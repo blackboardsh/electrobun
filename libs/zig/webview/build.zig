@@ -21,6 +21,9 @@ pub fn build(b: *std.Build) void {
         // .target = b.host,
     });
     // exe.addPackage(objc.pkg);
+    // need to link objective c runtime in order for zig-objc to work
     exe.linkSystemLibrary("objc");
+    // need to link AppKit in order to let zig-objc to reference AppKit related symbols in the objc runtime
+    exe.linkFramework("AppKit"); // Link the AppKit framework
     b.installArtifact(exe);
 }
