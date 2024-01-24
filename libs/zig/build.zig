@@ -17,10 +17,13 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "webview",
-        .root_source_file = .{ .path = "webview.zig" },
+        .root_source_file = .{ .path = "main.zig" },
         // .target = b.host,
     });
     // exe.addPackage(objc.pkg);
+    // const objcIncludePath = std.Build.LazyPath.relative("../zig-objc/src");
+    // exe.addIncludePath(objcIncludePath);
+
     // need to link objective c runtime in order for zig-objc to work
     exe.linkSystemLibrary("objc");
     // need to link AppKit in order to let zig-objc to reference AppKit related symbols in the objc runtime
