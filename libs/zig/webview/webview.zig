@@ -1,5 +1,6 @@
 const std = @import("std");
 const objc = @import("../zig-objc/src/main.zig");
+const c = @import("../zig-objc/src/c.zig");
 
 const CGPoint = extern struct {
     x: f64,
@@ -26,6 +27,11 @@ pub fn main() void {
     const window = createWindow();
     const window2 = createWindow();
     std.debug.print("------window {}{}\n", .{ window, window2 });
+}
+
+pub export fn startEventLoop() void {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
     // run the event loop
     const nsApplicationClass = objc.getClass("NSApplication") orelse {
         std.debug.print("Failed to get NSApplication class\n", .{});
@@ -39,7 +45,7 @@ pub fn main() void {
     app.msgSend(void, "run", .{});
 }
 
-pub fn createWindow() objc.Object {
+pub export fn createWindow() c.id {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
 
@@ -87,7 +93,9 @@ pub fn createWindow() objc.Object {
     // Display the window
     window.msgSend(void, "makeKeyAndOrderFront:", .{});
 
-    return window;
+    // startEventLoop();
+
+    return window.value;
 }
 
 fn createNSString(string: []const u8) objc.Object {
