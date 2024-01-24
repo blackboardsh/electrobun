@@ -25,5 +25,6 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("objc");
     // need to link AppKit in order to let zig-objc to reference AppKit related symbols in the objc runtime
     exe.linkFramework("AppKit"); // Link the AppKit framework
+    exe.linkFramework("WebKit"); // Link the WebKit framework
     b.installArtifact(exe);
 }
