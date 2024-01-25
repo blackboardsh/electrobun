@@ -1,9 +1,17 @@
 const std = @import("std");
 const objc = @import("../zig-objc/src/main.zig");
 const c = @import("../zig-objc/src/c.zig");
+
+// timer reference
+// const startTime = std.time.nanoTimestamp();
+// // code
+// const endTime = std.time.nanoTimestamp();
+// const duration = endTime - startTime;
+// std.debug.print("Time taken: {} ns\n", .{duration});
+
 // needed to access grand central dispatch to dispatch things from
 // other threads to the main thread
-const c2 = @cImport({
+const dispatch = @cImport({
     @cInclude("dispatch/dispatch.h");
 });
 
@@ -54,8 +62,6 @@ fn stdInListener() void {
     while (true) {
         const bytesRead = stdin.readUntilDelimiterOrEof(&buffer, '\n') catch break;
         if (bytesRead) |line| {
-            std.debug.print("Received from Bun: {s} - {}\n", .{ line, window });
-
             // Copy the line into a new, null-terminated (C-like) string
             const title = alloc.dupe(u8, line) catch {
                 // Handle the error here, e.g., log it or set a default value
@@ -63,7 +69,6 @@ fn stdInListener() void {
                 return;
             };
 
-            // var titleContext = TitleContext{ .title = "Bun WebView from thread!!" };
             // Dynamically allocate titleContext on the heap so it lives beyond this while loop iteration
             const titleContext = alloc.create(TitleContext) catch {
                 // Handle the error here, e.g., log it or set a default value
@@ -72,8 +77,7 @@ fn stdInListener() void {
             };
             titleContext.* = TitleContext{ .title = title };
 
-            // defer alloc.free(titleContext);
-            c2.dispatch_async_f(c2.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
+            dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
         }
     }
 }
@@ -82,42 +86,9 @@ fn setTitleOnMainThread(context: ?*anyopaque) callconv(.C) void {
     const titleContext = @as(*TitleContext, @ptrCast(@alignCast(context)));
     const titleString = createNSString(titleContext.title);
     alloc.free(titleContext.title);
-    const startTime = std.time.nanoTimestamp();
     window.msgSend(void, "setTitle:", .{titleString});
-    const endTime = std.time.nanoTimestamp();
-    const duration = endTime - startTime;
-    std.debug.print("Time taken: {} ns\n", .{duration});
-
-    // Schedule freeing of titleContext and title after a delay
-    // to ensure they are not used by the Objective-C runtime
-    // This is a simplistic approach and may need refinement
-    // std.time.sleep(1 * std.time.ns_per_s); // Example delay of 1 second
-
-    // alloc.free(title);
-    // alloc.free(titleContext);
+    alloc.destroy(titleContext);
 }
-
-// fn setTitleOnMainThread(context: *c_void) void {
-//     const titleContext = @as(*TitleContext, @ptrCast(context));
-//     std.debug.print("------setTitleOnMainThread {s}\n", .{titleContext.title});
-//     const titleString = createNSString(titleContext.title);
-//     window.msgSend(void, "setTitle:", .{titleString});
-// }
-
-// pub fn initStdio void {
-//     const stdin = std.io.getStdIn().reader();
-//     var buffer: [256]u8 = undefined;
-
-//     // Read a message from stdin
-//     const bytesRead = try stdin.readUntilDelimiterOrEof(&buffer, '\n');
-//     if (bytesRead) |line| {
-//         std.debug.print("Received from Bun: {}\n", .{line});
-//     }
-
-//     // Send a message to stdout
-//     const stdout = std.io.getStdOut().writer();
-//     try stdout.writeAll("Hello from Zig\n");
-// }
 
 pub export fn startEventLoop() void {
     const pool = objc.AutoreleasePool.init();
