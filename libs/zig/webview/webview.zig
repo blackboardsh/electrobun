@@ -1,6 +1,11 @@
 const std = @import("std");
 const objc = @import("../zig-objc/src/main.zig");
 const c = @import("../zig-objc/src/c.zig");
+// needed to access grand central dispatch to dispatch things from
+// other threads to the main thread
+const c2 = @cImport({
+    @cInclude("dispatch/dispatch.h");
+});
 
 const CGPoint = extern struct {
     x: f64,
@@ -23,15 +28,78 @@ const NSWindowStyleMaskResizable = 1 << 3;
 
 const NSBackingStoreBuffered = 2;
 
-pub fn main() void {
-    const window = createWindow();
-    const window2 = createWindow();
-    std.debug.print("------window {}{}\n", .{ window, window2 });
+var window: objc.Object = undefined;
+
+pub const TitleContext = struct {
+    title: []const u8,
+};
+
+pub fn main() !void {
+    var ipcThread = try std.Thread.spawn(.{}, stdInListener, .{});
+    defer ipcThread.join();
+
+    window = createWindow();
+
+    startEventLoop();
+    std.debug.print("------after event loop {}\n", .{window});
 }
+
+fn stdInListener() void {
+    const stdin = std.io.getStdIn().reader();
+    var buffer: [256]u8 = undefined;
+
+    while (true) {
+        const bytesRead = stdin.readUntilDelimiterOrEof(&buffer, '\n') catch break;
+        if (bytesRead) |line| {
+            std.debug.print("Received from Bun: {s} - {}\n", .{ line, window });
+
+            // const titleString = createNSString("Bun WebView wow");
+            // var titleContext = TitleContext{ .title = "Bun WebView wow" };
+
+            // window.msgSend(void, "setTitle:", .{titleString});
+            // Make sure that the context you pass to dispatch_async_f is correctly managed. It often involves passing a pointer to some data structure that both the caller and the callback understand.
+            // c2.dispatch_async_f(c2.dispatch_get_main_queue(), null, &setTitleOnMainThread);
+            // var titleContext = TitleContext{
+            //     .title = "Bun WebView wow",
+            // };
+
+            // c2.dispatch_async_f(c2.dispatch_get_main_queue(), @as(*c_void, @ptrCast(&titleContext)), setTitleOnMainThread);
+
+            // var titleContext = TitleContext{ .title = "Bun WebView wow" };
+            // c2.dispatch_async_f(c2.dispatch_get_main_queue(), @as(*std.c_void, @ptrCast(&titleContext)), setTitleOnMainThread);
+
+            // Process the message and possibly send a response
+            // ...
+        }
+    }
+}
+
+// fn setTitleOnMainThread(context: *c_void) void {
+//     const titleContext = @as(*TitleContext, @ptrCast(context));
+//     std.debug.print("------setTitleOnMainThread {s}\n", .{titleContext.title});
+//     const titleString = createNSString(titleContext.title);
+//     window.msgSend(void, "setTitle:", .{titleString});
+// }
+
+// pub fn initStdio void {
+//     const stdin = std.io.getStdIn().reader();
+//     var buffer: [256]u8 = undefined;
+
+//     // Read a message from stdin
+//     const bytesRead = try stdin.readUntilDelimiterOrEof(&buffer, '\n');
+//     if (bytesRead) |line| {
+//         std.debug.print("Received from Bun: {}\n", .{line});
+//     }
+
+//     // Send a message to stdout
+//     const stdout = std.io.getStdOut().writer();
+//     try stdout.writeAll("Hello from Zig\n");
+// }
 
 pub export fn startEventLoop() void {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
+
     // run the event loop
     const nsApplicationClass = objc.getClass("NSApplication") orelse {
         std.debug.print("Failed to get NSApplication class\n", .{});
@@ -45,7 +113,7 @@ pub export fn startEventLoop() void {
     app.msgSend(void, "run", .{});
 }
 
-pub export fn createWindow() c.id {
+pub fn createWindow() objc.Object {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
 
@@ -69,14 +137,14 @@ pub export fn createWindow() c.id {
     const defers = true;
 
     // Initialize the NSWindow instance
-    const window = windowAlloc.msgSend(objc.Object, "initWithContentRect:styleMask:backing:defer:", .{ frame, styleMask, backing, defers });
+    const _window = windowAlloc.msgSend(objc.Object, "initWithContentRect:styleMask:backing:defer:", .{ frame, styleMask, backing, defers });
 
     // You have to initialize obj-c string and then pass a pointer to it
     const titleString = createNSString("Bun WebView");
-    window.msgSend(void, "setTitle:", .{titleString});
+    _window.msgSend(void, "setTitle:", .{titleString});
 
     // Get the content view of the window
-    const contentView = window.msgSend(objc.Object, "contentView", .{});
+    const contentView = _window.msgSend(objc.Object, "contentView", .{});
 
     // Get the bounds of the content view
     const windowBounds: CGRect = contentView.msgSend(CGRect, "bounds", .{});
@@ -84,18 +152,20 @@ pub export fn createWindow() c.id {
     const wkWebviewClass = objc.getClass("WKWebView").?;
     const webkitAlloc = wkWebviewClass.msgSend(objc.Object, "alloc", .{});
     const webView = webkitAlloc.msgSend(objc.Object, "initWithFrame:", .{windowBounds});
-    window.msgSend(void, "setContentView:", .{webView});
+    _window.msgSend(void, "setContentView:", .{webView});
 
     const url = createNSURL("https://www.google.com");
     const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{url});
     webView.msgSend(void, "loadRequest:", .{request});
 
     // Display the window
-    window.msgSend(void, "makeKeyAndOrderFront:", .{});
+    _window.msgSend(void, "makeKeyAndOrderFront:", .{});
 
     // startEventLoop();
 
-    return window.value;
+    // std.debug.print("------after event loop started {}\n", .{window});
+
+    return _window;
 }
 
 fn createNSString(string: []const u8) objc.Object {
