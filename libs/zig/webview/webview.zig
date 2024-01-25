@@ -58,7 +58,8 @@ fn stdInListener() void {
 
             // window.msgSend(void, "setTitle:", .{titleString});
             // Make sure that the context you pass to dispatch_async_f is correctly managed. It often involves passing a pointer to some data structure that both the caller and the callback understand.
-            // c2.dispatch_async_f(c2.dispatch_get_main_queue(), null, &setTitleOnMainThread);
+            // setTitleOnMainThread();
+            c2.dispatch_async_f(c2.dispatch_get_main_queue(), null, setTitleOnMainThread);
             // var titleContext = TitleContext{
             //     .title = "Bun WebView wow",
             // };
@@ -72,6 +73,17 @@ fn stdInListener() void {
             // ...
         }
     }
+}
+
+fn setTitleOnMainThread(context: ?*anyopaque) callconv(.C) void {
+    _ = context;
+    std.debug.print("hi from thread!\n", .{});
+    // std.debug.print("hi from thread!{}\n", .{context});
+    // const titleContext = @as(*TitleContext, @ptrCast(context));
+    // std.debug.print("------setTitleOnMainThread {s}\n", .{titleContext.title});
+    // const titleString = createNSString(titleContext.title);
+    const titleString = createNSString("title from thread!");
+    window.msgSend(void, "setTitle:", .{titleString});
 }
 
 // fn setTitleOnMainThread(context: *c_void) void {
