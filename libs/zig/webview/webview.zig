@@ -7,6 +7,8 @@ const c2 = @cImport({
     @cInclude("dispatch/dispatch.h");
 });
 
+const alloc = std.heap.page_allocator;
+
 const CGPoint = extern struct {
     x: f64,
     y: f64,
@@ -46,6 +48,7 @@ pub fn main() !void {
 
 fn stdInListener() void {
     const stdin = std.io.getStdIn().reader();
+    // Note: this is a zig string
     var buffer: [256]u8 = undefined;
 
     while (true) {
@@ -53,37 +56,45 @@ fn stdInListener() void {
         if (bytesRead) |line| {
             std.debug.print("Received from Bun: {s} - {}\n", .{ line, window });
 
-            // const titleString = createNSString("Bun WebView wow");
-            // var titleContext = TitleContext{ .title = "Bun WebView wow" };
+            // Copy the line into a new, null-terminated (C-like) string
+            const title = alloc.dupe(u8, line) catch {
+                // Handle the error here, e.g., log it or set a default value
+                std.debug.print("Error duplicating string: {s}\n", .{line});
+                return;
+            };
 
-            // window.msgSend(void, "setTitle:", .{titleString});
-            // Make sure that the context you pass to dispatch_async_f is correctly managed. It often involves passing a pointer to some data structure that both the caller and the callback understand.
-            // setTitleOnMainThread();
-            c2.dispatch_async_f(c2.dispatch_get_main_queue(), null, setTitleOnMainThread);
-            // var titleContext = TitleContext{
-            //     .title = "Bun WebView wow",
-            // };
+            // var titleContext = TitleContext{ .title = "Bun WebView from thread!!" };
+            // Dynamically allocate titleContext on the heap so it lives beyond this while loop iteration
+            const titleContext = alloc.create(TitleContext) catch {
+                // Handle the error here, e.g., log it or set a default value
+                std.debug.print("Error allocating titleContext: \n", .{});
+                return;
+            };
+            titleContext.* = TitleContext{ .title = title };
 
-            // c2.dispatch_async_f(c2.dispatch_get_main_queue(), @as(*c_void, @ptrCast(&titleContext)), setTitleOnMainThread);
-
-            // var titleContext = TitleContext{ .title = "Bun WebView wow" };
-            // c2.dispatch_async_f(c2.dispatch_get_main_queue(), @as(*std.c_void, @ptrCast(&titleContext)), setTitleOnMainThread);
-
-            // Process the message and possibly send a response
-            // ...
+            // defer alloc.free(titleContext);
+            c2.dispatch_async_f(c2.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
         }
     }
 }
 
 fn setTitleOnMainThread(context: ?*anyopaque) callconv(.C) void {
-    _ = context;
-    std.debug.print("hi from thread!\n", .{});
-    // std.debug.print("hi from thread!{}\n", .{context});
-    // const titleContext = @as(*TitleContext, @ptrCast(context));
-    // std.debug.print("------setTitleOnMainThread {s}\n", .{titleContext.title});
-    // const titleString = createNSString(titleContext.title);
-    const titleString = createNSString("title from thread!");
+    const titleContext = @as(*TitleContext, @ptrCast(@alignCast(context)));
+    const titleString = createNSString(titleContext.title);
+    alloc.free(titleContext.title);
+    const startTime = std.time.nanoTimestamp();
     window.msgSend(void, "setTitle:", .{titleString});
+    const endTime = std.time.nanoTimestamp();
+    const duration = endTime - startTime;
+    std.debug.print("Time taken: {} ns\n", .{duration});
+
+    // Schedule freeing of titleContext and title after a delay
+    // to ensure they are not used by the Objective-C runtime
+    // This is a simplistic approach and may need refinement
+    // std.time.sleep(1 * std.time.ns_per_s); // Example delay of 1 second
+
+    // alloc.free(title);
+    // alloc.free(titleContext);
 }
 
 // fn setTitleOnMainThread(context: *c_void) void {
