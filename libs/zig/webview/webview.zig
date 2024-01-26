@@ -50,19 +50,22 @@ pub fn main() !void {
 
     window = createWindow();
 
-    startEventLoop();
-    std.debug.print("------after event loop {}\n", .{window});
+    startAppkitGuiEventLoop();
 }
 
+// We listen on stdin for stuff to do from bun and then dispatch it to the main thread where the gui stuff happens
 fn stdInListener() void {
     const stdin = std.io.getStdIn().reader();
-    // Note: this is a zig string
+    // Note: this is a zig string.
     var buffer: [256]u8 = undefined;
 
     while (true) {
         const bytesRead = stdin.readUntilDelimiterOrEof(&buffer, '\n') catch break;
         if (bytesRead) |line| {
+
             // Copy the line into a new, null-terminated (C-like) string
+            // you can't create an NSString here because it will be freed
+            // when dispatch_async chucks it over to the main thread
             const title = alloc.dupe(u8, line) catch {
                 // Handle the error here, e.g., log it or set a default value
                 std.debug.print("Error duplicating string: {s}\n", .{line});
@@ -82,6 +85,12 @@ fn stdInListener() void {
     }
 }
 
+// fn createWindowOnMainThread(context: ?*anyopaque) callconv(.C) void {
+//     _ = context;
+
+//     createWindow();
+// }
+
 fn setTitleOnMainThread(context: ?*anyopaque) callconv(.C) void {
     const titleContext = @as(*TitleContext, @ptrCast(@alignCast(context)));
     const titleString = createNSString(titleContext.title);
@@ -90,7 +99,7 @@ fn setTitleOnMainThread(context: ?*anyopaque) callconv(.C) void {
     alloc.destroy(titleContext);
 }
 
-pub export fn startEventLoop() void {
+pub export fn startAppkitGuiEventLoop() void {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
 
@@ -148,16 +157,17 @@ pub fn createWindow() objc.Object {
     const webView = webkitAlloc.msgSend(objc.Object, "initWithFrame:", .{windowBounds});
     _window.msgSend(void, "setContentView:", .{webView});
 
-    const url = createNSURL("https://www.google.com");
-    const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{url});
-    webView.msgSend(void, "loadRequest:", .{request});
+    // load url
+    // const url = createNSURL("https://www.google.com");
+    // const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{url});
+    // webView.msgSend(void, "loadRequest:", .{request});
+
+    // load local html content
+    const htmlString = createNSString("<html><body><h1>Hello World<webview style='width:100px; height:100px;' src='https://google.com'></webview></h1></body></html>");
+    webView.msgSend(void, "loadHTMLString:baseURL:", .{ htmlString, createNSURL("file://") });
 
     // Display the window
     _window.msgSend(void, "makeKeyAndOrderFront:", .{});
-
-    // startEventLoop();
-
-    // std.debug.print("------after event loop started {}\n", .{window});
 
     return _window;
 }
@@ -172,42 +182,3 @@ fn createNSURL(string: []const u8) objc.Object {
     const urlString = createNSString(string);
     return NSURL.msgSend(objc.Object, "URLWithString:", .{urlString});
 }
-
-// pub fn createWebview() {
-//     const pool = objc.AutoreleasePool.init();
-//     defer pool.deinit();
-
-//     const wkWebviewClass = objc.getClass("WKWebView").?;
-//     const webkitAlloc = wkWebviewClass.msgSend(objc.Object, "alloc", .{});
-
-// }
-
-// #import <Cocoa/Cocoa.h>
-// #import <WebKit/WebKit.h>
-
-// void createWebView(const char *url) {
-//     @autoreleasepool {
-//         // Set default URL to Google if none is provided
-//         const char *defaultUrl = "https://www.google.com";
-//         if (url == NULL || strlen(url) == 0) {
-//             url = defaultUrl;
-//         }
-
-//         NSApplication *app = [NSApplication sharedApplication];
-//         NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 800, 600)
-//                                                        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
-//                                                          backing:NSBackingStoreBuffered
-//                                                            defer:NO];
-//         [window cascadeTopLeftFromPoint:NSMakePoint(20,20)];
-//         [window setTitle:@"Bun WebView"];
-//         [window makeKeyAndOrderFront:nil];
-
-//         WKWebView *webView = [[WKWebView alloc] initWithFrame:[[window contentView] bounds]];
-//         [[window contentView] addSubview:webView];
-//         NSURL *nsurl = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
-//         NSURLRequest *nsrequest = [NSURLRequest requestWithURL:nsurl];
-//         [webView loadRequest:nsrequest];
-
-//         [app run];
-//     }
-// }
