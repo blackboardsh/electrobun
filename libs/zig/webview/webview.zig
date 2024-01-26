@@ -53,36 +53,110 @@ pub fn main() !void {
     startAppkitGuiEventLoop();
 }
 
+const MessageType = enum {
+    setTitle,
+    createWindow,
+    // Add other types as needed
+};
+
+const MessageFromBun = struct {
+    type: MessageType,
+    payload: []const u8,
+};
+
+const SetTitlePayload = struct {
+    title: []const u8,
+};
+
 // We listen on stdin for stuff to do from bun and then dispatch it to the main thread where the gui stuff happens
 fn stdInListener() void {
     const stdin = std.io.getStdIn().reader();
     // Note: this is a zig string.
-    var buffer: [256]u8 = undefined;
+    var buffer: [1024]u8 = undefined;
 
     while (true) {
-        const bytesRead = stdin.readUntilDelimiterOrEof(&buffer, '\n') catch break;
+        const bytesRead = stdin.readUntilDelimiterOrEof(&buffer, '\n') catch continue;
         if (bytesRead) |line| {
+            const messageFromBun = std.json.parseFromSlice(MessageFromBun, alloc, line, .{}) catch |err| {
+                std.debug.print("Error: {}{s}\n", .{ err, line });
+                continue;
+            };
+            defer messageFromBun.deinit();
+
+            // Handle the message based on its type
+            switch (messageFromBun.value.type) {
+                .setTitle => {
+                    sendMessageToBun("Hello, from zig stdin listener line!\n");
+                    const payload = std.json.parseFromSlice(SetTitlePayload, alloc, messageFromBun.value.payload, .{}) catch continue;
+                    defer payload.deinit();
+
+                    // convert the payload to null-terminated string
+                    const title = alloc.dupe(u8, payload.value.title) catch {
+                        // Handle the error here, e.g., log it or set a default value
+                        std.debug.print("Error: {s}\n", .{line});
+                        return;
+                    };
+
+                    // Dynamically allocate titleContext on the heap so it lives beyond this while loop iteration
+                    const titleContext = alloc.create(TitleContext) catch {
+                        // Handle the error here, e.g., log it or set a default value
+                        std.debug.print("Error allocating titleContext: \n", .{});
+                        return;
+                    };
+                    titleContext.* = TitleContext{ .title = title };
+
+                    dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
+
+                    // Parse the payload for 'exampleType'
+                    // ...
+                },
+                .createWindow => {
+                    // Handle 'anotherType'
+                    // ...
+                },
+
+                // Handle other types
+            }
+
+            // const stdout = std.io.getStdOut().writer();
+
+            // const message = "Hello, world!\n";
+            // // Write the message to stdout
+            // _ = stdout.writeAll(message) catch {
+            //     // Handle potential errors here
+            //     std.debug.print("Failed to write to stdout\n", .{});
+            // };
 
             // Copy the line into a new, null-terminated (C-like) string
             // you can't create an NSString here because it will be freed
             // when dispatch_async chucks it over to the main thread
-            const title = alloc.dupe(u8, line) catch {
-                // Handle the error here, e.g., log it or set a default value
-                std.debug.print("Error duplicating string: {s}\n", .{line});
-                return;
-            };
+            // const title = alloc.dupe(u8, line) catch {
+            //     // Handle the error here, e.g., log it or set a default value
+            //     std.debug.print("Error duplicating string: {s}\n", .{line});
+            //     return;
+            // };
 
-            // Dynamically allocate titleContext on the heap so it lives beyond this while loop iteration
-            const titleContext = alloc.create(TitleContext) catch {
-                // Handle the error here, e.g., log it or set a default value
-                std.debug.print("Error allocating titleContext: \n", .{});
-                return;
-            };
-            titleContext.* = TitleContext{ .title = title };
+            // // Dynamically allocate titleContext on the heap so it lives beyond this while loop iteration
+            // const titleContext = alloc.create(TitleContext) catch {
+            //     // Handle the error here, e.g., log it or set a default value
+            //     std.debug.print("Error allocating titleContext: \n", .{});
+            //     return;
+            // };
+            // titleContext.* = TitleContext{ .title = title };
 
-            dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
+            // dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
         }
     }
+}
+
+fn sendMessageToBun(message: []const u8) void {
+    const stdout = std.io.getStdOut().writer();
+
+    // Write the message to stdout
+    _ = stdout.writeAll(message) catch {
+        // Handle potential errors here
+        std.debug.print("Failed to write to stdout\n", .{});
+    };
 }
 
 // fn createWindowOnMainThread(context: ?*anyopaque) callconv(.C) void {
