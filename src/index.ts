@@ -40,7 +40,7 @@ async function readStream(stream) {
 const setTitle = (title: string) => {
 	const event = {
 		type: WebviewEvent.setTitle,
-		payload: JSON.stringify({title})
+		payload: {title}
 	}	
 
 	sendEvent(event)

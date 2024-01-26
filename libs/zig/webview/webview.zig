@@ -61,7 +61,7 @@ const MessageType = enum {
 
 const MessageFromBun = struct {
     type: MessageType,
-    payload: []const u8,
+    payload: std.json.Value,
 };
 
 const SetTitlePayload = struct {
@@ -87,7 +87,7 @@ fn stdInListener() void {
             switch (messageFromBun.value.type) {
                 .setTitle => {
                     sendMessageToBun("Hello, from zig stdin listener line!\n");
-                    const payload = std.json.parseFromSlice(SetTitlePayload, alloc, messageFromBun.value.payload, .{}) catch continue;
+                    const payload = std.json.parseFromValue(SetTitlePayload, alloc, messageFromBun.value.payload, .{}) catch continue;
                     defer payload.deinit();
 
                     // convert the payload to null-terminated string
