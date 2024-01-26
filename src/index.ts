@@ -34,17 +34,69 @@ async function readStream(stream) {
 	}
   }
   
-  // Read from stdout
-  readStream(proc.stdout);
+// Read from stdout
+readStream(proc.stdout);
 
+
+// Send messages to zig
 const setTitle = (title: string) => {
 	const event = {
 		type: WebviewEvent.setTitle,
-		payload: {title}
+		payload: {
+			title
+		}
 	}	
 
 	sendEvent(event)
 }
+
+type CreateWindowBaseConfig = {	
+	title: string,
+	width: number,
+	height: number,
+	x: number,
+	y: number,
+}
+
+type UrlWindowConfig = CreateWindowBaseConfig & {url: string}
+type HtmlWindowConfig = CreateWindowBaseConfig & {html: string}
+
+type CreateWindowEvent = {
+	type: WebviewEvent.createWindow,
+	payload: {id: number} & (UrlWindowConfig | HtmlWindowConfig)
+}
+
+const createUrlWindow = (url: string, config: CreateWindowBaseConfig) => {
+	return createWindow({
+		url,
+		html: '',
+		...config
+	})
+}
+
+const createHtmlWindow = (html: string, config: CreateWindowBaseConfig) => {
+	return createWindow({
+		html,
+		url:  '',
+		...config
+	})
+}
+
+let nextWindowId = 0;
+
+const createWindow = (config: UrlWindowConfig | HtmlWindowConfig) => {
+	const event: CreateWindowEvent = {
+		type: WebviewEvent.createWindow,
+		payload: {
+			id: nextWindowId++,
+			...config
+		}
+	}
+
+	sendEvent(event);
+}
+
+
 
 const sendEvent = (event: any) => {
 	const eventString = JSON.stringify(event) + "\n";
@@ -53,8 +105,27 @@ const sendEvent = (event: any) => {
 	proc.stdin.flush();
 }
 
+
+// tst
 setTimeout(() => {
 	setTitle('hello from bun via json')
+
+	createUrlWindow('https://eggbun.sh', {
+		title: 'my url window',
+		width: 800,
+		height: 600,
+		x: 100,
+		y: 100,
+	})
+
+	createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
+		title: 'my html window',
+		width: 800,
+		height: 600,
+		x: 100,
+		y: 100,
+	})
+
 	
 }, 2000)
 
