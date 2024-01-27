@@ -38,7 +38,7 @@ const NSWindowStyleMaskResizable = 1 << 3;
 
 const NSBackingStoreBuffered = 2;
 
-var window: objc.Object = undefined;
+// var window: objc.Object = undefined;
 
 pub const TitleContext = struct {
     title: []const u8,
@@ -51,8 +51,6 @@ pub const WindowContext = struct {
 pub fn main() !void {
     var ipcThread = try std.Thread.spawn(.{}, stdInListener, .{});
     defer ipcThread.join();
-
-    // window = createWindow();
 
     startAppkitGuiEventLoop();
 }
@@ -69,10 +67,11 @@ const MessageFromBun = struct {
 };
 
 const SetTitlePayload = struct {
+    winId: u32,
     title: []const u8,
 };
 
-const CreateWindowPayload = struct { id: u32, url: ?[]const u8, html: ?[]const u8, title: []const u8, width: u16, height: u16, x: u16, y: u16 };
+const CreateWindowPayload = struct { id: u32, url: ?[]const u8, html: ?[]const u8, title: []const u8, width: f64, height: f64, x: f64, y: f64 };
 
 const WindowType = struct {
     id: u32,
@@ -82,10 +81,10 @@ const WindowType = struct {
     title: []const u8,
     url: ?[]const u8,
     html: ?[]const u8,
-    width: u16,
-    height: u16,
-    x: u16,
-    y: u16,
+    width: f64,
+    height: f64,
+    x: f64,
+    y: f64,
 };
 
 var jobQueue = std.ArrayList([]const u8).init(alloc);
@@ -110,16 +109,6 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
         return;
     };
 
-    // jobQueue.append(messageFromBun) catch {
-    //     std.log.info("Error appending to jobQueue: \nreceived: {}", .{messageFromBun.value.type});
-    //     continue;
-    // };
-
-    // std.log.info("jobqueue items thread length {}", .{jobQueue.items.len});
-
-    // std.log.info("messageFromBun: {}", .{messageFromBun.value.type});
-    // std.log.info("messageFromBun: {}", .{messageFromBun.value.payload});
-
     defer messageFromBun.deinit();
 
     // Handle the message based on its type
@@ -134,7 +123,7 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
 
             const payload = parsedPayload.value;
 
-            setTitle(payload.title);
+            setTitle(payload);
         },
         .createWindow => {
             const parsedPayload = std.json.parseFromValue(CreateWindowPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
@@ -143,33 +132,19 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
             };
             defer parsedPayload.deinit();
 
-            window = createWindow();
+            const payload = parsedPayload.value;
+            const objcWindow = createWindow(payload);
 
-            // const payload = parsedPayload.value;
+            std.log.info("parsed type {}: \nreceived: ", .{payload.id});
 
-            // std.log.info("parsed type {}: \nreceived: ", .{payload.id});
+            const _window = WindowType{ .id = payload.id, .title = payload.title, .url = payload.url, .html = payload.html, .width = payload.width, .height = payload.height, .x = payload.x, .y = payload.y, .window = objcWindow, .webview = undefined };
 
-            // const _window = WindowType{ .id = payload.id, .title = payload.title, .url = payload.url, .html = payload.html, .width = payload.width, .height = payload.height, .x = payload.x, .y = payload.y, .window = undefined, .webview = undefined };
+            windowMap.put(payload.id, _window) catch {
+                std.log.info("Error putting window into hashmap: \nreceived: {}", .{messageFromBun.value.type});
+                return;
+            };
 
-            // windowMap.put(payload.id, _window) catch {
-            //     std.log.info("Error putting window into hashmap: \nreceived: {}", .{messageFromBun.value.type});
-            //     continue;
-            // };
-
-            // // std.log.info("hashmap size{}", .{windowMap.count()});
-
-            // const windowContext = alloc.create(WindowContext) catch {
-            //     // Handle the error here, e.g., log it or set a default value
-            //     std.debug.print("Error allocating windowContext: \n", .{});
-            //     return;
-            // };
-            // windowContext.* = WindowContext{ .id = payload.id };
-
-            // dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, windowContext), createWindowOnMainThread);
-            // // todo:
-            // - create a window struct in a hashmap with the id as the key
-            // - dispatch createWindow to the main thread with a specific id
-            // - that function then pulls the window config, creates the window and saves the window and webview pointer to the hashmap
+            std.log.info("hashmap size{}", .{windowMap.count()});
         },
 
         // Handle other types
@@ -200,90 +175,11 @@ fn stdInListener() void {
             };
 
             dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), null, proccessJobQueue);
-            // continue;
-            // defer messageFromBun.deinit();
-
-            // // Handle the message based on its type
-            // switch (messageFromBun.value.type) {
-            //     .setTitle => {
-            //         const parsedPayload = std.json.parseFromValue(SetTitlePayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-            //             std.log.info("Error casting parsed json to zig type from stdin - {}: \nreceived: {s}", .{ err, line });
-            //             continue;
-            //         };
-            //         defer parsedPayload.deinit();
-
-            //         const payload = parsedPayload.value;
-
-            //         // convert the payload to null-terminated string
-            //         const title = alloc.dupe(u8, payload.title) catch {
-            //             // Handle the error here, e.g., log it or set a default value
-            //             std.debug.print("Error: {s}\n", .{line});
-            //             return;
-            //         };
-
-            //         // Dynamically allocate titleContext on the heap so it lives beyond this while loop iteration
-            //         const titleContext = alloc.create(TitleContext) catch {
-            //             // Handle the error here, e.g., log it or set a default value
-            //             std.debug.print("Error allocating titleContext: \n", .{});
-            //             return;
-            //         };
-            //         titleContext.* = TitleContext{ .title = title };
-
-            //         dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
-
-            //         // Parse the payload for 'exampleType'
-            //         // ...
-            //     },
-            //     .createWindow => {
-            //         const parsedPayload = std.json.parseFromValue(CreateWindowPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-            //             switch (err) {
-            //                 error.MissingField => |missingFieldError| {
-            //                     std.log.info("Missing field error: field '{}' is missing in JSON data.\nReceived JSON: {s}", .{ missingFieldError, line });
-            //                 },
-            //                 else => {
-            //                     std.log.info("Error casting parsed json to zig type from stdin\nError type {}: \nreceived: {s}", .{ err, line });
-            //                 },
-            //             }
-
-            //             std.log.info("Error casting parsed json to zig type from stdin\nError type {}: \nreceived: {s}", .{ err, line });
-            //             continue;
-            //         };
-            //         defer parsedPayload.deinit();
-
-            //         const payload = parsedPayload.value;
-
-            //         std.log.info("parsed type {}: \nreceived: ", .{payload.id});
-
-            //         const _window = WindowType{ .id = payload.id, .title = payload.title, .url = payload.url, .html = payload.html, .width = payload.width, .height = payload.height, .x = payload.x, .y = payload.y, .window = undefined, .webview = undefined };
-
-            //         windowMap.put(payload.id, _window) catch {
-            //             std.log.info("Error putting window into hashmap: \nreceived: {}", .{messageFromBun.value.type});
-            //             continue;
-            //         };
-
-            //         // std.log.info("hashmap size{}", .{windowMap.count()});
-
-            //         const windowContext = alloc.create(WindowContext) catch {
-            //             // Handle the error here, e.g., log it or set a default value
-            //             std.debug.print("Error allocating windowContext: \n", .{});
-            //             return;
-            //         };
-            //         windowContext.* = WindowContext{ .id = payload.id };
-
-            //         dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, windowContext), createWindowOnMainThread);
-            //         // todo:
-            //         // - create a window struct in a hashmap with the id as the key
-            //         // - dispatch createWindow to the main thread with a specific id
-            //         // - that function then pulls the window config, creates the window and saves the window and webview pointer to the hashmap
-            //     },
-
-            //     // Handle other types
-            // }
-
         }
     }
 }
 
+// todo: create event mapping types in zig and typescript
 fn sendMessageToBun(message: []const u8) void {
     const stdout = std.io.getStdOut().writer();
 
@@ -292,32 +188,6 @@ fn sendMessageToBun(message: []const u8) void {
         // Handle potential errors here
         std.debug.print("Failed to write to stdout\n", .{});
     };
-}
-
-fn createWindowOnMainThread(context: ?*anyopaque) callconv(.C) void {
-    const windowContext = @as(*WindowContext, @ptrCast(@alignCast(context)));
-
-    const _window = windowMap.get(windowContext.id) orelse {
-        std.debug.print("Failed to get window from hashmap for id {}\n", .{windowContext.id});
-        return;
-    };
-
-    std.log.info("hashmap size from main thread {} - window id {}", .{ windowMap.count(), _window.id });
-
-    // createWindow();
-}
-
-fn setTitleOnMainThread(context: ?*anyopaque) callconv(.C) void {
-    const titleContext = @as(*TitleContext, @ptrCast(@alignCast(context)));
-    const titleString = createNSString(titleContext.title);
-    alloc.free(titleContext.title);
-    window.msgSend(void, "setTitle:", .{titleString});
-    alloc.destroy(titleContext);
-}
-
-fn setTitle(title: []const u8) void {
-    const titleString = createNSString(title);
-    window.msgSend(void, "setTitle:", .{titleString});
 }
 
 pub export fn startAppkitGuiEventLoop() void {
@@ -337,7 +207,19 @@ pub export fn startAppkitGuiEventLoop() void {
     app.msgSend(void, "run", .{});
 }
 
-pub fn createWindow() objc.Object {
+fn setTitle(opts: SetTitlePayload) void {
+    const win = windowMap.get(opts.winId) orelse {
+        std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.winId});
+        return;
+    };
+
+    if (win.window) |window| {
+        const titleString = createNSString(opts.title);
+        window.msgSend(void, "setTitle:", .{titleString});
+    }
+}
+
+pub fn createWindow(opts: CreateWindowPayload) objc.Object {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
 
@@ -349,7 +231,7 @@ pub fn createWindow() objc.Object {
     // windowAlloc.msgSend(void, "release", .{});
 
     // Define the frame rectangle (x, y, width, height)
-    const frame = CGRect{ .origin = CGPoint{ .x = 1000, .y = 100 }, .size = CGSize{ .width = 800, .height = 600 } };
+    const frame = CGRect{ .origin = CGPoint{ .x = opts.x, .y = opts.y }, .size = CGSize{ .width = opts.width, .height = opts.height } };
 
     // Define the window style mask (e.g., titled, closable, resizable)
     const styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable;
@@ -364,7 +246,7 @@ pub fn createWindow() objc.Object {
     const _window = windowAlloc.msgSend(objc.Object, "initWithContentRect:styleMask:backing:defer:", .{ frame, styleMask, backing, defers });
 
     // You have to initialize obj-c string and then pass a pointer to it
-    const titleString = createNSString("Bun WebView");
+    const titleString = createNSString(opts.title);
     _window.msgSend(void, "setTitle:", .{titleString});
 
     // Get the content view of the window
@@ -379,13 +261,22 @@ pub fn createWindow() objc.Object {
     _window.msgSend(void, "setContentView:", .{webView});
 
     // load url
-    // const url = createNSURL("https://www.google.com");
-    // const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{url});
-    // webView.msgSend(void, "loadRequest:", .{request});
-
-    // load local html content
-    const htmlString = createNSString("<html><body><h1>Hello World<webview style='width:100px; height:100px;' src='https://google.com'></webview></h1></body></html>");
-    webView.msgSend(void, "loadHTMLString:baseURL:", .{ htmlString, createNSURL("file://") });
+    if (opts.url) |url| {
+        // Note: we pass responsibility to objc to free the memory
+        const urlCopy = alloc.dupe(u8, url) catch {
+            unreachable;
+        };
+        // std.log.info("creating url window: {s}", .{url});
+        const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{createNSURL(urlCopy)});
+        webView.msgSend(void, "loadRequest:", .{request});
+    } else if (opts.html) |html| {
+        const htmlCopy = alloc.dupe(u8, html) catch {
+            unreachable;
+        };
+        std.log.info("creating html window: {s}", .{html});
+        // const NSHtmlString = createNSString(html);
+        webView.msgSend(void, "loadHTMLString:baseURL:", .{ createNSString(htmlCopy), createNSURL("file://") });
+    }
 
     // Display the window
     _window.msgSend(void, "makeKeyAndOrderFront:", .{});
@@ -400,6 +291,12 @@ fn createNSString(string: []const u8) objc.Object {
 
 fn createNSURL(string: []const u8) objc.Object {
     const NSURL = objc.getClass("NSURL").?;
+    std.log.info("Creating NSURL with string: {s}", .{string});
     const urlString = createNSString(string);
-    return NSURL.msgSend(objc.Object, "URLWithString:", .{urlString});
+    const nsUrl = NSURL.msgSend(objc.Object, "URLWithString:", .{urlString});
+    std.log.info("NSURL created: {}", .{nsUrl});
+    return nsUrl;
+    // const NSURL = objc.getClass("NSURL").?;
+    // const urlString = createNSString(string);
+    // return NSURL.msgSend(objc.Object, "URLWithString:", .{urlString});
 }

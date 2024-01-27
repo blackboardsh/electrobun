@@ -39,10 +39,11 @@ readStream(proc.stdout);
 
 
 // Send messages to zig
-const setTitle = (title: string) => {
+const setTitle = (winId: number, title: string) => {
 	const event = {
 		type: WebviewEvent.setTitle,
 		payload: {
+			winId,
 			title
 		}
 	}	
@@ -58,8 +59,8 @@ type CreateWindowBaseConfig = {
 	y: number,
 }
 
-type UrlWindowConfig = CreateWindowBaseConfig & {url: string}
-type HtmlWindowConfig = CreateWindowBaseConfig & {html: string}
+type UrlWindowConfig = CreateWindowBaseConfig & {url: string, html: null}
+type HtmlWindowConfig = CreateWindowBaseConfig & {html: string, url: null}
 
 type CreateWindowEvent = {
 	type: WebviewEvent.createWindow,
@@ -69,7 +70,7 @@ type CreateWindowEvent = {
 const createUrlWindow = (url: string, config: CreateWindowBaseConfig) => {
 	return createWindow({
 		url,
-		html: '',
+		html: null,
 		...config
 	})
 }
@@ -77,7 +78,7 @@ const createUrlWindow = (url: string, config: CreateWindowBaseConfig) => {
 const createHtmlWindow = (html: string, config: CreateWindowBaseConfig) => {
 	return createWindow({
 		html,
-		url:  '',
+		url:  null,
 		...config
 	})
 }
@@ -85,15 +86,23 @@ const createHtmlWindow = (html: string, config: CreateWindowBaseConfig) => {
 let nextWindowId = 0;
 
 const createWindow = (config: UrlWindowConfig | HtmlWindowConfig) => {
+	// todo (yoav): implement win status and lifecycle that updates
+	// from objc events sent from zig
+
+	// todo (yoav): also wrap in class with methods like setTitle, etc
+	const win = {
+		id: nextWindowId++,
+		...config
+	}
+
 	const event: CreateWindowEvent = {
 		type: WebviewEvent.createWindow,
-		payload: {
-			id: nextWindowId++,
-			...config
-		}
+		payload: win
 	}
 
 	sendEvent(event);
+
+	return win;
 }
 
 
@@ -109,19 +118,26 @@ const sendEvent = (event: any) => {
 // tst
 setTimeout(() => {
 	// setTitle('hello from bun via json')
-	
-
-	createUrlWindow('https://eggbun.sh', {
+	const win = createUrlWindow('https://google.com', {
 		title: 'my url window',
-		width: 800,
+		width: 1800,
 		height: 600,
-		x: 100,
-		y: 100,
+		x: 1000,
+		y: 500,
 	})
 
-	// setTimeout(() => {
-	setTitle('hello from bun via json - 2')
-// }, 0)
+	const win2 = createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
+		title: 'my html window',
+		width: 1000,
+		height: 900,
+		x: 500,
+		y: 900,
+	});
+
+	
+	setTitle(win.id, 'hello from bun via json -  win one')
+	setTitle(win2.id, 'hello from bun via json -  win two')
+
 
 	// createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
 	// 	title: 'my html window',
