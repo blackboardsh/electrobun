@@ -108,7 +108,8 @@ const sendEvent = (event: any) => {
 
 // tst
 setTimeout(() => {
-	setTitle('hello from bun via json')
+	// setTitle('hello from bun via json')
+	
 
 	createUrlWindow('https://eggbun.sh', {
 		title: 'my url window',
@@ -118,13 +119,17 @@ setTimeout(() => {
 		y: 100,
 	})
 
-	createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
-		title: 'my html window',
-		width: 800,
-		height: 600,
-		x: 100,
-		y: 100,
-	})
+	// setTimeout(() => {
+	setTitle('hello from bun via json - 2')
+// }, 0)
+
+	// createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
+	// 	title: 'my html window',
+	// 	width: 800,
+	// 	height: 600,
+	// 	x: 100,
+	// 	y: 100,
+	// })
 
 	
 }, 2000)

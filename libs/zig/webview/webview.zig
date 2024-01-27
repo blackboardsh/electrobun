@@ -52,7 +52,7 @@ pub fn main() !void {
     var ipcThread = try std.Thread.spawn(.{}, stdInListener, .{});
     defer ipcThread.join();
 
-    window = createWindow();
+    // window = createWindow();
 
     startAppkitGuiEventLoop();
 }
@@ -88,9 +88,93 @@ const WindowType = struct {
     y: u16,
 };
 
+var jobQueue = std.ArrayList([]const u8).init(alloc);
+// defer jobQueue.deinit();
+
 // const WindowMap = std.HashMap(u32, WindowType, std.hash_map.DefaultHashFn(u32));
 const WindowMap = std.AutoHashMap(u32, WindowType);
 var windowMap: WindowMap = WindowMap.init(alloc);
+
+fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
+    _ = context;
+    // std.log.info("jobqueue items main length {}", .{jobQueue.items.len});
+
+    const line = jobQueue.orderedRemove(0);
+    defer alloc.free(line);
+
+    std.log.info("parsed line {s}", .{line});
+    // Do the main json parsing work on the stdin thread, add it to a queue, and then
+    // process the generic jobs on the main thread
+    const messageFromBun = std.json.parseFromSlice(MessageFromBun, alloc, line, .{}) catch |err| {
+        std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
+        return;
+    };
+
+    // jobQueue.append(messageFromBun) catch {
+    //     std.log.info("Error appending to jobQueue: \nreceived: {}", .{messageFromBun.value.type});
+    //     continue;
+    // };
+
+    // std.log.info("jobqueue items thread length {}", .{jobQueue.items.len});
+
+    // std.log.info("messageFromBun: {}", .{messageFromBun.value.type});
+    // std.log.info("messageFromBun: {}", .{messageFromBun.value.payload});
+
+    defer messageFromBun.deinit();
+
+    // Handle the message based on its type
+    switch (messageFromBun.value.type) {
+        .setTitle => {
+            // todo: do we need parseFromValue here? can we just cast the payload to a type?
+            const parsedPayload = std.json.parseFromValue(SetTitlePayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
+                std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+                return;
+            };
+            defer parsedPayload.deinit();
+
+            const payload = parsedPayload.value;
+
+            setTitle(payload.title);
+        },
+        .createWindow => {
+            const parsedPayload = std.json.parseFromValue(CreateWindowPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
+                std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+                return;
+            };
+            defer parsedPayload.deinit();
+
+            window = createWindow();
+
+            // const payload = parsedPayload.value;
+
+            // std.log.info("parsed type {}: \nreceived: ", .{payload.id});
+
+            // const _window = WindowType{ .id = payload.id, .title = payload.title, .url = payload.url, .html = payload.html, .width = payload.width, .height = payload.height, .x = payload.x, .y = payload.y, .window = undefined, .webview = undefined };
+
+            // windowMap.put(payload.id, _window) catch {
+            //     std.log.info("Error putting window into hashmap: \nreceived: {}", .{messageFromBun.value.type});
+            //     continue;
+            // };
+
+            // // std.log.info("hashmap size{}", .{windowMap.count()});
+
+            // const windowContext = alloc.create(WindowContext) catch {
+            //     // Handle the error here, e.g., log it or set a default value
+            //     std.debug.print("Error allocating windowContext: \n", .{});
+            //     return;
+            // };
+            // windowContext.* = WindowContext{ .id = payload.id };
+
+            // dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, windowContext), createWindowOnMainThread);
+            // // todo:
+            // - create a window struct in a hashmap with the id as the key
+            // - dispatch createWindow to the main thread with a specific id
+            // - that function then pulls the window config, creates the window and saves the window and webview pointer to the hashmap
+        },
+
+        // Handle other types
+    }
+}
 
 // We listen on stdin for stuff to do from bun and then dispatch it to the main thread where the gui stuff happens
 fn stdInListener() void {
@@ -101,116 +185,101 @@ fn stdInListener() void {
     while (true) {
         const bytesRead = stdin.readUntilDelimiterOrEof(&buffer, '\n') catch continue;
         if (bytesRead) |line| {
-            const messageFromBun = std.json.parseFromSlice(MessageFromBun, alloc, line, .{}) catch |err| {
-                std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
+            std.log.info("received line: {s}", .{line});
+
+            // since line is re-used we need to copy it to the heap
+            const lineCopy = alloc.dupe(u8, line) catch {
+                // Handle the error here, e.g., log it or set a default value
+                std.debug.print("Error: {s}\n", .{line});
                 continue;
             };
-            defer messageFromBun.deinit();
 
-            // Handle the message based on its type
-            switch (messageFromBun.value.type) {
-                .setTitle => {
-                    const parsedPayload = std.json.parseFromValue(SetTitlePayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-                        std.log.info("Error casting parsed json to zig type from stdin - {}: \nreceived: {s}", .{ err, line });
-                        continue;
-                    };
-                    defer parsedPayload.deinit();
+            jobQueue.append(lineCopy) catch {
+                std.log.info("Error appending to jobQueue: \nreceived: {s}", .{line});
+                continue;
+            };
 
-                    const payload = parsedPayload.value;
+            dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), null, proccessJobQueue);
+            // continue;
+            // defer messageFromBun.deinit();
 
-                    // convert the payload to null-terminated string
-                    const title = alloc.dupe(u8, payload.title) catch {
-                        // Handle the error here, e.g., log it or set a default value
-                        std.debug.print("Error: {s}\n", .{line});
-                        return;
-                    };
+            // // Handle the message based on its type
+            // switch (messageFromBun.value.type) {
+            //     .setTitle => {
+            //         const parsedPayload = std.json.parseFromValue(SetTitlePayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
+            //             std.log.info("Error casting parsed json to zig type from stdin - {}: \nreceived: {s}", .{ err, line });
+            //             continue;
+            //         };
+            //         defer parsedPayload.deinit();
 
-                    // Dynamically allocate titleContext on the heap so it lives beyond this while loop iteration
-                    const titleContext = alloc.create(TitleContext) catch {
-                        // Handle the error here, e.g., log it or set a default value
-                        std.debug.print("Error allocating titleContext: \n", .{});
-                        return;
-                    };
-                    titleContext.* = TitleContext{ .title = title };
+            //         const payload = parsedPayload.value;
 
-                    dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
+            //         // convert the payload to null-terminated string
+            //         const title = alloc.dupe(u8, payload.title) catch {
+            //             // Handle the error here, e.g., log it or set a default value
+            //             std.debug.print("Error: {s}\n", .{line});
+            //             return;
+            //         };
 
-                    // Parse the payload for 'exampleType'
-                    // ...
-                },
-                .createWindow => {
-                    const parsedPayload = std.json.parseFromValue(CreateWindowPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-                        switch (err) {
-                            error.MissingField => |missingFieldError| {
-                                std.log.info("Missing field error: field '{}' is missing in JSON data.\nReceived JSON: {s}", .{ missingFieldError, line });
-                            },
-                            else => {
-                                std.log.info("Error casting parsed json to zig type from stdin\nError type {}: \nreceived: {s}", .{ err, line });
-                            },
-                        }
+            //         // Dynamically allocate titleContext on the heap so it lives beyond this while loop iteration
+            //         const titleContext = alloc.create(TitleContext) catch {
+            //             // Handle the error here, e.g., log it or set a default value
+            //             std.debug.print("Error allocating titleContext: \n", .{});
+            //             return;
+            //         };
+            //         titleContext.* = TitleContext{ .title = title };
 
-                        std.log.info("Error casting parsed json to zig type from stdin\nError type {}: \nreceived: {s}", .{ err, line });
-                        continue;
-                    };
-                    defer parsedPayload.deinit();
+            //         dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
 
-                    const payload = parsedPayload.value;
+            //         // Parse the payload for 'exampleType'
+            //         // ...
+            //     },
+            //     .createWindow => {
+            //         const parsedPayload = std.json.parseFromValue(CreateWindowPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
+            //             switch (err) {
+            //                 error.MissingField => |missingFieldError| {
+            //                     std.log.info("Missing field error: field '{}' is missing in JSON data.\nReceived JSON: {s}", .{ missingFieldError, line });
+            //                 },
+            //                 else => {
+            //                     std.log.info("Error casting parsed json to zig type from stdin\nError type {}: \nreceived: {s}", .{ err, line });
+            //                 },
+            //             }
 
-                    std.log.info("parsed type {}: \nreceived: ", .{payload.id});
+            //             std.log.info("Error casting parsed json to zig type from stdin\nError type {}: \nreceived: {s}", .{ err, line });
+            //             continue;
+            //         };
+            //         defer parsedPayload.deinit();
 
-                    const _window = WindowType{ .id = payload.id, .title = payload.title, .url = payload.url, .html = payload.html, .width = payload.width, .height = payload.height, .x = payload.x, .y = payload.y, .window = undefined, .webview = undefined };
+            //         const payload = parsedPayload.value;
 
-                    windowMap.put(payload.id, _window) catch {
-                        std.log.info("Error putting window into hashmap: \nreceived: {}", .{messageFromBun.value.type});
-                        continue;
-                    };
+            //         std.log.info("parsed type {}: \nreceived: ", .{payload.id});
 
-                    // std.log.info("hashmap size{}", .{windowMap.count()});
+            //         const _window = WindowType{ .id = payload.id, .title = payload.title, .url = payload.url, .html = payload.html, .width = payload.width, .height = payload.height, .x = payload.x, .y = payload.y, .window = undefined, .webview = undefined };
 
-                    const windowContext = alloc.create(WindowContext) catch {
-                        // Handle the error here, e.g., log it or set a default value
-                        std.debug.print("Error allocating windowContext: \n", .{});
-                        return;
-                    };
-                    windowContext.* = WindowContext{ .id = payload.id };
+            //         windowMap.put(payload.id, _window) catch {
+            //             std.log.info("Error putting window into hashmap: \nreceived: {}", .{messageFromBun.value.type});
+            //             continue;
+            //         };
 
-                    dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, windowContext), createWindowOnMainThread);
-                    // todo:
-                    // - create a window struct in a hashmap with the id as the key
-                    // - dispatch createWindow to the main thread with a specific id
-                    // - that function then pulls the window config, creates the window and saves the window and webview pointer to the hashmap
-                },
+            //         // std.log.info("hashmap size{}", .{windowMap.count()});
 
-                // Handle other types
-            }
+            //         const windowContext = alloc.create(WindowContext) catch {
+            //             // Handle the error here, e.g., log it or set a default value
+            //             std.debug.print("Error allocating windowContext: \n", .{});
+            //             return;
+            //         };
+            //         windowContext.* = WindowContext{ .id = payload.id };
 
-            // const stdout = std.io.getStdOut().writer();
+            //         dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, windowContext), createWindowOnMainThread);
+            //         // todo:
+            //         // - create a window struct in a hashmap with the id as the key
+            //         // - dispatch createWindow to the main thread with a specific id
+            //         // - that function then pulls the window config, creates the window and saves the window and webview pointer to the hashmap
+            //     },
 
-            // const message = "Hello, world!\n";
-            // // Write the message to stdout
-            // _ = stdout.writeAll(message) catch {
-            //     // Handle potential errors here
-            //     std.debug.print("Failed to write to stdout\n", .{});
-            // };
+            //     // Handle other types
+            // }
 
-            // Copy the line into a new, null-terminated (C-like) string
-            // you can't create an NSString here because it will be freed
-            // when dispatch_async chucks it over to the main thread
-            // const title = alloc.dupe(u8, line) catch {
-            //     // Handle the error here, e.g., log it or set a default value
-            //     std.debug.print("Error duplicating string: {s}\n", .{line});
-            //     return;
-            // };
-
-            // // Dynamically allocate titleContext on the heap so it lives beyond this while loop iteration
-            // const titleContext = alloc.create(TitleContext) catch {
-            //     // Handle the error here, e.g., log it or set a default value
-            //     std.debug.print("Error allocating titleContext: \n", .{});
-            //     return;
-            // };
-            // titleContext.* = TitleContext{ .title = title };
-
-            // dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), @as(?*anyopaque, titleContext), setTitleOnMainThread);
         }
     }
 }
@@ -244,6 +313,11 @@ fn setTitleOnMainThread(context: ?*anyopaque) callconv(.C) void {
     alloc.free(titleContext.title);
     window.msgSend(void, "setTitle:", .{titleString});
     alloc.destroy(titleContext);
+}
+
+fn setTitle(title: []const u8) void {
+    const titleString = createNSString(title);
+    window.msgSend(void, "setTitle:", .{titleString});
 }
 
 pub export fn startAppkitGuiEventLoop() void {
