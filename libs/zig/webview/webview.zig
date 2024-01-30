@@ -46,8 +46,9 @@ const WKNavigationResponsePolicy = enum(c_int) {
 
 // const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) void;
 // In C the first param is a reference to itself
-const WKNavigationDecisionHandler = fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) void;
+// const WKNavigationDecisionHandler = fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) void;
 // const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) callconv(.C) void;
+const DecisionHandlerBlock = objc.Block(struct {}, (.{WKNavigationResponsePolicy}), void);
 
 // var window: objc.Object = undefined;
 
@@ -280,14 +281,14 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
         defer objc.registerClassPair(MyNavigationDelegate);
 
         std.debug.assert(try MyNavigationDelegate.addMethod("webView:decidePolicyForNavigationAction:decisionHandler:", struct {
-            fn imp(target: objc.c.id, sel: objc.c.SEL, webView: *anyopaque, navigationAction: *anyopaque, decisionHandler: objc.c.id) callconv(.C) void {
+            fn imp(target: objc.c.id, webView: *anyopaque, navigationAction: *anyopaque, decisionHandler: objc.c.id) callconv(.C) void {
                 // Note:
                 // target = a reference to the object who's method is being called, so in this case it's the NavigationDelegate
                 // sel (objc selector) basically the name of the method on the target. in js it's like `target[sel]()`
                 // in this case it's thiswebviewinstance:decidePolicyForNavigationAction:decisionHandler:
                 // webView = the WKWebview that's calling the method
                 _ = target;
-                _ = sel;
+                // _ = sel;
                 _ = webView;
                 _ = navigationAction;
                 _ = decisionHandler;
@@ -303,11 +304,23 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
 
                 std.log.info("----> navigationg thingy running ", .{});
 
+                // Error: causes panic
                 // const decisionHandlerCallback: *WKNavigationDecisionHandler = @ptrCast(decisionHandler);
                 // decisionHandlerCallback(decisionHandler, WKNavigationResponsePolicy.allow);
 
-                //
-                // Implement your 'will-navigate' logic here
+                // Error: invalid selector
+                // const decisionHandlerObj = @as(*const objc.Object, @ptrCast(decisionHandler));
+                // decisionHandlerObj.msgSend(void, "invokeWithArgument:", .{WKNavigationResponsePolicy.allow});
+
+                // Error: panic
+                // const decisionHandlerCallback = @as(*const WKNavigationDecisionHandler, @ptrCast(decisionHandler));
+                // decisionHandlerCallback(decisionHandler, .allow); // Assuming .allow is a valid value for WKNavigationResponsePolicy
+
+                // Cast decisionHandler to the DecisionHandlerBlock type
+                // const decisionHandlerBlock: *DecisionHandlerBlock = @ptrCast(decisionHandler);
+
+                // Invoke the decisionHandler block with the appropriate arguments
+                // decisionHandlerBlock.invoke(.{.allow});
             }
         }.imp));
 
