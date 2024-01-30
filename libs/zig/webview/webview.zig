@@ -38,6 +38,17 @@ const NSWindowStyleMaskResizable = 1 << 3;
 
 const NSBackingStoreBuffered = 2;
 
+const WKNavigationResponsePolicy = enum(c_int) {
+    cancel,
+    allow,
+    download,
+};
+
+// const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) void;
+// In C the first param is a reference to itself
+const WKNavigationDecisionHandler = fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) void;
+// const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) callconv(.C) void;
+
 // var window: objc.Object = undefined;
 
 pub const TitleContext = struct {
@@ -257,8 +268,78 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
 
     const wkWebviewClass = objc.getClass("WKWebView").?;
     const webkitAlloc = wkWebviewClass.msgSend(objc.Object, "alloc", .{});
-    const webView = webkitAlloc.msgSend(objc.Object, "initWithFrame:", .{windowBounds});
-    _window.msgSend(void, "setContentView:", .{webView});
+    const windowWebview = webkitAlloc.msgSend(objc.Object, "initWithFrame:", .{windowBounds});
+    _window.msgSend(void, "setContentView:", .{windowWebview});
+
+    // fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
+    const MyNavigationDelegate = setup: {
+        const MyNavigationDelegate = objc.allocateClassPair(objc.getClass("NSObject").?, "my_navigation_delegate").?;
+
+        std.log.info("MyNavigationDelegate class allocated successfully", .{});
+
+        defer objc.registerClassPair(MyNavigationDelegate);
+
+        std.debug.assert(try MyNavigationDelegate.addMethod("webView:decidePolicyForNavigationAction:decisionHandler:", struct {
+            fn imp(target: objc.c.id, sel: objc.c.SEL, webView: *anyopaque, navigationAction: *anyopaque, decisionHandler: objc.c.id) callconv(.C) void {
+                // Note:
+                // target = a reference to the object who's method is being called, so in this case it's the NavigationDelegate
+                // sel (objc selector) basically the name of the method on the target. in js it's like `target[sel]()`
+                // in this case it's thiswebviewinstance:decidePolicyForNavigationAction:decisionHandler:
+                // webView = the WKWebview that's calling the method
+                _ = target;
+                _ = sel;
+                _ = webView;
+                _ = navigationAction;
+                _ = decisionHandler;
+                // const navigationActionObj = @as(*const objc.Object, @alignCast(@ptrCast(navigationAction)));
+                // // const navigationActionObj = @as(*const objc.Object, @ptrCast(navigationAction));
+                // const requestObj = navigationActionObj.msgSend(objc.Object, "request", .{});
+                // const url = requestObj.msgSend(objc.Object, "url", .{});
+
+                // We have to cast the objc opaque type to a defined zig type for zig to let us call it like a function
+                // and type it correctly
+
+                // std.log.info("----> navigationg thingy running {}", .{url});
+
+                std.log.info("----> navigationg thingy running ", .{});
+
+                // const decisionHandlerCallback: *WKNavigationDecisionHandler = @ptrCast(decisionHandler);
+                // decisionHandlerCallback(decisionHandler, WKNavigationResponsePolicy.allow);
+
+                //
+                // Implement your 'will-navigate' logic here
+            }
+        }.imp));
+
+        break :setup MyNavigationDelegate;
+    };
+
+    // Use your custom delegate
+    const myDelegate = MyNavigationDelegate.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
+    windowWebview.msgSend(void, "setNavigationDelegate:", .{myDelegate});
+
+    // works, basic zig example creating an obj c block that references zig code
+    // const AddBlock = objc.Block(struct {
+    //     x: i32,
+    //     y: i32,
+    // }, .{}, i32);
+
+    // const captures: AddBlock.Captures = .{
+    //     .x = 2,
+    //     .y = 3,
+    // };
+
+    // var block = AddBlock.init(captures, (struct {
+    //     fn addFn(block: *const AddBlock.Context) callconv(.C) i32 {
+    //         std.log.info("----> addFn running", .{});
+    //         return block.x + block.y;
+    //     }
+    // }).addFn) catch null;
+    // defer if (block != null) block.?.deinit();
+
+    // if (block) |_block| {
+    //     _ = _block.invoke(.{});
+    // }
 
     // load url
     if (opts.url) |url| {
@@ -268,14 +349,14 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
         };
         // std.log.info("creating url window: {s}", .{url});
         const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{createNSURL(urlCopy)});
-        webView.msgSend(void, "loadRequest:", .{request});
+        windowWebview.msgSend(void, "loadRequest:", .{request});
     } else if (opts.html) |html| {
         const htmlCopy = alloc.dupe(u8, html) catch {
             unreachable;
         };
         std.log.info("creating html window: {s}", .{html});
         // const NSHtmlString = createNSString(html);
-        webView.msgSend(void, "loadHTMLString:baseURL:", .{ createNSString(htmlCopy), createNSURL("file://") });
+        windowWebview.msgSend(void, "loadHTMLString:baseURL:", .{ createNSString(htmlCopy), createNSURL("file://") });
     }
 
     // Display the window

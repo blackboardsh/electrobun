@@ -126,17 +126,17 @@ setTimeout(() => {
 		y: 500,
 	})
 
-	const win2 = createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
-		title: 'my html window',
-		width: 1000,
-		height: 900,
-		x: 500,
-		y: 900,
-	});
+	// const win2 = createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
+	// 	title: 'my html window',
+	// 	width: 1000,
+	// 	height: 900,
+	// 	x: 500,
+	// 	y: 900,
+	// });
 
 	
 	setTitle(win.id, 'hello from bun via json -  win one')
-	setTitle(win2.id, 'hello from bun via json -  win two')
+	// setTitle(win2.id, 'hello from bun via json -  win two')
 
 
 	// createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
