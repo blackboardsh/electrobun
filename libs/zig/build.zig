@@ -29,20 +29,6 @@ pub fn build(b: *std.Build) void {
     exe.linkFramework("AppKit"); // Link the AppKit framework
     exe.linkFramework("WebKit"); // Link the WebKit framework
 
-    // Some things can't be done in objc directly from zig via msgSending
-    // So we have some objc wrappers that are themselves wrapped in c-abi compatible structures
-    // that zig can call in those cases (like executing objc blocks that have unknown context
-    // in their closure that can't reliably be replicated in zig)
-    // Compile the Objective-C code into a .dylib
-
-    // shared libraries are accessible at runtime, the os looks in standard folders
-    // we use Bun spawn's env to extends the DYLD_LIBRARY_PATH during development
-
-    // Used for the cImport call in webview.zig
-    // exe.addIncludePath(.{ .path = "../objc/" });
-
-    // exe.linkLibrary(sharedLib);
-
     b.installArtifact(exe);
 
     // todo for future testing of the methods from cli can pass args like

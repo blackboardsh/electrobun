@@ -46,17 +46,6 @@ const WKNavigationResponsePolicy = enum(c_int) {
     allow = 1,
     download = 2,
 };
-// const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) void;
-
-// const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) void;
-// In C the first param is a reference to itself
-// const WKNavigationDecisionHandler = fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) void;
-// pub fn WKNavigationDecisionHandler(target: *anyopaque, policy: WKNavigationResponsePolicy) void;
-// const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) callconv(.C) void;
-// const DecisionHandlerBlock = objc.Block(struct {}, (.{WKNavigationResponsePolicy}), void);
-// var decisionHandlerFunc: fn (*anyopaque, ?*c_int) callconv(.C) *void = undefined;
-
-// var window: objc.Object = undefined;
 
 pub const TitleContext = struct {
     title: []const u8,
@@ -308,22 +297,11 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
                 _ = target;
                 _ = sel;
                 _ = webView;
-                _ = navigationAction;
-                // _ = decisionHandler;
-                // const navigationActionObj = @as(*const objc.Object, @alignCast(@ptrCast(navigationAction)));
-                // // const navigationActionObj = @as(*const objc.Object, @ptrCast(navigationAction));
-                // const requestObj = navigationActionObj.msgSend(objc.Object, "request", .{});
-                // const url = requestObj.msgSend(objc.Object, "url", .{});
 
-                // We have to cast the objc opaque type to a defined zig type for zig to let us call it like a function
-                // and type it correctly
-
-                // std.log.info("----> navigationg thingy running {}", .{url});
                 std.log.info("----> navigationg thingy running ", .{});
 
-                // const policy: cpp.WKNavigationResponsePolicy = WKNavigationResponsePolicy.allow;
-                // cpp.invokeDecisionHandler(decisionHandler, policy);
-
+                // To compile this dylib, in the repo root run:
+                // clang -dynamiclib -o ./libs/objc/libDecisionWrapper.dylib ./libs/objc/DecisionHandlerWrapper.m -framework WebKit -framework Cocoa -fobjc-arc
                 const dylib_path = "./libs/objc/libDecisionWrapper.dylib";
                 const RTLD_NOW = 0x2;
                 const handle = system.dlopen(dylib_path, RTLD_NOW);
@@ -332,49 +310,43 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
                     return;
                 }
 
+                const getUrlFromNavigationAction = system.dlsym(handle, "getUrlFromNavigationAction");
+                if (getUrlFromNavigationAction == null) {
+                    std.debug.print("Failed to load symbol: getUrlFromNavigationAction\n", .{});
+                    // system.dlclose(handle);
+                    return;
+                }
+
+                // Define the function pointer type
+                // Note: [*:0]const u8 is a null terminated c-style string that obj returns
+                const getUrlFromNavigationActionFunc = fn (*anyopaque) callconv(.C) [*:0]const u8;
+
+                // Cast the function pointer to the appropriate type
+                const getUrlFromNavigationActionWrapper = @as(*const getUrlFromNavigationActionFunc, @alignCast(@ptrCast(getUrlFromNavigationAction)));
+
+                // Call the function
+                const url_cstr = getUrlFromNavigationActionWrapper(navigationAction);
+                // Note: this is needed to convert the c-style string to a zig string
+                const url_str = std.mem.span(url_cstr);
+
+                std.log.info("----> navigating to URL: {s}", .{url_str});
+
                 // Suppose 'someFunction' is a function in your dylib you want to call
-                const someFunction = system.dlsym(handle, "invokeDecisionHandler");
-                if (someFunction == null) {
-                    std.debug.print("Failed to load symbol: someFunction\n", .{});
+                const invokeDecisionHandler = system.dlsym(handle, "invokeDecisionHandler");
+                if (invokeDecisionHandler == null) {
+                    std.debug.print("Failed to load symbol: invokeDecisionHandler\n", .{});
                     // system.dlclose(handle);
                     return;
                 }
 
                 // Cast the function pointer to the appropriate type
-                const func: *const fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) *void = @alignCast(@ptrCast(someFunction));
-                // std.debug.print("Failed to load symbol: someFunction {}\n", .{@TypeOf(func)});
+                const decisionHandlerWrapper: *const fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) *void = @alignCast(@ptrCast(invokeDecisionHandler));
+
                 // Call the function
-                _ = func(decisionHandler, WKNavigationResponsePolicy.allow);
+                _ = decisionHandlerWrapper(decisionHandler, WKNavigationResponsePolicy.allow);
 
                 // Close the library
                 // system.dlclose(handle);
-
-                // Error: causes panic
-                // const decisionHandlerCallback: *WKNavigationDecisionHandler = @alignCast(@ptrCast(decisionHandler));
-                // std.log.info("decisionHandlerCallback address: {x}", .{@intFromPtr(decisionHandlerCallback)});
-
-                // @call(.auto, decisionHandlerCallback, .{WKNavigationResponsePolicy.allow});
-                // decisionHandlerCallback(WKNavigationResponsePolicy.allow);
-
-                // Error: invalid selector
-                // const decisionHandlerObj = @as(*const objc.Object, @ptrCast(decisionHandler));
-                // decisionHandlerObj.msgSend(void, "invokeWithArgument:", .{WKNavigationResponsePolicy.allow});
-
-                // Error: panic
-                // const decisionHandlerCallback = @as(*const WKNavigationDecisionHandler, @ptrCast(decisionHandler));
-                // decisionHandlerCallback(decisionHandler, .allow); // Assuming .allow is a valid value for WKNavigationResponsePolicy
-
-                // Cast decisionHandler to the DecisionHandlerBlock type
-                // const decisionHandlerBlock: *DecisionHandlerBlock = @ptrCast(decisionHandler);
-
-                // Invoke the decisionHandler block with the appropriate arguments
-                // decisionHandlerBlock.invoke(.{.allow});
-
-                // const decisionHandlerCallback: *objc.Object = @alignCast(@ptrCast(decisionHandler));
-
-                // decisionHandlerCallback.msgSend(void, "decisionHandler:withPolicy:", .{WKNavigationResponsePolicy.allow});
-
-                // _ = decisionHandlerCallback;
             }
         }.imp));
 
