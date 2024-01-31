@@ -38,17 +38,20 @@ const NSWindowStyleMaskResizable = 1 << 3;
 
 const NSBackingStoreBuffered = 2;
 
+const WKNavigationResponsePolicyAllow = 1;
+
 const WKNavigationResponsePolicy = enum(c_int) {
-    cancel,
-    allow,
-    download,
+    cancel = 0,
+    allow = 1,
+    download = 2,
 };
+const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) void;
 
 // const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) void;
 // In C the first param is a reference to itself
 // const WKNavigationDecisionHandler = fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) void;
 // const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) callconv(.C) void;
-const DecisionHandlerBlock = objc.Block(struct {}, (.{WKNavigationResponsePolicy}), void);
+// const DecisionHandlerBlock = objc.Block(struct {}, (.{WKNavigationResponsePolicy}), void);
 
 // var window: objc.Object = undefined;
 
@@ -278,20 +281,32 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
 
         std.log.info("MyNavigationDelegate class allocated successfully", .{});
 
-        defer objc.registerClassPair(MyNavigationDelegate);
+        // defer objc.registerClassPair(MyNavigationDelegate);
+
+        // go implemetation
+        //         func (ad *cocoaDefaultDelegateClassWrapper) handleWebViewDecidePolicyForNavigationActionDecisionHandler(delegate objc.Object, webview objc.Object, navigation objc.Object, decisionHandler objc.Object) {
+        // 	reqURL := mdCore.NSURLRequest_fromRef(navigation.Send("request")).URL()
+        // 	destinationHost := reqURL.Host().String()
+        // 	var decisionPolicy int
+        // 	if appURL.Hostname() != destinationHost {
+        // 		decisionPolicy = NavigationActionPolicyCancel
+        // 		openURL(reqURL.String())
+        // 	}
+        // 	completionHandler.Send("decisionHandler:withPolicy:", decisionHandler, decisionPolicy)
+        // }
 
         std.debug.assert(try MyNavigationDelegate.addMethod("webView:decidePolicyForNavigationAction:decisionHandler:", struct {
-            fn imp(target: objc.c.id, webView: *anyopaque, navigationAction: *anyopaque, decisionHandler: objc.c.id) callconv(.C) void {
+            fn imp(target: objc.c.id, sel: objc.c.SEL, webView: *anyopaque, navigationAction: *anyopaque, decisionHandler: *anyopaque) callconv(.C) void {
                 // Note:
                 // target = a reference to the object who's method is being called, so in this case it's the NavigationDelegate
                 // sel (objc selector) basically the name of the method on the target. in js it's like `target[sel]()`
                 // in this case it's thiswebviewinstance:decidePolicyForNavigationAction:decisionHandler:
                 // webView = the WKWebview that's calling the method
                 _ = target;
-                // _ = sel;
+                _ = sel;
                 _ = webView;
                 _ = navigationAction;
-                _ = decisionHandler;
+                // _ = decisionHandler;
                 // const navigationActionObj = @as(*const objc.Object, @alignCast(@ptrCast(navigationAction)));
                 // // const navigationActionObj = @as(*const objc.Object, @ptrCast(navigationAction));
                 // const requestObj = navigationActionObj.msgSend(objc.Object, "request", .{});
@@ -305,8 +320,11 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
                 std.log.info("----> navigationg thingy running ", .{});
 
                 // Error: causes panic
-                // const decisionHandlerCallback: *WKNavigationDecisionHandler = @ptrCast(decisionHandler);
-                // decisionHandlerCallback(decisionHandler, WKNavigationResponsePolicy.allow);
+                const decisionHandlerCallback: *WKNavigationDecisionHandler = @alignCast(@ptrCast(decisionHandler));
+                std.log.info("decisionHandlerCallback address: {x}", .{@intFromPtr(decisionHandlerCallback)});
+
+                @call(.auto, decisionHandlerCallback, .{WKNavigationResponsePolicy.allow});
+                // decisionHandlerCallback(WKNavigationResponsePolicy.allow);
 
                 // Error: invalid selector
                 // const decisionHandlerObj = @as(*const objc.Object, @ptrCast(decisionHandler));
@@ -321,6 +339,12 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
 
                 // Invoke the decisionHandler block with the appropriate arguments
                 // decisionHandlerBlock.invoke(.{.allow});
+
+                // const decisionHandlerCallback: *objc.Object = @alignCast(@ptrCast(decisionHandler));
+
+                // decisionHandlerCallback.msgSend(void, "decisionHandler:withPolicy:", .{WKNavigationResponsePolicy.allow});
+
+                // _ = decisionHandlerCallback;
             }
         }.imp));
 
