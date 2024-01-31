@@ -10,6 +10,10 @@ const proc = Bun.spawn([webviewPath], {
 	stdin: 'pipe',
 	stdout: 'pipe',
 	//  cwd: webviewPath,
+	env: {
+		...process.env,
+		DYLD_LIBRARY_PATH: '../libs/objc/'
+	}
 });
 
 enum WebviewEvent {

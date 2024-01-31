@@ -1,6 +1,7 @@
 const std = @import("std");
 const objc = @import("../zig-objc/src/main.zig");
-const c = @import("../zig-objc/src/c.zig");
+// const c = @import("../zig-objc/src/c.zig");
+const system = std.c;
 
 // timer reference
 // const startTime = std.time.nanoTimestamp();
@@ -45,13 +46,15 @@ const WKNavigationResponsePolicy = enum(c_int) {
     allow = 1,
     download = 2,
 };
-const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) void;
+// const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) void;
 
 // const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) void;
 // In C the first param is a reference to itself
 // const WKNavigationDecisionHandler = fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) void;
+// pub fn WKNavigationDecisionHandler(target: *anyopaque, policy: WKNavigationResponsePolicy) void;
 // const WKNavigationDecisionHandler = fn (WKNavigationResponsePolicy) callconv(.C) void;
 // const DecisionHandlerBlock = objc.Block(struct {}, (.{WKNavigationResponsePolicy}), void);
+// var decisionHandlerFunc: fn (*anyopaque, ?*c_int) callconv(.C) *void = undefined;
 
 // var window: objc.Object = undefined;
 
@@ -316,14 +319,41 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
                 // and type it correctly
 
                 // std.log.info("----> navigationg thingy running {}", .{url});
-
                 std.log.info("----> navigationg thingy running ", .{});
 
-                // Error: causes panic
-                const decisionHandlerCallback: *WKNavigationDecisionHandler = @alignCast(@ptrCast(decisionHandler));
-                std.log.info("decisionHandlerCallback address: {x}", .{@intFromPtr(decisionHandlerCallback)});
+                // const policy: cpp.WKNavigationResponsePolicy = WKNavigationResponsePolicy.allow;
+                // cpp.invokeDecisionHandler(decisionHandler, policy);
 
-                @call(.auto, decisionHandlerCallback, .{WKNavigationResponsePolicy.allow});
+                const dylib_path = "./libs/objc/libDecisionWrapper.dylib";
+                const RTLD_NOW = 0x2;
+                const handle = system.dlopen(dylib_path, RTLD_NOW);
+                if (handle == null) {
+                    std.debug.print("Failed to load library: {s}\n", .{dylib_path});
+                    return;
+                }
+
+                // Suppose 'someFunction' is a function in your dylib you want to call
+                const someFunction = system.dlsym(handle, "invokeDecisionHandler");
+                if (someFunction == null) {
+                    std.debug.print("Failed to load symbol: someFunction\n", .{});
+                    // system.dlclose(handle);
+                    return;
+                }
+
+                // Cast the function pointer to the appropriate type
+                const func: *const fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) *void = @alignCast(@ptrCast(someFunction));
+                // std.debug.print("Failed to load symbol: someFunction {}\n", .{@TypeOf(func)});
+                // Call the function
+                _ = func(decisionHandler, WKNavigationResponsePolicy.allow);
+
+                // Close the library
+                // system.dlclose(handle);
+
+                // Error: causes panic
+                // const decisionHandlerCallback: *WKNavigationDecisionHandler = @alignCast(@ptrCast(decisionHandler));
+                // std.log.info("decisionHandlerCallback address: {x}", .{@intFromPtr(decisionHandlerCallback)});
+
+                // @call(.auto, decisionHandlerCallback, .{WKNavigationResponsePolicy.allow});
                 // decisionHandlerCallback(WKNavigationResponsePolicy.allow);
 
                 // Error: invalid selector
