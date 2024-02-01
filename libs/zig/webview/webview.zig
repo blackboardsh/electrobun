@@ -39,7 +39,7 @@ const NSWindowStyleMaskResizable = 1 << 3;
 
 const NSBackingStoreBuffered = 2;
 
-const WKNavigationResponsePolicyAllow = 1;
+// const WKNavigationResponsePolicyAllow = 1;
 
 const WKNavigationResponsePolicy = enum(c_int) {
     cancel = 0,
@@ -65,6 +65,7 @@ pub fn main() !void {
 const MessageType = enum {
     setTitle,
     createWindow,
+    decideNavigation,
     // Add other types as needed
 };
 
@@ -79,6 +80,10 @@ const SetTitlePayload = struct {
 };
 
 const CreateWindowPayload = struct { id: u32, url: ?[]const u8, html: ?[]const u8, title: []const u8, width: f64, height: f64, x: f64, y: f64 };
+
+const decideNavigationPayload = struct {
+    shouldAllow: bool,
+};
 
 const WindowType = struct {
     id: u32,
@@ -118,6 +123,8 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
 
     defer messageFromBun.deinit();
 
+    std.log.info("parsed line {}", .{messageFromBun.value.type});
+
     // Handle the message based on its type
     switch (messageFromBun.value.type) {
         .setTitle => {
@@ -154,6 +161,34 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
             std.log.info("hashmap size{}", .{windowMap.count()});
         },
 
+        .decideNavigation => {
+            std.log.info("decide Navigation... ", .{});
+            // note: could techincally resolve this on the other thread instead of waiting for it to
+            // be sent as a main thread job queue
+            const parsedPayload = std.json.parseFromValue(decideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
+                std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+                return;
+            };
+            defer parsedPayload.deinit();
+
+            const payload = parsedPayload.value;
+
+            _response = payload.shouldAllow;
+
+            std.log.info("decide Navigation{}", .{_response});
+
+            _waitingForResponse = false;
+            // Handle the navigation decision
+            // const parsedPayload = std.json.parseFromValue(DecideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
+            //     std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+            //     return;
+            // };
+            // defer parsedPayload.deinit();
+
+            // const payload = parsedPayload.value;
+            // decideNavigation(payload);
+        },
+
         // Handle other types
     }
 }
@@ -168,6 +203,14 @@ fn stdInListener() void {
         const bytesRead = stdin.readUntilDelimiterOrEof(&buffer, '\n') catch continue;
         if (bytesRead) |line| {
             std.log.info("received line: {s}", .{line});
+
+            if (_waitingForResponse == true) {
+                _response = true;
+                _waitingForResponse = false;
+
+                std.log.info("was waiting for response, unblocking thread", .{});
+                continue;
+            }
 
             // since line is re-used we need to copy it to the heap
             const lineCopy = alloc.dupe(u8, line) catch {
@@ -225,6 +268,9 @@ fn setTitle(opts: SetTitlePayload) void {
         window.msgSend(void, "setTitle:", .{titleString});
     }
 }
+
+var _waitingForResponse = false;
+var _response = false;
 
 pub fn createWindow(opts: CreateWindowPayload) objc.Object {
     const pool = objc.AutoreleasePool.init();
@@ -342,8 +388,36 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
                 // Cast the function pointer to the appropriate type
                 const decisionHandlerWrapper: *const fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) *void = @alignCast(@ptrCast(invokeDecisionHandler));
 
+                // timer reference
+                const startTime = std.time.nanoTimestamp();
+
+                sendMessageToBun(url_str);
+
+                _waitingForResponse = true;
+
+                while (_waitingForResponse == true) {
+                    // std.time.sleep(1000000000);
+
+                    // const endTime = std.time.nanoTimestamp();
+                    // const duration = endTime - startTime;
+                    // std.debug.print("Time since started: {} ns \n{}", .{ duration, _waitingForResponse });
+                    // maybe do a small sleep here?
+                }
+
+                const endTime = std.time.nanoTimestamp();
+                const duration = endTime - startTime;
+                std.debug.print("Time taken: {} ns\n", .{duration});
+
+                var policyResponse: WKNavigationResponsePolicy = undefined;
+
+                if (_response == true) {
+                    policyResponse = WKNavigationResponsePolicy.allow;
+                } else {
+                    policyResponse = WKNavigationResponsePolicy.cancel;
+                }
+
                 // Call the function
-                _ = decisionHandlerWrapper(decisionHandler, WKNavigationResponsePolicy.allow);
+                _ = decisionHandlerWrapper(decisionHandler, policyResponse);
 
                 // Close the library
                 // system.dlclose(handle);

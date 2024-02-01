@@ -19,17 +19,28 @@ const proc = Bun.spawn([webviewPath], {
 enum WebviewEvent {
 	setTitle = 0,
 	createWindow = 1,
+	decideNavigation = 2,
 }
 
 async function readStream(stream) {
 	const reader = stream.getReader();
 	try {
 	  while (true) {
+		// todo (yoav): does this read until the next new line
 		const { done, value } = await reader.read();
 		if (done) break;
 		const output = new TextDecoder().decode(value);
 		// Process the output
 		console.log("Received output:", output);
+
+		
+			sendEvent({
+				type: WebviewEvent.decideNavigation,
+				payload: {
+					shouldAllow: output.includes('google.com'),					
+				}
+			})
+		
 	  }
 	} catch (error) {
 	  console.error("Error reading from stream:", error);
