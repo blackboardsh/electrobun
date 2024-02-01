@@ -114,6 +114,7 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
     defer alloc.free(line);
 
     std.log.info("parsed line {s}", .{line});
+
     // Do the main json parsing work on the stdin thread, add it to a queue, and then
     // process the generic jobs on the main thread
     const messageFromBun = std.json.parseFromSlice(MessageFromBun, alloc, line, .{}) catch |err| {
@@ -162,7 +163,7 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
         },
 
         .decideNavigation => {
-            std.log.info("decide Navigation... ", .{});
+            std.log.info("NEVER GET HERE ", .{});
             // note: could techincally resolve this on the other thread instead of waiting for it to
             // be sent as a main thread job queue
             const parsedPayload = std.json.parseFromValue(decideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
@@ -177,7 +178,14 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
 
             std.log.info("decide Navigation{}", .{_response});
 
-            _waitingForResponse = false;
+            {
+                m.lock();
+                defer m.unlock();
+                _waitingForResponse = false;
+            }
+            // wake the thread up
+            c.signal();
+
             // Handle the navigation decision
             // const parsedPayload = std.json.parseFromValue(DecideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
             //     std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
@@ -204,27 +212,60 @@ fn stdInListener() void {
         if (bytesRead) |line| {
             std.log.info("received line: {s}", .{line});
 
-            if (_waitingForResponse == true) {
-                _response = true;
-                _waitingForResponse = false;
+            // if (_waitingForResponse == true) {
+            //     _response = true;
+            //     _waitingForResponse = false;
 
-                std.log.info("was waiting for response, unblocking thread", .{});
+            //     std.log.info("was waiting for response, unblocking thread", .{});
+            //     continue;
+            // }
+
+            const messageFromBun = std.json.parseFromSlice(MessageFromBun, alloc, line, .{}) catch |err| {
+                std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
                 continue;
+            };
+
+            defer messageFromBun.deinit();
+
+            // Handle blocking event responses
+            if (messageFromBun.value.type == .decideNavigation) {
+                const parsedPayload = std.json.parseFromValue(decideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
+                    std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+                    continue;
+                };
+                defer parsedPayload.deinit();
+
+                const payload = parsedPayload.value;
+
+                _response = payload.shouldAllow;
+
+                std.log.info("decide Navigation{}", .{_response});
+
+                {
+                    m.lock();
+                    defer m.unlock();
+                    _waitingForResponse = false;
+                }
+                // wake the thread up
+                c.signal();
+                continue;
+            } else {
+                // Handle UI events on main thread
+
+                // since line is re-used we need to copy it to the heap
+                const lineCopy = alloc.dupe(u8, line) catch {
+                    // Handle the error here, e.g., log it or set a default value
+                    std.debug.print("Error: {s}\n", .{line});
+                    continue;
+                };
+
+                jobQueue.append(lineCopy) catch {
+                    std.log.info("Error appending to jobQueue: \nreceived: {s}", .{line});
+                    continue;
+                };
+
+                dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), null, proccessJobQueue);
             }
-
-            // since line is re-used we need to copy it to the heap
-            const lineCopy = alloc.dupe(u8, line) catch {
-                // Handle the error here, e.g., log it or set a default value
-                std.debug.print("Error: {s}\n", .{line});
-                continue;
-            };
-
-            jobQueue.append(lineCopy) catch {
-                std.log.info("Error appending to jobQueue: \nreceived: {s}", .{line});
-                continue;
-            };
-
-            dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), null, proccessJobQueue);
         }
     }
 }
@@ -269,8 +310,11 @@ fn setTitle(opts: SetTitlePayload) void {
     }
 }
 
+// todo: wrap in struct for each blocking response
 var _waitingForResponse = false;
 var _response = false;
+var m = std.Thread.Mutex{};
+var c = std.Thread.Condition{};
 
 pub fn createWindow(opts: CreateWindowPayload) objc.Object {
     const pool = objc.AutoreleasePool.init();
@@ -393,20 +437,27 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
 
                 sendMessageToBun(url_str);
 
+                m.lock();
+                defer m.unlock();
+
                 _waitingForResponse = true;
 
-                while (_waitingForResponse == true) {
-                    // std.time.sleep(1000000000);
-
-                    // const endTime = std.time.nanoTimestamp();
-                    // const duration = endTime - startTime;
-                    // std.debug.print("Time since started: {} ns \n{}", .{ duration, _waitingForResponse });
-                    // maybe do a small sleep here?
+                while (_waitingForResponse) {
+                    c.wait(&m);
                 }
+
+                // while (_waitingForResponse == true) {
+                //     // std.time.sleep(1000000000);
+
+                //     // const endTime = std.time.nanoTimestamp();
+                //     // const duration = endTime - startTime;
+                //     // std.debug.print("Time since started: {} ns \n{}", .{ duration, _waitingForResponse });
+                //     // maybe do a small sleep here?
+                // }
 
                 const endTime = std.time.nanoTimestamp();
                 const duration = endTime - startTime;
-                std.debug.print("Time taken: {} ns\n", .{duration});
+                std.debug.print("Time taken: {} ns\n", .{@divTrunc(duration, std.time.ns_per_ms)});
 
                 var policyResponse: WKNavigationResponsePolicy = undefined;
 
