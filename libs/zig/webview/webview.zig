@@ -99,6 +99,110 @@ const WindowType = struct {
     y: f64,
 };
 
+// NOTE: These type must be kept in sync with typescript version
+const xPromiseDecideNavigation = struct {
+    type: xPromiseMessageType.decideNavigation,
+    phases: struct {
+        request: struct { // request payload
+            promiseId: u32,
+            url: []const u8,
+        },
+        response: struct { // response payload
+            promiseId: u32,
+            allow: bool,
+        },
+    },
+};
+
+const blah = xPromiseDecideNavigation.phases.request;
+
+const testPayload = struct {
+    // request: struct { // request payload
+    promiseId: u32,
+    url: []const u8,
+    // }
+};
+
+// explicit phase, always use payload
+const xPromiseMessagePhase = enum(u32) {
+    request = 0,
+    response = 1,
+    // message = 2,
+    // error = 3,
+};
+
+const xPromiseMessageType = enum(u32) {
+    setTitle = 0,
+    // createWindow = 1,
+    decideNavigation = 2,
+};
+
+const xPromiseMessage = struct {
+    type: xPromiseMessageType,
+    phase: xPromiseMessagePhase,
+    payload: testPayload,
+};
+
+fn getPayloadType(comptime messageType: xPromiseMessageType, comptime phase: xPromiseMessagePhase) type {
+    _ = switch (messageType) {
+        .setTitle => xPromiseSetTitle,
+        // .createWindow => xPromiseCreateWindow, // Assuming xPromiseCreateWindow is defined
+        .decideNavigation => xPromiseDecideNavigation, // Assuming xPromiseDecideNavigation is defined
+    };
+
+    const payloadType = switch (phase) {
+        xPromiseMessagePhase.request => testPayload,
+        xPromiseMessagePhase.response => testPayload,
+    };
+
+    return payloadType;
+}
+
+const xPromiseSetTitle = struct {
+    type: xPromiseMessageType.setTitle,
+    phases: struct {
+        request: struct { // request payload
+            promiseId: u32,
+            winId: u32,
+            title: []const u8,
+        },
+        response: struct { // response payload
+            promiseId: u32,
+            success: bool,
+        },
+    },
+};
+
+// todo: create event mapping types in zig and typescript
+fn sendMessageToBun(message: []const u8) void {
+    const stdout = std.io.getStdOut().writer();
+
+    // Write the message to stdout
+    _ = stdout.writeAll(message) catch {
+        // Handle potential errors here
+        std.debug.print("Failed to write to stdout\n", .{});
+    };
+}
+
+fn sendRequestToBun(comptime T: xPromiseMessageType, payload: anytype) void {
+    // todo comptime function heree to get xPromiseSetTitle from xPromiseMessageType.setTitle enum
+    const phase = xPromiseMessagePhase.request;
+    const payloadType = getPayloadType(T, phase);
+    const _payload: payloadType = payload;
+    // const requestType = T.phase.request;
+
+    std.json.stringify(xPromiseMessage{
+        .type = T,
+        .phase = phase,
+        .payload = _payload,
+    }, .{}, std.io.getStdOut().writer()) catch |err| {
+        std.debug.print("Failed to stringify message: {}\n", .{err});
+        return;
+    };
+}
+
+//
+
 var jobQueue = std.ArrayList([]const u8).init(alloc);
 // defer jobQueue.deinit();
 
@@ -201,6 +305,17 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
     }
 }
 
+// todo: so there's a message type
+// which is either 0: event or 1: response
+// 0: events are things bun wants to do (like open a window, set the title, etc.)
+// 1: responses are things where zig is waiting for bun to respond to something like a navigation decision
+// either
+// {type: MessageType, subType: EventType or ResponseType, payload: any}
+// or
+// {eventType: ?EventType, responseType: ?ResponseType, payload: any}
+// or
+// {type: MessageType, payload: any} // where MessageType < 500 is an event and MessageType > 500 is a response
+
 // We listen on stdin for stuff to do from bun and then dispatch it to the main thread where the gui stuff happens
 fn stdInListener() void {
     const stdin = std.io.getStdIn().reader();
@@ -268,17 +383,6 @@ fn stdInListener() void {
             }
         }
     }
-}
-
-// todo: create event mapping types in zig and typescript
-fn sendMessageToBun(message: []const u8) void {
-    const stdout = std.io.getStdOut().writer();
-
-    // Write the message to stdout
-    _ = stdout.writeAll(message) catch {
-        // Handle potential errors here
-        std.debug.print("Failed to write to stdout\n", .{});
-    };
 }
 
 pub export fn startAppkitGuiEventLoop() void {
@@ -435,7 +539,15 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
                 // timer reference
                 const startTime = std.time.nanoTimestamp();
 
-                sendMessageToBun(url_str);
+                // wrap this in xPromise functions
+                // const payload: xPromiseDecideNavigation.phases.request = .{
+                const payload: testPayload = .{
+                    // make this auto incremenet
+                    .promiseId = 1,
+                    .url = url_str,
+                };
+
+                sendRequestToBun(xPromiseMessageType.decideNavigation, payload);
 
                 m.lock();
                 defer m.unlock();
@@ -445,15 +557,6 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
                 while (_waitingForResponse) {
                     c.wait(&m);
                 }
-
-                // while (_waitingForResponse == true) {
-                //     // std.time.sleep(1000000000);
-
-                //     // const endTime = std.time.nanoTimestamp();
-                //     // const duration = endTime - startTime;
-                //     // std.debug.print("Time since started: {} ns \n{}", .{ duration, _waitingForResponse });
-                //     // maybe do a small sleep here?
-                // }
 
                 const endTime = std.time.nanoTimestamp();
                 const duration = endTime - startTime;
