@@ -102,12 +102,12 @@ const handleZigEvent = (event: any) => {
 			const {url} = event.payload as {url: string};
 			console.log('bun: decideNavigation event received', url)
 
-			// todo (yoav): encapsulate this
+			// todo (yoav): encapsulate this, send response back to zig
 			sendEvent({
+				id: event.id,
 				type: WebviewEvent.decideNavigation,
 				phase: WebviewEventPhase.response,
-				payload: {
-					promiseId: event.payload.promiseId,
+				payload: {					
 					allow: url.includes('google.com'),					
 				}
 			})
@@ -189,9 +189,19 @@ const createWindow = (config: UrlWindowConfig | HtmlWindowConfig) => {
 	return win;
 }
 
-
+// Note: the zig side has an equivalent id generator that cycles between a different min/max range
+let next_id_min = 100;
+let next_id_max = 200;
+let next_id = next_id_min;
+const nextId = (() => {	
+	next_id = Math.max(next_id_min, (next_id + 1) % next_id_max)
+	return (next_id)
+});
 
 const sendEvent = (event: any) => {
+	event.id = event.id || nextId()
+
+	console.log('sending event', event)
 	// const withStringifiedPayload = event.payload = JSON.stringify(event.payload)
 	const eventString = JSON.stringify(event) + "\n";
 	console.log('bun: sending event string', eventString)
@@ -220,7 +230,7 @@ setTimeout(() => {
 	// });
 
 	
-	// setTitle(win.id, 'hello from bun via json -  win one')
+	setTitle(win.id, 'hello from bun via json -  win one')
 	// setTitle(win2.id, 'hello from bun via json -  win two')
 
 

@@ -2,19 +2,14 @@ const std = @import("std");
 
 const alloc = std.heap.page_allocator;
 
-// exported instances
-// pub const decideNavigation = DecideNavigation{};
-
 // message types
 pub const decideNavigation = struct {
     const responseType = struct {
-        promiseId: u32,
         allow: bool,
     };
 
     pub fn request(url: []const u8) void {
         const payload = .{
-            .promiseId = promiseIdGen.nextId(),
             .url = url,
         };
         sendRequestToBun(xPromiseMessageType.decideNavigation, payload);
@@ -24,7 +19,7 @@ pub const decideNavigation = struct {
         // const payload = std.json.parse(xPromiseMessage, rawPayload);
         const parsedPayload = std.json.parseFromValue(responseType, alloc, rawPayload, .{}) catch |err| {
             std.log.info("Error casting parsed json to zig type from stdin xPromise response - {}: \n", .{err});
-            return responseType{ .allow = true, .promiseId = 0 };
+            return responseType{ .allow = true };
         };
         defer parsedPayload.deinit();
 
@@ -33,14 +28,14 @@ pub const decideNavigation = struct {
 };
 
 // private methods
-var promiseIdGen = PromiseIdGenerator{ .next_id = 1 };
+var promiseIdGen = PromiseIdGenerator{};
 const PromiseIdGenerator = struct {
-    next_id: u32 = 1,
+    next_id: u32 = 0,
+    const NextIdMax: u32 = 100;
 
     pub fn nextId(self: *PromiseIdGenerator) u32 {
-        const id = self.next_id;
-        self.next_id += 1;
-        return id;
+        self.next_id = (self.next_id + 1) % (NextIdMax);
+        return self.next_id;
     }
 };
 
@@ -57,6 +52,7 @@ fn sendMessageToBun(messageType: xPromiseMessageType, phaseType: xPromiseMessage
     // if phaseType === request then add promiseId to the payload, sleep thread, and track it
     std.log.info("Sending message to bun: {} - {}\n", .{ messageType, phaseType });
     std.json.stringify(.{
+        .id = promiseIdGen.nextId(),
         .type = messageType,
         .phase = phaseType,
         .payload = payload,
@@ -73,6 +69,7 @@ fn sendMessageToBun(messageType: xPromiseMessageType, phaseType: xPromiseMessage
 }
 
 pub const xPromiseMessage = struct {
+    id: u32,
     type: xPromiseMessageType,
     phase: xPromiseMessagePhase,
     payload: std.json.Value,
