@@ -17,38 +17,104 @@ const proc = Bun.spawn([webviewPath], {
 });
 
 enum WebviewEvent {
-	setTitle = 0,
-	createWindow = 1,
-	decideNavigation = 2,
+	setTitle = "setTitle",
+	createWindow = "createWindow",
+	decideNavigation = "decideNavigation",
 }
 
-async function readStream(stream) {
-	const reader = stream.getReader();
-	try {
-	  while (true) {
-		// todo (yoav): does this read until the next new line
-		const { done, value } = await reader.read();
-		if (done) break;
-		const output = new TextDecoder().decode(value);
-		// Process the output
-		console.log("Received output:", output);
+enum WebviewEventPhase {
+	request = "request",
+	response = "response",
+}
+
+// async function readStream(stream) {
+// 	const reader = stream.getReader();
+// 	try {
+// 		while (true) {
+// 		// todo (yoav): does this read until the next new line
+// 		const { done, value } = await reader.read();
+// 		if (done) break;
+// 		const output = new TextDecoder().decode(value);
+// 		// Process the output
+// 		console.log("bun: Received output:", output);
 
 		
+// 			// sendEvent({
+// 			// 	type: WebviewEvent.decideNavigation,
+// 			// 	phase: WebviewEventPhase.response,
+// 			// 	payload: {
+// 			// 		shouldAllow: output.includes('google.com'),					
+// 			// 	}
+// 			// })
+		
+// 		}
+// 	} catch (error) {
+// 		console.error("Error reading from stream:", error);
+// 	} finally {
+// 		reader.releaseLock();
+// 	}
+// }
+  
+// // Read from stdout
+// readStream(proc.stdout);
+async function readStream(stream) {
+    const reader = stream.getReader();
+    let buffer = '';
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += new TextDecoder().decode(value);
+            let eolIndex;
+			console.log("bun: received chunk", buffer)
+            // Process each line contained in the buffer
+            while ((eolIndex = buffer.indexOf('\n')) >= 0) {
+                const line = buffer.slice(0, eolIndex).trim();
+                buffer = buffer.slice(eolIndex + 1);
+                if (line) {
+					try {
+					const event = JSON.parse(line);
+
+					handleZigEvent(event)					
+					
+
+					} catch (error) {
+						console.log('bun: failed to parse event from zig: ', line)
+					}
+                    console.log("bun: Received line:", line);
+                    // Process the line (a complete JSON object)
+                    // You might want to use JSON.parse(line) here
+                    // and then handle the parsed object
+                }
+            }
+        }
+    } catch (error) {
+        console.error("Error reading from stream:", error);
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+const handleZigEvent = (event: any) => {
+	switch (event.type) {
+		case WebviewEvent.decideNavigation: {
+			const {url} = event.payload as {url: string};
+			console.log('bun: decideNavigation event received', url)
+
+			// todo (yoav): encapsulate this
 			sendEvent({
 				type: WebviewEvent.decideNavigation,
+				phase: WebviewEventPhase.response,
 				payload: {
-					shouldAllow: output.includes('google.com'),					
+					promiseId: event.payload.promiseId,
+					allow: url.includes('google.com'),					
 				}
 			})
-		
-	  }
-	} catch (error) {
-	  console.error("Error reading from stream:", error);
-	} finally {
-	  reader.releaseLock();
+		}
 	}
-  }
-  
+}
+
 // Read from stdout
 readStream(proc.stdout);
 
@@ -57,6 +123,7 @@ readStream(proc.stdout);
 const setTitle = (winId: number, title: string) => {
 	const event = {
 		type: WebviewEvent.setTitle,
+		phase: WebviewEventPhase.request,
 		payload: {
 			winId,
 			title
@@ -79,6 +146,7 @@ type HtmlWindowConfig = CreateWindowBaseConfig & {html: string, url: null}
 
 type CreateWindowEvent = {
 	type: WebviewEvent.createWindow,
+	phase: WebviewEventPhase.request,
 	payload: {id: number} & (UrlWindowConfig | HtmlWindowConfig)
 }
 
@@ -93,7 +161,7 @@ const createUrlWindow = (url: string, config: CreateWindowBaseConfig) => {
 const createHtmlWindow = (html: string, config: CreateWindowBaseConfig) => {
 	return createWindow({
 		html,
-		url:  null,
+		url: null,
 		...config
 	})
 }
@@ -112,6 +180,7 @@ const createWindow = (config: UrlWindowConfig | HtmlWindowConfig) => {
 
 	const event: CreateWindowEvent = {
 		type: WebviewEvent.createWindow,
+		phase: WebviewEventPhase.request,
 		payload: win
 	}
 
@@ -123,8 +192,9 @@ const createWindow = (config: UrlWindowConfig | HtmlWindowConfig) => {
 
 
 const sendEvent = (event: any) => {
+	// const withStringifiedPayload = event.payload = JSON.stringify(event.payload)
 	const eventString = JSON.stringify(event) + "\n";
-	console.log('sending event', eventString)
+	console.log('bun: sending event string', eventString)
 	proc.stdin.write(eventString);
 	proc.stdin.flush();
 }
@@ -150,7 +220,7 @@ setTimeout(() => {
 	// });
 
 	
-	setTitle(win.id, 'hello from bun via json -  win one')
+	// setTitle(win.id, 'hello from bun via json -  win one')
 	// setTitle(win2.id, 'hello from bun via json -  win two')
 
 

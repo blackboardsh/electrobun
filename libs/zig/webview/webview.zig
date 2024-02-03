@@ -3,6 +3,8 @@ const objc = @import("../zig-objc/src/main.zig");
 // const c = @import("../zig-objc/src/c.zig");
 const system = std.c;
 
+const xp = @import("xPromise.zig");
+
 // timer reference
 // const startTime = std.time.nanoTimestamp();
 // // code
@@ -71,6 +73,7 @@ const MessageType = enum {
 
 const MessageFromBun = struct {
     type: MessageType,
+    phase: u32,
     payload: std.json.Value,
 };
 
@@ -82,7 +85,7 @@ const SetTitlePayload = struct {
 const CreateWindowPayload = struct { id: u32, url: ?[]const u8, html: ?[]const u8, title: []const u8, width: f64, height: f64, x: f64, y: f64 };
 
 const decideNavigationPayload = struct {
-    shouldAllow: bool,
+    allow: bool,
 };
 
 const WindowType = struct {
@@ -100,106 +103,207 @@ const WindowType = struct {
 };
 
 // NOTE: These type must be kept in sync with typescript version
-const xPromiseDecideNavigation = struct {
-    type: xPromiseMessageType.decideNavigation,
-    phases: struct {
-        request: struct { // request payload
-            promiseId: u32,
-            url: []const u8,
-        },
-        response: struct { // response payload
-            promiseId: u32,
-            allow: bool,
-        },
-    },
-};
+// const xPromiseDecideNavigation = struct {
+//     type: xPromiseMessageType.decideNavigation,
+//     phases: struct {
+//         request: struct { // request payload
+//             promiseId: u32,
+//             url: []const u8,
+//         },
+//         response: struct { // response payload
+//             promiseId: u32,
+//             allow: bool,
+//         },
+//     },
+// };
 
-const blah = xPromiseDecideNavigation.phases.request;
+// const xPromiseMessage = struct {
+//     type: xPromiseMessageType,
+//     phase: xPromiseMessagePhase,
+//     payload: std.json.Value,
+// };
 
-const testPayload = struct {
-    // request: struct { // request payload
-    promiseId: u32,
-    url: []const u8,
-    // }
-};
+// // // explicit phase, always use payload
+// const xPromiseMessagePhase = enum {
+//     request,
+//     response,
+//     // message = 2,
+//     // error = 3,
+// };
 
-// explicit phase, always use payload
-const xPromiseMessagePhase = enum(u32) {
-    request = 0,
-    response = 1,
-    // message = 2,
-    // error = 3,
-};
+// const xPromiseMessageType = enum {
+//     setTitle,
+//     createWindow,
+//     decideNavigation,
+// };
 
-const xPromiseMessageType = enum(u32) {
-    setTitle = 0,
-    // createWindow = 1,
-    decideNavigation = 2,
-};
+// const PromiseIdGenerator = struct {
+//     nextId: u32,
 
-const xPromiseMessage = struct {
-    type: xPromiseMessageType,
-    phase: xPromiseMessagePhase,
-    payload: testPayload,
-};
+//     fn init() PromiseIdGenerator {
+//         return PromiseIdGenerator{ .nextId = 1 };
+//     }
 
-fn getPayloadType(comptime messageType: xPromiseMessageType, comptime phase: xPromiseMessagePhase) type {
-    _ = switch (messageType) {
-        .setTitle => xPromiseSetTitle,
-        // .createWindow => xPromiseCreateWindow, // Assuming xPromiseCreateWindow is defined
-        .decideNavigation => xPromiseDecideNavigation, // Assuming xPromiseDecideNavigation is defined
-    };
+//     fn nextId(self: *PromiseIdGenerator) u32 {
+//         const id = self.nextId;
+//         self.nextId += 1;
+//         return id;
+//     }
+// };
 
-    const payloadType = switch (phase) {
-        xPromiseMessagePhase.request => testPayload,
-        xPromiseMessagePhase.response => testPayload,
-    };
+// // const xp = xPromise.init();
 
-    return payloadType;
-}
+// const DecideNavigation = struct {
+//     fn request(self: *xPromise, url: []const u8) void {
+//         const payload = struct {
+//             promiseId: u32,
+//             url: []const u8,
+//         }{
+//             .promiseId = self.promiseIdGen.nextId(),
+//             .url = url,
+//         };
+//         self.sendRequestToBun(xPromiseMessageType.decideNavigation, payload);
+//     }
+// };
 
-const xPromiseSetTitle = struct {
-    type: xPromiseMessageType.setTitle,
-    phases: struct {
-        request: struct { // request payload
-            promiseId: u32,
-            winId: u32,
-            title: []const u8,
-        },
-        response: struct { // response payload
-            promiseId: u32,
-            success: bool,
-        },
-    },
-};
+// const xPromise = struct {
+//     promiseIdGen: PromiseIdGenerator,
+//     decideNavigation: DecideNavigation,
+
+//     fn init() xPromise {
+//         return xPromise{ .promiseIdGen = PromiseIdGenerator.init(), .decideNavigation = DecideNavigation{} };
+//     }
+
+//     // fn decideNavigationRequest(self: *xPromise, url: []const u8) void {
+//     //     const payload = struct {
+//     //         promiseId: u32,
+//     //         url: []const u8,
+//     //     }{
+//     //         .promiseId = self.promiseIdGen.nextId(),
+//     //         .url = url,
+//     //     };
+//     //     self.sendRequestToBun(xPromiseMessageType.decideNavigation, payload);
+//     // }
+
+//     // fn decideNavigationResponse(self: *xPromise, allow: bool) void {
+//     //     const payload = struct {
+//     //         promiseId: u32,
+//     //         allow: bool,
+//     //     }{
+//     //         .promiseId = self.promiseIdGen.nextId(),
+//     //         .allow = allow,
+//     //     };
+//     //     self.sendResponseToBun(xPromiseMessageType.decideNavigation, payload);
+//     // }
+
+//     fn sendRequestToBun(self: *xPromise, messageType: xPromiseMessageType, payload: anytype) void {
+//         self.sendMessageToBun(messageType, xPromiseMessagePhase.request, payload);
+//     }
+
+//     fn sendResponseToBun(self: *xPromise, messageType: xPromiseMessageType, payload: anytype) void {
+//         self.sendMessageToBun(messageType, xPromiseMessagePhase.response, payload);
+//     }
+
+//     fn sendMessageToBun(_: *xPromise, messageType: xPromiseMessageType, phaseType: xPromiseMessagePhase, payload: anytype) void {
+//         // if phaseType === request then add promiseId to the payload, sleep thread, and track it
+
+//         std.json.stringify(.{
+//             .type = messageType,
+//             .phase = phaseType,
+//             .payload = payload,
+//         }, .{}, std.io.getStdOut().writer()) catch |err| {
+//             std.debug.print("Failed to stringify message: {}\n", .{err});
+//             return;
+//         };
+//     }
+// };
+
+// fn getPayloadType(messageType: xPromiseMessageType, phase: xPromiseMessagePhase) type {
+//     return switch (messageType) {
+//         // .setTitle => todo,
+//         // .createWindow => todo
+//         .decideNavigation => switch (phase) {
+//             .request => struct { // request payload
+//                 promiseId: u32,
+//                 url: []const u8,
+//             },
+//             .response => struct { // response payload
+//                 promiseId: u32,
+//                 allow: bool,
+//             },
+//         },
+//     };
+// }
+
+// fn getPayloadType(comptime messageType: xPromiseMessageType, comptime phase: xPromiseMessagePhase) type {
+//     _ = switch (messageType) {
+//         .setTitle => xPromiseSetTitle,
+//         // .createWindow => xPromiseCreateWindow, // Assuming xPromiseCreateWindow is defined
+//         .decideNavigation => xPromiseDecideNavigation, // Assuming xPromiseDecideNavigation is defined
+//     };
+
+//     const payloadType = switch (phase) {
+//         xPromiseMessagePhase.request => testPayload,
+//         xPromiseMessagePhase.response => testPayload,
+//     };
+
+//     return payloadType;
+// }
+
+// const xPromiseSetTitle = struct {
+//     type: xPromiseMessageType.setTitle,
+//     phases: struct {
+//         request: struct { // request payload
+//             promiseId: u32,
+//             winId: u32,
+//             title: []const u8,
+//         },
+//         response: struct { // response payload
+//             promiseId: u32,
+//             success: bool,
+//         },
+//     },
+// };
 
 // todo: create event mapping types in zig and typescript
-fn sendMessageToBun(message: []const u8) void {
-    const stdout = std.io.getStdOut().writer();
+// fn sendMessageToBun(message: []const u8) void {
+//     const stdout = std.io.getStdOut().writer();
 
-    // Write the message to stdout
-    _ = stdout.writeAll(message) catch {
-        // Handle potential errors here
-        std.debug.print("Failed to write to stdout\n", .{});
-    };
-}
+//     // Write the message to stdout
+//     _ = stdout.writeAll(message) catch {
+//         // Handle potential errors here
+//         std.debug.print("Failed to write to stdout\n", .{});
+//     };
+// }
 
-fn sendRequestToBun(comptime T: xPromiseMessageType, payload: anytype) void {
-    // todo comptime function heree to get xPromiseSetTitle from xPromiseMessageType.setTitle enum
-    const phase = xPromiseMessagePhase.request;
-    const payloadType = getPayloadType(T, phase);
-    const _payload: payloadType = payload;
-    // const requestType = T.phase.request;
+// fn sendMessageToBun(messageType: xPromiseMessageType, phaseType: xPromiseMessagePhase, payload: anytype) void {
+//     var out = std.ArrayList(u8).init(alloc);
+//     defer out.deinit();
+//     std.json.stringify(payload, .{}, out.writer()) catch |err| {
+//         std.debug.print("Failed to stringify message: {}\n", .{err});
+//         return;
+//     };
+//     const stringifiedPayload = out.items;
 
-    std.json.stringify(xPromiseMessage{
-        .type = T,
-        .phase = phase,
-        .payload = _payload,
-    }, .{}, std.io.getStdOut().writer()) catch |err| {
-        std.debug.print("Failed to stringify message: {}\n", .{err});
-        return;
-    };
-}
+//     std.log.info("stringifiedPayload {s}", .{stringifiedPayload});
+
+//     std.json.stringify(.{
+//         .type = messageType,
+//         .phase = phaseType,
+//         .payload = payload,
+//     }, .{}, std.io.getStdOut().writer()) catch |err| {
+//         std.debug.print("Failed to stringify message: {}\n", .{err});
+//         return;
+//     };
+// }
+
+// fn sendRequestToBun(messageType: xPromiseMessageType, payload: anytype) void {
+//     sendMessageToBun(messageType, xPromiseMessagePhase.request, payload);
+// }
+
+// fn sendResponseToBun(messageType: xPromiseMessageType, payload: anytype) void {
+//     sendMessageToBun(messageType, xPromiseMessagePhase.response, payload);
+// }
 
 //
 
@@ -221,7 +325,7 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
 
     // Do the main json parsing work on the stdin thread, add it to a queue, and then
     // process the generic jobs on the main thread
-    const messageFromBun = std.json.parseFromSlice(MessageFromBun, alloc, line, .{}) catch |err| {
+    const messageFromBun = std.json.parseFromSlice(xp.xPromiseMessage, alloc, line, .{}) catch |err| {
         std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
         return;
     };
@@ -235,7 +339,7 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
         .setTitle => {
             // todo: do we need parseFromValue here? can we just cast the payload to a type?
             const parsedPayload = std.json.parseFromValue(SetTitlePayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-                std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+                std.log.info("Error casting parsed json to zig type from stdin setTitle - {}: \n", .{err});
                 return;
             };
             defer parsedPayload.deinit();
@@ -246,7 +350,7 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
         },
         .createWindow => {
             const parsedPayload = std.json.parseFromValue(CreateWindowPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-                std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+                std.log.info("Error casting parsed json to zig type from stdin createWindow - {}: \n", .{err});
                 return;
             };
             defer parsedPayload.deinit();
@@ -271,14 +375,14 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
             // note: could techincally resolve this on the other thread instead of waiting for it to
             // be sent as a main thread job queue
             const parsedPayload = std.json.parseFromValue(decideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-                std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+                std.log.info("Error casting parsed json to zig type from stdin decideNavigation - {}: \n", .{err});
                 return;
             };
             defer parsedPayload.deinit();
 
             const payload = parsedPayload.value;
 
-            _response = payload.shouldAllow;
+            _response = payload.allow;
 
             std.log.info("decide Navigation{}", .{_response});
 
@@ -335,51 +439,58 @@ fn stdInListener() void {
             //     continue;
             // }
 
-            const messageFromBun = std.json.parseFromSlice(MessageFromBun, alloc, line, .{}) catch |err| {
-                std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
+            const messageFromBun = std.json.parseFromSlice(xp.xPromiseMessage, alloc, line, .{}) catch |err| {
+                std.log.info("Error parsing wrapper from stdin - {}: \nreceived: {s}", .{ err, line });
                 continue;
             };
 
             defer messageFromBun.deinit();
-
+            std.log.info("parsed line {}", .{messageFromBun.value.type});
             // Handle blocking event responses
-            if (messageFromBun.value.type == .decideNavigation) {
-                const parsedPayload = std.json.parseFromValue(decideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-                    std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+
+            switch (messageFromBun.value.type) {
+                .decideNavigation => {
+                    const payload = xp.decideNavigation.response(messageFromBun.value.payload);
+
+                    // const parsedPayload = std.json.parseFromValue(decideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
+                    //     std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
+                    //     continue;
+                    // };
+                    // defer parsedPayload.deinit();
+
+                    // const payload = parsedPayload.value;
+
+                    _response = payload.allow;
+
+                    std.log.info("decide Navigation{}", .{_response});
+
+                    {
+                        m.lock();
+                        defer m.unlock();
+                        _waitingForResponse = false;
+                    }
+                    // wake the thread up
+                    c.signal();
                     continue;
-                };
-                defer parsedPayload.deinit();
+                },
 
-                const payload = parsedPayload.value;
+                else => {
+                    // Handle UI events on main thread
 
-                _response = payload.shouldAllow;
+                    // since line is re-used we need to copy it to the heap
+                    const lineCopy = alloc.dupe(u8, line) catch {
+                        // Handle the error here, e.g., log it or set a default value
+                        std.debug.print("Error: {s}\n", .{line});
+                        continue;
+                    };
 
-                std.log.info("decide Navigation{}", .{_response});
+                    jobQueue.append(lineCopy) catch {
+                        std.log.info("Error appending to jobQueue: \nreceived: {s}", .{line});
+                        continue;
+                    };
 
-                {
-                    m.lock();
-                    defer m.unlock();
-                    _waitingForResponse = false;
-                }
-                // wake the thread up
-                c.signal();
-                continue;
-            } else {
-                // Handle UI events on main thread
-
-                // since line is re-used we need to copy it to the heap
-                const lineCopy = alloc.dupe(u8, line) catch {
-                    // Handle the error here, e.g., log it or set a default value
-                    std.debug.print("Error: {s}\n", .{line});
-                    continue;
-                };
-
-                jobQueue.append(lineCopy) catch {
-                    std.log.info("Error appending to jobQueue: \nreceived: {s}", .{line});
-                    continue;
-                };
-
-                dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), null, proccessJobQueue);
+                    dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), null, proccessJobQueue);
+                },
             }
         }
     }
@@ -540,14 +651,18 @@ pub fn createWindow(opts: CreateWindowPayload) objc.Object {
                 const startTime = std.time.nanoTimestamp();
 
                 // wrap this in xPromise functions
-                // const payload: xPromiseDecideNavigation.phases.request = .{
-                const payload: testPayload = .{
-                    // make this auto incremenet
-                    .promiseId = 1,
-                    .url = url_str,
-                };
+                // const payload = .{
+                //     // const payload: testPayload = .{
+                //     // make this auto incremenet
+                //     .promiseId = 1,
+                //     .wow = url_str,
+                // };
 
-                sendRequestToBun(xPromiseMessageType.decideNavigation, payload);
+                // sendRequestToBun(xPromiseMessageType.decideNavigation, payload);
+
+                // xPromise.decideNavigationRequest(url_str);
+
+                xp.decideNavigation.request(url_str);
 
                 m.lock();
                 defer m.unlock();
