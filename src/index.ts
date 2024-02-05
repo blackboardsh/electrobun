@@ -47,7 +47,8 @@ async function readStream(stream) {
 						const event = JSON.parse(line);
 						handleZigEvent(event)										
 					} catch (error) {
-						console.log('bun: failed to parse event from zig: ', line)
+						// Non-json things are just bubbled up to the console.
+						console.log('zig: ', line)
 					}                    
                 }
             }
@@ -82,6 +83,18 @@ const handleZigEvent = (event: any) => {
 readStream(proc.stdout);
 
 const xPromise = {
+	createWindow: {
+		request: (config: {url: string, html: string, title: string, width: number, height: number, x: number, y: number}) => {
+			const event = {
+				type: xPromiseMessageType.createWindow,
+				phase: xPromiseMessagePhase.request,
+				payload: config
+			}	
+		
+			sendEvent(event)
+		}
+	},
+	
 	setTitle: {
 		request: (winId: number, title: string) => {
 			const event = {
@@ -95,7 +108,8 @@ const xPromise = {
 		
 			sendEvent(event)
 		}
-	}
+	},
+
 }
 
 type CreateWindowBaseConfig = {	
@@ -175,46 +189,151 @@ const sendEvent = (event: any) => {
 }
 
 
-// tst
-setTimeout(() => {
-	// setTitle('hello from bun via json')
-	const win = createUrlWindow('https://google.com', {
-		title: 'my url window',
-		width: 1800,
+type WindowOptionsType = {
+	title: string,
+	frame: {
+		x: number,
+		y: number,
+		width: number,
+		height: number,
+	},
+	url: string | null,
+	html: string | null,
+}
+
+const defaultWindowOptions: WindowOptionsType = {
+	title: 'Electrobun',
+	frame: {
+		x: 0,
+		y: 0,
+		width: 800,
 		height: 600,
-		x: 1000,
-		y: 500,
-	})
+	},
+	url: 'https://electrobun.dev',
+	html: null,
+}
 
-	const win2 = createHtmlWindow('<html><head></head><body style="background: #000;"><h1>hello</h1></body></html>', {
-		title: 'my html window',
-		width: 1000,
-		height: 900,
-		x: 500,
-		y: 900,
-	});
+
+export class BrowserWindow {
+	id: number = nextWindowId++;
+	title: string = 'Electrobun';
+	state: 'creating' | 'created' = 'creating'
+	url: string | null = null;
+	html: string | null = null;
+	frame: {
+		x: number,
+		y: number,
+		width: number,
+		height: number,
+	} = {
+		x: 0,
+		y: 0,
+		width: 800,
+		height: 600,
+	}
+
+	constructor(options: Partial<WindowOptionsType> = defaultWindowOptions) {
+		this.title = options.title || 'New Window';
+		this.frame = options.frame ? options.frame : defaultWindowOptions.frame;
+		this.url = options.url || null;
+		this.html = options.html || null;			
+	
+		
+		this.init();
+	  }
+	
+	  init() {
+		// is this.id available here?
+		const win = {
+			id: this.id,
+			title: this.title,
+			url: this.url,
+			html: this.html,
+			width: this.frame.width,
+			height: this.frame.height,
+			x: this.frame.x,
+			y: this.frame.y,
+		}
+
+		xPromise.createWindow.request({
+			id: this.id,
+				title: this.title,
+				url: this.url,
+				html: this.html,
+				
+				width: this.frame.width,
+				height: this.frame.height,
+				x: this.frame.x,
+				y: this.frame.y,
+		});
+		// sendEvent(event).then(() => {
+		// 	this.state = 'created'
+		// })
+	  }
+
+	  setTitle(title: string) {
+		this.title = title;
+		return xPromise.setTitle.request(this.id, title)
+	  }
+	
+	  
+	  loadURL(url) {
+		
+	  }
+	
+	  loadHTML(html) {
+		
+	  }
+	
+	  
+	
+}
+
+
+// tst
+// setTimeout(() => {
+// 	// setTitle('hello from bun via json')
+// 	const win = createUrlWindow('https://google.com', {
+// 		title: 'my url window',
+// 		width: 1800,
+// 		height: 600,
+// 		x: 1000,
+// 		y: 500,
+// 	})
+
+// 	const win2 = createHtmlWindow('<html><head></head><body style="background: #000;"><h1>hello</h1></body></html>', {
+// 		title: 'my html window',
+// 		width: 1000,
+// 		height: 900,
+// 		x: 500,
+// 		y: 900,
+// 	});
 
 	
-	xPromise.setTitle.request(win.id, 'hello from bun via json -  win one')
-	xPromise.setTitle.request(win2.id, 'hello from bun via json -  win two')
+// 	xPromise.setTitle.request(win.id, 'hello from bun via json -  win one')
+// 	xPromise.setTitle.request(win2.id, 'hello from bun via json -  win two')
 
 
-	// createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
-	// 	title: 'my html window',
-	// 	width: 800,
-	// 	height: 600,
-	// 	x: 100,
-	// 	y: 100,
-	// })
+// 	// createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
+// 	// 	title: 'my html window',
+// 	// 	width: 800,
+// 	// 	height: 600,
+// 	// 	x: 100,
+// 	// 	y: 100,
+// 	// })
 
 	
-}, 2000)
+// }, 2000)
 
-proc.stdin.write("hello\n");
-proc.stdin.flush();
+// proc.stdin.write("hello\n");
+// proc.stdin.flush();
 
 // proc.stdin.end();
 
+const Electrobun = {
+	BrowserWindow,
+}
 
 
-
+// Electrobun
+export default Electrobun
