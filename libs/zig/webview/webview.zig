@@ -370,39 +370,8 @@ fn proccessJobQueue(context: ?*anyopaque) callconv(.C) void {
             std.log.info("hashmap size{}", .{windowMap.count()});
         },
 
-        .decideNavigation => {
-            std.log.info("NEVER GET HERE ", .{});
-            // note: could techincally resolve this on the other thread instead of waiting for it to
-            // be sent as a main thread job queue
-            const parsedPayload = std.json.parseFromValue(decideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-                std.log.info("Error casting parsed json to zig type from stdin decideNavigation - {}: \n", .{err});
-                return;
-            };
-            defer parsedPayload.deinit();
-
-            const payload = parsedPayload.value;
-
-            _response = payload.allow;
-
-            std.log.info("decide Navigation{}", .{_response});
-
-            {
-                m.lock();
-                defer m.unlock();
-                _waitingForResponse = false;
-            }
-            // wake the thread up
-            c.signal();
-
-            // Handle the navigation decision
-            // const parsedPayload = std.json.parseFromValue(DecideNavigationPayload, alloc, messageFromBun.value.payload, .{}) catch |err| {
-            //     std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
-            //     return;
-            // };
-            // defer parsedPayload.deinit();
-
-            // const payload = parsedPayload.value;
-            // decideNavigation(payload);
+        else => {
+            std.log.info("Error: Unhandled event type on main thread", .{});
         },
 
         // Handle other types

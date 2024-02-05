@@ -16,47 +16,17 @@ const proc = Bun.spawn([webviewPath], {
 	}
 });
 
-enum WebviewEvent {
+enum xPromiseMessageType {
 	setTitle = "setTitle",
 	createWindow = "createWindow",
 	decideNavigation = "decideNavigation",
 }
 
-enum WebviewEventPhase {
+enum xPromiseMessagePhase {
 	request = "request",
 	response = "response",
 }
 
-// async function readStream(stream) {
-// 	const reader = stream.getReader();
-// 	try {
-// 		while (true) {
-// 		// todo (yoav): does this read until the next new line
-// 		const { done, value } = await reader.read();
-// 		if (done) break;
-// 		const output = new TextDecoder().decode(value);
-// 		// Process the output
-// 		console.log("bun: Received output:", output);
-
-		
-// 			// sendEvent({
-// 			// 	type: WebviewEvent.decideNavigation,
-// 			// 	phase: WebviewEventPhase.response,
-// 			// 	payload: {
-// 			// 		shouldAllow: output.includes('google.com'),					
-// 			// 	}
-// 			// })
-		
-// 		}
-// 	} catch (error) {
-// 		console.error("Error reading from stream:", error);
-// 	} finally {
-// 		reader.releaseLock();
-// 	}
-// }
-  
-// // Read from stdout
-// readStream(proc.stdout);
 async function readStream(stream) {
     const reader = stream.getReader();
     let buffer = '';
@@ -74,18 +44,11 @@ async function readStream(stream) {
                 buffer = buffer.slice(eolIndex + 1);
                 if (line) {
 					try {
-					const event = JSON.parse(line);
-
-					handleZigEvent(event)					
-					
-
+						const event = JSON.parse(line);
+						handleZigEvent(event)										
 					} catch (error) {
 						console.log('bun: failed to parse event from zig: ', line)
-					}
-                    console.log("bun: Received line:", line);
-                    // Process the line (a complete JSON object)
-                    // You might want to use JSON.parse(line) here
-                    // and then handle the parsed object
+					}                    
                 }
             }
         }
@@ -98,15 +61,15 @@ async function readStream(stream) {
 
 const handleZigEvent = (event: any) => {
 	switch (event.type) {
-		case WebviewEvent.decideNavigation: {
+		case xPromiseMessageType.decideNavigation: {
 			const {url} = event.payload as {url: string};
 			console.log('bun: decideNavigation event received', url)
 
 			// todo (yoav): encapsulate this, send response back to zig
 			sendEvent({
 				id: event.id,
-				type: WebviewEvent.decideNavigation,
-				phase: WebviewEventPhase.response,
+				type: xPromiseMessageType.decideNavigation,
+				phase: xPromiseMessagePhase.response,
 				payload: {					
 					allow: url.includes('google.com'),					
 				}
@@ -118,19 +81,21 @@ const handleZigEvent = (event: any) => {
 // Read from stdout
 readStream(proc.stdout);
 
-
-// Send messages to zig
-const setTitle = (winId: number, title: string) => {
-	const event = {
-		type: WebviewEvent.setTitle,
-		phase: WebviewEventPhase.request,
-		payload: {
-			winId,
-			title
+const xPromise = {
+	setTitle: {
+		request: (winId: number, title: string) => {
+			const event = {
+				type: xPromiseMessageType.setTitle,
+				phase: xPromiseMessagePhase.request,
+				payload: {
+					winId,
+					title
+				}
+			}	
+		
+			sendEvent(event)
 		}
-	}	
-
-	sendEvent(event)
+	}
 }
 
 type CreateWindowBaseConfig = {	
@@ -145,8 +110,8 @@ type UrlWindowConfig = CreateWindowBaseConfig & {url: string, html: null}
 type HtmlWindowConfig = CreateWindowBaseConfig & {html: string, url: null}
 
 type CreateWindowEvent = {
-	type: WebviewEvent.createWindow,
-	phase: WebviewEventPhase.request,
+	type: xPromiseMessageType.createWindow,
+	phase: xPromiseMessagePhase.request,
 	payload: {id: number} & (UrlWindowConfig | HtmlWindowConfig)
 }
 
@@ -179,8 +144,8 @@ const createWindow = (config: UrlWindowConfig | HtmlWindowConfig) => {
 	}
 
 	const event: CreateWindowEvent = {
-		type: WebviewEvent.createWindow,
-		phase: WebviewEventPhase.request,
+		type: xPromiseMessageType.createWindow,
+		phase: xPromiseMessagePhase.request,
 		payload: win
 	}
 
@@ -221,17 +186,17 @@ setTimeout(() => {
 		y: 500,
 	})
 
-	// const win2 = createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
-	// 	title: 'my html window',
-	// 	width: 1000,
-	// 	height: 900,
-	// 	x: 500,
-	// 	y: 900,
-	// });
+	const win2 = createHtmlWindow('<html><head></head><body style="background: #000;"><h1>hello</h1></body></html>', {
+		title: 'my html window',
+		width: 1000,
+		height: 900,
+		x: 500,
+		y: 900,
+	});
 
 	
-	setTitle(win.id, 'hello from bun via json -  win one')
-	// setTitle(win2.id, 'hello from bun via json -  win two')
+	xPromise.setTitle.request(win.id, 'hello from bun via json -  win one')
+	xPromise.setTitle.request(win2.id, 'hello from bun via json -  win two')
 
 
 	// createHtmlWindow('<html><head></head><body><h1>hello</h1></body></html>', {
