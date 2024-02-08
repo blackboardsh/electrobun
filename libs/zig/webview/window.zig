@@ -1,7 +1,6 @@
 const std = @import("std");
 const objc = @import("../zig-objc/src/main.zig");
 const rpcSenders = @import("rpcSenders.zig").senders;
-// const c = @import("../zig-objc/src/c.zig");
 const system = std.c;
 
 const alloc = std.heap.page_allocator;
@@ -66,6 +65,7 @@ pub fn createWindow(opts: CreateWindowPayload) WindowType {
     const windowAlloc = nsWindowClass.msgSend(objc.Object, "alloc", .{});
 
     // Pointer Note: if using manual memory management then the memory will need to be cleaned up using `release` method
+    // but we're using obc.AutoreleasePool so we don't need to do that
     // windowAlloc.msgSend(void, "release", .{});
 
     // Define the frame rectangle (x, y, width, height)
@@ -161,18 +161,6 @@ pub fn createWindow(opts: CreateWindowPayload) WindowType {
                 // timer reference
                 const startTime = std.time.nanoTimestamp();
 
-                // wrap this in xPromise functions
-                // const payload = .{
-                //     // const payload: testPayload = .{
-                //     // make this auto incremenet
-                //     .promiseId = 1,
-                //     .wow = url_str,
-                // };
-
-                // sendRequestToBun(xPromiseMessageType.decideNavigation, payload);
-
-                // xPromise.decideNavigationRequest(url_str);
-
                 const _response = rpcSenders.decideNavigation(.{
                     .url = url_str,
                 });
@@ -213,7 +201,7 @@ pub fn createWindow(opts: CreateWindowPayload) WindowType {
             std.log.info("Error copying url", .{});
             unreachable;
         };
-        // std.log.info("creating url window: {s}", .{url});
+
         const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{createNSURL(urlCopy)});
         windowWebview.msgSend(void, "loadRequest:", .{request});
     } else if (opts.html) |html| {
@@ -222,7 +210,7 @@ pub fn createWindow(opts: CreateWindowPayload) WindowType {
             unreachable;
         };
         std.log.info("creating html window: {s}", .{html});
-        // const NSHtmlString = createNSString(html);
+
         windowWebview.msgSend(void, "loadHTMLString:baseURL:", .{ createNSString(htmlCopy), createNSURL("file://") });
     }
 
@@ -238,7 +226,6 @@ pub fn createWindow(opts: CreateWindowPayload) WindowType {
 
     std.log.info("hashmap size{}", .{windowMap.count()});
 
-    // todo: return void
     return _window;
 }
 
@@ -267,7 +254,4 @@ fn createNSURL(string: []const u8) objc.Object {
     const nsUrl = NSURL.msgSend(objc.Object, "URLWithString:", .{urlString});
     std.log.info("NSURL created: {}", .{nsUrl});
     return nsUrl;
-    // const NSURL = objc.getClass("NSURL").?;
-    // const urlString = createNSString(string);
-    // return NSURL.msgSend(objc.Object, "URLWithString:", .{urlString});
 }

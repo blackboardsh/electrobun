@@ -5,9 +5,8 @@ const rpcSchema = @import("rpcSchema.zig");
 const alloc = std.heap.page_allocator;
 
 pub fn decideNavigation(args: rpcSchema.ZigSchema.requests.decideNavigation.args) rpcSchema.ZigSchema.requests.decideNavigation.returns {
-    std.log.info("decideNavigation request called\n", .{});
     const rawPayload = sendRequest("decideNavigation", args);
-    std.log.info("decideNavigation response called \n", .{});
+
     const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.decideNavigation.returns, alloc, rawPayload.?, .{}) catch {
         unreachable;
     };
@@ -31,57 +30,34 @@ pub fn sendRequest(method: []const u8, args: anytype) ?std.json.Value {
         .params = args,
     });
 
-    // lock the current thread
-    // {
     m.lock();
     defer m.unlock();
     _waitingForResponse = true;
     _response = null;
-    // }
-
-    std.log.info("Waiting for response\n", .{});
 
     while (_waitingForResponse) {
         c.wait(&m);
     }
 
-    std.log.info("Response Arrived\n", .{});
-
-    // setResponse will have been called to unlock the thread
-
-    // m.lock();
-    // defer m.unlock();
-    // defer _response = undefined;
-    // right now response is the std.json.Value for the message payload property
-
     return _response;
 }
 
 pub fn setResponse(id: u32, response: anytype) void {
+    // todo: consider using a hashmap instead of a single variable
+    // note: technically since main thread gets blocked and all
+    // requests currently originate from the main thread, we don't need
+    // this yet
+    _ = id;
 
-    // todo use id for something
-    // _ = response;
-
-    std.log.info("set Response called {}\n", .{id});
-
-    {
-        m.lock();
-        defer m.unlock();
-        _response = response;
-        _waitingForResponse = false;
-        c.signal();
-    }
-    // wake the thread up
+    m.lock();
+    defer m.unlock();
+    _response = response;
+    _waitingForResponse = false;
+    c.signal();
 }
 
-// pub fn returnResponse() anytype {
-//     m.lock();
-//     defer m.unlock();
-//     return _response;
-// }
-
-pub fn sendResponseSuccess(id: u32, payload: anytype) void {
-    send(rpcTypes._RPCResponsePacketSuccess{
+pub fn sendResponseSuccess(id: u32, payload: ?rpcSchema.PayloadType) void {
+    send(.{
         .id = id,
         .type = "response",
         .success = true,
@@ -90,7 +66,7 @@ pub fn sendResponseSuccess(id: u32, payload: anytype) void {
 }
 
 pub fn sendResponseError(id: u32, errorMsg: []const u8) void {
-    send(rpcTypes._RPCResponsePacketError{
+    send(.{
         .id = id,
         .type = "response",
         .success = false,
@@ -99,7 +75,7 @@ pub fn sendResponseError(id: u32, errorMsg: []const u8) void {
 }
 
 pub fn sendMessage(payload: anytype) void {
-    send(rpcTypes._RPCRequestPacket{
+    send(.{
         .id = idGen.nextId(),
         .type = "message",
         .payload = payload,
@@ -110,7 +86,7 @@ pub fn send(message: anytype) void {
     // stringify message and send to stdout. note: message already has id and everything
     // added
     const stdoutWriter = std.io.getStdOut().writer();
-    // std.log.info("Sending message to bun: {} - {}\n", .{ messageType, phaseType });
+
     std.json.stringify(message, .{}, stdoutWriter) catch |err| {
         std.debug.print("Failed to stringify message: {}\n", .{err});
         return;
@@ -118,7 +94,6 @@ pub fn send(message: anytype) void {
 
     // add a newline
     _ = stdoutWriter.writeAll("\n") catch {
-        // Handle potential errors here
         std.debug.print("Failed to write to stdout\n", .{});
     };
 }

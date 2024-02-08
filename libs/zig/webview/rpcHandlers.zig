@@ -1,7 +1,10 @@
+const rpcTypes = @import("rpcTypes.zig");
 const rpcSchema = @import("rpcSchema.zig");
 const window = @import("window.zig");
+const std = @import("std");
 
-// pub const requestHandlers = struct {
+const alloc = std.heap.page_allocator;
+
 pub fn createWindow(args: rpcSchema.BunSchema.requests.createWindow.args) void {
     _ = window.createWindow(.{
         .id = args.id,
@@ -27,4 +30,43 @@ pub const handlers = rpcSchema.Handlers{
     .setTitle = setTitle,
 };
 
-// };
+pub const RequestResult = struct { errorMsg: ?[]const u8, payload: ?rpcSchema.PayloadType };
+
+pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
+    const method = request.method;
+
+    if (std.mem.eql(u8, method, "createWindow")) {
+        const params = request.params;
+
+        const parsedArgs = std.json.parseFromValue(rpcSchema.BunSchema.requests.createWindow.args, alloc, params, .{}) catch |err| {
+            std.log.info("Error casting parsed json to zig type from stdin createWindow - {}: \n", .{err});
+            return RequestResult{ .errorMsg = "failed to parse args", .payload = null };
+        };
+
+        // this is the handler, mapping the args and return value
+        // window.createWindow is not a handler it's a window method called by the handler
+        // everything above this line should be abstracted away as part of the generic rpc internals
+        handlers.createWindow(parsedArgs.value);
+
+        return RequestResult{ .errorMsg = null, .payload = null };
+
+        // todo: send back something from the window potentialy as part of the rpc implementation
+        // in this case it would be void
+
+    } else if (std.mem.eql(u8, method, "setTitle")) {
+        const params = request.params;
+
+        const parsedArgs = std.json.parseFromValue(rpcSchema.BunSchema.requests.setTitle.args, alloc, params, .{}) catch |err| {
+            std.log.info("Error casting parsed json to zig type from stdin createWindow - {}: \n", .{err});
+            return RequestResult{ .errorMsg = "failed to parse args", .payload = null };
+        };
+
+        // this is the handler, mapping the args and return value
+        // window.createWindow is not a handler it's a window method called by the handler
+        // everything above this line should be abstracted away as part of the generic rpc internals
+        handlers.setTitle(parsedArgs.value);
+        return RequestResult{ .errorMsg = null, .payload = null };
+    } else {
+        return RequestResult{ .errorMsg = "unhandled method", .payload = null };
+    }
+}
