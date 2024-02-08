@@ -26,6 +26,12 @@ const NSWindowStyleMaskResizable = 1 << 3;
 
 const NSBackingStoreBuffered = 2;
 
+const WKNavigationResponsePolicy = enum(c_int) {
+    cancel = 0,
+    allow = 1,
+    download = 2,
+};
+
 const WindowType = struct {
     id: u32,
     window: ?objc.Object,
@@ -34,29 +40,25 @@ const WindowType = struct {
     title: []const u8,
     url: ?[]const u8,
     html: ?[]const u8,
-    width: f64,
-    height: f64,
-    x: f64,
-    y: f64,
+    frame: struct {
+        width: f64,
+        height: f64,
+        x: f64,
+        y: f64,
+    },
 };
 
 // todo: use the types in rpc.zig (or move them to a shared location)
-const CreateWindowPayload = struct { id: u32, url: ?[]const u8, html: ?[]const u8, title: []const u8, width: f64, height: f64, x: f64, y: f64 };
-const SetTitlePayload = struct {
+const CreateWindowOpts = struct { id: u32, url: ?[]const u8, html: ?[]const u8, title: []const u8, frame: struct { width: f64, height: f64, x: f64, y: f64 } };
+const SetTitleOpts = struct {
     winId: u32,
     title: []const u8,
-};
-
-const WKNavigationResponsePolicy = enum(c_int) {
-    cancel = 0,
-    allow = 1,
-    download = 2,
 };
 
 const WindowMap = std.AutoHashMap(u32, WindowType);
 var windowMap: WindowMap = WindowMap.init(alloc);
 
-pub fn createWindow(opts: CreateWindowPayload) WindowType {
+pub fn createWindow(opts: CreateWindowOpts) WindowType {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
 
@@ -69,7 +71,7 @@ pub fn createWindow(opts: CreateWindowPayload) WindowType {
     // windowAlloc.msgSend(void, "release", .{});
 
     // Define the frame rectangle (x, y, width, height)
-    const frame = CGRect{ .origin = CGPoint{ .x = opts.x, .y = opts.y }, .size = CGSize{ .width = opts.width, .height = opts.height } };
+    const frame = CGRect{ .origin = CGPoint{ .x = opts.frame.x, .y = opts.frame.y }, .size = CGSize{ .width = opts.frame.width, .height = opts.frame.height } };
 
     // Define the window style mask (e.g., titled, closable, resizable)
     const styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable;
@@ -217,7 +219,20 @@ pub fn createWindow(opts: CreateWindowPayload) WindowType {
     // Display the window
     objcWindow.msgSend(void, "makeKeyAndOrderFront:", .{});
 
-    const _window = WindowType{ .id = opts.id, .title = opts.title, .url = opts.url, .html = opts.html, .width = opts.width, .height = opts.height, .x = opts.x, .y = opts.y, .window = objcWindow, .webview = undefined };
+    const _window = WindowType{ //
+        .id = opts.id,
+        .title = opts.title,
+        .url = opts.url,
+        .html = opts.html,
+        .frame = .{
+            .width = opts.frame.width,
+            .height = opts.frame.height,
+            .x = opts.frame.x,
+            .y = opts.frame.y,
+        },
+        .window = objcWindow,
+        .webview = undefined,
+    };
 
     windowMap.put(opts.id, _window) catch {
         std.log.info("Error putting window into hashmap: ", .{});
@@ -229,7 +244,7 @@ pub fn createWindow(opts: CreateWindowPayload) WindowType {
     return _window;
 }
 
-pub fn setTitle(opts: SetTitlePayload) void {
+pub fn setTitle(opts: SetTitleOpts) void {
     const win = windowMap.get(opts.winId) orelse {
         std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.winId});
         return;

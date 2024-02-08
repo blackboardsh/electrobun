@@ -62,12 +62,13 @@ export class BrowserWindow {
 			title: this.title,
 			url: this.url,
 			html: this.html,
-			width: this.frame.width,
-			height: this.frame.height,
-			x: this.frame.x,
-			y: this.frame.y,
+            frame: {
+                width: this.frame.width,
+                height: this.frame.height,
+                x: this.frame.x,
+                y: this.frame.y,
+            }
 		}
-
 
 		zigRPC.request.createWindow(win)
 		

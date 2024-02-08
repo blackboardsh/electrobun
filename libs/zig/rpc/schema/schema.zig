@@ -18,11 +18,13 @@ pub const BunSchema = struct {
                 id: u32,
                 title: []const u8,
                 url: ?[]const u8,
-                html: ?[]const u8,
-                width: f64,
-                height: f64,
-                x: f64,
-                y: f64,
+                html: ?[]const u8, //
+                frame: struct {
+                    width: f64,
+                    height: f64,
+                    x: f64,
+                    y: f64,
+                },
             };
         };
         pub const setTitle = struct { //

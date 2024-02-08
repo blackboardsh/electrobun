@@ -11,10 +11,16 @@ pub fn createWindow(args: rpcSchema.BunSchema.requests.createWindow.args) void {
         .title = args.title,
         .url = args.url,
         .html = args.html,
-        .width = args.width,
-        .height = args.height,
-        .x = args.x,
-        .y = args.y,
+        .frame = .{
+            .x = args.frame.x,
+            .y = args.frame.y,
+            .width = args.frame.width,
+            .height = args.frame.height,
+        },
+        // .width = args.width,
+        // .height = args.height,
+        // .x = args.x,
+        // .y = args.y,
     });
 }
 
