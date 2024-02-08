@@ -1,6 +1,6 @@
 const std = @import("std");
 const objc = @import("../zig-objc/src/main.zig");
-const rpcSenders = @import("rpcSenders.zig").senders;
+const rpcSenders = @import("../rpc/schema/senders.zig").senders;
 const system = std.c;
 
 const alloc = std.heap.page_allocator;

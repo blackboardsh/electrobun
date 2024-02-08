@@ -4,11 +4,10 @@ const dispatch = @cImport({
     @cInclude("dispatch/dispatch.h");
 });
 const std = @import("std");
-const window = @import("window.zig");
-const rpcSchema = @import("rpcSchema.zig");
-const rpcTypes = @import("rpcTypes.zig");
-const rpcSenders = @import("rpcSenders.zig");
-const rpcHandlers = @import("rpcHandlers.zig");
+const rpcSchema = @import("schema/schema.zig");
+const rpcTypes = @import("types.zig");
+const rpcSenders = @import("schema/senders.zig");
+const rpcHandlers = @import("schema/handlers.zig");
 const handlers = rpcHandlers.handlers;
 
 const alloc = std.heap.page_allocator;
@@ -34,7 +33,7 @@ fn stdInListener() void {
 
                 // todo: handle _RPCResponsePacketError
                 const _response = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, line, .{}) catch |err| {
-                    std.log.info("Error casting parsed json to zig type from stdin createWindow - {}: \n", .{err});
+                    std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
                     return;
                 };
                 // handle response
@@ -94,7 +93,7 @@ fn processMessageQueue(context: ?*anyopaque) callconv(.C) void {
 
     if (std.mem.eql(u8, msgType, "request")) {
         const _request = std.json.parseFromValue(rpcTypes._RPCRequestPacket, alloc, json.value, .{}) catch |err| {
-            std.log.info("Error casting parsed json to zig type from stdin createWindow - {}: \n", .{err});
+            std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
             return;
         };
 

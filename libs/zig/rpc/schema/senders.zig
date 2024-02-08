@@ -1,6 +1,6 @@
 const std = @import("std");
-const rpcTypes = @import("rpcTypes.zig");
-const rpcSchema = @import("rpcSchema.zig");
+const rpcTypes = @import("../types.zig");
+const rpcSchema = @import("schema.zig");
 
 const alloc = std.heap.page_allocator;
 

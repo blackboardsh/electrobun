@@ -1,5 +1,5 @@
 .DS_Store
 **/target
 **/zig-cache
+**/zig-out
 /node_modules
-/libs/zig/zig-out/bin/webview

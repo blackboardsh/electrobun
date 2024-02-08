@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
     //     .optimize = optimize,
     // });
 
+    // todo: should probably rename webview to something else
     const exe = b.addExecutable(.{
         .name = "webview",
         .root_source_file = .{ .path = "main.zig" },

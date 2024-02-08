@@ -1,6 +1,6 @@
-const rpcTypes = @import("rpcTypes.zig");
-const rpcSchema = @import("rpcSchema.zig");
-const window = @import("window.zig");
+const rpcTypes = @import("../types.zig");
+const rpcSchema = @import("schema.zig");
+const window = @import("../../macos/window.zig");
 const std = @import("std");
 
 const alloc = std.heap.page_allocator;
