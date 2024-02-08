@@ -13,6 +13,7 @@ const handlers = rpcHandlers.handlers;
 const alloc = std.heap.page_allocator;
 
 // We listen on stdin for stuff to do from bun and then dispatch it to the main thread where the gui stuff happens
+// todo: add test for non-json input (should output an error and continue receiving inputs)
 fn stdInListener() void {
     const stdin = std.io.getStdIn().reader();
     // Note: this is a zig string.
@@ -25,7 +26,7 @@ fn stdInListener() void {
 
             const messageWithType = std.json.parseFromSlice(rpcTypes._RPCMessage, alloc, line, .{ .ignore_unknown_fields = true }) catch |err| {
                 std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
-                return;
+                continue;
             };
 
             std.log.info("parsed line {s}", .{messageWithType.value.type});
@@ -34,7 +35,7 @@ fn stdInListener() void {
                 // todo: handle _RPCResponsePacketError
                 const _response = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, line, .{}) catch |err| {
                     std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
-                    return;
+                    continue;
                 };
                 // handle response
                 // _response = payload.allow;
