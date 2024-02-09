@@ -1,6 +1,6 @@
 const std = @import("std");
 const objc = @import("./objc/zig-objc/src/main.zig");
-const rpcSenders = @import("../rpc/schema/senders.zig").senders;
+const rpc = @import("../rpc/schema/request.zig");
 const objcLibImport = @import("./objc/objc.zig");
 const objcLib = objcLibImport.objcLib;
 
@@ -123,7 +123,7 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
                 // timer reference
                 const startTime = std.time.nanoTimestamp();
 
-                const _response = rpcSenders.decideNavigation(.{
+                const _response = rpc.request.decideNavigation(.{
                     .url = url_str,
                 });
 

@@ -42,7 +42,7 @@ pub const Handlers = struct {
     setTitle: fn (args: BunSchema.requests.setTitle.args) void,
 };
 
-pub const Senders = struct {
+pub const Requests = struct {
     decideNavigation: fn (args: ZigSchema.requests.decideNavigation.args) ZigSchema.requests.decideNavigation.returns,
 };
 
