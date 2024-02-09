@@ -1,5 +1,5 @@
 const std = @import("std");
-const objc = @import("../zig-objc/src/main.zig");
+const objc = @import("./objc/zig-objc/src/main.zig");
 
 pub export fn startAppkitGuiEventLoop() void {
     const pool = objc.AutoreleasePool.init();

@@ -1,7 +1,8 @@
 const std = @import("std");
-const objc = @import("../zig-objc/src/main.zig");
+const objc = @import("./objc/zig-objc/src/main.zig");
 const rpcSenders = @import("../rpc/schema/senders.zig").senders;
-const system = std.c;
+const objcLibImport = @import("./objc/objc.zig");
+const objcLib = objcLibImport.objcLib;
 
 const alloc = std.heap.page_allocator;
 
@@ -25,12 +26,6 @@ const NSWindowStyleMaskClosable = 1 << 1;
 const NSWindowStyleMaskResizable = 1 << 3;
 
 const NSBackingStoreBuffered = 2;
-
-const WKNavigationResponsePolicy = enum(c_int) {
-    cancel = 0,
-    allow = 1,
-    download = 2,
-};
 
 const WindowType = struct {
     id: u32,
@@ -116,49 +111,14 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
                 _ = sel;
                 _ = webView;
 
-                std.log.info("----> navigationg thingy running ", .{});
-
-                // To compile this dylib, in the repo root run:
-                // clang -dynamiclib -o ./libs/objc/libDecisionWrapper.dylib ./libs/objc/DecisionHandlerWrapper.m -framework WebKit -framework Cocoa -fobjc-arc
-                const dylib_path = "./libs/objc/libDecisionWrapper.dylib";
-                const RTLD_NOW = 0x2;
-                const handle = system.dlopen(dylib_path, RTLD_NOW);
-                if (handle == null) {
-                    std.debug.print("Failed to load library: {s}\n", .{dylib_path});
-                    return;
-                }
-
-                const getUrlFromNavigationAction = system.dlsym(handle, "getUrlFromNavigationAction");
-                if (getUrlFromNavigationAction == null) {
-                    std.debug.print("Failed to load symbol: getUrlFromNavigationAction\n", .{});
-                    // system.dlclose(handle);
-                    return;
-                }
-
-                // Define the function pointer type
-                // Note: [*:0]const u8 is a null terminated c-style string that obj returns
-                const getUrlFromNavigationActionFunc = fn (*anyopaque) callconv(.C) [*:0]const u8;
-
-                // Cast the function pointer to the appropriate type
-                const getUrlFromNavigationActionWrapper = @as(*const getUrlFromNavigationActionFunc, @alignCast(@ptrCast(getUrlFromNavigationAction)));
+                const _objcLib = objcLib();
 
                 // Call the function
-                const url_cstr = getUrlFromNavigationActionWrapper(navigationAction);
+                const url_cstr = _objcLib.getUrlFromNavigationAction(navigationAction);
                 // Note: this is needed to convert the c-style string to a zig string
                 const url_str = std.mem.span(url_cstr);
 
                 std.log.info("----> navigating to URL: {s}", .{url_str});
-
-                // Suppose 'someFunction' is a function in your dylib you want to call
-                const invokeDecisionHandler = system.dlsym(handle, "invokeDecisionHandler");
-                if (invokeDecisionHandler == null) {
-                    std.debug.print("Failed to load symbol: invokeDecisionHandler\n", .{});
-                    // system.dlclose(handle);
-                    return;
-                }
-
-                // Cast the function pointer to the appropriate type
-                const decisionHandlerWrapper: *const fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) *void = @alignCast(@ptrCast(invokeDecisionHandler));
 
                 // timer reference
                 const startTime = std.time.nanoTimestamp();
@@ -173,19 +133,16 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
                 const duration = endTime - startTime;
                 std.debug.print("Time taken: {} ns\n", .{@divTrunc(duration, std.time.ns_per_ms)});
 
-                var policyResponse: WKNavigationResponsePolicy = undefined;
+                var policyResponse: objcLibImport.WKNavigationResponsePolicy = undefined;
 
                 if (_response.allow == true) {
-                    policyResponse = WKNavigationResponsePolicy.allow;
+                    policyResponse = objcLibImport.WKNavigationResponsePolicy.allow;
                 } else {
-                    policyResponse = WKNavigationResponsePolicy.cancel;
+                    policyResponse = objcLibImport.WKNavigationResponsePolicy.cancel;
                 }
 
-                // Call the function
-                _ = decisionHandlerWrapper(decisionHandler, policyResponse);
-
-                // Close the library
-                // system.dlclose(handle);
+                // Call the objc callback function
+                _objcLib.invokeDecisionHandler(decisionHandler, policyResponse);
             }
         }.imp));
 

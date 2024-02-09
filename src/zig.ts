@@ -13,7 +13,9 @@ const zigProc = Bun.spawn([webviewPath], {
 	//  cwd: webviewPath,
 	env: {
 		...process.env,
-		DYLD_LIBRARY_PATH: '../libs/objc/'
+		// Note: Tell the os which folders the zig process is allowed to look for 
+		// dynamic libraries in.
+		DYLD_LIBRARY_PATH: '../libs/zig/macos/objc/'
 	}
 });
 
