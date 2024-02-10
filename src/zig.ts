@@ -127,7 +127,10 @@ const zigRPC = createRPC<BunSchema, ZigSchema>({
 			console.log('decide navigation request handler', args)
 			// todo (yoav): note: typescript should complain here if the return type doesn't
 			// match the schema
-			return {allow: args.url.includes('google.com')}
+
+			// this needs to get the right window/webview and run the decision handler on it
+			// if it exists.
+			return {allow: true}//args.url.includes('google.com')}
 		},
 	},
 	maxRequestTime: 5000,

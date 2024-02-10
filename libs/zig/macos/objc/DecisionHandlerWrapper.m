@@ -11,3 +11,8 @@ const char* getUrlFromNavigationAction(WKNavigationAction *navigationAction) {
     NSURL *url = request.URL;
     return url.absoluteString.UTF8String;
 }
+
+const char* getBodyFromScriptMessage(WKScriptMessage *message) {
+    NSString *body = message.body;
+    return body.UTF8String;
+}

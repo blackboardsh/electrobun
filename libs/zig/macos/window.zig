@@ -91,9 +91,61 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
     const windowBounds: CGRect = contentView.msgSend(CGRect, "bounds", .{});
 
     const wkWebviewClass = objc.getClass("WKWebView").?;
+
+    // todo: implement WKWebViewConfiguration -> specifically also the userContentController (to create a bridge between zig and js)
+    // pass in a new config object
+    const configClass = objc.getClass("WKWebViewConfiguration").?;
+    const configAlloc = configClass.msgSend(objc.Object, "alloc", .{});
+    const configInstance = configAlloc.msgSend(objc.Object, "init", .{});
+
     const webkitAlloc = wkWebviewClass.msgSend(objc.Object, "alloc", .{});
-    const windowWebview = webkitAlloc.msgSend(objc.Object, "initWithFrame:", .{windowBounds});
+    // https://developer.apple.com/documentation/webkit/wkwebview/1414998-initwithframe?language=objc
+    const windowWebview = webkitAlloc.msgSend(objc.Object, "initWithFrame:configuration:", .{ windowBounds, configInstance });
+
+    // get instance's config
+    const config = windowWebview.msgSend(objc.Object, "configuration", .{});
+    // Note: we need the controller from the instance, passing a new one into config when initializing the
+    // webview doesn't seem to work
+    const userContentController = config.msgSend(objc.Object, "userContentController", .{});
+
     objcWindow.msgSend(void, "setContentView:", .{windowWebview});
+
+    // Add a script message handler
+    const MyScriptMessageHandler = setup: {
+        const MyScriptMessageHandler = objc.allocateClassPair(objc.getClass("NSObject").?, "my_script_message_handler").?;
+
+        std.debug.assert(try MyScriptMessageHandler.addMethod("userContentController:didReceiveScriptMessage:", struct {
+            fn imp(target: objc.c.id, sel: objc.c.SEL, _userContentController: *anyopaque, message: *anyopaque) callconv(.C) void {
+                _ = target;
+                _ = sel;
+                _ = _userContentController;
+                // Implementation goes here
+                // const bodyStr = objcLib.getUrlFromScriptMessage(message); // Assume this function extracts the message body as a string
+                // std.log.info("Received script message: {s}", .{bodyStr});
+
+                const _objcLib = objcLib();
+                const body_cstr = _objcLib.getBodyFromScriptMessage(message);
+                const body_str = std.mem.span(body_cstr);
+
+                // todo: create electrobun js library and inject it into webview.
+                // it will wrap an rpc call that serializes rpcAnywhere style messages on the messageHandler to json
+                // we can then just write those directly to stdout to pass them to bun
+
+                std.log.info("Received script message: {s}", .{body_str});
+            }
+        }.imp));
+
+        break :setup MyScriptMessageHandler;
+    };
+
+    const myScriptMessageHandler = MyScriptMessageHandler.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
+
+    // todo: also implement addScriptMessageHandler with reply (https://developer.apple.com/documentation/webkit/wkscriptmessagehandlerwithreply?language=objc)
+    userContentController.msgSend(void, "addScriptMessageHandler:name:", .{ myScriptMessageHandler, createNSString("myMessageHandler") });
+
+    //
+
+    // WKWebViewConfiguration
 
     const MyNavigationDelegate = setup: {
         const MyNavigationDelegate = objc.allocateClassPair(objc.getClass("NSObject").?, "my_navigation_delegate").?;

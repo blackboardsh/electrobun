@@ -1,3 +1,5 @@
+// compile using
+// clang -dynamiclib -o ./libs/zig/macos/objc/libDecisionWrapper.dylib ./libs/zig/macos/objc/DecisionHandlerWrapper.m -framework WebKit -framework Cocoa -fobjc-arc
 const std = @import("std");
 const libc = std.c;
 const os = std.os;
@@ -19,6 +21,7 @@ pub const WKNavigationResponsePolicy = enum(c_int) {
 const ObcLib = struct {
     handle: ?*anyopaque = null,
     getUrlFromNavigationActionSymbol: *const fn (*anyopaque) callconv(.C) [*:0]const u8 = undefined,
+    getBodyFromScriptMessage: *const fn (*anyopaque) callconv(.C) [*:0]const u8 = undefined,
     invokeDecisionHandlerSymbol: *const fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) *void = undefined,
 
     fn loadSymbols(self: *ObcLib) void {
@@ -36,6 +39,7 @@ const ObcLib = struct {
 
             // Load symbols
             self.getUrlFromNavigationActionSymbol = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "getUrlFromNavigationAction"))); //orelse return error.CannotLoadSymbol;
+            self.getBodyFromScriptMessage = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "getBodyFromScriptMessage"))); //orelse return error.CannotLoadSymbol;
             self.invokeDecisionHandlerSymbol = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "invokeDecisionHandler"))); //orelse return error.CannotLoadSymbol;
         }
     }
@@ -43,6 +47,11 @@ const ObcLib = struct {
     pub fn getUrlFromNavigationAction(self: *ObcLib, navigationAction: *anyopaque) [*:0]const u8 {
         self.loadSymbols();
         return self.getUrlFromNavigationActionSymbol(navigationAction);
+    }
+
+    pub fn getBodyFromScriptMessage(self: *ObcLib, scriptMessage: *anyopaque) [*:0]const u8 {
+        self.loadSymbols();
+        return self.getBodyFromScriptMessage(scriptMessage);
     }
 
     pub fn invokeDecisionHandler(self: *ObcLib, decisionHandler: *anyopaque, policy: WKNavigationResponsePolicy) void {
@@ -56,6 +65,7 @@ const ObcLib = struct {
             self.handle = null;
             self.getUrlFromNavigationActionSymbol = null;
             self.invokeDecisionHandlerSymbol = null;
+            self.getBodyFromScriptMessage = null;
         }
     }
 };
