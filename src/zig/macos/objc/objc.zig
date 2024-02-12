@@ -12,6 +12,8 @@ pub const WKNavigationResponsePolicy = enum(c_int) {
     download = 2,
 };
 
+// const WKContentWorld = opaque {};
+
 // This file exposes a singleton that automatically loads the dynamic library and symbols
 // when they are first used.
 // example:
@@ -23,8 +25,10 @@ const ObcLib = struct {
     getUrlFromNavigationActionSymbol: *const fn (*anyopaque) callconv(.C) [*:0]const u8 = undefined,
     getBodyFromScriptMessage: *const fn (*anyopaque) callconv(.C) [*:0]const u8 = undefined,
     invokeDecisionHandlerSymbol: *const fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) *void = undefined,
+    // getPageWorld: *const fn () callconv(.C) *WKContentWorld = undefined,
 
     fn loadSymbols(self: *ObcLib) void {
+        // std.log.info("Getting page world A", .{});
         if (self.handle == null) {
             // Note: Just use the name of the .dylib, in typescript we set the DYLD_LIBRARY_PATH as an env
             // variable to the zig process, which signals to the OS which folders to let this process look
@@ -41,6 +45,8 @@ const ObcLib = struct {
             self.getUrlFromNavigationActionSymbol = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "getUrlFromNavigationAction"))); //orelse return error.CannotLoadSymbol;
             self.getBodyFromScriptMessage = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "getBodyFromScriptMessage"))); //orelse return error.CannotLoadSymbol;
             self.invokeDecisionHandlerSymbol = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "invokeDecisionHandler"))); //orelse return error.CannotLoadSymbol;
+            // self.getPageWorld = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "getPageWorld"))); //orelse return error.CannotLoadSymbol;
+            // std.log.info("Getting page world B", .{});
         }
     }
 
@@ -59,6 +65,15 @@ const ObcLib = struct {
         _ = self.invokeDecisionHandlerSymbol(decisionHandler, policy);
     }
 
+    // pub fn getPageWorld(self: *ObcLib) *WKContentWorld {
+    //     std.log.info("Getting page world x", .{});
+    //     self.loadSymbols();
+    //     std.log.info("Getting page world y", .{});
+
+    //     std.log.info("Getting page world {}", .{self.getPageWorld});
+    //     return self.getPageWorld();
+    // }
+
     pub fn unload(self: *ObcLib) void {
         if (self.handle) |handle| {
             libc.dlclose(handle);
@@ -66,6 +81,7 @@ const ObcLib = struct {
             self.getUrlFromNavigationActionSymbol = null;
             self.invokeDecisionHandlerSymbol = null;
             self.getBodyFromScriptMessage = null;
+            // self.GetPageWorld = null;
         }
     }
 };

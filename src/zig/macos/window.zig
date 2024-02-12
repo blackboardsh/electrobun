@@ -27,6 +27,8 @@ const NSWindowStyleMaskResizable = 1 << 3;
 
 const NSBackingStoreBuffered = 2;
 
+const WKUserScriptInjectionTimeAtDocumentStart = 0;
+
 const WindowType = struct {
     id: u32,
     window: ?objc.Object,
@@ -104,6 +106,10 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
 
     // get instance's config
     const config = windowWebview.msgSend(objc.Object, "configuration", .{});
+
+    addPreloadScriptToWebViewConfig(&config, "window.electrobun = {bunBridge = (msg) => {window.webkit.messageHandlers.bunBridge.postMessage(msg)}};");
+    addPreloadScriptToWebViewConfig(&config, "window.webkit.messageHandlers.bunBridge.postMessage('Hello from the other side!');");
+
     // Note: we need the controller from the instance, passing a new one into config when initializing the
     // webview doesn't seem to work
     const userContentController = config.msgSend(objc.Object, "userContentController", .{});
@@ -111,10 +117,10 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
     objcWindow.msgSend(void, "setContentView:", .{windowWebview});
 
     // Add a script message handler
-    const MyScriptMessageHandler = setup: {
-        const MyScriptMessageHandler = objc.allocateClassPair(objc.getClass("NSObject").?, "my_script_message_handler").?;
+    const BunBridgeHandler = setup: {
+        const BunBridgeHandler = objc.allocateClassPair(objc.getClass("NSObject").?, "bunBridgeHandler").?;
 
-        std.debug.assert(try MyScriptMessageHandler.addMethod("userContentController:didReceiveScriptMessage:", struct {
+        std.debug.assert(try BunBridgeHandler.addMethod("userContentController:didReceiveScriptMessage:", struct {
             fn imp(target: objc.c.id, sel: objc.c.SEL, _userContentController: *anyopaque, message: *anyopaque) callconv(.C) void {
                 _ = target;
                 _ = sel;
@@ -135,13 +141,13 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
             }
         }.imp));
 
-        break :setup MyScriptMessageHandler;
+        break :setup BunBridgeHandler;
     };
 
-    const myScriptMessageHandler = MyScriptMessageHandler.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
+    const bunBridgeHandler = BunBridgeHandler.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
 
     // todo: also implement addScriptMessageHandler with reply (https://developer.apple.com/documentation/webkit/wkscriptmessagehandlerwithreply?language=objc)
-    userContentController.msgSend(void, "addScriptMessageHandler:name:", .{ myScriptMessageHandler, createNSString("myMessageHandler") });
+    userContentController.msgSend(void, "addScriptMessageHandler:name:", .{ bunBridgeHandler, createNSString("bunBridge") });
 
     //
 
@@ -278,4 +284,56 @@ fn createNSURL(string: []const u8) objc.Object {
     const nsUrl = NSURL.msgSend(objc.Object, "URLWithString:", .{urlString});
     std.log.info("NSURL created: {}", .{nsUrl});
     return nsUrl;
+}
+
+fn readJsFileContents(filePath: []const u8) ![]u8 {
+    const file = try std.fs.cwd().openFile(filePath, .{});
+    defer file.close();
+
+    const fileSize = try file.getEndPos();
+    var buffer = try alloc.alloc(u8, fileSize);
+    _ = try file.readAll(buffer);
+
+    return buffer;
+}
+
+fn executeJavaScript(webview: *objc.Object, jsCode: []const u8) void {
+    const NSString = objc.getClass("NSString").?;
+    const jsString = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{jsCode});
+    webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, null });
+}
+
+fn addPreloadScriptToWebViewConfig(config: *const objc.Object, scriptContent: []const u8) void {
+    const WKUserScript = objc.getClass("WKUserScript").?;
+    const userScriptAlloc = WKUserScript.msgSend(objc.Object, "alloc", .{});
+
+    const wKContentWorldClass = objc.getClass("WKContentWorld").?;
+    const pageWorld = wKContentWorldClass.msgSend(objc.Object, "pageWorld", .{});
+    std.log.info("pageWorld: {s}", .{pageWorld.getClassName()});
+    std.log.info("pageWorld...", .{});
+    // const _objcLib = objcLib();
+    std.log.info("pageWorld2...", .{});
+    // _ = _objcLib.getPageWorld();
+    std.log.info("pageWorld3...", .{});
+    std.log.info("pageWorld: {}", .{pageWorld});
+
+    // Convert your script content to an NSString
+    const scriptNSString = createNSString(scriptContent);
+
+    // Initialize a WKUserScript with your script content
+    // Injection time is .atDocumentStart to ensure it runs before the page content loads
+    // ForMainFrameOnly: true or false depending on your needs
+    const userScript = userScriptAlloc.msgSend(objc.Object, "initWithSource:injectionTime:forMainFrameOnly:", .{
+        scriptNSString,
+        WKUserScriptInjectionTimeAtDocumentStart,
+        // it's odd that the preload script only runs before the page's scripts if this is set to false
+        false,
+        // pageWorld,
+    });
+
+    // Get the userContentController from the config
+    const userContentController = config.msgSend(objc.Object, "userContentController", .{});
+
+    // Add the user script to the content controller
+    userContentController.msgSend(void, "addUserScript:", .{userScript});
 }

@@ -1,4 +1,4 @@
-import { zigRPC } from '../zig'
+import { zigRPC } from '../proc/zig'
 
 let nextWindowId = 0;
 

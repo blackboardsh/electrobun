@@ -1,1 +1,29 @@
-{ "dependencies": { "rpc-anywhere": "^1.3.4" } }
+{
+    "name": "electrobun",
+    "version": "0.0.1",
+    "license": "MIT",
+    "private": true,
+    "repository": {
+      "type": "git",
+      "url": "https://github.com/blackboardsh/electrobun.git"
+    },
+    "scripts": {
+      "start": "bun src/bun/index.ts",
+      "install:bun": "cd src/bun && bun install",
+      "install:browser": "cd src/browser && bun install",
+      "install:all": "bun run install:bun && bun run install:browser",
+      "build:objc": "clang -dynamiclib -o src/zig/macos/objc/libDecisionWrapper.dylib src/zig/macos/objc/DecisionHandlerWrapper.m -framework WebKit -framework Cocoa -fobjc-arc",
+      "build:zig": "cd src/zig && zig build",
+      "build:browser": "bun build src/browser/index.ts --outdir src/browser/build/",
+      "build:bun": "",
+      "build:dev": "bun build:objc && bun build:zig && bun build:browser",
+      "build:electrobun": "bun build:objc && bun build:zig && bun build:browser && bun build:bun",
+      "example:1": "bun example/index.ts",
+      "dev:example": "bun build:dev && bun example:1"
+    },
+    "devDependencies": {
+      "bun": "1.0.26"    
+    },
+    "dependencies": {      
+    }
+  }

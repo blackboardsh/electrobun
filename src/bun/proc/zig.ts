@@ -1,7 +1,8 @@
 import {join} from 'path'
 import {type RPCSchema, type RPCTransport, createRPC} from 'rpc-anywhere'
 
-const webviewPath = join(new URL('../', import.meta.url).pathname, 'libs/zig/zig-out/bin/webview')
+const webviewPath = join(new URL('../', import.meta.url).pathname, '../zig/zig-out/bin/webview')
+const DYLD_LIBRARY_PATH = 'src/zig/macos/objc/';
 
 console.log(webviewPath)
 
@@ -15,7 +16,7 @@ const zigProc = Bun.spawn([webviewPath], {
 		...process.env,
 		// Note: Tell the os which folders the zig process is allowed to look for 
 		// dynamic libraries in.
-		DYLD_LIBRARY_PATH: '../libs/zig/macos/objc/'
+		DYLD_LIBRARY_PATH
 	}
 });
 

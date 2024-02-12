@@ -16,3 +16,7 @@ const char* getBodyFromScriptMessage(WKScriptMessage *message) {
     NSString *body = message.body;
     return body.UTF8String;
 }
+
+WKContentWorld* getPageWorld() {
+    return WKContentWorld.pageWorld;
+}

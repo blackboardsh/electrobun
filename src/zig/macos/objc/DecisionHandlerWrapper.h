@@ -5,3 +5,5 @@ void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WK
 const char* getUrlFromNavigationAction(WKNavigationAction *navigationAction);
 
 const char* getBodyFromScriptMessage(WKScriptMessage *message);
+
+WKContentWorld* getPageWorld();
