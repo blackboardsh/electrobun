@@ -12,6 +12,7 @@ type WindowOptionsType = {
 	},
 	url: string | null,
 	html: string | null,
+	preloadScript?: string
 }
 
 const defaultWindowOptions: WindowOptionsType = {

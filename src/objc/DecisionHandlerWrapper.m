@@ -1,6 +1,6 @@
 #import "DecisionHandlerWrapper.h"
 
-void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WKNavigationActionPolicy policy) {
+void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WKNavigationActionPolicy policy) {    
     if (decisionHandler != NULL) {
         decisionHandler(policy);
     }
@@ -15,8 +15,4 @@ const char* getUrlFromNavigationAction(WKNavigationAction *navigationAction) {
 const char* getBodyFromScriptMessage(WKScriptMessage *message) {
     NSString *body = message.body;
     return body.UTF8String;
-}
-
-WKContentWorld* getPageWorld() {
-    return WKContentWorld.pageWorld;
 }

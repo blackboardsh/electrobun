@@ -6,6 +6,8 @@ const objcLib = objcLibImport.objcLib;
 
 const alloc = std.heap.page_allocator;
 
+const ELECTROBUN_BROWSER_API_SCRIPT = @embedFile("../build/index.js");
+
 const CGPoint = extern struct {
     x: f64,
     y: f64,
@@ -107,8 +109,8 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
     // get instance's config
     const config = windowWebview.msgSend(objc.Object, "configuration", .{});
 
-    addPreloadScriptToWebViewConfig(&config, "window.electrobun = {bunBridge = (msg) => {window.webkit.messageHandlers.bunBridge.postMessage(msg)}};");
-    addPreloadScriptToWebViewConfig(&config, "window.webkit.messageHandlers.bunBridge.postMessage('Hello from the other side!');");
+    addPreloadScriptToWebViewConfig(&config, ELECTROBUN_BROWSER_API_SCRIPT);
+    // addPreloadScriptToWebViewConfig(&config, "window.webkit.messageHandlers.bunBridge.postMessage('Hello from the other side!');");
 
     // Note: we need the controller from the instance, passing a new one into config when initializing the
     // webview doesn't seem to work
@@ -307,16 +309,6 @@ fn addPreloadScriptToWebViewConfig(config: *const objc.Object, scriptContent: []
     const WKUserScript = objc.getClass("WKUserScript").?;
     const userScriptAlloc = WKUserScript.msgSend(objc.Object, "alloc", .{});
 
-    const wKContentWorldClass = objc.getClass("WKContentWorld").?;
-    const pageWorld = wKContentWorldClass.msgSend(objc.Object, "pageWorld", .{});
-    std.log.info("pageWorld: {s}", .{pageWorld.getClassName()});
-    std.log.info("pageWorld...", .{});
-    // const _objcLib = objcLib();
-    std.log.info("pageWorld2...", .{});
-    // _ = _objcLib.getPageWorld();
-    std.log.info("pageWorld3...", .{});
-    std.log.info("pageWorld: {}", .{pageWorld});
-
     // Convert your script content to an NSString
     const scriptNSString = createNSString(scriptContent);
 
@@ -328,7 +320,6 @@ fn addPreloadScriptToWebViewConfig(config: *const objc.Object, scriptContent: []
         WKUserScriptInjectionTimeAtDocumentStart,
         // it's odd that the preload script only runs before the page's scripts if this is set to false
         false,
-        // pageWorld,
     });
 
     // Get the userContentController from the config

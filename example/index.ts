@@ -23,7 +23,7 @@ const win = new BrowserWindow({
         <head></head>
         <body>
             <script>
-                window.webkit.messageHandlers.bunBridge.postMessage("Hello from JavaScript!");
+                window.webkit.messageHandlers.bunBridge.postMessage("Hello from JavaScript!");                
                 window.electrobun.bunBridge("Hello from bun bridge!");
             </script>
             <h1>hi</h1>

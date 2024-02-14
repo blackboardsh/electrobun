@@ -2,7 +2,7 @@ import {join} from 'path'
 import {type RPCSchema, type RPCTransport, createRPC} from 'rpc-anywhere'
 
 const webviewPath = join(new URL('../', import.meta.url).pathname, '../zig/zig-out/bin/webview')
-const DYLD_LIBRARY_PATH = 'src/zig/macos/objc/';
+const DYLD_LIBRARY_PATH = 'src/zig/build/';
 
 console.log(webviewPath)
 
@@ -91,8 +91,7 @@ type BunSchema = RPCSchema<{
 				width: number,
 				height: number,
 				x: number,
-				y: number,				
-			
+				y: number,							
 			},
 			returns: void
 		},
