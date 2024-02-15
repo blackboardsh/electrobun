@@ -64,6 +64,20 @@ export class BrowserWindow {
 		
 
 
+		
+
+		// todo (yoav): wait for window/webview to be created		
+		// todo (yoav): track ids for webviews as well
+		const webviewPipe = `/private/tmp/electrobun_ipc_pipe_${this.id}_1`;
+		const webviewPipeIn = webviewPipe + '_in';
+		const webviewPipeOut = webviewPipe + '_out';
+		
+		try {
+		execSync('mkfifo ' + webviewPipeOut);
+		} catch (e) {
+			console.log('pipe already exists')
+		}
+
 		const win = {
 			id: this.id,
 			title: this.title,
@@ -78,18 +92,6 @@ export class BrowserWindow {
 		}
 
 		zigRPC.request.createWindow(win)
-
-		// todo (yoav): wait for window/webview to be created
-		
-		const webviewPipe = '/private/tmp/electrobun_ipc_pipe_1_1';
-		const webviewPipeIn = webviewPipe + '_in';
-		const webviewPipeOut = webviewPipe + '_out';
-		
-		try {
-		execSync('mkfifo ' + webviewPipeOut);
-		} catch (e) {
-			console.log('pipe already exists')
-		}
 
 		
 		

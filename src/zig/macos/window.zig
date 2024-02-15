@@ -172,7 +172,12 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
 
     // defer file.close();
     std.log.info("---> opening file descriptor", .{});
-    const file_result = std.fs.cwd().openFile("/private/tmp/electrobun_ipc_pipe_1_1_out", .{ .mode = .read_write });
+
+    const bunPipeOutPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_out", .{opts.id});
+
+    std.log.info("concat result {s}", .{bunPipeOutPath});
+
+    const file_result = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
 
     std.log.info("after read", .{});
     // if (file_result) |file| {
@@ -419,4 +424,16 @@ fn addPreloadScriptToWebViewConfig(config: *const objc.Object, scriptContent: []
 
     // Add the user script to the content controller
     userContentController.msgSend(void, "addUserScript:", .{userScript});
+}
+
+// effecient string concatenation that returns the template if there's an error
+// this makes handling errors a bit easier
+fn concatOrFallback(comptime fmt: []const u8, args: anytype) []const u8 {
+    var buffer: [100]u8 = undefined;
+    const result = std.fmt.bufPrint(&buffer, fmt, args) catch |err| {
+        std.log.info("Error concatenating string {}", .{err});
+        return fmt;
+    };
+
+    return result;
 }
