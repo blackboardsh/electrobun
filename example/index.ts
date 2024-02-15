@@ -40,3 +40,4 @@ const win = new BrowserWindow({
 
 
 win.setTitle('New title from bun')
+

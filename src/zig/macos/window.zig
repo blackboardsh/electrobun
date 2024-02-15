@@ -34,7 +34,7 @@ const WKUserScriptInjectionTimeAtDocumentStart = 0;
 const WindowType = struct {
     id: u32,
     window: ?objc.Object,
-    webview: ?objc.Object,
+    webview: WebviewType,
 
     title: []const u8,
     url: ?[]const u8,
@@ -45,6 +45,31 @@ const WindowType = struct {
         x: f64,
         y: f64,
     },
+};
+
+const WebviewType = struct {
+    // id: u32,
+    handle: objc.Object,
+    bun_out_pipe: ?anyerror!std.fs.File,
+    // Function to send a message to Bun
+    pub fn sendToBun(self: *WebviewType, message: []const u8) !void {
+        if (self.bun_out_pipe) |result| {
+            if (result) |file| {
+                std.log.info("Opened file successfully", .{});
+                // Write the message to the named pipe
+                file.writeAll(message) catch |err| {
+                    std.debug.print("Failed to write to file: {}\n", .{err});
+                };
+            } else |err| {
+                std.debug.print("Failed to open file: {}\n", .{err});
+            }
+            // If bun_out_pipe is not an error and not null, write the message
+            // try file.writeAll(message);
+        } else {
+            // If bun_out_pipe is null, print an error or the message to stdio
+            std.debug.print("Error: No valid pipe to write to. Message was: {s}\n", .{message});
+        }
+    }
 };
 
 // todo: use the types in rpc.zig (or move them to a shared location)
@@ -118,35 +143,116 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
 
     objcWindow.msgSend(void, "setContentView:", .{windowWebview});
 
+    // create a named pipe for webview and bun to communicate
+    // // todo: maybe do this from bun as a shell exec command
+    // // 1_1 is the windowId_webviewId
+    // const base_path = "/tmp/electrobun_ipc_pipe_1_1";
+    // const in_path = try alloc.alloc(u8, base_path.len + 4);
+    // const out_path = try alloc.alloc(u8, base_path.len + 5);
+
+    // defer alloc.free(in_path);
+    // defer alloc.free(out_path);
+
+    // std.mem.copy(u8, in_path, base_path);
+    // std.mem.copy(u8, in_path[base_path.len..], "_in\0");
+    // std.mem.copy(u8, out_path, base_path);
+    // std.mem.copy(u8, out_path[base_path.len..], "_out\0");
+
+    // // Create the named pipes (FIFOs)
+    // if (os.mkfifo(in_path, 0o644)) |_| {
+    //     std.debug.print("Failed to create input named pipe.\n", .{});
+    // } else {
+    //     std.debug.print("Input named pipe created: {}\n", .{in_path});
+    // }
+    // if (os.mkfifo(out_path, 0o644)) |_| {
+    //     std.debug.print("Failed to create output named pipe.\n", .{});
+    // } else {
+    //     std.debug.print("Output named pipe created: {}\n", .{out_path});
+    // }
+
+    // defer file.close();
+    std.log.info("---> opening file descriptor", .{});
+    const file_result = std.fs.cwd().openFile("/private/tmp/electrobun_ipc_pipe_1_1_out", .{ .mode = .read_write });
+
+    std.log.info("after read", .{});
+    // if (file_result) |file| {
+    //     std.log.info("Opened file successfully", .{});
+    //     // Write the message to the named pipe
+    //     file.writeAll("--->>>>>>>>>>>>>>>>body_str") catch |err| {
+    //         std.debug.print("Failed to write to file: {}\n", .{err});
+    //     };
+    // } else |err| {
+    //     std.debug.print("Failed to open file: {}\n", .{err});
+    // }
+
+    const _window = WindowType{ //
+        .id = opts.id,
+        .title = opts.title,
+        .url = opts.url,
+        .html = opts.html,
+        .frame = .{
+            .width = opts.frame.width,
+            .height = opts.frame.height,
+            .x = opts.frame.x,
+            .y = opts.frame.y,
+        },
+        .window = objcWindow,
+        .webview = WebviewType{ .handle = windowWebview, .bun_out_pipe = file_result },
+    };
+
+    windowMap.put(opts.id, _window) catch {
+        std.log.info("Error putting window into hashmap: ", .{});
+        return _window;
+    };
+
     // Add a script message handler
     const BunBridgeHandler = setup: {
         const BunBridgeHandler = objc.allocateClassPair(objc.getClass("NSObject").?, "bunBridgeHandler").?;
 
         std.debug.assert(try BunBridgeHandler.addMethod("userContentController:didReceiveScriptMessage:", struct {
             fn imp(target: objc.c.id, sel: objc.c.SEL, _userContentController: *anyopaque, message: *anyopaque) callconv(.C) void {
-                _ = target;
                 _ = sel;
                 _ = _userContentController;
-                // Implementation goes here
-                // const bodyStr = objcLib.getUrlFromScriptMessage(message); // Assume this function extracts the message body as a string
-                // std.log.info("Received script message: {s}", .{bodyStr});
 
                 const _objcLib = objcLib();
                 const body_cstr = _objcLib.getBodyFromScriptMessage(message);
                 const body_str = std.mem.span(body_cstr);
 
-                // todo: create electrobun js library and inject it into webview.
-                // it will wrap an rpc call that serializes rpcAnywhere style messages on the messageHandler to json
-                // we can then just write those directly to stdout to pass them to bun
-
                 std.log.info("Received script message: {s}", .{body_str});
+
+                const _BunBridgeHandler = objc.Object.fromId(target);
+                const windowIdIvar = _BunBridgeHandler.getInstanceVariable("windowId");
+                const windowId = windowIdIvar.getProperty(c_uint, "unsignedIntValue");
+
+                var win = windowMap.get(windowId) orelse {
+                    std.debug.print("Failed to get window from hashmap for id {}\n", .{windowId});
+                    return;
+                };
+
+                win.webview.sendToBun(body_str) catch |err| {
+                    std.debug.print("Failed to send message to bun: {}\n", .{err});
+                };
             }
         }.imp));
+
+        _ = BunBridgeHandler.addIvar("windowId");
 
         break :setup BunBridgeHandler;
     };
 
-    const bunBridgeHandler = BunBridgeHandler.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
+    var win = windowMap.get(opts.id) orelse {
+        // std.debug.print("Failed to get window from hashmap for id {d}\n", .{opts.id});
+        return _window;
+    };
+
+    win.webview.sendToBun("<><><<<><>< wowowowow yay! body_str") catch |err| {
+        std.debug.print("Failed to send message to bun: {}\n", .{err});
+    };
+
+    const bunBridgeHandler: objc.Object = .{ .value = BunBridgeHandler.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{}).value };
+
+    bunBridgeHandler.setInstanceVariable("windowId", createNSNumber(opts.id)); //opts.id);
+    // const bunBridgeHandler = BunBridgeHandler.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
 
     // todo: also implement addScriptMessageHandler with reply (https://developer.apple.com/documentation/webkit/wkscriptmessagehandlerwithreply?language=objc)
     userContentController.msgSend(void, "addScriptMessageHandler:name:", .{ bunBridgeHandler, createNSString("bunBridge") });
@@ -236,26 +342,6 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
     // Display the window
     objcWindow.msgSend(void, "makeKeyAndOrderFront:", .{});
 
-    const _window = WindowType{ //
-        .id = opts.id,
-        .title = opts.title,
-        .url = opts.url,
-        .html = opts.html,
-        .frame = .{
-            .width = opts.frame.width,
-            .height = opts.frame.height,
-            .x = opts.frame.x,
-            .y = opts.frame.y,
-        },
-        .window = objcWindow,
-        .webview = undefined,
-    };
-
-    windowMap.put(opts.id, _window) catch {
-        std.log.info("Error putting window into hashmap: ", .{});
-        return _window;
-    };
-
     std.log.info("hashmap size{}", .{windowMap.count()});
 
     return _window;
@@ -279,6 +365,12 @@ fn createNSString(string: []const u8) objc.Object {
     return NSString.msgSend(objc.Object, "stringWithUTF8String:", .{string});
 }
 
+fn createNSNumber(value: u32) objc.Object {
+    const NSNumber = objc.getClass("NSNumber").?;
+    // Use numberWithUnsignedInt: method to create NSNumber from u32
+    return NSNumber.msgSend(objc.Object, "numberWithUnsignedInt:", .{value});
+}
+
 fn createNSURL(string: []const u8) objc.Object {
     const NSURL = objc.getClass("NSURL").?;
     std.log.info("Creating NSURL with string: {s}", .{string});
@@ -288,16 +380,16 @@ fn createNSURL(string: []const u8) objc.Object {
     return nsUrl;
 }
 
-fn readJsFileContents(filePath: []const u8) ![]u8 {
-    const file = try std.fs.cwd().openFile(filePath, .{});
-    defer file.close();
+// fn readJsFileContents(filePath: []const u8) ![]u8 {
+//     const file = try std.fs.cwd().openFile(filePath, .{});
+//     defer file.close();
 
-    const fileSize = try file.getEndPos();
-    var buffer = try alloc.alloc(u8, fileSize);
-    _ = try file.readAll(buffer);
+//     const fileSize = try file.getEndPos();
+//     var buffer = try alloc.alloc(u8, fileSize);
+//     _ = try file.readAll(buffer);
 
-    return buffer;
-}
+//     return buffer;
+// }
 
 fn executeJavaScript(webview: *objc.Object, jsCode: []const u8) void {
     const NSString = objc.getClass("NSString").?;

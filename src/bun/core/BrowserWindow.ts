@@ -1,4 +1,6 @@
 import { zigRPC } from '../proc/zig'
+import * as fs from 'fs';
+import {execSync} from 'child_process';
 
 let nextWindowId = 0;
 
@@ -58,6 +60,10 @@ export class BrowserWindow {
 	
 	  init() {
 		// is this.id available here?
+		
+		
+
+
 		const win = {
 			id: this.id,
 			title: this.title,
@@ -72,6 +78,35 @@ export class BrowserWindow {
 		}
 
 		zigRPC.request.createWindow(win)
+
+		// todo (yoav): wait for window/webview to be created
+		
+		const webviewPipe = '/private/tmp/electrobun_ipc_pipe_1_1';
+		const webviewPipeIn = webviewPipe + '_in';
+		const webviewPipeOut = webviewPipe + '_out';
+		
+		try {
+		execSync('mkfifo ' + webviewPipeOut);
+		} catch (e) {
+			console.log('pipe already exists')
+		}
+
+		
+		
+// Open the named pipe for reading
+	
+	const outStream = fs.createReadStream(webviewPipeOut, {
+		flags: 'r', 		
+	});
+	
+	outStream.on('data', (chunk) => {
+	    console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
+	});	
+	
+	outStream.on('error', (err) => {
+	    console.error('Error:', err);
+	});
+
 		
 
 		// sendEvent(event).then(() => {
