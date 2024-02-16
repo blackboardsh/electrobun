@@ -30,6 +30,8 @@ const defaultWindowOptions: WindowOptionsType = {
 }
 
 
+
+
 export class BrowserWindow {
 	id: number = nextWindowId++;
 	title: string = 'Electrobun';
@@ -75,8 +77,14 @@ export class BrowserWindow {
 		try {
 		execSync('mkfifo ' + webviewPipeOut);
 		} catch (e) {
-			console.log('pipe already exists')
+			console.log('pipe out already exists')
 		}
+
+		try {
+			execSync('mkfifo ' + webviewPipeIn);
+			} catch (e) {
+				console.log('pipe in already exists')
+			}
 
 		const win = {
 			id: this.id,
@@ -91,9 +99,36 @@ export class BrowserWindow {
             }
 		}
 
+		
+		
+	
+		// inStream.on('data', (chunk) => {
+		//     console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
+		// });	
+		
+		// inStream.on('error', (err) => {
+		//     console.error('Error:', err);
+		// });
+		
+		// inStream.write('hello from bun through named pipe\n');
+		// inStream.end();
+
+
 		zigRPC.request.createWindow(win)
 
-		
+		const inStream = fs.createWriteStream(webviewPipeIn, {
+			flags: 'w', 		
+		});
+	
+		inStream.write('\n');
+
+		setTimeout(() => {
+			inStream.write('another message for the webview! \n');
+		}, 5000)
+	
+
+
+	
 		
 // Open the named pipe for reading
 	
@@ -109,6 +144,8 @@ export class BrowserWindow {
 	    console.error('Error:', err);
 	});
 
+	
+	
 		
 
 		// sendEvent(event).then(() => {

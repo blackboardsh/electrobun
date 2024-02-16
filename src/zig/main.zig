@@ -14,6 +14,7 @@ const alloc = std.heap.page_allocator;
 pub fn main() !void {
     std.log.info("main starting", .{});
     try rpc.init();
-    std.log.info("rpc initialized", .{}); // never gets here
+
+    std.log.info("rpc initialized", .{});
     application.startAppkitGuiEventLoop();
 }

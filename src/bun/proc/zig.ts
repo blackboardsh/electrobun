@@ -1,5 +1,7 @@
 import {join} from 'path'
 import {type RPCSchema, type RPCTransport, createRPC} from 'rpc-anywhere'
+import {execSync} from 'child_process';
+import * as fs from 'fs';
 
 const webviewPath = join(new URL('../', import.meta.url).pathname, '../zig/zig-out/bin/webview')
 const DYLD_LIBRARY_PATH = 'src/zig/build/';
@@ -20,7 +22,16 @@ const zigProc = Bun.spawn([webviewPath], {
 	}
 });
 
+const mainPipe = `/private/tmp/electrobun_ipc_pipe_${'my-app-id'}_main`;
 
+try {
+	execSync('mkfifo ' + mainPipe);
+	} catch (e) {
+		console.log('pipe out already exists')
+	}
+	const inStream = fs.createWriteStream(mainPipe, {
+		flags: 'w', 		
+	});
 
 function createStdioTransport(proc): RPCTransport {
 	// let proc: any | null = null;
@@ -30,8 +41,10 @@ function createStdioTransport(proc): RPCTransport {
 		try {										
 		const messageString = JSON.stringify(message) + "\n";
 		console.log('bun: sending event string', messageString)
-		proc.stdin.write(messageString);
-		proc.stdin.flush();
+		inStream.write(messageString);
+		// inStream.flush();
+		// proc.stdin.write(messageString);
+		// proc.stdin.flush();
 		} catch (error) {
 			console.error('bun: failed to serialize message to zig', error)
 		}

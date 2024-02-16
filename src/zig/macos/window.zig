@@ -2,11 +2,16 @@ const std = @import("std");
 const objc = @import("./objc/zig-objc/src/main.zig");
 const rpc = @import("../rpc/schema/request.zig");
 const objcLibImport = @import("./objc/objc.zig");
+const pipesin = @import("../rpc/pipesin.zig");
 const objcLib = objcLibImport.objcLib;
 
 const alloc = std.heap.page_allocator;
 
 const ELECTROBUN_BROWSER_API_SCRIPT = @embedFile("../build/index.js");
+
+// Note: ideally these would be available in zig stdlib but they're not currently
+const O_RDONLY = 0;
+const O_NONBLOCK = 0x0004;
 
 const CGPoint = extern struct {
     x: f64,
@@ -51,6 +56,7 @@ const WebviewType = struct {
     // id: u32,
     handle: objc.Object,
     bun_out_pipe: ?anyerror!std.fs.File,
+    bun_in_pipe: ?std.fs.File,
     // Function to send a message to Bun
     pub fn sendToBun(self: *WebviewType, message: []const u8) !void {
         if (self.bun_out_pipe) |result| {
@@ -173,22 +179,34 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
     // defer file.close();
     std.log.info("---> opening file descriptor", .{});
 
+    const bunPipeIn = blk: {
+        const bunPipeInPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_in", .{opts.id});
+        // const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
+        const bunPipeInFileResult = std.os.open(bunPipeInPath, O_RDONLY | O_NONBLOCK, 0);
+
+        if (bunPipeInFileResult) |fd| {
+            std.log.info("Opened file successfully", .{});
+            break :blk std.fs.File{ .handle = fd };
+        } else |err| {
+            std.debug.print("Failed to open file: {}\n", .{err});
+            break :blk null;
+        }
+    };
+
+    std.log.info("Finished opening file descriptor", .{});
+
+    if (bunPipeIn) |pipeInFile| {
+        // _ = pipeInFile;
+        pipesin.addPipe(pipeInFile.handle);
+    }
+
     const bunPipeOutPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_out", .{opts.id});
 
     std.log.info("concat result {s}", .{bunPipeOutPath});
 
-    const file_result = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
+    const bunPipeOutFileResult = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
 
     std.log.info("after read", .{});
-    // if (file_result) |file| {
-    //     std.log.info("Opened file successfully", .{});
-    //     // Write the message to the named pipe
-    //     file.writeAll("--->>>>>>>>>>>>>>>>body_str") catch |err| {
-    //         std.debug.print("Failed to write to file: {}\n", .{err});
-    //     };
-    // } else |err| {
-    //     std.debug.print("Failed to open file: {}\n", .{err});
-    // }
 
     const _window = WindowType{ //
         .id = opts.id,
@@ -202,7 +220,11 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
             .y = opts.frame.y,
         },
         .window = objcWindow,
-        .webview = WebviewType{ .handle = windowWebview, .bun_out_pipe = file_result },
+        .webview = WebviewType{ //
+            .handle = windowWebview,
+            .bun_out_pipe = bunPipeOutFileResult,
+            .bun_in_pipe = bunPipeIn,
+        },
     };
 
     windowMap.put(opts.id, _window) catch {
