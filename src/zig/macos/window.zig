@@ -10,8 +10,6 @@ const alloc = std.heap.page_allocator;
 const ELECTROBUN_BROWSER_API_SCRIPT = @embedFile("../build/index.js");
 
 // Note: ideally these would be available in zig stdlib but they're not currently
-const O_RDONLY = 0;
-const O_NONBLOCK = 0x0004;
 
 const CGPoint = extern struct {
     x: f64,
@@ -75,6 +73,15 @@ const WebviewType = struct {
             // If bun_out_pipe is null, print an error or the message to stdio
             std.debug.print("Error: No valid pipe to write to. Message was: {s}\n", .{message});
         }
+    }
+
+    pub fn sendToWebview(self: *WebviewType, message: []const u8) void {
+        std.log.info("}}}}}}}}Sending message to webview: {s}", .{message});
+
+        executeJavaScript(&self.handle, message);
+        // const NSString = objc.getClass("NSString").?;
+        // const jsString = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{message});
+        // self.handle.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, null });
     }
 };
 
@@ -149,44 +156,16 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
 
     objcWindow.msgSend(void, "setContentView:", .{windowWebview});
 
-    // create a named pipe for webview and bun to communicate
-    // // todo: maybe do this from bun as a shell exec command
-    // // 1_1 is the windowId_webviewId
-    // const base_path = "/tmp/electrobun_ipc_pipe_1_1";
-    // const in_path = try alloc.alloc(u8, base_path.len + 4);
-    // const out_path = try alloc.alloc(u8, base_path.len + 5);
-
-    // defer alloc.free(in_path);
-    // defer alloc.free(out_path);
-
-    // std.mem.copy(u8, in_path, base_path);
-    // std.mem.copy(u8, in_path[base_path.len..], "_in\0");
-    // std.mem.copy(u8, out_path, base_path);
-    // std.mem.copy(u8, out_path[base_path.len..], "_out\0");
-
-    // // Create the named pipes (FIFOs)
-    // if (os.mkfifo(in_path, 0o644)) |_| {
-    //     std.debug.print("Failed to create input named pipe.\n", .{});
-    // } else {
-    //     std.debug.print("Input named pipe created: {}\n", .{in_path});
-    // }
-    // if (os.mkfifo(out_path, 0o644)) |_| {
-    //     std.debug.print("Failed to create output named pipe.\n", .{});
-    // } else {
-    //     std.debug.print("Output named pipe created: {}\n", .{out_path});
-    // }
-
     // defer file.close();
     std.log.info("---> opening file descriptor", .{});
 
     const bunPipeIn = blk: {
         const bunPipeInPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_in", .{opts.id});
-        // const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
-        const bunPipeInFileResult = std.os.open(bunPipeInPath, O_RDONLY | O_NONBLOCK, 0);
+        const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
 
-        if (bunPipeInFileResult) |fd| {
+        if (bunPipeInFileResult) |file| {
             std.log.info("Opened file successfully", .{});
-            break :blk std.fs.File{ .handle = fd };
+            break :blk file; //std.fs.File{ .handle = fd };
         } else |err| {
             std.debug.print("Failed to open file: {}\n", .{err});
             break :blk null;
@@ -197,7 +176,7 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
 
     if (bunPipeIn) |pipeInFile| {
         // _ = pipeInFile;
-        pipesin.addPipe(pipeInFile.handle);
+        pipesin.addPipe(pipeInFile.handle, opts.id);
     }
 
     const bunPipeOutPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_out", .{opts.id});
@@ -419,9 +398,59 @@ fn createNSURL(string: []const u8) objc.Object {
 // }
 
 fn executeJavaScript(webview: *objc.Object, jsCode: []const u8) void {
-    const NSString = objc.getClass("NSString").?;
-    const jsString = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{jsCode});
-    webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, null });
+    // std.log.info("Executing JavaScript: {s}", .{jsCode});
+    const nullString = sliceToNullTerminated(jsCode);
+    // _ = jsCode;
+    const _objcLib = objcLib();
+    _objcLib.evaluateJavaScriptWithNoCompletion(webview.value, nullString);
+    // this works!
+    // _objcLib.evaluateJavaScriptWithNoCompletion(webview.value, "document.location = 'https://www.google.com'");
+    // const NSString = objc.getClass("NSString").?;
+    // const jsString = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{jsCode});
+    // const jsString = createNSString(jsCode);
+    // std.log.info("Executing JavaScript2", .{});
+    // _ = jsString;
+
+    // const NSString = objc.getClass("NSString").?;
+    // const _jsString = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"alert('Hello, World!');"});
+
+    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ _jsString, null });
+
+    // const CompletionHandlerBlock = objc.Block(struct {
+    //     id: *anyopaque, // Use `?*objc.Object` to represent `id` which can be null
+    //     @"error": *anyopaque, // NSError can also be null
+    // }, .{}, void);
+
+    // const captures = CompletionHandlerBlock.Captures{
+    //     .id = undefined,
+    //     .@"error" = undefined,
+    // };
+
+    // var block = CompletionHandlerBlock.init(captures, (struct {
+    //     fn completionHandler(blockContext: *const CompletionHandlerBlock.Context) callconv(.C) void {
+    //         _ = blockContext;
+    //     }
+    // }).completionHandler);
+
+    // if (block) |_block| {
+    //     defer _block.deinit();
+    // }
+    // Note: we pass responsibility to objc to free the memory
+
+    // const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{createNSURL("https://www.google.com")});
+    // webview.msgSend(void, "loadRequest:", .{request});
+    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, null });
+    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, null });
+    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ "document.body.innerHTML = 'yay'", null });
+}
+
+pub fn sendLineToWebview(winId: u32, line: []const u8) void {
+    var win = windowMap.get(winId) orelse {
+        std.debug.print("Failed to get window from hashmap for id {}\n", .{winId});
+        return;
+    };
+
+    win.webview.sendToWebview(line);
 }
 
 fn addPreloadScriptToWebViewConfig(config: *const objc.Object, scriptContent: []const u8) void {
@@ -458,4 +487,48 @@ fn concatOrFallback(comptime fmt: []const u8, args: anytype) []const u8 {
     };
 
     return result;
+}
+
+// fn sliceToNullTerminated(slice: []const u8) ?[*:0]const u8 {
+//     var ntBuf = alloc.alloc(u8, slice.len + 1) catch {
+//         // Handle the allocation error by logging or other means
+//         std.log.err("Failed to allocate memory for null-terminated string", .{});
+//         return null; // Correctly return null to indicate failure
+//     };
+//     std.mem.copy(u8, ntBuf[0..slice.len], slice); // Copy the slice into the allocated buffer
+//     ntBuf[slice.len] = 0; // Add the null terminator
+
+//     // Correctly return an optional pointer to a null-terminated string
+//     // The syntax `&ntBuf[0]` already produces a pointer, so we just need to make sure
+//     // it's interpreted as an optional pointer to a null-terminated array.
+//     return ntBuf.ptr; // This now matches the expected return type `?[*:0]const u8`
+// }
+
+// pub fn sliceToNullTerminated(slice: []const u8) []u8 {
+//     // Allocate space for the new string, including the null terminator
+
+//     var null_terminated = alloc.alloc(u8, slice.len + 1).?;
+
+//     // Copy the contents of the slice into the new string
+//     std.mem.copy(u8, null_terminated[0..slice.len], slice);
+
+//     // Add the null terminator
+//     null_terminated[slice.len] = 0;
+
+//     return null_terminated;
+// }
+
+fn sliceToNullTerminated(input: []const u8) [*:0]const u8 {
+    var buffer: [*:0]u8 = undefined; // Initially undefined
+
+    // Attempt to allocate memory, handle error without bubbling it up
+    const allocResult = alloc.alloc(u8, input.len + 1) catch {
+        return "oops"; // Return "oops" on any allocation failure
+    };
+
+    std.mem.copy(u8, allocResult, input); // Copy input to the allocated buffer
+    allocResult[input.len] = 0; // Null-terminate
+    buffer = allocResult[0..input.len :0]; // Correctly typed slice with null terminator
+
+    return buffer;
 }

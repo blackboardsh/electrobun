@@ -7,6 +7,7 @@ const rpcTypes = @import("types.zig");
 const rpcStdout = @import("stdout.zig");
 const rpcHandlers = @import("schema/handlers.zig");
 const handlers = rpcHandlers.handlers;
+const window = @import("../macos/window.zig");
 
 const alloc = std.heap.page_allocator;
 
@@ -36,7 +37,7 @@ pub fn pipesInEventListener() void {
     // const stdInFd = std.io.getStdIn().handle;
     if (mainPipeIn) |pipeInFile| {
         // _ = pipeInFile;
-        addPipe(pipeInFile.handle);
+        addPipe(pipeInFile.handle, 0);
     }
 
     var events: [10]std.os.Kevent = undefined; // todo: Adjust based on expected concurrency
@@ -58,18 +59,32 @@ pub fn pipesInEventListener() void {
             // Check ev.ident to see which fd has an event
             if (ev.filter == std.os.darwin.EVFILT_READ) {
                 std.log.info("e::::::::::::::::::: ... {any} {any}\n", .{ ev, std.os.darwin.EVFILT_READ });
+                var buffer: [1024]u8 = undefined;
+                const bytesRead = readLineFromPipe(&buffer, ev.ident);
+
+                if (bytesRead) |line| {
+                    std.log.info("line: {s}\n", .{line});
+                    if (mainPipeIn != null and mainPipeIn.?.handle == ev.ident) {
+                        std.log.info("handle main pipe from bun\n", .{});
+                        handleLineFromMainPipe(line);
+                    } else {
+                        std.log.info("handle webview pipe from bun: udata:  {}\n", .{ev.udata});
+                        window.sendLineToWebview(@intCast(ev.udata), line);
+                    }
+                }
+
                 // The fd is ready to be read
                 // Proceed to read from the fd
                 // .ident is the file descriptor
                 // .data is the number of bytes available to read
                 // .udata is the window/webview id
-                readLineFromPipe(ev.ident, @intCast(ev.udata));
+
             }
         }
     }
 }
 
-pub fn addPipe(fd: std.os.fd_t) void {
+pub fn addPipe(fd: std.os.fd_t, windowId: u32) void {
     std.log.info("i::::::::::::::::::: ...FD {}\n", .{fd});
     var events: [10]std.os.Kevent = undefined;
     var event = std.os.Kevent{
@@ -80,7 +95,7 @@ pub fn addPipe(fd: std.os.fd_t) void {
         .data = 0,
         // The .udata field is typically used to store user-defined data or a pointer to user-defined data that can be retrieved when an event occurs.
         // this could be the id of the window/webview
-        .udata = 0,
+        .udata = @as(usize, @intCast(windowId)),
     };
 
     var changes: [1]std.os.Kevent = undefined;
@@ -103,59 +118,64 @@ pub fn addPipe(fd: std.os.fd_t) void {
     std.log.info("Finished adding pie", .{});
 }
 
-pub fn readLineFromPipe(fd: usize, windowId: u32) void {
-    _ = windowId;
-    // _ = fd;
-    // const pipeReader = std.io.getStdIn().reader();
+pub fn readLineFromPipe(buffer: []u8, fd: usize) ?[]const u8 {
 
     // Wrap the file descriptor in a std.os.File
     const file = std.fs.File{ .handle = @as(c_int, @intCast(fd)) };
 
     // Create a buffered reader for more efficient reading
     var pipeReader = file.reader();
-    var buffer: [1024]u8 = undefined;
+    // var buffer: [1024]u8 = undefined;
 
-    const bytesRead = pipeReader.readUntilDelimiterOrEof(&buffer, '\n') catch return;
+    const bytesRead = pipeReader.readUntilDelimiterOrEof(buffer, '\n') catch return null;
+
     if (bytesRead) |line| {
-        std.log.info("received line VIA EVENTS: {s}", .{line});
+        std.log.info("read line: {s}", .{line});
+        return line;
+    } else {
+        return null;
+    }
+}
 
-        const messageWithType = std.json.parseFromSlice(rpcTypes._RPCMessage, alloc, line, .{ .ignore_unknown_fields = true }) catch |err| {
+pub fn handleLineFromMainPipe(line: []const u8) void {
+    std.log.info("received line VIA EVENTS: {s}", .{line});
+
+    const messageWithType = std.json.parseFromSlice(rpcTypes._RPCMessage, alloc, line, .{ .ignore_unknown_fields = true }) catch |err| {
+        std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
+        return;
+    };
+
+    std.log.info("parsed line {s}", .{messageWithType.value.type});
+    if (std.mem.eql(u8, messageWithType.value.type, "response")) {
+
+        // todo: handle _RPCResponsePacketError
+        const _response = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, line, .{}) catch |err| {
             std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
             return;
         };
+        // handle response
+        // _response = payload.allow;
 
-        std.log.info("parsed line {s}", .{messageWithType.value.type});
-        if (std.mem.eql(u8, messageWithType.value.type, "response")) {
+        std.log.info("decide Navigation - {}", .{_response.value.payload.?});
 
-            // todo: handle _RPCResponsePacketError
-            const _response = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, line, .{}) catch |err| {
-                std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
-                return;
-            };
-            // handle response
-            // _response = payload.allow;
+        rpcStdout.setResponse(messageWithType.value.id, _response.value.payload);
+    } else {
+        // Handle UI events on main thread
+        // since line is re-used we need to copy it to the heap
+        const lineCopy = alloc.dupe(u8, line) catch {
+            // Handle the error here, e.g., log it or set a default value
+            std.debug.print("Error: {s}\n", .{line});
+            return;
+        };
 
-            std.log.info("decide Navigation - {}", .{_response.value.payload.?});
+        messageQueue.append(lineCopy) catch {
+            std.log.info("Error appending to messageQueue: \nreceived: {s}", .{line});
+            return;
+        };
 
-            rpcStdout.setResponse(messageWithType.value.id, _response.value.payload);
-        } else {
-            // Handle UI events on main thread
-            // since line is re-used we need to copy it to the heap
-            const lineCopy = alloc.dupe(u8, line) catch {
-                // Handle the error here, e.g., log it or set a default value
-                std.debug.print("Error: {s}\n", .{line});
-                return;
-            };
+        dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), null, processMessageQueue);
 
-            messageQueue.append(lineCopy) catch {
-                std.log.info("Error appending to messageQueue: \nreceived: {s}", .{line});
-                return;
-            };
-
-            dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), null, processMessageQueue);
-
-            std.log.info("sending over to main thread", .{});
-        }
+        std.log.info("sending over to main thread", .{});
     }
 }
 

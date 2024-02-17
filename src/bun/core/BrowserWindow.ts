@@ -2,7 +2,8 @@ import { zigRPC } from '../proc/zig'
 import * as fs from 'fs';
 import {execSync} from 'child_process';
 
-let nextWindowId = 0;
+// Note: start at 1, so that 0 can be used in the zig renderer's rpc udata
+let nextWindowId = 1;
 
 type WindowOptionsType = {
 	title: string,
@@ -123,7 +124,7 @@ export class BrowserWindow {
 		inStream.write('\n');
 
 		setTimeout(() => {
-			inStream.write('another message for the webview! \n');
+			inStream.write('document.body.innerHTML = "wow yeah!";\n');
 		}, 5000)
 	
 

@@ -16,3 +16,9 @@ const char* getBodyFromScriptMessage(WKScriptMessage *message) {
     NSString *body = message.body;
     return body.UTF8String;
 }
+
+// Add this to your existing .m file
+void evaluateJavaScriptWithNoCompletion(WKWebView *webView, const char *jsString) {
+    NSString *javaScript = [NSString stringWithUTF8String:jsString];
+    [webView evaluateJavaScript:javaScript completionHandler:nil];
+}
