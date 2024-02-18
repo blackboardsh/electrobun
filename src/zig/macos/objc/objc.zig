@@ -24,6 +24,7 @@ const ObcLib = struct {
     getBodyFromScriptMessage: *const fn (*anyopaque) callconv(.C) [*:0]const u8 = undefined,
     invokeDecisionHandlerSymbol: *const fn (*anyopaque, WKNavigationResponsePolicy) callconv(.C) *void = undefined,
     evaluateJavaScriptWithNoCompletionFn: *const fn (*anyopaque, [*:0]const u8) callconv(.C) *void = undefined,
+    getNilValueFn: *const fn () callconv(.C) *anyopaque = undefined,
 
     fn loadSymbols(self: *ObcLib) void {
         // std.log.info("Getting page world A", .{});
@@ -44,6 +45,7 @@ const ObcLib = struct {
             self.getBodyFromScriptMessage = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "getBodyFromScriptMessage"))); //orelse return error.CannotLoadSymbol;
             self.invokeDecisionHandlerSymbol = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "invokeDecisionHandler"))); //orelse return error.CannotLoadSymbol;
             self.evaluateJavaScriptWithNoCompletionFn = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "evaluateJavaScriptWithNoCompletion"))); //orelse return error.CannotLoadSymbol;
+            self.getNilValueFn = @alignCast(@ptrCast(libc.dlsym(self.handle.?, "getNilValue"))); //orelse return error.CannotLoadSymbol;
         }
     }
 
@@ -65,6 +67,11 @@ const ObcLib = struct {
     pub fn evaluateJavaScriptWithNoCompletion(self: *ObcLib, webView: *anyopaque, script: [*:0]const u8) void {
         self.loadSymbols();
         _ = self.evaluateJavaScriptWithNoCompletionFn(webView, script);
+    }
+
+    pub fn getNilValue(self: *ObcLib) *anyopaque {
+        self.loadSymbols();
+        return self.getNilValueFn();
     }
 
     pub fn unload(self: *ObcLib) void {

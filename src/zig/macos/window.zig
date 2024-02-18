@@ -371,6 +371,11 @@ fn createNSString(string: []const u8) objc.Object {
     return NSString.msgSend(objc.Object, "stringWithUTF8String:", .{string});
 }
 
+fn createNSStringFromNullTerminatedString(string: [*:0]const u8) objc.Object {
+    const NSString = objc.getClass("NSString").?;
+    return NSString.msgSend(objc.Object, "stringWithUTF8String:", .{string});
+}
+
 fn createNSNumber(value: u32) objc.Object {
     const NSNumber = objc.getClass("NSNumber").?;
     // Use numberWithUnsignedInt: method to create NSNumber from u32
@@ -399,49 +404,17 @@ fn createNSURL(string: []const u8) objc.Object {
 
 fn executeJavaScript(webview: *objc.Object, jsCode: []const u8) void {
     // std.log.info("Executing JavaScript: {s}", .{jsCode});
-    const nullString = sliceToNullTerminated(jsCode);
-    // _ = jsCode;
+    // // Note: this works (passing weview pointer and nullTerminatedJsCode to objc function)
+    // const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
+    // const _objcLib = objcLib();
+    // _objcLib.evaluateJavaScriptWithNoCompletion(webview.value, nullTerminatedJsCode);
+
+    // Note: this works, passing null terminated nsstring and nil to msgSend
+    const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
+    const jsString = createNSStringFromNullTerminatedString(nullTerminatedJsCode);
     const _objcLib = objcLib();
-    _objcLib.evaluateJavaScriptWithNoCompletion(webview.value, nullString);
-    // this works!
-    // _objcLib.evaluateJavaScriptWithNoCompletion(webview.value, "document.location = 'https://www.google.com'");
-    // const NSString = objc.getClass("NSString").?;
-    // const jsString = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{jsCode});
-    // const jsString = createNSString(jsCode);
-    // std.log.info("Executing JavaScript2", .{});
-    // _ = jsString;
-
-    // const NSString = objc.getClass("NSString").?;
-    // const _jsString = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"alert('Hello, World!');"});
-
-    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ _jsString, null });
-
-    // const CompletionHandlerBlock = objc.Block(struct {
-    //     id: *anyopaque, // Use `?*objc.Object` to represent `id` which can be null
-    //     @"error": *anyopaque, // NSError can also be null
-    // }, .{}, void);
-
-    // const captures = CompletionHandlerBlock.Captures{
-    //     .id = undefined,
-    //     .@"error" = undefined,
-    // };
-
-    // var block = CompletionHandlerBlock.init(captures, (struct {
-    //     fn completionHandler(blockContext: *const CompletionHandlerBlock.Context) callconv(.C) void {
-    //         _ = blockContext;
-    //     }
-    // }).completionHandler);
-
-    // if (block) |_block| {
-    //     defer _block.deinit();
-    // }
-    // Note: we pass responsibility to objc to free the memory
-
-    // const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{createNSURL("https://www.google.com")});
-    // webview.msgSend(void, "loadRequest:", .{request});
-    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, null });
-    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, null });
-    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ "document.body.innerHTML = 'yay'", null });
+    const nil = _objcLib.getNilValue();
+    webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, nil });
 }
 
 pub fn sendLineToWebview(winId: u32, line: []const u8) void {
@@ -489,41 +462,12 @@ fn concatOrFallback(comptime fmt: []const u8, args: anytype) []const u8 {
     return result;
 }
 
-// fn sliceToNullTerminated(slice: []const u8) ?[*:0]const u8 {
-//     var ntBuf = alloc.alloc(u8, slice.len + 1) catch {
-//         // Handle the allocation error by logging or other means
-//         std.log.err("Failed to allocate memory for null-terminated string", .{});
-//         return null; // Correctly return null to indicate failure
-//     };
-//     std.mem.copy(u8, ntBuf[0..slice.len], slice); // Copy the slice into the allocated buffer
-//     ntBuf[slice.len] = 0; // Add the null terminator
-
-//     // Correctly return an optional pointer to a null-terminated string
-//     // The syntax `&ntBuf[0]` already produces a pointer, so we just need to make sure
-//     // it's interpreted as an optional pointer to a null-terminated array.
-//     return ntBuf.ptr; // This now matches the expected return type `?[*:0]const u8`
-// }
-
-// pub fn sliceToNullTerminated(slice: []const u8) []u8 {
-//     // Allocate space for the new string, including the null terminator
-
-//     var null_terminated = alloc.alloc(u8, slice.len + 1).?;
-
-//     // Copy the contents of the slice into the new string
-//     std.mem.copy(u8, null_terminated[0..slice.len], slice);
-
-//     // Add the null terminator
-//     null_terminated[slice.len] = 0;
-
-//     return null_terminated;
-// }
-
 fn sliceToNullTerminated(input: []const u8) [*:0]const u8 {
     var buffer: [*:0]u8 = undefined; // Initially undefined
 
     // Attempt to allocate memory, handle error without bubbling it up
     const allocResult = alloc.alloc(u8, input.len + 1) catch {
-        return "oops"; // Return "oops" on any allocation failure
+        return "console.error('failed to allocate string');";
     };
 
     std.mem.copy(u8, allocResult, input); // Copy input to the allocated buffer
