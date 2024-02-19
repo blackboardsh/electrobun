@@ -405,16 +405,16 @@ fn createNSURL(string: []const u8) objc.Object {
 fn executeJavaScript(webview: *objc.Object, jsCode: []const u8) void {
     // std.log.info("Executing JavaScript: {s}", .{jsCode});
     // // Note: this works (passing weview pointer and nullTerminatedJsCode to objc function)
-    // const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
-    // const _objcLib = objcLib();
-    // _objcLib.evaluateJavaScriptWithNoCompletion(webview.value, nullTerminatedJsCode);
+    const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
+    const _objcLib = objcLib();
+    _objcLib.evaluateJavaScriptWithNoCompletion(webview.value, nullTerminatedJsCode);
 
     // Note: this works, passing null terminated nsstring and nil to msgSend
-    const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
-    const jsString = createNSStringFromNullTerminatedString(nullTerminatedJsCode);
-    const _objcLib = objcLib();
-    const nil = _objcLib.getNilValue();
-    webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, nil });
+    // const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
+    // const jsString = createNSStringFromNullTerminatedString(nullTerminatedJsCode);
+    // const _objcLib = objcLib();
+    // const nil = _objcLib.getNilValue();
+    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, nil });
 }
 
 pub fn sendLineToWebview(winId: u32, line: []const u8) void {
