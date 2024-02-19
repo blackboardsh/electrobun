@@ -20,15 +20,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // lib.setOutputDir("../../src/");
-
     // Things to interact with objc directly from zig via msgSending
-
     // need to link objective c runtime in order for zig-objc to work
     exe.linkSystemLibrary("objc");
     // need to link AppKit for NSApplication (windows, event loop, etc.)
     exe.linkFramework("AppKit"); // Link the AppKit framework
     exe.linkFramework("WebKit"); // Link the WebKit framework
+
+    // Embed our static objc wrapping library in the zig binary
+    exe.addLibraryPath(.{ .path = "build" });
+    // Note: zig will add the lib prefix and .a suffix in the library Path above
+    // so src/zig/build/libObjcWrapperLib.a will be linked in
+    exe.linkSystemLibrary("ObjcWrapper");
 
     b.installArtifact(exe);
 

@@ -3,7 +3,7 @@ const objc = @import("./objc/zig-objc/src/main.zig");
 const rpc = @import("../rpc/schema/request.zig");
 const objcLibImport = @import("./objc/objc.zig");
 const pipesin = @import("../rpc/pipesin.zig");
-const objcLib = objcLibImport.objcLib;
+// const objcLib = objcLibImport.objcLib;
 
 const alloc = std.heap.page_allocator;
 
@@ -220,8 +220,7 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
                 _ = sel;
                 _ = _userContentController;
 
-                const _objcLib = objcLib();
-                const body_cstr = _objcLib.getBodyFromScriptMessage(message);
+                const body_cstr = objcLibImport.getBodyFromScriptMessage(message);
                 const body_str = std.mem.span(body_cstr);
 
                 std.log.info("Received script message: {s}", .{body_str});
@@ -283,10 +282,8 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
                 _ = sel;
                 _ = webView;
 
-                const _objcLib = objcLib();
-
                 // Call the function
-                const url_cstr = _objcLib.getUrlFromNavigationAction(navigationAction);
+                const url_cstr = objcLibImport.getUrlFromNavigationAction(navigationAction);
                 // Note: this is needed to convert the c-style string to a zig string
                 const url_str = std.mem.span(url_cstr);
 
@@ -314,7 +311,7 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
                 }
 
                 // Call the objc callback function
-                _objcLib.invokeDecisionHandler(decisionHandler, policyResponse);
+                objcLibImport.invokeDecisionHandler(decisionHandler, policyResponse);
             }
         }.imp));
 
@@ -406,8 +403,8 @@ fn executeJavaScript(webview: *objc.Object, jsCode: []const u8) void {
     // std.log.info("Executing JavaScript: {s}", .{jsCode});
     // // Note: this works (passing weview pointer and nullTerminatedJsCode to objc function)
     const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
-    const _objcLib = objcLib();
-    _objcLib.evaluateJavaScriptWithNoCompletion(webview.value, nullTerminatedJsCode);
+
+    objcLibImport.evaluateJavaScriptWithNoCompletion(webview.value, nullTerminatedJsCode);
 
     // Note: this works, passing null terminated nsstring and nil to msgSend
     // const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
