@@ -1,7 +1,6 @@
 const std = @import("std");
-const objc = @import("./objc/zig-objc/src/main.zig");
 const rpc = @import("../rpc/schema/request.zig");
-const objcLibImport = @import("./objc/objc.zig");
+const objc = @import("./objc.zig");
 const pipesin = @import("../rpc/pipesin.zig");
 
 const alloc = std.heap.page_allocator;
@@ -79,10 +78,7 @@ const WebviewType = struct {
     pub fn sendToWebview(self: *WebviewType, message: []const u8) void {
         std.log.info("}}}}}}}}Sending message to webview: {s}", .{message});
 
-        executeJavaScript(self.handle, message);
-        // const NSString = objc.getClass("NSString").?;
-        // const jsString = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{message});
-        // self.handle.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, null });
+        objc.evaluateJavaScriptWithNoCompletion(self.handle, toCString(message));
     }
 };
 
@@ -97,7 +93,7 @@ const WindowMap = std.AutoHashMap(u32, WindowType);
 var windowMap: WindowMap = WindowMap.init(alloc);
 
 pub fn createWindow(opts: CreateWindowOpts) WindowType {
-    const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(.{ //
+    const objcWin = objc.createNSWindowWithFrameAndStyle(.{ //
         .styleMask = .{ .Titled = true, .Closable = true, .Resizable = true }, //
         .frame = .{ //
             .origin = .{ .x = opts.frame.x - 600, .y = opts.frame.y - 600 },
@@ -133,8 +129,8 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
 
     std.log.info("after read", .{});
 
-    const windowBounds = objcLibImport.getWindowBounds(objcWin);
-    const objcWebview = objcLibImport.createAndReturnWKWebView(windowBounds);
+    const windowBounds = objc.getWindowBounds(objcWin);
+    const objcWebview = objc.createAndReturnWKWebView(windowBounds);
 
     const _window = WindowType{ //
         .id = opts.id,
@@ -160,13 +156,13 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
         return _window;
     };
 
-    objcLibImport.setNSWindowTitle(objcWin, toCString(opts.title));
+    objc.setNSWindowTitle(objcWin, toCString(opts.title));
 
-    objcLibImport.setContentView(objcWin, objcWebview);
-    objcLibImport.addPreloadScriptToWebView(objcWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
+    objc.setContentView(objcWin, objcWebview);
+    objc.addPreloadScriptToWebView(objcWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
 
     // Can only define functions inline in zig within a struct
-    objcLibImport.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
+    objc.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
         fn decideNavigation(windowId: u32, url: [*:0]const u8) bool {
             std.log.info("???????????????????????????????????????????????Deciding navigation for URL: {s}", .{url});
             std.log.info("win doo id: {}", .{windowId});
@@ -181,7 +177,7 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
         }
     }.decideNavigation);
 
-    objcLibImport.addScriptMessageHandlerWithCallback(objcWebview, opts.id, "bunBridge", struct {
+    objc.addScriptMessageHandlerWithCallback(objcWebview, opts.id, "bunBridge", struct {
         fn HandlePostMessageCallback(windowId: u32, message: [*:0]const u8) void {
             std.log.info("Received script message ************************************: {s} {}", .{ message, windowId });
 
@@ -197,12 +193,12 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
     }.HandlePostMessageCallback);
 
     if (opts.url) |url| {
-        objcLibImport.loadURLInWebView(objcWebview, toCString(url));
+        objc.loadURLInWebView(objcWebview, toCString(url));
     } else if (opts.html) |html| {
-        objcLibImport.loadHTMLInWebView(objcWebview, toCString(html));
+        objc.loadHTMLInWebView(objcWebview, toCString(html));
     }
 
-    objcLibImport.makeNSWindowKeyAndOrderFront(objcWin);
+    objc.makeNSWindowKeyAndOrderFront(objcWin);
 
     return _window;
 }
@@ -213,50 +209,7 @@ pub fn setTitle(opts: SetTitleOpts) void {
         return;
     };
 
-    objcLibImport.setNSWindowTitle(win.window, toCString(opts.title));
-}
-
-// todo: move these to a different file
-fn createNSString(string: []const u8) objc.Object {
-    const NSString = objc.getClass("NSString").?;
-    return NSString.msgSend(objc.Object, "stringWithUTF8String:", .{string});
-}
-
-fn createNSStringFromNullTerminatedString(string: [*:0]const u8) objc.Object {
-    const NSString = objc.getClass("NSString").?;
-    return NSString.msgSend(objc.Object, "stringWithUTF8String:", .{string});
-}
-
-fn createNSNumber(value: u32) objc.Object {
-    const NSNumber = objc.getClass("NSNumber").?;
-    // Use numberWithUnsignedInt: method to create NSNumber from u32
-    return NSNumber.msgSend(objc.Object, "numberWithUnsignedInt:", .{value});
-}
-
-fn createNSURL(string: []const u8) objc.Object {
-    const NSURL = objc.getClass("NSURL").?;
-    std.log.info("Creating NSURL with string: {s}", .{string});
-    const urlString = createNSString(string);
-    const nsUrl = NSURL.msgSend(objc.Object, "URLWithString:", .{urlString});
-    std.log.info("NSURL created: {}", .{nsUrl});
-    return nsUrl;
-}
-
-// fn readJsFileContents(filePath: []const u8) ![]u8 {
-//     const file = try std.fs.cwd().openFile(filePath, .{});
-//     defer file.close();
-
-//     const fileSize = try file.getEndPos();
-//     var buffer = try alloc.alloc(u8, fileSize);
-//     _ = try file.readAll(buffer);
-
-//     return buffer;
-// }
-
-fn executeJavaScript(webview: *anyopaque, jsCode: []const u8) void {
-    const nullTerminatedJsCode = toCString(jsCode);
-
-    objcLibImport.evaluateJavaScriptWithNoCompletion(webview, nullTerminatedJsCode);
+    objc.setNSWindowTitle(win.window, toCString(opts.title));
 }
 
 pub fn sendLineToWebview(winId: u32, line: []const u8) void {
@@ -266,30 +219,6 @@ pub fn sendLineToWebview(winId: u32, line: []const u8) void {
     };
 
     win.webview.sendToWebview(line);
-}
-
-fn addPreloadScriptToWebViewConfig(config: *const objc.Object, scriptContent: []const u8) void {
-    const WKUserScript = objc.getClass("WKUserScript").?;
-    const userScriptAlloc = WKUserScript.msgSend(objc.Object, "alloc", .{});
-
-    // Convert your script content to an NSString
-    const scriptNSString = createNSString(scriptContent);
-
-    // Initialize a WKUserScript with your script content
-    // Injection time is .atDocumentStart to ensure it runs before the page content loads
-    // ForMainFrameOnly: true or false depending on your needs
-    const userScript = userScriptAlloc.msgSend(objc.Object, "initWithSource:injectionTime:forMainFrameOnly:", .{
-        scriptNSString,
-        WKUserScriptInjectionTimeAtDocumentStart,
-        // it's odd that the preload script only runs before the page's scripts if this is set to false
-        false,
-    });
-
-    // Get the userContentController from the config
-    const userContentController = config.msgSend(objc.Object, "userContentController", .{});
-
-    // Add the user script to the content controller
-    userContentController.msgSend(void, "addUserScript:", .{userScript});
 }
 
 // effecient string concatenation that returns the template if there's an error

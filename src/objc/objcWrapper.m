@@ -61,7 +61,10 @@ NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
     return mask;
 }
 
-
+// application
+void runNSApplication() {
+    [[NSApplication sharedApplication] run];    
+}
 
 
 // WKWebView

@@ -26,10 +26,11 @@ pub extern fn getUrlFromNavigationAction(navigationAction: *anyopaque) callconv(
 pub extern fn getBodyFromScriptMessage(scriptMessage: *anyopaque) callconv(.C) [*:0]const u8;
 pub extern fn evaluateJavaScriptWithNoCompletion(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
 pub extern fn getNilValue() callconv(.C) *anyopaque;
-pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn createNSRectWrapper(x: f64, y: f64, width: f64, height: f64) callconv(.C) *anyopaque;
 
 // pub extern fn createNSWindowWithFrameAndStyle(frame: *anyopaque, styleMask: WindowStyleMaskOptions) callconv(.C) *anyopaque;
+// application
+pub extern fn runNSApplication() callconv(.C) void;
 
 // window
 pub const WindowStyleMaskOptions = extern struct {
@@ -60,6 +61,7 @@ pub extern fn setContentView(webView: *anyopaque, view: *anyopaque) callconv(.C)
 
 // webview
 pub extern fn createAndReturnWKWebView(frame: *anyopaque) callconv(.C) *anyopaque;
+pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;
 pub extern fn loadHTMLInWebView(webView: *anyopaque, html: [*:0]const u8) callconv(.C) void;
 pub extern fn setNavigationDelegateWithCallback(webView: *anyopaque, windowId: u32, delegate: *const fn (u32, [*:0]const u8) bool) callconv(.C) void;

@@ -20,10 +20,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Things to interact with objc directly from zig via msgSending
-    // need to link objective c runtime in order for zig-objc to work
-    exe.linkSystemLibrary("objc");
     // need to link AppKit for NSApplication (windows, event loop, etc.)
+    // so that the ObjcWrapper objc code can be linked against these frameworks
     exe.linkFramework("AppKit"); // Link the AppKit framework
     exe.linkFramework("WebKit"); // Link the WebKit framework
 
