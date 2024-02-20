@@ -61,3 +61,4 @@ pub extern fn setContentView(webView: *anyopaque, view: *anyopaque) callconv(.C)
 // webview
 pub extern fn createAndReturnWKWebView(frame: *anyopaque) callconv(.C) *anyopaque;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;
+pub extern fn loadHTMLInWebView(webView: *anyopaque, html: [*:0]const u8) callconv(.C) void;

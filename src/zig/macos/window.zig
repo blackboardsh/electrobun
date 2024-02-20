@@ -107,7 +107,14 @@ pub fn createNSWindow(opts: CreateWindowOpts) void {
     const windowBounds = objcLibImport.getWindowBounds(objcWin);
     const objcWebview = objcLibImport.createAndReturnWKWebView(windowBounds);
     objcLibImport.setContentView(objcWin, objcWebview);
-    objcLibImport.loadURLInWebView(objcWebview, sliceToNullTerminated("https://www.google.com"));
+    objcLibImport.addPreloadScriptToWebView(objcWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
+
+    if (opts.url) |url| {
+        objcLibImport.loadURLInWebView(objcWebview, sliceToNullTerminated(url));
+    } else if (opts.html) |html| {
+        objcLibImport.loadHTMLInWebView(objcWebview, sliceToNullTerminated(html));
+    }
+
     objcLibImport.makeNSWindowKeyAndOrderFront(objcWin);
 }
 

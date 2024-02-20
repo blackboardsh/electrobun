@@ -87,6 +87,12 @@ void loadURLInWebView(WKWebView *webView, const char *urlString) {
     [webView loadRequest:request];
 }
 
+void loadHTMLInWebView(WKWebView *webView, const char *htmlString) {
+    NSString *htmlNSString = [NSString stringWithUTF8String:htmlString];
+    NSURL *baseURL = [NSURL URLWithString:@"file://"];
+    [webView loadHTMLString:htmlNSString baseURL:baseURL];
+}
+
 
 
 void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WKNavigationActionPolicy policy) {    
@@ -116,10 +122,10 @@ void* getNilValue() {
     return NULL;
 }
 
-void addPreloadScriptToWebView(WKWebView *webView, NSString *scriptContent, BOOL forMainFrameOnly) {
+void addPreloadScriptToWebView(WKWebView *webView, const char *scriptContent, BOOL forMainFrameOnly) {
     // Create a WKUserScript object with the provided script content
     // Injection time is set to atDocumentStart to ensure it runs before the page content loads
-    WKUserScript *userScript = [[WKUserScript alloc] initWithSource:scriptContent
+    WKUserScript *userScript = [[WKUserScript alloc] initWithSource:[NSString stringWithUTF8String:scriptContent]
                                                       injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                    forMainFrameOnly:forMainFrameOnly];
 
