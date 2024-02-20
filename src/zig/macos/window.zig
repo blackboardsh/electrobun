@@ -95,11 +95,14 @@ const WindowMap = std.AutoHashMap(u32, WindowType);
 var windowMap: WindowMap = WindowMap.init(alloc);
 
 pub fn createNSWindow(opts: CreateWindowOpts) void {
-    // const objcFrame = objcLibImport.createNSRectWrapper(300, 0, 800, 600);
-    const objcFrame = objcLibImport.createNSRectWrapper(opts.frame.x - 300, opts.frame.y, opts.frame.width, opts.frame.height);
-    // const objcStyleMask = objcLibImport.getNSWindowStyleMask(true, true, true);
-    // const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, .{ .Titled = true, .Closable = true, .Resizable = true });
-    const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, 11);
+    const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(.{ //
+        .styleMask = .{ .Titled = true, .Closable = true, .Resizable = true }, //
+        .frame = .{ //
+            .origin = .{ .x = opts.frame.x - 600, .y = opts.frame.y - 600 },
+            .size = .{ .width = opts.frame.width, .height = opts.frame.height },
+        },
+    });
+
     objcLibImport.setNSWindowTitle(objcWin, sliceToNullTerminated(opts.title));
     const windowBounds = objcLibImport.getWindowBounds(objcWin);
     const objcWebview = objcLibImport.createAndReturnWKWebView(windowBounds);
@@ -131,17 +134,6 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
 
     // Initialize the NSWindow instance
     const objcWindow = windowAlloc.msgSend(objc.Object, "initWithContentRect:styleMask:backing:defer:", .{ frame, styleMask, backing, defers });
-
-    // const objcFrame = objcLibImport.createCGRectWrapper(opts.frame.x, opts.frame.y, opts.frame.width, opts.frame.height);
-    // const objcStyleMask = objcLibImport.getNSWindowStyleMask(true, true, true);
-    // const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, objcStyleMask);
-    // objcLibImport.setNSWindowTitle(objcWin, sliceToNullTerminated(opts.title));
-    // objcLibImport.makeNSWindowKeyAndOrderFront(objcWin);
-
-    // const objcWebview = objcLibImport.createAndReturnWKWebView();
-    // objcLibImport.setContentView(objcWin, objcWebview);
-    // objcLibImport.loadURLInWebView(objcWebview, sliceToNullTerminated("https://www.google.com"));
-    // _ = objcLibImport.createNSWindowWithFrameAndStyle(opts.frame.x, opts.frame.y, opts.frame.width, opts.frame.height);
 
     // You have to initialize obj-c string and then pass a pointer to it
     const titleString = createNSString(opts.title);
