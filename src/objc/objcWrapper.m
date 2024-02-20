@@ -1,65 +1,65 @@
 #import <WebKit/WebKit.h>
 
+// typedef struct {
+//     BOOL Borderless;
+//     BOOL Titled;
+//     BOOL Closable;
+//     BOOL Miniaturizable;
+//     BOOL Resizable;
+//     BOOL UnifiedTitleAndToolbar;
+//     BOOL FullScreen;
+//     BOOL FullSizeContentView;
+//     BOOL UtilityWindow;
+//     BOOL DocModalWindow;
+//     BOOL NonactivatingPanel;
+//     BOOL HUDWindow;
+// } WindowStyleOptions;
 
-typedef struct {
-    BOOL Borderless;
-    BOOL Titled;
-    BOOL Closable;
-    BOOL Miniaturizable;
-    BOOL Resizable;
-    BOOL UnifiedTitleAndToolbar;
-    BOOL FullScreen;
-    BOOL FullSizeContentView;
-    BOOL UtilityWindow;
-    BOOL DocModalWindow;
-    BOOL NonactivatingPanel;
-    BOOL HUDWindow;
-} WindowStyleOptions;
+// NSUInteger getNSWindowStyleMask(WindowStyleOptions options) {
+//      NSLog(@"Passed style getwindowstylemaks<><><><>");
+//     NSUInteger mask = 0; 
+//     if (options.Borderless) {
+//         NSLog(@"Passed style BORDERLESS<><><><>");
+//         mask |= NSWindowStyleMaskBorderless;
+//     }
+//     if (options.Titled)     {
+//         NSLog(@"Passed style TITLED<><><>");
+//         mask |= NSWindowStyleMaskTitled;
+//     }
+//     if (options.Closable) {
+//         mask |= NSWindowStyleMaskClosable;
+//     }
+//     if (options.Miniaturizable) {
+//         mask |= NSWindowStyleMaskMiniaturizable;
+//     }
+//     if (options.Resizable) {
+//         mask |= NSWindowStyleMaskResizable;
+//     }
+//     if (options.UnifiedTitleAndToolbar) {
+//         mask |= NSWindowStyleMaskUnifiedTitleAndToolbar;
+//     }
+//     if (options.FullScreen) {
+//         mask |= NSWindowStyleMaskFullScreen;
+//     }
+//     if (options.FullSizeContentView) {
+//         mask |= NSWindowStyleMaskFullSizeContentView;
+//     }
+//     if (options.UtilityWindow) {
+//         mask |= NSWindowStyleMaskUtilityWindow;
+//     }
+//     if (options.DocModalWindow) {
+//         mask |= NSWindowStyleMaskDocModalWindow;
+//     }
+//     if (options.NonactivatingPanel) {
+//         mask |= NSWindowStyleMaskNonactivatingPanel;
+//     }
+//     if (options.HUDWindow) {
+//         mask |= NSWindowStyleMaskHUDWindow;
+//     }
 
-NSUInteger getNSWindowStyleMask(WindowStyleOptions options) {
-     NSLog(@"Passed style getwindowstylemaks<><><><>");
-    NSUInteger mask = 0; 
-    if (options.Borderless) {
-        NSLog(@"Passed style BORDERLESS<><><><>");
-        mask |= NSWindowStyleMaskBorderless;
-    }
-    if (options.Titled)     {
-        NSLog(@"Passed style TITLED<><><>");
-        mask |= NSWindowStyleMaskTitled;
-    }
-    if (options.Closable) {
-        mask |= NSWindowStyleMaskClosable;
-    }
-    if (options.Miniaturizable) {
-        mask |= NSWindowStyleMaskMiniaturizable;
-    }
-    if (options.Resizable) {
-        mask |= NSWindowStyleMaskResizable;
-    }
-    if (options.UnifiedTitleAndToolbar) {
-        mask |= NSWindowStyleMaskUnifiedTitleAndToolbar;
-    }
-    if (options.FullScreen) {
-        mask |= NSWindowStyleMaskFullScreen;
-    }
-    if (options.FullSizeContentView) {
-        mask |= NSWindowStyleMaskFullSizeContentView;
-    }
-    if (options.UtilityWindow) {
-        mask |= NSWindowStyleMaskUtilityWindow;
-    }
-    if (options.DocModalWindow) {
-        mask |= NSWindowStyleMaskDocModalWindow;
-    }
-    if (options.NonactivatingPanel) {
-        mask |= NSWindowStyleMaskNonactivatingPanel;
-    }
-    if (options.HUDWindow) {
-        mask |= NSWindowStyleMaskHUDWindow;
-    }
+//     return mask;
+// }
 
-    return mask;
-}
 
 
 
@@ -131,25 +131,19 @@ void addPreloadScriptToWebView(WKWebView *webView, NSString *scriptContent, BOOL
 
 // NSWindow
 
-NSWindow *createNSWindowWithFrameAndStyle(NSRect frame, WindowStyleOptions styleMaskOptions) {
+NSWindow *createNSWindowWithFrameAndStyle(NSRect frame, NSUInteger styleMask) {
     // Allocate the NSWindow object
-    
-    NSUInteger calcStyle = getNSWindowStyleMask(styleMaskOptions);
-    NSUInteger fstyleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable;
+    NSRect fframe = NSMakeRect(0, 0, 800, 600); // Window size
 
-    NSLog(@"Passed styleMask %lu", fstyleMask);
-    NSLog(@"Passed calcStyle %lu", calcStyle);
+        NSLog(@"Passed frame = x: %f, y: %f, width: %f, height: %f", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+        NSLog(@"Hardcoded fframe = x: %f, y: %f, width: %f, height: %f", fframe.origin.x, fframe.origin.y, fframe.size.width, fframe.size.height);
 
- 
-        
 
     NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
-                                                   styleMask:fstyleMask
+                                                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                      backing:NSBackingStoreBuffered
                                                        defer:YES];
     // Additional configuration (if needed) can be done here
-
-    NSLog(@"Passed styleMask %lu", fstyleMask);
 
     return window; // Return the pointer to the initialized window
 }
@@ -168,11 +162,12 @@ void setContentView(NSWindow *window, NSView *view) {
 }
 
 NSRect createNSRectWrapper(double x, double y, double width, double height) {
-    NSLog(@"Passed frame WRAPPER = x: %f, y: %f, width: %f, height: %f", x, y, width, height);
-
-
+    NSLog(@"Passed frame = x: %f, y: %f, width: %f, height: %f", x, y, width, height);
+    
     return NSMakeRect(x, y, width, height);
 }
+
+
 
 NSRect getWindowBounds(NSWindow *window) {
     NSView *contentView = [window contentView];

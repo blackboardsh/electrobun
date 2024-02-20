@@ -95,11 +95,11 @@ const WindowMap = std.AutoHashMap(u32, WindowType);
 var windowMap: WindowMap = WindowMap.init(alloc);
 
 pub fn createNSWindow(opts: CreateWindowOpts) void {
-    const objcFrame = objcLibImport.createNSRectWrapper(opts.frame.x, opts.frame.y, opts.frame.width, opts.frame.height);
-    // const objcStyleMask = objcLibImport.getNSWindowStyleMask(.{ .Titled = true, .Closable = true, .Resizable = true });
-    // std.log.info("----0-0-0-0=-0=-0=-0=-0=-0=-0=-0 {}", .{objcStyleMask});
-    // const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, objcStyleMask);
-    const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, .{ .Titled = true, .Closable = true, .Resizable = true });
+    // const objcFrame = objcLibImport.createNSRectWrapper(300, 0, 800, 600);
+    const objcFrame = objcLibImport.createNSRectWrapper(opts.frame.x - 300, opts.frame.y, opts.frame.width, opts.frame.height);
+    // const objcStyleMask = objcLibImport.getNSWindowStyleMask(true, true, true);
+    // const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, .{ .Titled = true, .Closable = true, .Resizable = true });
+    const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, 11);
     objcLibImport.setNSWindowTitle(objcWin, sliceToNullTerminated(opts.title));
     const windowBounds = objcLibImport.getWindowBounds(objcWin);
     const objcWebview = objcLibImport.createAndReturnWKWebView(windowBounds);
