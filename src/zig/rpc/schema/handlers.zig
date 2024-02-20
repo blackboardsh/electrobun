@@ -6,6 +6,23 @@ const std = @import("std");
 const alloc = std.heap.page_allocator;
 
 pub fn createWindow(args: rpcSchema.BunSchema.requests.createWindow.args) void {
+    //  _ = window.createNSWindow(.{
+    //     .id = args.id,
+    //     .title = args.title,
+    //     .url = args.url,
+    //     .html = args.html,
+    //     .frame = .{
+    //         .x = args.frame.x,
+    //         .y = args.frame.y,
+    //         .width = args.frame.width,
+    //         .height = args.frame.height,
+    //     },
+    //     // .width = args.width,
+    //     // .height = args.height,
+    //     // .x = args.x,
+    //     // .y = args.y,
+    // });
+
     _ = window.createWindow(.{
         .id = args.id,
         .title = args.title,

@@ -3,7 +3,6 @@ const objc = @import("./objc/zig-objc/src/main.zig");
 const rpc = @import("../rpc/schema/request.zig");
 const objcLibImport = @import("./objc/objc.zig");
 const pipesin = @import("../rpc/pipesin.zig");
-// const objcLib = objcLibImport.objcLib;
 
 const alloc = std.heap.page_allocator;
 
@@ -95,18 +94,29 @@ const SetTitleOpts = struct {
 const WindowMap = std.AutoHashMap(u32, WindowType);
 var windowMap: WindowMap = WindowMap.init(alloc);
 
+pub fn createNSWindow(opts: CreateWindowOpts) void {
+    const objcFrame = objcLibImport.createNSRectWrapper(opts.frame.x, opts.frame.y, opts.frame.width, opts.frame.height);
+    // const objcStyleMask = objcLibImport.getNSWindowStyleMask(.{ .Titled = true, .Closable = true, .Resizable = true });
+    // std.log.info("----0-0-0-0=-0=-0=-0=-0=-0=-0=-0 {}", .{objcStyleMask});
+    // const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, objcStyleMask);
+    const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, .{ .Titled = true, .Closable = true, .Resizable = true });
+    objcLibImport.setNSWindowTitle(objcWin, sliceToNullTerminated(opts.title));
+    const windowBounds = objcLibImport.getWindowBounds(objcWin);
+    const objcWebview = objcLibImport.createAndReturnWKWebView(windowBounds);
+    objcLibImport.setContentView(objcWin, objcWebview);
+    objcLibImport.loadURLInWebView(objcWebview, sliceToNullTerminated("https://www.google.com"));
+    objcLibImport.makeNSWindowKeyAndOrderFront(objcWin);
+}
+
 pub fn createWindow(opts: CreateWindowOpts) WindowType {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
 
+    createNSWindow(opts);
+
     // open a window
     const nsWindowClass = objc.getClass("NSWindow").?;
     const windowAlloc = nsWindowClass.msgSend(objc.Object, "alloc", .{});
-
-    // Pointer Note: if using manual memory management then the memory will need to be cleaned up using `release` method
-    // but we're using obc.AutoreleasePool so we don't need to do that
-    // windowAlloc.msgSend(void, "release", .{});
-
     // Define the frame rectangle (x, y, width, height)
     const frame = CGRect{ .origin = CGPoint{ .x = opts.frame.x, .y = opts.frame.y }, .size = CGSize{ .width = opts.frame.width, .height = opts.frame.height } };
 
@@ -122,6 +132,17 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
     // Initialize the NSWindow instance
     const objcWindow = windowAlloc.msgSend(objc.Object, "initWithContentRect:styleMask:backing:defer:", .{ frame, styleMask, backing, defers });
 
+    // const objcFrame = objcLibImport.createCGRectWrapper(opts.frame.x, opts.frame.y, opts.frame.width, opts.frame.height);
+    // const objcStyleMask = objcLibImport.getNSWindowStyleMask(true, true, true);
+    // const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(objcFrame, objcStyleMask);
+    // objcLibImport.setNSWindowTitle(objcWin, sliceToNullTerminated(opts.title));
+    // objcLibImport.makeNSWindowKeyAndOrderFront(objcWin);
+
+    // const objcWebview = objcLibImport.createAndReturnWKWebView();
+    // objcLibImport.setContentView(objcWin, objcWebview);
+    // objcLibImport.loadURLInWebView(objcWebview, sliceToNullTerminated("https://www.google.com"));
+    // _ = objcLibImport.createNSWindowWithFrameAndStyle(opts.frame.x, opts.frame.y, opts.frame.width, opts.frame.height);
+
     // You have to initialize obj-c string and then pass a pointer to it
     const titleString = createNSString(opts.title);
     objcWindow.msgSend(void, "setTitle:", .{titleString});
@@ -132,21 +153,20 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
     // Get the bounds of the content view
     const windowBounds: CGRect = contentView.msgSend(CGRect, "bounds", .{});
 
-    const wkWebviewClass = objc.getClass("WKWebView").?;
-
     // todo: implement WKWebViewConfiguration -> specifically also the userContentController (to create a bridge between zig and js)
     // pass in a new config object
     const configClass = objc.getClass("WKWebViewConfiguration").?;
     const configAlloc = configClass.msgSend(objc.Object, "alloc", .{});
     const configInstance = configAlloc.msgSend(objc.Object, "init", .{});
 
+    const wkWebviewClass = objc.getClass("WKWebView").?;
     const webkitAlloc = wkWebviewClass.msgSend(objc.Object, "alloc", .{});
     // https://developer.apple.com/documentation/webkit/wkwebview/1414998-initwithframe?language=objc
     const windowWebview = webkitAlloc.msgSend(objc.Object, "initWithFrame:configuration:", .{ windowBounds, configInstance });
 
     // get instance's config
     const config = windowWebview.msgSend(objc.Object, "configuration", .{});
-
+    // objcLibImport.addPreloadScriptToWebView(&windowWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
     addPreloadScriptToWebViewConfig(&config, ELECTROBUN_BROWSER_API_SCRIPT);
     // addPreloadScriptToWebViewConfig(&config, "window.webkit.messageHandlers.bunBridge.postMessage('Hello from the other side!');");
 
@@ -400,18 +420,9 @@ fn createNSURL(string: []const u8) objc.Object {
 // }
 
 fn executeJavaScript(webview: *objc.Object, jsCode: []const u8) void {
-    // std.log.info("Executing JavaScript: {s}", .{jsCode});
-    // // Note: this works (passing weview pointer and nullTerminatedJsCode to objc function)
     const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
 
     objcLibImport.evaluateJavaScriptWithNoCompletion(webview.value, nullTerminatedJsCode);
-
-    // Note: this works, passing null terminated nsstring and nil to msgSend
-    // const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
-    // const jsString = createNSStringFromNullTerminatedString(nullTerminatedJsCode);
-    // const _objcLib = objcLib();
-    // const nil = _objcLib.getNilValue();
-    // webview.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, nil });
 }
 
 pub fn sendLineToWebview(winId: u32, line: []const u8) void {

@@ -4,8 +4,34 @@ pub const WKNavigationResponsePolicy = enum(c_int) {
     download = 2,
 };
 
+pub const WindowStyleOptions = extern struct {
+    Borderless: bool = false,
+    Titled: bool = false,
+    Closable: bool = false,
+    Miniaturizable: bool = false,
+    Resizable: bool = false,
+    UnifiedTitleAndToolbar: bool = false,
+    FullScreen: bool = false,
+    FullSizeContentView: bool = false,
+    UtilityWindow: bool = false,
+    DocModalWindow: bool = false,
+    NonactivatingPanel: bool = false,
+    HUDWindow: bool = false,
+};
+
 pub extern fn invokeDecisionHandler(decisionHandler: *anyopaque, policy: WKNavigationResponsePolicy) callconv(.C) void;
 pub extern fn getUrlFromNavigationAction(navigationAction: *anyopaque) callconv(.C) [*:0]const u8;
 pub extern fn getBodyFromScriptMessage(scriptMessage: *anyopaque) callconv(.C) [*:0]const u8;
 pub extern fn evaluateJavaScriptWithNoCompletion(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
 pub extern fn getNilValue() callconv(.C) *anyopaque;
+pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
+pub extern fn createNSRectWrapper(x: f64, y: f64, width: f64, height: f64) callconv(.C) *anyopaque;
+pub extern fn setNSWindowTitle(window: *anyopaque, title: [*:0]const u8) callconv(.C) void;
+// pub extern fn getNSWindowStyleMask(options: WindowStyleOptions) callconv(.C) u64;
+pub extern fn createNSWindowWithFrameAndStyle(frame: *anyopaque, styleMask: WindowStyleOptions) callconv(.C) *anyopaque;
+pub extern fn makeNSWindowKeyAndOrderFront(window: *anyopaque) callconv(.C) void;
+
+pub extern fn createAndReturnWKWebView(frame: *anyopaque) callconv(.C) *anyopaque;
+pub extern fn setContentView(webView: *anyopaque, view: *anyopaque) callconv(.C) void;
+pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;
+pub extern fn getWindowBounds(window: *anyopaque) callconv(.C) *anyopaque;
