@@ -1,5 +1,18 @@
 #import <WebKit/WebKit.h>
 
+// generic utils
+
+// manually retain and release objects so they don't get deallocated
+// Function to retain any Objective-C object
+void retainObjCObject(id objcObject) {
+    CFRetain((__bridge CFTypeRef)objcObject);
+}
+
+// Function to release any Objective-C object
+void releaseObjCObject(id objcObject) {
+    CFRelease((__bridge CFTypeRef)objcObject);
+}
+
 // mask utils
 typedef struct {
     BOOL Borderless;
@@ -204,18 +217,16 @@ typedef BOOL (*DecideNavigationCallback)(uint32_t windowId, const char* url);
 
 @end
 
-// todo: replace this with a map of window/webview ids to pointers and delegates
-// for holding onto things strongly
-NSMutableArray *globalDelegateArray; 
-
-void setNavigationDelegateWithCallback(WKWebView *webView, uint32_t windowId, DecideNavigationCallback callback) {
-    globalDelegateArray = [[NSMutableArray alloc] init];
-    
+MyNavigationDelegate* setNavigationDelegateWithCallback(WKWebView *webView, uint32_t windowId, DecideNavigationCallback callback) {        
     MyNavigationDelegate *delegate = [[MyNavigationDelegate alloc] init];
     delegate.zigCallback = callback;
     delegate.windowId = windowId;
-    webView.navigationDelegate = delegate;    
-    [globalDelegateArray addObject:delegate]; // Add to the global array
+    webView.navigationDelegate = delegate;        
+
+    // todo: release this delegate when the window is closed from zig
+    retainObjCObject(delegate);
+    
+    return delegate;
 }
 
 // add postMessage handler
@@ -239,10 +250,14 @@ typedef BOOL (*HandlePostMessageCallback)(uint32_t windowId, const char* message
 
 @end
 
-void addScriptMessageHandlerWithCallback(WKWebView *webView, uint32_t windowId, const char *name, HandlePostMessageCallback callback) {
+MyScriptMessageHandler* addScriptMessageHandlerWithCallback(WKWebView *webView, uint32_t windowId, const char *name, HandlePostMessageCallback callback) {
     MyScriptMessageHandler *handler = [[MyScriptMessageHandler alloc] init];
     handler.zigCallback = callback;    
     handler.windowId = windowId;
     [webView.configuration.userContentController addScriptMessageHandler:handler name:[NSString stringWithUTF8String:name]];
-    [globalDelegateArray addObject:handler]; // Add to the global array
+    // todo: release this handler when the window is closed from zig
+    retainObjCObject(handler);
+
+    return handler;
 }
+

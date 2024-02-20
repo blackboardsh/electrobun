@@ -7,31 +7,6 @@ const alloc = std.heap.page_allocator;
 
 const ELECTROBUN_BROWSER_API_SCRIPT = @embedFile("../build/index.js");
 
-// Note: ideally these would be available in zig stdlib but they're not currently
-
-const CGPoint = extern struct {
-    x: f64,
-    y: f64,
-};
-
-const CGSize = extern struct {
-    width: f64,
-    height: f64,
-};
-
-const CGRect = extern struct {
-    origin: CGPoint,
-    size: CGSize,
-};
-
-const NSWindowStyleMaskTitled = 1 << 0;
-const NSWindowStyleMaskClosable = 1 << 1;
-const NSWindowStyleMaskResizable = 1 << 3;
-
-const NSBackingStoreBuffered = 2;
-
-const WKUserScriptInjectionTimeAtDocumentStart = 0;
-
 const WindowType = struct {
     id: u32,
     window: *anyopaque,
@@ -51,6 +26,8 @@ const WindowType = struct {
 const WebviewType = struct {
     // id: u32,
     handle: *anyopaque,
+    delegate: *anyopaque,
+    bunBridgeHandler: *anyopaque,
     bun_out_pipe: ?anyerror!std.fs.File,
     bun_in_pipe: ?std.fs.File,
     // Function to send a message to Bun
@@ -132,6 +109,42 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
     const windowBounds = objc.getWindowBounds(objcWin);
     const objcWebview = objc.createAndReturnWKWebView(windowBounds);
 
+    objc.setNSWindowTitle(objcWin, toCString(opts.title));
+
+    objc.setContentView(objcWin, objcWebview);
+    objc.addPreloadScriptToWebView(objcWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
+
+    // Can only define functions inline in zig within a struct
+    const delegate = objc.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
+        fn decideNavigation(windowId: u32, url: [*:0]const u8) bool {
+            std.log.info("???????????????????????????????????????????????Deciding navigation for URL: {s}", .{url});
+            std.log.info("win doo id: {}", .{windowId});
+            // todo: right now this reaches a generic rpc request, but it should be attached
+            // to this specific webview's pipe so navigation handlers can be attached to specific webviews
+            const _response = rpc.request.decideNavigation(.{
+                .url = url,
+            });
+            std.log.info("response from rpc: {}", .{_response});
+
+            return _response.allow;
+        }
+    }.decideNavigation);
+
+    const bunBridgeHandler = objc.addScriptMessageHandlerWithCallback(objcWebview, opts.id, "bunBridge", struct {
+        fn HandlePostMessageCallback(windowId: u32, message: [*:0]const u8) void {
+            std.log.info("Received script message ************************************: {s} {}", .{ message, windowId });
+
+            var win = windowMap.get(windowId) orelse {
+                std.debug.print("Failed to get window from hashmap for id {}\n", .{windowId});
+                return;
+            };
+
+            win.webview.sendToBun(message) catch |err| {
+                std.debug.print("Failed to send message to bun: {}\n", .{err});
+            };
+        }
+    }.HandlePostMessageCallback);
+
     const _window = WindowType{ //
         .id = opts.id,
         .title = opts.title,
@@ -148,6 +161,8 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
             .handle = objcWebview,
             .bun_out_pipe = bunPipeOutFileResult,
             .bun_in_pipe = bunPipeIn,
+            .delegate = delegate,
+            .bunBridgeHandler = bunBridgeHandler,
         },
     };
 
@@ -155,42 +170,6 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
         std.log.info("Error putting window into hashmap: ", .{});
         return _window;
     };
-
-    objc.setNSWindowTitle(objcWin, toCString(opts.title));
-
-    objc.setContentView(objcWin, objcWebview);
-    objc.addPreloadScriptToWebView(objcWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
-
-    // Can only define functions inline in zig within a struct
-    objc.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
-        fn decideNavigation(windowId: u32, url: [*:0]const u8) bool {
-            std.log.info("???????????????????????????????????????????????Deciding navigation for URL: {s}", .{url});
-            std.log.info("win doo id: {}", .{windowId});
-            // todo: right now this reaches a generic rpc request, but it should be attached
-            // to this specific webview's pipe so navigation handlers can be attached to specific webviews
-            const _response = rpc.request.decideNavigation(.{
-                .url = url,
-            });
-            std.log.info("response from rpc: {}", .{_response});
-
-            return _response.allow;
-        }
-    }.decideNavigation);
-
-    objc.addScriptMessageHandlerWithCallback(objcWebview, opts.id, "bunBridge", struct {
-        fn HandlePostMessageCallback(windowId: u32, message: [*:0]const u8) void {
-            std.log.info("Received script message ************************************: {s} {}", .{ message, windowId });
-
-            var win = windowMap.get(windowId) orelse {
-                std.debug.print("Failed to get window from hashmap for id {}\n", .{windowId});
-                return;
-            };
-
-            win.webview.sendToBun(message) catch |err| {
-                std.debug.print("Failed to send message to bun: {}\n", .{err});
-            };
-        }
-    }.HandlePostMessageCallback);
 
     if (opts.url) |url| {
         objc.loadURLInWebView(objcWebview, toCString(url));
