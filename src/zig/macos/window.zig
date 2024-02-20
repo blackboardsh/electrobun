@@ -35,7 +35,7 @@ const WKUserScriptInjectionTimeAtDocumentStart = 0;
 
 const WindowType = struct {
     id: u32,
-    window: ?objc.Object,
+    window: *anyopaque,
     webview: WebviewType,
 
     title: []const u8,
@@ -51,16 +51,18 @@ const WindowType = struct {
 
 const WebviewType = struct {
     // id: u32,
-    handle: objc.Object,
+    handle: *anyopaque,
     bun_out_pipe: ?anyerror!std.fs.File,
     bun_in_pipe: ?std.fs.File,
     // Function to send a message to Bun
-    pub fn sendToBun(self: *WebviewType, message: []const u8) !void {
+    pub fn sendToBun(self: *WebviewType, message: [*:0]const u8) !void {
         if (self.bun_out_pipe) |result| {
             if (result) |file| {
                 std.log.info("Opened file successfully", .{});
+                // convert null terminated string to slice
+                // const message_slice: []const u8 = message[0..std.mem.len(message)];
                 // Write the message to the named pipe
-                file.writeAll(message) catch |err| {
+                file.writeAll(fromCString(message)) catch |err| {
                     std.debug.print("Failed to write to file: {}\n", .{err});
                 };
             } else |err| {
@@ -77,7 +79,7 @@ const WebviewType = struct {
     pub fn sendToWebview(self: *WebviewType, message: []const u8) void {
         std.log.info("}}}}}}}}Sending message to webview: {s}", .{message});
 
-        executeJavaScript(&self.handle, message);
+        executeJavaScript(self.handle, message);
         // const NSString = objc.getClass("NSString").?;
         // const jsString = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{message});
         // self.handle.msgSend(void, "evaluateJavaScript:completionHandler:", .{ jsString, null });
@@ -94,7 +96,7 @@ const SetTitleOpts = struct {
 const WindowMap = std.AutoHashMap(u32, WindowType);
 var windowMap: WindowMap = WindowMap.init(alloc);
 
-pub fn createNSWindow(opts: CreateWindowOpts) void {
+pub fn createWindow(opts: CreateWindowOpts) WindowType {
     const objcWin = objcLibImport.createNSWindowWithFrameAndStyle(.{ //
         .styleMask = .{ .Titled = true, .Closable = true, .Resizable = true }, //
         .frame = .{ //
@@ -102,81 +104,6 @@ pub fn createNSWindow(opts: CreateWindowOpts) void {
             .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         },
     });
-
-    objcLibImport.setNSWindowTitle(objcWin, sliceToNullTerminated(opts.title));
-    const windowBounds = objcLibImport.getWindowBounds(objcWin);
-    const objcWebview = objcLibImport.createAndReturnWKWebView(windowBounds);
-    objcLibImport.setContentView(objcWin, objcWebview);
-    objcLibImport.addPreloadScriptToWebView(objcWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
-
-    if (opts.url) |url| {
-        objcLibImport.loadURLInWebView(objcWebview, sliceToNullTerminated(url));
-    } else if (opts.html) |html| {
-        objcLibImport.loadHTMLInWebView(objcWebview, sliceToNullTerminated(html));
-    }
-
-    objcLibImport.makeNSWindowKeyAndOrderFront(objcWin);
-}
-
-pub fn createWindow(opts: CreateWindowOpts) WindowType {
-    const pool = objc.AutoreleasePool.init();
-    defer pool.deinit();
-
-    createNSWindow(opts);
-
-    // open a window
-    const nsWindowClass = objc.getClass("NSWindow").?;
-    const windowAlloc = nsWindowClass.msgSend(objc.Object, "alloc", .{});
-    // Define the frame rectangle (x, y, width, height)
-    const frame = CGRect{ .origin = CGPoint{ .x = opts.frame.x, .y = opts.frame.y }, .size = CGSize{ .width = opts.frame.width, .height = opts.frame.height } };
-
-    // Define the window style mask (e.g., titled, closable, resizable)
-    const styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable;
-
-    // Define the backing store type
-    const backing = NSBackingStoreBuffered;
-
-    // Define whether to defer creation
-    const defers = true;
-
-    // Initialize the NSWindow instance
-    const objcWindow = windowAlloc.msgSend(objc.Object, "initWithContentRect:styleMask:backing:defer:", .{ frame, styleMask, backing, defers });
-
-    // You have to initialize obj-c string and then pass a pointer to it
-    const titleString = createNSString(opts.title);
-    objcWindow.msgSend(void, "setTitle:", .{titleString});
-
-    // Get the content view of the window
-    const contentView = objcWindow.msgSend(objc.Object, "contentView", .{});
-
-    // Get the bounds of the content view
-    const windowBounds: CGRect = contentView.msgSend(CGRect, "bounds", .{});
-
-    // todo: implement WKWebViewConfiguration -> specifically also the userContentController (to create a bridge between zig and js)
-    // pass in a new config object
-    const configClass = objc.getClass("WKWebViewConfiguration").?;
-    const configAlloc = configClass.msgSend(objc.Object, "alloc", .{});
-    const configInstance = configAlloc.msgSend(objc.Object, "init", .{});
-
-    const wkWebviewClass = objc.getClass("WKWebView").?;
-    const webkitAlloc = wkWebviewClass.msgSend(objc.Object, "alloc", .{});
-    // https://developer.apple.com/documentation/webkit/wkwebview/1414998-initwithframe?language=objc
-    const windowWebview = webkitAlloc.msgSend(objc.Object, "initWithFrame:configuration:", .{ windowBounds, configInstance });
-
-    // get instance's config
-    const config = windowWebview.msgSend(objc.Object, "configuration", .{});
-    // objcLibImport.addPreloadScriptToWebView(&windowWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
-    addPreloadScriptToWebViewConfig(&config, ELECTROBUN_BROWSER_API_SCRIPT);
-    // addPreloadScriptToWebViewConfig(&config, "window.webkit.messageHandlers.bunBridge.postMessage('Hello from the other side!');");
-
-    // Note: we need the controller from the instance, passing a new one into config when initializing the
-    // webview doesn't seem to work
-    const userContentController = config.msgSend(objc.Object, "userContentController", .{});
-
-    objcWindow.msgSend(void, "setContentView:", .{windowWebview});
-
-    // defer file.close();
-    std.log.info("---> opening file descriptor", .{});
 
     const bunPipeIn = blk: {
         const bunPipeInPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_in", .{opts.id});
@@ -206,6 +133,9 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
 
     std.log.info("after read", .{});
 
+    const windowBounds = objcLibImport.getWindowBounds(objcWin);
+    const objcWebview = objcLibImport.createAndReturnWKWebView(windowBounds);
+
     const _window = WindowType{ //
         .id = opts.id,
         .title = opts.title,
@@ -217,9 +147,9 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
             .x = opts.frame.x,
             .y = opts.frame.y,
         },
-        .window = objcWindow,
+        .window = objcWin,
         .webview = WebviewType{ //
-            .handle = windowWebview,
+            .handle = objcWebview,
             .bun_out_pipe = bunPipeOutFileResult,
             .bun_in_pipe = bunPipeIn,
         },
@@ -230,141 +160,49 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
         return _window;
     };
 
-    // Add a script message handler
-    const BunBridgeHandler = setup: {
-        const BunBridgeHandler = objc.allocateClassPair(objc.getClass("NSObject").?, "bunBridgeHandler").?;
+    objcLibImport.setNSWindowTitle(objcWin, toCString(opts.title));
 
-        std.debug.assert(try BunBridgeHandler.addMethod("userContentController:didReceiveScriptMessage:", struct {
-            fn imp(target: objc.c.id, sel: objc.c.SEL, _userContentController: *anyopaque, message: *anyopaque) callconv(.C) void {
-                _ = sel;
-                _ = _userContentController;
+    objcLibImport.setContentView(objcWin, objcWebview);
+    objcLibImport.addPreloadScriptToWebView(objcWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
 
-                const body_cstr = objcLibImport.getBodyFromScriptMessage(message);
-                const body_str = std.mem.span(body_cstr);
+    // Can only define functions inline in zig within a struct
+    objcLibImport.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
+        fn decideNavigation(windowId: u32, url: [*:0]const u8) bool {
+            std.log.info("???????????????????????????????????????????????Deciding navigation for URL: {s}", .{url});
+            std.log.info("win doo id: {}", .{windowId});
+            // todo: right now this reaches a generic rpc request, but it should be attached
+            // to this specific webview's pipe so navigation handlers can be attached to specific webviews
+            const _response = rpc.request.decideNavigation(.{
+                .url = url,
+            });
+            std.log.info("response from rpc: {}", .{_response});
 
-                std.log.info("Received script message: {s}", .{body_str});
+            return _response.allow;
+        }
+    }.decideNavigation);
 
-                const _BunBridgeHandler = objc.Object.fromId(target);
-                const windowIdIvar = _BunBridgeHandler.getInstanceVariable("windowId");
-                const windowId = windowIdIvar.getProperty(c_uint, "unsignedIntValue");
+    objcLibImport.addScriptMessageHandlerWithCallback(objcWebview, opts.id, "bunBridge", struct {
+        fn HandlePostMessageCallback(windowId: u32, message: [*:0]const u8) void {
+            std.log.info("Received script message ************************************: {s} {}", .{ message, windowId });
 
-                var win = windowMap.get(windowId) orelse {
-                    std.debug.print("Failed to get window from hashmap for id {}\n", .{windowId});
-                    return;
-                };
+            var win = windowMap.get(windowId) orelse {
+                std.debug.print("Failed to get window from hashmap for id {}\n", .{windowId});
+                return;
+            };
 
-                win.webview.sendToBun(body_str) catch |err| {
-                    std.debug.print("Failed to send message to bun: {}\n", .{err});
-                };
-            }
-        }.imp));
+            win.webview.sendToBun(message) catch |err| {
+                std.debug.print("Failed to send message to bun: {}\n", .{err});
+            };
+        }
+    }.HandlePostMessageCallback);
 
-        _ = BunBridgeHandler.addIvar("windowId");
-
-        break :setup BunBridgeHandler;
-    };
-
-    var win = windowMap.get(opts.id) orelse {
-        // std.debug.print("Failed to get window from hashmap for id {d}\n", .{opts.id});
-        return _window;
-    };
-
-    win.webview.sendToBun("<><><<<><>< wowowowow yay! body_str") catch |err| {
-        std.debug.print("Failed to send message to bun: {}\n", .{err});
-    };
-
-    const bunBridgeHandler: objc.Object = .{ .value = BunBridgeHandler.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{}).value };
-
-    bunBridgeHandler.setInstanceVariable("windowId", createNSNumber(opts.id)); //opts.id);
-    // const bunBridgeHandler = BunBridgeHandler.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
-
-    // todo: also implement addScriptMessageHandler with reply (https://developer.apple.com/documentation/webkit/wkscriptmessagehandlerwithreply?language=objc)
-    userContentController.msgSend(void, "addScriptMessageHandler:name:", .{ bunBridgeHandler, createNSString("bunBridge") });
-
-    //
-
-    // WKWebViewConfiguration
-
-    const MyNavigationDelegate = setup: {
-        const MyNavigationDelegate = objc.allocateClassPair(objc.getClass("NSObject").?, "my_navigation_delegate").?;
-
-        std.log.info("MyNavigationDelegate class allocated successfully", .{});
-
-        std.debug.assert(try MyNavigationDelegate.addMethod("webView:decidePolicyForNavigationAction:decisionHandler:", struct {
-            fn imp(target: objc.c.id, sel: objc.c.SEL, webView: *anyopaque, navigationAction: *anyopaque, decisionHandler: *anyopaque) callconv(.C) void {
-                // Note:
-                // target = a reference to the object who's method is being called, so in this case it's the NavigationDelegate
-                // sel (objc selector) basically the name of the method on the target. in js it's like `target[sel]()`
-                // in this case it's thiswebviewinstance:decidePolicyForNavigationAction:decisionHandler:
-                // webView = the WKWebview that's calling the method
-                _ = target;
-                _ = sel;
-                _ = webView;
-
-                // Call the function
-                const url_cstr = objcLibImport.getUrlFromNavigationAction(navigationAction);
-                // Note: this is needed to convert the c-style string to a zig string
-                const url_str = std.mem.span(url_cstr);
-
-                std.log.info("----> navigating to URL: {s}", .{url_str});
-
-                // timer reference
-                const startTime = std.time.nanoTimestamp();
-
-                const _response = rpc.request.decideNavigation(.{
-                    .url = url_str,
-                });
-
-                std.log.info("response from rpc: {}", .{_response});
-
-                const endTime = std.time.nanoTimestamp();
-                const duration = endTime - startTime;
-                std.debug.print("Time taken: {} ns\n", .{@divTrunc(duration, std.time.ns_per_ms)});
-
-                var policyResponse: objcLibImport.WKNavigationResponsePolicy = undefined;
-
-                if (_response.allow == true) {
-                    policyResponse = objcLibImport.WKNavigationResponsePolicy.allow;
-                } else {
-                    policyResponse = objcLibImport.WKNavigationResponsePolicy.cancel;
-                }
-
-                // Call the objc callback function
-                objcLibImport.invokeDecisionHandler(decisionHandler, policyResponse);
-            }
-        }.imp));
-
-        break :setup MyNavigationDelegate;
-    };
-
-    // Use your custom delegate
-    const myDelegate = MyNavigationDelegate.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
-    windowWebview.msgSend(void, "setNavigationDelegate:", .{myDelegate});
-
-    // load url
     if (opts.url) |url| {
-        // Note: we pass responsibility to objc to free the memory
-        const urlCopy = alloc.dupe(u8, url) catch {
-            std.log.info("Error copying url", .{});
-            unreachable;
-        };
-
-        const request = objc.getClass("NSURLRequest").?.msgSend(objc.Object, "requestWithURL:", .{createNSURL(urlCopy)});
-        windowWebview.msgSend(void, "loadRequest:", .{request});
+        objcLibImport.loadURLInWebView(objcWebview, toCString(url));
     } else if (opts.html) |html| {
-        const htmlCopy = alloc.dupe(u8, html) catch {
-            std.log.info("Error copying html", .{});
-            unreachable;
-        };
-        std.log.info("creating html window: {s}", .{html});
-
-        windowWebview.msgSend(void, "loadHTMLString:baseURL:", .{ createNSString(htmlCopy), createNSURL("file://") });
+        objcLibImport.loadHTMLInWebView(objcWebview, toCString(html));
     }
 
-    // Display the window
-    objcWindow.msgSend(void, "makeKeyAndOrderFront:", .{});
-
-    std.log.info("hashmap size{}", .{windowMap.count()});
+    objcLibImport.makeNSWindowKeyAndOrderFront(objcWin);
 
     return _window;
 }
@@ -375,10 +213,7 @@ pub fn setTitle(opts: SetTitleOpts) void {
         return;
     };
 
-    if (win.window) |window| {
-        const titleString = createNSString(opts.title);
-        window.msgSend(void, "setTitle:", .{titleString});
-    }
+    objcLibImport.setNSWindowTitle(win.window, toCString(opts.title));
 }
 
 // todo: move these to a different file
@@ -418,10 +253,10 @@ fn createNSURL(string: []const u8) objc.Object {
 //     return buffer;
 // }
 
-fn executeJavaScript(webview: *objc.Object, jsCode: []const u8) void {
-    const nullTerminatedJsCode = sliceToNullTerminated(jsCode);
+fn executeJavaScript(webview: *anyopaque, jsCode: []const u8) void {
+    const nullTerminatedJsCode = toCString(jsCode);
 
-    objcLibImport.evaluateJavaScriptWithNoCompletion(webview.value, nullTerminatedJsCode);
+    objcLibImport.evaluateJavaScriptWithNoCompletion(webview, nullTerminatedJsCode);
 }
 
 pub fn sendLineToWebview(winId: u32, line: []const u8) void {
@@ -469,9 +304,7 @@ fn concatOrFallback(comptime fmt: []const u8, args: anytype) []const u8 {
     return result;
 }
 
-fn sliceToNullTerminated(input: []const u8) [*:0]const u8 {
-    var buffer: [*:0]u8 = undefined; // Initially undefined
-
+fn toCString(input: []const u8) [*:0]const u8 {
     // Attempt to allocate memory, handle error without bubbling it up
     const allocResult = alloc.alloc(u8, input.len + 1) catch {
         return "console.error('failed to allocate string');";
@@ -479,7 +312,9 @@ fn sliceToNullTerminated(input: []const u8) [*:0]const u8 {
 
     std.mem.copy(u8, allocResult, input); // Copy input to the allocated buffer
     allocResult[input.len] = 0; // Null-terminate
-    buffer = allocResult[0..input.len :0]; // Correctly typed slice with null terminator
+    return allocResult[0..input.len :0]; // Correctly typed slice with null terminator
+}
 
-    return buffer;
+fn fromCString(input: [*:0]const u8) []const u8 {
+    return input[0 .. std.mem.len(input) - 1];
 }

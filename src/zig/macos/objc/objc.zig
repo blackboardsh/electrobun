@@ -62,3 +62,5 @@ pub extern fn setContentView(webView: *anyopaque, view: *anyopaque) callconv(.C)
 pub extern fn createAndReturnWKWebView(frame: *anyopaque) callconv(.C) *anyopaque;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;
 pub extern fn loadHTMLInWebView(webView: *anyopaque, html: [*:0]const u8) callconv(.C) void;
+pub extern fn setNavigationDelegateWithCallback(webView: *anyopaque, windowId: u32, delegate: *const fn (u32, [*:0]const u8) bool) callconv(.C) void;
+pub extern fn addScriptMessageHandlerWithCallback(webView: *anyopaque, windowId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) void) callconv(.C) void;

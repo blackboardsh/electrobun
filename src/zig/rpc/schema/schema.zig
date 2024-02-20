@@ -2,7 +2,7 @@ pub const ZigSchema = struct { //
     pub const requests = struct { //
         pub const decideNavigation = struct { //
             pub const args = struct {
-                url: []const u8,
+                url: [*:0]const u8,
             };
             pub const returns = struct {
                 allow: bool,

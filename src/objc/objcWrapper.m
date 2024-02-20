@@ -180,3 +180,66 @@ NSRect getWindowBounds(NSWindow *window) {
 
 
 
+
+// navigation delegate that 
+typedef BOOL (*DecideNavigationCallback)(uint32_t windowId, const char* url);
+
+@interface MyNavigationDelegate : NSObject <WKNavigationDelegate>
+@property (nonatomic, assign) DecideNavigationCallback zigCallback;
+@property (nonatomic, assign) uint32_t windowId;
+@end
+
+@implementation MyNavigationDelegate
+
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    NSLog(@"?????????????????? inside navigation delegate objc");
+    // decisionHandler(WKNavigationActionPolicyAllow);
+    NSURL *url = navigationAction.request.URL;
+    BOOL shouldAllow = self.zigCallback(self.windowId, url.absoluteString.UTF8String);
+    decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
+}
+
+@end
+
+// todo: replace this with a map of window/webview ids to pointers and delegates
+// for holding onto things strongly
+NSMutableArray *globalDelegateArray; 
+
+void setNavigationDelegateWithCallback(WKWebView *webView, uint32_t windowId, DecideNavigationCallback callback) {
+    globalDelegateArray = [[NSMutableArray alloc] init];
+    
+    MyNavigationDelegate *delegate = [[MyNavigationDelegate alloc] init];
+    delegate.zigCallback = callback;
+    delegate.windowId = windowId;
+    webView.navigationDelegate = delegate;    
+    [globalDelegateArray addObject:delegate]; // Add to the global array
+}
+
+// add postMessage handler
+typedef BOOL (*HandlePostMessageCallback)(uint32_t windowId, const char* message);
+
+// todo: add windowId as a property here
+@interface MyScriptMessageHandler : NSObject <WKScriptMessageHandler>
+@property (nonatomic, assign) HandlePostMessageCallback zigCallback;
+@property (nonatomic, assign) uint32_t windowId;
+@end
+
+@implementation MyScriptMessageHandler
+
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    NSLog(@"?????????????????? inside post message delegate objc");
+    NSString *body = message.body;
+    // return body.UTF8String;
+    
+    self.zigCallback(self.windowId, body.UTF8String);    
+}
+
+@end
+
+void addScriptMessageHandlerWithCallback(WKWebView *webView, uint32_t windowId, const char *name, HandlePostMessageCallback callback) {
+    MyScriptMessageHandler *handler = [[MyScriptMessageHandler alloc] init];
+    handler.zigCallback = callback;    
+    handler.windowId = windowId;
+    [webView.configuration.userContentController addScriptMessageHandler:handler name:[NSString stringWithUTF8String:name]];
+    [globalDelegateArray addObject:handler]; // Add to the global array
+}

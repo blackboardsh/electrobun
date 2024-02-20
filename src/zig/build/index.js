@@ -5,6 +5,3 @@ var electrobun = {
   }
 };
 window.electrobun = electrobun;
-setTimeout(() => {
-  document.body.innerHTML = "wow yeah! bro";
-}, 4000);
