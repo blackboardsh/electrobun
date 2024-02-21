@@ -42,12 +42,15 @@ const win = new BrowserWindow({
 // todo (yoav): typescript types should resolve for e and e.setResponse
 Electrobun.events.on('will-navigate', (e) => {
     console.log('example global will navigate handler', e.data.url, e.data.windowId )
-    e.setResponse({allow: false});
+    e.response = {allow: false};
 })
 
 win.on('will-navigate', (e) => {
     console.log('example webview will navigate handler', e.data.url, e.data.windowId )
-    e.setResponse({allow: true});
+    if (e.responseWasSet && e.response.allow === false) {
+        e.response.allow = true;
+        // e.clearResponse();
+    }    
 })
 
 win.setTitle('New title from bun')
