@@ -2,6 +2,8 @@ import {join} from 'path'
 import {type RPCSchema, type RPCTransport, createRPC} from 'rpc-anywhere'
 import {execSync} from 'child_process';
 import * as fs from 'fs';
+import electrobunEventEmitter from '../events/eventEmitter';
+
 
 const webviewPath = join(new URL('../', import.meta.url).pathname, '../zig/zig-out/bin/webview')
 const DYLD_LIBRARY_PATH = 'src/zig/build/';
@@ -123,6 +125,7 @@ type ZigSchema = RPCSchema<{
 	requests: {
 		decideNavigation: {
 			args: {
+				windowId: number,
 				url: string
 			},
 			returns: {
@@ -136,14 +139,23 @@ type ZigSchema = RPCSchema<{
 const zigRPC = createRPC<BunSchema, ZigSchema>({
 	transport: createStdioTransport(zigProc),
 	requestHandler: {
-		decideNavigation: (args) => {
-			console.log('decide navigation request handler', args)
-			// todo (yoav): note: typescript should complain here if the return type doesn't
-			// match the schema
+		decideNavigation: ({windowId, url}) => {
+			console.log('decide navigation request handler', windowId, url)
 
-			// this needs to get the right window/webview and run the decision handler on it
-			// if it exists.
-			return {allow: true}//args.url.includes('google.com')}
+			const willNavigate = electrobunEventEmitter.events.webview.willNavigate({url, windowId});
+
+			let result;
+			// global will-navigate event
+			result = electrobunEventEmitter.emitEvent(willNavigate);
+			
+			result = electrobunEventEmitter.emitEvent(willNavigate, windowId);			
+
+			if (willNavigate.responseWasSet) {
+				return willNavigate.response;
+			} else {
+				return {allow: true}
+			}
+			
 		},
 	},
 	maxRequestTime: 5000,
@@ -151,5 +163,5 @@ const zigRPC = createRPC<BunSchema, ZigSchema>({
 
 export {
     zigRPC,
-    zigProc
+    zigProc,	
 }

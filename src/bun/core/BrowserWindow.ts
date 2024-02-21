@@ -1,6 +1,7 @@
 import { zigRPC } from '../proc/zig'
 import * as fs from 'fs';
 import {execSync} from 'child_process';
+import electrobunEventEmitter from '../events/eventEmitter';
 
 // Note: start at 1, so that 0 can be used in the zig renderer's rpc udata
 let nextWindowId = 1;
@@ -33,6 +34,7 @@ const defaultWindowOptions: WindowOptionsType = {
 
 
 
+
 export class BrowserWindow {
 	id: number = nextWindowId++;
 	title: string = 'Electrobun';
@@ -50,6 +52,16 @@ export class BrowserWindow {
 		width: 800,
 		height: 600,
 	}
+	webview: {
+		on: (event: 'will-navigate', handler: (url: string) => boolean) => void
+	} = {
+		on: (event: 'will-navigate', handler: (url: string) => boolean) => {
+			// todo (yoav): this should be a real event emitter
+			console.log('webview on', event, handler)
+		}
+	}
+
+
 
 	constructor(options: Partial<WindowOptionsType> = defaultWindowOptions) {
 		this.title = options.title || 'New Window';
@@ -98,10 +110,7 @@ export class BrowserWindow {
                 x: this.frame.x,
                 y: this.frame.y,
             }
-		}
-
-		
-		
+		}		
 	
 		// inStream.on('data', (chunk) => {
 		//     console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
@@ -146,9 +155,6 @@ export class BrowserWindow {
 	});
 
 	
-	
-		
-
 		// sendEvent(event).then(() => {
 		// 	this.state = 'created'
 		// })
@@ -167,8 +173,14 @@ export class BrowserWindow {
 	  loadHTML(html) {
 		
 	  }
-	
+
+	  // todo (yoav): move this to a class that also has off, append, prepend, etc.
+	  // todo (yoav): also make a webview one that handles will-navigate
+	  on(name, handler) {
+		const specificName = `${name}-${this.id}`;
+		electrobunEventEmitter.on(specificName, handler);
+	  }
+
 	  
-	
 }
 

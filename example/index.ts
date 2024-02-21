@@ -1,4 +1,4 @@
-import {BrowserWindow} from '../src/bun'
+import Electrobun, {BrowserWindow} from '../src/bun'
 
 
 // const win = new BrowserWindow({
@@ -38,6 +38,17 @@ const win = new BrowserWindow({
     }
 });
 
+
+// todo (yoav): typescript types should resolve for e and e.setResponse
+Electrobun.events.on('will-navigate', (e) => {
+    console.log('example global will navigate handler', e.data.url, e.data.windowId )
+    e.setResponse({allow: false});
+})
+
+win.on('will-navigate', (e) => {
+    console.log('example webview will navigate handler', e.data.url, e.data.windowId )
+    e.setResponse({allow: true});
+})
 
 win.setTitle('New title from bun')
 

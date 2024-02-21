@@ -26,6 +26,7 @@ const WindowType = struct {
 const WebviewType = struct {
     // id: u32,
     handle: *anyopaque,
+    // todo: de-init these using objc.releaseObjCObject() when the webview closes
     delegate: *anyopaque,
     bunBridgeHandler: *anyopaque,
     bun_out_pipe: ?anyerror!std.fs.File,
@@ -122,6 +123,7 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
             // todo: right now this reaches a generic rpc request, but it should be attached
             // to this specific webview's pipe so navigation handlers can be attached to specific webviews
             const _response = rpc.request.decideNavigation(.{
+                .windowId = windowId,
                 .url = url,
             });
             std.log.info("response from rpc: {}", .{_response});
@@ -132,6 +134,8 @@ pub fn createWindow(opts: CreateWindowOpts) WindowType {
 
     const bunBridgeHandler = objc.addScriptMessageHandlerWithCallback(objcWebview, opts.id, "bunBridge", struct {
         fn HandlePostMessageCallback(windowId: u32, message: [*:0]const u8) void {
+            // bun bridge just forwards messages to the bun
+
             std.log.info("Received script message ************************************: {s} {}", .{ message, windowId });
 
             var win = windowMap.get(windowId) orelse {
