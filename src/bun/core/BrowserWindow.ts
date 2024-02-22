@@ -2,8 +2,8 @@ import { zigRPC } from '../proc/zig'
 import * as fs from 'fs';
 import {execSync} from 'child_process';
 import electrobunEventEmitter from '../events/eventEmitter';
+import { BrowserView } from './BrowserView';
 
-// Note: start at 1, so that 0 can be used in the zig renderer's rpc udata
 let nextWindowId = 1;
 
 type WindowOptionsType = {
@@ -19,7 +19,7 @@ type WindowOptionsType = {
 	preloadScript?: string
 }
 
-const defaultWindowOptions: WindowOptionsType = {
+const defaultOptions: WindowOptionsType = {
 	title: 'Electrobun',
 	frame: {
 		x: 0,
@@ -31,8 +31,7 @@ const defaultWindowOptions: WindowOptionsType = {
 	html: null,
 }
 
-
-
+const BrowserWindowMap = {};
 
 
 export class BrowserWindow {
@@ -52,20 +51,14 @@ export class BrowserWindow {
 		width: 800,
 		height: 600,
 	}
-	webview: {
-		on: (event: 'will-navigate', handler: (url: string) => boolean) => void
-	} = {
-		on: (event: 'will-navigate', handler: (url: string) => boolean) => {
-			// todo (yoav): this should be a real event emitter
-			console.log('webview on', event, handler)
-		}
-	}
+	// todo (yoav): make this an array of ids or something
+	webviewId: number
 
 
 
-	constructor(options: Partial<WindowOptionsType> = defaultWindowOptions) {
+	constructor(options: Partial<WindowOptionsType> = defaultOptions) {
 		this.title = options.title || 'New Window';
-		this.frame = options.frame ? options.frame : defaultWindowOptions.frame;
+		this.frame = options.frame ? {...defaultOptions.frame, ...options.frame} : {...defaultOptions.frame};
 		this.url = options.url || null;
 		this.html = options.html || null;			
 	
@@ -73,33 +66,11 @@ export class BrowserWindow {
 		this.init();
 	  }
 	
-	  init() {
-		// is this.id available here?
+	  init() {	
 		
 		
 
-
-		
-
-		// todo (yoav): wait for window/webview to be created		
-		// todo (yoav): track ids for webviews as well
-		const webviewPipe = `/private/tmp/electrobun_ipc_pipe_${this.id}_1`;
-		const webviewPipeIn = webviewPipe + '_in';
-		const webviewPipeOut = webviewPipe + '_out';
-		
-		try {
-		execSync('mkfifo ' + webviewPipeOut);
-		} catch (e) {
-			console.log('pipe out already exists')
-		}
-
-		try {
-			execSync('mkfifo ' + webviewPipeIn);
-			} catch (e) {
-				console.log('pipe in already exists')
-			}
-
-		const win = {
+		zigRPC.request.createWindow({
 			id: this.id,
 			title: this.title,
 			url: this.url,
@@ -110,54 +81,30 @@ export class BrowserWindow {
                 x: this.frame.x,
                 y: this.frame.y,
             }
-		}		
-	
-		// inStream.on('data', (chunk) => {
-		//     console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
-		// });	
-		
-		// inStream.on('error', (err) => {
-		//     console.error('Error:', err);
-		// });
-		
-		// inStream.write('hello from bun through named pipe\n');
-		// inStream.end();
-
-
-		zigRPC.request.createWindow(win)
-
-		const inStream = fs.createWriteStream(webviewPipeIn, {
-			flags: 'w', 		
 		});
-	
-		inStream.write('\n');
 
-		setTimeout(() => {
-			inStream.write('document.body.innerHTML = "wow yeah!";\n');
-		}, 5000)
-	
+		// todo (yoav): user should be able to override this and pass in their
+		// own webview instance, or instances for attaching to the window.
+		const webview = new BrowserView({
+			url: this.url, 
+			html: this.html, 
+			frame: this.frame
+		});
 
+		this.webviewId = webview.id;
 
-	
-		
-// Open the named pipe for reading
-	
-	const outStream = fs.createReadStream(webviewPipeOut, {
-		flags: 'r', 		
-	});
-	
-	outStream.on('data', (chunk) => {
-	    console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
-	});	
-	
-	outStream.on('error', (err) => {
-	    console.error('Error:', err);
-	});
+		zigRPC.request.setContentView({
+			windowId: this.id,
+			webviewId: webview.id
+		});
 
-	
-		// sendEvent(event).then(() => {
-		// 	this.state = 'created'
-		// })
+		if (this.url) {
+			this.loadURL(this.url);
+		} else if (this.html) {
+			this.loadHTML(this.html);			
+		}
+
+		BrowserWindowMap[this.id] = this;			
 	  }
 
 	  setTitle(title: string) {
@@ -166,12 +113,14 @@ export class BrowserWindow {
 	  }
 	
 	  
-	  loadURL(url) {
-		
+	  loadURL(url: string) {
+		this.url = url;
+		zigRPC.request.loadURL({webviewId: this.id, url: this.url})
 	  }
 	
-	  loadHTML(html) {
-		
+	  loadHTML(html: string) {
+		this.html = html;
+		zigRPC.request.loadHTML({webviewId: this.id, html: this.html})
 	  }
 
 	  // todo (yoav): move this to a class that also has off, append, prepend, etc.

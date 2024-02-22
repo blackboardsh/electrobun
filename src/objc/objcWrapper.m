@@ -91,8 +91,8 @@ WKWebView* createAndReturnWKWebView(NSRect frame) {
     // Allocate and initialize the WKWebView
     WKWebView *webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
 
+    retainObjCObject(webView);
     // Perform any additional setup here
-
     return webView;
 }
 
@@ -130,6 +130,7 @@ const char* getBodyFromScriptMessage(WKScriptMessage *message) {
 
 // Add this to your existing .m file
 void evaluateJavaScriptWithNoCompletion(WKWebView *webView, const char *jsString) {
+    NSLog(@"?????????????????? inside evaluateJavaScriptWithNoCompletion objc");
     NSString *javaScript = [NSString stringWithUTF8String:jsString];
     [webView evaluateJavaScript:javaScript completionHandler:nil];
 }
@@ -177,9 +178,12 @@ void setNSWindowTitle(NSWindow *window, const char *title) {
     [window setTitle:titleString];
 }
 
+// Sets the main content view of the window
 void setContentView(NSWindow *window, NSView *view) {
     [window setContentView:view];
 }
+
+// todo: add addSubview function
 
 NSRect createNSRectWrapper(double x, double y, double width, double height) {
     NSLog(@"Passed frame = x: %f, y: %f, width: %f, height: %f", x, y, width, height);
@@ -198,11 +202,11 @@ NSRect getWindowBounds(NSWindow *window) {
 
 
 // navigation delegate that 
-typedef BOOL (*DecideNavigationCallback)(uint32_t windowId, const char* url);
+typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
 
 @interface MyNavigationDelegate : NSObject <WKNavigationDelegate>
 @property (nonatomic, assign) DecideNavigationCallback zigCallback;
-@property (nonatomic, assign) uint32_t windowId;
+@property (nonatomic, assign) uint32_t webviewId;
 @end
 
 @implementation MyNavigationDelegate
@@ -211,16 +215,16 @@ typedef BOOL (*DecideNavigationCallback)(uint32_t windowId, const char* url);
     NSLog(@"?????????????????? inside navigation delegate objc");
     // decisionHandler(WKNavigationActionPolicyAllow);
     NSURL *url = navigationAction.request.URL;
-    BOOL shouldAllow = self.zigCallback(self.windowId, url.absoluteString.UTF8String);
+    BOOL shouldAllow = self.zigCallback(self.webviewId, url.absoluteString.UTF8String);
     decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
 }
 
 @end
 
-MyNavigationDelegate* setNavigationDelegateWithCallback(WKWebView *webView, uint32_t windowId, DecideNavigationCallback callback) {        
+MyNavigationDelegate* setNavigationDelegateWithCallback(WKWebView *webView, uint32_t webviewId, DecideNavigationCallback callback) {        
     MyNavigationDelegate *delegate = [[MyNavigationDelegate alloc] init];
     delegate.zigCallback = callback;
-    delegate.windowId = windowId;
+    delegate.webviewId = webviewId;
     webView.navigationDelegate = delegate;        
 
     // todo: release this delegate when the window is closed from zig
@@ -230,12 +234,12 @@ MyNavigationDelegate* setNavigationDelegateWithCallback(WKWebView *webView, uint
 }
 
 // add postMessage handler
-typedef BOOL (*HandlePostMessageCallback)(uint32_t windowId, const char* message);
+typedef BOOL (*HandlePostMessageCallback)(uint32_t webviewId, const char* message);
 
-// todo: add windowId as a property here
+// todo: add webviewId as a property here
 @interface MyScriptMessageHandler : NSObject <WKScriptMessageHandler>
 @property (nonatomic, assign) HandlePostMessageCallback zigCallback;
-@property (nonatomic, assign) uint32_t windowId;
+@property (nonatomic, assign) uint32_t webviewId;
 @end
 
 @implementation MyScriptMessageHandler
@@ -245,15 +249,16 @@ typedef BOOL (*HandlePostMessageCallback)(uint32_t windowId, const char* message
     NSString *body = message.body;
     // return body.UTF8String;
     
-    self.zigCallback(self.windowId, body.UTF8String);    
+    self.zigCallback(self.webviewId, body.UTF8String);    
 }
 
 @end
 
-MyScriptMessageHandler* addScriptMessageHandlerWithCallback(WKWebView *webView, uint32_t windowId, const char *name, HandlePostMessageCallback callback) {
+// todo: this actually isn't withCallback
+MyScriptMessageHandler* addScriptMessageHandlerWithCallback(WKWebView *webView, uint32_t webviewId, const char *name, HandlePostMessageCallback callback) {
     MyScriptMessageHandler *handler = [[MyScriptMessageHandler alloc] init];
     handler.zigCallback = callback;    
-    handler.windowId = windowId;
+    handler.webviewId = webviewId;
     [webView.configuration.userContentController addScriptMessageHandler:handler name:[NSString stringWithUTF8String:name]];
     // todo: release this handler when the window is closed from zig
     retainObjCObject(handler);

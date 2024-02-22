@@ -1,19 +1,19 @@
 import Electrobun, {BrowserWindow} from '../src/bun'
 
 
-// const win = new BrowserWindow({
-//     title: 'my url window',
-//     url: 'https://google.com',
-//     frame: {
-// 		width: 1800,
-// 		height: 600,
-// 		x: 1000,
-// 		y: 500,
-//     }
-// });
+const win2 = new BrowserWindow({
+    title: 'my url window',
+    url: 'https://google.com',
+    frame: {
+		width: 1800,
+		height: 600,
+		x: 1000,
+		y: 500,
+    }
+});
 
 
-// win.setTitle('New title from bun')
+win2.setTitle('New title from bun')
 
 
 const win = new BrowserWindow({

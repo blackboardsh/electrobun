@@ -7,7 +7,7 @@ const rpcTypes = @import("types.zig");
 const rpcStdout = @import("stdout.zig");
 const rpcHandlers = @import("schema/handlers.zig");
 const handlers = rpcHandlers.handlers;
-const window = @import("../macos/window.zig");
+const webview = @import("../macos/webview.zig");
 
 const alloc = std.heap.page_allocator;
 
@@ -51,7 +51,7 @@ pub fn pipesInEventListener() void {
             continue;
         };
 
-        // std.log.info("2::::::::::::::::::: ...", .{});
+        std.log.info("2::::::::::::::::::: ...", .{});
 
         for (0..n) |i| {
             // std.log.info("i::::::::::::::::::: ... {}", .{i});
@@ -69,7 +69,7 @@ pub fn pipesInEventListener() void {
                         handleLineFromMainPipe(line);
                     } else {
                         std.log.info("handle webview pipe from bun: udata:  {}\n", .{ev.udata});
-                        window.sendLineToWebview(@intCast(ev.udata), line);
+                        webview.sendLineToWebview(@intCast(ev.udata), line);
                     }
                 }
 
@@ -84,7 +84,7 @@ pub fn pipesInEventListener() void {
     }
 }
 
-pub fn addPipe(fd: std.os.fd_t, windowId: u32) void {
+pub fn addPipe(fd: std.os.fd_t, webviewId: u32) void {
     std.log.info("i::::::::::::::::::: ...FD {}\n", .{fd});
     var events: [10]std.os.Kevent = undefined;
     var event = std.os.Kevent{
@@ -95,7 +95,7 @@ pub fn addPipe(fd: std.os.fd_t, windowId: u32) void {
         .data = 0,
         // The .udata field is typically used to store user-defined data or a pointer to user-defined data that can be retrieved when an event occurs.
         // this could be the id of the window/webview
-        .udata = @as(usize, @intCast(windowId)),
+        .udata = @as(usize, @intCast(webviewId)),
     };
 
     var changes: [1]std.os.Kevent = undefined;

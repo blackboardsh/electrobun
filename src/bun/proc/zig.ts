@@ -96,20 +96,62 @@ function createStdioTransport(proc): RPCTransport {
 	};
   }
 
+  // todo (yoav): move this stuff to bun/rpc/zig.ts
 type BunSchema = RPCSchema<{
 	requests: {
 		createWindow: {
 			args: {
+				id: number,
 				url: string | null,
 				html: string | null,
 				title: string,
-				width: number,
-				height: number,
-				x: number,
-				y: number,							
+				frame: {
+					width: number,
+					height: number,
+					x: number,
+					y: number,							
+				}
 			},
 			returns: void
 		},
+		createWebview: {
+			args: {
+				id: number,
+				url: string | null,
+				html: string | null,
+				frame: {
+					x: number,
+					y: number,
+					width: number,
+					height: number,
+				}
+			},
+			returns: void
+		},
+
+		setContentView: {
+			args: {
+				windowId: number,
+				webviewId: number
+			},
+			returns: void
+		}
+
+		loadURL: {
+			args: {
+				webviewId: number,
+				url: string
+			},
+			returns: void
+		}
+		loadHTML: {
+			args: {
+				webviewId: number,
+				html: string
+			},
+			returns: void
+		}
+		
 		setTitle: {
 			args: {
 				winId: number,
@@ -125,7 +167,7 @@ type ZigSchema = RPCSchema<{
 	requests: {
 		decideNavigation: {
 			args: {
-				windowId: number,
+				webviewId: number,
 				url: string
 			},
 			returns: {
@@ -139,16 +181,16 @@ type ZigSchema = RPCSchema<{
 const zigRPC = createRPC<BunSchema, ZigSchema>({
 	transport: createStdioTransport(zigProc),
 	requestHandler: {
-		decideNavigation: ({windowId, url}) => {
-			console.log('decide navigation request handler', windowId, url)
+		decideNavigation: ({webviewId, url}) => {
+			console.log('decide navigation request handler', webviewId, url)
 
-			const willNavigate = electrobunEventEmitter.events.webview.willNavigate({url, windowId});
+			const willNavigate = electrobunEventEmitter.events.webview.willNavigate({url, webviewId});
 
 			let result;
 			// global will-navigate event
 			result = electrobunEventEmitter.emitEvent(willNavigate);
 			
-			result = electrobunEventEmitter.emitEvent(willNavigate, windowId);			
+			result = electrobunEventEmitter.emitEvent(willNavigate, webviewId);			
 
 			if (willNavigate.responseWasSet) {
 				return willNavigate.response;
