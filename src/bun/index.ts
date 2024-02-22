@@ -1,8 +1,13 @@
 import electobunEventEmmitter from "./events/eventEmitter";
 import { BrowserWindow } from "./core/BrowserWindow";
+import {type RPCSchema, createRPC} from 'rpc-anywhere'
 
 // Named Exports
-export {BrowserWindow};
+export {
+	type RPCSchema,
+	createRPC,
+	BrowserWindow,
+};
 
 // Default Export
 const Electrobun = {

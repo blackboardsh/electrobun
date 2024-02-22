@@ -24,6 +24,14 @@ const zigProc = Bun.spawn([webviewPath], {
 	}
 });
 
+process.on("beforeExit", (code) => {
+	// todo (yoav): maybe send a friendly signal to the webviews to let them know
+	// we're shutting down
+	
+	// clean up the webview process when the bun process dies.
+	zigProc.kill();
+  });
+
 const mainPipe = `/private/tmp/electrobun_ipc_pipe_${'my-app-id'}_main`;
 
 try {
@@ -200,7 +208,7 @@ const zigRPC = createRPC<BunSchema, ZigSchema>({
 			
 		},
 	},
-	maxRequestTime: 5000,
+	maxRequestTime: 25000,
 })
 
 export {

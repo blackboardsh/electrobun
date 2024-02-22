@@ -29,14 +29,18 @@ const WebviewType = struct {
     bun_out_pipe: ?anyerror!std.fs.File,
     bun_in_pipe: ?std.fs.File,
     // Function to send a message to Bun
-    pub fn sendToBun(self: *WebviewType, message: [*:0]const u8) !void {
+    pub fn sendToBun(self: *WebviewType, message: []const u8) !void {
         if (self.bun_out_pipe) |result| {
             if (result) |file| {
                 std.log.info("Opened file successfully", .{});
                 // convert null terminated string to slice
                 // const message_slice: []const u8 = message[0..std.mem.len(message)];
                 // Write the message to the named pipe
-                file.writeAll(fromCString(message)) catch |err| {
+                file.writeAll(message) catch |err| {
+                    std.debug.print("Failed to write to file: {}\n", .{err});
+                };
+
+                file.writeAll("\n") catch |err| {
                     std.debug.print("Failed to write to file: {}\n", .{err});
                 };
             } else |err| {
@@ -118,16 +122,18 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         fn HandlePostMessageCallback(webviewId: u32, message: [*:0]const u8) void {
             // bun bridge just forwards messages to the bun
 
-            std.log.info("Received script message ************************************: {s} {}", .{ message, webviewId });
-
             var webview = webviewMap.get(webviewId) orelse {
                 std.debug.print("Failed to get webview from hashmap for id {}\n", .{webviewId});
                 return;
             };
 
-            webview.sendToBun(message) catch |err| {
+            webview.sendToBun(fromCString(message)) catch |err| {
                 std.debug.print("Failed to send message to bun: {}\n", .{err});
             };
+
+            // webview.sendToBun("\n") catch |err| {
+            //     std.debug.print("Failed to send message to bun: {}\n", .{err});
+            // };
         }
     }.HandlePostMessageCallback);
 
@@ -192,8 +198,9 @@ pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {
 }
 
 // todo: move to a util and dedup with window.zig
+// todo: make buffer an arg
 fn concatOrFallback(comptime fmt: []const u8, args: anytype) []const u8 {
-    var buffer: [100]u8 = undefined;
+    var buffer: [250]u8 = undefined;
     const result = std.fmt.bufPrint(&buffer, fmt, args) catch |err| {
         std.log.info("Error concatenating string {}", .{err});
         return fmt;
@@ -214,5 +221,5 @@ fn toCString(input: []const u8) [*:0]const u8 {
 }
 
 fn fromCString(input: [*:0]const u8) []const u8 {
-    return input[0 .. std.mem.len(input) - 1];
+    return input[0..std.mem.len(input)];
 }

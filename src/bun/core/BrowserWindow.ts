@@ -3,9 +3,12 @@ import * as fs from 'fs';
 import {execSync} from 'child_process';
 import electrobunEventEmitter from '../events/eventEmitter';
 import { BrowserView } from './BrowserView';
+import {type RPC} from 'rpc-anywhere'
 
 let nextWindowId = 1;
 
+// todo (yoav): if we default to builtInSchema, we don't want dev to have to define custom handlers
+// for the built-in schema stuff.
 type WindowOptionsType = {
 	title: string,
 	frame: {
@@ -16,7 +19,8 @@ type WindowOptionsType = {
 	},
 	url: string | null,
 	html: string | null,
-	preloadScript?: string
+	preloadScript?: string,
+	rpc?: RPC<any, any>
 }
 
 const defaultOptions: WindowOptionsType = {
@@ -28,11 +32,15 @@ const defaultOptions: WindowOptionsType = {
 		height: 600,
 	},
 	url: 'https://electrobun.dev',
-	html: null,
+	html: null,	
 }
 
 const BrowserWindowMap = {};
 
+
+
+// todo (yoav): do something where the type extends the default schema
+// that way we can provide built-in requests/messages and devs can extend it
 
 export class BrowserWindow {
 	id: number = nextWindowId++;
@@ -63,10 +71,10 @@ export class BrowserWindow {
 		this.html = options.html || null;			
 	
 		
-		this.init();
+		this.init(options.rpc);
 	  }
 	
-	  init() {	
+	  init(rpc?: RPC<any, any>) {	
 		
 		
 
@@ -88,7 +96,8 @@ export class BrowserWindow {
 		const webview = new BrowserView({
 			url: this.url, 
 			html: this.html, 
-			frame: this.frame
+			frame: this.frame,
+			rpc
 		});
 
 		this.webviewId = webview.id;
