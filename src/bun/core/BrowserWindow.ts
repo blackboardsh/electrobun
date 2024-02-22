@@ -99,12 +99,16 @@ export class BrowserWindow {
 		});
 
 		if (this.url) {
-			this.loadURL(this.url);
+			webview.loadURL(this.url);
 		} else if (this.html) {
-			this.loadHTML(this.html);			
+			webview.loadHTML(this.html);			
 		}
 
 		BrowserWindowMap[this.id] = this;			
+	  }
+
+	  get webview() {
+		return BrowserView.getById(this.webviewId);
 	  }
 
 	  setTitle(title: string) {
@@ -113,18 +117,10 @@ export class BrowserWindow {
 	  }
 	
 	  
-	  loadURL(url: string) {
-		this.url = url;
-		zigRPC.request.loadURL({webviewId: this.id, url: this.url})
-	  }
-	
-	  loadHTML(html: string) {
-		this.html = html;
-		zigRPC.request.loadHTML({webviewId: this.id, html: this.html})
-	  }
+	  
 
 	  // todo (yoav): move this to a class that also has off, append, prepend, etc.
-	  // todo (yoav): also make a webview one that handles will-navigate
+	  // name should only allow browserWindow events
 	  on(name, handler) {
 		const specificName = `${name}-${this.id}`;
 		electrobunEventEmitter.on(specificName, handler);

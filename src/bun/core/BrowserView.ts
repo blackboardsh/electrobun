@@ -45,6 +45,8 @@ export class BrowserView {
         width: 800,
         height: 600,
     }
+    inStream: fs.WriteStream;
+    outStream: fs.ReadStream;
 
     constructor(options: Partial<BrowserViewOptions> = defaultOptions) {
         this.url = options.url || defaultOptions.url;
@@ -60,23 +62,7 @@ export class BrowserView {
             
             
     
-            // todo (yoav): wait for window/webview to be created		
-            // todo (yoav): track ids for webviews as well
-            const webviewPipe = `/private/tmp/electrobun_ipc_pipe_${this.id}_1`;
-            const webviewPipeIn = webviewPipe + '_in';
-            const webviewPipeOut = webviewPipe + '_out';
             
-            try {
-            execSync('mkfifo ' + webviewPipeOut);
-            } catch (e) {
-                console.log('pipe out already exists')
-            }
-    
-            try {
-                execSync('mkfifo ' + webviewPipeIn);
-                } catch (e) {
-                    console.log('pipe in already exists')
-                }
     
            	
         
@@ -104,44 +90,101 @@ export class BrowserView {
                 }
             })
     
-            const inStream = fs.createWriteStream(webviewPipeIn, {
-                flags: 'w', 		
-            });
-        
-            // todo: something has to be written to it to open it
-            // look into this
-            inStream.write('\n');
-    
-            setTimeout(() => {
-                inStream.write('document.body.innerHTML = "wow yeah!";\n');
-            }, 5000)
-        
-    
-    
-        
-            
-    // Open the named pipe for reading
-        
-        const outStream = fs.createReadStream(webviewPipeOut, {
-            flags: 'r', 		
-        });
-        
-        outStream.on('data', (chunk) => {
-            console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
-        });	
-        
-        outStream.on('error', (err) => {
-            console.error('Error:', err);
-        });
+            this.createStreams();
 
         BrowserViewMap[this.id] = this;
     }
 
+    createStreams() {
+// todo (yoav): wait for window/webview to be created		
+            // todo (yoav): track ids for webviews as well
+            const webviewPipe = `/private/tmp/electrobun_ipc_pipe_${this.id}_1`;
+            const webviewPipeIn = webviewPipe + '_in';
+            const webviewPipeOut = webviewPipe + '_out';
+            
+            try {
+            execSync('mkfifo ' + webviewPipeOut);
+            } catch (e) {
+                console.log('pipe out already exists')
+            }
+    
+            try {
+                execSync('mkfifo ' + webviewPipeIn);
+                } catch (e) {
+                    console.log('pipe in already exists')
+                }
+
+        const inStream = fs.createWriteStream(webviewPipeIn, {
+            flags: 'w', 		
+        });
+    
+        // todo: something has to be written to it to open it
+        // look into this
+        inStream.write('\n');
+
+        this.inStream = inStream;
+
+        
+    
+
+
+    
+        
+// Open the named pipe for reading
+    
+    const outStream = fs.createReadStream(webviewPipeOut, {
+        flags: 'r', 		
+    });
+    
+    outStream.on('data', (chunk) => {
+        // todo (yoav): implemnt a proper reader up to \n
+        // when event is read and parsed it should emit an webview onMessage event
+        // it should also tie into webview's RPC anywhere types and handlers
+        console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
+    });	
+    
+    outStream.on('error', (err) => {
+        console.error('Error:', err);
+    });
+
+    this.outStream = outStream;
+    }
+
+    sendMessageToWebview(jsonMessage) {
+        const stringifiedMessage = JSON.stringify(jsonMessage);
+        const wrappedMessage = `electrobun.receiveMessageFromBun(${stringifiedMessage})`;
+        this.executeJavascript(wrappedMessage);
+    }
+
+    executeJavascript(js: string) {
+        this.inStream.write(js + '\n');
+    }
+
+    loadURL(url: string) {
+		this.url = url;
+		zigRPC.request.loadURL({webviewId: this.id, url: this.url})
+	  }
+	
+	  loadHTML(html: string) {
+		this.html = html;
+		zigRPC.request.loadHTML({webviewId: this.id, html: this.html})
+	  }
+
     // todo (yoav): move this to a class that also has off, append, prepend, etc.
-	  // todo (yoav): also make a webview one that handles will-navigate
-	  on(name, handler) {
+	  // name should only allow browserView events
+      // Note: normalize event names to willNavigate instead of ['will-navigate'] to save
+      // 5 characters per usage and allow minification to be more effective.
+	  on(name: 'will-navigate', handler) {
 		const specificName = `${name}-${this.id}`;
 		electrobunEventEmitter.on(specificName, handler);
 	  }
+
+      static getById(id: number) {
+            return BrowserViewMap[id];
+      }
+
+      static getAll() {
+        return Object(BrowserViewMap).values();
+      }
 
 }

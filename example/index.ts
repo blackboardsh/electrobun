@@ -45,7 +45,7 @@ Electrobun.events.on('will-navigate', (e) => {
     e.response = {allow: false};
 })
 
-win.on('will-navigate', (e) => {
+win.webview.on('will-navigate', (e) => {
     console.log('example webview will navigate handler', e.data.url, e.data.windowId )
     if (e.responseWasSet && e.response.allow === false) {
         e.response.allow = true;
@@ -54,4 +54,10 @@ win.on('will-navigate', (e) => {
 })
 
 win.setTitle('New title from bun')
+
+setTimeout(() => {
+    win.webview.executeJavascript('document.body.innerHTML = "wow yeah! . !";');
+    // win.webview.loadURL('https://google.com');
+    win.webview.sendMessageToWebview({msg: 'hello from bun'});
+}, 5000)
 
