@@ -43,8 +43,9 @@ type MyWebviewRPC = {
 
 const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
     maxRequestTime: 5000,
-    handlers: {
-        doMoreMath: (a, b) => {
+    requestHandler: {
+        doMoreMath: ({a, b}) => {
+            console.log('doing more math in example/index.ts', a, b)
             return a + b;
         },
         log: (msg) => {

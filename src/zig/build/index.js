@@ -215,4 +215,9 @@ var rpc2 = createRPC({
     }
   }
 });
+setTimeout(() => {
+  rpc2.request.doMoreMath({ a: 1, b: 2 }).then((result) => {
+    document.body.innerHTML += "++++++++oMoreMath result: " + result;
+  });
+}, 5000);
 window.electrobun = electrobun;

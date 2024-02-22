@@ -107,6 +107,12 @@ const rpc = createRPC<MyWebviewRPC["webview"], MyWebviewRPC["bun"]>({
 
 });
 
+setTimeout(() => {
+    rpc.request.doMoreMath({a: 1, b: 2}).then((result) => {
+        document.body.innerHTML += '++++++++oMoreMath result: ' + result;
+    });
+}, 5000);
+
 
 
 
