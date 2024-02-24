@@ -10,15 +10,18 @@ const ELECTROBUN_BROWSER_API_SCRIPT = @embedFile("../build/index.js");
 
 const WebviewMap = std.AutoHashMap(u32, WebviewType);
 pub var webviewMap: WebviewMap = WebviewMap.init(alloc);
+const AssetScheme = "assets://";
 
 fn assetFileLoader(url: [*:0]const u8) objc.FileResponse {
     std.log.info("assetFileLoader {s}", .{url});
-    const fileContents = "Hello, world!"; // Replace with actual file loading logic
+    const relPath = url[AssetScheme.len..std.mem.len(url)];
+
+    const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
     const mimeType = "text/html"; // or dynamically determine MIME type
 
     return objc.FileResponse{
         .mimeType = mimeType,
-        .fileContents = fileContents,
+        .fileContents = toCString(fileContents),
     };
 }
 
@@ -210,12 +213,25 @@ pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {
 
 // todo: move to a util and dedup with window.zig
 // todo: make buffer an arg
+// todo: use a for loop with mem.copy for simpler concat
+// template string concat with arbitrary number of args
 fn concatOrFallback(comptime fmt: []const u8, args: anytype) []const u8 {
     var buffer: [250]u8 = undefined;
     const result = std.fmt.bufPrint(&buffer, fmt, args) catch |err| {
         std.log.info("Error concatenating string {}", .{err});
         return fmt;
     };
+
+    return result;
+}
+
+// join two strings
+pub fn concatStrings(a: []const u8, b: []const u8) []u8 {
+    var totalLength: usize = a.len + b.len;
+    var result = alloc.alloc(u8, totalLength) catch unreachable;
+
+    std.mem.copy(u8, result[0..a.len], a);
+    std.mem.copy(u8, result[a.len..totalLength], b);
 
     return result;
 }
@@ -233,4 +249,22 @@ fn toCString(input: []const u8) [*:0]const u8 {
 
 fn fromCString(input: [*:0]const u8) []const u8 {
     return input[0..std.mem.len(input)];
+}
+
+pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
+    // todo: get the base path from env var passed in from bun
+    const basePath = "/Users/yoav/code/electrobun/example/build/";
+
+    const combinedPath = concatStrings(basePath, filePath);
+
+    const file = try std.fs.cwd().openFile(combinedPath, .{});
+    defer file.close();
+
+    const fileSize = try file.getEndPos();
+    var fileContents = try alloc.alloc(u8, fileSize);
+
+    // Read the file contents into the allocated buffer
+    _ = try file.readAll(fileContents);
+
+    return fileContents;
 }
