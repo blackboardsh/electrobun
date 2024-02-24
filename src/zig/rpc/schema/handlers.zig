@@ -117,6 +117,7 @@ pub fn parseArgsAndCall(handler: anytype, argSchema: anytype, unparsedArgs: anyt
     return handler(parsedArgs.value);
 }
 
-fn strEql(a: []const u8, b: []const u8) bool {
+// todo: move to string util (duplicated in webview.zig)
+pub fn strEql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }

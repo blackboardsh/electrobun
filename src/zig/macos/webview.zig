@@ -17,10 +17,10 @@ fn assetFileLoader(url: [*:0]const u8) objc.FileResponse {
     const relPath = url[AssetScheme.len..std.mem.len(url)];
 
     const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
-    const mimeType = "text/html"; // or dynamically determine MIME type
+    const mimeType = getMimeType(relPath); // or dynamically determine MIME type
 
     return objc.FileResponse{
-        .mimeType = mimeType,
+        .mimeType = toCString(mimeType),
         .fileContents = toCString(fileContents),
     };
 }
@@ -267,4 +267,58 @@ pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
     _ = try file.readAll(fileContents);
 
     return fileContents;
+}
+
+// todo: move to string utils
+pub fn getMimeType(filePath: []const u8) []const u8 {
+    if (getFileExtension(filePath)) |extension| {
+        if (strEql(extension, "html")) {
+            return "text/html";
+        } else if (strEql(extension, "htm")) {
+            return "text/html";
+        } else if (strEql(extension, "js")) {
+            return "application/javascript";
+        } else if (strEql(extension, "json")) {
+            return "application/json";
+        } else if (strEql(extension, "css")) {
+            return "text/css";
+        } else if (strEql(extension, "png")) {
+            return "image/png";
+        } else if (strEql(extension, "jpg")) {
+            return "image/jpeg";
+        } else if (strEql(extension, "jpeg")) {
+            return "image/jpeg";
+        } else if (strEql(extension, "gif")) {
+            return "image/gif";
+        } else if (strEql(extension, "svg")) {
+            return "image/svg+xml";
+        } else if (strEql(extension, "txt")) {
+            return "text/plain";
+        }
+    }
+
+    return "application/octet-stream";
+}
+
+pub fn getFileExtension(filePath: []const u8) ?[]const u8 {
+    if (findLastIndexOfChar(filePath, '.')) |dotPos| {
+        return filePath[dotPos + 1 ..];
+    }
+
+    return null;
+}
+
+fn findLastIndexOfChar(slice: []const u8, char: u8) ?usize {
+    var i: usize = slice.len;
+    while (i > 0) : (i -= 1) {
+        if (slice[i - 1] == char) {
+            return i - 1;
+        }
+    }
+    return null;
+}
+
+// todo: move to string util (duplicated in handlers.zig)
+pub fn strEql(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
 }
