@@ -1,5 +1,71 @@
 #import <WebKit/WebKit.h>
 
+
+// asset:// schema handler
+
+typedef struct {
+    const char *mimeType;
+    const char *fileContents;    
+} FileResponse;
+
+// Define callback types for starting and stopping URL scheme tasks
+typedef FileResponse (*zigStartURLSchemeTaskCallback)(const char* url);
+
+@interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>
+@property (nonatomic, assign) zigStartURLSchemeTaskCallback assetFileLoader;
+
+@end
+
+@implementation MyURLSchemeHandler
+
+- (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+    NSURL *url = urlSchemeTask.request.URL;    
+    
+    NSLog(@"Starting URL scheme task for URL: %@", url);
+    // todo: the zig handler should return the file to here, and objc can send it back to the webview
+    if (self.assetFileLoader) {
+        // const char *fileContents = self.assetFileLoader(url.absoluteString.UTF8String);
+        // NSData *data = [NSData dataWithBytes:fileContents length:strlen(fileContents)];
+        NSLog(@"assetFileLoader called");
+        FileResponse fileResponse = self.assetFileLoader(url.absoluteString.UTF8String);
+        NSLog(@"assetFileLoader result");
+        
+        NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:strlen(fileResponse.fileContents)];
+        
+        // Determine MIME type from the response, or default if null
+        NSString *mimeType = fileResponse.mimeType ? [NSString stringWithUTF8String:fileResponse.mimeType] : @"application/octet-stream";
+        
+        // Create a response - you might need to adjust the MIME type
+        NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
+        // Webkit will try guess the mimetype based on the file extension. supports common file types  https://github.com/WebKit/WebKit/blob/a78127adb38a402b5d0fe6b17367aba32a38eb22/Source/WebCore/platform/playstation/MIMETypeRegistryPlayStation.cpp#L34-L55
+        // If/when we need to support more file types, we can implement that in zig cross-platform and allow extending with more
+        // bun also has comprehensive mimetype detection written in zig that could be used but increases the binary size
+                                                            MIMEType:mimeType 
+                                               expectedContentLength:data.length
+                                                    textEncodingName:nil];
+        
+        // Inform the urlSchemeTask of the response
+        [urlSchemeTask didReceiveResponse:response];
+        
+        // Send the data
+        [urlSchemeTask didReceiveData:data];
+        
+        // Complete the task
+        [urlSchemeTask didFinish];
+        // how to send the fileContents back to the webview?
+    }
+}
+
+- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+    NSURL *url = urlSchemeTask.request.URL;
+    NSLog(@"Stopping URL scheme task for URL: %@", url);
+    // if (self.stopCallback) {
+    //     self.stopCallback(url.absoluteString.UTF8String);
+    // }
+}
+
+@end
+
 // generic utils
 
 // manually retain and release objects so they don't get deallocated
@@ -81,9 +147,17 @@ void runNSApplication() {
 
 
 // WKWebView
-WKWebView* createAndReturnWKWebView(NSRect frame) {
+WKWebView* createAndReturnWKWebView(NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader) {
     // Create a default WKWebViewConfiguration
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+
+    // wire up assets:// schema handler
+    MyURLSchemeHandler *schemeHandler = [[MyURLSchemeHandler alloc] init];
+    schemeHandler.assetFileLoader = assetFileLoader;    
+
+    [configuration setURLSchemeHandler:schemeHandler forURLScheme:@"assets"];
+    retainObjCObject(schemeHandler);
+    NSLog(@"setting custom protoco scheme");
     
     // Define a default frame; you might want to parameterize this
     // CGRect frame = CGRectMake(0, 0, 1800, 600); // Example frame
@@ -145,12 +219,10 @@ void addPreloadScriptToWebView(WKWebView *webView, const char *scriptContent, BO
     WKUserScript *userScript = [[WKUserScript alloc] initWithSource:[NSString stringWithUTF8String:scriptContent]
                                                       injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                    forMainFrameOnly:forMainFrameOnly];
-
-    // Get the userContentController from the WKWebView's configuration
-    WKUserContentController *userContentController = webView.configuration.userContentController;
+    
 
     // Add the user script to the content controller
-    [userContentController addUserScript:userScript];
+    [webView.configuration.userContentController addUserScript:userScript];
 }
 
 // NSWindow
@@ -244,10 +316,8 @@ typedef BOOL (*HandlePostMessageCallback)(uint32_t webviewId, const char* messag
 
 @implementation MyScriptMessageHandler
 
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    NSLog(@"?????????????????? inside post message delegate objc");
-    NSString *body = message.body;
-    // return body.UTF8String;
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {    
+    NSString *body = message.body;    
     
     self.zigCallback(self.webviewId, body.UTF8String);    
 }
@@ -265,4 +335,3 @@ MyScriptMessageHandler* addScriptMessageHandlerWithCallback(WKWebView *webView, 
 
     return handler;
 }
-

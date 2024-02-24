@@ -11,6 +11,17 @@ const ELECTROBUN_BROWSER_API_SCRIPT = @embedFile("../build/index.js");
 const WebviewMap = std.AutoHashMap(u32, WebviewType);
 pub var webviewMap: WebviewMap = WebviewMap.init(alloc);
 
+fn assetFileLoader(url: [*:0]const u8) objc.FileResponse {
+    std.log.info("assetFileLoader {s}", .{url});
+    const fileContents = "Hello, world!"; // Replace with actual file loading logic
+    const mimeType = "text/html"; // or dynamically determine MIME type
+
+    return objc.FileResponse{
+        .mimeType = mimeType,
+        .fileContents = fileContents,
+    };
+}
+
 const WebviewType = struct {
     id: u32,
     handle: *anyopaque,
@@ -97,7 +108,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
         .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         // },
-    });
+    }, assetFileLoader);
 
     objc.addPreloadScriptToWebView(objcWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
 

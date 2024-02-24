@@ -59,17 +59,19 @@ const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
 
 const win2 = new BrowserWindow({
     title: 'my url window',
-    url: 'https://google.com',
+    // url: 'https://eggbun.sh',
+    url: 'assets://index.html',
     frame: {
 		width: 1800,
 		height: 600,
-		x: 1000,
-		y: 500,
-    }
+		x: 2000,
+		y: 2000,
+    },
+    rpc: myWebviewRPC
 });
 
 
-win2.setTitle('New title from bun')
+win2.setTitle('url browserwindow')
 
 
 const win = new BrowserWindow({
@@ -78,7 +80,7 @@ const win = new BrowserWindow({
 		width: 1800,
 		height: 600,
 		x: 1000,
-		y: 500,
+		y: 0,
     },
     // webview: {
     // todo (yoav): break this into webview options
@@ -92,12 +94,17 @@ const win = new BrowserWindow({
                     // window.webkit.messageHandlers.bunBridge.postMessage("Hello from JavaScript!");                
                     window.electrobun.bunBridge("Hello from bun bridge!");
                 </script>
+
+                
                 <h1>hi</h1>
             </body>
         </html>
         `,
         
+        // todo (yoav): can we pass this to the webview's preload code so it doesn't have to be included
+        // in the user's webview bundle?
         rpc: myWebviewRPC
+        // <script src="asset://js/test.js"></script>
     // }
     
 });
@@ -106,7 +113,7 @@ const win = new BrowserWindow({
 // todo (yoav): typescript types should resolve for e and e.setResponse
 Electrobun.events.on('will-navigate', (e) => {
     console.log('example global will navigate handler', e.data.url, e.data.windowId )
-    e.response = {allow: false};
+    e.response = {allow: true};
 })
 
 win.webview.on('will-navigate', (e) => {

@@ -53,6 +53,13 @@ const createNSWindowWithFrameAndStyleParams = extern struct {
     styleMask: WindowStyleMaskOptions,
 };
 
+// Note: this struct is mirrored in objective-c, it's returned by a zig function that is called by objc function
+// so extern (c-compatible) struct is not enough
+pub const FileResponse = packed struct {
+    mimeType: [*:0]const u8,
+    fileContents: [*:0]const u8,
+};
+
 pub extern fn createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams) callconv(.C) *anyopaque;
 pub extern fn makeNSWindowKeyAndOrderFront(window: *anyopaque) callconv(.C) void;
 pub extern fn setNSWindowTitle(window: *anyopaque, title: [*:0]const u8) callconv(.C) void;
@@ -60,7 +67,7 @@ pub extern fn getWindowBounds(window: *anyopaque) callconv(.C) *anyopaque;
 pub extern fn setContentView(window: *anyopaque, view: *anyopaque) callconv(.C) void;
 
 // webview
-pub extern fn createAndReturnWKWebView(frame: NSRect) callconv(.C) *anyopaque;
+pub extern fn createAndReturnWKWebView(frame: NSRect, assetFileLoader: *const fn ([*:0]const u8) FileResponse) callconv(.C) *anyopaque;
 pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;
 pub extern fn loadHTMLInWebView(webView: *anyopaque, html: [*:0]const u8) callconv(.C) void;
