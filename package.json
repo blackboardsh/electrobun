@@ -3,6 +3,8 @@
     "version": "0.0.1",
     "license": "MIT",
     "private": true,
+    "main": "src/bun/index.ts",
+    "bin": "src/cli/build/electrobun",
     "repository": {
       "type": "git",
       "url": "https://github.com/blackboardsh/electrobun.git"
@@ -17,11 +19,11 @@
       "build:objc": "bun build:objc:object && bun build:objc:staticlib",
       "build:zig": "cd src/zig && zig build",
       "build:browser": "bun build src/browser/index.ts --outdir src/zig/build/",
+      "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",
       "build:bun": "",
-      "build:dev": "bun build:objc && bun build:browser && bun build:zig",
-      "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
-      "example:1": "bun example/index.ts",
-      "dev:example": "bun build:dev && bun example:1"
+      "build:dev": "bun build:objc && bun build:cli && bun build:browser && bun build:zig",
+      "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",      
+      "dev:example": "bun build:dev && cd example && bun install && bun build:dev && bun start"
     },
     "devDependencies": {
       "bun": "1.0.26"    

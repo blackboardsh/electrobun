@@ -1,0 +1,10 @@
+{
+    "scripts": {
+        "start": "electrobun dev",
+        "build:dev": "electrobun build"
+
+    },
+    "dependencies": {
+        "electrobun": "file:../"
+    }
+}

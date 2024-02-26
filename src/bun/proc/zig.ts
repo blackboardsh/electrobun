@@ -4,15 +4,23 @@ import {execSync} from 'child_process';
 import * as fs from 'fs';
 import electrobunEventEmitter from '../events/eventEmitter';
 
+// console.log('----> meta.url', import.meta.url)
+// console.log('----> meta.dir.', import.meta.dir)
+// console.log('----> meta.dir', import.meta.resolveSync("electrobun"))
+// console.log('----> meta.url.pathname', new URL('../', import.meta.url).pathname)
+// console.log('----> __dirname', __dirname)
+// // console.log('----> require', require('electrobun'))
+// console.log('----> process.cwd', process.cwd())
 
-const webviewPath = join(new URL('../', import.meta.url).pathname, '../zig/zig-out/bin/webview')
-const DYLD_LIBRARY_PATH = 'src/zig/build/';
+// const webviewPath = join(new URL('../', import.meta.url).pathname, '../zig/zig-out/bin/webview')
+const webviewBinaryPath = join(import.meta.dir, 'native', 'webview');
+// const DYLD_LIBRARY_PATH = 'src/zig/build/';
 
-console.log(webviewPath)
+console.log(webviewBinaryPath)
 
 // todo (yoav): make sure process exits when this process exits
 // especially on error
-const zigProc = Bun.spawn([webviewPath], {
+const zigProc = Bun.spawn([webviewBinaryPath], {
 	stdin: 'pipe',
 	stdout: 'pipe',
 	//  cwd: webviewPath,
@@ -20,7 +28,7 @@ const zigProc = Bun.spawn([webviewPath], {
 		...process.env,
 		// Note: Tell the os which folders the zig process is allowed to look for 
 		// dynamic libraries in.
-		DYLD_LIBRARY_PATH
+		// DYLD_LIBRARY_PATH
 	}
 });
 
