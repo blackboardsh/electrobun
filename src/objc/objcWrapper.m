@@ -151,11 +151,11 @@ WKWebView* createAndReturnWKWebView(NSRect frame, zigStartURLSchemeTaskCallback 
     // Create a default WKWebViewConfiguration
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
 
-    // wire up assets:// schema handler
+    // wire up views:// schema handler
     MyURLSchemeHandler *schemeHandler = [[MyURLSchemeHandler alloc] init];
     schemeHandler.assetFileLoader = assetFileLoader;    
 
-    [configuration setURLSchemeHandler:schemeHandler forURLScheme:@"assets"];
+    [configuration setURLSchemeHandler:schemeHandler forURLScheme:@"views"];
     retainObjCObject(schemeHandler);
     NSLog(@"setting custom protoco scheme");
     

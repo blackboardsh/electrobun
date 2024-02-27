@@ -61,7 +61,11 @@ const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
 const win2 = new BrowserWindow({
     title: 'my url window',
     // url: 'https://eggbun.sh',
-    url: 'assets://mainview/index.html',
+    url: 'views://mainview/index.html',
+    // url: 'assets://mainview/../../bun/index.js', // /Users/yoav/code/electrobun/example/build/bun/index.js
+        // url: 'assets://../bun/index.js', // /Users/yoav/code/electrobun/example/build/bun/index.js
+        // url: 'assets://%2E%2E/bun/index.js',
+        // url: 'assets:////Users/yoav/code/electrobun/example/build/bun/index.js', ///Users/yoav/code/electrobun/example/build/bun/index.js
     frame: {
 		width: 1800,
 		height: 600,

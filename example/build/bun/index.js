@@ -285,13 +285,14 @@ var createStdioTransport = function(proc) {
     }
   };
 };
-var webviewBinaryPath = join(import.meta.dir, "native", "webview");
+var webviewBinaryPath = join(import.meta.dir, "..", "native", "webview");
 console.log(webviewBinaryPath);
 var zigProc = Bun.spawn([webviewBinaryPath], {
   stdin: "pipe",
   stdout: "pipe",
   env: {
-    ...process.env
+    ...process.env,
+    ELECTROBUN_VIEWS_FOLDER: join(import.meta.dir, "..", "views")
   }
 });
 process.on("beforeExit", (code) => {
@@ -579,7 +580,7 @@ var myWebviewRPC = createRPC({
 });
 var win2 = new BrowserWindow({
   title: "my url window",
-  url: "assets://mainview/index.html",
+  url: "views://mainview/index.html",
   frame: {
     width: 1800,
     height: 600,

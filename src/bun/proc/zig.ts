@@ -4,16 +4,8 @@ import {execSync} from 'child_process';
 import * as fs from 'fs';
 import electrobunEventEmitter from '../events/eventEmitter';
 
-// console.log('----> meta.url', import.meta.url)
-// console.log('----> meta.dir.', import.meta.dir)
-// console.log('----> meta.dir', import.meta.resolveSync("electrobun"))
-// console.log('----> meta.url.pathname', new URL('../', import.meta.url).pathname)
-// console.log('----> __dirname', __dirname)
-// // console.log('----> require', require('electrobun'))
-// console.log('----> process.cwd', process.cwd())
-
-// const webviewPath = join(new URL('../', import.meta.url).pathname, '../zig/zig-out/bin/webview')
-const webviewBinaryPath = join(import.meta.dir, 'native', 'webview');
+// Note: import.meta.dir is expected to be the /build/bun folder where user's bun index is bundled to
+const webviewBinaryPath = join(import.meta.dir, '..', 'native', 'webview');
 // const DYLD_LIBRARY_PATH = 'src/zig/build/';
 
 console.log(webviewBinaryPath)
@@ -26,6 +18,7 @@ const zigProc = Bun.spawn([webviewBinaryPath], {
 	//  cwd: webviewPath,
 	env: {
 		...process.env,
+		ELECTROBUN_VIEWS_FOLDER: join(import.meta.dir, '..', 'views') ,
 		// Note: Tell the os which folders the zig process is allowed to look for 
 		// dynamic libraries in.
 		// DYLD_LIBRARY_PATH

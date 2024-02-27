@@ -10,11 +10,11 @@ const ELECTROBUN_BROWSER_API_SCRIPT = @embedFile("../build/index.js");
 
 const WebviewMap = std.AutoHashMap(u32, WebviewType);
 pub var webviewMap: WebviewMap = WebviewMap.init(alloc);
-const AssetScheme = "assets://";
+const ViewsScheme = "views://";
 
 fn assetFileLoader(url: [*:0]const u8) objc.FileResponse {
     std.log.info("assetFileLoader {s}", .{url});
-    const relPath = url[AssetScheme.len..std.mem.len(url)];
+    const relPath = url[ViewsScheme.len..std.mem.len(url)];
 
     const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
     const mimeType = getMimeType(relPath); // or dynamically determine MIME type
@@ -252,12 +252,33 @@ fn fromCString(input: [*:0]const u8) []const u8 {
 }
 
 pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
-    // todo: get the base path from env var passed in from bun
-    const basePath = "/Users/yoav/code/electrobun/example/build/";
+    const ELECTROBUN_VIEWS_FOLDER = std.os.getenv("ELECTROBUN_VIEWS_FOLDER") orelse {
+        // todo: return an error here
+        return error.ELECTROBUN_VIEWS_FOLDER_NOT_SET;
+    };
 
-    const combinedPath = concatStrings(basePath, filePath);
+    // Note: resolve the path, then check if it's not a descendant
+    const joinedPath = try std.fs.path.join(alloc, &.{ ELECTROBUN_VIEWS_FOLDER, filePath });
+    const resolvedPath = try std.fs.path.resolve(alloc, &.{joinedPath});
+    defer alloc.free(resolvedPath);
+    const relativePath = try std.fs.path.relative(alloc, ELECTROBUN_VIEWS_FOLDER, resolvedPath);
+    defer alloc.free(relativePath);
 
-    const file = try std.fs.cwd().openFile(combinedPath, .{});
+    // Should defend against trying to load content outside of the build/views folder
+    // eg: relative and absolute urls
+    // url: 'assets://mainview/index.html',
+    // url: 'assets://mainview/../../bun/index.js', // /Users/yoav/code/electrobun/example/build/bun/index.js
+    // url: 'assets://../bun/index.js', // /Users/yoav/code/electrobun/example/build/bun/index.js
+    // url: 'assets://%2E%2E/bun/index.js',
+    // url: 'assets:////Users/yoav/code/electrobun/example/build/bun/index.js', ///Users/yoav/code/electrobun/example/build/bun/index.js
+    if (relativePath[0] == '.' and relativePath[1] == '.') {
+        std.log.info("Invalid path: \nrelativePath: {s}\nresolvedPath: {s}\njoinedPath: {s}", .{ relativePath, resolvedPath, joinedPath });
+        return error.InvalidPath;
+    }
+
+    std.log.info("resolved path: \nrelativePath: {s}\nresolvedPath: {s}\njoinedPath: {s}", .{ relativePath, resolvedPath, joinedPath });
+
+    const file = try std.fs.cwd().openFile(resolvedPath, .{});
     defer file.close();
 
     const fileSize = try file.getEndPos();
@@ -266,46 +287,42 @@ pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
     // Read the file contents into the allocated buffer
     _ = try file.readAll(fileContents);
 
+    std.log.info("filecontents: {s}", .{fileContents});
+
     return fileContents;
 }
 
 // todo: move to string utils
 pub fn getMimeType(filePath: []const u8) []const u8 {
-    if (getFileExtension(filePath)) |extension| {
-        if (strEql(extension, "html")) {
-            return "text/html";
-        } else if (strEql(extension, "htm")) {
-            return "text/html";
-        } else if (strEql(extension, "js")) {
-            return "application/javascript";
-        } else if (strEql(extension, "json")) {
-            return "application/json";
-        } else if (strEql(extension, "css")) {
-            return "text/css";
-        } else if (strEql(extension, "png")) {
-            return "image/png";
-        } else if (strEql(extension, "jpg")) {
-            return "image/jpeg";
-        } else if (strEql(extension, "jpeg")) {
-            return "image/jpeg";
-        } else if (strEql(extension, "gif")) {
-            return "image/gif";
-        } else if (strEql(extension, "svg")) {
-            return "image/svg+xml";
-        } else if (strEql(extension, "txt")) {
-            return "text/plain";
-        }
+    const extension = std.fs.path.extension(filePath);
+
+    std.log.info("extension: {s}", .{extension});
+
+    if (strEql(extension, ".html")) {
+        return "text/html";
+    } else if (strEql(extension, ".htm")) {
+        return "text/html";
+    } else if (strEql(extension, ".js")) {
+        return "application/javascript";
+    } else if (strEql(extension, ".json")) {
+        return "application/json";
+    } else if (strEql(extension, ".css")) {
+        return "text/css";
+    } else if (strEql(extension, ".png")) {
+        return "image/png";
+    } else if (strEql(extension, ".jpg")) {
+        return "image/jpeg";
+    } else if (strEql(extension, ".jpeg")) {
+        return "image/jpeg";
+    } else if (strEql(extension, ".gif")) {
+        return "image/gif";
+    } else if (strEql(extension, ".svg")) {
+        return "image/svg+xml";
+    } else if (strEql(extension, ".txt")) {
+        return "text/plain";
+    } else {
+        return "application/octet-stream";
     }
-
-    return "application/octet-stream";
-}
-
-pub fn getFileExtension(filePath: []const u8) ?[]const u8 {
-    if (findLastIndexOfChar(filePath, '.')) |dotPos| {
-        return filePath[dotPos + 1 ..];
-    }
-
-    return null;
 }
 
 fn findLastIndexOfChar(slice: []const u8, char: u8) ?usize {
