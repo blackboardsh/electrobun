@@ -75,7 +75,18 @@ const WebviewType = struct {
     }
 };
 
-const CreateWebviewOpts = struct { id: u32, url: ?[]const u8, html: ?[]const u8, frame: struct { width: f64, height: f64, x: f64, y: f64 } };
+const CreateWebviewOpts = struct { //
+    id: u32,
+    url: ?[]const u8,
+    html: ?[]const u8,
+    preload: ?[]const u8,
+    frame: struct { //
+        width: f64,
+        height: f64,
+        x: f64,
+        y: f64,
+    },
+};
 pub fn createWebview(opts: CreateWebviewOpts) void {
     const bunPipeIn = blk: {
         const bunPipeInPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_in", .{opts.id});
@@ -113,7 +124,9 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         // },
     }, assetFileLoader);
 
-    objc.addPreloadScriptToWebView(objcWebview, ELECTROBUN_BROWSER_API_SCRIPT, false);
+    if (opts.preload) |preload| {
+        addPreloadScriptToWebview(objcWebview, preload, true);
+    }
 
     // Can only define functions inline in zig within a struct
     const delegate = objc.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
@@ -180,6 +193,21 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     // } else if (opts.html) |html| {
     //     objc.loadHTMLInWebView(objcWebview, toCString(html));
     // }
+}
+
+// todo: move everything to cStrings or non-CStrings. just pick one.
+pub fn addPreloadScriptToWebview(objcWindow: *anyopaque, scriptOrPath: []const u8, allFrames: bool) void {
+    var script: []const u8 = undefined;
+
+    // If it's a views:// url safely load from disk otherwise treat it as js
+    if (std.mem.startsWith(u8, scriptOrPath, ViewsScheme)) {
+        const fileResult = assetFileLoader(toCString(scriptOrPath));
+        script = fromCString(fileResult.fileContents);
+    } else {
+        script = scriptOrPath;
+    }
+
+    objc.addPreloadScriptToWebView(objcWindow, toCString(script), allFrames);
 }
 
 pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.args) void {

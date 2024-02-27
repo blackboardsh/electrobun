@@ -176,8 +176,8 @@ if (commandArg === 'init') {
     const mainPath = join(buildFolder, 'bun', 'index.js');
     console.log('running ', bunPath, mainPath);
     Bun.spawn([bunPath, mainPath], {
-        stdin: 'pipe',
-        stdout: 'pipe',
+        stdin: 'inherit',
+        stdout: 'inherit',
         env: {
 
         }

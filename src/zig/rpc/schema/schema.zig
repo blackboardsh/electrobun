@@ -50,8 +50,9 @@ pub const BunSchema = struct {
             pub const args = struct {
                 id: u32,
                 url: ?[]const u8,
-                html: ?[]const u8, //
-                frame: struct {
+                html: ?[]const u8,
+                preload: ?[]const u8,
+                frame: struct { //
                     width: f64,
                     height: f64,
                     x: f64,

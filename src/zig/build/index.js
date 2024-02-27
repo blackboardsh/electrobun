@@ -182,42 +182,55 @@ function createRPC(options) {
   return _createRPC(options);
 }
 // src/browser/index.ts
-class ElectrobunView {
+class Electroview {
+  rpc;
   rpcHandler;
+  constructor(config) {
+    this.rpc = config.rpc;
+    this.init();
+  }
+  init() {
+    window.__electrobun = {
+      receiveMessageFromBun: this.receiveMessageFromBun.bind(this)
+    };
+    if (this.rpc) {
+      this.rpc.setTransport(this.createTransport());
+    }
+  }
+  createTransport() {
+    const that = this;
+    return {
+      send(message) {
+        try {
+          const messageString = JSON.stringify(message);
+          document.body.innerHTML += "sending message to bun: " + messageString + "\n";
+          that.bunBridge(messageString);
+        } catch (error) {
+          document.body.innerHTML += "failed to serialize message to bun:  \n";
+        }
+      },
+      registerHandler(handler) {
+        that.rpcHandler = handler;
+      }
+    };
+  }
   bunBridge(msg) {
+    document.body.innerHTML += "bunBRIDGE]\n" + msg;
     window.webkit.messageHandlers.bunBridge.postMessage(msg);
   }
   receiveMessageFromBun(msg) {
     document.body.innerHTML += "receiving message from bun";
-    this.rpcHandler(msg);
+    if (this.rpcHandler) {
+      this.rpcHandler(msg);
+    }
   }
 }
-var electrobun = new ElectrobunView;
-var rpc2 = createRPC({
-  transport: {
-    send(message) {
-      try {
-        const messageString = JSON.stringify(message);
-        document.body.innerHTML += "sending message to bun: " + messageString + "\n";
-        electrobun.bunBridge(messageString);
-      } catch (error) {
-        document.body.innerHTML += "failed to serialize message to bun:  \n";
-      }
-    },
-    registerHandler(handler) {
-      electrobun.rpcHandler = handler;
-    }
-  },
-  requestHandler: {
-    doMath: ({ a, b }) => {
-      document.body.innerHTML += "in do math handler\n" + a + ":::::" + b;
-      return a + b;
-    }
-  }
-});
-setTimeout(() => {
-  rpc2.request.doMoreMath({ a: 1, b: 2 }).then((result) => {
-    document.body.innerHTML += "++++++++oMoreMath result: " + result;
-  });
-}, 5000);
-window.electrobun = electrobun;
+var ElectrobunView = {
+  Electroview
+};
+var browser_default = ElectrobunView;
+export {
+  browser_default as default,
+  createRPC,
+  Electroview
+};

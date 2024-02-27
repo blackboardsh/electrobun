@@ -1,53 +1,51 @@
-import {type RPCSchema, createRPC} from 'rpc-anywhere'
+import {type RPCSchema, type RPC, createRPC} from 'rpc-anywhere'
 
-type MyWebviewRPC = {
-    bun: RPCSchema<{
-        requests: {
-            doMath: {
-                args: {
-                    a: number,
-                    b: number
-                },
-                returns: number
-            }
-        },
-        messages: {
-            hello: {
-                args: {
-                    msg: string
+
+class Electroview {
+    rpc?: RPC<any, any>;
+    rpcHandler?: (msg: any) => void;
+
+    constructor(config: {rpc: RPC<any, any>}) {
+        this.rpc = config.rpc;
+
+        this.init();
+    }
+
+    init() {
+        // todo (yoav): rpc anywhere
+        window.__electrobun = {
+            receiveMessageFromBun: this.receiveMessageFromBun.bind(this)
+        }
+
+        if (this.rpc) {
+            this.rpc.setTransport(this.createTransport());;
+        }
+    }
+
+    createTransport() {
+        const that = this;
+        return {
+            send(message) {                
+                try {
+                    const messageString = JSON.stringify(message);
+                    document.body.innerHTML += "sending message to bun: " + messageString + '\n';
+                    
+                    that.bunBridge(messageString);
+                } catch (error) {
+                    document.body.innerHTML += "failed to serialize message to bun:  \n";
+                    // console.error('bun: failed to serialize message to webview', error)
                 }
+            },
+            registerHandler(handler) {
+                that.rpcHandler = handler;
+                
             }
         }
-    }>,
-    webview:  RPCSchema<{
-        requests: {
-            doMoreMath: {
-                args: {
-                    a: number,
-                    b: number
-                },
-                returns: number
-            }
-        },
-        messages: {
-            log: {
-                args: {
-                    msg: string
-                }
-            }
-        }
-    }>
-}
-
-
-
-
-class ElectrobunView {
-    rpcHandler: any;
+    
+    }
 
     bunBridge(msg)  {
-
-        // document.body.innerHTML += "sending message to bun: [" + msg[msg.length - 1] + ']\n';
+        document.body.innerHTML += "bunBRIDGE]\n" + msg;
 
         // todo (yoav): this should be happening in zig
         // if (msg[msg.length - 1] !== "\n") {
@@ -63,7 +61,9 @@ class ElectrobunView {
         // NOTE: in the webview messages are passed by executing ElectrobunView.receiveMessageFromBun(object)
         // so they're already parsed into an object here
         document.body.innerHTML += "receiving message from bun"
-        this.rpcHandler(msg);
+        if (this.rpcHandler) {
+            this.rpcHandler(msg);
+        }
 
         // todo (yoav): rpc anywhere
         // if (typeof msg === 'string') {
@@ -75,49 +75,20 @@ class ElectrobunView {
     }
 }
 
-const electrobun = new ElectrobunView();
+export {
+    type RPCSchema,
+    createRPC,
+    Electroview
+}
 
+const ElectrobunView = {
+    Electroview
+}
 
-const rpc = createRPC<MyWebviewRPC["webview"], MyWebviewRPC["bun"]>({
-    transport: {
-        send(message) {
-            try {
-                const messageString = JSON.stringify(message);
-                document.body.innerHTML += "sending message to bun: " + messageString + '\n';
-                
-                electrobun.bunBridge(messageString);
-            } catch (error) {
-                document.body.innerHTML += "failed to serialize message to bun:  \n";
-                // console.error('bun: failed to serialize message to webview', error)
-            }
-            
-        },
-        registerHandler(handler) {
-            // todo (yoav): readStream function is identical to the one in zig.ts
-            electrobun.rpcHandler = handler;
-        }
-    },
-    requestHandler: {
-        doMath: ({a, b}) => {
-            document.body.innerHTML += "in do math handler\n" + a + ':::::' + b;
-            // document.body.innerHTML += method + ' ' + params.a + ' ' + params.b + ' = ' + (params.a + params.b) + '\n';
-            return a + b;
-        }
-    }
-
-});
-
-setTimeout(() => {
-    rpc.request.doMoreMath({a: 1, b: 2}).then((result) => {
-        document.body.innerHTML += '++++++++oMoreMath result: ' + result;
-    });
-}, 5000);
+export default ElectrobunView
 
 
 
 
-
-
-window.electrobun = electrobun;
 
 

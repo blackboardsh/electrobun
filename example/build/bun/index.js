@@ -268,6 +268,7 @@ var createStdioTransport = function(proc) {
               if (line) {
                 try {
                   const event2 = JSON.parse(line);
+                  console.log("received from zig: ", event2);
                   handler(event2);
                 } catch (error) {
                   console.log("zig: ", line);
@@ -334,19 +335,20 @@ var nextWebviewId = 1;
 var defaultOptions = {
   url: "https://electrobun.dev",
   html: null,
+  preload: null,
   frame: {
     x: 0,
     y: 0,
     width: 800,
     height: 600
-  },
-  preloadScript: null
+  }
 };
 
 class BrowserView {
   id = nextWebviewId++;
   url = null;
   html = null;
+  preload = null;
   frame = {
     x: 0,
     y: 0,
@@ -359,6 +361,7 @@ class BrowserView {
   constructor(options = defaultOptions) {
     this.url = options.url || defaultOptions.url;
     this.html = options.html || defaultOptions.html;
+    this.preload = options.preload || defaultOptions.preload;
     this.frame = options.frame ? { ...defaultOptions.frame, ...options.frame } : { ...defaultOptions.frame };
     console.log("bun: creating webview options", options);
     this.rpc = options.rpc;
@@ -369,6 +372,7 @@ class BrowserView {
       id: this.id,
       url: this.url,
       html: this.html,
+      preload: this.preload,
       frame: {
         width: this.frame.width,
         height: this.frame.height,
@@ -414,7 +418,7 @@ class BrowserView {
   }
   sendMessageToWebview(jsonMessage) {
     const stringifiedMessage = typeof jsonMessage === "string" ? jsonMessage : JSON.stringify(jsonMessage);
-    const wrappedMessage = `electrobun.receiveMessageFromBun(${stringifiedMessage})`;
+    const wrappedMessage = `window.__electrobun.receiveMessageFromBun(${stringifiedMessage})`;
     this.executeJavascript(wrappedMessage);
   }
   executeJavascript(js) {
@@ -489,7 +493,8 @@ var defaultOptions2 = {
     height: 600
   },
   url: "https://electrobun.dev",
-  html: null
+  html: null,
+  preload: null
 };
 var BrowserWindowMap = {};
 
@@ -499,6 +504,7 @@ class BrowserWindow {
   state = "creating";
   url = null;
   html = null;
+  preload = null;
   frame = {
     x: 0,
     y: 0,
@@ -511,6 +517,7 @@ class BrowserWindow {
     this.frame = options.frame ? { ...defaultOptions2.frame, ...options.frame } : { ...defaultOptions2.frame };
     this.url = options.url || null;
     this.html = options.html || null;
+    this.preload = options.preload || null;
     this.init(options.rpc);
   }
   init(rpc2) {
@@ -529,6 +536,7 @@ class BrowserWindow {
     const webview = new BrowserView({
       url: this.url,
       html: this.html,
+      preload: this.preload,
       frame: this.frame,
       rpc: rpc2
     });
@@ -592,6 +600,7 @@ var win2 = new BrowserWindow({
 win2.setTitle("url browserwindow");
 var win = new BrowserWindow({
   title: "my url window",
+  preload: "views://mainview/index.js",
   frame: {
     width: 1800,
     height: 600,
@@ -627,13 +636,22 @@ win.webview.on("will-navigate", (e) => {
   }
 });
 win.setTitle("New title from bun");
+console.log("-------> setting timeout\n\n\n\n\n");
 setTimeout(() => {
+  console.log("executing javascript");
   win.webview.executeJavascript('document.body.innerHTML = "wow yeah! . !";');
+  win2.webview.executeJavascript('document.body.innerHTML = "wow yeah2! . !";');
   setTimeout(() => {
     console.time("doMath");
-    win.webview.rpc.request.doMath({ a: 1, b: 2 }).then((result) => {
+    console.log("-------> do math");
+    win.webview.rpc.request.doMath({ a: 5, b: 3 }).then((result) => {
       console.timeEnd("doMath");
+      win2.webview.executeJavascript(`document.body.innerHTML += "------>do math result ${result}";`);
+      console.log("doMath result", result);
       console.log("_+_+_+_+_+_+_+_+_+ doMath result", result);
+    }).catch((err) => {
+      win2.webview.executeJavascript(`document.body.innerHTML += "------>do math error ${err.msg}";`);
+      console.log("doMath error", err);
     });
   }, 1000);
 }, 3000);

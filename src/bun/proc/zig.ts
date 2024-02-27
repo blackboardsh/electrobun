@@ -81,6 +81,7 @@ function createStdioTransport(proc): RPCTransport {
 						if (line) {
 							try {
 								const event = JSON.parse(line);
+								console.log('received from zig: ', event);
 								handler(event)										
 							} catch (error) {
 								// Non-json things are just bubbled up to the console.

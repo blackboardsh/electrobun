@@ -19,7 +19,7 @@ type WindowOptionsType = {
 	},
 	url: string | null,
 	html: string | null,
-	preloadScript?: string,
+	preload: string | null,
 	rpc?: RPC<any, any>
 }
 
@@ -33,6 +33,7 @@ const defaultOptions: WindowOptionsType = {
 	},
 	url: 'https://electrobun.dev',
 	html: null,	
+	preload: null,
 }
 
 const BrowserWindowMap = {};
@@ -48,6 +49,7 @@ export class BrowserWindow {
 	state: 'creating' | 'created' = 'creating'
 	url: string | null = null;
 	html: string | null = null;
+	preload: string | null = null;
 	frame: {
 		x: number,
 		y: number,
@@ -68,7 +70,8 @@ export class BrowserWindow {
 		this.title = options.title || 'New Window';
 		this.frame = options.frame ? {...defaultOptions.frame, ...options.frame} : {...defaultOptions.frame};
 		this.url = options.url || null;
-		this.html = options.html || null;			
+		this.html = options.html || null;	
+		this.preload = options.preload || null;		
 	
 		
 		this.init(options.rpc);
@@ -82,7 +85,7 @@ export class BrowserWindow {
 			id: this.id,
 			title: this.title,
 			url: this.url,
-			html: this.html,
+			html: this.html,			
             frame: {
                 width: this.frame.width,
                 height: this.frame.height,
@@ -96,6 +99,7 @@ export class BrowserWindow {
 		const webview = new BrowserView({
 			url: this.url, 
 			html: this.html, 
+			preload: this.preload,
 			frame: this.frame,
 			rpc
 		});

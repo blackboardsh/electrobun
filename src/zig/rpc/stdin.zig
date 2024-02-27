@@ -101,6 +101,7 @@ fn processMessageQueue(context: ?*anyopaque) callconv(.C) void {
         if (result.errorMsg == null) {
             rpcStdout.sendResponseSuccess(_request.value.id, result.payload);
         } else {
+            // todo: this doesn't work yet
             rpcStdout.sendResponseError(_request.value.id, result.errorMsg.?);
         }
     } else if (std.mem.eql(u8, msgType, "message")) {

@@ -10,26 +10,26 @@ let nextWebviewId = 1;
 type BrowserViewOptions = {    
     url: string | null;
     html: string | null;
+    preload: string | null;
     frame: {
         x: number,
         y: number,
         width: number,
         height: number,
     }
-    preloadScript: string | null;
     rpc?: RPC<any, any>
 }
 
 const defaultOptions: BrowserViewOptions = {    
     url: 'https://electrobun.dev',
     html: null,
+    preload: null,
     frame: {
         x: 0,
         y: 0,
         width: 800,
         height: 600,
-    },
-    preloadScript: null,
+    },    
 }
 
 
@@ -38,6 +38,7 @@ export class BrowserView {
     id: number = nextWebviewId++;
     url: string | null = null;
     html: string | null = null;
+    preload: string | null = null;
     frame: {
         x: number,
         y: number,
@@ -56,6 +57,7 @@ export class BrowserView {
     constructor(options: Partial<BrowserViewOptions> = defaultOptions) {
         this.url = options.url || defaultOptions.url;
         this.html = options.html || defaultOptions.html;
+        this.preload = options.preload || defaultOptions.preload;
         this.frame = options.frame ? {...defaultOptions.frame, ...options.frame} : {...defaultOptions.frame};
 
         console.log('bun: creating webview options', options)
@@ -66,12 +68,7 @@ export class BrowserView {
     }
 
     init() {
-        
-            // is this.id available here?
-            
-            
-    
-            
+                   
     
            	
         
@@ -91,6 +88,7 @@ export class BrowserView {
                 id: this.id,                
                 url: this.url,
                 html: this.html,
+                preload: this.preload,
                 frame: {
                     width: this.frame.width,
                     height: this.frame.height,
@@ -169,7 +167,7 @@ export class BrowserView {
     sendMessageToWebview(jsonMessage) {
         
         const stringifiedMessage = typeof jsonMessage === 'string' ? jsonMessage : JSON.stringify(jsonMessage);
-        const wrappedMessage = `electrobun.receiveMessageFromBun(${stringifiedMessage})`;
+        const wrappedMessage = `window.__electrobun.receiveMessageFromBun(${stringifiedMessage})`;
         this.executeJavascript(wrappedMessage);
     }
 

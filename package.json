@@ -2,8 +2,12 @@
     "name": "electrobun",
     "version": "0.0.1",
     "license": "MIT",
-    "private": true,
-    "main": "src/bun/index.ts",
+    "private": true,    
+    "exports": {
+      ".": "./src/bun/index.ts",
+      "./bun": "./src/bun/index.ts",
+      "./view": "./src/browser/index.ts"
+    },
     "bin": "src/cli/build/electrobun",
     "repository": {
       "type": "git",

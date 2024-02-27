@@ -66,6 +66,7 @@ pub fn pipesInEventListener() void {
                     std.log.info("line: {s}\n", .{line});
                     if (mainPipeIn != null and mainPipeIn.?.handle == ev.ident) {
                         std.log.info("handle main pipe from bun\n", .{});
+                        // todo: do we need this and stdin.zig
                         handleLineFromMainPipe(line);
                     } else {
                         std.log.info("handle webview pipe from bun: udata:  {}\n", .{ev.udata});
@@ -210,11 +211,13 @@ fn processMessageQueue(context: ?*anyopaque) callconv(.C) void {
             return;
         };
 
+        std.log.info("request parsed", .{});
         const result = rpcHandlers.handleRequest(_request.value);
 
         if (result.errorMsg == null) {
             rpcStdout.sendResponseSuccess(_request.value.id, result.payload);
         } else {
+            std.log.info("error sending", .{});
             rpcStdout.sendResponseError(_request.value.id, result.errorMsg.?);
         }
     } else if (std.mem.eql(u8, msgType, "message")) {

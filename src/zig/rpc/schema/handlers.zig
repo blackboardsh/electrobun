@@ -25,10 +25,12 @@ pub fn createWindow(args: rpcSchema.BunSchema.requests.createWindow.args) Reques
 }
 
 pub fn createWebview(args: rpcSchema.BunSchema.requests.createWebview.args) RequestResult {
+    // std.log.info("createWebview handler preload {s}", .{args.preload});
     webview.createWebview(.{
         .id = args.id,
         .url = args.url,
         .html = args.html,
+        .preload = args.preload,
         .frame = .{
             .x = args.frame.x,
             .y = args.frame.y,
@@ -90,7 +92,7 @@ pub const handlers = rpcSchema.Handlers{
 const BunRequests = rpcSchema.BunSchema.requests;
 pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
     const method = request.method;
-
+    std.log.info("hanlde request {s}", .{method});
     if (strEql(method, "createWindow")) {
         return parseArgsAndCall(handlers.createWindow, BunRequests.createWindow.args, request.params);
     } else if (strEql(method, "setTitle")) {
@@ -113,6 +115,8 @@ pub fn parseArgsAndCall(handler: anytype, argSchema: anytype, unparsedArgs: anyt
         std.log.info("Error casting parsed json to zig type from stdin createWindow - {}: \n", .{err});
         return RequestResult{ .errorMsg = "failed to parse args", .payload = null };
     };
+
+    std.log.info("parse and call", .{});
 
     return handler(parsedArgs.value);
 }
