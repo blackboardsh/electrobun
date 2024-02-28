@@ -12,9 +12,7 @@ const application = @import("macos/application.zig");
 const alloc = std.heap.page_allocator;
 
 pub fn main() !void {
-    std.log.info("main starting", .{});
     try rpc.init();
 
-    std.log.info("rpc initialized", .{});
     application.startAppkitGuiEventLoop();
 }

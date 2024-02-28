@@ -244,7 +244,6 @@ var createStdioTransport = function(proc) {
     send(message) {
       try {
         const messageString = JSON.stringify(message) + "\n";
-        console.log("bun: sending event string", messageString);
         inStream.write(messageString);
       } catch (error) {
         console.error("bun: failed to serialize message to zig", error);
@@ -261,17 +260,15 @@ var createStdioTransport = function(proc) {
               break;
             buffer += new TextDecoder().decode(value);
             let eolIndex;
-            console.log("bun: received chunk", buffer);
             while ((eolIndex = buffer.indexOf("\n")) >= 0) {
               const line = buffer.slice(0, eolIndex).trim();
               buffer = buffer.slice(eolIndex + 1);
               if (line) {
                 try {
                   const event2 = JSON.parse(line);
-                  console.log("received from zig: ", event2);
                   handler(event2);
                 } catch (error) {
-                  console.log("zig: ", line);
+                  console.error("zig: ", line);
                 }
               }
             }
@@ -287,7 +284,6 @@ var createStdioTransport = function(proc) {
   };
 };
 var webviewBinaryPath = join(import.meta.dir, "..", "native", "webview");
-console.log(webviewBinaryPath);
 var zigProc = Bun.spawn([webviewBinaryPath], {
   stdin: "pipe",
   stdout: "pipe",
@@ -312,7 +308,6 @@ var zigRPC = createRPC({
   transport: createStdioTransport(zigProc),
   requestHandler: {
     decideNavigation: ({ webviewId, url }) => {
-      console.log("decide navigation request handler", webviewId, url);
       const willNavigate = eventEmitter_default.events.webview.willNavigate({ url, webviewId });
       let result;
       result = eventEmitter_default.emitEvent(willNavigate);
@@ -363,7 +358,6 @@ class BrowserView {
     this.html = options.html || defaultOptions.html;
     this.preload = options.preload || defaultOptions.preload;
     this.frame = options.frame ? { ...defaultOptions.frame, ...options.frame } : { ...defaultOptions.frame };
-    console.log("bun: creating webview options", options);
     this.rpc = options.rpc;
     this.init();
   }
@@ -405,12 +399,6 @@ class BrowserView {
     const outStream = fs2.createReadStream(webviewPipeOut, {
       flags: "r"
     });
-    outStream.on("data", (chunk) => {
-      console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
-    });
-    outStream.on("error", (err) => {
-      console.error("Error:", err);
-    });
     this.outStream = outStream;
     if (this.rpc) {
       this.rpc.setTransport(this.createTransport());
@@ -422,7 +410,6 @@ class BrowserView {
     this.executeJavascript(wrappedMessage);
   }
   executeJavascript(js) {
-    console.log("bun: sending js to execute in webview: ", js);
     this.inStream.write(js + "\n");
   }
   loadURL(url) {
@@ -443,7 +430,6 @@ class BrowserView {
       send(message) {
         try {
           const messageString = JSON.stringify(message);
-          console.log("bun: sending event string to webview", messageString);
           that.sendMessageToWebview(messageString);
         } catch (error) {
           console.error("bun: failed to serialize message to webview", error);
@@ -453,20 +439,16 @@ class BrowserView {
         let buffer = "";
         that.outStream.on("data", (chunk) => {
           buffer += chunk.toString();
-          console.log(`'''''' on chunk`, chunk.toString());
-          console.log(`'''''' on chunk`, buffer);
-          console.log(`'''' eol index`, buffer.indexOf("\n"));
           let eolIndex;
           while ((eolIndex = buffer.indexOf("\n")) >= 0) {
             const line = buffer.slice(0, eolIndex).trim();
             buffer = buffer.slice(eolIndex + 1);
-            console.log("found line: ", line);
             if (line) {
               try {
                 const event2 = JSON.parse(line);
                 handler(event2);
               } catch (error) {
-                console.log("webview: ", line);
+                console.error("webview: ", line);
               }
             }
           }
@@ -572,21 +554,21 @@ var Electrobun = {
 };
 var bun_default = Electrobun;
 
-// src/index.ts
-console.log("hi3");
+// src/bun/index.ts
 var myWebviewRPC = createRPC({
   maxRequestTime: 5000,
   requestHandler: {
     doMoreMath: ({ a, b }) => {
-      console.log("doing more math in example/index.ts", a, b);
+      console.log("\n\n\n\n");
+      console.log(`win1 webview asked me to do more math with: ${a} and ${b}`);
       return a + b;
     },
-    log: (msg) => {
-      console.log("log from webview", msg);
+    logToBun: ({ msg }) => {
+      console.log("\n\nWebview asked to logToBun: ", msg, "\n\n");
     }
   }
 });
-var win2 = new BrowserWindow({
+var win = new BrowserWindow({
   title: "my url window",
   url: "views://mainview/index.html",
   frame: {
@@ -597,61 +579,47 @@ var win2 = new BrowserWindow({
   },
   rpc: myWebviewRPC
 });
-win2.setTitle("url browserwindow");
-var win = new BrowserWindow({
+win.setTitle("url browserwindow");
+var wikiWindow = new BrowserWindow({
   title: "my url window",
-  preload: "views://mainview/index.js",
+  url: "https://en.wikipedia.org/wiki/Special:Random",
+  preload: "views://myextension/preload.js",
   frame: {
     width: 1800,
     height: 600,
     x: 1000,
     y: 0
   },
-  html: `
-        <html>
-            <head></head>
-            <body>
-                <script>
-                    // NOTE: do not use bunBridge.postMessage directly, if you forget the newline at the end
-                    // it will break IPC
-                    // window.webkit.messageHandlers.bunBridge.postMessage("Hello from JavaScript!");                
-                    window.electrobun.bunBridge("Hello from bun bridge!");
-                </script>
-
-                
-                <h1>hi</h1>
-            </body>
-        </html>
-        `,
-  rpc: myWebviewRPC
+  rpc: createRPC({
+    maxRequestTime: 5000,
+    requestHandler: {}
+  })
 });
 bun_default.events.on("will-navigate", (e) => {
-  console.log("example global will navigate handler", e.data.url, e.data.windowId);
+  console.log("example global will navigate handler", e.data.url, e.data.webviewId);
   e.response = { allow: true };
 });
-win.webview.on("will-navigate", (e) => {
-  console.log("example webview will navigate handler", e.data.url, e.data.windowId);
+wikiWindow.webview.on("will-navigate", (e) => {
+  console.log("example webview will navigate handler", e.data.url, e.data.webviewId);
   if (e.responseWasSet && e.response.allow === false) {
     e.response.allow = true;
   }
 });
-win.setTitle("New title from bun");
-console.log("-------> setting timeout\n\n\n\n\n");
+wikiWindow.setTitle("New title from bun");
 setTimeout(() => {
-  console.log("executing javascript");
-  win.webview.executeJavascript('document.body.innerHTML = "wow yeah! . !";');
-  win2.webview.executeJavascript('document.body.innerHTML = "wow yeah2! . !";');
+  win.webview.executeJavascript('document.body.innerHTML = "executing random js in win2 webview";');
   setTimeout(() => {
-    console.time("doMath");
-    console.log("-------> do math");
-    win.webview.rpc.request.doMath({ a: 5, b: 3 }).then((result) => {
-      console.timeEnd("doMath");
-      win2.webview.executeJavascript(`document.body.innerHTML += "------>do math result ${result}";`);
-      console.log("doMath result", result);
-      console.log("_+_+_+_+_+_+_+_+_+ doMath result", result);
+    wikiWindow.webview.rpc.request.getTitle().then((result) => {
+      console.log("\n\n\n\n");
+      console.log(`visiting wikipedia article for: ${result}`);
+      console.log("\n\n\n\n");
     }).catch((err) => {
-      win2.webview.executeJavascript(`document.body.innerHTML += "------>do math error ${err.msg}";`);
-      console.log("doMath error", err);
+      console.log("getTitle error", err);
+    });
+    win.webview.rpc.request.doMath({ a: 3, b: 4 }).then((result) => {
+      console.log("\n\n\n\n");
+      console.log(`I asked win1 webview to do math and it said: ${result}`);
+      console.log("\n\n\n\n");
     });
   }, 1000);
 }, 3000);

@@ -13,9 +13,7 @@ pub var webviewMap: WebviewMap = WebviewMap.init(alloc);
 const ViewsScheme = "views://";
 
 fn assetFileLoader(url: [*:0]const u8) objc.FileResponse {
-    std.log.info("assetFileLoader {s}", .{url});
     const relPath = url[ViewsScheme.len..std.mem.len(url)];
-
     const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
     const mimeType = getMimeType(relPath); // or dynamically determine MIME type
 
@@ -28,9 +26,6 @@ fn assetFileLoader(url: [*:0]const u8) objc.FileResponse {
 const WebviewType = struct {
     id: u32,
     handle: *anyopaque,
-
-    // url: ?[]const u8,
-    // html: ?[]const u8,
     frame: struct {
         width: f64,
         height: f64,
@@ -46,7 +41,6 @@ const WebviewType = struct {
     pub fn sendToBun(self: *WebviewType, message: []const u8) !void {
         if (self.bun_out_pipe) |result| {
             if (result) |file| {
-                std.log.info("Opened file successfully", .{});
                 // convert null terminated string to slice
                 // const message_slice: []const u8 = message[0..std.mem.len(message)];
                 // Write the message to the named pipe
@@ -69,8 +63,6 @@ const WebviewType = struct {
     }
 
     pub fn sendToWebview(self: *WebviewType, message: []const u8) void {
-        std.log.info("}}}}}}}}Sending message to webview: {s} {}", .{ message, self.handle });
-
         objc.evaluateJavaScriptWithNoCompletion(self.handle, toCString(message));
     }
 };
@@ -93,30 +85,19 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
 
         if (bunPipeInFileResult) |file| {
-            std.log.info("Opened file successfully", .{});
-            break :blk file; //std.fs.File{ .handle = fd };
+            break :blk file;
         } else |err| {
             std.debug.print("Failed to open file: {}\n", .{err});
             break :blk null;
         }
     };
 
-    std.log.info("Finished opening file descriptor", .{});
-
     if (bunPipeIn) |pipeInFile| {
-        // _ = pipeInFile;
         pipesin.addPipe(pipeInFile.handle, opts.id);
     }
 
     const bunPipeOutPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_out", .{opts.id});
-
-    std.log.info("concat result {s}", .{bunPipeOutPath});
-
     const bunPipeOutFileResult = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
-
-    std.log.info("after read", .{});
-
-    // const windowBounds = objc.getWindowBounds(objcWin);
     const objcWebview = objc.createAndReturnWKWebView(.{
         // .frame = .{ //
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
@@ -131,15 +112,12 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     // Can only define functions inline in zig within a struct
     const delegate = objc.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
         fn decideNavigation(webviewId: u32, url: [*:0]const u8) bool {
-            std.log.info("???????????????????????????????????????????????Deciding navigation for URL: {s}", .{url});
-            std.log.info("web voo id: {}", .{webviewId});
             // todo: right now this reaches a generic rpc request, but it should be attached
             // to this specific webview's pipe so navigation handlers can be attached to specific webviews
             const _response = rpc.request.decideNavigation(.{
                 .webviewId = webviewId,
                 .url = fromCString(url),
             });
-            std.log.info("response from rpc: {}", .{_response});
 
             return _response.allow;
         }
@@ -157,17 +135,11 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
             webview.sendToBun(fromCString(message)) catch |err| {
                 std.debug.print("Failed to send message to bun: {}\n", .{err});
             };
-
-            // webview.sendToBun("\n") catch |err| {
-            //     std.debug.print("Failed to send message to bun: {}\n", .{err});
-            // };
         }
     }.HandlePostMessageCallback);
 
     const _webview = WebviewType{ //
         .id = opts.id,
-        // .url = opts.url,
-        // .html = opts.html,
         .frame = .{
             .width = opts.frame.width,
             .height = opts.frame.height,
@@ -185,14 +157,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         std.log.info("Error putting webview into hashmap: ", .{});
         return;
     };
-
-    // todo: I think you can only load webview once it's added to a window
-    // so will need to call this RPC from bun
-    // if (opts.url) |url| {
-    //     objc.loadURLInWebView(objcWebview, toCString(url));
-    // } else if (opts.html) |html| {
-    //     objc.loadHTMLInWebView(objcWebview, toCString(html));
-    // }
 }
 
 // todo: move everything to cStrings or non-CStrings. just pick one.
@@ -300,11 +264,8 @@ pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
     // url: 'assets://%2E%2E/bun/index.js',
     // url: 'assets:////Users/yoav/code/electrobun/example/build/bun/index.js', ///Users/yoav/code/electrobun/example/build/bun/index.js
     if (relativePath[0] == '.' and relativePath[1] == '.') {
-        std.log.info("Invalid path: \nrelativePath: {s}\nresolvedPath: {s}\njoinedPath: {s}", .{ relativePath, resolvedPath, joinedPath });
         return error.InvalidPath;
     }
-
-    std.log.info("resolved path: \nrelativePath: {s}\nresolvedPath: {s}\njoinedPath: {s}", .{ relativePath, resolvedPath, joinedPath });
 
     const file = try std.fs.cwd().openFile(resolvedPath, .{});
     defer file.close();
@@ -315,16 +276,12 @@ pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
     // Read the file contents into the allocated buffer
     _ = try file.readAll(fileContents);
 
-    std.log.info("filecontents: {s}", .{fileContents});
-
     return fileContents;
 }
 
 // todo: move to string utils
 pub fn getMimeType(filePath: []const u8) []const u8 {
     const extension = std.fs.path.extension(filePath);
-
-    std.log.info("extension: {s}", .{extension});
 
     if (strEql(extension, ".html")) {
         return "text/html";

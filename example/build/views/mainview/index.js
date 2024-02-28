@@ -203,10 +203,9 @@ class Electroview {
       send(message) {
         try {
           const messageString = JSON.stringify(message);
-          document.body.innerHTML += "sending message to bun: " + messageString + "\n";
           that.bunBridge(messageString);
         } catch (error) {
-          document.body.innerHTML += "failed to serialize message to bun:  \n";
+          console.error("bun: failed to serialize message to webview", error);
         }
       },
       registerHandler(handler) {
@@ -215,7 +214,6 @@ class Electroview {
     };
   }
   bunBridge(msg) {
-    document.body.innerHTML += "bunBRIDGE]\n" + msg;
     window.webkit.messageHandlers.bunBridge.postMessage(msg);
   }
   receiveMessageFromBun(msg) {
@@ -231,22 +229,18 @@ var ElectrobunView = {
 var browser_default = ElectrobunView;
 
 // src/mainview/index.ts
-console.log("script loaded into webview");
-setTimeout(() => {
-  document.body.innerHTML += "script loaded into webview";
-}, 1000);
 var rpc2 = createRPC({
   requestHandler: {
     doMath: ({ a, b }) => {
-      document.body.innerHTML += "in do math handler\n" + a + ":::::" + b;
+      document.body.innerHTML += `bun asked me to do math with ${a} and ${b}\n`;
       return a + b;
     }
   }
 });
 var electrobun = new browser_default.Electroview({ rpc: rpc2 });
 setTimeout(() => {
-  document.body.innerHTML += "sending doMoreMath request\n";
   electrobun.rpc.request.doMoreMath({ a: 9, b: 8 }).then((result) => {
-    document.body.innerHTML += "++++++++oMoreMath result: " + result;
+    document.body.innerHTML += `I asked bun to do more math and it said ${result}\n`;
   });
+  electrobun.rpc.request.logToBun({ msg: "hello from webview" });
 }, 5000);

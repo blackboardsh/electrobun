@@ -33,7 +33,6 @@ const defaultOptions: BrowserViewOptions = {
 }
 
 
-
 export class BrowserView {
     id: number = nextWebviewId++;
     url: string | null = null;
@@ -58,53 +57,32 @@ export class BrowserView {
         this.url = options.url || defaultOptions.url;
         this.html = options.html || defaultOptions.html;
         this.preload = options.preload || defaultOptions.preload;
-        this.frame = options.frame ? {...defaultOptions.frame, ...options.frame} : {...defaultOptions.frame};
-
-        console.log('bun: creating webview options', options)
+        this.frame = options.frame ? {...defaultOptions.frame, ...options.frame} : {...defaultOptions.frame};        
         this.rpc = options.rpc;
-        
 
         this.init();
     }
 
-    init() {
-                   
-    
-           	
-        
-            // inStream.on('data', (chunk) => {
-            //     console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
-            // });	
-            
-            // inStream.on('error', (err) => {
-            //     console.error('Error:', err);
-            // });
-            
-            // inStream.write('hello from bun through named pipe\n');
-            // inStream.end();
-    
-    
-            zigRPC.request.createWebview({
-                id: this.id,                
-                url: this.url,
-                html: this.html,
-                preload: this.preload,
-                frame: {
-                    width: this.frame.width,
-                    height: this.frame.height,
-                    x: this.frame.x,
-                    y: this.frame.y,
-                }
-            })
-    
-            this.createStreams();
+    init() {                  
+        zigRPC.request.createWebview({
+            id: this.id,                
+            url: this.url,
+            html: this.html,
+            preload: this.preload,
+            frame: {
+                width: this.frame.width,
+                height: this.frame.height,
+                x: this.frame.x,
+                y: this.frame.y,
+            }
+        })
+
+        this.createStreams();
 
         BrowserViewMap[this.id] = this;
     }
 
     createStreams() {
-// todo (yoav): wait for window/webview to be created		
-            // todo (yoav): track ids for webviews as well
             const webviewPipe = `/private/tmp/electrobun_ipc_pipe_${this.id}_1`;
             const webviewPipeIn = webviewPipe + '_in';
             const webviewPipeOut = webviewPipe + '_out';
@@ -141,21 +119,7 @@ export class BrowserView {
     
     const outStream = fs.createReadStream(webviewPipeOut, {
         flags: 'r', 		
-    });
-    
-    // todo (yoav): we may not need these listeners since we have rpc transport
-    outStream.on('data', (chunk) => {
-        // todo (yoav): implemnt a proper reader up to \n
-        // when event is read and parsed it should emit an webview onMessage event
-        // it should also tie into webview's RPC anywhere types and handlers
-
-        // it needs to also reponse, maybe emit different events for requests and messages
-        console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
-    });	
-    
-    outStream.on('error', (err) => {
-        console.error('Error:', err);
-    });
+    });       
 
     this.outStream = outStream;
 
@@ -164,15 +128,14 @@ export class BrowserView {
         }
     }
 
-    sendMessageToWebview(jsonMessage) {
-        
+    sendMessageToWebview(jsonMessage) {        
         const stringifiedMessage = typeof jsonMessage === 'string' ? jsonMessage : JSON.stringify(jsonMessage);
+        // todo (yoav): make this a shared const with the browser api
         const wrappedMessage = `window.__electrobun.receiveMessageFromBun(${stringifiedMessage})`;
         this.executeJavascript(wrappedMessage);
     }
 
-    executeJavascript(js: string) {
-        console.log("bun: sending js to execute in webview: ", js)
+    executeJavascript(js: string) {        
         this.inStream.write(js + '\n');
     }
 
@@ -202,8 +165,7 @@ export class BrowserView {
             send(message) {
                 // todo (yoav): note: this is the same as the zig transport
                 try {
-                    const messageString = JSON.stringify(message);
-                    console.log('bun: sending event string to webview', messageString)
+                    const messageString = JSON.stringify(message);                    
                     that.sendMessageToWebview(messageString);
                 } catch (error) {
                     console.error('bun: failed to serialize message to webview', error)
@@ -213,79 +175,23 @@ export class BrowserView {
                 let buffer = '';
                 // todo (yoav): readStream function is identical to the one in zig.ts
                 that.outStream.on('data', (chunk) => {
-                    buffer += chunk.toString();
-                    console.log(`'''''' on chunk`, chunk.toString())
-                    console.log(`'''''' on chunk`, buffer)
-                    console.log(`'''' eol index`, buffer.indexOf('\n'))
+                    buffer += chunk.toString();                    
                     let eolIndex;
 
                     while ((eolIndex = buffer.indexOf('\n')) >= 0) {
                         const line = buffer.slice(0, eolIndex).trim();
-                        buffer = buffer.slice(eolIndex + 1);
-                        console.log('found line: ', line)
+                        buffer = buffer.slice(eolIndex + 1);                        
                         if (line) {
                             try {
                                 const event = JSON.parse(line);
                                 handler(event)										
                             } catch (error) {
                                 // Non-json things are just bubbled up to the console.
-                                console.log('webview: ', line)
+                                console.error('webview: ', line)
                             }                    
                         }
-                    }
-
-                    // // todo (yoav): implemnt a proper reader up to \n
-                    // // when event is read and parsed it should emit an webview onMessage event
-                    // // it should also tie into webview's RPC anywhere types and handlers
-            
-                    // // it needs to also reponse, maybe emit different events for requests and messages
-                    // console.log(`Received on named pipe <><>><><><><>: ${chunk.toString()}`);
-
-                    // const chunkString = chunk.toString();
-
-                    // try {
-                    //     const event = JSON.parse(chunkString);
-                    //     handler(event)										
-                    // } catch (error){
-                    //     console.log('bun: received non-json chunk', chunkString);
-                    // }
-                    
-                });	
-                
-                // async function readStream(stream) {
-                //     const reader = stream.getReader();
-                //     let buffer = '';
-                
-                //     try {
-                //         while (true) {
-                //             const { done, value } = await reader.read();
-                //             if (done) break;
-                //             buffer += new TextDecoder().decode(value);
-                //             let eolIndex;
-                //             console.log("bun: received chunk", buffer)
-                //             // Process each line contained in the buffer
-                //             while ((eolIndex = buffer.indexOf('\n')) >= 0) {
-                //                 const line = buffer.slice(0, eolIndex).trim();
-                //                 buffer = buffer.slice(eolIndex + 1);
-                //                 if (line) {
-                //                     try {
-                //                         const event = JSON.parse(line);
-                //                         handler(event)										
-                //                     } catch (error) {
-                //                         // Non-json things are just bubbled up to the console.
-                //                         console.log('zig: ', line)
-                //                     }                    
-                //                 }
-                //             }
-                //         }
-                //     } catch (error) {
-                //         console.error("Error reading from stream:", error);
-                //     } finally {
-                //         reader.releaseLock();
-                //     }
-                // }
-            
-                // readStream(this.outStream);
+                    }                                       
+                });	                              
             }
         }
       }
@@ -297,5 +203,4 @@ export class BrowserView {
       static getAll() {
         return Object(BrowserViewMap).values();
       }
-
 }

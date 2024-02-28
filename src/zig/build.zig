@@ -5,13 +5,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // const lib = b.addSharedLibrary(.{
-    //     .name = "webview",
-    //     .root_source_file = .{ .path = "main.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-
     // todo: should probably rename webview to something else
     const exe = b.addExecutable(.{
         .name = "webview",
@@ -32,9 +25,4 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("ObjcWrapper");
 
     b.installArtifact(exe);
-
-    // todo for future testing of the methods from cli can pass args like
-    // if (b.option(bool, "enable-demo", "install the demo too") orelse false) {
-    //     b.installArtifact(exe);
-    // }
 }

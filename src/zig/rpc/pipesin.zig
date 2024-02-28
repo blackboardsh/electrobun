@@ -26,7 +26,6 @@ pub fn pipesInEventListener() void {
         const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
 
         if (bunPipeInFileResult) |file| {
-            std.log.info("Opened file successfully", .{});
             break :blk file;
         } else |err| {
             std.debug.print("Failed to open file: {}\n", .{err});
@@ -34,9 +33,7 @@ pub fn pipesInEventListener() void {
         }
     };
 
-    // const stdInFd = std.io.getStdIn().handle;
     if (mainPipeIn) |pipeInFile| {
-        // _ = pipeInFile;
         addPipe(pipeInFile.handle, 0);
     }
 
@@ -45,31 +42,23 @@ pub fn pipesInEventListener() void {
 
     // Event loop
     while (true) {
-        // std.log.info("1::::::::::::::::::: ...", .{});
         const n = std.os.kevent(kqueue, changelist, &events, null) catch |err| {
             std.log.err("Error in kevent: {}", .{err});
             continue;
         };
 
-        std.log.info("2::::::::::::::::::: ...", .{});
-
         for (0..n) |i| {
-            // std.log.info("i::::::::::::::::::: ... {}", .{i});
             const ev = events[i];
             // Check ev.ident to see which fd has an event
             if (ev.filter == std.os.darwin.EVFILT_READ) {
-                std.log.info("e::::::::::::::::::: ... {any} {any}\n", .{ ev, std.os.darwin.EVFILT_READ });
                 var buffer: [1024]u8 = undefined;
                 const bytesRead = readLineFromPipe(&buffer, ev.ident);
 
                 if (bytesRead) |line| {
-                    std.log.info("line: {s}\n", .{line});
                     if (mainPipeIn != null and mainPipeIn.?.handle == ev.ident) {
-                        std.log.info("handle main pipe from bun\n", .{});
-                        // todo: do we need this and stdin.zig
+                        // todo: do we need both this and stdin.zig
                         handleLineFromMainPipe(line);
                     } else {
-                        std.log.info("handle webview pipe from bun: udata:  {}\n", .{ev.udata});
                         webview.sendLineToWebview(@intCast(ev.udata), line);
                     }
                 }
@@ -86,7 +75,6 @@ pub fn pipesInEventListener() void {
 }
 
 pub fn addPipe(fd: std.os.fd_t, webviewId: u32) void {
-    std.log.info("i::::::::::::::::::: ...FD {}\n", .{fd});
     var events: [10]std.os.Kevent = undefined;
     var event = std.os.Kevent{
         .ident = @as(usize, @intCast(fd)),
@@ -102,21 +90,16 @@ pub fn addPipe(fd: std.os.fd_t, webviewId: u32) void {
     var changes: [1]std.os.Kevent = undefined;
     changes[0] = event;
 
-    std.log.info("created kevent", .{});
-
     // Register the event
     const nev = std.os.kevent(kqueue, &changes, &events, null) catch |err| {
         std.log.err("Failed to register kqueue event: {}\n", .{err});
         return;
     };
 
-    std.log.info("Finished registering kevent", .{});
-
     if (nev == -1) {
         std.log.err("Failed to register kqueue event", .{});
         return;
     }
-    std.log.info("Finished adding pie", .{});
 }
 
 pub fn readLineFromPipe(buffer: []u8, fd: usize) ?[]const u8 {
@@ -131,7 +114,6 @@ pub fn readLineFromPipe(buffer: []u8, fd: usize) ?[]const u8 {
     const bytesRead = pipeReader.readUntilDelimiterOrEof(buffer, '\n') catch return null;
 
     if (bytesRead) |line| {
-        std.log.info("read line: {s}", .{line});
         return line;
     } else {
         return null;
@@ -139,26 +121,18 @@ pub fn readLineFromPipe(buffer: []u8, fd: usize) ?[]const u8 {
 }
 
 pub fn handleLineFromMainPipe(line: []const u8) void {
-    std.log.info("received line VIA EVENTS: {s}", .{line});
-
     const messageWithType = std.json.parseFromSlice(rpcTypes._RPCMessage, alloc, line, .{ .ignore_unknown_fields = true }) catch |err| {
         std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
         return;
     };
 
-    std.log.info("parsed line {s}", .{messageWithType.value.type});
     if (std.mem.eql(u8, messageWithType.value.type, "response")) {
-
         // todo: handle _RPCResponsePacketError
         const _response = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, line, .{}) catch |err| {
             std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
             return;
         };
         // handle response
-        // _response = payload.allow;
-
-        std.log.info("decide Navigation - {}", .{_response.value.payload.?});
-
         rpcStdout.setResponse(messageWithType.value.id, _response.value.payload);
     } else {
         // Handle UI events on main thread
@@ -175,19 +149,14 @@ pub fn handleLineFromMainPipe(line: []const u8) void {
         };
 
         dispatch.dispatch_async_f(dispatch.dispatch_get_main_queue(), null, processMessageQueue);
-
-        std.log.info("sending over to main thread", .{});
     }
 }
 
 fn processMessageQueue(context: ?*anyopaque) callconv(.C) void {
-    std.log.info("processMessageQueue on main thread", .{});
     _ = context;
 
     const line = messageQueue.orderedRemove(0);
     defer alloc.free(line);
-
-    std.log.info("parsed line on main thread {s}", .{line});
 
     // Do the main json parsing work on the stdin thread, add it to a queue, and then
     // process the generic jobs on the main thread
@@ -203,21 +172,17 @@ fn processMessageQueue(context: ?*anyopaque) callconv(.C) void {
         break :blk obj.string;
     };
 
-    std.log.info("parsed line main thread {s}", .{msgType});
-
     if (std.mem.eql(u8, msgType, "request")) {
         const _request = std.json.parseFromValue(rpcTypes._RPCRequestPacket, alloc, json.value, .{}) catch |err| {
             std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
             return;
         };
 
-        std.log.info("request parsed", .{});
         const result = rpcHandlers.handleRequest(_request.value);
 
         if (result.errorMsg == null) {
             rpcStdout.sendResponseSuccess(_request.value.id, result.payload);
         } else {
-            std.log.info("error sending", .{});
             rpcStdout.sendResponseError(_request.value.id, result.errorMsg.?);
         }
     } else if (std.mem.eql(u8, msgType, "message")) {

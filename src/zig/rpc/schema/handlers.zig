@@ -92,7 +92,7 @@ pub const handlers = rpcSchema.Handlers{
 const BunRequests = rpcSchema.BunSchema.requests;
 pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
     const method = request.method;
-    std.log.info("hanlde request {s}", .{method});
+
     if (strEql(method, "createWindow")) {
         return parseArgsAndCall(handlers.createWindow, BunRequests.createWindow.args, request.params);
     } else if (strEql(method, "setTitle")) {
@@ -115,8 +115,6 @@ pub fn parseArgsAndCall(handler: anytype, argSchema: anytype, unparsedArgs: anyt
         std.log.info("Error casting parsed json to zig type from stdin createWindow - {}: \n", .{err});
         return RequestResult{ .errorMsg = "failed to parse args", .payload = null };
     };
-
-    std.log.info("parse and call", .{});
 
     return handler(parsedArgs.value);
 }

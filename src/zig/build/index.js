@@ -203,10 +203,9 @@ class Electroview {
       send(message) {
         try {
           const messageString = JSON.stringify(message);
-          document.body.innerHTML += "sending message to bun: " + messageString + "\n";
           that.bunBridge(messageString);
         } catch (error) {
-          document.body.innerHTML += "failed to serialize message to bun:  \n";
+          console.error("bun: failed to serialize message to webview", error);
         }
       },
       registerHandler(handler) {
@@ -215,7 +214,6 @@ class Electroview {
     };
   }
   bunBridge(msg) {
-    document.body.innerHTML += "bunBRIDGE]\n" + msg;
     window.webkit.messageHandlers.bunBridge.postMessage(msg);
   }
   receiveMessageFromBun(msg) {

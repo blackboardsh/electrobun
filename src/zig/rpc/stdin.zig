@@ -1,3 +1,5 @@
+// todo: I think we can delete this file now
+
 const dispatch = @cImport({
     @cInclude("dispatch/dispatch.h");
 });
@@ -20,14 +22,11 @@ pub fn stdInListener() void {
     while (true) {
         const bytesRead = stdin.readUntilDelimiterOrEof(&buffer, '\n') catch continue;
         if (bytesRead) |line| {
-            std.log.info("received line: {s}", .{line});
-
             const messageWithType = std.json.parseFromSlice(rpcTypes._RPCMessage, alloc, line, .{ .ignore_unknown_fields = true }) catch |err| {
                 std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
                 continue;
             };
 
-            std.log.info("parsed line {s}", .{messageWithType.value.type});
             if (std.mem.eql(u8, messageWithType.value.type, "response")) {
 
                 // todo: handle _RPCResponsePacketError

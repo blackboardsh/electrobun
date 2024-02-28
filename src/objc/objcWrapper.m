@@ -20,18 +20,12 @@ typedef FileResponse (*zigStartURLSchemeTaskCallback)(const char* url);
 
 - (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
     NSURL *url = urlSchemeTask.request.URL;    
-    
-    NSLog(@"Starting URL scheme task for URL: %@", url);
+        
     // todo: the zig handler should return the file to here, and objc can send it back to the webview
-    if (self.assetFileLoader) {
-        // const char *fileContents = self.assetFileLoader(url.absoluteString.UTF8String);
-        // NSData *data = [NSData dataWithBytes:fileContents length:strlen(fileContents)];
-        NSLog(@"assetFileLoader called");
-        FileResponse fileResponse = self.assetFileLoader(url.absoluteString.UTF8String);
-        NSLog(@"assetFileLoader result");
+    if (self.assetFileLoader) {        
+        FileResponse fileResponse = self.assetFileLoader(url.absoluteString.UTF8String);        
         
-        NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:strlen(fileResponse.fileContents)];
-        
+        NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:strlen(fileResponse.fileContents)];        
         // Determine MIME type from the response, or default if null
         NSString *mimeType = fileResponse.mimeType ? [NSString stringWithUTF8String:fileResponse.mimeType] : @"application/octet-stream";
         
@@ -58,10 +52,7 @@ typedef FileResponse (*zigStartURLSchemeTaskCallback)(const char* url);
 
 - (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
     NSURL *url = urlSchemeTask.request.URL;
-    NSLog(@"Stopping URL scheme task for URL: %@", url);
-    // if (self.stopCallback) {
-    //     self.stopCallback(url.absoluteString.UTF8String);
-    // }
+    NSLog(@"Stopping URL scheme task for URL: %@", url);    
 }
 
 @end
@@ -95,15 +86,12 @@ typedef struct {
     BOOL HUDWindow;
 } WindowStyleMaskOptions;
 
-NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
-     NSLog(@"Passed style getwindowstylemaks<><><><>");
+NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {     
     NSUInteger mask = 0; 
-    if (options.Borderless) {
-        NSLog(@"Passed style BORDERLESS<><><><>");
+    if (options.Borderless) {        
         mask |= NSWindowStyleMaskBorderless;
     }
-    if (options.Titled)     {
-        NSLog(@"Passed style TITLED<><><>");
+    if (options.Titled)     {        
         mask |= NSWindowStyleMaskTitled;
     }
     if (options.Closable) {
@@ -156,11 +144,7 @@ WKWebView* createAndReturnWKWebView(NSRect frame, zigStartURLSchemeTaskCallback 
     schemeHandler.assetFileLoader = assetFileLoader;    
 
     [configuration setURLSchemeHandler:schemeHandler forURLScheme:@"views"];
-    retainObjCObject(schemeHandler);
-    NSLog(@"setting custom protoco scheme");
-    
-    // Define a default frame; you might want to parameterize this
-    // CGRect frame = CGRectMake(0, 0, 1800, 600); // Example frame
+    retainObjCObject(schemeHandler);        
 
     // Allocate and initialize the WKWebView
     WKWebView *webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
@@ -183,8 +167,6 @@ void loadHTMLInWebView(WKWebView *webView, const char *htmlString) {
     [webView loadHTMLString:htmlNSString baseURL:baseURL];
 }
 
-
-
 void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WKNavigationActionPolicy policy) {    
     if (decisionHandler != NULL) {
         decisionHandler(policy);
@@ -203,8 +185,7 @@ const char* getBodyFromScriptMessage(WKScriptMessage *message) {
 }
 
 // Add this to your existing .m file
-void evaluateJavaScriptWithNoCompletion(WKWebView *webView, const char *jsString) {
-    NSLog(@"?????????????????? inside evaluateJavaScriptWithNoCompletion objc");
+void evaluateJavaScriptWithNoCompletion(WKWebView *webView, const char *jsString) {    
     NSString *javaScript = [NSString stringWithUTF8String:jsString];
     [webView evaluateJavaScript:javaScript completionHandler:nil];
 }
@@ -218,15 +199,13 @@ void addPreloadScriptToWebView(WKWebView *webView, const char *scriptContent, BO
     // Injection time is set to atDocumentStart to ensure it runs before the page content loads
     WKUserScript *userScript = [[WKUserScript alloc] initWithSource:[NSString stringWithUTF8String:scriptContent]
                                                       injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                   forMainFrameOnly:forMainFrameOnly];
-    
+                                                   forMainFrameOnly:forMainFrameOnly];    
 
     // Add the user script to the content controller
     [webView.configuration.userContentController addUserScript:userScript];
 }
 
 // NSWindow
-
 typedef struct {
     NSRect frame;
     WindowStyleMaskOptions styleMask;
@@ -256,22 +235,14 @@ void setContentView(NSWindow *window, NSView *view) {
 }
 
 // todo: add addSubview function
-
-NSRect createNSRectWrapper(double x, double y, double width, double height) {
-    NSLog(@"Passed frame = x: %f, y: %f, width: %f, height: %f", x, y, width, height);
-    
+NSRect createNSRectWrapper(double x, double y, double width, double height) {    
     return NSMakeRect(x, y, width, height);
 }
-
-
 
 NSRect getWindowBounds(NSWindow *window) {
     NSView *contentView = [window contentView];
     return [contentView bounds];
 }
-
-
-
 
 // navigation delegate that 
 typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
@@ -283,9 +254,7 @@ typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
 
 @implementation MyNavigationDelegate
 
-- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
-    NSLog(@"?????????????????? inside navigation delegate objc");
-    // decisionHandler(WKNavigationActionPolicyAllow);
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {        
     NSURL *url = navigationAction.request.URL;
     BOOL shouldAllow = self.zigCallback(self.webviewId, url.absoluteString.UTF8String);
     decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);

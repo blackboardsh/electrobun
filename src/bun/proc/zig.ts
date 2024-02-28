@@ -6,22 +6,15 @@ import electrobunEventEmitter from '../events/eventEmitter';
 
 // Note: import.meta.dir is expected to be the /build/bun folder where user's bun index is bundled to
 const webviewBinaryPath = join(import.meta.dir, '..', 'native', 'webview');
-// const DYLD_LIBRARY_PATH = 'src/zig/build/';
-
-console.log(webviewBinaryPath)
 
 // todo (yoav): make sure process exits when this process exits
 // especially on error
 const zigProc = Bun.spawn([webviewBinaryPath], {
 	stdin: 'pipe',
-	stdout: 'pipe',
-	//  cwd: webviewPath,
+	stdout: 'pipe',	
 	env: {
 		...process.env,
-		ELECTROBUN_VIEWS_FOLDER: join(import.meta.dir, '..', 'views') ,
-		// Note: Tell the os which folders the zig process is allowed to look for 
-		// dynamic libraries in.
-		// DYLD_LIBRARY_PATH
+		ELECTROBUN_VIEWS_FOLDER: join(import.meta.dir, '..', 'views') ,		
 	}
 });
 
@@ -33,6 +26,7 @@ process.on("beforeExit", (code) => {
 	zigProc.kill();
   });
 
+// todo: this needs to be globally unique across all apps (including different electrobun apps, and different versions and builds of the same app)
 const mainPipe = `/private/tmp/electrobun_ipc_pipe_${'my-app-id'}_main`;
 
 try {
@@ -44,22 +38,15 @@ try {
 		flags: 'w', 		
 	});
 
-function createStdioTransport(proc): RPCTransport {
-	// let proc: any | null = null;
-
+function createStdioTransport(proc): RPCTransport {	
 	return {
 	  send(message) {		
 		try {										
-		const messageString = JSON.stringify(message) + "\n";
-		console.log('bun: sending event string', messageString)
-		inStream.write(messageString);
-		// inStream.flush();
-		// proc.stdin.write(messageString);
-		// proc.stdin.flush();
+		const messageString = JSON.stringify(message) + "\n";		
+		inStream.write(messageString);		
 		} catch (error) {
 			console.error('bun: failed to serialize message to zig', error)
-		}
-		
+		}		
 	  },
 	  registerHandler(handler) {
 
@@ -72,20 +59,18 @@ function createStdioTransport(proc): RPCTransport {
 					const { done, value } = await reader.read();
 					if (done) break;
 					buffer += new TextDecoder().decode(value);
-					let eolIndex;
-					console.log("bun: received chunk", buffer)
+					let eolIndex;					
 					// Process each line contained in the buffer
 					while ((eolIndex = buffer.indexOf('\n')) >= 0) {
 						const line = buffer.slice(0, eolIndex).trim();
 						buffer = buffer.slice(eolIndex + 1);
 						if (line) {
 							try {
-								const event = JSON.parse(line);
-								console.log('received from zig: ', event);
+								const event = JSON.parse(line);								
 								handler(event)										
 							} catch (error) {
 								// Non-json things are just bubbled up to the console.
-								console.log('zig: ', line)
+								console.error('zig: ', line)
 							}                    
 						}
 					}
@@ -99,10 +84,7 @@ function createStdioTransport(proc): RPCTransport {
 	
 		readStream(proc.stdout);
 	
-	  },
-	//   unregisterHandler() {
-	// 	// if (listener) channel.removeMessageListener(listener);
-	//   },
+	  },	
 	};
   }
 
@@ -185,15 +167,12 @@ type ZigSchema = RPCSchema<{
 			}
 		}
 	}
-
 }>
 
 const zigRPC = createRPC<BunSchema, ZigSchema>({
 	transport: createStdioTransport(zigProc),
 	requestHandler: {
-		decideNavigation: ({webviewId, url}) => {
-			console.log('decide navigation request handler', webviewId, url)
-
+		decideNavigation: ({webviewId, url}) => {			
 			const willNavigate = electrobunEventEmitter.events.webview.willNavigate({url, webviewId});
 
 			let result;

@@ -1,6 +1,4 @@
 import { zigRPC } from '../proc/zig'
-import * as fs from 'fs';
-import {execSync} from 'child_process';
 import electrobunEventEmitter from '../events/eventEmitter';
 import { BrowserView } from './BrowserView';
 import {type RPC} from 'rpc-anywhere'
@@ -38,8 +36,6 @@ const defaultOptions: WindowOptionsType = {
 
 const BrowserWindowMap = {};
 
-
-
 // todo (yoav): do something where the type extends the default schema
 // that way we can provide built-in requests/messages and devs can extend it
 
@@ -64,8 +60,6 @@ export class BrowserWindow {
 	// todo (yoav): make this an array of ids or something
 	webviewId: number
 
-
-
 	constructor(options: Partial<WindowOptionsType> = defaultOptions) {
 		this.title = options.title || 'New Window';
 		this.frame = options.frame ? {...defaultOptions.frame, ...options.frame} : {...defaultOptions.frame};
@@ -73,14 +67,10 @@ export class BrowserWindow {
 		this.html = options.html || null;	
 		this.preload = options.preload || null;		
 	
-		
 		this.init(options.rpc);
 	  }
 	
-	  init(rpc?: RPC<any, any>) {	
-		
-		
-
+	  init(rpc?: RPC<any, any>) {			
 		zigRPC.request.createWindow({
 			id: this.id,
 			title: this.title,
@@ -128,17 +118,12 @@ export class BrowserWindow {
 		this.title = title;
 		return zigRPC.request.setTitle({winId: this.id, title})
 	  }
-	
-	  
-	  
-
+		  	  
 	  // todo (yoav): move this to a class that also has off, append, prepend, etc.
 	  // name should only allow browserWindow events
 	  on(name, handler) {
 		const specificName = `${name}-${this.id}`;
 		electrobunEventEmitter.on(specificName, handler);
-	  }
-
-	  
+	  }	  
 }
 

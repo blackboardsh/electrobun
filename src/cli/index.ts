@@ -43,21 +43,6 @@ const config = getConfig();
 
 const buildFolder = join(projectRoot, config.build.outputFolder);
 
-// console.log('config', config);
-
-// const defaultBundleConfig = {
-//     minify: {
-//         whitespace: true,
-//         identifiers: true,
-//         syntax: true,
-//       },
-//     external: [],
-//     define: {
-
-//     },
-// }
-
-
 if (commandArg === 'init') {
     // todo (yoav): init a repo folder structure
     console.log('initializing electrobun project');
@@ -108,13 +93,13 @@ if (commandArg === 'init') {
         const viewDestFolder = join(buildFolder, 'views', viewName);
         
         if (!existsSync(viewDestFolder)) {
-            console.info('creating folder: ', viewDestFolder);
+            // console.info('creating folder: ', viewDestFolder);
             mkdirSync(viewDestFolder, {recursive: true});
         } else {
             console.error('continuing, but ', viewDestFolder, 'unexpectedly already exists in the build folder')
         }
 
-        console.info(`bundling ${viewSource} to ${viewDestFolder} with config: `, viewConfig);
+        // console.info(`bundling ${viewSource} to ${viewDestFolder} with config: `, viewConfig);
 
         const buildResult = await Bun.build({
             entrypoints: [viewSource],
@@ -143,12 +128,12 @@ if (commandArg === 'init') {
         const destFolder = dirname(destination);
 
         if (!existsSync(destFolder)) {
-            console.info('creating folder: ', destFolder);
+            // console.info('creating folder: ', destFolder);
             mkdirSync(destFolder, {recursive: true});
         }
         
         // todo (yoav): add ability to swap out BUILD VARS
-        console.log('copying', source, 'to', destination);
+        // console.log('copying', source, 'to', destination);
         cpSync(source, destination, {recursive: true, dereference: true})
     }
 
@@ -159,14 +144,11 @@ if (commandArg === 'init') {
     const zigNativeBinaryDestination = join(buildFolder, 'native', 'webview');
     const destFolder = dirname(zigNativeBinaryDestination);
     if (!existsSync(destFolder)) {
-        console.info('creating folder: ', destFolder);
+        // console.info('creating folder: ', destFolder);
         mkdirSync(destFolder, {recursive: true});
     }
-    console.log('copying', zigNativeBinarySource, 'to', zigNativeBinaryDestination);
-    cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {recursive: true});
-
-    // compile the project
-    console.log('building electrobun project');
+    // console.log('copying', zigNativeBinarySource, 'to', zigNativeBinaryDestination);
+    cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {recursive: true});    
 
 } else if (commandArg === 'dev') {
     // run the project in dev mode
@@ -174,7 +156,7 @@ if (commandArg === 'init') {
     // Note: we want to use the version of bun that's packaged with electrobun
     const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
     const mainPath = join(buildFolder, 'bun', 'index.js');
-    console.log('running ', bunPath, mainPath);
+    // console.log('running ', bunPath, mainPath);
     Bun.spawn([bunPath, mainPath], {
         stdin: 'inherit',
         stdout: 'inherit',
@@ -183,8 +165,6 @@ if (commandArg === 'init') {
         }
         
     });
-
-
 
     // support multiple js files, each built differently with different externals and different names
     // support preload scripts
@@ -196,9 +176,6 @@ if (commandArg === 'init') {
       // by default, webviews given a views:// url should be able to access views
       // any other url should not unless user specifies it with enableViewsScheme: true
       // assets:// never maps to build/native or build/bun
-
-
-
 } 
 
 
