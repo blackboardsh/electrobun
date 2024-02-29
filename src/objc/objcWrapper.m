@@ -130,14 +130,14 @@ NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
 
 // application
 void runNSApplication() {
-    [[NSApplication sharedApplication] run];    
+    [[NSApplication sharedApplication] run];        
 }
 
 
 // WKWebView
 WKWebView* createAndReturnWKWebView(NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader) {
     // Create a default WKWebViewConfiguration
-    WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+    WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];    
 
     // wire up views:// schema handler
     MyURLSchemeHandler *schemeHandler = [[MyURLSchemeHandler alloc] init];
@@ -146,8 +146,13 @@ WKWebView* createAndReturnWKWebView(NSRect frame, zigStartURLSchemeTaskCallback 
     [configuration setURLSchemeHandler:schemeHandler forURLScheme:@"views"];
     retainObjCObject(schemeHandler);        
 
+    // open devtools
+    // Enable Developer Extras (right click to inspect element)
+    [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+
     // Allocate and initialize the WKWebView
     WKWebView *webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
+    
 
     retainObjCObject(webView);
     // Perform any additional setup here
@@ -215,13 +220,13 @@ NSWindow *createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams 
     NSWindow *window = [[NSWindow alloc] initWithContentRect:config.frame
                                                    styleMask:getNSWindowStyleMask(config.styleMask)
                                                      backing:NSBackingStoreBuffered
-                                                       defer:YES];    
+                                                       defer:YES];                                                              
 
     return window; 
 }
 
 void makeNSWindowKeyAndOrderFront(NSWindow *window) {
-    [window makeKeyAndOrderFront:nil];
+    [window makeKeyAndOrderFront:nil];        
 }
 
 void setNSWindowTitle(NSWindow *window, const char *title) {    
@@ -304,3 +309,6 @@ MyScriptMessageHandler* addScriptMessageHandlerWithCallback(WKWebView *webView, 
 
     return handler;
 }
+
+
+

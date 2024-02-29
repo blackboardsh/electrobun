@@ -1,6 +1,6 @@
 import {join, dirname} from 'path';
-import {existsSync, readFileSync, cpSync, rmdirSync, mkdirSync} from 'fs';
-import {execSync} from 'child_process';
+import {existsSync, readFileSync, cpSync, rmdirSync, mkdirSync, chmodSync} from 'fs';
+import {fork} from 'child_process';
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -59,14 +59,54 @@ if (commandArg === 'init') {
 
     // bundle bun to build/bun
     const bunConfig = config.build.bun;
-    const bunSource = join(projectRoot, bunConfig.entrypoint);
-    const bunDestFolder = join(buildFolder, "bun");
+    const bunSource = join(projectRoot, bunConfig.entrypoint);    
+    
 
     if (!existsSync(bunSource)) {
         console.error(`failed to bundle ${bunSource} because it doesn't exist.\n You need a config.build.bun.entrypoint source file to build.`);
         process.exit(1);
     }
 
+    // build macos bundle
+    const appBundleFolderPath = join(buildFolder, 'dev.app');
+    const appBundleFolderContentsPath = join(appBundleFolderPath, 'Contents');
+    const appBundleMacOSPath = join(appBundleFolderContentsPath, 'MacOS');
+    
+    mkdirSync(appBundleMacOSPath, {recursive: true});
+
+    // const bundledBunPath = join(appBundleMacOSPath, 'bun');
+    // cpSync(bunPath, bundledBunPath);    
+
+    const InfoPlistContents = `<?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+        <key>CFBundleExecutable</key>
+        <string>MyApp</string>
+        <key>CFBundleIdentifier</key>
+        <string>com.example.myapp</string>
+        <key>CFBundleName</key>
+        <string>MyApp</string>
+        <key>CFBundleVersion</key>
+        <string>1.0</string>
+        <key>CFBundlePackageType</key>
+        <string>APPL</string>
+    </dict>
+    </plist>`
+
+    Bun.write(join(appBundleFolderContentsPath, 'Info.plist'), InfoPlistContents);
+
+    const LauncherContents = `#!/bin/bash
+cd "$(dirname "$0")"/bun
+    
+./bun .
+    `;
+
+    Bun.write(join(appBundleMacOSPath, 'MyApp'), LauncherContents);
+    chmodSync(join(appBundleMacOSPath, 'MyApp'), '755');
+    
+    
+    const bunDestFolder = join(appBundleMacOSPath, "bun");
     const buildResult = await Bun.build({
         entrypoints: [bunSource],
         outdir: bunDestFolder,
@@ -78,6 +118,16 @@ if (commandArg === 'init') {
         console.error('failed to build', bunSource, buildResult.logs);
         process.exit(1);
     }
+    const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
+    // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
+    // in node_modules, so we have to dereference here to get the actual binary in the bundle.
+    cpSync(bunPath, join(bunDestFolder, 'bun'), {dereference: true});
+    // const singleFileExecutablePath = join(appBundleMacOSPath, 'myApp');
+    
+    // const builderProcess = Bun.spawnSync([bunPath, 'build', bunSource, '--compile', '--outfile', singleFileExecutablePath])
+
+    // console.log('builderProcess', builderProcess.stdout.toString(), builderProcess.stderr.toString());
+    
 
 
     // bundle all the bundles
@@ -90,7 +140,7 @@ if (commandArg === 'init') {
             continue;
         }
 
-        const viewDestFolder = join(buildFolder, 'views', viewName);
+        const viewDestFolder = join(appBundleMacOSPath, 'views', viewName);
         
         if (!existsSync(viewDestFolder)) {
             // console.info('creating folder: ', viewDestFolder);
@@ -124,7 +174,7 @@ if (commandArg === 'init') {
             continue;
         }
 
-        const destination = join(buildFolder, config.build.copy[relSource]);
+        const destination = join(appBundleMacOSPath, config.build.copy[relSource]);
         const destFolder = dirname(destination);
 
         if (!existsSync(destFolder)) {
@@ -141,7 +191,7 @@ if (commandArg === 'init') {
     
     // copy native bindings
     const zigNativeBinarySource = join(projectRoot, 'node_modules', 'electrobun', 'src', 'zig', 'zig-out', 'bin', 'webview');
-    const zigNativeBinaryDestination = join(buildFolder, 'native', 'webview');
+    const zigNativeBinaryDestination = join(appBundleMacOSPath, 'native', 'webview');
     const destFolder = dirname(zigNativeBinaryDestination);
     if (!existsSync(destFolder)) {
         // console.info('creating folder: ', destFolder);
@@ -150,21 +200,25 @@ if (commandArg === 'init') {
     // console.log('copying', zigNativeBinarySource, 'to', zigNativeBinaryDestination);
     cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {recursive: true});    
 
+    
+
 } else if (commandArg === 'dev') {
     // run the project in dev mode
     // Note: this cli will be a bun single-file-executable
     // Note: we want to use the version of bun that's packaged with electrobun
-    const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
-    const mainPath = join(buildFolder, 'bun', 'index.js');
+    // const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
+    // const mainPath = join(buildFolder, 'bun', 'index.js');
+    const mainPath = join(buildFolder, 'dev.app');
     // console.log('running ', bunPath, mainPath);
-    Bun.spawn([bunPath, mainPath], {
+    
+    Bun.spawn(['open', mainPath], {
         stdin: 'inherit',
         stdout: 'inherit',
         env: {
 
         }
         
-    });
+    });    
 
     // support multiple js files, each built differently with different externals and different names
     // support preload scripts

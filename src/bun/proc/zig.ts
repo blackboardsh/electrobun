@@ -1,20 +1,17 @@
-import {join} from 'path'
+import {join, resolve} from 'path'
 import {type RPCSchema, type RPCTransport, createRPC} from 'rpc-anywhere'
 import {execSync} from 'child_process';
 import * as fs from 'fs';
 import electrobunEventEmitter from '../events/eventEmitter';
 
-// Note: import.meta.dir is expected to be the /build/bun folder where user's bun index is bundled to
-const webviewBinaryPath = join(import.meta.dir, '..', 'native', 'webview');
+const webviewBinaryPath = join('..', 'native', 'webview');
 
-// todo (yoav): make sure process exits when this process exits
-// especially on error
 const zigProc = Bun.spawn([webviewBinaryPath], {
 	stdin: 'pipe',
 	stdout: 'pipe',	
 	env: {
-		...process.env,
-		ELECTROBUN_VIEWS_FOLDER: join(import.meta.dir, '..', 'views') ,		
+		...process.env,		
+		ELECTROBUN_VIEWS_FOLDER: resolve('../views'),		
 	}
 });
 
