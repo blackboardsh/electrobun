@@ -1,6 +1,6 @@
 import {join, dirname} from 'path';
 import {existsSync, readFileSync, cpSync, rmdirSync, mkdirSync, chmodSync} from 'fs';
-import {fork} from 'child_process';
+import {exec} from 'child_process';
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -42,6 +42,8 @@ if (!command) {
 const config = getConfig();
 
 const buildFolder = join(projectRoot, config.build.outputFolder);
+
+const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
 
 if (commandArg === 'init') {
     // todo (yoav): init a repo folder structure
@@ -96,11 +98,25 @@ if (commandArg === 'init') {
 
     Bun.write(join(appBundleFolderContentsPath, 'Info.plist'), InfoPlistContents);
 
-    const LauncherContents = `#!/bin/bash
-cd "$(dirname "$0")"/bun
     
-./bun .
-    `;
+    // in dev builds the log file is a named pipe so we can stream it back to the terminal
+    // in canary/stable builds it'll be a regular log file
+    const LauncherContents = `#!/bin/bash
+    cd "$(dirname "$0")"/bun
+    
+    # Define the log file path
+    LOG_FILE="$HOME/${logPath}"    
+    
+    # Ensure the directory exists
+    mkdir -p "$(dirname "$LOG_FILE")"
+
+    if [[ ! -p $LOG_FILE ]]; then
+        mkfifo $LOG_FILE
+    fi    
+    
+    # Execute bun and redirect stdout and stderr to the log file
+    ./bun . >"$LOG_FILE" 2>&1
+`;
 
     Bun.write(join(appBundleMacOSPath, 'MyApp'), LauncherContents);
     chmodSync(join(appBundleMacOSPath, 'MyApp'), '755');
@@ -211,14 +227,26 @@ cd "$(dirname "$0")"/bun
     const mainPath = join(buildFolder, 'dev.app');
     // console.log('running ', bunPath, mainPath);
     
-    Bun.spawn(['open', mainPath], {
-        stdin: 'inherit',
-        stdout: 'inherit',
+    // Note: open will open the app bundle as a completely different process
+    // This is critical to fully test the app (including plist configuration, etc.)
+    // but also to get proper cmd+tab and dock behaviour and not run the windowed app
+    // as a child of the terminal process which steels keyboard focus from any descendant nswindows.
+    Bun.spawn(['open', mainPath], {        
         env: {
-
-        }
-        
+        }        
     });    
+
+    const proc = exec(`cat ~${logPath}`, {stdio: 'inherit'});
+    proc.stdout.on('data', (data) => {        
+        process.stdout.write(data);
+    });
+    proc.stderr.on('data', (data) => {        
+        process.stderr.write(data);
+    });
+
+      // todo (yoav): it would be nice if cmd+c here killed the opened app bundle
+      
+  
 
     // support multiple js files, each built differently with different externals and different names
     // support preload scripts
