@@ -45,6 +45,6 @@ See the detailed <a href="https://github.com/blackboardsh/electrobun/issues/2">d
 
 Ways to get involved at this early stage:
 
-- Follow us on X for updates:
+- Follow us on X for updates <a href="https://twitter.com/BlackboardTech">@BlackboardTech</a>
 - Join the conversation on Discord
 - Create and participate in Github issues and discussions
