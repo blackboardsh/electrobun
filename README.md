@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://electrobun.dev"><img src="https://github.com/blackboardsh/electrobun/assets/75102186/35b21093-1f29-44bc-a359-57ead6c19ab8" alt="Logo" height=170></a>
+  <a href="https://electrobun.dev"><img src="https://github.com/blackboardsh/electrobun/assets/75102186/8799b522-0507-45e9-86e3-c3cfded1aa7c" alt="Logo" height=170></a>
 </p>
 <h1 align="center">Electrobun</h1>
 
