@@ -4,7 +4,7 @@ export type MyExtensionSchema = {
     bun: RPCSchema<{
         requests: {
             getTitle: {
-                args: {},
+                params: {},
                 returns: string
             }
         },       

@@ -4,8 +4,8 @@ const rpcStdout = @import("../stdout.zig");
 
 const alloc = std.heap.page_allocator;
 
-pub fn decideNavigation(args: rpcSchema.ZigSchema.requests.decideNavigation.args) rpcSchema.ZigSchema.requests.decideNavigation.returns {
-    const rawPayload = rpcStdout.sendRequest("decideNavigation", args);
+pub fn decideNavigation(params: rpcSchema.ZigSchema.requests.decideNavigation.params) rpcSchema.ZigSchema.requests.decideNavigation.returns {
+    const rawPayload = rpcStdout.sendRequest("decideNavigation", params);
     const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.decideNavigation.returns, alloc, rawPayload.?, .{}) catch {
         unreachable;
     };

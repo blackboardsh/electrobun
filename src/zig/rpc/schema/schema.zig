@@ -1,7 +1,7 @@
 pub const ZigSchema = struct { //
     pub const requests = struct { //
         pub const decideNavigation = struct { //
-            pub const args = struct {
+            pub const params = struct {
                 webviewId: u32,
                 url: []const u8,
             };
@@ -15,7 +15,7 @@ pub const ZigSchema = struct { //
 pub const BunSchema = struct {
     pub const requests = struct {
         pub const createWindow = struct {
-            pub const args = struct {
+            pub const params = struct {
                 id: u32,
                 title: []const u8,
                 url: ?[]const u8,
@@ -31,14 +31,14 @@ pub const BunSchema = struct {
         };
 
         pub const setContentView = struct {
-            pub const args = struct {
+            pub const params = struct {
                 windowId: u32,
                 webviewId: u32,
             };
             pub const returns = void;
         };
         pub const setTitle = struct { //
-            pub const args = struct {
+            pub const params = struct {
                 // todo: be consistent about winId vs windowId
                 winId: u32,
                 title: []const u8,
@@ -47,7 +47,7 @@ pub const BunSchema = struct {
         };
 
         pub const createWebview = struct {
-            pub const args = struct {
+            pub const params = struct {
                 id: u32,
                 url: ?[]const u8,
                 html: ?[]const u8,
@@ -63,7 +63,7 @@ pub const BunSchema = struct {
         };
 
         pub const loadURL = struct {
-            pub const args = struct {
+            pub const params = struct {
                 webviewId: u32,
                 url: []const u8,
             };
@@ -71,7 +71,7 @@ pub const BunSchema = struct {
         };
 
         pub const loadHTML = struct {
-            pub const args = struct {
+            pub const params = struct {
                 webviewId: u32,
                 html: []const u8,
             };
@@ -82,16 +82,16 @@ pub const BunSchema = struct {
 pub const RequestResult = struct { errorMsg: ?[]const u8, payload: ?RequestReturnsType };
 // todo: can we replace this with a compile-time function
 pub const Handlers = struct {
-    createWindow: fn (args: BunSchema.requests.createWindow.args) RequestResult,
-    createWebview: fn (args: BunSchema.requests.createWebview.args) RequestResult,
-    setTitle: fn (args: BunSchema.requests.setTitle.args) RequestResult,
-    setContentView: fn (args: BunSchema.requests.setContentView.args) RequestResult,
-    loadURL: fn (args: BunSchema.requests.loadURL.args) RequestResult,
-    loadHTML: fn (args: BunSchema.requests.loadHTML.args) RequestResult,
+    createWindow: fn (params: BunSchema.requests.createWindow.params) RequestResult,
+    createWebview: fn (params: BunSchema.requests.createWebview.params) RequestResult,
+    setTitle: fn (params: BunSchema.requests.setTitle.params) RequestResult,
+    setContentView: fn (params: BunSchema.requests.setContentView.params) RequestResult,
+    loadURL: fn (params: BunSchema.requests.loadURL.params) RequestResult,
+    loadHTML: fn (params: BunSchema.requests.loadHTML.params) RequestResult,
 };
 
 pub const Requests = struct {
-    decideNavigation: fn (args: ZigSchema.requests.decideNavigation.args) ZigSchema.requests.decideNavigation.returns,
+    decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) ZigSchema.requests.decideNavigation.returns,
 };
 
 pub const RequestReturnsType = union(enum) {

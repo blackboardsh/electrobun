@@ -89,7 +89,7 @@ function createStdioTransport(proc): RPCTransport {
 type BunSchema = RPCSchema<{
 	requests: {
 		createWindow: {
-			args: {
+			params: {
 				id: number,
 				url: string | null,
 				html: string | null,
@@ -104,7 +104,7 @@ type BunSchema = RPCSchema<{
 			returns: void
 		},
 		createWebview: {
-			args: {
+			params: {
 				id: number,
 				url: string | null,
 				html: string | null,
@@ -119,7 +119,7 @@ type BunSchema = RPCSchema<{
 		},
 
 		setContentView: {
-			args: {
+			params: {
 				windowId: number,
 				webviewId: number
 			},
@@ -127,14 +127,14 @@ type BunSchema = RPCSchema<{
 		}
 
 		loadURL: {
-			args: {
+			params: {
 				webviewId: number,
 				url: string
 			},
 			returns: void
 		}
 		loadHTML: {
-			args: {
+			params: {
 				webviewId: number,
 				html: string
 			},
@@ -142,7 +142,7 @@ type BunSchema = RPCSchema<{
 		}
 		
 		setTitle: {
-			args: {
+			params: {
 				winId: number,
 				title: string
 			},
@@ -155,7 +155,7 @@ type BunSchema = RPCSchema<{
 type ZigSchema = RPCSchema<{
 	requests: {
 		decideNavigation: {
-			args: {
+			params: {
 				webviewId: number,
 				url: string
 			},

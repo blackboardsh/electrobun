@@ -7,12 +7,12 @@ var _response: ?std.json.Value = null;
 var m = std.Thread.Mutex{};
 var c = std.Thread.Condition{};
 
-pub fn sendRequest(method: []const u8, args: anytype) ?std.json.Value {
+pub fn sendRequest(method: []const u8, params: anytype) ?std.json.Value {
     send(.{
         .id = idGen.nextId(),
         .type = "request",
         .method = method,
-        .params = args,
+        .params = params,
     });
 
     m.lock();

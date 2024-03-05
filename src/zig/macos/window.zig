@@ -91,9 +91,9 @@ pub fn setContentView(opts: struct { webviewId: u32, windowId: u32 }) void {
 
 // effecient string concatenation that returns the template if there's an error
 // this makes handling errors a bit easier
-fn concatOrFallback(comptime fmt: []const u8, args: anytype) []const u8 {
+fn concatOrFallback(comptime fmt: []const u8, params: anytype) []const u8 {
     var buffer: [100]u8 = undefined;
-    const result = std.fmt.bufPrint(&buffer, fmt, args) catch |err| {
+    const result = std.fmt.bufPrint(&buffer, fmt, params) catch |err| {
         std.log.info("Error concatenating string {}", .{err});
         return fmt;
     };

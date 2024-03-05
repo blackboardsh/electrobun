@@ -4,7 +4,7 @@ export type MyWebviewRPC = {
     bun: RPCSchema<{
         requests: {
             doMath: {
-                args: {
+                params: {
                     a: number,
                     b: number
                 },
@@ -13,7 +13,7 @@ export type MyWebviewRPC = {
         },
         messages: {
             logToBun: {
-                args: {
+                params: {
                     msg: string
                 }
             }
@@ -22,7 +22,7 @@ export type MyWebviewRPC = {
     webview:  RPCSchema<{
         requests: {
             doMoreMath: {
-                args: {
+                params: {
                     a: number,
                     b: number
                 },

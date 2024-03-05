@@ -8,67 +8,67 @@ const std = @import("std");
 
 const alloc = std.heap.page_allocator;
 
-pub fn createWindow(args: rpcSchema.BunSchema.requests.createWindow.args) RequestResult {
+pub fn createWindow(params: rpcSchema.BunSchema.requests.createWindow.params) RequestResult {
     _ = window.createWindow(.{
-        .id = args.id,
-        .title = args.title,
-        .url = args.url,
-        .html = args.html,
+        .id = params.id,
+        .title = params.title,
+        .url = params.url,
+        .html = params.html,
         .frame = .{
-            .x = args.frame.x,
-            .y = args.frame.y,
-            .width = args.frame.width,
-            .height = args.frame.height,
+            .x = params.frame.x,
+            .y = params.frame.y,
+            .width = params.frame.width,
+            .height = params.frame.height,
         },
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
-pub fn createWebview(args: rpcSchema.BunSchema.requests.createWebview.args) RequestResult {
-    // std.log.info("createWebview handler preload {s}", .{args.preload});
+pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) RequestResult {
+    // std.log.info("createWebview handler preload {s}", .{params.preload});
     webview.createWebview(.{
-        .id = args.id,
-        .url = args.url,
-        .html = args.html,
-        .preload = args.preload,
+        .id = params.id,
+        .url = params.url,
+        .html = params.html,
+        .preload = params.preload,
         .frame = .{
-            .x = args.frame.x,
-            .y = args.frame.y,
-            .width = args.frame.width,
-            .height = args.frame.height,
+            .x = params.frame.x,
+            .y = params.frame.y,
+            .width = params.frame.width,
+            .height = params.frame.height,
         },
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
-pub fn setContentView(args: rpcSchema.BunSchema.requests.setContentView.args) RequestResult {
+pub fn setContentView(params: rpcSchema.BunSchema.requests.setContentView.params) RequestResult {
     window.setContentView(.{
-        .webviewId = args.webviewId,
-        .windowId = args.windowId,
+        .webviewId = params.webviewId,
+        .windowId = params.windowId,
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
-pub fn setTitle(args: rpcSchema.BunSchema.requests.setTitle.args) RequestResult {
+pub fn setTitle(params: rpcSchema.BunSchema.requests.setTitle.params) RequestResult {
     _ = window.setTitle(.{
-        .winId = args.winId,
-        .title = args.title,
+        .winId = params.winId,
+        .title = params.title,
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
-pub fn loadURL(args: rpcSchema.BunSchema.requests.loadURL.args) RequestResult {
+pub fn loadURL(params: rpcSchema.BunSchema.requests.loadURL.params) RequestResult {
     webview.loadURL(.{
-        .webviewId = args.webviewId,
-        .url = args.url,
+        .webviewId = params.webviewId,
+        .url = params.url,
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
-pub fn loadHTML(args: rpcSchema.BunSchema.requests.loadHTML.args) RequestResult {
+pub fn loadHTML(params: rpcSchema.BunSchema.requests.loadHTML.params) RequestResult {
     webview.loadHTML(.{
-        .webviewId = args.webviewId,
-        .html = args.html,
+        .webviewId = params.webviewId,
+        .html = params.html,
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
@@ -94,29 +94,29 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
     const method = request.method;
 
     if (strEql(method, "createWindow")) {
-        return parseArgsAndCall(handlers.createWindow, BunRequests.createWindow.args, request.params);
+        return parseParamsAndCall(handlers.createWindow, BunRequests.createWindow.params, request.params);
     } else if (strEql(method, "setTitle")) {
-        return parseArgsAndCall(handlers.setTitle, BunRequests.setTitle.args, request.params);
+        return parseParamsAndCall(handlers.setTitle, BunRequests.setTitle.params, request.params);
     } else if (strEql(method, "setContentView")) {
-        return parseArgsAndCall(handlers.setContentView, BunRequests.setContentView.args, request.params);
+        return parseParamsAndCall(handlers.setContentView, BunRequests.setContentView.params, request.params);
     } else if (strEql(method, "createWebview")) {
-        return parseArgsAndCall(handlers.createWebview, BunRequests.createWebview.args, request.params);
+        return parseParamsAndCall(handlers.createWebview, BunRequests.createWebview.params, request.params);
     } else if (strEql(method, "loadURL")) {
-        return parseArgsAndCall(handlers.loadURL, BunRequests.loadURL.args, request.params);
+        return parseParamsAndCall(handlers.loadURL, BunRequests.loadURL.params, request.params);
     } else if (strEql(method, "loadHTML")) {
-        return parseArgsAndCall(handlers.loadHTML, BunRequests.loadHTML.args, request.params);
+        return parseParamsAndCall(handlers.loadHTML, BunRequests.loadHTML.params, request.params);
     } else {
         return RequestResult{ .errorMsg = "unhandled method", .payload = null };
     }
 }
 
-pub fn parseArgsAndCall(handler: anytype, argSchema: anytype, unparsedArgs: anytype) RequestResult {
-    const parsedArgs = std.json.parseFromValue(argSchema, alloc, unparsedArgs, .{}) catch |err| {
+pub fn parseParamsAndCall(handler: anytype, paramsSchema: anytype, unparsedParams: anytype) RequestResult {
+    const parsedParams = std.json.parseFromValue(paramsSchema, alloc, unparsedParams, .{}) catch |err| {
         std.log.info("Error casting parsed json to zig type from stdin createWindow - {}: \n", .{err});
-        return RequestResult{ .errorMsg = "failed to parse args", .payload = null };
+        return RequestResult{ .errorMsg = "failed to parse params", .payload = null };
     };
 
-    return handler(parsedArgs.value);
+    return handler(parsedParams.value);
 }
 
 // todo: move to string util (duplicated in webview.zig)

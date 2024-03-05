@@ -174,7 +174,7 @@ pub fn addPreloadScriptToWebview(objcWindow: *anyopaque, scriptOrPath: []const u
     objc.addPreloadScriptToWebView(objcWindow, toCString(script), allFrames);
 }
 
-pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.args) void {
+pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.params) void {
     var webview = webviewMap.get(opts.webviewId) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.webviewId});
         return;
@@ -184,7 +184,7 @@ pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.args) void {
     objc.loadURLInWebView(webview.handle, toCString(opts.url));
 }
 
-pub fn loadHTML(opts: rpcSchema.BunSchema.requests.loadHTML.args) void {
+pub fn loadHTML(opts: rpcSchema.BunSchema.requests.loadHTML.params) void {
     var webview = webviewMap.get(opts.webviewId) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.webviewId});
         return;
@@ -206,10 +206,10 @@ pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {
 // todo: move to a util and dedup with window.zig
 // todo: make buffer an arg
 // todo: use a for loop with mem.copy for simpler concat
-// template string concat with arbitrary number of args
-fn concatOrFallback(comptime fmt: []const u8, args: anytype) []const u8 {
+// template string concat with arbitrary number of params
+fn concatOrFallback(comptime fmt: []const u8, params: anytype) []const u8 {
     var buffer: [250]u8 = undefined;
-    const result = std.fmt.bufPrint(&buffer, fmt, args) catch |err| {
+    const result = std.fmt.bufPrint(&buffer, fmt, params) catch |err| {
         std.log.info("Error concatenating string {}", .{err});
         return fmt;
     };
