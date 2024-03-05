@@ -1,37 +1,37 @@
 {
-    "name": "electrobun",
-    "version": "0.0.1",
-    "license": "MIT",
-    "private": true,    
-    "exports": {
-      ".": "./src/bun/index.ts",
-      "./bun": "./src/bun/index.ts",
-      "./view": "./src/browser/index.ts"
-    },
-    "bin": "src/cli/build/electrobun",
-    "repository": {
-      "type": "git",
-      "url": "https://github.com/blackboardsh/electrobun.git"
-    },
-    "scripts": {
-      "start": "bun src/bun/index.ts",
-      "install:bun": "cd src/bun && bun install",
-      "install:browser": "cd src/browser && bun install",
-      "install:all": "bun run install:bun && bun run install:browser",
-      "build:objc:object": "clang -c src/objc/objcWrapper.m -o src/objc/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs",
-      "build:objc:staticlib": "ar rcs src/zig/build/libObjcWrapper.a src/objc/build/objcWrapper.o",      
-      "build:objc": "bun build:objc:object && bun build:objc:staticlib",
-      "build:zig": "cd src/zig && zig build",
-      "build:browser": "bun build src/browser/index.ts --outdir src/zig/build/",
-      "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",
-      "build:bun": "",
-      "build:dev": "bun build:objc && bun build:cli && bun build:browser && bun build:zig",
-      "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",      
-      "dev:example": "bun build:dev && cd example && bun install && bun build:dev && bun start"
-    },
-    "devDependencies": {
-      "bun": "1.0.26"    
-    },
-    "dependencies": {      
-    }
-  }
+  "name": "electrobun",
+  "version": "0.0.1",
+  "license": "MIT",
+  "private": true,
+  "exports": {
+    ".": "./src/bun/index.ts",
+    "./bun": "./src/bun/index.ts",
+    "./view": "./src/browser/index.ts"
+  },
+  "bin": "src/cli/build/electrobun",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blackboardsh/electrobun.git"
+  },
+  "scripts": {
+    "start": "bun src/bun/index.ts",
+    "install:bun": "cd src/bun && bun install",
+    "install:browser": "cd src/browser && bun install",
+    "install:all": "bun run install:bun && bun run install:browser",
+    "build:objc:object": "clang -c src/objc/objcWrapper.m -o src/objc/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs",
+    "build:objc:staticlib": "ar rcs src/zig/build/libObjcWrapper.a src/objc/build/objcWrapper.o",
+    "build:objc": "bun build:objc:object && bun build:objc:staticlib",
+    "build:zig": "cd src/zig && zig build",
+    "build:browser": "bun build src/browser/index.ts --outdir src/zig/build/",
+    "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",
+    "build:bun": "",
+    "build:dev": "bun build:objc && bun build:cli && bun build:browser && bun build:zig",
+    "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
+    "dev:example": "bun build:dev && cd example && bun install && bun build:dev && bun start"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.0.8",
+    "bun": "1.0.26"
+  },
+  "dependencies": {}
+}

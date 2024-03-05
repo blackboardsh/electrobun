@@ -1,5 +1,5 @@
 {
   "dependencies": {
-    "rpc-anywhere": "^1.3.4"
+    "rpc-anywhere": "1.5.0"
   }
 }
