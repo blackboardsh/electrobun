@@ -86,7 +86,7 @@ function createStdioTransport(proc): RPCTransport {
   }
 
   // todo (yoav): move this stuff to bun/rpc/zig.ts
-type BunSchema = RPCSchema<{
+type ZigHandlers = RPCSchema<{
 	requests: {
 		createWindow: {
 			params: {
@@ -152,21 +152,21 @@ type BunSchema = RPCSchema<{
 	}
 }>
 
-type ZigSchema = RPCSchema<{
+type BunHandlers = RPCSchema<{
 	requests: {
 		decideNavigation: {
 			params: {
 				webviewId: number,
 				url: string
 			},
-			returns: {
+			response: {
 				allow: boolean
 			}
 		}
 	}
 }>
 
-const zigRPC = createRPC<BunSchema, ZigSchema>({
+const zigRPC = createRPC<BunHandlers, ZigHandlers>({
 	transport: createStdioTransport(zigProc),
 	requestHandler: {
 		decideNavigation: ({webviewId, url}) => {			
@@ -179,7 +179,7 @@ const zigRPC = createRPC<BunSchema, ZigSchema>({
 			result = electrobunEventEmitter.emitEvent(willNavigate, webviewId);			
 
 			if (willNavigate.responseWasSet) {
-				return willNavigate.response;
+				return willNavigate.response || {allow: true};
 			} else {
 				return {allow: true}
 			}
