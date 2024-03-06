@@ -1,9 +1,9 @@
 import ElectrobunView, {createRPC } from 'electrobun/view'
-import {type MyWebviewRPC} from './rpc';
+import {type MyExtensionSchema} from './rpc';
 
-const rpc = createRPC<MyWebviewRPC["webview"], MyWebviewRPC["bun"]>({    
+const rpc = createRPC<MyExtensionSchema["webview"], MyExtensionSchema["bun"]>({    
     requestHandler: {
-        getTitle: () => {            
+        getTitle: () => {                        
             return document.title;            
         }
     }

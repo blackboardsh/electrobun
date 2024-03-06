@@ -2,12 +2,14 @@ import {type RPCSchema } from 'electrobun'
 
 export type MyExtensionSchema = {
     bun: RPCSchema<{
+               
+    }>,
+    webview:  RPCSchema<{
         requests: {
             getTitle: {
-                params: {},
-                returns: string
+                params: void,
+                response: string
             }
-        },       
-    }>,
-    webview:  RPCSchema<{}>
+        }
+    }>
 }

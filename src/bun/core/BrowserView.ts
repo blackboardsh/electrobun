@@ -7,7 +7,7 @@ import {type RPC} from 'rpc-anywhere'
 const BrowserViewMap = {};
 let nextWebviewId = 1;
 
-type BrowserViewOptions = {    
+type BrowserViewOptions<T = undefined> = {    
     url: string | null;
     html: string | null;
     preload: string | null;
@@ -17,7 +17,7 @@ type BrowserViewOptions = {
         width: number,
         height: number,
     }
-    rpc?: RPC<any, any>
+    rpc: T
 }
 
 const defaultOptions: BrowserViewOptions = {    
@@ -33,7 +33,7 @@ const defaultOptions: BrowserViewOptions = {
 }
 
 
-export class BrowserView {
+export class BrowserView<T> {
     id: number = nextWebviewId++;
     url: string | null = null;
     html: string | null = null;
@@ -51,14 +51,14 @@ export class BrowserView {
     }
     inStream: fs.WriteStream;
     outStream: fs.ReadStream;
-    rpc: RPC<any, any> | null;
+    rpc?: T;
 
-    constructor(options: Partial<BrowserViewOptions> = defaultOptions) {
+    constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
         this.url = options.url || defaultOptions.url;
         this.html = options.html || defaultOptions.html;
         this.preload = options.preload || defaultOptions.preload;
         this.frame = options.frame ? {...defaultOptions.frame, ...options.frame} : {...defaultOptions.frame};        
-        this.rpc = options.rpc;
+        this.rpc = options.rpc
 
         this.init();
     }

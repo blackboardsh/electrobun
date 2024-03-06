@@ -239,8 +239,10 @@ var rpc2 = createRPC({
 });
 var electrobun = new browser_default.Electroview({ rpc: rpc2 });
 setTimeout(() => {
-  electrobun.rpc.request.doMoreMath({ a: 9, b: 8 }).then((result) => {
-    document.body.innerHTML += `I asked bun to do more math and it said ${result}\n`;
-  });
-  electrobun.rpc.request.logToBun({ msg: "hello from webview" });
+  if (electrobun.rpc) {
+    electrobun.rpc.request.doMoreMath({ a: 9, b: 8 }).then((result) => {
+      document.body.innerHTML += `I asked bun to do more math and it said ${result}\n`;
+    });
+    electrobun.rpc.send.logToBun({ msg: "hello from webview" });
+  }
 }, 5000);

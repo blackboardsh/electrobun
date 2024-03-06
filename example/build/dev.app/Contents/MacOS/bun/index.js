@@ -324,7 +324,7 @@ var zigRPC = createRPC({
       result = eventEmitter_default.emitEvent(willNavigate);
       result = eventEmitter_default.emitEvent(willNavigate, webviewId);
       if (willNavigate.responseWasSet) {
-        return willNavigate.response;
+        return willNavigate.response || { allow: true };
       } else {
         return { allow: true };
       }
@@ -561,6 +561,7 @@ class BrowserWindow {
 // /Users/yoav/code/electrobun/example/node_modules/electrobun/src/bun/index.ts
 var Electrobun = {
   BrowserWindow,
+  BrowserView,
   events: eventEmitter_default
 };
 var bun_default = Electrobun;
@@ -573,9 +574,6 @@ var myWebviewRPC = createRPC({
       console.log("\n\n\n\n");
       console.log(`win1 webview asked me to do more math with: ${a} and ${b}`);
       return a + b;
-    },
-    logToBun: ({ msg }) => {
-      console.log("\n\nWebview asked to logToBun: ", msg, "\n\n");
     }
   }
 });
@@ -602,8 +600,7 @@ var wikiWindow = new BrowserWindow({
     y: 0
   },
   rpc: createRPC({
-    maxRequestTime: 5000,
-    requestHandler: {}
+    maxRequestTime: 5000
   })
 });
 bun_default.events.on("will-navigate", (e) => {
@@ -620,14 +617,14 @@ wikiWindow.setTitle("New title from bun");
 setTimeout(() => {
   win.webview.executeJavascript('document.body.innerHTML = "executing random js in win2 webview";');
   setTimeout(() => {
-    wikiWindow.webview.rpc.request.getTitle().then((result) => {
+    wikiWindow.webview.rpc?.request.getTitle().then((result) => {
       console.log("\n\n\n\n");
       console.log(`visiting wikipedia article for: ${result}`);
       console.log("\n\n\n\n");
     }).catch((err) => {
       console.log("getTitle error", err);
     });
-    win.webview.rpc.request.doMath({ a: 3, b: 4 }).then((result) => {
+    win.webview.rpc?.request.doMath({ a: 3, b: 4 }).then((result) => {
       console.log("\n\n\n\n");
       console.log(`I asked win1 webview to do math and it said: ${result}`);
       console.log("\n\n\n\n");

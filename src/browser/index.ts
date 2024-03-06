@@ -1,10 +1,10 @@
 import {type RPCSchema, type RPC, createRPC} from 'rpc-anywhere'
 
-class Electroview {
-    rpc?: RPC<any, any>;
+class Electroview<T> {
+    rpc?: T;
     rpcHandler?: (msg: any) => void;
 
-    constructor(config: {rpc: RPC<any, any>}) {
+    constructor(config: {rpc: T}) {
         this.rpc = config.rpc;
         this.init();
     }

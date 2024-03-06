@@ -13,10 +13,12 @@ const rpc = createRPC<MyWebviewRPC["webview"], MyWebviewRPC["bun"]>({
 const electrobun = new ElectrobunView.Electroview({rpc});
 
 setTimeout(() => {
-    electrobun.rpc.request.doMoreMath({a: 9, b: 8}).then((result) => {
-        document.body.innerHTML += `I asked bun to do more math and it said ${result}\n`;
-    });
+    if (electrobun.rpc) {
+        electrobun.rpc.request.doMoreMath({a: 9, b: 8}).then((result) => {
+            document.body.innerHTML += `I asked bun to do more math and it said ${result}\n`;
+        });
 
-    electrobun.rpc.request.logToBun({msg: 'hello from webview'});
+        electrobun.rpc.send.logToBun({msg: 'hello from webview'});
+    }
 }, 5000);
 

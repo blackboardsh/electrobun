@@ -1,6 +1,6 @@
-import Electrobun, {BrowserWindow, type RPCSchema, createRPC} from 'electrobun/bun';
-import {MyWebviewRPC} from '../mainview/rpc';
-import {MyExtensionSchema} from '../myextension/rpc';
+import Electrobun, {BrowserWindow, BrowserView, type RPCSchema, createRPC} from 'electrobun/bun';
+import {type MyWebviewRPC} from '../mainview/rpc';
+import {type MyExtensionSchema} from '../myextension/rpc';
 
 const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
     maxRequestTime: 5000,
@@ -10,9 +10,10 @@ const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
             console.log(`win1 webview asked me to do more math with: ${a} and ${b}`)            
             return a + b;
         },
-        logToBun: ({msg}) => {
-            console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
-        }
+        // todo (yoav): messages currently require subscripting
+        // logToBun: ({msg}) => {
+        //     console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
+        // }
     }
 });
 
@@ -46,7 +47,7 @@ const wikiWindow = new BrowserWindow({
         // in the user's webview bundle?
         rpc: createRPC<MyExtensionSchema["bun"], MyExtensionSchema["webview"]>({
             maxRequestTime: 5000,
-            requestHandler: {}        
+            // requestHandler: {}        
         })           
 });
 
@@ -71,9 +72,9 @@ wikiWindow.setTitle('New title from bun')
 setTimeout(() => {        
     win.webview.executeJavascript('document.body.innerHTML = "executing random js in win2 webview";');
     
-    setTimeout(() => {
+    setTimeout(() => {        
         // asking wikipedia for the title of the article        
-        wikiWindow.webview.rpc.request.getTitle().then((result) => {
+        wikiWindow.webview.rpc?.request.getTitle().then((result) => {
             console.log('\n\n\n\n')
             console.log(`visiting wikipedia article for: ${result}`)
             console.log('\n\n\n\n')
@@ -81,7 +82,7 @@ setTimeout(() => {
             console.log('getTitle error', err)        
         })
 
-        win.webview.rpc.request.doMath({a: 3, b: 4}).then((result) => {
+        win.webview.rpc?.request.doMath({a: 3, b: 4}).then((result) => {
             console.log('\n\n\n\n')
             console.log(`I asked win1 webview to do math and it said: ${result}`)
             console.log('\n\n\n\n')

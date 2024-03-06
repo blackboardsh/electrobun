@@ -7,7 +7,7 @@ let nextWindowId = 1;
 
 // todo (yoav): if we default to builtInSchema, we don't want dev to have to define custom handlers
 // for the built-in schema stuff.
-type WindowOptionsType = {
+type WindowOptionsType<T = undefined> = {
 	title: string,
 	frame: {
 		x: number,
@@ -18,7 +18,7 @@ type WindowOptionsType = {
 	url: string | null,
 	html: string | null,
 	preload: string | null,
-	rpc?: RPC<any, any>
+	rpc?: T
 }
 
 const defaultOptions: WindowOptionsType = {
@@ -39,7 +39,7 @@ const BrowserWindowMap = {};
 // todo (yoav): do something where the type extends the default schema
 // that way we can provide built-in requests/messages and devs can extend it
 
-export class BrowserWindow {
+export class BrowserWindow<T> {
 	id: number = nextWindowId++;
 	title: string = 'Electrobun';
 	state: 'creating' | 'created' = 'creating'
@@ -60,7 +60,7 @@ export class BrowserWindow {
 	// todo (yoav): make this an array of ids or something
 	webviewId: number
 
-	constructor(options: Partial<WindowOptionsType> = defaultOptions) {
+	constructor(options: Partial<WindowOptionsType<T>> = defaultOptions) {
 		this.title = options.title || 'New Window';
 		this.frame = options.frame ? {...defaultOptions.frame, ...options.frame} : {...defaultOptions.frame};
 		this.url = options.url || null;
@@ -70,7 +70,7 @@ export class BrowserWindow {
 		this.init(options.rpc);
 	  }
 	
-	  init(rpc?: RPC<any, any>) {			
+	  init(rpc?: T) {			
 		zigRPC.request.createWindow({
 			id: this.id,
 			title: this.title,
@@ -111,7 +111,9 @@ export class BrowserWindow {
 	  }
 
 	  get webview() {
-		return BrowserView.getById(this.webviewId);
+		// todo (yoav): we don't want this to be undefined, so maybe we should just
+		// link directly to the browserview object instead of a getter
+		return BrowserView.getById(this.webviewId) as BrowserView<T>;
 	  }
 
 	  setTitle(title: string) {
