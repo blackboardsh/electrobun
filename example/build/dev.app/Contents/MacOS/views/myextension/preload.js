@@ -232,7 +232,6 @@ var browser_default = ElectrobunView;
 var rpc2 = createRPC({
   requestHandler: {
     getTitle: () => {
-      console.log("... handling getTitle handler");
       return document.title;
     }
   }

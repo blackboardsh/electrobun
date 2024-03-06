@@ -41,7 +41,7 @@ pub fn setResponse(id: u32, response: anytype) void {
     c.signal();
 }
 
-pub fn sendResponseSuccess(id: u32, payload: ?rpcSchema.RequestReturnsType) void {
+pub fn sendResponseSuccess(id: u32, payload: ?rpcSchema.RequestResponseType) void {
     send(.{
         .id = id,
         .type = "response",

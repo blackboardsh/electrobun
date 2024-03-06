@@ -101,7 +101,7 @@ type ZigHandlers = RPCSchema<{
 					y: number,							
 				}
 			},
-			returns: void
+			response: void
 		},
 		createWebview: {
 			params: {
@@ -115,7 +115,7 @@ type ZigHandlers = RPCSchema<{
 					height: number,
 				}
 			},
-			returns: void
+			response: void
 		},
 
 		setContentView: {
@@ -123,7 +123,7 @@ type ZigHandlers = RPCSchema<{
 				windowId: number,
 				webviewId: number
 			},
-			returns: void
+			response: void
 		}
 
 		loadURL: {
@@ -131,14 +131,14 @@ type ZigHandlers = RPCSchema<{
 				webviewId: number,
 				url: string
 			},
-			returns: void
+			response: void
 		}
 		loadHTML: {
 			params: {
 				webviewId: number,
 				html: string
 			},
-			returns: void
+			response: void
 		}
 		
 		setTitle: {
@@ -146,7 +146,7 @@ type ZigHandlers = RPCSchema<{
 				winId: number,
 				title: string
 			},
-			returns: void
+			response: void
 		}
 	
 	}
