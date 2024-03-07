@@ -43,6 +43,10 @@ See the detailed <a href="https://github.com/blackboardsh/electrobun/issues/2">d
 
 ## Contributing
 
+On the road to a stable 1.0.0 I'm probably going to just be pushing directly to main a lot.
+
+As we get closer to 1.0.0 I'll probably make guidelines for PRs and stuff. In the meantime if you find this project and want to contribute code it's probably best to create an issue first or ping me on twitter or discord to discuss when, what, and how is best to do that.
+
 Ways to get involved at this early stage:
 
 - Follow us on X for updates <a href="https://twitter.com/BlackboardTech">@BlackboardTech</a>
