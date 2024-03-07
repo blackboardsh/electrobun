@@ -3,6 +3,22 @@ import {type RPCSchema } from 'electrobun'
 export type MyWebviewRPC = {
     bun: RPCSchema<{
         requests: {
+            doMoreMath: {
+                params: {
+                    a: number,
+                    b: number
+                },
+                response: number
+            }
+        },
+        messages: {
+            logToBun: {                
+                msg: string                
+            }
+        },
+    }>,
+    webview:  RPCSchema<{
+        requests: {
             doMath: {
                 params: {
                     a: number,
@@ -17,22 +33,8 @@ export type MyWebviewRPC = {
             }
         },
         
-    }>,
-    webview:  RPCSchema<{
-        requests: {
-            doMoreMath: {
-                params: {
-                    a: number,
-                    b: number
-                },
-                response: number
-            }
-        },
-        messages: {
-            logToBun: {                
-                msg: string                
-            }
-        },
+        
+       
            
     }>
 }

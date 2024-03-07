@@ -59,11 +59,11 @@ class Electroview<T> {
     static defineRPC<Schema extends ElectrobunWebviewRPCSChema, BunSchema extends RPCSchema = Schema["bun"], WebviewSchema extends RPCSchema = Schema["webview"]>(config: {
         maxRequestTime?: number,
         handlers: {            
-            requests?: RPCRequestHandler<BunSchema["requests"]>,
+            requests?: RPCRequestHandler<WebviewSchema["requests"]>,
             messages?:  {
-                [key in keyof BunSchema["messages"]]: RPCMessageHandlerFn<BunSchema["messages"], key>
+                [key in keyof WebviewSchema["messages"]]: RPCMessageHandlerFn<WebviewSchema["messages"], key>
             } & {
-                "*"?: WildcardRPCMessageHandlerFn<BunSchema["messages"]>
+                "*"?: WildcardRPCMessageHandlerFn<WebviewSchema["messages"]>
             },
         }
       }) {
@@ -88,14 +88,14 @@ class Electroview<T> {
         // electrobun also treats messages as "requests that we don't wait for to complete", and normalizes specifying the
         // handlers for them alongside request handlers.
 
-        type mixedBunSchema = {
-            requests: WebviewSchema["requests"],
-            messages: BunSchema["messages"]
-        }
-
         type mixedWebviewSchema = {
             requests: BunSchema["requests"],
             messages: WebviewSchema["messages"]
+        }
+
+        type mixedBunSchema = {
+            requests: WebviewSchema["requests"],
+            messages: BunSchema["messages"]
         }
 
         const rpcOptions = {
@@ -105,15 +105,15 @@ class Electroview<T> {
                 // Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey
                 registerHandler: () => {},
             }
-        } as RPCOptions<mixedWebviewSchema, mixedBunSchema>;        
+        } as RPCOptions<mixedBunSchema, mixedWebviewSchema>;        
 
-        const rpc = createRPC<mixedWebviewSchema, mixedBunSchema>(rpcOptions);
+        const rpc = createRPC<mixedBunSchema, mixedWebviewSchema>(rpcOptions);
         const messageHandlers = config.handlers.messages;
             if (messageHandlers) {
          // note: this can only be done once there is a transport
         // @ts-ignore - this is due to all the schema mixing we're doing, fine to ignore
         // while types in here are borked, they resolve correctly/bubble up to the defineRPC call site.
-        rpc.addMessageListener('*', (messageName: keyof BunSchema["messages"], payload) => {
+        rpc.addMessageListener('*', (messageName: keyof WebviewSchema["messages"], payload) => {
             
                 
 
