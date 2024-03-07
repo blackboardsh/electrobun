@@ -225,9 +225,26 @@ class Electroview {
   static defineRPC(config) {
     const rpcOptions = {
       maxRequestTime: config.maxRequestTime,
-      requestHandler: config.handlers.requests
+      requestHandler: config.handlers.requests,
+      transport: {
+        registerHandler: () => {
+        }
+      }
     };
     const rpc2 = createRPC(rpcOptions);
+    const messageHandlers = config.handlers.messages;
+    if (messageHandlers) {
+      rpc2.addMessageListener("*", (messageName, payload) => {
+        const globalHandler = messageHandlers["*"];
+        if (globalHandler) {
+          globalHandler(messageName, payload);
+        }
+        const messageHandler = messageHandlers[messageName];
+        if (messageHandler) {
+          messageHandler(payload);
+        }
+      });
+    }
     return rpc2;
   }
 }

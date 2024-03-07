@@ -1,4 +1,4 @@
-import {type RPCSchema, type RPCRequestHandler, type RPCOptions, createRPC} from 'rpc-anywhere'
+import {type RPCSchema, type RPCRequestHandler, type RPCOptions, type RPCMessageHandlerFn, type WildcardRPCMessageHandlerFn, createRPC} from 'rpc-anywhere'
 
 interface ElectrobunWebviewRPCSChema {
     bun: RPCSchema,
@@ -60,7 +60,11 @@ class Electroview<T> {
         maxRequestTime?: number,
         handlers: {            
             requests?: RPCRequestHandler<BunSchema["requests"]>,
-            messages?: any,
+            messages?:  {
+                [key in keyof BunSchema["messages"]]: RPCMessageHandlerFn<BunSchema["messages"], key>
+            } & {
+                "*"?: WildcardRPCMessageHandlerFn<BunSchema["messages"]>
+            },
         }
       }) {
         // Note: RPC Anywhere requires defining the requests that a schema handles and the messages that a schema sends.
@@ -97,11 +101,34 @@ class Electroview<T> {
         const rpcOptions = {
             maxRequestTime: config.maxRequestTime,
             requestHandler: config.handlers.requests,                
+            transport: {
+                // Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey
+                registerHandler: () => {},
+            }
         } as RPCOptions<mixedWebviewSchema, mixedBunSchema>;        
 
         const rpc = createRPC<mixedWebviewSchema, mixedBunSchema>(rpcOptions);
+        const messageHandlers = config.handlers.messages;
+            if (messageHandlers) {
+         // note: this can only be done once there is a transport
+        // @ts-ignore - this is due to all the schema mixing we're doing, fine to ignore
+        // while types in here are borked, they resolve correctly/bubble up to the defineRPC call site.
+        rpc.addMessageListener('*', (messageName: keyof BunSchema["messages"], payload) => {
+            
+                
 
-        // todo (yoav): wire up message handlers here
+            const globalHandler = messageHandlers['*'];
+            if (globalHandler) {
+                globalHandler(messageName, payload);
+            }
+            
+            const messageHandler = messageHandlers[messageName];
+            if (messageHandler) {
+                messageHandler(payload);            
+            }            
+        });
+    }
+
 
         return rpc;
       }

@@ -2,7 +2,7 @@ import { zigRPC } from '../proc/zig'
 import * as fs from 'fs';
 import {execSync} from 'child_process';
 import electrobunEventEmitter from '../events/eventEmitter';
-import {type RPC, type RPCSchema, type RPCRequestHandler, type RPCMessageHandlerFn, type RPCRequestHandlerObject, type RPCOptions, createRPC} from 'rpc-anywhere'
+import {type RPC, type RPCSchema, type RPCRequestHandler, type RPCMessageHandlerFn, type WildcardRPCMessageHandlerFn, type RPCRequestHandlerObject, type RPCOptions, createRPC} from 'rpc-anywhere'
 
 // temp import
 import { type MyWebviewRPC } from '../../../example/src/mainview/rpc';
@@ -216,7 +216,11 @@ export class BrowserView<T> {
         maxRequestTime?: number,
         handlers: {            
             requests?: RPCRequestHandler<WebviewSchema["requests"]>,
-            messages?: any,
+            messages?: {
+                [key in keyof WebviewSchema["messages"]]: RPCMessageHandlerFn<WebviewSchema["messages"], key>
+            } & {
+                "*"?: WildcardRPCMessageHandlerFn<WebviewSchema["messages"]>
+            },
         }
       }) {
         // Note: RPC Anywhere requires defining the requests that a schema handles and the messages that a schema sends.
@@ -253,11 +257,34 @@ export class BrowserView<T> {
         const rpcOptions = {
             maxRequestTime: config.maxRequestTime,
             requestHandler: config.handlers.requests,                
+            transport: {
+                // Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey
+                registerHandler: () => {},
+            }
         } as RPCOptions<mixedBunSchema, mixedWebviewSchema>;        
 
         const rpc = createRPC<mixedBunSchema, mixedWebviewSchema>(rpcOptions);
 
-        // todo (yoav): wire up message handlers here
+        const messageHandlers = config.handlers.messages;
+        if (messageHandlers) {
+            
+            // note: this can only be done once there is a transport
+            // @ts-ignore - this is due to all the schema mixing we're doing, fine to ignore
+            // while types in here are borked, they resolve correctly/bubble up to the defineRPC call site.
+                rpc.addMessageListener('*', (messageName: keyof WebviewSchema["messages"], payload) => {
+                    
+                    
+                    const globalHandler = messageHandlers['*'];
+                    if (globalHandler) {
+                        globalHandler(messageName, payload);
+                    }
+                    
+                    const messageHandler = messageHandlers[messageName];
+                    if (messageHandler) {
+                        messageHandler(payload);            
+                    }            
+                });
+            }
 
         return rpc;
       }

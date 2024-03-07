@@ -8,6 +8,12 @@ const rpc = Electroview.defineRPC<MyWebviewRPC>({
                 document.body.innerHTML += `bun asked me to do math with ${a} and ${b}\n`;
                 return a + b;
             }
+        },
+        messages: {
+            logToWebview: ({msg}) => {
+                console.log(`bun asked me to logToWebview: ${msg}`);
+            }
+        
         }
     }
 });

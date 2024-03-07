@@ -476,9 +476,26 @@ class BrowserView {
   static defineRPC(config) {
     const rpcOptions = {
       maxRequestTime: config.maxRequestTime,
-      requestHandler: config.handlers.requests
+      requestHandler: config.handlers.requests,
+      transport: {
+        registerHandler: () => {
+        }
+      }
     };
     const rpc2 = createRPC(rpcOptions);
+    const messageHandlers = config.handlers.messages;
+    if (messageHandlers) {
+      rpc2.addMessageListener("*", (messageName, payload) => {
+        const globalHandler = messageHandlers["*"];
+        if (globalHandler) {
+          globalHandler(messageName, payload);
+        }
+        const messageHandler = messageHandlers[messageName];
+        if (messageHandler) {
+          messageHandler(payload);
+        }
+      });
+    }
     return rpc2;
   }
 }
@@ -584,6 +601,14 @@ var myWebviewRPC = BrowserView.defineRPC({
         console.log(`win1 webview asked me to do more math with: ${a} and ${b}`);
         return a + b;
       }
+    },
+    messages: {
+      "*": (messageName, payload) => {
+        console.log("----------.,.,.,.", messageName, payload);
+      },
+      logToBun: ({ msg }) => {
+        console.log("^^^^^^^^^^^^^^^^^^^^^^^^^------------............ received message", msg);
+      }
     }
   }
 });
@@ -643,5 +668,6 @@ setTimeout(() => {
       console.log(`I asked win1 webview to do math and it said: ${result}`);
       console.log("\n\n\n\n");
     });
+    win.webview.rpc?.send.logToWebview({ msg: "hi from bun!" });
   }, 1000);
 }, 3000);

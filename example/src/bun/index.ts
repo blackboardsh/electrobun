@@ -27,25 +27,17 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
                 return a + b;
             },
         },
-        // messages: {
-        //     logToBun: ({msg}) => {
-        //             console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
-        //         }
-        // }
-    }
-    
-       
-        // todo (yoav): messages currently require subscripting
-        // logToBun: ({msg}) => {
-        //     console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
-        // }    
+        messages: {
+            "*": (messageName, payload) => {
+                console.log('----------.,.,.,.', messageName, payload)
+            },
+            logToBun: ({msg}) => {
+                console.log('^^^^^^^^^^^^^^^^^^^^^^^^^------------............ received message', msg)
+                    // console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
+                }
+        }
+    }         
 });
-
-// myWebviewRPC.request.doMath({a: 4, b: 5}).then((result) => {
-//     console.log(result);
-// });
-
-// myWebviewRPC.send.logToWebview({msg: 'hello from bun'});
 
 const win = new BrowserWindow({
     title: 'my url window',
@@ -130,6 +122,8 @@ setTimeout(() => {
             console.log(`I asked win1 webview to do math and it said: ${result}`)
             console.log('\n\n\n\n')
         });
+
+        win.webview.rpc?.send.logToWebview({msg: 'hi from bun!'});
     }, 1000)
 }, 3000)
 
