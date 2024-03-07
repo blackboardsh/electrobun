@@ -1,4 +1,10 @@
-import {type RPCSchema, type RPC, createRPC} from 'rpc-anywhere'
+import {type RPCSchema, type RPCRequestHandler, type RPCOptions, createRPC} from 'rpc-anywhere'
+
+interface ElectrobunWebviewRPCSChema {
+    bun: RPCSchema,
+    webview: RPCSchema
+}
+
 
 class Electroview<T> {
     rpc?: T;
@@ -49,6 +55,56 @@ class Electroview<T> {
             this.rpcHandler(msg);
         }        
     }
+    // todo (yoav): This is mostly just the reverse of the one in BrowserView.ts on the bun side. Should DRY this up.
+    static defineRPC<Schema extends ElectrobunWebviewRPCSChema, BunSchema extends RPCSchema = Schema["bun"], WebviewSchema extends RPCSchema = Schema["webview"]>(config: {
+        maxRequestTime?: number,
+        handlers: {            
+            requests?: RPCRequestHandler<BunSchema["requests"]>,
+            messages?: any,
+        }
+      }) {
+        // Note: RPC Anywhere requires defining the requests that a schema handles and the messages that a schema sends.
+        // eg: BunSchema { 
+        //   requests: // ... requests bun handles, sent by webview
+        //   messages: // ... messages bun sends, handled by webview
+        // }
+        // In some generlized contexts that makes sense,
+        // In the Electrobun context it can feel a bit counter-intuitive so we swap this around a bit. In Electrobun, the
+        // webview and bun are known endpoints so we simplify schema definitions by combining them.
+        // Schema {
+        //   bun: BunSchema {
+        //      requests: // ... requests bun sends, handled by webview,
+        //      messages: // ... messages bun sends, handled by webview
+        //    },
+        //   webview: WebviewSchema {
+        //      requests: // ... requests webview sends, handled by bun,
+        //      messages: // ... messages webview sends, handled by bun
+        //    },
+        // }
+        // electrobun also treats messages as "requests that we don't wait for to complete", and normalizes specifying the
+        // handlers for them alongside request handlers.
+
+        type mixedBunSchema = {
+            requests: WebviewSchema["requests"],
+            messages: BunSchema["messages"]
+        }
+
+        type mixedWebviewSchema = {
+            requests: BunSchema["requests"],
+            messages: WebviewSchema["messages"]
+        }
+
+        const rpcOptions = {
+            maxRequestTime: config.maxRequestTime,
+            requestHandler: config.handlers.requests,                
+        } as RPCOptions<mixedWebviewSchema, mixedBunSchema>;        
+
+        const rpc = createRPC<mixedWebviewSchema, mixedBunSchema>(rpcOptions);
+
+        // todo (yoav): wire up message handlers here
+
+        return rpc;
+      }
 }
 
 export {

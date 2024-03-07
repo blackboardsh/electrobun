@@ -222,6 +222,14 @@ class Electroview {
       this.rpcHandler(msg);
     }
   }
+  static defineRPC(config) {
+    const rpcOptions = {
+      maxRequestTime: config.maxRequestTime,
+      requestHandler: config.handlers.requests
+    };
+    const rpc2 = createRPC(rpcOptions);
+    return rpc2;
+  }
 }
 var ElectrobunView = {
   Electroview
@@ -229,10 +237,12 @@ var ElectrobunView = {
 var browser_default = ElectrobunView;
 
 // src/myextension/preload.ts
-var rpc2 = createRPC({
-  requestHandler: {
-    getTitle: () => {
-      return document.title;
+var rpc2 = Electroview.defineRPC({
+  handlers: {
+    requests: {
+      getTitle: () => {
+        return document.title;
+      }
     }
   }
 });

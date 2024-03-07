@@ -473,6 +473,14 @@ class BrowserView {
   static getAll() {
     return Object(BrowserViewMap).values();
   }
+  static defineRPC(config) {
+    const rpcOptions = {
+      maxRequestTime: config.maxRequestTime,
+      requestHandler: config.handlers.requests
+    };
+    const rpc2 = createRPC(rpcOptions);
+    return rpc2;
+  }
 }
 
 // /Users/yoav/code/electrobun/src/bun/core/BrowserWindow.ts
@@ -567,13 +575,15 @@ var Electrobun = {
 var bun_default = Electrobun;
 
 // src/bun/index.ts
-var myWebviewRPC = createRPC({
+var myWebviewRPC = BrowserView.defineRPC({
   maxRequestTime: 5000,
-  requestHandler: {
-    doMoreMath: ({ a, b }) => {
-      console.log("\n\n\n\n");
-      console.log(`win1 webview asked me to do more math with: ${a} and ${b}`);
-      return a + b;
+  handlers: {
+    requests: {
+      doMoreMath: ({ a, b }) => {
+        console.log("\n\n\n\n");
+        console.log(`win1 webview asked me to do more math with: ${a} and ${b}`);
+        return a + b;
+      }
     }
   }
 });
@@ -599,8 +609,12 @@ var wikiWindow = new BrowserWindow({
     x: 1000,
     y: 0
   },
-  rpc: createRPC({
-    maxRequestTime: 5000
+  rpc: BrowserView.defineRPC({
+    maxRequestTime: 5000,
+    handlers: {
+      requests: {},
+      messages: {}
+    }
   })
 });
 bun_default.events.on("will-navigate", (e) => {

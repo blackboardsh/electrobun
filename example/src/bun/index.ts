@@ -2,20 +2,50 @@ import Electrobun, {BrowserWindow, BrowserView, type RPCSchema, createRPC} from 
 import {type MyWebviewRPC} from '../mainview/rpc';
 import {type MyExtensionSchema} from '../myextension/rpc';
 
-const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
+// const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
+//     maxRequestTime: 5000,
+//     requestHandler: {
+//         doMoreMath: ({a, b}) => {
+//             console.log('\n\n\n\n')
+//             console.log(`win1 webview asked me to do more math with: ${a} and ${b}`)            
+//             return a + b;
+//         },
+//         // todo (yoav): messages currently require subscripting
+//         // logToBun: ({msg}) => {
+//         //     console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
+//         // }
+//     }
+// });
+
+const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
     maxRequestTime: 5000,
-    requestHandler: {
-        doMoreMath: ({a, b}) => {
-            console.log('\n\n\n\n')
-            console.log(`win1 webview asked me to do more math with: ${a} and ${b}`)            
-            return a + b;
+    handlers: {
+        requests: {
+            doMoreMath: ({a, b}) => {
+                console.log('\n\n\n\n')
+                console.log(`win1 webview asked me to do more math with: ${a} and ${b}`)            
+                return a + b;
+            },
         },
+        // messages: {
+        //     logToBun: ({msg}) => {
+        //             console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
+        //         }
+        // }
+    }
+    
+       
         // todo (yoav): messages currently require subscripting
         // logToBun: ({msg}) => {
         //     console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
-        // }
-    }
+        // }    
 });
+
+// myWebviewRPC.request.doMath({a: 4, b: 5}).then((result) => {
+//     console.log(result);
+// });
+
+// myWebviewRPC.send.logToWebview({msg: 'hello from bun'});
 
 const win = new BrowserWindow({
     title: 'my url window',
@@ -45,11 +75,24 @@ const wikiWindow = new BrowserWindow({
     }, 
         // todo (yoav): can we pass this to the webview's preload code so it doesn't have to be included
         // in the user's webview bundle?
-        rpc: createRPC<MyExtensionSchema["bun"], MyExtensionSchema["webview"]>({
+        // rpc: createRPC<MyExtensionSchema["bun"], MyExtensionSchema["webview"]>({
+        //     maxRequestTime: 5000,
+        //     // requestHandler: {}        
+        // })         ,
+        rpc: BrowserView.defineRPC<MyExtensionSchema>({
             maxRequestTime: 5000,
-            // requestHandler: {}        
-        })           
+            handlers: {
+                requests: {
+
+                },
+                messages: {
+
+                }
+            }
+        })  
 });
+
+// wikiWindow.setRPC()
 
 
 // todo (yoav): typescript types should resolve for e and e.setResponse
