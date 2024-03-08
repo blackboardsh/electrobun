@@ -1,15 +1,16 @@
-#!/bin/bash
-    cd "$(dirname "$0")"/bun
-    
-    # Define the log file path
-    LOG_FILE="$HOME//Library/Logs/Electrobun/ExampleApp/dev/out.log"    
-    
-    # Ensure the directory exists
-    mkdir -p "$(dirname "$LOG_FILE")"
+#!/bin/bash    
+# change directory from whatever open was or double clicking on the app to the dir of the bin in the app bundle
+cd "$(dirname "$0")"/
 
-    if [[ ! -p $LOG_FILE ]]; then
-        mkfifo $LOG_FILE
-    fi    
-    
-    # Execute bun and redirect stdout and stderr to the log file
-    ./bun . >"$LOG_FILE" 2>&1
+# Define the log file path
+LOG_FILE="$HOME//Library/Logs/Electrobun/ExampleApp/dev/out.log"    
+
+# Ensure the directory exists
+mkdir -p "$(dirname "$LOG_FILE")"
+
+if [[ ! -p $LOG_FILE ]]; then
+    mkfifo $LOG_FILE
+fi    
+
+# Execute bun and redirect stdout and stderr to the log file
+./bun ../Resources/bun/index.js >"$LOG_FILE" 2>&1

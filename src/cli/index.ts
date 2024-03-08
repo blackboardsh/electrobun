@@ -73,8 +73,10 @@ if (commandArg === 'init') {
     const appBundleFolderPath = join(buildFolder, 'dev.app');
     const appBundleFolderContentsPath = join(appBundleFolderPath, 'Contents');
     const appBundleMacOSPath = join(appBundleFolderContentsPath, 'MacOS');
+    const appBundleFolderResourcesPath = join(appBundleFolderContentsPath, 'Resources');
     
     mkdirSync(appBundleMacOSPath, {recursive: true});
+    mkdirSync(appBundleFolderResourcesPath, {recursive: true});
 
     // const bundledBunPath = join(appBundleMacOSPath, 'bun');
     // cpSync(bunPath, bundledBunPath);    
@@ -101,28 +103,51 @@ if (commandArg === 'init') {
     
     // in dev builds the log file is a named pipe so we can stream it back to the terminal
     // in canary/stable builds it'll be a regular log file
-    const LauncherContents = `#!/bin/bash
-    cd "$(dirname "$0")"/bun
-    
-    # Define the log file path
-    LOG_FILE="$HOME/${logPath}"    
-    
-    # Ensure the directory exists
-    mkdir -p "$(dirname "$LOG_FILE")"
+    const LauncherContents = `#!/bin/bash    
+# change directory from whatever open was or double clicking on the app to the dir of the bin in the app bundle
+cd "$(dirname "$0")"/
 
-    if [[ ! -p $LOG_FILE ]]; then
-        mkfifo $LOG_FILE
-    fi    
-    
-    # Execute bun and redirect stdout and stderr to the log file
-    ./bun . >"$LOG_FILE" 2>&1
+# Define the log file path
+LOG_FILE="$HOME/${logPath}"    
+
+# Ensure the directory exists
+mkdir -p "$(dirname "$LOG_FILE")"
+
+if [[ ! -p $LOG_FILE ]]; then
+    mkfifo $LOG_FILE
+fi    
+
+# Execute bun and redirect stdout and stderr to the log file
+./bun ../Resources/bun/index.js >"$LOG_FILE" 2>&1
 `;
 
+    // Launcher binary
+    // todo (yoav): This will likely be a zig compiled binary in the future
     Bun.write(join(appBundleMacOSPath, 'MyApp'), LauncherContents);
     chmodSync(join(appBundleMacOSPath, 'MyApp'), '755');
-    
-    
-    const bunDestFolder = join(appBundleMacOSPath, "bun");
+
+    // Bun runtime binary
+    // todo (yoav): this only works for the current architecture
+    const bunBinarySourcePath = join(projectRoot, 'node_modules', '.bin', 'bun');
+    // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
+    // in node_modules, so we have to dereference here to get the actual binary in the bundle.
+    cpSync(bunBinarySourcePath, join(appBundleMacOSPath, 'bun'), {dereference: true});    
+    const bunDestFolder = join(appBundleFolderResourcesPath, "bun");
+
+    // Zig native wrapper binary
+    // todo (yoav): build native bindings for target
+    // copy native bindings
+    const zigNativeBinarySource = join(projectRoot, 'node_modules', 'electrobun', 'src', 'zig', 'zig-out', 'bin', 'webview');
+    const zigNativeBinaryDestination = join(appBundleMacOSPath, 'native', 'webview');
+    const destFolder = dirname(zigNativeBinaryDestination);
+    if (!existsSync(destFolder)) {
+        // console.info('creating folder: ', destFolder);
+        mkdirSync(destFolder, {recursive: true});
+    }
+    // console.log('copying', zigNativeBinarySource, 'to', zigNativeBinaryDestination);
+    cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {recursive: true, dereference: true});    
+
+    // Build bun-javascript ts files
     const buildResult = await Bun.build({
         entrypoints: [bunSource],
         outdir: bunDestFolder,
@@ -134,10 +159,7 @@ if (commandArg === 'init') {
         console.error('failed to build', bunSource, buildResult.logs);
         process.exit(1);
     }
-    const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
-    // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
-    // in node_modules, so we have to dereference here to get the actual binary in the bundle.
-    cpSync(bunPath, join(bunDestFolder, 'bun'), {dereference: true});
+    
     // const singleFileExecutablePath = join(appBundleMacOSPath, 'myApp');
     
     // const builderProcess = Bun.spawnSync([bunPath, 'build', bunSource, '--compile', '--outfile', singleFileExecutablePath])
@@ -145,7 +167,7 @@ if (commandArg === 'init') {
     // console.log('builderProcess', builderProcess.stdout.toString(), builderProcess.stderr.toString());
     
 
-
+    // Build webview-javascript ts files
     // bundle all the bundles
     for (const viewName in config.build.views) {        
         const viewConfig = config.build.views[viewName];
@@ -156,7 +178,7 @@ if (commandArg === 'init') {
             continue;
         }
 
-        const viewDestFolder = join(appBundleMacOSPath, 'views', viewName);
+        const viewDestFolder = join(appBundleFolderResourcesPath, 'views', viewName);
         
         if (!existsSync(viewDestFolder)) {
             // console.info('creating folder: ', viewDestFolder);
@@ -182,7 +204,7 @@ if (commandArg === 'init') {
     }
 
 
-    // copy all the files
+    // Copy assets like html, css, images, and other files
     for (const relSource in config.build.copy) {
         const source = join(projectRoot, relSource);
         if (!existsSync(source)) {
@@ -190,7 +212,7 @@ if (commandArg === 'init') {
             continue;
         }
 
-        const destination = join(appBundleMacOSPath, config.build.copy[relSource]);
+        const destination = join(appBundleFolderResourcesPath, config.build.copy[relSource]);
         const destFolder = dirname(destination);
 
         if (!existsSync(destFolder)) {
@@ -203,18 +225,9 @@ if (commandArg === 'init') {
         cpSync(source, destination, {recursive: true, dereference: true})
     }
 
-    // todo (yoav): build native bindings for target
     
-    // copy native bindings
-    const zigNativeBinarySource = join(projectRoot, 'node_modules', 'electrobun', 'src', 'zig', 'zig-out', 'bin', 'webview');
-    const zigNativeBinaryDestination = join(appBundleMacOSPath, 'native', 'webview');
-    const destFolder = dirname(zigNativeBinaryDestination);
-    if (!existsSync(destFolder)) {
-        // console.info('creating folder: ', destFolder);
-        mkdirSync(destFolder, {recursive: true});
-    }
-    // console.log('copying', zigNativeBinarySource, 'to', zigNativeBinaryDestination);
-    cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {recursive: true});    
+    
+    
 
     
 

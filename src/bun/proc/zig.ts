@@ -4,14 +4,14 @@ import {execSync} from 'child_process';
 import * as fs from 'fs';
 import electrobunEventEmitter from '../events/eventEmitter';
 
-const webviewBinaryPath = join('..', 'native', 'webview');
+const webviewBinaryPath = join('native', 'webview');
 
 const zigProc = Bun.spawn([webviewBinaryPath], {
 	stdin: 'pipe',
 	stdout: 'pipe',	
 	env: {
 		...process.env,		
-		ELECTROBUN_VIEWS_FOLDER: resolve('../views'),		
+		ELECTROBUN_VIEWS_FOLDER: resolve('../Resources/views'),		
 	}
 });
 

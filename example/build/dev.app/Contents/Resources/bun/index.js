@@ -294,13 +294,13 @@ var createStdioTransport = function(proc) {
     }
   };
 };
-var webviewBinaryPath = join("..", "native", "webview");
+var webviewBinaryPath = join("native", "webview");
 var zigProc = Bun.spawn([webviewBinaryPath], {
   stdin: "pipe",
   stdout: "pipe",
   env: {
     ...process.env,
-    ELECTROBUN_VIEWS_FOLDER: resolve("../views")
+    ELECTROBUN_VIEWS_FOLDER: resolve("../Resources/views")
   }
 });
 process.on("beforeExit", (code) => {
