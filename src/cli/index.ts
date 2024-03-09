@@ -1,6 +1,6 @@
 import {join, dirname} from 'path';
-import {existsSync, readFileSync, cpSync, rmdirSync, mkdirSync, chmodSync} from 'fs';
-import {exec} from 'child_process';
+import {existsSync, readFileSync, cpSync, rmdirSync, mkdirSync, createWriteStream, createReadStream} from 'fs';
+import {execSync} from 'child_process';
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -74,9 +74,10 @@ if (commandArg === 'init') {
     const appBundleFolderContentsPath = join(appBundleFolderPath, 'Contents');
     const appBundleMacOSPath = join(appBundleFolderContentsPath, 'MacOS');
     const appBundleFolderResourcesPath = join(appBundleFolderContentsPath, 'Resources');
+    const appBundleAppCodePath = join(appBundleFolderResourcesPath, 'app');
     
     mkdirSync(appBundleMacOSPath, {recursive: true});
-    mkdirSync(appBundleFolderResourcesPath, {recursive: true});
+    mkdirSync(appBundleAppCodePath, {recursive: true});
 
     // const bundledBunPath = join(appBundleMacOSPath, 'bun');
     // cpSync(bunPath, bundledBunPath);    
@@ -103,28 +104,36 @@ if (commandArg === 'init') {
     
     // in dev builds the log file is a named pipe so we can stream it back to the terminal
     // in canary/stable builds it'll be a regular log file
-    const LauncherContents = `#!/bin/bash    
-# change directory from whatever open was or double clicking on the app to the dir of the bin in the app bundle
-cd "$(dirname "$0")"/
+//     const LauncherContents = `#!/bin/bash    
+// # change directory from whatever open was or double clicking on the app to the dir of the bin in the app bundle
+// cd "$(dirname "$0")"/
 
-# Define the log file path
-LOG_FILE="$HOME/${logPath}"    
+// # Define the log file path
+// LOG_FILE="$HOME/${logPath}"    
 
-# Ensure the directory exists
-mkdir -p "$(dirname "$LOG_FILE")"
+// # Ensure the directory exists
+// mkdir -p "$(dirname "$LOG_FILE")"
 
-if [[ ! -p $LOG_FILE ]]; then
-    mkfifo $LOG_FILE
-fi    
+// if [[ ! -p $LOG_FILE ]]; then
+//     mkfifo $LOG_FILE
+// fi    
 
-# Execute bun and redirect stdout and stderr to the log file
-./bun ../Resources/bun/index.js >"$LOG_FILE" 2>&1
-`;
+// # Execute bun and redirect stdout and stderr to the log file
+// ./bun ../Resources/app/bun/index.js >"$LOG_FILE" 2>&1
+// `;
 
-    // Launcher binary
-    // todo (yoav): This will likely be a zig compiled binary in the future
-    Bun.write(join(appBundleMacOSPath, 'MyApp'), LauncherContents);
-    chmodSync(join(appBundleMacOSPath, 'MyApp'), '755');
+//     // Launcher binary
+//     // todo (yoav): This will likely be a zig compiled binary in the future
+//     Bun.write(join(appBundleMacOSPath, 'MyApp'), LauncherContents);
+//     chmodSync(join(appBundleMacOSPath, 'MyApp'), '755');
+    const zigLauncherBinarySource = join(projectRoot, 'node_modules', 'electrobun', 'src', 'launcher', 'zig-out', 'bin', 'launcher');
+    const zigLauncherDestination = join(appBundleMacOSPath, 'MyApp');
+    const destLauncherFolder = dirname(zigLauncherDestination);
+    if (!existsSync(destLauncherFolder)) {
+        // console.info('creating folder: ', destFolder);
+        mkdirSync(destLauncherFolder, {recursive: true});
+    }
+    cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});    
 
     // Bun runtime binary
     // todo (yoav): this only works for the current architecture
@@ -132,7 +141,7 @@ fi
     // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
     // in node_modules, so we have to dereference here to get the actual binary in the bundle.
     cpSync(bunBinarySourcePath, join(appBundleMacOSPath, 'bun'), {dereference: true});    
-    const bunDestFolder = join(appBundleFolderResourcesPath, "bun");
+    
 
     // Zig native wrapper binary
     // todo (yoav): build native bindings for target
@@ -147,11 +156,13 @@ fi
     // console.log('copying', zigNativeBinarySource, 'to', zigNativeBinaryDestination);
     cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {recursive: true, dereference: true});    
 
+    const bunDestFolder = join(appBundleAppCodePath, "bun");
     // Build bun-javascript ts files
     const buildResult = await Bun.build({
         entrypoints: [bunSource],
         outdir: bunDestFolder,
         external: bunConfig.external || [],
+        // minify: true, // todo (yoav): add minify in canary and prod builds
         target: "bun",
     })
 
@@ -178,7 +189,7 @@ fi
             continue;
         }
 
-        const viewDestFolder = join(appBundleFolderResourcesPath, 'views', viewName);
+        const viewDestFolder = join(appBundleAppCodePath, 'views', viewName);
         
         if (!existsSync(viewDestFolder)) {
             // console.info('creating folder: ', viewDestFolder);
@@ -212,7 +223,7 @@ fi
             continue;
         }
 
-        const destination = join(appBundleFolderResourcesPath, config.build.copy[relSource]);
+        const destination = join(appBundleAppCodePath, config.build.copy[relSource]);
         const destFolder = dirname(destination);
 
         if (!existsSync(destFolder)) {
@@ -225,9 +236,31 @@ fi
         cpSync(source, destination, {recursive: true, dereference: true})
     }
 
+    // in dev mode add a cupla named pipes for some dev debug rpc magic
+    const debugPipesFolder = join(appBundleFolderResourcesPath, 'debug');
+    if (!existsSync(debugPipesFolder)) {
+        // console.info('creating folder: ', debugPipesFolder);
+        mkdirSync(debugPipesFolder, {recursive: true});
+    }
+    const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
+    const toCliPipePath = join(debugPipesFolder, 'toCli');
+    try {        
+        execSync('mkfifo ' + toLauncherPipePath);        
+    } catch (e) {
+        console.log('pipe out already exists')
+    }
+
+    try {        
+        execSync('mkfifo ' + toCliPipePath);
+    } catch (e) {
+        console.log('pipe out already exists')
+    }
+
+    
+
     
     
-    
+    // todo (yoav): generate version.json file
 
     
 
@@ -244,18 +277,76 @@ fi
     // This is critical to fully test the app (including plist configuration, etc.)
     // but also to get proper cmd+tab and dock behaviour and not run the windowed app
     // as a child of the terminal process which steels keyboard focus from any descendant nswindows.
+    console.log(0)
     Bun.spawn(['open', mainPath], {        
         env: {
         }        
     });    
+    const debugPipesFolder = join(buildFolder, "dev.app", 'Contents', 'Resources', 'debug');
+    const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
+    const toCliPipePath = join(debugPipesFolder, 'toCli');
+    console.log(1)
+    const toLauncherPipe = createWriteStream(toLauncherPipePath, {
+		flags: 'w', 		
+	});
+    toLauncherPipe.write('\n')
+    console.log(2)
 
-    const proc = exec(`cat ~${logPath}`, {stdio: 'inherit'});
-    proc.stdout.on('data', (data) => {        
-        process.stdout.write(data);
-    });
-    proc.stderr.on('data', (data) => {        
-        process.stderr.write(data);
-    });
+    toLauncherPipe.write('hello from cli\n')
+
+    const toCliPipeStream = createReadStream(toCliPipePath, {
+		flags: 'r+', 		
+	});
+    console.log(3)
+    let buffer = '';
+    toCliPipeStream.on('data', (chunk) => {
+        buffer += chunk.toString();                    
+        let eolIndex;
+
+        while ((eolIndex = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, eolIndex).trim();
+            buffer = buffer.slice(eolIndex + 1);                        
+            if (line) {
+                try {
+                    const event = JSON.parse(line);
+                    // handler(event)										
+                } catch (error) {
+                    // Non-json things are just bubbled up to the console.
+                    console.error('webview: ', line)
+                }                    
+            }
+        }                                       
+    });	     
+    console.log(5)
+    // process.on("beforeExit", (code) => {
+    //     console.log('beforeExit', code);
+    //     toLauncherPipe.write('exit command')
+    // });
+
+    process.on("SIGINT", () => {
+        toLauncherPipe.write('exit command\n')
+        console.log("Received SIGINT");
+      });
+    
+      setTimeout(() => {        
+        toLauncherPipe.write('exit command\n')
+      }, 1000)
+
+    //   process.on("beforeExit", (code) => {
+    //     console.log(`Event loop is empty! ${code}`);
+    //   });
+      
+    //   process.on("exit", (code) => {
+    //     console.log(`Process is exiting with code ${code}`);
+    //   });
+
+    // const proc = exec(`cat ~${logPath}`, {stdio: 'inherit'});
+    // proc.stdout.on('data', (data) => {        
+    //     process.stdout.write(data);
+    // });
+    // proc.stderr.on('data', (data) => {        
+    //     process.stderr.write(data);
+    // });
 
       // todo (yoav): it would be nice if cmd+c here killed the opened app bundle
       

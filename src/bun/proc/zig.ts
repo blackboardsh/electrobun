@@ -4,6 +4,8 @@ import {execSync} from 'child_process';
 import * as fs from 'fs';
 import electrobunEventEmitter from '../events/eventEmitter';
 
+// todo (yoav): webviewBinaryPath and ELECTROBUN_VIEWS_FOLDER should be passed in as cli/env args by the launcher binary
+// will likely be different on different platforms. Right now these are hardcoded for relative paths inside the mac app bundle.
 const webviewBinaryPath = join('native', 'webview');
 
 const zigProc = Bun.spawn([webviewBinaryPath], {
@@ -11,7 +13,7 @@ const zigProc = Bun.spawn([webviewBinaryPath], {
 	stdout: 'pipe',	
 	env: {
 		...process.env,		
-		ELECTROBUN_VIEWS_FOLDER: resolve('../Resources/views'),		
+		ELECTROBUN_VIEWS_FOLDER: resolve('../Resources/app/views'),		
 	}
 });
 
