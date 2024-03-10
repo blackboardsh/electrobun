@@ -14,5 +14,12 @@ const alloc = std.heap.page_allocator;
 pub fn main() !void {
     try rpc.init();
 
+    // const sigint = std.os.signals.get(std.os.signals.SIGINT) catch {
+    //     std.debug.print("Failed to get SIGINT signal\n", .{});
+    //     return;
+    // };
+
+    // try sigint.setHandler(SigIntHandler.handle, null, null);
+
     application.startAppkitGuiEventLoop();
 }

@@ -9,7 +9,7 @@ const configPath = join(projectRoot, configName);
 
 // Note: cli args can be called via npm bun /path/to/electorbun/binary arg1 arg2 
 const indexOfElectrobun = process.argv.findIndex(arg => arg.includes('electrobun'));;
-const commandArg = process.argv[indexOfElectrobun + 1];
+const commandArg = process.argv[indexOfElectrobun + 1] || 'launcher';
 const commandDefaults = {
     init: {
         projectRoot,
@@ -22,7 +22,11 @@ const commandDefaults = {
     dev: {
         projectRoot,
         config: 'electrobun.config'
-    }
+    },
+    launcher: {
+        projectRoot,
+        config: 'electrobun.config'
+    },
 }
 
 // todo (yoav): add types for config
@@ -44,6 +48,8 @@ const config = getConfig();
 const buildFolder = join(projectRoot, config.build.outputFolder);
 
 const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
+
+let proc = null;
 
 if (commandArg === 'init') {
     // todo (yoav): init a repo folder structure
@@ -126,14 +132,22 @@ if (commandArg === 'init') {
 //     // todo (yoav): This will likely be a zig compiled binary in the future
 //     Bun.write(join(appBundleMacOSPath, 'MyApp'), LauncherContents);
 //     chmodSync(join(appBundleMacOSPath, 'MyApp'), '755');
-    const zigLauncherBinarySource = join(projectRoot, 'node_modules', 'electrobun', 'src', 'launcher', 'zig-out', 'bin', 'launcher');
-    const zigLauncherDestination = join(appBundleMacOSPath, 'MyApp');
-    const destLauncherFolder = dirname(zigLauncherDestination);
+    // const zigLauncherBinarySource = join(projectRoot, 'node_modules', 'electrobun', 'src', 'launcher', 'zig-out', 'bin', 'launcher');
+    // const zigLauncherDestination = join(appBundleMacOSPath, 'MyApp');
+    // const destLauncherFolder = dirname(zigLauncherDestination);
+    // if (!existsSync(destLauncherFolder)) {
+    //     // console.info('creating folder: ', destFolder);
+    //     mkdirSync(destLauncherFolder, {recursive: true});
+    // }
+    // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});    
+    const bunCliLauncherBinarySource = join(projectRoot, 'node_modules', '.bin', 'electrobun');
+    const bunCliLauncherDestination = join(appBundleMacOSPath, 'MyApp');
+    const destLauncherFolder = dirname(bunCliLauncherDestination);
     if (!existsSync(destLauncherFolder)) {
         // console.info('creating folder: ', destFolder);
         mkdirSync(destLauncherFolder, {recursive: true});
     }
-    cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});    
+    cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {recursive: true, dereference: true});    
 
     // Bun runtime binary
     // todo (yoav): this only works for the current architecture
@@ -265,7 +279,13 @@ if (commandArg === 'init') {
     
 
 } else if (commandArg === 'dev') {
+    
     // run the project in dev mode
+    // this runs the cli in debug mode, on macos executes the app bundle,
+    // there is another copy of the cli in the app bundle that will execute the app
+    // the two cli processes communicate via named pipes and together manage the dev
+    // lifecycle and debug functionality
+
     // Note: this cli will be a bun single-file-executable
     // Note: we want to use the version of bun that's packaged with electrobun
     // const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
@@ -281,22 +301,23 @@ if (commandArg === 'init') {
     Bun.spawn(['open', mainPath], {        
         env: {
         }        
-    });    
+    });   
+    
+    
     const debugPipesFolder = join(buildFolder, "dev.app", 'Contents', 'Resources', 'debug');
     const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
     const toCliPipePath = join(debugPipesFolder, 'toCli');
     console.log(1)
-    const toLauncherPipe = createWriteStream(toLauncherPipePath, {
-		flags: 'w', 		
-	});
-    toLauncherPipe.write('\n')
-    console.log(2)
-
-    toLauncherPipe.write('hello from cli\n')
+    
+    
 
     const toCliPipeStream = createReadStream(toCliPipePath, {
 		flags: 'r+', 		
 	});
+    
+    
+
+    
     console.log(3)
     let buffer = '';
     toCliPipeStream.on('data', (chunk) => {
@@ -308,6 +329,9 @@ if (commandArg === 'init') {
             buffer = buffer.slice(eolIndex + 1);                        
             if (line) {
                 try {
+                    if (line === 'app exiting command')  {
+                        process.exit();
+                    }
                     const event = JSON.parse(line);
                     // handler(event)										
                 } catch (error) {
@@ -317,7 +341,17 @@ if (commandArg === 'init') {
             }
         }                                       
     });	     
+
     console.log(5)
+
+    console.log(2)
+    console.log('electrobun cli pid: ', process.pid)
+    console.log('electrobun cli ppid: ', process.ppid)
+    const toLauncherPipe = createWriteStream(toLauncherPipePath, {
+		flags: 'w', 		
+	});
+    toLauncherPipe.write('\n')
+    toLauncherPipe.write('hello from cli 1\n')
     // process.on("beforeExit", (code) => {
     //     console.log('beforeExit', code);
     //     toLauncherPipe.write('exit command')
@@ -325,11 +359,19 @@ if (commandArg === 'init') {
 
     process.on("SIGINT", () => {
         toLauncherPipe.write('exit command\n')
-        console.log("Received SIGINT");
+        // toCliPipeStream.close();
+        // toLauncherPipe.close();
+        console.log("Received SIGINT in cli do nothing");
+        // toLauncherPipe.close();
+        setTimeout(() => {
+            process.exit();
+
+        }, 1000)
       });
     
       setTimeout(() => {        
-        toLauncherPipe.write('exit command\n')
+        // toLauncherPipe.write('exit command\n')
+        toLauncherPipe.write('hello from cli timeout\n')
       }, 1000)
 
     //   process.on("beforeExit", (code) => {
@@ -362,7 +404,114 @@ if (commandArg === 'init') {
       // by default, webviews given a views:// url should be able to access views
       // any other url should not unless user specifies it with enableViewsScheme: true
       // assets:// never maps to build/native or build/bun
-} 
+} else {
+    // no commands so run as the debug launcher inside the app bundle
+
+    // todo (yoav): as the debug launcher, get the relative path a different way, so dev builds can be shared and executed
+    // from different locations
+    const pathToLauncherBin = process.argv0;
+    const pathToMacOS = dirname(pathToLauncherBin);
+    const debugPipesFolder = join(pathToMacOS, "..", 'Resources', 'debug');
+    const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
+    const toCliPipePath = join(debugPipesFolder, 'toCli');
+    console.log(1)
+    Bun.write('/Users/yoav/Desktop/debug.txt', `${debugPipesFolder}\n${toLauncherPipePath}\n${toCliPipePath}\ndirname: ${__dirname}\nargv0: ${process.argv0}`);
+
+    const toLauncherPipeStream = createReadStream(toLauncherPipePath, {
+		flags: 'r+', 		
+	});
+    Bun.write('/Users/yoav/Desktop/debug.txt', `toLauncherStream r+\n`);
+    console.log(3)
+    let buffer = '';
+    toLauncherPipeStream.on('data', (chunk) => {
+        buffer += chunk.toString();                    
+        let eolIndex;
+
+        while ((eolIndex = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, eolIndex).trim();
+            buffer = buffer.slice(eolIndex + 1);                        
+            if (line) {
+                try {
+                    Bun.write('/Users/yoav/Desktop/debug.txt', `launcher received line from cli: ${line}\n`);
+                    if (line === 'exit command') {     
+                        // Receive kill command from cli (likely did cmd+c in terminal running the cli)                   
+                        Bun.write('/Users/yoav/Desktop/debug.txt', `trying to kill subprocess\n`);                        
+                        // Note: pass on sigint to the subprocess. don't use proc.kill
+                        process.kill(proc.pid, 'SIGINT');                        
+                        process.exit();
+                        
+                    }
+                    const event = JSON.parse(line);
+                    // handler(event)										
+                } catch (error) {
+                    // Non-json things are just bubbled up to the console.
+                    console.error('launcher received line from cli: ', line)
+                }                    
+            }
+        }                                       
+    });	     
+    console.log(5)
+    Bun.write('/Users/yoav/Desktop/debug.txt', `toCli starting pipe w\n`);
+    const toCliPipe = createWriteStream(toCliPipePath, {
+		flags: 'w', 		
+	});
+    Bun.write('/Users/yoav/Desktop/debug.txt', `toCli pipe w\n`);
+    toCliPipe.write('\n')
+    console.log(2)
+
+    toCliPipe.write('hello from launcher\n')
+    // process.on("beforeExit", (code) => {
+    //     console.log('beforeExit', code);
+    //     toLauncherPipe.write('exit command')
+    // });
+
+    
+
+    const bunRuntimePath = join(pathToMacOS, "bun");
+    const appEntrypointPath = join(pathToMacOS, "..", "Resources", "app", "bun", "index.js");
+    toCliPipe.write(`hello from launcher\n ${bunRuntimePath}, ${appEntrypointPath}\n`)
+    
+    try {
+    proc = Bun.spawn([bunRuntimePath, appEntrypointPath], {cwd: pathToMacOS, onExit: (code) => {
+        toCliPipe.write(`subprocess exited\n`)
+        // process.exit();
+        process.kill(process.pid, 'SIGINT')
+    }});
+
+    
+    
+    // Bun.write('/Users/yoav/Desktop/debug.txt', `proc: ${pathToMacOS}\n pid: ${proc.pid}\n`);
+    toCliPipe.write(`proc: ${pathToMacOS}\n pid: ${proc.pid}\n`)
+
+    
+} catch (e) {
+    toCliPipe.write(`error\n ${e}\n`)
+    Bun.write('/Users/yoav/Desktop/debug.txt', `error: ${e}\n`);
+}
+
+    process.on("SIGINT", () => {
+        toCliPipe.write('app exiting command\n')
+        // toLauncherPipeStream.close();
+        // toCliPipe.close();
+        proc?.kill();
+        
+        // maybe react by continuing to watch for file changes and rebuild or whatever the cli wants to do.
+        console.log("Received SIGINT in launcher from cli");
+
+        process.exit();
+    });
+
+    async function streamPipeToCli(stream) {
+        for await (const chunk of stream) {
+            toCliPipe.write(chunk);
+        }
+    }
+    streamPipeToCli(proc.stdout);
+    // streamPipeToCli(process.stdout);
+    // streamPipeToCli(proc.stderr);
+}
+
+
 
 
 

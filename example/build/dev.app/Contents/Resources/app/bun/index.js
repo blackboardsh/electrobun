@@ -301,12 +301,32 @@ var zigProc = Bun.spawn([webviewBinaryPath], {
   env: {
     ...process.env,
     ELECTROBUN_VIEWS_FOLDER: resolve("../Resources/app/views")
+  },
+  onExit: (_zigProc) => {
+    console.log("--------------> SIGINT ", _zigProc.pid, _zigProc.exitCode);
+    process.exit(0);
   }
 });
-process.on("beforeExit", (code) => {
-  zigProc.kill();
-});
 var mainPipe = "/private/tmp/electrobun_ipc_pipe_my-app-id_main";
+console.log("--------------> 1");
+process.on("SIGINT", (code) => {
+  console.log("--------------> SIGINT ", code);
+  Bun.write("/Users/yoav/Desktop/debug.txt", `--------------> SIGINT \n`);
+  zigProc.kill();
+  process.exit();
+});
+process.on("exit", (code) => {
+  console.log("--------------> exit ", code);
+  Bun.write("/Users/yoav/Desktop/debug.txt", `--------------> exit \n`);
+  zigProc.kill();
+  process.exit();
+});
+process.on("beforeExit", (code) => {
+  console.log("--------------> beforeExit ", code);
+  Bun.write("/Users/yoav/Desktop/debug.txt", `--------------> beforeExit \n`);
+  zigProc.kill();
+  process.exit();
+});
 try {
   execSync("mkfifo " + mainPipe);
 } catch (e) {

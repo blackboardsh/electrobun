@@ -14,19 +14,59 @@ const zigProc = Bun.spawn([webviewBinaryPath], {
 	env: {
 		...process.env,		
 		ELECTROBUN_VIEWS_FOLDER: resolve('../Resources/app/views'),		
+	},
+	onExit: (_zigProc) => {
+		console.log('--------------> SIGINT ', _zigProc.pid, _zigProc.exitCode)
+		// right now just exit the whole app if the webview process dies.
+		// in the future we probably want to try spin it back up aagain
+		process.exit(0);
 	}
 });
 
-process.on("beforeExit", (code) => {
-	// todo (yoav): maybe send a friendly signal to the webviews to let them know
-	// we're shutting down
-	
-	// clean up the webview process when the bun process dies.
-	zigProc.kill();
-  });
+
 
 // todo: this needs to be globally unique across all apps (including different electrobun apps, and different versions and builds of the same app)
 const mainPipe = `/private/tmp/electrobun_ipc_pipe_${'my-app-id'}_main`;
+
+
+console.log('--------------> 1')
+process.on("SIGINT", (code) => {
+	console.log('--------------> SIGINT ', code)
+	Bun.write('/Users/yoav/Desktop/debug.txt', `--------------> SIGINT \n`);
+// todo (yoav): maybe send a friendly signal to the webviews to let them know
+// we're shutting down
+
+// clean up the webview process when the bun process dies.
+zigProc.kill();
+// fs.unlinkSync(mainPipe);
+process.exit();
+});
+
+process.on("exit", (code) => {
+	console.log('--------------> exit ', code)
+	Bun.write('/Users/yoav/Desktop/debug.txt', `--------------> exit \n`);
+// todo (yoav): maybe send a friendly signal to the webviews to let them know
+// we're shutting down
+
+// clean up the webview process when the bun process dies.
+zigProc.kill();
+// fs.unlinkSync(mainPipe);
+process.exit();
+});
+
+process.on("beforeExit", (code) => {
+	console.log('--------------> beforeExit ', code)
+	Bun.write('/Users/yoav/Desktop/debug.txt', `--------------> beforeExit \n`);
+// todo (yoav): maybe send a friendly signal to the webviews to let them know
+// we're shutting down
+
+// clean up the webview process when the bun process dies.
+zigProc.kill();
+// fs.unlinkSync(mainPipe);
+process.exit();
+});
+
+
 
 try {
 	execSync('mkfifo ' + mainPipe);
