@@ -2,10 +2,8 @@ import { zigRPC } from '../proc/zig'
 import * as fs from 'fs';
 import {execSync} from 'child_process';
 import electrobunEventEmitter from '../events/eventEmitter';
-import {type RPC, type RPCSchema, type RPCRequestHandler, type RPCMessageHandlerFn, type WildcardRPCMessageHandlerFn, type RPCRequestHandlerObject, type RPCOptions, createRPC} from 'rpc-anywhere'
+import {type RPCSchema, type RPCRequestHandler, type RPCMessageHandlerFn, type WildcardRPCMessageHandlerFn, type RPCOptions, createRPC} from 'rpc-anywhere'
 
-// temp import
-import { type MyWebviewRPC } from '../../../example/src/mainview/rpc';
 
 const BrowserViewMap = {};
 let nextWebviewId = 1;

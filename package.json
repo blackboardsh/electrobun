@@ -30,7 +30,8 @@
     "build:bun": "",
     "build:dev": "bun build:objc && bun build:cli && bun build:browser && bun build:zig && bun build:launcher",
     "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
-    "dev:example": "bun build:dev && cd example && bun install && bun build:dev && bun start"
+    "dev:example": "bun build:dev && cd example && bun install && bun build:dev && bun start",
+    "dev:example:rerun": "cd example && bun start"
   },
   "devDependencies": {
     "@types/bun": "^1.0.8",
