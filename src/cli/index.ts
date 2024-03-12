@@ -31,8 +31,16 @@ const commandDefaults = {
 
 // todo (yoav): add types for config
 const defaultConfig = {
+    app: {
+        name: "MyApp",
+        identifier: 'com.example.myapp',
+        version: '0.1',
+    },
     build: {
         outputFolder: 'build',
+    },
+    release: {
+        bucketUrl: ''
     }
 };
 
@@ -47,7 +55,15 @@ const config = getConfig();
 
 const buildFolder = join(projectRoot, config.build.outputFolder);
 
-const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
+// MyApp
+// todo (yoav): dev, canary, and stable;
+const buildEnvironment = 'dev';
+
+// const appName = config.app.name.replace(/\s/g, '-').toLowerCase();
+const appFileName = `${config.app.name}-${config.app.version}-${buildEnvironment}.app`.replace(/\s/g, '').toLowerCase();
+
+
+// const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
 
 let proc = null;
 
@@ -75,8 +91,10 @@ if (commandArg === 'init') {
         process.exit(1);
     }
 
+    
+
     // build macos bundle
-    const appBundleFolderPath = join(buildFolder, 'dev.app');
+    const appBundleFolderPath = join(buildFolder, appFileName);
     const appBundleFolderContentsPath = join(appBundleFolderPath, 'Contents');
     const appBundleMacOSPath = join(appBundleFolderContentsPath, 'MacOS');
     const appBundleFolderResourcesPath = join(appBundleFolderContentsPath, 'Resources');
@@ -88,22 +106,23 @@ if (commandArg === 'init') {
     // const bundledBunPath = join(appBundleMacOSPath, 'bun');
     // cpSync(bunPath, bundledBunPath);    
 
-    const InfoPlistContents = `<?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    <plist version="1.0">
-    <dict>
-        <key>CFBundleExecutable</key>
-        <string>MyApp</string>
-        <key>CFBundleIdentifier</key>
-        <string>com.example.myapp</string>
-        <key>CFBundleName</key>
-        <string>MyApp</string>
-        <key>CFBundleVersion</key>
-        <string>1.0</string>
-        <key>CFBundlePackageType</key>
-        <string>APPL</string>
-    </dict>
-    </plist>`
+    const InfoPlistContents = 
+`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>${appFileName}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${config.app.version}</string>
+    <key>CFBundleName</key>
+    <string>${appFileName}</string>
+    <key>CFBundleVersion</key>
+    <string>${config.app.version}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+</dict>
+</plist>`
 
     Bun.write(join(appBundleFolderContentsPath, 'Info.plist'), InfoPlistContents);
 
@@ -141,7 +160,7 @@ if (commandArg === 'init') {
     // }
     // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});    
     const bunCliLauncherBinarySource = join(projectRoot, 'node_modules', '.bin', 'electrobun');
-    const bunCliLauncherDestination = join(appBundleMacOSPath, 'MyApp');
+    const bunCliLauncherDestination = join(appBundleMacOSPath, appFileName);
     const destLauncherFolder = dirname(bunCliLauncherDestination);
     if (!existsSync(destLauncherFolder)) {
         // console.info('creating folder: ', destFolder);
@@ -250,6 +269,15 @@ if (commandArg === 'init') {
         cpSync(source, destination, {recursive: true, dereference: true})
     }
 
+    
+    const versionJsonContent = JSON.stringify({
+        version: config.app.version,
+        build: buildEnvironment,
+        bucketUrl: config.release.bucketUrl,
+    });    
+
+    Bun.write(join(appBundleFolderResourcesPath, 'version.json'), versionJsonContent);
+
     // in dev mode add a cupla named pipes for some dev debug rpc magic
     const debugPipesFolder = join(appBundleFolderResourcesPath, 'debug');
     if (!existsSync(debugPipesFolder)) {
@@ -286,7 +314,7 @@ if (commandArg === 'init') {
     // Note: we want to use the version of bun that's packaged with electrobun
     // const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
     // const mainPath = join(buildFolder, 'bun', 'index.js');
-    const mainPath = join(buildFolder, 'dev.app');
+    const mainPath = join(buildFolder, appFileName);
     // console.log('running ', bunPath, mainPath);
     
     // Note: open will open the app bundle as a completely different process
@@ -298,7 +326,7 @@ if (commandArg === 'init') {
         }        
     });   
     
-    const debugPipesFolder = join(buildFolder, "dev.app", 'Contents', 'Resources', 'debug');
+    const debugPipesFolder = join(buildFolder, appFileName, 'Contents', 'Resources', 'debug');
     const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
     const toCliPipePath = join(debugPipesFolder, 'toCli');
 
@@ -415,7 +443,7 @@ if (commandArg === 'init') {
 function getConfig() {
     let loadedConfig = {};
     if (existsSync(configPath)) {
-        const configFileContents = readFileSync(configPath, 'utf8');
+        const configFileContents = readFileSync(configPath, 'utf8');        
         // Note: we want this to hard fail if there's a syntax error
         loadedConfig = JSON.parse(configFileContents);
 
@@ -426,9 +454,17 @@ function getConfig() {
     return {
         ...defaultConfig,
         ...loadedConfig,
+        app: {
+            ...defaultConfig.app,
+            ...loadedConfig.app
+        },
         build: {
             ...defaultConfig.build,
             ...loadedConfig.build
+        },
+        release: {
+            ...defaultConfig.release,
+            ...loadedConfig.release
         }
     }
 }
