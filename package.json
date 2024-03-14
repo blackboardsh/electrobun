@@ -23,15 +23,17 @@
     "build:objc": "bun build:objc:object && bun build:objc:staticlib",
     "build:zig": "cd src/zig && zig build",
     "build:launcher": "cd src/launcher && zig build",
-    "build:zig:prod": "cd src/zig && zig build -Doptimize=ReleaseFast",
-    "build:launcher:prod": "cd src/launcher && zig build -Doptimize=ReleaseSmall",
+    "build:zig:release": "cd src/zig && zig build -Doptimize=ReleaseFast",
+    "build:launcher:release": "cd src/launcher && zig build -Doptimize=ReleaseSmall",
     "build:browser": "bun build src/browser/index.ts --outdir src/zig/build/",
     "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",
     "build:bun": "",
     "build:dev": "bun build:objc && bun build:cli && bun build:browser && bun build:zig && bun build:launcher",
+    "build:release": "bun build:objc && bun build:cli && bun build:browser && bun build:zig:release && bun build:launcher:release",
     "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
     "dev:example": "bun build:dev && cd example && bun install && bun build:dev && bun start",
-    "dev:example:rerun": "cd example && bun start"
+    "dev:example:rerun": "cd example && bun start",
+    "dev:example:canary": "bun build:release && cd example && bun install && bun build:canary && bun start:canary"
   },
   "devDependencies": {
     "@types/bun": "^1.0.8",

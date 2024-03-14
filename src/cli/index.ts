@@ -53,8 +53,13 @@ if (!command) {
 
 const config = getConfig();
 
+const envArg = process.argv.find(arg => arg.startsWith('env='))?.split('=')[1] || '';
+
+const validEnvironments = ['dev', 'canary', 'stable'];
+
 // todo (yoav): dev, canary, and stable;
-const buildEnvironment: 'dev' | 'canary' | 'stable' = 'dev';
+const buildEnvironment: 'dev' | 'canary' | 'stable' = validEnvironments.includes(envArg) ? envArg : 'dev';
+
 // todo (yoav): dev builds should include the branch name, and/or allow configuration via external config
 const buildSubFolder = `${buildEnvironment}`;
 
@@ -164,7 +169,11 @@ if (commandArg === 'init') {
     //     mkdirSync(destLauncherFolder, {recursive: true});
     // }
     // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});    
-    const bunCliLauncherBinarySource = join(projectRoot, 'node_modules', '.bin', 'electrobun');
+    const bunCliLauncherBinarySource = buildEnvironment === 'dev' ? 
+        // Note: in dev use the cli as the launcher
+        join(projectRoot, 'node_modules', '.bin', 'electrobun') : 
+        // Note: for release use the zig launcher optimized for smol size
+        join(projectRoot, 'node_modules', 'electrobun', 'src', 'launcher', 'zig-out', 'bin', 'launcher');
     const bunCliLauncherDestination = join(appBundleMacOSPath, appFileName);
     const destLauncherFolder = dirname(bunCliLauncherDestination);
     if (!existsSync(destLauncherFolder)) {
@@ -283,24 +292,26 @@ if (commandArg === 'init') {
 
     Bun.write(join(appBundleFolderResourcesPath, 'version.json'), versionJsonContent);
 
-    // in dev mode add a cupla named pipes for some dev debug rpc magic
-    const debugPipesFolder = join(appBundleFolderResourcesPath, 'debug');
-    if (!existsSync(debugPipesFolder)) {
-        // console.info('creating folder: ', debugPipesFolder);
-        mkdirSync(debugPipesFolder, {recursive: true});
-    }
-    const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
-    const toCliPipePath = join(debugPipesFolder, 'toCli');
-    try {        
-        execSync('mkfifo ' + toLauncherPipePath);        
-    } catch (e) {
-        console.log('pipe out already exists')
-    }
+    if (buildEnvironment === 'dev') {
+        // in dev mode add a cupla named pipes for some dev debug rpc magic
+        const debugPipesFolder = join(appBundleFolderResourcesPath, 'debug');
+        if (!existsSync(debugPipesFolder)) {
+            // console.info('creating folder: ', debugPipesFolder);
+            mkdirSync(debugPipesFolder, {recursive: true});
+        }
+        const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
+        const toCliPipePath = join(debugPipesFolder, 'toCli');
+        try {        
+            execSync('mkfifo ' + toLauncherPipePath);        
+        } catch (e) {
+            console.log('pipe out already exists')
+        }
 
-    try {        
-        execSync('mkfifo ' + toCliPipePath);
-    } catch (e) {
-        console.log('pipe out already exists')
+        try {        
+            execSync('mkfifo ' + toCliPipePath);
+        } catch (e) {
+            console.log('pipe out already exists')
+        }
     }
 
     // todo (yoav): generate version.json file
@@ -308,6 +319,7 @@ if (commandArg === 'init') {
     
 
 } else if (commandArg === 'dev') {
+    // todo (yoav): rename to start
     
     // run the project in dev mode
     // this runs the cli in debug mode, on macos executes the app bundle,
@@ -330,6 +342,12 @@ if (commandArg === 'init') {
         env: {
         }        
     });   
+
+    if (buildEnvironment !== 'dev') {
+        // Note: only continue wiring up dev mode if we're launching the 
+        // dev build.
+        process.exit();
+    }
     
     const debugPipesFolder = join(buildFolder, bundleFileName, 'Contents', 'Resources', 'debug');
     const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
