@@ -106,7 +106,7 @@ export class BrowserView<T> {
                 }
 
         const inStream = fs.createWriteStream(webviewPipeIn, {
-            flags: 'w', 		
+            flags: 'r+', 		
         });
     
         // todo: something has to be written to it to open it
@@ -124,7 +124,7 @@ export class BrowserView<T> {
 // Open the named pipe for reading
     
     const outStream = fs.createReadStream(webviewPipeOut, {
-        flags: 'r', 		
+        flags: 'r+', 		
     });       
 
     this.outStream = outStream;

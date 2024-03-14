@@ -43,7 +43,7 @@ try {
 		console.log('pipe out already exists')
 	}
 	const inStream = fs.createWriteStream(mainPipe, {
-		flags: 'w', 		
+		flags: 'r+', 		
 	});
 
 function createStdioTransport(proc): RPCTransport {	

@@ -53,14 +53,19 @@ if (!command) {
 
 const config = getConfig();
 
-const buildFolder = join(projectRoot, config.build.outputFolder);
+// todo (yoav): dev, canary, and stable;
+const buildEnvironment: 'dev' | 'canary' | 'stable' = 'dev';
+// todo (yoav): dev builds should include the branch name, and/or allow configuration via external config
+const buildSubFolder = `${buildEnvironment}`;
+
+const buildFolder = join(projectRoot, config.build.outputFolder, buildSubFolder);
 
 // MyApp
-// todo (yoav): dev, canary, and stable;
-const buildEnvironment = 'dev';
 
 // const appName = config.app.name.replace(/\s/g, '-').toLowerCase();
-const appFileName = `${config.app.name}-${config.app.version}-${buildEnvironment}.app`.replace(/\s/g, '').toLowerCase();
+
+const appFileName = (buildEnvironment === 'stable' ? config.app.name : `${config.app.name}-${config.app.version}-${buildEnvironment}`).replace(/\s/g, '').replace(/\./g, '-');
+const bundleFileName = `${appFileName}.app`;
 
 
 // const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
@@ -94,7 +99,7 @@ if (commandArg === 'init') {
     
 
     // build macos bundle
-    const appBundleFolderPath = join(buildFolder, appFileName);
+    const appBundleFolderPath = join(buildFolder, bundleFileName);
     const appBundleFolderContentsPath = join(appBundleFolderPath, 'Contents');
     const appBundleMacOSPath = join(appBundleFolderContentsPath, 'MacOS');
     const appBundleFolderResourcesPath = join(appBundleFolderContentsPath, 'Resources');
@@ -116,7 +121,7 @@ if (commandArg === 'init') {
     <key>CFBundleIdentifier</key>
     <string>${config.app.version}</string>
     <key>CFBundleName</key>
-    <string>${appFileName}</string>
+    <string>${bundleFileName}</string>
     <key>CFBundleVersion</key>
     <string>${config.app.version}</string>
     <key>CFBundlePackageType</key>
@@ -314,7 +319,7 @@ if (commandArg === 'init') {
     // Note: we want to use the version of bun that's packaged with electrobun
     // const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
     // const mainPath = join(buildFolder, 'bun', 'index.js');
-    const mainPath = join(buildFolder, appFileName);
+    const mainPath = join(buildFolder, bundleFileName);
     // console.log('running ', bunPath, mainPath);
     
     // Note: open will open the app bundle as a completely different process
@@ -326,7 +331,7 @@ if (commandArg === 'init') {
         }        
     });   
     
-    const debugPipesFolder = join(buildFolder, appFileName, 'Contents', 'Resources', 'debug');
+    const debugPipesFolder = join(buildFolder, bundleFileName, 'Contents', 'Resources', 'debug');
     const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
     const toCliPipePath = join(debugPipesFolder, 'toCli');
 
@@ -358,8 +363,10 @@ if (commandArg === 'init') {
         }                                       
     });	     
 
+   
+
     const toLauncherPipe = createWriteStream(toLauncherPipePath, {
-		flags: 'w', 		
+		flags: 'r+', 		
 	});
     toLauncherPipe.write('\n')
     // toLauncherPipe.write('hello from cli 1\n')
@@ -375,7 +382,7 @@ if (commandArg === 'init') {
     // todo (yoav): as the debug launcher, get the relative path a different way, so dev builds can be shared and executed
     // from different locations
     const pathToLauncherBin = process.argv0;
-    const pathToMacOS = dirname(pathToLauncherBin);
+    const pathToMacOS = dirname(pathToLauncherBin);    
     const debugPipesFolder = join(pathToMacOS, "..", 'Resources', 'debug');
     const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
     const toCliPipePath = join(debugPipesFolder, 'toCli');
@@ -406,9 +413,14 @@ if (commandArg === 'init') {
                 }                    
             }
         }                                       
-    });	             
+    });	    
+    
+    // If we open the dev app bundle directly without the cli, then no one will be listening to the toCliPipe
+    // and it'll hang. So we open the pipe for reading to prevent it from blocking but we don't read it here.
     const toCliPipe = createWriteStream(toCliPipePath, {
-		flags: 'w', 		
+        // Note: open the pipe for reading and writing (r+) so that it doesn't block. If you only open it for writing (w)
+        // then it'll block until the cli starts reading. Double clicking on the bundle bypasses the cli so it'll block forever.
+		flags: 'r+', 		
 	});    
     toCliPipe.write('\n')
     
