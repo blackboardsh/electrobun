@@ -16,7 +16,7 @@ Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main proc
 **Project Goals**
 
 - Write typescript for the main process and webviews without having to think about it.
-- Isolation between main and webview processes with fast RPC between them.
+- Isolation between main and webview processes with fast, typed, easily to implement RPC between them.
 - Decouple shipping Bun and Web runtimes from shipping your application code.
 - Small app bundles ~18MB zipped (when using system webview, 99% of this is the bun runtime zipped)
 - Even smaller app updates < 200KB (when only your app code changes users just download that, so you can ship at web speed)
@@ -51,5 +51,5 @@ As we get closer to 1.0.0 I'll probably make guidelines for PRs and stuff. In th
 Ways to get involved at this early stage:
 
 - Follow us on X for updates <a href="https://twitter.com/BlackboardTech">@BlackboardTech</a>
-- Join the conversation on Discord
+- Join the conversation on <a href="https://discord.gg/ueKE4tjaCE">Discord</a>
 - Create and participate in Github issues and discussions
