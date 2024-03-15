@@ -18,7 +18,8 @@ Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main proc
 - Write typescript for the main process and webviews without having to think about it.
 - Isolation between main and webview processes with fast RPC between them.
 - Decouple shipping Bun and Web runtimes from shipping your application code.
-- Small app bundles < 5MB
+- Small app bundles ~18MB zipped (when using system webview, 99% of this is the bun runtime zipped)
+- Even smaller app updates < 200KB (when only your app code changes users just download that, so you can ship at web speed)
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
 ## Architecture
