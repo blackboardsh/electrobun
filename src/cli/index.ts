@@ -1,5 +1,5 @@
-import {join, dirname} from 'path';
-import {existsSync, readFileSync, cpSync, rmdirSync, mkdirSync, createWriteStream, createReadStream} from 'fs';
+import {join, dirname, basename} from 'path';
+import {existsSync, readFileSync, cpSync, rmdirSync, mkdirSync, createWriteStream, createReadStream, unlinkSync} from 'fs';
 import {execSync} from 'child_process';
 
 // this when run as an npm script this will be where the folder where package.json is.
@@ -37,7 +37,8 @@ const defaultConfig = {
         version: '0.1',
     },
     build: {
-        outputFolder: 'build',
+        buildFolder: 'build',
+        artifactFolder: 'artifacts',
     },
     release: {
         bucketUrl: ''
@@ -63,7 +64,9 @@ const buildEnvironment: 'dev' | 'canary' | 'stable' = validEnvironments.includes
 // todo (yoav): dev builds should include the branch name, and/or allow configuration via external config
 const buildSubFolder = `${buildEnvironment}`;
 
-const buildFolder = join(projectRoot, config.build.outputFolder, buildSubFolder);
+const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
+
+const artifactFolder = join(projectRoot, config.build.artifactFolder, buildSubFolder);
 
 // MyApp
 
@@ -112,6 +115,7 @@ if (commandArg === 'init') {
     
     mkdirSync(appBundleMacOSPath, {recursive: true});
     mkdirSync(appBundleAppCodePath, {recursive: true});
+    mkdirSync(artifactFolder, {recursive: true});
 
     // const bundledBunPath = join(appBundleMacOSPath, 'bun');
     // cpSync(bunPath, bundledBunPath);    
@@ -187,7 +191,8 @@ if (commandArg === 'init') {
     const bunBinarySourcePath = join(projectRoot, 'node_modules', '.bin', 'bun');
     // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
     // in node_modules, so we have to dereference here to get the actual binary in the bundle.
-    cpSync(bunBinarySourcePath, join(appBundleMacOSPath, 'bun'), {dereference: true});    
+    const bunBinaryDestInBundlePath = join(appBundleMacOSPath, 'bun');
+    cpSync(bunBinarySourcePath, bunBinaryDestInBundlePath, {dereference: true});    
     
 
     // Zig native wrapper binary
@@ -285,17 +290,52 @@ if (commandArg === 'init') {
 
     const bunVersion = execSync(`${bunBinarySourcePath} --version`).toString().trim();
     
+    // version.json inside the app bundle
     const versionJsonContent = JSON.stringify({
         versions: {
             app: config.app.version,
             bun: bunVersion,
             webview: 'system'// could also be type of webview with version number. eg: 'cef:1.0.2'
         },        
-        build: buildEnvironment,
+        channel: buildEnvironment,
         bucketUrl: config.release.bucketUrl,
     });    
 
     Bun.write(join(appBundleFolderResourcesPath, 'version.json'), versionJsonContent);
+
+    // update.json for the channel in that channel's build folder
+    const updateJsonContent = JSON.stringify({
+        versions: {
+            app: config.app.version,
+            bun: bunVersion,
+            webview: 'system',
+        },
+        channel: buildEnvironment,        
+        bucketUrl: config.release.bucketUrl
+    });    
+
+    Bun.write(join(artifactFolder, 'update.json'), updateJsonContent);
+
+    // duplicate the bundle
+    const appBundleContainer = `${appFileName}-container.app`;
+    const appBundleContainerPath = join(buildFolder, appBundleContainer);
+    cpSync(appBundleFolderPath, appBundleContainerPath, {recursive: true});
+
+    // copy bun out of the container
+    const containerBunRuntimePath = join(appBundleContainerPath, 'Contents', 'MacOS', 'bun');
+    const bunVersionedRuntimePath = join(buildFolder, `bun-${bunVersion}`);
+    cpSync(containerBunRuntimePath, bunVersionedRuntimePath);
+    unlinkSync(containerBunRuntimePath)
+
+    // compress all the upload files
+    const filesToCompress = [appBundleFolderPath, appBundleContainerPath, bunVersionedRuntimePath];
+
+    filesToCompress.forEach((filePath) => {        
+        const filename = basename(filePath);
+        const zipPath = join(artifactFolder, `${filename}.zip`);
+        // todo (yoav): do this in parallel
+        execSync(`zip -r -9 ${zipPath} ${filePath}`);
+    });
 
     if (buildEnvironment === 'dev') {
         // in dev mode add a cupla named pipes for some dev debug rpc magic
