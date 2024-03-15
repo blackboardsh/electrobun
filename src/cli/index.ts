@@ -281,11 +281,16 @@ if (commandArg === 'init') {
         // todo (yoav): add ability to swap out BUILD VARS
         // console.log('copying', source, 'to', destination);
         cpSync(source, destination, {recursive: true, dereference: true})
-    }
+    }    
 
+    const bunVersion = execSync(`${bunBinarySourcePath} --version`).toString().trim();
     
     const versionJsonContent = JSON.stringify({
-        version: config.app.version,
+        versions: {
+            app: config.app.version,
+            bun: bunVersion,
+            webview: 'system'// could also be type of webview with version number. eg: 'cef:1.0.2'
+        },        
         build: buildEnvironment,
         bucketUrl: config.release.bucketUrl,
     });    

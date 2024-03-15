@@ -1,1 +1,1 @@
-{"version":"0.0.1","build":"canary","bucketUrl":"https://some-bucket-root/"}
+{"versions":{"app":"0.0.1","bun":"1.0.26","webview":"system"},"build":"canary","bucketUrl":"https://some-bucket-root/"}
