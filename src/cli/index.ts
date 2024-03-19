@@ -39,6 +39,14 @@ const defaultConfig = {
     build: {
         buildFolder: 'build',
         artifactFolder: 'artifacts',
+        mac: {
+            codesign: false,
+            notarize: false,
+            entitlements: {
+                // This entitlement is required for Electrobun apps with a hardened runtime (required for notarization) to run on macos
+                "com.apple.security.cs.allow-jit": true,                
+            }
+        },        
     },
     release: {
         bucketUrl: ''
@@ -128,7 +136,7 @@ if (commandArg === 'init') {
     <key>CFBundleExecutable</key>
     <string>${appFileName}</string>
     <key>CFBundleIdentifier</key>
-    <string>${config.app.version}</string>
+    <string>${config.app.identifier}</string>
     <key>CFBundleName</key>
     <string>${bundleFileName}</string>
     <key>CFBundleVersion</key>
@@ -325,10 +333,100 @@ if (commandArg === 'init') {
     const containerBunRuntimePath = join(appBundleContainerPath, 'Contents', 'MacOS', 'bun');
     const bunVersionedRuntimePath = join(buildFolder, `bun-${bunVersion}`);
     cpSync(containerBunRuntimePath, bunVersionedRuntimePath);
-    unlinkSync(containerBunRuntimePath)
+    unlinkSync(containerBunRuntimePath);
+    
+    // todo (yoav): add these to config
+    const shouldCodesign = buildEnvironment !== 'dev' && config.build.mac.codesign;
+    const shouldNotarize = shouldCodesign && config.build.mac.notarize;
+
+    if (shouldCodesign) {
+        console.log('code signing...')
+        const ELECTROBUN_DEVELOPER_ID = process.env['ELECTROBUN_DEVELOPER_ID'];
+
+
+        if (!ELECTROBUN_DEVELOPER_ID) {
+            console.error('Env var ELECTROBUN_DEVELOPER_ID is required to codesign');
+            process.exit(1);
+        }
+        
+        // list of entitlements https://developer.apple.com/documentation/security/hardened_runtime?language=objc
+        // todo (yoav): consider allowing separate entitlements config for each binary
+        const entitlementsFileContents = buildEntitlementsFile(config.build.mac.entitlements);
+        const entitlementsFilePath = join(buildFolder, 'entitlements.plist');
+        Bun.write(entitlementsFilePath, entitlementsFileContents);
+
+        // codesign --deep --force --verbose --sign "Developer ID Application: YourDeveloperID" /path/to/YourApp.app                        
+        execSync(`codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --entitlements ${entitlementsFilePath} ${appBundleFolderPath}`)        
+    } else {
+        console.log('skipping codesign')
+    }
+
+
+    // make a dmg
+    const dmgPath = join(buildFolder, `${appFileName}.dmg`);
+    
+    // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
+    // Note: use UDBZ for better compression vs. UDZO
+    execSync(`hdiutil create -volname "${appFileName}" -srcfolder ${appBundleFolderPath} -ov -format UDBZ ${dmgPath}`)
+
+
+    // codesign 
+    // NOTE: Codesigning fails in dev mode (when using a single-file-executable bun cli as the launcher)
+    // see https://github.com/oven-sh/bun/issues/7208
+    if (shouldNotarize) {
+        console.log('notarizing...')
+        const ELECTROBUN_APPLEID = process.env['ELECTROBUN_APPLEID'];
+
+        if (!ELECTROBUN_APPLEID) {
+            console.error('Env var ELECTROBUN_APPLEID is required to notarize');
+            process.exit(1);
+        }
+
+        const ELECTROBUN_APPLEIDPASS = process.env['ELECTROBUN_APPLEIDPASS'];
+
+        if (!ELECTROBUN_APPLEIDPASS) {
+            console.error('Env var ELECTROBUN_APPLEIDPASS is required to notarize');
+            process.exit(1);
+        }
+
+        const ELECTROBUN_TEAMID = process.env['ELECTROBUN_TEAMID'];
+
+        if (!ELECTROBUN_TEAMID) {
+            console.error('Env var ELECTROBUN_TEAMID is required to notarize');
+            process.exit(1);
+        }
+        
+        
+        // notarize        
+        // todo (yoav): follow up on options here like --s3-acceleration and --webhook        
+        // todo (yoav): don't use execSync since it's blocking and we'll only see the output at the end
+        const statusInfo = execSync(`xcrun notarytool submit --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" --wait ${dmgPath}`).toString();
+        const uuid = statusInfo.match(/id: ([^\n]+)/)?.[1]
+        console.log('statusInfo', statusInfo);
+        console.log('uuid', uuid);
+
+        if (statusInfo.match("Current status: Invalid")) {
+            console.error('notarization failed', statusInfo);
+            const log = execSync(`xcrun notarytool log --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" ${uuid}`).toString();
+            console.log('log', log)
+            process.exit(1);
+        }        
+        // check notarization                
+        // todo (yoav): actually check result
+        // use `notarytool info` or some other request thing to check separately from the wait above
+        
+        // stable notarization        
+        console.log('stapling...')
+        execSync(`xcrun stapler staple ${dmgPath}`)
+        
+
+    } else {
+        console.log('skipping notarization')
+    }
+    
 
     // compress all the upload files
-    const filesToCompress = [appBundleFolderPath, appBundleContainerPath, bunVersionedRuntimePath];
+    const filesToCompress = [dmgPath, appBundleContainerPath, bunVersionedRuntimePath];
 
     filesToCompress.forEach((filePath) => {        
         const filename = basename(filePath);
@@ -535,11 +633,40 @@ function getConfig() {
         },
         build: {
             ...defaultConfig.build,
-            ...loadedConfig.build
+            ...loadedConfig.build,
+            mac: {                
+                ...defaultConfig.build.mac,
+                ...loadedConfig?.build?.mac,
+                entitlements: {
+                    ...defaultConfig.build.mac.entitlements,
+                    ...loadedConfig?.build?.mac?.entitlements                
+                }
+            }
         },
         release: {
             ...defaultConfig.release,
             ...loadedConfig.release
         }
+    }
+}
+
+function buildEntitlementsFile(entitlements) {    
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    ${Object.keys(entitlements).map(key => {
+        return `<key>${key}</key>\n${getEntitlementValue(entitlements[key])}`;
+    }).join('\n')}
+</dict>
+</plist>
+`
+}
+
+function getEntitlementValue(value: boolean | string) {
+    if (typeof value === 'boolean') {
+        return `<${value.toString()}/>`;
+    } else {
+        return value;
     }
 }
