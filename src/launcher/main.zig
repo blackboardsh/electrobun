@@ -20,10 +20,6 @@ pub fn decompressStreamOptions(
 pub fn main() !void {
     var allocator = std.heap.page_allocator;
 
-    const cache_path = try getCachePath(allocator, "ElectrobunPlaygroundtest");
-    std.debug.print("cache_path: {s}\n", .{cache_path});
-    defer allocator.free(cache_path);
-
     var startTime = std.time.nanoTimestamp();
 
     // try get the absolute path to the executable inside the app bundle
@@ -35,14 +31,32 @@ pub fn main() !void {
     var exePathBuffer: [1024]u8 = undefined;
     const APPBUNDLE_MACOS_PATH = try std.fs.selfExeDirPath(exePathBuffer[0..]);
     const APPBUNDLE_PATH = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, "../../" });
+    const PLIST_PATH = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "Contents/Info.plist" });
 
-    // const joinedPath = try std.fs.path.join(allocator, &.{ ELECTROBUN_VIEWS_FOLDER, filePath });
-    const resolvedPath = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, COMPRESSED_APP_BUNDLE_REL_PATH });
+    const plistContents = try std.fs.cwd().readFileAlloc(allocator, PLIST_PATH, std.math.maxInt(usize));
+    defer allocator.free(plistContents);
 
-    std.debug.print("resolvedPath: {s}\n", .{resolvedPath});
+    // Note: We want to use the app name, since electrobun cli adds the "- <channel name>" which allws dev, canary, and stable
+    // builds to coexist on a machine.
+    // todo: consider putting it in <app identifier>/<app name> for better organization and reduce namespace collisions with other
+    // apps that might use the same name. (CFBundleIdentifier)
+    const identifierName = try getPlistStringValue(plistContents, "CFBundleIdentifier") orelse {
+        return error.UnexpectedNull;
+    };
 
-    if (std.fs.cwd().openFile(resolvedPath, .{})) |compressedAppBundle| {
-        const SELF_EXTRACTION_PATH = try std.fs.path.join(allocator, &.{ cache_path, "self-extraction" });
+    const bundleName = try getPlistStringValue(plistContents, "CFBundleExecutable") orelse {
+        return error.UnexpectedNull;
+    };
+
+    const appDataPathSegment = try std.fs.path.join(allocator, &.{ identifierName, bundleName });
+
+    const APPDATA_PATH = try std.fs.getAppDataDir(allocator, appDataPathSegment);
+    defer allocator.free(APPDATA_PATH);
+
+    const compressedTarballPath = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, COMPRESSED_APP_BUNDLE_REL_PATH });
+
+    if (std.fs.cwd().openFile(compressedTarballPath, .{})) |compressedAppBundle| {
+        const SELF_EXTRACTION_PATH = try std.fs.path.join(allocator, &.{ APPDATA_PATH, "self-extraction" });
 
         if (std.fs.openDirAbsolute(SELF_EXTRACTION_PATH, .{})) |_| {
             try std.fs.deleteTreeAbsolute(SELF_EXTRACTION_PATH);
@@ -341,12 +355,23 @@ pub const Header = struct {
     }
 };
 
-// todo: consider using std.fs.getAppDataDir instead as it's cross platform (Library/Application Support on macos)
-pub fn getCachePath(allocator: std.mem.Allocator, appName: []const u8) ![]u8 {
-    const home_dir = std.os.getenv("HOME") orelse {
-        return error.UnexpectedNull;
-    };
+fn getPlistStringValue(plistContents: []const u8, key: []const u8) !?[]const u8 {
+    var index: usize = 0;
+    while (true) {
+        index = std.mem.indexOfPos(u8, plistContents, index, key) orelse break;
+        index += key.len;
 
-    var cache_path = try std.fs.path.join(allocator, &.{ home_dir, "Library", "Caches", appName });
-    return cache_path;
+        const openTag = "<string>";
+        index = std.mem.indexOfPos(u8, plistContents, index, openTag) orelse break;
+        index += openTag.len;
+
+        const closeTag = "</string>";
+        const endIndex = std.mem.indexOfPos(u8, plistContents, index, closeTag) orelse break;
+
+        const value = plistContents[index..endIndex];
+        const trimmedValue = std.mem.trim(u8, value, " \t\n\r");
+
+        return trimmedValue;
+    }
+    return null; // Key not found or malformed plist
 }

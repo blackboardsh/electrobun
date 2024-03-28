@@ -405,6 +405,7 @@ if (commandArg === 'init') {
         const compressedTarPath = `${tarPath}.zst`;
 
         // zstd compress tarball
+        console.log('compressing tarball...')
         await ZstdInit().then(async ({ZstdSimple, ZstdStream}) => {
             const tarball = Bun.file(tarPath);
             
@@ -442,18 +443,40 @@ if (commandArg === 'init') {
 
         Bun.write(join(selfExtractingBundle.appBundleFolderContentsPath, 'Info.plist'), InfoPlistContents);
 
-        // codesignAppBundle(selfExtractingBundle.appBundleFolderPath);
-        codesignAppBundle(selfExtractingBundle.appBundleFolderPath, join(buildFolder, 'entitlements.plist'));
 
-        notarizeAndStaple(selfExtractingBundle.appBundleFolderPath);
+        if (shouldCodesign) {        
+            codesignAppBundle(selfExtractingBundle.appBundleFolderPath, join(buildFolder, 'entitlements.plist'));
+        } else {
+            console.log('skipping codesign')
+        }                 
+        
+        // Note: we need to notarize the original app bundle, the self-extracting app bundle, and the dmg
+        if (shouldNotarize) {
+            notarizeAndStaple(selfExtractingBundle.appBundleFolderPath);   
+        } else {
+            console.log('skipping notarization')
+        }
 
 
+        console.log('creating dmg...')
         // make a dmg
         const dmgPath = join(buildFolder, `${appFileName}.dmg`);
         
         // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
         // Note: use UDBZ for better compression vs. UDZO
         execSync(`hdiutil create -volname "${appFileName}" -srcfolder ${appBundleFolderPath} -ov -format UDBZ ${dmgPath}`)
+
+        if (shouldCodesign) {        
+            codesignAppBundle(dmgPath);
+        } else {
+            console.log('skipping codesign')
+        }    
+
+        if (shouldNotarize) {
+            notarizeAndStaple(dmgPath);   
+        } else {
+            console.log('skipping notarization')
+        }
         
 
         // refresh artifacts folder
@@ -497,6 +520,11 @@ if (commandArg === 'init') {
 
     // Note: verify notarization
     // spctl --assess --type execute --verbose <app path>
+    
+    // Note: for .dmg spctl --assess will respond with "rejected (*the code is valid* but does not seem to be an app)" which is valid
+    // for a dmg.
+    // can also use stapler validate -v to validate the dmg and look for teamId, signingId, and the response signedTicket
+    // stapler validate -v <app path>
 
 
     // todo (yoav): generate version.json file
@@ -717,7 +745,7 @@ function getEntitlementValue(value: boolean | string) {
     }
 }
 
-function codesignAppBundle(appBundleFolderPath: string, entitlementsFilePath?: string) {
+function codesignAppBundle(appBundleOrDmgPath: string, entitlementsFilePath?: string) {
     console.log('code signing...')
     if (!config.build.mac.codesign) {
         return;
@@ -739,9 +767,9 @@ function codesignAppBundle(appBundleFolderPath: string, entitlementsFilePath?: s
         const entitlementsFileContents = buildEntitlementsFile(config.build.mac.entitlements);
         Bun.write(entitlementsFilePath, entitlementsFileContents);
         
-        execSync(`codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --entitlements ${entitlementsFilePath} ${appBundleFolderPath}`)        
+        execSync(`codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --entitlements ${entitlementsFilePath} ${appBundleOrDmgPath}`)        
     } else {
-        execSync(`codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${appBundleFolderPath}`)            
+        execSync(`codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${appBundleOrDmgPath}`)            
     }
 }
 
@@ -758,12 +786,12 @@ function notarizeAndStaple(appOrDmgPath: string) {
     // if (shouldNotarize) {
         console.log('notarizing...')
         const zipPath = appOrDmgPath + '.zip';
-        if (appOrDmgPath.endsWith('.app')) {
+        // if (appOrDmgPath.endsWith('.app')) {
             const appBundleFileName = basename(appOrDmgPath);
             // if we're codesigning the .app we have to zip it first
             execSync(`zip -r -9 ${zipPath} ${appBundleFileName}`, {cwd: dirname(appOrDmgPath)});
             fileToNotarize = zipPath;
-        }
+        // }
 
         const ELECTROBUN_APPLEID = process.env['ELECTROBUN_APPLEID'];
         
