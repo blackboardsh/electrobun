@@ -522,6 +522,7 @@ if (commandArg === 'init') {
     // spctl --assess --type execute --verbose <app path>
     
     // Note: for .dmg spctl --assess will respond with "rejected (*the code is valid* but does not seem to be an app)" which is valid
+    // an actual failed response for a dmg is "source=no usable signature" 
     // for a dmg.
     // can also use stapler validate -v to validate the dmg and look for teamId, signingId, and the response signedTicket
     // stapler validate -v <app path>

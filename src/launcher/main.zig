@@ -130,24 +130,6 @@ pub fn main() !void {
                 // todo: get the basename of the newBundlePath and join a new path with it
                 // in case the name changed.
 
-                // Note: Since the new and old app path will be the same in the end, seems osx doesn't like that we
-                // move the running self-extrator that was opened with path X and then try open the new app bundle that was
-                // put in its place. So we launch the new app bundle before moving it.
-                // todo: make sure to note in docs that this is possible, and that apps should be designed to run from anywhere.
-                const argv = &[_][]const u8{ "open", newBundlePath };
-                var child_process = std.ChildProcess.init(argv, allocator);
-
-                child_process.cwd = newBundlePath;
-
-                // The open command will exit and run the opened app (the unpacked/updated app bundle in a separate process)
-                _ = child_process.spawnAndWait() catch |err| {
-                    std.debug.print("Failed to wait for child process: {}\n", .{err});
-                    return;
-                };
-
-                // give the open command a second to actually launch it before moving it to the original bundle location
-                std.time.sleep(std.time.ns_per_s * 1);
-
                 // Note: move the current bundle to application support as a backup in case the update fails
                 // We only need to keep it around until the next update since we assume if you didn't need it
                 // before then you won't need it in the future. ie: only keep one backup around.
@@ -155,14 +137,19 @@ pub fn main() !void {
                 try std.fs.renameAbsolute(APPBUNDLE_PATH, backupBundlePath);
                 try std.fs.renameAbsolute(newBundlePath, APPBUNDLE_PATH);
 
-                break;
+                const argv = &[_][]const u8{ "open", APPBUNDLE_PATH };
+                var child_process = std.ChildProcess.init(argv, allocator);
+
+                // The open command will exit and run the opened app (the unpacked/updated app bundle in a separate process)
+                // so we want to just spawn (so it detaches) and exit as soon as possible
+                _ = child_process.spawn() catch |err| {
+                    std.debug.print("Failed to wait for child process: {}\n", .{err});
+                    return;
+                };
+
+                std.os.exit(0);
             }
         }
-
-        // find .app bundle in the extracted directory, copy it to the same location as the APPBUNDLE_PATH
-        // if the app bundle name is different then delete the old one then quit and launch the new app bundle
-
-        std.debug.print("APPBUNDLE_PATH: {s}\n", .{APPBUNDLE_PATH});
     } else |_| {
         // no compressed file found, assume we're the full app bundle and launch the electrobun app
 
