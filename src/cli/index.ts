@@ -402,6 +402,12 @@ if (commandArg === 'init') {
         }, 
         [basename(appBundleFolderPath)])
 
+        // Note: The playground app bundle is around 48MB.
+        // compression on m1 max with 64GB ram:
+        //   brotli: 1min 38s, 48MB -> 11.1MB
+        //   zstd: 15s, 48MB -> 12.1MB
+        // zstd is the clear winner here. dev iteration speed gain of 1min 15s per build is much more valubale
+        // than saving 1 more MB of space/bandwidth.
         const compressedTarPath = `${tarPath}.zst`;
 
         // zstd compress tarball
@@ -415,8 +421,7 @@ if (commandArg === 'init') {
                 // Uint8 array filestream of the tar file
                 const tarBuffer = await tarball.arrayBuffer();
                 const data = new Uint8Array(tarBuffer);
-                const compressionLevel = 22;
-                // todo (yoav): use --long if available via this library
+                const compressionLevel = 22;                
                 const compressedData = ZstdSimple.compress(data, compressionLevel)
 
                 console.log('compressed', compressedData.length, 'bytes', 'from', data.length, 'bytes')
