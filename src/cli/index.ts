@@ -1,6 +1,8 @@
 import {join, dirname, basename} from 'path';
 import {existsSync, readFileSync, cpSync, rmdirSync, mkdirSync, createWriteStream, createReadStream, unlinkSync} from 'fs';
 import {execSync} from 'child_process';
+import tar from 'tar';
+import {ZstdInit} from '@oneidentity/zstd-js/wasm';
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -80,7 +82,7 @@ const artifactFolder = join(projectRoot, config.build.artifactFolder, buildSubFo
 
 // const appName = config.app.name.replace(/\s/g, '-').toLowerCase();
 
-const appFileName = (buildEnvironment === 'stable' ? config.app.name : `${config.app.name}-${config.app.version}-${buildEnvironment}`).replace(/\s/g, '').replace(/\./g, '-');
+const appFileName = (buildEnvironment === 'stable' ? config.app.name : `${config.app.name}-${buildEnvironment}`).replace(/\s/g, '').replace(/\./g, '-');
 const bundleFileName = `${appFileName}.app`;
 
 
@@ -115,19 +117,29 @@ if (commandArg === 'init') {
     
 
     // build macos bundle
-    const appBundleFolderPath = join(buildFolder, bundleFileName);
-    const appBundleFolderContentsPath = join(appBundleFolderPath, 'Contents');
-    const appBundleMacOSPath = join(appBundleFolderContentsPath, 'MacOS');
-    const appBundleFolderResourcesPath = join(appBundleFolderContentsPath, 'Resources');
-    const appBundleAppCodePath = join(appBundleFolderResourcesPath, 'app');
+
+    const {
+        appBundleFolderPath,
+        appBundleFolderContentsPath,
+        appBundleMacOSPath,
+        appBundleFolderResourcesPath
+    } = createAppBundle(appFileName, buildFolder);
     
-    mkdirSync(appBundleMacOSPath, {recursive: true});
+    const appBundleAppCodePath = join(appBundleFolderResourcesPath, 'app');
+        
     mkdirSync(appBundleAppCodePath, {recursive: true});
-    mkdirSync(artifactFolder, {recursive: true});
+    
 
     // const bundledBunPath = join(appBundleMacOSPath, 'bun');
     // cpSync(bunPath, bundledBunPath);    
 
+
+    // Note: for sandboxed apps, MacOS will use the CFBundleIdentifier to create a unique container for the app,
+    // mirroring folders like Application Support, Caches, etc. in the user's Library folder that the sandboxed app
+    // gets access to.
+
+    // We likely want to let users configure this for different environments (eg: dev, canary, stable) and/or
+    // provide methods to help segment data in those folders based on channel/environment
     const InfoPlistContents = 
 `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -310,131 +322,41 @@ if (commandArg === 'init') {
     });    
 
     Bun.write(join(appBundleFolderResourcesPath, 'version.json'), versionJsonContent);
+    
+    // todo (yoav): add these to config
+    const shouldCodesign = buildEnvironment !== 'dev' && config.build.mac.codesign;
+    const shouldNotarize = shouldCodesign && config.build.mac.notarize;
+    
+    if (shouldCodesign) {        
+        codesignAppBundle(appBundleFolderPath, join(buildFolder, 'entitlements.plist'));
+    } else {
+        console.log('skipping codesign')
+    }
+    
+    
+    // codesign 
+    // NOTE: Codesigning fails in dev mode (when using a single-file-executable bun cli as the launcher)
+    // see https://github.com/oven-sh/bun/issues/7208
+    if (shouldNotarize) {
+        notarizeAndStaple(appBundleFolderPath);       
+    } else {
+        console.log('skipping notarization')
+    }
+    
 
     // update.json for the channel in that channel's build folder
     const updateJsonContent = JSON.stringify({
         versions: {
             app: config.app.version,
             bun: bunVersion,
-            webview: 'system',
+            webview: 'system2',
         },
         channel: buildEnvironment,        
         bucketUrl: config.release.bucketUrl
     });    
 
     Bun.write(join(artifactFolder, 'update.json'), updateJsonContent);
-
-    // duplicate the bundle
-    const appBundleContainer = `${appFileName}-container.app`;
-    const appBundleContainerPath = join(buildFolder, appBundleContainer);
-    cpSync(appBundleFolderPath, appBundleContainerPath, {recursive: true});
-
-    // copy bun out of the container
-    const containerBunRuntimePath = join(appBundleContainerPath, 'Contents', 'MacOS', 'bun');
-    const bunVersionedRuntimePath = join(buildFolder, `bun-${bunVersion}`);
-    cpSync(containerBunRuntimePath, bunVersionedRuntimePath);
-    unlinkSync(containerBunRuntimePath);
     
-    // todo (yoav): add these to config
-    const shouldCodesign = buildEnvironment !== 'dev' && config.build.mac.codesign;
-    const shouldNotarize = shouldCodesign && config.build.mac.notarize;
-
-    if (shouldCodesign) {
-        console.log('code signing...')
-        const ELECTROBUN_DEVELOPER_ID = process.env['ELECTROBUN_DEVELOPER_ID'];
-
-
-        if (!ELECTROBUN_DEVELOPER_ID) {
-            console.error('Env var ELECTROBUN_DEVELOPER_ID is required to codesign');
-            process.exit(1);
-        }
-        
-        // list of entitlements https://developer.apple.com/documentation/security/hardened_runtime?language=objc
-        // todo (yoav): consider allowing separate entitlements config for each binary
-        const entitlementsFileContents = buildEntitlementsFile(config.build.mac.entitlements);
-        const entitlementsFilePath = join(buildFolder, 'entitlements.plist');
-        Bun.write(entitlementsFilePath, entitlementsFileContents);
-
-        // codesign --deep --force --verbose --sign "Developer ID Application: YourDeveloperID" /path/to/YourApp.app                        
-        execSync(`codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --entitlements ${entitlementsFilePath} ${appBundleFolderPath}`)        
-    } else {
-        console.log('skipping codesign')
-    }
-
-
-    // make a dmg
-    const dmgPath = join(buildFolder, `${appFileName}.dmg`);
-    
-    // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
-    // Note: use UDBZ for better compression vs. UDZO
-    execSync(`hdiutil create -volname "${appFileName}" -srcfolder ${appBundleFolderPath} -ov -format UDBZ ${dmgPath}`)
-
-
-    // codesign 
-    // NOTE: Codesigning fails in dev mode (when using a single-file-executable bun cli as the launcher)
-    // see https://github.com/oven-sh/bun/issues/7208
-    if (shouldNotarize) {
-        console.log('notarizing...')
-        const ELECTROBUN_APPLEID = process.env['ELECTROBUN_APPLEID'];
-
-        if (!ELECTROBUN_APPLEID) {
-            console.error('Env var ELECTROBUN_APPLEID is required to notarize');
-            process.exit(1);
-        }
-
-        const ELECTROBUN_APPLEIDPASS = process.env['ELECTROBUN_APPLEIDPASS'];
-
-        if (!ELECTROBUN_APPLEIDPASS) {
-            console.error('Env var ELECTROBUN_APPLEIDPASS is required to notarize');
-            process.exit(1);
-        }
-
-        const ELECTROBUN_TEAMID = process.env['ELECTROBUN_TEAMID'];
-
-        if (!ELECTROBUN_TEAMID) {
-            console.error('Env var ELECTROBUN_TEAMID is required to notarize');
-            process.exit(1);
-        }
-        
-        
-        // notarize        
-        // todo (yoav): follow up on options here like --s3-acceleration and --webhook        
-        // todo (yoav): don't use execSync since it's blocking and we'll only see the output at the end
-        const statusInfo = execSync(`xcrun notarytool submit --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" --wait ${dmgPath}`).toString();
-        const uuid = statusInfo.match(/id: ([^\n]+)/)?.[1]
-        console.log('statusInfo', statusInfo);
-        console.log('uuid', uuid);
-
-        if (statusInfo.match("Current status: Invalid")) {
-            console.error('notarization failed', statusInfo);
-            const log = execSync(`xcrun notarytool log --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" ${uuid}`).toString();
-            console.log('log', log)
-            process.exit(1);
-        }        
-        // check notarization                
-        // todo (yoav): actually check result
-        // use `notarytool info` or some other request thing to check separately from the wait above
-        
-        // stable notarization        
-        console.log('stapling...')
-        execSync(`xcrun stapler staple ${dmgPath}`)
-        
-
-    } else {
-        console.log('skipping notarization')
-    }
-    
-
-    // compress all the upload files
-    const filesToCompress = [dmgPath, appBundleContainerPath, bunVersionedRuntimePath];
-
-    filesToCompress.forEach((filePath) => {        
-        const filename = basename(filePath);
-        const zipPath = join(artifactFolder, `${filename}.zip`);
-        // todo (yoav): do this in parallel
-        execSync(`zip -r -9 ${zipPath} ${filePath}`);
-    });
-
     if (buildEnvironment === 'dev') {
         // in dev mode add a cupla named pipes for some dev debug rpc magic
         const debugPipesFolder = join(appBundleFolderResourcesPath, 'debug');
@@ -455,7 +377,127 @@ if (commandArg === 'init') {
         } catch (e) {
             console.log('pipe out already exists')
         }
+    } else {
+         // bsdiff wasm https://github.com/kairi003/bsdiff-wasm
+        // zstd wasm https://github.com/OneIdentity/zstd-js
+        // tar https://github.com/isaacs/node-tar
+
+        // steps:
+        // 1. [done] build the app bundle, code sign, notarize, staple.
+        // 2. tar and zstd the app bundle (two separate files)
+        // 3. build another app bundle for the self-extracting app bundle with the zstd in Resources
+        // 4. code sign and notarize the self-extracting app bundle
+        // 5. while waiting for that notarization, download the prev app bundle, extract the tar, and generate a bsdiff patch
+        // 6. when notarization is complete, generate a dmg of the self-extracting app bundle
+        // 6.5. code sign and notarize the dmg
+        // 7. copy artifacts to directory [self-extractor dmg, zstd app bundle, bsdiff patch, update.json]
+
+        const tarPath = `${appBundleFolderPath}.tar`;
+
+        // tar the signed and notarized app bundle
+        await tar.c({
+            gzip: false,
+            file: tarPath,
+            cwd: buildFolder
+        }, 
+        [basename(appBundleFolderPath)])
+
+        const compressedTarPath = `${tarPath}.zst`;
+
+        // zstd compress tarball
+        await ZstdInit().then(async ({ZstdSimple, ZstdStream}) => {
+            const tarball = Bun.file(tarPath);
+            
+            // Note: Simple is much faster than stream, but stream is better for large files
+            // todo (yoav): consider a file size cutoff to switch to stream instead of simple.
+            if (tarball.size > 0) {
+                // Uint8 array filestream of the tar file
+                const tarBuffer = await tarball.arrayBuffer();
+                const data = new Uint8Array(tarBuffer);
+                const compressionLevel = 22;
+                // todo (yoav): use --long if available via this library
+                const compressedData = ZstdSimple.compress(data, compressionLevel)
+
+                console.log('compressed', compressedData.length, 'bytes', 'from', data.length, 'bytes')
+                
+                await Bun.write(compressedTarPath, compressedData);
+            }
+        })
+
+        // we can delete the original app bundle since we've tarred and zstd it. We need to create the self-extracting app bundle
+        // now and it needs the same name as the original app bundle.
+        rmdirSync(appBundleFolderPath, {recursive: true});
+        
+
+        const selfExtractingBundle = createAppBundle(appFileName, buildFolder);
+        const compressedTarballInExtractingBundlePath = join(selfExtractingBundle.appBundleFolderResourcesPath, 'compressed.tar.zst');
+
+        // copy the zstd tarball to the self-extracting app bundle
+        cpSync(compressedTarPath, compressedTarballInExtractingBundlePath);
+
+        const selfExtractorBinSourcePath = join(projectRoot, 'node_modules', 'electrobun', 'src', 'launcher', 'zig-out', 'bin', 'launcher');
+        const selfExtractorBinDestinationPath = join(selfExtractingBundle.appBundleMacOSPath, appFileName);
+
+        cpSync(selfExtractorBinSourcePath, selfExtractorBinDestinationPath, {dereference: true});
+
+        Bun.write(join(selfExtractingBundle.appBundleFolderContentsPath, 'Info.plist'), InfoPlistContents);
+
+        // codesignAppBundle(selfExtractingBundle.appBundleFolderPath);
+        codesignAppBundle(selfExtractingBundle.appBundleFolderPath, join(buildFolder, 'entitlements.plist'));
+
+        notarizeAndStaple(selfExtractingBundle.appBundleFolderPath);
+
+
+        // make a dmg
+        const dmgPath = join(buildFolder, `${appFileName}.dmg`);
+        
+        // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
+        // Note: use UDBZ for better compression vs. UDZO
+        execSync(`hdiutil create -volname "${appFileName}" -srcfolder ${appBundleFolderPath} -ov -format UDBZ ${dmgPath}`)
+        
+
+        // refresh artifacts folder
+
+        if (existsSync(artifactFolder)) {
+            console.info('deleting artifact folder: ', artifactFolder);
+            rmdirSync(artifactFolder, {recursive: true});
+        }
+
+        mkdirSync(artifactFolder, {recursive: true});
+        
+        // // compress all the upload files
+        // const filesToCompress = [dmgPath, appBundleContainerPath, bunVersionedRuntimePath];
+        
+        // filesToCompress.forEach((filePath) => {        
+        //     const filename = basename(filePath);
+        //     const zipPath = join(artifactFolder, `${filename}.zip`);
+        //     // todo (yoav): do this in parallel
+        //     execSync(`zip -r -9 ${zipPath} ${filename}`, {cwd: dirname(filePath)});
+        // });
+
+        // self-extractor:
+        // 1. extract zstd tarball in resources folder to an application specific cache folder
+        // 2. extract the tarball to a tmp location, verify codesign/sha/checksum
+        // 3. replace bundle in place close, and re-open the app
+        // 4. do we need messaging or an alert? should we build that into the electrobun bun api to give user control
+
+
+        // updator: 
+        // 1. check update.json
+        // 2. try download patches
+        // 3. apply patches to cached tarball
+        // 4. verify codesign/sha/checksum
+        // 5. replace bundle in place, close, and re-open the app
+
     }
+
+
+    // NOTE: verify codesign
+    //  codesign --verify --deep --strict --verbose=2 <app path>
+
+    // Note: verify notarization
+    // spctl --assess --type execute --verbose <app path>
+
 
     // todo (yoav): generate version.json file
 
@@ -486,11 +528,9 @@ if (commandArg === 'init') {
         }        
     });   
 
-    if (buildEnvironment !== 'dev') {
-        // Note: only continue wiring up dev mode if we're launching the 
-        // dev build.
-        process.exit();
-    }
+    if (buildEnvironment === 'dev') {
+      
+    
     
     const debugPipesFolder = join(buildFolder, bundleFileName, 'Contents', 'Resources', 'debug');
     const toLauncherPipePath = join(debugPipesFolder, 'toLauncher');
@@ -537,6 +577,12 @@ if (commandArg === 'init') {
         toLauncherPipe.write('exit command\n')                        
         process.exit();        
       });    
+
+    }
+
+   
+    
+
 } else {
     // no commands so run as the debug launcher inside the app bundle
 
@@ -668,5 +714,126 @@ function getEntitlementValue(value: boolean | string) {
         return `<${value.toString()}/>`;
     } else {
         return value;
+    }
+}
+
+function codesignAppBundle(appBundleFolderPath: string, entitlementsFilePath?: string) {
+    console.log('code signing...')
+    if (!config.build.mac.codesign) {
+        return;
+    }
+    
+    const ELECTROBUN_DEVELOPER_ID = process.env['ELECTROBUN_DEVELOPER_ID'];
+    
+    
+    if (!ELECTROBUN_DEVELOPER_ID) {
+        console.error('Env var ELECTROBUN_DEVELOPER_ID is required to codesign');
+        process.exit(1);
+    }
+    
+    // list of entitlements https://developer.apple.com/documentation/security/hardened_runtime?language=objc
+    // todo (yoav): consider allowing separate entitlements config for each binary
+    // const entitlementsFilePath = join(buildFolder, 'entitlements.plist');
+    
+    if (entitlementsFilePath) {
+        const entitlementsFileContents = buildEntitlementsFile(config.build.mac.entitlements);
+        Bun.write(entitlementsFilePath, entitlementsFileContents);
+        
+        execSync(`codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --entitlements ${entitlementsFilePath} ${appBundleFolderPath}`)        
+    } else {
+        execSync(`codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${appBundleFolderPath}`)            
+    }
+}
+
+
+function notarizeAndStaple(appOrDmgPath: string) {
+    if (!config.build.mac.notarize) {
+        return;
+    }
+
+    let fileToNotarize = appOrDmgPath;
+    // codesign 
+    // NOTE: Codesigning fails in dev mode (when using a single-file-executable bun cli as the launcher)
+    // see https://github.com/oven-sh/bun/issues/7208
+    // if (shouldNotarize) {
+        console.log('notarizing...')
+        const zipPath = appOrDmgPath + '.zip';
+        if (appOrDmgPath.endsWith('.app')) {
+            const appBundleFileName = basename(appOrDmgPath);
+            // if we're codesigning the .app we have to zip it first
+            execSync(`zip -r -9 ${zipPath} ${appBundleFileName}`, {cwd: dirname(appOrDmgPath)});
+            fileToNotarize = zipPath;
+        }
+
+        const ELECTROBUN_APPLEID = process.env['ELECTROBUN_APPLEID'];
+        
+        if (!ELECTROBUN_APPLEID) {
+            console.error('Env var ELECTROBUN_APPLEID is required to notarize');
+            process.exit(1);
+        }
+        
+        const ELECTROBUN_APPLEIDPASS = process.env['ELECTROBUN_APPLEIDPASS'];
+        
+        if (!ELECTROBUN_APPLEIDPASS) {
+            console.error('Env var ELECTROBUN_APPLEIDPASS is required to notarize');
+            process.exit(1);
+        }
+        
+        const ELECTROBUN_TEAMID = process.env['ELECTROBUN_TEAMID'];
+        
+        if (!ELECTROBUN_TEAMID) {
+            console.error('Env var ELECTROBUN_TEAMID is required to notarize');
+            process.exit(1);
+        }
+        
+        
+        // notarize        
+        // todo (yoav): follow up on options here like --s3-acceleration and --webhook        
+        // todo (yoav): don't use execSync since it's blocking and we'll only see the output at the end
+        const statusInfo = execSync(`xcrun notarytool submit --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" --wait ${fileToNotarize}`).toString();
+        const uuid = statusInfo.match(/id: ([^\n]+)/)?.[1]
+        console.log('statusInfo', statusInfo);
+        console.log('uuid', uuid);
+        
+        if (statusInfo.match("Current status: Invalid")) {
+            console.error('notarization failed', statusInfo);
+            const log = execSync(`xcrun notarytool log --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" ${uuid}`).toString();
+            console.log('log', log)
+            process.exit(1);
+        }        
+        // check notarization                
+        // todo (yoav): actually check result
+        // use `notarytool info` or some other request thing to check separately from the wait above
+        
+        // stable notarization        
+        console.log('stapling...')
+        execSync(`xcrun stapler staple ${appOrDmgPath}`)        
+
+        if (existsSync(zipPath)) {
+            unlinkSync(zipPath);
+        }
+}
+
+// Note: supposedly the app bundle name is relevant to code sign/notarization so we need to make the app bundle and the self-extracting wrapper app bundle
+// have the same name but different subfolders in our build directory. or I guess delete the first one after tar/compression and then create the other one.
+// either way you can pass in the parent folder here for that flexibility.
+// for intel/arm builds on mac we'll probably have separate subfolders as well and build them in parallel.
+function createAppBundle(bundleName: string, parentFolder: string) {
+    const bundleFileName = `${bundleName}.app`;
+    const appBundleFolderPath = join(parentFolder, bundleFileName);
+    const appBundleFolderContentsPath = join(appBundleFolderPath, 'Contents');
+    const appBundleMacOSPath = join(appBundleFolderContentsPath, 'MacOS');
+    const appBundleFolderResourcesPath = join(appBundleFolderContentsPath, 'Resources');
+    
+    // we don't have to make all the folders, just the deepest ones
+    // todo (yoav): check if folders exist already before creating them
+    mkdirSync(appBundleMacOSPath, {recursive: true});
+    mkdirSync(appBundleFolderResourcesPath, {recursive: true});
+
+    return {
+        appBundleFolderPath,
+        appBundleFolderContentsPath,
+        appBundleMacOSPath,
+        appBundleFolderResourcesPath,        
     }
 }
