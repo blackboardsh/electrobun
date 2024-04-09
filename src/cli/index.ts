@@ -3,6 +3,7 @@ import {existsSync, readFileSync, cpSync, rmdirSync, mkdirSync, createWriteStrea
 import {execSync} from 'child_process';
 import tar from 'tar';
 import {ZstdInit} from '@oneidentity/zstd-js/wasm';
+import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -343,19 +344,6 @@ if (commandArg === 'init') {
         console.log('skipping notarization')
     }
     
-
-    // update.json for the channel in that channel's build folder
-    const updateJsonContent = JSON.stringify({
-        versions: {
-            app: config.app.version,
-            bun: bunVersion,
-            webview: 'system2',
-        },
-        channel: buildEnvironment,        
-        bucketUrl: config.release.bucketUrl
-    });    
-
-    Bun.write(join(artifactFolder, 'update.json'), updateJsonContent);
     
     if (buildEnvironment === 'dev') {
         // in dev mode add a cupla named pipes for some dev debug rpc magic
@@ -441,7 +429,7 @@ if (commandArg === 'init') {
         // copy the zstd tarball to the self-extracting app bundle
         cpSync(compressedTarPath, compressedTarballInExtractingBundlePath);
 
-        const selfExtractorBinSourcePath = join(projectRoot, 'node_modules', 'electrobun', 'src', 'launcher', 'zig-out', 'bin', 'launcher');
+        const selfExtractorBinSourcePath = join(projectRoot, 'node_modules', 'electrobun', 'src', 'extractor', 'zig-out', 'bin', 'extractor');
         const selfExtractorBinDestinationPath = join(selfExtractingBundle.appBundleMacOSPath, appFileName);
 
         cpSync(selfExtractorBinSourcePath, selfExtractorBinDestinationPath, {dereference: true});
@@ -485,23 +473,74 @@ if (commandArg === 'init') {
         
 
         // refresh artifacts folder
-
+        console.log('creating artifacts folder...')
         if (existsSync(artifactFolder)) {
             console.info('deleting artifact folder: ', artifactFolder);
             rmdirSync(artifactFolder, {recursive: true});
         }
 
         mkdirSync(artifactFolder, {recursive: true});
+
+        console.log('creating update.json...')
+        // update.json for the channel in that channel's build folder
+        const updateJsonContent = JSON.stringify({
+            version: config.app.version,
+            channel: buildEnvironment,        
+            bucketUrl: config.release.bucketUrl
+        });    
         
-        // // compress all the upload files
-        // const filesToCompress = [dmgPath, appBundleContainerPath, bunVersionedRuntimePath];
+        Bun.write(join(artifactFolder, 'update.json'), updateJsonContent);
+
+        // generate bsdiff
+        // https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst        
+        console.log("bucketUrl: ", config.release.bucketUrl);
+
+        console.log('fetching previous tarball...')
+        // todo (yoav): should be able to stream and decompress in the same step
+        const urlToLatestTarball = join(config.release.bucketUrl, buildEnvironment,  `${appFileName}.app.tar.zst`);;
+        const response = await fetch(urlToLatestTarball);        
+        const prevVersionCompressedTarballPath = join(buildFolder, 'prev.tar.zst');
+
+        if (response.ok && response.body) {
+            const reader = response.body.getReader();            
+            
+            const writer = Bun.file(prevVersionCompressedTarballPath).writer();
+
+            while (true) {                
+                const { done, value } = await reader.read();
+                if (done) break;
+                await writer.write(value);
+            }
+            await writer.flush();
+            writer.end();
+        } else {
+            console.log('prevoius version not found at: ', urlToLatestTarball);
+            console.log('skipping diff generation');
+        }
+
+        console.log('generating diff...')
+        const prevTarballPath = join(buildFolder, 'prev.tar');
+        await ZstdInit().then(async ({ZstdSimple}) => {
+            const data = new Uint8Array(await Bun.file(compressedTarPath).arrayBuffer());
+            const uncompressedData = ZstdSimple.decompress(data);
+            await Bun.write(prevTarballPath, uncompressedData);
+        });
+
+        const bsdiff = await loadBsdiff();
+
+        bsdiff.FS.writeFile('old.tar', new Uint8Array(await Bun.file(prevTarballPath).arrayBuffer()));
+        bsdiff.FS.writeFile('new.tar', new Uint8Array(await Bun.file(tarPath).arrayBuffer()));
+        bsdiff.callMain(['old.tar', 'new.tar', 'patch.bsdiff']);
+        const patch = bsdiff.FS.readFile('patch.bsdiff');
+        console.log('patch: ', patch);
+                
+        // compress all the upload files
+        const filesToUpload = [dmgPath, compressedTarPath];
         
-        // filesToCompress.forEach((filePath) => {        
-        //     const filename = basename(filePath);
-        //     const zipPath = join(artifactFolder, `${filename}.zip`);
-        //     // todo (yoav): do this in parallel
-        //     execSync(`zip -r -9 ${zipPath} ${filename}`, {cwd: dirname(filePath)});
-        // });
+        filesToUpload.forEach((filePath) => {        
+            const filename = basename(filePath);
+            cpSync(filePath, join(artifactFolder, filename));            
+        });
 
         // self-extractor:
         // 1. extract zstd tarball in resources folder to an application specific cache folder

@@ -16,9 +16,8 @@ Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main proc
 **Project Goals**
 
 - Write typescript for the main process and webviews without having to think about it.
-- Isolation between main and webview processes with fast, typed, easily to implement RPC between them.
-- Decouple shipping Bun and Web runtimes from shipping your application code.
-- Small self-extracting app bundles ~12MB (when using system webview, 99% of this is the bun runtime)
+- Isolation between main and webview processes with fast, typed, easy to implement RPC between them.
+- Small self-extracting app bundles ~12MB (when using system webview, most of this is the bun runtime)
 - Even smaller app updates as small as 4KB (using bsdiff it only downloads tiny patches between versions)
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
