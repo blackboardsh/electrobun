@@ -2,6 +2,26 @@ import Electrobun, {BrowserWindow, BrowserView, type RPCSchema, createRPC} from 
 import {type MyWebviewRPC} from '../mainview/rpc';
 import {type MyExtensionSchema} from '../myextension/rpc';
 
+// Electrobun.Updater.getLocalVersion();
+
+
+const updateInfo = await Electrobun.Updater.checkForUpdate();
+console.log('Electrobun update', await Electrobun.Updater.localInfo.hash())
+console.log('Electrobun update', updateInfo)
+
+if (updateInfo.updateAvailable) {
+    console.log('update available')
+    // todo (yoav): add a button to the UI to trigger this
+    await Electrobun.Updater.downloadUpdate();
+}
+
+// if (updateInfo.updateReady) {
+    console.log('update app')
+    await Electrobun.Updater.applyUpdate();
+// }
+
+
+
 // const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
 //     maxRequestTime: 5000,
 //     requestHandler: {

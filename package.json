@@ -8,7 +8,9 @@
     "./bun": "./src/bun/index.ts",
     "./view": "./src/browser/index.ts"
   },
-  "bin": "src/cli/build/electrobun",
+  "bin": {
+    "electrobun": "src/cli/build/electrobun"    
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/blackboardsh/electrobun.git"
@@ -30,18 +32,17 @@
     "build:launcher:release": "cd src/launcher && zig build -Doptimize=ReleaseSmall",
     "build:extractor:release": "cd src/extractor && zig build -Doptimize=ReleaseSmall",
     "build:browser": "bun build src/browser/index.ts --outdir src/zig/build/",
-    "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",
-    "build:bun": "",
-    "build:dev": "bun build:objc && bun build:browser && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
-    "build:release": "bun build:objc && bun build:browser && bun build:zig:release && bun build:launcher:release && bun build:extractor:release && bun build:cli",
+    "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",    
+    "build:dev": "bun install:all && bun build:zig:trdiff && bun build:objc && bun build:browser && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
+    "build:release": "bun build:objc && bun build:zig:trdiff:release && bun build:browser && bun build:zig:release && bun build:launcher:release && bun build:extractor:release && bun build:cli",
     "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
-    "dev:example": "bun build:dev && cd example && bun install && bun build:dev && bun start",
+    "dev:example": "bun build:dev && cd example && npm install && bun build:dev && bun start",
     "dev:example:rerun": "cd example && bun start",
-    "dev:example:canary": "bun build:release && cd example && bun install && bun build:canary"
+    "dev:example:canary": "bun build:release && cd example && npm install && bun build:canary"
   },
   "devDependencies": {
     "@types/bun": "^1.0.8",
-    "bun": "1.0.26"
+    "bun": "1.1.3"
   },
   "dependencies": {}
 }

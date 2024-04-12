@@ -28,14 +28,18 @@ const mainPipe = `/private/tmp/electrobun_ipc_pipe_${'my-app-id'}_main`;
 
 process.on("SIGINT", (code) => {
 	// todo (yoav): maybe send a friendly signal to the webviews to let them know
-	// we're shutting down
-
+	// we're shutting down	
 	// clean up the webview process when the bun process dies.
 	zigProc.kill();
 	// fs.unlinkSync(mainPipe);
 	process.exit();
 });
 
+process.on("exit", (code) => {
+	// Note: this can happen when the bun process crashes
+	// make sure that zigProc is killed so it doesn't linger around
+	zigProc.kill();
+});
 
 try {
 	execSync('mkfifo ' + mainPipe);

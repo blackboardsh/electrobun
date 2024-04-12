@@ -4,6 +4,10 @@ var missingTransportMethodError = function(methods, action) {
   return new Error(`This RPC instance cannot ${action} because the transport did not provide one or more of these methods: ${methodsString}`);
 };
 function _createRPC(options = {}) {
+  let debugHooks = {};
+  function _setDebugHooks(newDebugHooks) {
+    debugHooks = newDebugHooks;
+  }
   let transport = {};
   function setTransport(newTransport) {
     if (transport.unregisterHandler)
@@ -32,6 +36,8 @@ function _createRPC(options = {}) {
     setTransport(options.transport);
   if (options.requestHandler)
     setRequestHandler(options.requestHandler);
+  if (options._debugHooks)
+    _setDebugHooks(options._debugHooks);
   let lastRequestId = 0;
   function getRequestId() {
     if (lastRequestId <= MAX_ID)
@@ -58,6 +64,7 @@ function _createRPC(options = {}) {
           requestTimeouts.delete(requestId);
           reject(new Error("RPC request timed out."));
         }, maxRequestTime));
+      debugHooks.onSend?.(request2);
       transport.send(request2);
     });
   }
@@ -78,6 +85,7 @@ function _createRPC(options = {}) {
       id: message,
       payload
     };
+    debugHooks.onSend?.(rpcMessage);
     transport.send(rpcMessage);
   }
   const send = new Proxy(sendFn, {
@@ -111,6 +119,7 @@ function _createRPC(options = {}) {
       messageListeners.delete(message);
   }
   async function handler(message) {
+    debugHooks.onReceive?.(message);
     if (!("type" in message))
       throw new Error("Message does not contain a type.");
     if (message.type === "request") {
@@ -135,6 +144,7 @@ function _createRPC(options = {}) {
           error: error.message
         };
       }
+      debugHooks.onSend?.(response);
       transport.send(response);
       return;
     }
@@ -171,7 +181,8 @@ function _createRPC(options = {}) {
     sendProxy,
     addMessageListener,
     removeMessageListener,
-    proxy
+    proxy,
+    _setDebugHooks
   };
 }
 var MAX_ID = 10000000000;

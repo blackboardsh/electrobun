@@ -2,7 +2,8 @@ const std = @import("std");
 const zstd = std.compress.zstd;
 
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "/Users/yoav/code/electrobun/example/build/canary/ElectrobunPlayground-0-0-1-canary.app/Contents/Resources/compressed.tar.zst";
-const COMPRESSED_APP_BUNDLE_REL_PATH = "../Resources/compressed.tar.zst";
+// const COMPRESSED_APP_BUNDLE_REL_PATH = "../Resources/compressed.tar.zst";
+const BUNLE_RESOURCES_REL_PATH = "../Resources/";
 // todo: for some reason it's saying std.compress.zstd.DecompressorOptions doesn't exist so hardcoding the value
 pub const default_window_buffer_len = 8 * 1024 * 1024;
 
@@ -53,108 +54,146 @@ pub fn main() !void {
     const APPDATA_PATH = try std.fs.getAppDataDir(allocator, appDataPathSegment);
     defer allocator.free(APPDATA_PATH);
 
-    const compressedTarballPath = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, COMPRESSED_APP_BUNDLE_REL_PATH });
+    const appBundleResourcesPath = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, BUNLE_RESOURCES_REL_PATH });
 
-    if (std.fs.cwd().openFile(compressedTarballPath, .{})) |compressedAppBundle| {
-        const SELF_EXTRACTION_PATH = try std.fs.path.join(allocator, &.{ APPDATA_PATH, "self-extraction" });
+    const compressedBundleFileName = try getFilenameFromExtension(allocator, appBundleResourcesPath, ".zst");
 
-        if (std.fs.openDirAbsolute(SELF_EXTRACTION_PATH, .{})) |_| {
-            try std.fs.deleteTreeAbsolute(SELF_EXTRACTION_PATH);
-        } else |_| {
-            // do nothing
-        }
+    std.debug.print("compressedBundleFileName: {s}\n", .{compressedBundleFileName});
 
-        try std.fs.cwd().makePath(SELF_EXTRACTION_PATH);
+    const compressedTarballPath = try std.fs.path.join(allocator, &.{ appBundleResourcesPath, compressedBundleFileName });
 
-        // compressed file found, assume I'm the self-extractor
-        defer compressedAppBundle.close();
+    const compressedAppBundle = try std.fs.cwd().openFile(compressedTarballPath, .{}); //|compressedAppBundle| {
+    const SELF_EXTRACTION_PATH = try std.fs.path.join(allocator, &.{ APPDATA_PATH, "self-extraction" });
 
-        const src_reader = compressedAppBundle.reader();
-
-        // Initialize the decompressor
-        // Set window size to 128 MiB which facebook's zstd docs state is the max
-        var zstd_stream = decompressStreamOptions(allocator, src_reader, .{ .window_size_max = 128 << 20 });
-
-        defer zstd_stream.deinit();
-
-        const tarPath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, "extracted.tar" });
-        std.debug.print("tarPath: {s}\n", .{tarPath});
-        // Open the destination file for writing
-
-        const dst_file = try std.fs.cwd().createFile(tarPath, .{ .truncate = true });
-        defer dst_file.close();
-
-        // Create a writer for the destination file
-        var dst_writer = dst_file.writer();
-
-        // Allocate a buffer for reading decompressed data chunks
-        var buffer: [4096]u8 = undefined;
-
-        // Read from the decompressor and write to the destination file
-        while (true) {
-            // Read a chunk of decompressed data into the buffer
-            const read_bytes = try zstd_stream.reader().read(&buffer);
-            if (read_bytes == 0) break; // Check for end of the decompressed stream
-
-            // Write the decompressed chunk to the destination file
-            try dst_writer.writeAll(buffer[0..read_bytes]);
-        }
-
-        std.debug.print("Time taken to decompress: {} ns\n", .{std.time.nanoTimestamp() - startTime});
-
-        startTime = std.time.nanoTimestamp();
-
-        // const unpackedBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, "unpacked" });
-        // try std.fs.cwd().makeDir(unpackedBundlePath);
-
-        const extractionFolder = try std.fs.cwd().openDir(SELF_EXTRACTION_PATH, .{});
-
-        const tarfile = try std.fs.cwd().openFile(tarPath, .{});
-        defer tarfile.close();
-
-        try pipeToFileSystem(extractionFolder, tarfile.reader());
-
-        std.debug.print("Time taken to untar: {} ns\n", .{std.time.nanoTimestamp() - startTime});
-
-        // Note: the name of the application or bundle may change between builds. By switching distribution channels
-        // and/or by the app developer deciding to rename it.
-        // todo: consider having a metadata file for the final bundle name and having all the names in this directory consistent
-        const iterableDir = try std.fs.openIterableDirAbsolute(SELF_EXTRACTION_PATH, .{});
-        var extractionFolderWalker = try iterableDir.walk(allocator);
-        defer extractionFolderWalker.deinit();
-
-        while (try extractionFolderWalker.next()) |entry| {
-            const entryName = entry.basename;
-            if (std.mem.eql(u8, std.fs.path.extension(entryName), ".app")) {
-                const newBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, entryName });
-                // todo: get the basename of the newBundlePath and join a new path with it
-                // in case the name changed.
-
-                // Note: move the current bundle to application support as a backup in case the update fails
-                // We only need to keep it around until the next update since we assume if you didn't need it
-                // before then you won't need it in the future. ie: only keep one backup around.
-                const backupBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, "backup.app" });
-                try std.fs.renameAbsolute(APPBUNDLE_PATH, backupBundlePath);
-                try std.fs.renameAbsolute(newBundlePath, APPBUNDLE_PATH);
-
-                const argv = &[_][]const u8{ "open", APPBUNDLE_PATH };
-                var child_process = std.ChildProcess.init(argv, allocator);
-
-                // The open command will exit and run the opened app (the unpacked/updated app bundle in a separate process)
-                // so we want to just spawn (so it detaches) and exit as soon as possible
-                _ = child_process.spawn() catch |err| {
-                    std.debug.print("Failed to wait for child process: {}\n", .{err});
-                    return;
-                };
-
-                std.os.exit(0);
-            }
-        }
+    if (std.fs.openDirAbsolute(SELF_EXTRACTION_PATH, .{})) |_| {
+        try std.fs.deleteTreeAbsolute(SELF_EXTRACTION_PATH);
     } else |_| {
-        // no compressed file found, assume we're the full app bundle and launch the electrobun app
-
-        std.debug.print("No compressed bundle found: \n", .{});
+        // do nothing
     }
+
+    try std.fs.cwd().makePath(SELF_EXTRACTION_PATH);
+
+    // compressed file found, assume I'm the self-extractor
+    defer compressedAppBundle.close();
+
+    const src_reader = compressedAppBundle.reader();
+
+    // Initialize the decompressor
+    // Set window size to 128 MiB which facebook's zstd docs state is the max
+    var zstd_stream = decompressStreamOptions(allocator, src_reader, .{ .window_size_max = 128 << 20 });
+
+    defer zstd_stream.deinit();
+
+    // compressedTarballPath replace extension
+    // remove the .zst extension from filename.tar.zst
+    const tarFileName = std.fs.path.stem(compressedTarballPath);
+
+    const tarPath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, tarFileName });
+    std.debug.print("tarPath: {s}\n", .{tarPath});
+    // Open the destination file for writing
+
+    const dst_file = try std.fs.cwd().createFile(tarPath, .{ .truncate = true });
+    defer dst_file.close();
+
+    // Create a writer for the destination file
+    var dst_writer = dst_file.writer();
+
+    // Allocate a buffer for reading decompressed data chunks
+    var buffer: [4096]u8 = undefined;
+
+    // Read from the decompressor and write to the destination file
+    while (true) {
+        // Read a chunk of decompressed data into the buffer
+        const read_bytes = try zstd_stream.reader().read(&buffer);
+        if (read_bytes == 0) break; // Check for end of the decompressed stream
+
+        // Write the decompressed chunk to the destination file
+        try dst_writer.writeAll(buffer[0..read_bytes]);
+    }
+
+    std.debug.print("Time taken to decompress: {} ns\n", .{std.time.nanoTimestamp() - startTime});
+
+    startTime = std.time.nanoTimestamp();
+
+    // const unpackedBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, "unpacked" });
+    // try std.fs.cwd().makeDir(unpackedBundlePath);
+
+    const extractionFolder = try std.fs.cwd().openDir(SELF_EXTRACTION_PATH, .{});
+
+    const tarfile = try std.fs.cwd().openFile(tarPath, .{});
+    defer tarfile.close();
+
+    try pipeToFileSystem(extractionFolder, tarfile.reader());
+
+    std.debug.print("Time taken to untar: {} ns\n", .{std.time.nanoTimestamp() - startTime});
+
+    const bundleFileName = try getFilenameFromExtension(allocator, SELF_EXTRACTION_PATH, ".app");
+    std.debug.print("bundleFileName: {s}\n", .{bundleFileName});
+    // Note: the name of the application or bundle may change between builds. By switching distribution channels
+    // and/or by the app developer deciding to rename it.
+    // todo: consider having a metadata file for the final bundle name and having all the names in this directory consistent
+    // const iterableDir = try std.fs.openIterableDirAbsolute(SELF_EXTRACTION_PATH, .{});
+    // var extractionFolderWalker = try iterableDir.walk(allocator);
+    // defer extractionFolderWalker.deinit();
+
+    // while (try extractionFolderWalker.next()) |entry| {
+    //     const entryName = entry.basename;
+    //     if (std.mem.eql(u8, std.fs.path.extension(entryName), ".app")) {
+    const newBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, bundleFileName });
+
+    // todo
+    // rename the tar file to its hash so we can update it later
+    // const hash = "";
+
+    // todo: get the basename of the newBundlePath and join a new path with it
+    // in case the name changed.
+
+    // Note: move the current bundle to application support as a backup in case the update fails
+    // We only need to keep it around until the next update since we assume if you didn't need it
+    // before then you won't need it in the future. ie: only keep one backup around.
+    const backupBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, "backup.app" });
+    try std.fs.renameAbsolute(APPBUNDLE_PATH, backupBundlePath);
+    try std.fs.renameAbsolute(newBundlePath, APPBUNDLE_PATH);
+
+    const argv = &[_][]const u8{ "open", APPBUNDLE_PATH };
+    var child_process = std.ChildProcess.init(argv, allocator);
+
+    // The open command will exit and run the opened app (the unpacked/updated app bundle in a separate process)
+    // so we want to just spawn (so it detaches) and exit as soon as possible
+    _ = child_process.spawn() catch |err| {
+        std.debug.print("Failed to wait for child process: {}\n", .{err});
+        return;
+    };
+
+    std.os.exit(0);
+
+    //     }
+    // } else |_| {
+    //     // no compressed file found, assume we're the full app bundle and launch the electrobun app
+
+    //     std.debug.print("No compressed bundle found: \n", .{});
+    // }
+}
+
+pub fn getFilenameFromExtension(allocator: std.mem.Allocator, folderPath: []const u8, extension: []const u8) ![]const u8 {
+    // std.debug.print("one\n", .{});
+    const iterableDir = try std.fs.openIterableDirAbsolute(folderPath, .{});
+    var extractionFolderWalker = try iterableDir.walk(allocator);
+    // std.debug.print("two\n", .{});
+    defer extractionFolderWalker.deinit();
+
+    while (try extractionFolderWalker.next()) |entry| {
+        const entryName = entry.basename;
+        if (std.mem.eql(u8, std.fs.path.extension(entryName), extension)) {
+            // Copy the filename to the allocator since we deinit the walker in here
+            // and the entryName will be deallocated along with it
+            const fileName = try allocator.alloc(u8, entryName.len);
+            std.mem.copy(u8, fileName, entryName);
+            return fileName;
+        }
+    }
+    // std.debug.print("No file found with extension: {s} {s}\n", .{ folderPath, extension });
+    return error.FileNotFound;
 }
 
 // Note: zig stdlib's untar function doesn't support file modes. They don't plan on adding it later,

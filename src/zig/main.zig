@@ -3,11 +3,9 @@ const rpc = @import("rpc/rpc.zig");
 const application = @import("macos/application.zig");
 
 // timer reference
-// const startTime = std.time.nanoTimestamp();
-// // code
-// const endTime = std.time.nanoTimestamp();
-// const duration = endTime - startTime;
-// std.debug.print("Time taken: {} ns\n", .{duration});
+// var startTime = std.time.nanoTimestamp();
+// std.debug.print("Time taken: {} ns\n", .{std.time.nanoTimestamp() - startTime});
+// startTime = std.time.nanoTimestamp();
 
 const alloc = std.heap.page_allocator;
 

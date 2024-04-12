@@ -9,8 +9,7 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@oneidentity/zstd-js": "^1.0.3",
-    "bsdiff-wasm": "^0.1.4",
+    "@oneidentity/zstd-js": "^1.0.3",    
     "tar": "^6.2.1"
   },
   "trustedDependencies": []

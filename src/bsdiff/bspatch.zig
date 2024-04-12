@@ -48,11 +48,11 @@ pub fn main() !void {
     _ = args.skip();
 
     const oldFilePath = args.next() orelse "";
-    const patchFilePath = args.next() orelse "";
     const newFilePath = args.next() orelse "";
+    const patchFilePath = args.next() orelse "";
 
-    if (oldFilePath.len == 0 or patchFilePath.len == 0 or newFilePath.len == 0) {
-        std.debug.print("Usage: bsdiff <oldFilePath> <patchFilePath> <newFilePath>\n", .{});
+    if (oldFilePath.len == 0 or newFilePath.len == 0 or patchFilePath.len == 0) {
+        std.debug.print("Usage: bsdiff <oldFilePath> <newFilePath> <patchFilePath>\n", .{});
         std.process.exit(1);
     }
 
@@ -183,7 +183,7 @@ fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []const
             if (i + vectorSize <= diffSlice.len) {
                 const oldVec: @Vector(vectorSize, u8) = oldSlice[i..][0..vectorSize].*;
                 const diffVec: @Vector(vectorSize, u8) = diffSlice[i..][0..vectorSize].*;
-                const resultVec = oldVec + diffVec;
+                const resultVec = @addWithOverflow(oldVec, diffVec)[0];
                 const resultArray: [vectorSize]u8 = resultVec;
                 try newfile.appendSlice(&resultArray);
                 i += vectorSize;
@@ -197,7 +197,7 @@ fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []const
             if (i + vectorSize4 <= diffSlice.len) {
                 const oldVec: @Vector(vectorSize4, u8) = oldSlice[i..][0..vectorSize4].*;
                 const diffVec: @Vector(vectorSize4, u8) = diffSlice[i..][0..vectorSize4].*;
-                const resultVec = oldVec + diffVec;
+                const resultVec = @addWithOverflow(oldVec, diffVec)[0];
                 const resultArray: [vectorSize4]u8 = resultVec;
                 try newfile.appendSlice(&resultArray);
                 i += vectorSize4;
