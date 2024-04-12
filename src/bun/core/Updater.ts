@@ -322,7 +322,7 @@ const Updater = {
     channelBucketUrl: async () => {
         await Updater.getLocallocalInfo();
         // todo: tmp hardcode canary
-        return join(localInfo.bucketUrl, 'canary');//localInfo.channel);
+        return join(localInfo.bucketUrl, localInfo.channel);
     },
 
     appDataFolder: async () => {
