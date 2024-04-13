@@ -212,15 +212,12 @@ if (commandArg === 'init') {
     
     // Bun runtime binary
     // todo (yoav): this only works for the current architecture
-    const bunBinarySourcePath = join(projectRoot, 'node_modules', 'electrobun', "node_modules", '.bin', 'bun');
-    // const bunBinarySourcePath = join(projectRoot, 'node_modules', '.bin', 'bun');
-    // console.log('bunBinarySourcePath', bunBinarySourcePath)
+    const bunBinarySourcePath = join(projectRoot, 'node_modules', 'electrobun', "node_modules", '.bin', 'bun');    
     // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
     // in node_modules, so we have to dereference here to get the actual binary in the bundle.
     const bunBinaryDestInBundlePath = join(appBundleMacOSPath, 'bun');
     const destFolder2 = dirname(bunBinaryDestInBundlePath);
-    if (!existsSync(destFolder2)) {
-        console.log(9)
+    if (!existsSync(destFolder2)) {        
         // console.info('creating folder: ', destFolder);
         mkdirSync(destFolder2, {recursive: true});
     }
@@ -240,18 +237,17 @@ if (commandArg === 'init') {
         // console.info('creating folder: ', destFolder);
         mkdirSync(destFolder, {recursive: true});
     }
-    // console.log('copying', zigNativeBinarySource, 'to', zigNativeBinaryDestination);
+    
     cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {recursive: true, dereference: true});    
 
     // copy native bindings
     const bsPatchSource = join(projectRoot, 'node_modules', 'electrobun', 'src', 'bsdiff', 'zig-out', 'bin', 'bspatch');
     const bsPatchDestination = join(appBundleMacOSPath, 'bspatch');
     const bsPatchDestFolder = dirname(bsPatchDestination);
-    if (!existsSync(bsPatchDestFolder)) {
-        // console.info('creating folder: ', bsPatchDestFolder);
+    if (!existsSync(bsPatchDestFolder)) {        
         mkdirSync(bsPatchDestFolder, {recursive: true});
     }
-    // console.log('copying', bsPatchSource, 'to', bsPatchDestination);
+    
     cpSync(bsPatchSource, bsPatchDestination, {recursive: true, dereference: true});    
     
     const bunDestFolder = join(appBundleAppCodePath, "bun");
@@ -269,13 +265,6 @@ if (commandArg === 'init') {
         process.exit(1);
     }
     
-    // const singleFileExecutablePath = join(appBundleMacOSPath, 'myApp');
-    
-    // const builderProcess = Bun.spawnSync([bunPath, 'build', bunSource, '--compile', '--outfile', singleFileExecutablePath])
-
-    // console.log('builderProcess', builderProcess.stdout.toString(), builderProcess.stderr.toString());
-    
-
     // Build webview-javascript ts files
     // bundle all the bundles
     for (const viewName in config.build.views) {        
@@ -308,10 +297,8 @@ if (commandArg === 'init') {
         if (!buildResult.success) {
             console.error('failed to build', viewSource, buildResult.logs);
             continue;
-        }
-        
+        }        
     }
-
 
     // Copy assets like html, css, images, and other files
     for (const relSource in config.build.copy) {
@@ -329,8 +316,7 @@ if (commandArg === 'init') {
             mkdirSync(destFolder, {recursive: true});
         }
         
-        // todo (yoav): add ability to swap out BUILD VARS
-        // console.log('copying', source, 'to', destination);
+        // todo (yoav): add ability to swap out BUILD VARS        
         cpSync(source, destination, {recursive: true, dereference: true})
     }    
 
@@ -357,11 +343,6 @@ if (commandArg === 'init') {
     
     // version.json inside the app bundle
     const versionJsonContent = JSON.stringify({
-        // versions: {
-        //     app: config.app.version,
-        //     bun: bunVersion,
-        //     webview: 'system'// could also be type of webview with version number. eg: 'cef:1.0.2'
-        // }, 
         version: config.app.version,
         // The first tar file does not include this, it gets hashed,
         // then the hash is included in another tar file. That later one
@@ -385,7 +366,6 @@ if (commandArg === 'init') {
         console.log('skipping codesign')
     }
     
-    
     // codesign 
     // NOTE: Codesigning fails in dev mode (when using a single-file-executable bun cli as the launcher)
     // see https://github.com/oven-sh/bun/issues/7208
@@ -394,7 +374,6 @@ if (commandArg === 'init') {
     } else {
         console.log('skipping notarization')
     }
-    
     
     if (buildEnvironment === 'dev') {
         // in dev mode add a cupla named pipes for some dev debug rpc magic
@@ -602,17 +581,9 @@ if (commandArg === 'init') {
             const bsdiffpath = join(projectRoot, 'node_modules', 'electrobun', 'src', 'bsdiff', 'zig-out', 'bin', 'bsdiff');
             const patchFilePath = join(buildFolder, `${prevHash}.patch`);
             artifactsToUpload.push(patchFilePath);;
-            const result = Bun.spawnSync([bsdiffpath, prevTarballPath, tarPath, patchFilePath, '--use-zstd'], {cwd: buildFolder});
-            console.log('diff command', [bsdiffpath, prevTarballPath, tarPath, patchFilePath, '--use-zstd'])
+            const result = Bun.spawnSync([bsdiffpath, prevTarballPath, tarPath, patchFilePath, '--use-zstd'], {cwd: buildFolder});            
             console.log('bsdiff result: ', result.stdout.toString(), result.stderr.toString());
-        }
-        // const bsdiff = await loadBsdiff();
-
-        // bsdiff.FS.writeFile('old.tar', new Uint8Array(await Bun.file(prevTarballPath).arrayBuffer()));
-        // bsdiff.FS.writeFile('new.tar', new Uint8Array(await Bun.file(tarPath).arrayBuffer()));
-        // bsdiff.callMain(['old.tar', 'new.tar', 'patch.bsdiff']);
-        // const patch = bsdiff.FS.readFile('patch.bsdiff');
-        // console.log('patch: ', patch);
+        }        
                 
         // compress all the upload files
         console.log('copying artifacts...')

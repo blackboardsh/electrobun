@@ -1,8 +1,7 @@
-import {join, dirname, basename, resolve} from 'path';
+import {join, dirname, resolve} from 'path';
 import {homedir} from 'os';
 import {renameSync, unlinkSync, mkdirSync, rmdirSync, statSync} from 'fs';
 import tar from 'tar';
-import {execSync} from 'child_process';
 import {ZstdInit} from '@oneidentity/zstd-js/wasm';
 
 const appSupportDir = join(homedir(), 'Library', 'Application Support');
@@ -63,20 +62,15 @@ const Updater = {
         const latestTarPath = join(appDataFolder, 'self-extraction', `${latestHash}.tar`);        
         
         const seenHashes = [];        
-
-        console.log('downloadUpdate', currentHash, latestHash)
+        
         // todo (yoav): add a check to the while loop that checks for a hash we've seen before
         // so that update loops that are cyclical can be broken
         if (!(await Bun.file(latestTarPath).exists())) {
             while (currentHash !== latestHash) {
                 
-                seenHashes.push(currentHash);
-                console.log('current hash beginloop', currentHash, 'latest hash', latestHash)
-
-
-                
+                seenHashes.push(currentHash);                                
                 const currentTar = Bun.file(currentTarPath);
-                console.log('Checking for', currentTarPath, await currentTar.exists())
+
                 if (!await currentTar.exists()) {
                     // tar file of the current version not found
                     // so we can't patch it. We need the byte-for-byte tar file
@@ -87,41 +81,26 @@ const Updater = {
                 // check if there's a patch file for it
                 const patchResponse = await fetch(join(channelBucketUrl, `${currentHash}.patch`));
 
-                // console.log('Patch not found for', patchResponse);
                 if (!patchResponse.ok) {
                     // patch not found                
                     break;
                 }
 
                 // The patch file's name is the hash of the "from" version
-                const patchFilePath = join(appDataFolder, 'self-extraction', `${currentHash}.patch`);
-                console.log('.............writing')
-                await Bun.write(patchFilePath, await patchResponse.arrayBuffer());
-                console.log('.............patching')
+                const patchFilePath = join(appDataFolder, 'self-extraction', `${currentHash}.patch`);                
+                await Bun.write(patchFilePath, await patchResponse.arrayBuffer());                
                 // patch it to a tmp name
                 const tmpPatchedTarFilePath = join(appDataFolder, 'self-extraction', `from-${currentHash}.tar`);
-                // todo: copy bspatch binary to the app bundle
-                // todo (yoav): get app bundle path
-                // const bspatchPath = resolve('./bspatch');
+                
                 // Note: cwd should be Contents/MacOS/ where the binaries are in the amc app bundle
                 try {
-                    const result = Bun.spawnSync(['bspatch', currentTarPath, tmpPatchedTarFilePath ,patchFilePath]);
-                    // const result = Bun.spawnSync([`bspatch`]);
-                    console.log('bsdiff result: ', result.stdout.toString(), result.stderr.toString());
-                    // console.log('patch reult', result.toString())
-                    console.log('cwd: ', process.cwd());
-                } catch (error) {
-                    console.log('Failed to patch', error, 'cwd: ', process.cwd());
-                    // console.log(`bspatch ${currentTarPath} ${patchFilePath} ${tmpPatchFilePath}`)
+                    Bun.spawnSync(['bspatch', currentTarPath, tmpPatchedTarFilePath ,patchFilePath]);                    
+                } catch (error) {                    
                     break;
                 }
-                console.log('.............untarring')
-                // todo (yoav): extract the hash from the tar file
-                // use it to name the patched tar file, and update currentHash
+                                
                 let versionSubpath = '';
-
                 const untarDir = join(appDataFolder, 'self-extraction', 'tmpuntar');
-
                 mkdirSync(untarDir, {recursive: true});
                 
                 // extract just the version.json from the patched tar file so we can see what hash it is now
@@ -137,7 +116,6 @@ const Updater = {
                             return false;
                         }
                     }
-
                 });
 
                 const currentVersionJson = await Bun.file(join(untarDir, versionSubpath)).json();
@@ -150,46 +128,27 @@ const Updater = {
 
                 seenHashes.push(nextHash);
 
-                console.log('current hash', currentHash )
-                console.log('next hash', nextHash )
-
                 if (!nextHash) {
                     break;
                 }
                 // Sync the patched tar file to the new hash
-                const updatedTarPath = join(appDataFolder, 'self-extraction', `${nextHash}.tar`);
-                console.log('.............renaming', tmpPatchedTarFilePath, updatedTarPath)
+                const updatedTarPath = join(appDataFolder, 'self-extraction', `${nextHash}.tar`);                
                 renameSync(tmpPatchedTarFilePath, updatedTarPath);
 
-                // delete the old tar file
-                console.log('.............unlinking', currentTarPath)
+                // delete the old tar file                
                 unlinkSync(currentTarPath)
                 unlinkSync(patchFilePath)
-                rmdirSync(untarDir, {recursive: true});
-                // [basename(currentTarPath)])
-                console.log('.............finished', currentVersionJson)
-
-                // todo (yoav): make sure bspatch is available in the app bundle
+                rmdirSync(untarDir, {recursive: true});                                
 
                 currentHash = nextHash;  
-                currentTarPath = join(appDataFolder, 'self-extraction', `${currentHash}.tar`);
-                
-                console.log('current hash end loop', currentHash, 'latest hash', latestHash, 'nextHash', nextHash)
+                currentTarPath = join(appDataFolder, 'self-extraction', `${currentHash}.tar`);                                
                 // loop through applying patches until we reach the latest version
                 // if we get stuck then exit and just download the full latest version
             }
-        
-
-            
-                    
-
+                                        
             // If we weren't able to apply patches to the current version,
             // then just download it and unpack it
-            if (currentHash !== latestHash) {
-                console.log('Downloading full version');
-
-                
-                
+            if (currentHash !== latestHash) {                
                 const cacheBuster = Math.random().toString(36).substring(7);
                 const urlToLatestTarball = join(channelBucketUrl,  `${appFileName}.app.tar.zst`);;
                 const prevVersionCompressedTarballPath = join(appDataFolder, 'self-extraction', 'latest.tar.zst');
@@ -233,16 +192,11 @@ const Updater = {
         // to check again
         if (await Bun.file(latestTarPath).exists()) {
             // download patch for this version, apply it.
-            // check for patch from that tar and apply it, until it matches the latest version
-            
-            // todo (yoav): 
-
+            // check for patch from that tar and apply it, until it matches the latest version                        
             // as a fallback it should just download and unpack the latest version
-            updateInfo.updateReady = true;
-            console.log('!!!! update ready ')
+            updateInfo.updateReady = true;            
         } else {
-            updateInfo.error = 'Failed to download latest version';
-            console.log('!!!! update NOT NOT NOT ready ')
+            updateInfo.error = 'Failed to download latest version';            
         }
     },
 
@@ -255,9 +209,7 @@ const Updater = {
             let latestHash = (await Updater.checkForUpdate()).hash;     
             const latestTarPath = join(extractionFolder, `${latestHash}.tar`);        
 
-            let appBundleSubpath: string = '';
-
-            
+            let appBundleSubpath: string = '';            
 
             if (await Bun.file(latestTarPath).exists()) {
                 await tar.x({
@@ -284,36 +236,23 @@ const Updater = {
                 // Contents/MacOS directory
                 const runningAppBundlePath = resolve(dirname(process.execPath), '..', '..');
                 const backupAppBundlePath = join(extractionFolder, 'backup.app');
-
-                console.log('newAppBundlePath', newAppBundlePath);
-                console.log('runningAppBundlePath', runningAppBundlePath);
-                console.log('backupAppBundlePath', backupAppBundlePath);
-                
-                // console.log('rename' , await Bun.file(backupAppBundlePath).exists())
                 
                 try {
                     // const backupState = statSync(backupAppBundlePath);
-                    if (statSync(backupAppBundlePath, {throwIfNoEntry: false})) {
-                        console.log('removing!!')
+                    if (statSync(backupAppBundlePath, {throwIfNoEntry: false})) {                        
                         rmdirSync(backupAppBundlePath, {recursive: true});
                     } else {
                         console.log('backupAppBundlePath does not exist')
                     }
-                    renameSync(runningAppBundlePath, backupAppBundlePath);
-                    console.log('rename2')
+                    renameSync(runningAppBundlePath, backupAppBundlePath);                    
                     renameSync(newAppBundlePath, runningAppBundlePath);
-                    console.log('rename3')
                 } catch (error) {
                     console.error('Failed to replace app with new version', error);
                     return;
                 }
 
-                console.log('open')
-
                 await Bun.spawn(['open', runningAppBundlePath]);
-
                 process.exit(0);
-
             }
         }
     },
