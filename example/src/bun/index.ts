@@ -4,10 +4,7 @@ import {type MyExtensionSchema} from '../myextension/rpc';
 
 // Electrobun.Updater.getLocalVersion();
 
-
 const updateInfo = await Electrobun.Updater.checkForUpdate();
-console.log('Electrobun update', await Electrobun.Updater.localInfo.hash())
-console.log('Electrobun update', updateInfo)
 
 if (updateInfo.updateAvailable) {
     console.log('update available')
@@ -15,10 +12,10 @@ if (updateInfo.updateAvailable) {
     await Electrobun.Updater.downloadUpdate();
 }
 
-// if (updateInfo.updateReady) {
+if (updateInfo.updateReady) {
     console.log('update app')
     await Electrobun.Updater.applyUpdate();
-// }
+}
 
 
 

@@ -29,12 +29,23 @@ let updateInfo: {
 const Updater = {
     // todo: allow switching channels, by default will check the current channel    
     checkForUpdate: async () => {
-        // todo (yoav): disable in dev mode with a message in the console that it's skipping
-        const channelBucketUrl = await Updater.channelBucketUrl();
-        
-        const cacheBuster = Math.random().toString(36).substring(7);
-        const updateInfoResponse = await fetch(join(channelBucketUrl, `update.json?${cacheBuster}`));
+        const localInfo = await Updater.getLocallocalInfo();
 
+        if (localInfo.channel === 'dev') {
+            return {
+                version: localInfo.version,
+                hash: localInfo.hash,
+                updateAvailable: false,
+                updateReady: false,
+                error: ''
+            }
+        }
+
+        const channelBucketUrl = await Updater.channelBucketUrl();        
+        
+        const cacheBuster = Math.random().toString(36).substring(7);        
+        const updateInfoResponse = await fetch(join(channelBucketUrl, `update.json?${cacheBuster}`));
+        
         if (updateInfoResponse.ok) {
             updateInfo = await updateInfoResponse.json();
 
@@ -50,7 +61,7 @@ const Updater = {
         
     },
 
-    downloadUpdate: async () => {
+    downloadUpdate: async () => {        
         const appDataFolder = await Updater.appDataFolder();
         const channelBucketUrl = await Updater.channelBucketUrl();
         const appFileName = localInfo.name;
@@ -258,8 +269,8 @@ const Updater = {
     },
 
 
-    channelBucketUrl: async () => {
-        await Updater.getLocallocalInfo();
+    channelBucketUrl: async () => {        
+        await Updater.getLocallocalInfo();        
         // todo: tmp hardcode canary
         return join(localInfo.bucketUrl, localInfo.channel);
     },
