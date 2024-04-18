@@ -34,7 +34,8 @@ pub const _RPCResponsePacketError = struct {
 };
 
 pub const _RPCMessagePacket = struct {
-    id: u32,
+    // Note: RPC Anywhere uses the id field for "method" when it's a message
+    id: []const u8,
     type: []const u8 = "message",
-    params: std.json.Value,
+    payload: std.json.Value,
 };

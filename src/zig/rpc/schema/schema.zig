@@ -1,3 +1,4 @@
+// Zig sends to Bun
 pub const ZigSchema = struct { //
     pub const requests = struct { //
         pub const decideNavigation = struct { //
@@ -9,9 +10,20 @@ pub const ZigSchema = struct { //
                 allow: bool,
             };
         };
+        // Note: this should be a message not a request
+        // because we don't need a response
+        pub const log = struct {
+            pub const params = struct {
+                msg: []const u8,
+            };
+            pub const response = struct {
+                success: bool,
+            };
+        };
     };
 };
 
+// Bun sends to Zig
 pub const BunSchema = struct {
     pub const requests = struct {
         pub const createWindow = struct {
@@ -30,7 +42,7 @@ pub const BunSchema = struct {
             pub const response = void;
         };
 
-        pub const setContentView = struct {
+        pub const addWebviewToWindow = struct {
             pub const params = struct {
                 windowId: u32,
                 webviewId: u32,
@@ -79,26 +91,28 @@ pub const BunSchema = struct {
         };
     };
 };
+
 pub const RequestResult = struct { errorMsg: ?[]const u8, payload: ?RequestResponseType };
 // todo: can we replace this with a compile-time function
 pub const Handlers = struct {
     createWindow: fn (params: BunSchema.requests.createWindow.params) RequestResult,
     createWebview: fn (params: BunSchema.requests.createWebview.params) RequestResult,
     setTitle: fn (params: BunSchema.requests.setTitle.params) RequestResult,
-    setContentView: fn (params: BunSchema.requests.setContentView.params) RequestResult,
+    addWebviewToWindow: fn (params: BunSchema.requests.addWebviewToWindow.params) RequestResult,
     loadURL: fn (params: BunSchema.requests.loadURL.params) RequestResult,
     loadHTML: fn (params: BunSchema.requests.loadHTML.params) RequestResult,
 };
 
 pub const Requests = struct {
     decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) ZigSchema.requests.decideNavigation.response,
+    log: fn (params: ZigSchema.requests.log.params) ZigSchema.requests.log.response,
 };
 
 pub const RequestResponseType = union(enum) {
     CreateWindowResponse: BunSchema.requests.createWindow.response,
     CreateWebviewResponse: BunSchema.requests.createWebview.response,
     SetTitleResponse: BunSchema.requests.setTitle.response,
-    SetContentViewResponse: BunSchema.requests.setContentView.response,
+    addWebviewToWindowResponse: BunSchema.requests.addWebviewToWindow.response,
     LoadURLResponse: BunSchema.requests.loadURL.response,
     LoadHTMLResponse: BunSchema.requests.loadHTML.response,
     DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
@@ -107,4 +121,41 @@ pub const RequestResponseType = union(enum) {
 pub const ResponsePayloadType = union(enum) {
     DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
     // SomeOtherMethodResponse: ZigSchema.requests.someOtherMethod.response,
+};
+
+// browser -> zig schema
+pub const FromBrowserHandlers = struct {
+    webviewTagInit: fn (params: BrowserSchema.requests.webviewTagInit.params) RequestResult,
+    webviewTagResize: fn (params: BrowserSchema.messages.webviewTagResize) RequestResult,
+};
+
+// Browser sends to Zig
+pub const BrowserSchema = struct { //
+    pub const requests = struct { //
+        pub const webviewTagInit = struct {
+            pub const params = struct {
+                id: u32,
+                url: ?[]const u8,
+                html: ?[]const u8,
+                preload: ?[]const u8,
+                frame: struct {
+                    width: f64,
+                    height: f64,
+                    x: f64,
+                    y: f64,
+                },
+            };
+        };
+    };
+    pub const messages = struct {
+        pub const webviewTagResize = struct {
+            id: u32,
+            frame: struct {
+                width: f64,
+                height: f64,
+                x: f64,
+                y: f64,
+            },
+        };
+    };
 };

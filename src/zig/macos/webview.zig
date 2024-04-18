@@ -3,6 +3,9 @@ const rpc = @import("../rpc/schema/request.zig");
 const rpcSchema = @import("../rpc/schema/schema.zig");
 const objc = @import("./objc.zig");
 const pipesin = @import("../rpc/pipesin.zig");
+const window = @import("./window.zig");
+const rpcTypes = @import("../rpc/types.zig");
+const rpcHandlers = @import("../rpc/schema/handlers.zig");
 
 const alloc = std.heap.page_allocator;
 
@@ -35,6 +38,7 @@ const WebviewType = struct {
     // todo: de-init these using objc.releaseObjCObject() when the webview closes
     delegate: *anyopaque,
     bunBridgeHandler: *anyopaque,
+    webviewTagHandler: *anyopaque,
     bun_out_pipe: ?anyerror!std.fs.File,
     bun_in_pipe: ?std.fs.File,
     // Function to send a message to Bun
@@ -78,6 +82,7 @@ const CreateWebviewOpts = struct { //
         x: f64,
         y: f64,
     },
+    autoResize: bool,
 };
 pub fn createWebview(opts: CreateWebviewOpts) void {
     const bunPipeIn = blk: {
@@ -103,7 +108,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
         .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         // },
-    }, assetFileLoader);
+    }, assetFileLoader, opts.autoResize);
 
     if (opts.preload) |preload| {
         addPreloadScriptToWebview(objcWebview, preload, true);
@@ -138,6 +143,63 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         }
     }.HandlePostMessageCallback);
 
+    // todo: only set this up if the webview tag is enabled for this webview
+    const webviewTagHandler = objc.addScriptMessageHandlerWithCallback(objcWebview, opts.id, "webviewTagBridge", struct {
+        fn HandlePostMessageCallback(webviewId: u32, message: [*:0]const u8) void {
+            const msgString = fromCString(message);
+
+            const json = std.json.parseFromSlice(std.json.Value, alloc, msgString, .{ .ignore_unknown_fields = true }) catch |err| {
+                std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, msgString });
+                return;
+            };
+
+            defer json.deinit();
+
+            const msgType = blk: {
+                const obj = json.value.object.get("type").?;
+                break :blk obj.string;
+            };
+
+            if (std.mem.eql(u8, msgType, "request")) {
+                const _request = std.json.parseFromValue(rpcTypes._RPCRequestPacket, alloc, json.value, .{}) catch |err| {
+                    std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, msgString });
+                    return;
+                };
+
+                const result = rpcHandlers.fromBrowserHandleRequest(_request.value);
+
+                if (result.errorMsg == null) {
+                    const responseSuccess = .{ .id = _request.value.id, .type = "response", .success = true, .payload = result };
+
+                    var buffer = std.json.stringifyAlloc(alloc, responseSuccess, .{}) catch {
+                        return;
+                    };
+                    defer alloc.free(buffer);
+
+                    // Prepare the JavaScript function call
+                    var jsCall = std.fmt.allocPrint(alloc, "window.__electrobun.receiveMessageFromZig({s})\n", .{buffer}) catch {
+                        return;
+                    };
+                    defer alloc.free(jsCall);
+
+                    sendLineToWebview(webviewId, jsCall);
+                } else {
+                    // todo: this doesn't work yet
+                    // rpcStdout.sendResponseError(_request.value.id, result.errorMsg.?);
+                }
+            } else if (std.mem.eql(u8, msgType, "message")) {
+                const _message = std.json.parseFromValue(rpcTypes._RPCMessagePacket, alloc, json.value, .{}) catch |err| {
+                    std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, msgString });
+                    return;
+                };
+
+                rpcHandlers.fromBrowserHandleMessage(_message.value);
+            } else {
+                std.log.info("it's an unhandled meatball", .{});
+            }
+        }
+    }.HandlePostMessageCallback);
+
     const _webview = WebviewType{ //
         .id = opts.id,
         .frame = .{
@@ -151,6 +213,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         .bun_in_pipe = bunPipeIn,
         .delegate = delegate,
         .bunBridgeHandler = bunBridgeHandler,
+        .webviewTagHandler = webviewTagHandler,
     };
 
     webviewMap.put(opts.id, _webview) catch {
@@ -174,13 +237,30 @@ pub fn addPreloadScriptToWebview(objcWindow: *anyopaque, scriptOrPath: []const u
     objc.addPreloadScriptToWebView(objcWindow, toCString(script), allFrames);
 }
 
+pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+    // todo: update webview frame in the webviewMap.
+    // not doing this yet to see when we run into issues. it's possible
+    // we don't need to store this in zig at all since the "last one set"
+    // is in bun or webview (in the case of webview tags) and "current one"
+    // is in objc
+    objc.resizeWebview(webview.handle, .{
+        .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
+        .size = .{ .width = opts.frame.width, .height = opts.frame.height },
+    });
+}
+
 pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.params) void {
     var webview = webviewMap.get(opts.webviewId) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.webviewId});
         return;
     };
 
-    // webview.url = opts.url;
+    // todo: consider updating url. we may not need it stored in zig though.
+    // webview.url = need to use webviewMap.getPtr() then webview.*.url = opts.url
     objc.loadURLInWebView(webview.handle, toCString(opts.url));
 }
 

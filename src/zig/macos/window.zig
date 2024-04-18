@@ -75,7 +75,7 @@ pub fn setTitle(opts: SetTitleOpts) void {
     objc.setNSWindowTitle(win.window, toCString(opts.title));
 }
 
-pub fn setContentView(opts: struct { webviewId: u32, windowId: u32 }) void {
+pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
     var win = windowMap.get(opts.windowId) orelse {
         std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.windowId});
         return;
@@ -86,7 +86,7 @@ pub fn setContentView(opts: struct { webviewId: u32, windowId: u32 }) void {
         return;
     };
 
-    objc.setContentView(win.window, view.handle);
+    objc.addWebviewToWindow(win.window, view.handle);
 }
 
 // effecient string concatenation that returns the template if there's an error

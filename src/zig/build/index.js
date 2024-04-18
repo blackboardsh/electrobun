@@ -192,6 +192,150 @@ var DEFAULT_MAX_REQUEST_TIME = 1000;
 function createRPC(options) {
   return _createRPC(options);
 }
+// src/browser/webviewtag.ts
+var ConfigureWebviewTags = (enableWebviewTags) => {
+  if (!enableWebviewTags) {
+    return {
+      receiveMessageFromZig: () => {
+      }
+    };
+  }
+  let rpcHandler;
+  function createStdioTransport() {
+    return {
+      send(message) {
+        window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify(message));
+      },
+      registerHandler(handler) {
+        rpcHandler = handler;
+      }
+    };
+  }
+  const receiveMessageFromZig = (msg) => {
+    if (rpcHandler) {
+      rpcHandler(msg);
+    }
+  };
+  const webviewTagRPC = createRPC({
+    transport: createStdioTransport(),
+    maxRequestTime: 1000
+  });
+  let nextWebviewId = 1e4;
+
+  class WebviewTag extends HTMLElement {
+    webviewId = nextWebviewId++;
+    rpc;
+    resizeObserver;
+    intersectionObserver;
+    mutationObserver;
+    positionCheckLoop;
+    lastRect = {
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0
+    };
+    constructor() {
+      super();
+      console.log("webview component created.");
+      requestAnimationFrame(() => {
+        this.initWebview();
+      });
+    }
+    sendToZig(message) {
+      window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify(message));
+    }
+    initWebview() {
+      const rect = this.getBoundingClientRect();
+      this.lastRect = rect;
+      webviewTagRPC.request.webviewTagInit({
+        id: this.webviewId,
+        url: this.getAttribute("src"),
+        html: null,
+        preload: null,
+        frame: {
+          width: rect.width,
+          height: rect.height,
+          x: rect.x,
+          y: rect.y
+        }
+      });
+    }
+    syncDimensions(force = false) {
+      const rect = this.getBoundingClientRect();
+      const { x, y, width, height } = rect;
+      const lastRect = this.lastRect;
+      if (force || lastRect.x !== x || lastRect.y !== y || lastRect.width !== width || lastRect.height !== height) {
+        this.lastRect = rect;
+        webviewTagRPC.send.webviewTagResize({
+          id: this.webviewId,
+          frame: {
+            width,
+            height,
+            x,
+            y
+          }
+        });
+      }
+    }
+    boundSyncDimensions = () => this.syncDimensions(true);
+    connectedCallback() {
+      this.positionCheckLoop = setInterval(() => this.syncDimensions(), 400);
+      this.resizeObserver = new ResizeObserver(() => {
+        this.syncDimensions();
+      });
+      window.addEventListener("resize", this.boundSyncDimensions);
+    }
+    disconnectedCallback() {
+      clearInterval(this.positionCheckLoop);
+      this.resizeObserver?.disconnect();
+      this.intersectionObserver?.disconnect();
+      this.mutationObserver?.disconnect();
+      window.removeEventListener("resize", this.boundSyncDimensions);
+    }
+    static get observedAttributes() {
+      return ["src", "class", "style"];
+    }
+    attributeChangedCallback(name, oldValue, newValue) {
+      if (name === "src" && oldValue !== newValue) {
+        this.updateIFrameSrc(newValue);
+      } else {
+        this.syncDimensions();
+      }
+    }
+    updateIFrameSrc(src) {
+      console.log(`Loading new src: ${src}`);
+    }
+  }
+  customElements.define("electrobun-webview", WebviewTag);
+  insertWebviewTagNormalizationStyles();
+  return {
+    receiveMessageFromZig
+  };
+};
+var insertWebviewTagNormalizationStyles = () => {
+  var style = document.createElement("style");
+  style.type = "text/css";
+  var css = `
+electrobun-webview {
+    display: block;
+    width: 800px;
+    height: 300px;
+    background: #333;
+}
+`;
+  style.appendChild(document.createTextNode(css));
+  var head = document.getElementsByTagName("head")[0];
+  if (!head) {
+    return;
+  }
+  if (head.firstChild) {
+    head.insertBefore(style, head.firstChild);
+  } else {
+    head.appendChild(style);
+  }
+};
+
 // src/browser/index.ts
 class Electroview {
   rpc;
@@ -201,8 +345,10 @@ class Electroview {
     this.init();
   }
   init() {
+    const { receiveMessageFromZig } = ConfigureWebviewTags(true);
     window.__electrobun = {
-      receiveMessageFromBun: this.receiveMessageFromBun.bind(this)
+      receiveMessageFromBun: this.receiveMessageFromBun.bind(this),
+      receiveMessageFromZig
     };
     if (this.rpc) {
       this.rpc.setTransport(this.createTransport());

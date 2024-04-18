@@ -135,7 +135,7 @@ void runNSApplication() {
 
 
 // WKWebView
-WKWebView* createAndReturnWKWebView(NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader) {
+WKWebView* createAndReturnWKWebView(NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader, bool autoResize) {
     // Create a default WKWebViewConfiguration
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];    
 
@@ -150,9 +150,15 @@ WKWebView* createAndReturnWKWebView(NSRect frame, zigStartURLSchemeTaskCallback 
     // Enable Developer Extras (right click to inspect element)
     [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
 
+
     // Allocate and initialize the WKWebView
     WKWebView *webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
     
+    // Since all wkwebviews are children of a generic NSView we need to tell them to 
+    // auto size with the window. 
+    if (autoResize) {
+        webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    }
 
     retainObjCObject(webView);
     // Perform any additional setup here
@@ -220,7 +226,11 @@ NSWindow *createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams 
     NSWindow *window = [[NSWindow alloc] initWithContentRect:config.frame
                                                    styleMask:getNSWindowStyleMask(config.styleMask)
                                                      backing:NSBackingStoreBuffered
-                                                       defer:YES];                                                              
+                                                       defer:YES];    
+
+    // Give it a default content view that can accept subviews later on                                                                                                               
+    NSView *contentView = [[NSView alloc] initWithFrame:[window frame]];
+    [window setContentView:contentView];
 
     return window; 
 }
@@ -235,11 +245,19 @@ void setNSWindowTitle(NSWindow *window, const char *title) {
 }
 
 // Sets the main content view of the window
-void setContentView(NSWindow *window, NSView *view) {
-    [window setContentView:view];
+void addWebviewToWindow(NSWindow *window, NSView *view) {
+
+    [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];        
+
+    CGFloat adjustedY = view.superview.bounds.size.height - view.frame.origin.y - view.frame.size.height;
+    view.frame = NSMakeRect(view.frame.origin.x, adjustedY, view.frame.size.width, view.frame.size.height);
 }
 
-// todo: add addSubview function
+void resizeWebview(NSView *view, NSRect frame) {
+    CGFloat adjustedY = view.superview.bounds.size.height - frame.origin.y - frame.size.height;
+    view.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+}
+
 NSRect createNSRectWrapper(double x, double y, double width, double height) {    
     return NSMakeRect(x, y, width, height);
 }
@@ -312,3 +330,9 @@ MyScriptMessageHandler* addScriptMessageHandlerWithCallback(WKWebView *webView, 
 
 
 
+// example calling function after a delay for debugging
+// dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+//     // Remove the WebView after 10 seconds
+//     [view removeFromSuperview];
+//     NSLog(@"WebView removed after 10 seconds");
+// });

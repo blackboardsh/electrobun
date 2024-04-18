@@ -12,6 +12,12 @@ pub fn decideNavigation(params: rpcSchema.ZigSchema.requests.decideNavigation.pa
     return parsedPayload.value;
 }
 
-pub const request = rpcSchema.Requests{
-    .decideNavigation = decideNavigation,
-};
+pub fn log(params: rpcSchema.ZigSchema.requests.log.params) rpcSchema.ZigSchema.requests.log.response {
+    const rawPayload = rpcStdout.sendRequest("log", params);
+    const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.log.response, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
+}
+
+pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log };
