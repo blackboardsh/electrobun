@@ -35,6 +35,7 @@
     "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",    
     "build:dev": "bun install:all && bun build:zig:trdiff && bun build:objc && bun build:browser && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
     "build:release": "bun build:objc && bun build:zig:trdiff:release && bun build:browser && bun build:zig:release && bun build:launcher:release && bun build:extractor:release && bun build:cli",
+    "release:dist": "bun build:release && cp src/launcher/zig-out/bin/launcher dist/launcher && cp src/extractor/zig-out/bin/extractor dist/extractor && cp src/bsdiff/zig-out/bin/bsdiff dist/bsdiff && cp src/bsdiff/zig-out/bin/bspatch dist/bspatch && cp src/zig/zig-out/bin/webview dist/webview && cp node_modules/.bin/bun dist/bun",
     "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
     "dev:example": "bun build:dev && cd example && npm install && bun build:dev && bun start",
     "dev:example:rerun": "cd example && bun start",

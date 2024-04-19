@@ -54,3 +54,12 @@ Ways to get involved at this early stage:
 - Follow us on X for updates <a href="https://twitter.com/BlackboardTech">@BlackboardTech</a>
 - Join the conversation on <a href="https://discord.gg/ueKE4tjaCE">Discord</a>
 - Create and participate in Github issues and discussions
+
+## Building
+
+`bun dev:example` and `bun dev:example:canary` will compile everything in electrobun in either dev or release modes and then compile the example app in either dev or canary modes and run it.
+
+Note: For now `bun build:release` will build all the electrobun components in release mode and copy them to the /dist folder.
+Setting up a more complex release process is a todo, since those binaries should ideally stay in sync with the bun and browser typescript apis.
+
+More work is needed to separate out "build everything in release mode for testing with the example app" vs. "build everything in release mode and prepare for distribution"
