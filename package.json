@@ -16,10 +16,7 @@
     "url": "https://github.com/blackboardsh/electrobun.git"
   },
   "scripts": {
-    "start": "bun src/bun/index.ts",
-    "install:bun": "cd src/bun && bun install",
-    "install:browser": "cd src/browser && bun install",
-    "install:all": "bun run install:bun && bun run install:browser",
+    "start": "bun src/bun/index.ts",    
     "build:objc:object": "clang -c src/objc/objcWrapper.m -o src/objc/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs",
     "build:objc:staticlib": "ar rcs src/zig/build/libObjcWrapper.a src/objc/build/objcWrapper.o",
     "build:objc": "bun build:objc:object && bun build:objc:staticlib",
@@ -33,7 +30,7 @@
     "build:extractor:release": "cd src/extractor && zig build -Doptimize=ReleaseSmall",
     "build:browser": "bun build src/browser/index.ts --outdir src/zig/build/",
     "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",    
-    "build:dev": "bun install:all && bun build:zig:trdiff && bun build:objc && bun build:browser && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
+    "build:dev": "bun install && bun build:zig:trdiff && bun build:objc && bun build:browser && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
     "build:release": "bun build:objc && bun build:zig:trdiff:release && bun build:browser && bun build:zig:release && bun build:launcher:release && bun build:extractor:release && bun build:cli",
     "release:dist": "bun build:release && cp src/launcher/zig-out/bin/launcher dist/launcher && cp src/extractor/zig-out/bin/extractor dist/extractor && cp src/bsdiff/zig-out/bin/bsdiff dist/bsdiff && cp src/bsdiff/zig-out/bin/bspatch dist/bspatch && cp src/zig/zig-out/bin/webview dist/webview && cp node_modules/.bin/bun dist/bun",
     "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
@@ -45,5 +42,7 @@
     "@types/bun": "^1.0.8",
     "bun": "1.1.3"
   },
-  "dependencies": {}
+  "dependencies": {
+    "rpc-anywhere": "1.5.0", "tar": "^6.2.1", "@oneidentity/zstd-js": "^1.0.3" 
+  }
 }
