@@ -39,27 +39,21 @@ const WebviewType = struct {
     delegate: *anyopaque,
     bunBridgeHandler: *anyopaque,
     webviewTagHandler: *anyopaque,
-    bun_out_pipe: ?anyerror!std.fs.File,
+    bun_out_pipe: ?std.fs.File, //?anyerror!std.fs.File,
     bun_in_pipe: ?std.fs.File,
     // Function to send a message to Bun
     pub fn sendToBun(self: *WebviewType, message: []const u8) !void {
-        if (self.bun_out_pipe) |result| {
-            if (result) |file| {
-                // convert null terminated string to slice
-                // const message_slice: []const u8 = message[0..std.mem.len(message)];
-                // Write the message to the named pipe
-                file.writeAll(message) catch |err| {
-                    std.debug.print("Failed to write to file: {}\n", .{err});
-                };
+        if (self.bun_out_pipe) |file| {
+            // convert null terminated string to slice
+            // const message_slice: []const u8 = message[0..std.mem.len(message)];
+            // Write the message to the named pipe
+            file.writeAll(message) catch |err| {
+                std.debug.print("Failed to write to file: {}\n", .{err});
+            };
 
-                file.writeAll("\n") catch |err| {
-                    std.debug.print("Failed to write to file: {}\n", .{err});
-                };
-            } else |err| {
-                std.debug.print("Failed to open file: {}\n", .{err});
-            }
-            // If bun_out_pipe is not an error and not null, write the message
-            // try file.writeAll(message);
+            file.writeAll("\n") catch |err| {
+                std.debug.print("Failed to write to file: {}\n", .{err});
+            };
         } else {
             // If bun_out_pipe is null, print an error or the message to stdio
             std.debug.print("Error: No valid pipe to write to. Message was: {s}\n", .{message});
@@ -86,13 +80,21 @@ const CreateWebviewOpts = struct { //
 };
 pub fn createWebview(opts: CreateWebviewOpts) void {
     const bunPipeIn = blk: {
+        // todo: currently webviewtags which have ids starting at 10000
+        // don't have bun creating or listening on named pipes. It should
+        // ideally report to bun and connect them so bun can do things
+        // like "get all webviews" including nested <webview> tags
+        if (opts.id >= 10000) {
+            break :blk null;
+        }
         const bunPipeInPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_in", .{opts.id});
         const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
 
         if (bunPipeInFileResult) |file| {
             break :blk file;
         } else |err| {
-            std.debug.print("Failed to open file: {}\n", .{err});
+            std.debug.print("Failed to open bunPipeIn: {}\n", .{err});
+            std.debug.print("path: {s}", .{bunPipeInPath});
             break :blk null;
         }
     };
@@ -101,8 +103,22 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         pipesin.addPipe(pipeInFile.handle, opts.id);
     }
 
-    const bunPipeOutPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_out", .{opts.id});
-    const bunPipeOutFileResult = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
+    const bunPipeOut = blk: {
+        if (opts.id >= 10000) {
+            break :blk null;
+        }
+        const bunPipeOutPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_out", .{opts.id});
+        const bunPipeOutResult = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
+
+        if (bunPipeOutResult) |file| {
+            break :blk file;
+        } else |err| {
+            std.debug.print("Failed to open bunPipeOut: {}\n", .{err});
+            std.debug.print("path: {s}", .{bunPipeOutPath});
+            break :blk null;
+        }
+    };
+
     const objcWebview = objc.createAndReturnWKWebView(.{
         // .frame = .{ //
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
@@ -209,7 +225,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
             .y = opts.frame.y,
         },
         .handle = objcWebview,
-        .bun_out_pipe = bunPipeOutFileResult,
+        .bun_out_pipe = bunPipeOut,
         .bun_in_pipe = bunPipeIn,
         .delegate = delegate,
         .bunBridgeHandler = bunBridgeHandler,
