@@ -1,4 +1,4 @@
-// node_modules/rpc-anywhere/dist/esm/rpc.js
+// src/browser/node_modules/rpc-anywhere/dist/esm/rpc.js
 var missingTransportMethodError = function(methods, action) {
   const methodsString = methods.map((method) => `"${method}"`).join(", ");
   return new Error(`This RPC instance cannot ${action} because the transport did not provide one or more of these methods: ${methodsString}`);
@@ -188,7 +188,7 @@ function _createRPC(options = {}) {
 var MAX_ID = 10000000000;
 var DEFAULT_MAX_REQUEST_TIME = 1000;
 
-// node_modules/rpc-anywhere/dist/esm/create-rpc.js
+// src/browser/node_modules/rpc-anywhere/dist/esm/create-rpc.js
 function createRPC(options) {
   return _createRPC(options);
 }
