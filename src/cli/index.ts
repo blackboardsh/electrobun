@@ -776,7 +776,7 @@ if (commandArg === "init") {
             // handler(event)
           } catch (error) {
             // Non-json things are just bubbled up to the console.
-            console.error("webview: ", line);
+            console.log("bun: ", line);
           }
         }
       }
@@ -854,9 +854,9 @@ if (commandArg === "init") {
   try {
     proc = Bun.spawn([bunRuntimePath, appEntrypointPath], {
       cwd: pathToMacOS,
+      stderr: "pipe",
       onExit: (code) => {
         // todo: In cases where the bun process crashed, there's a lingering process that needs killing
-
         toCliPipe.write(`subprocess exited command\n`);
         process.kill(process.pid, "SIGINT");
       },
@@ -877,6 +877,7 @@ if (commandArg === "init") {
     }
   }
   streamPipeToCli(proc.stdout);
+  streamPipeToCli(proc.stderr);
   // streamPipeToCli(process.stdout);
   // streamPipeToCli(proc.stderr);
 }
