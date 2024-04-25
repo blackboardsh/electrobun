@@ -91,6 +91,9 @@ const defaultConfig = {
       },
     },
   },
+  scripts: {
+    postBuild: "",
+  },
   release: {
     bucketUrl: "",
   },
@@ -378,6 +381,13 @@ if (commandArg === "init") {
 
     // todo (yoav): add ability to swap out BUILD VARS
     cpSync(source, destination, { recursive: true, dereference: true });
+  }
+
+  // Run postBuild script
+  if (config.scripts.postBuild) {
+    Bun.spawnSync([bunBinarySourcePath, config.scripts.postBuild], {
+      stdio: ["ignore", "inherit", "inherit"],
+    });
   }
 
   // All the unique files are in the bundle now. Create an initial temporary tar file
@@ -888,8 +898,6 @@ function getConfig() {
     const configFileContents = readFileSync(configPath, "utf8");
     // Note: we want this to hard fail if there's a syntax error
     loadedConfig = JSON.parse(configFileContents);
-
-    loadedConfig.build = loadedConfig.build || {};
   }
 
   // todo (yoav): write a deep clone fn
@@ -898,23 +906,27 @@ function getConfig() {
     ...loadedConfig,
     app: {
       ...defaultConfig.app,
-      ...loadedConfig.app,
+      ...(loadedConfig?.app || {}),
     },
     build: {
       ...defaultConfig.build,
-      ...loadedConfig.build,
+      ...(loadedConfig?.build || {}),
       mac: {
         ...defaultConfig.build.mac,
-        ...loadedConfig?.build?.mac,
+        ...(loadedConfig?.build?.mac || {}),
         entitlements: {
           ...defaultConfig.build.mac.entitlements,
-          ...loadedConfig?.build?.mac?.entitlements,
+          ...(loadedConfig?.build?.mac?.entitlements || {}),
         },
       },
     },
+    scripts: {
+      ...defaultConfig.scripts,
+      ...(loadedConfig?.scripts || {}),
+    },
     release: {
       ...defaultConfig.release,
-      ...loadedConfig.release,
+      ...(loadedConfig?.release || {}),
     },
   };
 }
