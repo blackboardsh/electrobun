@@ -51,7 +51,10 @@ pub fn pipesInEventListener() void {
             const ev = events[i];
             // Check ev.ident to see which fd has an event
             if (ev.filter == std.os.darwin.EVFILT_READ) {
-                var buffer: [1024]u8 = undefined;
+                // Note: readLineFromPipe reads until the end of the buffer or the delimeter.
+                // so the buffer is the max size of a line.
+                // setting it to 1MB
+                var buffer: [1024 * 1024]u8 = undefined;
                 const bytesRead = readLineFromPipe(&buffer, ev.ident);
 
                 if (bytesRead) |line| {
