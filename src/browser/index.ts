@@ -67,7 +67,6 @@ class Electroview<T> {
   receiveMessageFromBun(msg) {
     // NOTE: in the webview messages are passed by executing ElectrobunView.receiveMessageFromBun(object)
     // so they're already parsed into an object here
-    document.body.innerHTML += "receiving message from bun";
     if (this.rpcHandler) {
       this.rpcHandler(msg);
     }
