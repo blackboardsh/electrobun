@@ -144,8 +144,8 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         }
     }.decideNavigation);
 
-    const bunBridgeHandler = objc.addScriptMessageHandlerWithCallback(objcWebview, opts.id, "bunBridge", struct {
-        fn HandlePostMessageCallback(webviewId: u32, message: [*:0]const u8) void {
+    const bunBridgeHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "bunBridge", struct {
+        fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) void {
             // bun bridge just forwards messages to the bun
 
             var webview = webviewMap.get(webviewId) orelse {
@@ -157,11 +157,28 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 std.debug.print("Failed to send message to bun: {}\n", .{err});
             };
         }
-    }.HandlePostMessageCallback);
+    }.HandlePostMessage);
+
+    // Note: Since post message is async in the browser context and bun will reply async
+    // We're using postMessage handler (above) without a reply, and then letting bun reply
+    // via pipesin and evaluateJavascript. addScriptMessageHandlerWithReply is just here
+    // as reference and for future use cases. This may be useful for exposing zig/objc apis
+    // to the browser context without needing to use more complex rpc.
+    const bunBridgeWithReplyHandler = objc.addScriptMessageHandlerWithReply(objcWebview, opts.id, "bunBridgeWithReply", struct {
+        fn HandlePostMessageCallbackWithReply(webviewId: u32, message: [*:0]const u8) [*:0]const u8 {
+            _ = webviewId;
+            _ = message;
+
+            return toCString("hello with reply: not using this api yet");
+        }
+    }.HandlePostMessageCallbackWithReply);
+
+    // todo: store the returned value so we can free the memory when the webview is destroyed
+    _ = bunBridgeWithReplyHandler;
 
     // todo: only set this up if the webview tag is enabled for this webview
-    const webviewTagHandler = objc.addScriptMessageHandlerWithCallback(objcWebview, opts.id, "webviewTagBridge", struct {
-        fn HandlePostMessageCallback(webviewId: u32, message: [*:0]const u8) void {
+    const webviewTagHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "webviewTagBridge", struct {
+        fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) void {
             const msgString = fromCString(message);
 
             const json = std.json.parseFromSlice(std.json.Value, alloc, msgString, .{ .ignore_unknown_fields = true }) catch |err| {
@@ -214,7 +231,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 std.log.info("it's an unhandled meatball", .{});
             }
         }
-    }.HandlePostMessageCallback);
+    }.HandlePostMessage);
 
     const _webview = WebviewType{ //
         .id = opts.id,

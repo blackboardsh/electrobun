@@ -298,11 +298,11 @@ MyNavigationDelegate* setNavigationDelegateWithCallback(WKWebView *webView, uint
 }
 
 // add postMessage handler
-typedef BOOL (*HandlePostMessageCallback)(uint32_t webviewId, const char* message);
+typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);
 
 // todo: add webviewId as a property here
 @interface MyScriptMessageHandler : NSObject <WKScriptMessageHandler>
-@property (nonatomic, assign) HandlePostMessageCallback zigCallback;
+@property (nonatomic, assign) HandlePostMessage zigCallback;
 @property (nonatomic, assign) uint32_t webviewId;
 @end
 
@@ -316,13 +316,52 @@ typedef BOOL (*HandlePostMessageCallback)(uint32_t webviewId, const char* messag
 
 @end
 
-// todo: this actually isn't withCallback
-MyScriptMessageHandler* addScriptMessageHandlerWithCallback(WKWebView *webView, uint32_t webviewId, const char *name, HandlePostMessageCallback callback) {
+MyScriptMessageHandler* addScriptMessageHandler(WKWebView *webView, uint32_t webviewId, const char *name, HandlePostMessage callback) {
     MyScriptMessageHandler *handler = [[MyScriptMessageHandler alloc] init];
     handler.zigCallback = callback;    
     handler.webviewId = webviewId;
     [webView.configuration.userContentController addScriptMessageHandler:handler name:[NSString stringWithUTF8String:name]];
     // todo: release this handler when the window is closed from zig
+    retainObjCObject(handler);
+
+    return handler;
+}
+
+
+// add postMessage handler with reply
+typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
+
+@interface MyScriptMessageHandlerWithReply : NSObject <WKScriptMessageHandlerWithReply>
+
+@property (nonatomic, assign) HandlePostMessageWithReply zigCallback;
+@property (nonatomic, assign) uint32_t webviewId;
+
+@end
+
+@implementation MyScriptMessageHandlerWithReply
+
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
+    NSString *body = message.body;
+    
+    // Call the zig callback and pass the completion handler to send replies
+    const char *response = self.zigCallback(self.webviewId, body.UTF8String);
+
+    NSString *responseNSString = [NSString stringWithUTF8String:response];    
+            
+    replyHandler(responseNSString, nil);
+}
+
+@end
+
+MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView, uint32_t webviewId, const char *name, HandlePostMessageWithReply callback) {
+    MyScriptMessageHandlerWithReply *handler = [[MyScriptMessageHandlerWithReply alloc] init];
+    handler.zigCallback = callback;
+    handler.webviewId = webviewId;
+    
+    // Use the new API to add the script message handler
+    [webView.configuration.userContentController addScriptMessageHandlerWithReply:handler contentWorld:WKContentWorld.pageWorld name:[NSString stringWithUTF8String:name]];
+    
+    // Retain the handler if necessary; handle lifecycle management appropriately
     retainObjCObject(handler);
 
     return handler;

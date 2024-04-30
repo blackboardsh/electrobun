@@ -59,6 +59,15 @@ class Electroview<T> {
     window.webkit.messageHandlers.bunBridge.postMessage(msg);
   }
 
+  bunBridgeWithReply(msg) {
+    // Note: zig sets up this custom message handler bridge
+    // Note: Since post message is async in the browser context and bun will reply async
+    // We're using postMessage handler (via bunBridge above) without a reply, and then letting bun reply
+    // via pipesin and evaluateJavascript.
+    // addScriptMessageHandlerWithReply is just here as reference and for future use cases.
+    return window.webkit.messageHandlers.bunBridgeWithReply.postMessage(msg);
+  }
+
   // webviewTagBridge(msg) {
   //     // Note: zig sets up this custom message handler bridge
   //     window.webkit.messageHandlers.webviewTagBridge.postMessage(msg);
