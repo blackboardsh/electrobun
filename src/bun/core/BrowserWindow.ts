@@ -19,6 +19,7 @@ type WindowOptionsType<T = undefined> = {
   html: string | null;
   preload: string | null;
   rpc?: T;
+  syncRpc?: { [method: string]: (params: any) => any };
 };
 
 const defaultOptions: WindowOptionsType = {
@@ -69,10 +70,10 @@ export class BrowserWindow<T> {
     this.html = options.html || null;
     this.preload = options.preload || null;
 
-    this.init(options.rpc);
+    this.init(options.rpc, options.syncRpc);
   }
 
-  init(rpc?: T) {
+  init(rpc?: T, syncRpc?: { [method: string]: (params: any) => any }) {
     zigRPC.request.createWindow({
       id: this.id,
       title: this.title,
@@ -103,6 +104,7 @@ export class BrowserWindow<T> {
         height: this.frame.height,
       },
       rpc,
+      syncRpc,
     });
 
     this.webviewId = webview.id;

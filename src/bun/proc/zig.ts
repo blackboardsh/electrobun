@@ -3,6 +3,7 @@ import { type RPCSchema, type RPCTransport, createRPC } from "rpc-anywhere";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import electrobunEventEmitter from "../events/eventEmitter";
+import { BrowserView } from "../core/BrowserView";
 
 // todo (yoav): webviewBinaryPath and ELECTROBUN_VIEWS_FOLDER should be passed in as cli/env args by the launcher binary
 // will likely be different on different platforms. Right now these are hardcoded for relative paths inside the mac app bundle.
@@ -174,6 +175,15 @@ type BunHandlers = RPCSchema<{
         allow: boolean;
       };
     };
+    syncRequest: {
+      params: {
+        webviewId: number;
+        request: string;
+      };
+      response: {
+        payload: string;
+      };
+    };
     log: {
       params: {
         msg: string;
@@ -205,6 +215,40 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
       } else {
         return { allow: true };
       }
+    },
+    syncRequest: ({ webviewId, request: requestStr }) => {
+      const webview = BrowserView.getById(webviewId);
+      const { method, params } = JSON.parse(requestStr);
+
+      if (!webview) {
+        const err = `error: could not find webview with id ${webviewId}`;
+        console.log(err);
+        return { payload: err };
+      }
+
+      if (!method) {
+        const err = `error: request missing a method`;
+        console.log(err);
+        return { payload: err };
+      }
+
+      if (!webview.syncRpc || !webview.syncRpc[method]) {
+        const err = `error: webview does not have a handler for method ${method}`;
+        console.log(err);
+        return { payload: err };
+      }
+
+      const handler = webview.syncRpc[method];
+      var response;
+      try {
+        response = handler(params);
+      } catch (err) {
+        console.log(err);
+        return { payload: String(err) };
+      }
+
+      const payload = JSON.stringify(response);
+      return { payload };
     },
     log: ({ msg }) => {
       console.log("zig: ", msg);

@@ -60,6 +60,8 @@ pub const FileResponse = packed struct {
     fileContents: [*:0]const u8,
 };
 
+pub const FileLoader = *const fn (webviewId: u32, [*:0]const u8, [*:0]const u8) FileResponse;
+
 pub extern fn createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams) callconv(.C) *anyopaque;
 pub extern fn makeNSWindowKeyAndOrderFront(window: *anyopaque) callconv(.C) void;
 pub extern fn setNSWindowTitle(window: *anyopaque, title: [*:0]const u8) callconv(.C) void;
@@ -67,7 +69,7 @@ pub extern fn getWindowBounds(window: *anyopaque) callconv(.C) *anyopaque;
 pub extern fn addWebviewToWindow(window: *anyopaque, view: *anyopaque) callconv(.C) void;
 
 // webview
-pub extern fn createAndReturnWKWebView(frame: NSRect, assetFileLoader: *const fn ([*:0]const u8) FileResponse, autoResize: bool) callconv(.C) *anyopaque;
+pub extern fn createAndReturnWKWebView(webviewId: u32, frame: NSRect, assetFileLoader: FileLoader, autoResize: bool) callconv(.C) *anyopaque;
 pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;
 pub extern fn loadHTMLInWebView(webView: *anyopaque, html: [*:0]const u8) callconv(.C) void;

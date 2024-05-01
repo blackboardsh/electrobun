@@ -17,7 +17,7 @@
   },
   "scripts": {
     "start": "bun src/bun/index.ts",    
-    "build:objc:object": "clang -c src/objc/objcWrapper.m -o src/objc/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs",
+    "build:objc:object": "mkdir -p src/objc/build && clang -c src/objc/objcWrapper.m -o src/objc/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs",
     "build:objc:staticlib": "ar rcs src/zig/build/libObjcWrapper.a src/objc/build/objcWrapper.o",
     "build:objc": "bun build:objc:object && bun build:objc:staticlib",
     "build:zig": "cd src/zig && zig build",

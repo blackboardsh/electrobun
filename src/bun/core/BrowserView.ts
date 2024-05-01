@@ -25,6 +25,7 @@ type BrowserViewOptions<T = undefined> = {
     height: number;
   };
   rpc: T;
+  syncRpc: { [method: string]: (params: any) => any };
 };
 
 interface ElectrobunWebviewRPCSChema {
@@ -63,6 +64,7 @@ export class BrowserView<T> {
   inStream: fs.WriteStream;
   outStream: fs.ReadStream;
   rpc?: T;
+  syncRpc?: { [method: string]: (params: any) => any };
 
   constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
     this.url = options.url || defaultOptions.url;
@@ -72,6 +74,7 @@ export class BrowserView<T> {
       ? { ...defaultOptions.frame, ...options.frame }
       : { ...defaultOptions.frame };
     this.rpc = options.rpc;
+    this.syncRpc = options.syncRpc;
 
     this.init();
   }
@@ -215,7 +218,7 @@ export class BrowserView<T> {
   }
 
   static getAll() {
-    return Object(BrowserViewMap).values();
+    return Object.values(BrowserViewMap);
   }
 
   static defineRPC<

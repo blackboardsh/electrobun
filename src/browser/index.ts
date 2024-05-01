@@ -16,6 +16,10 @@ interface ElectrobunWebviewRPCSChema {
 class Electroview<T> {
   rpc?: T;
   rpcHandler?: (msg: any) => void;
+  // give it a default function
+  syncRpc: (params: any) => any = () => {
+    console.log("syncRpc not initialized");
+  };
 
   constructor(config: { rpc: T }) {
     this.rpc = config.rpc;
@@ -34,6 +38,25 @@ class Electroview<T> {
 
     if (this.rpc) {
       this.rpc.setTransport(this.createTransport());
+
+      // Note:
+      // syncRPC doesn't need to be defined since there's no need for sync 1-way message
+      // just use non-blocking async rpc for that
+      // We don't need request ids either since we're not receiving the response on a different pipe
+      if (true) {
+        // TODO: define sync requests on schema (separate from async reqeusts and messages)
+        this.syncRpc = (msg: { method: string; params: any }) => {
+          try {
+            const messageString = JSON.stringify(msg);
+            return this.bunBridgeSync(messageString);
+          } catch (error) {
+            console.error(
+              "bun: failed to serialize message to webview syncRpc",
+              error
+            );
+          }
+        };
+      }
     }
   }
 
@@ -54,12 +77,31 @@ class Electroview<T> {
     };
   }
 
-  bunBridge(msg) {
+  // call any of your bun syncrpc methods in a way that appears synchronous from the browser context
+  bunBridgeSync(msg: string) {
+    var xhr = new XMLHttpRequest();
+    // Note: setting false here makes the xhr request blocking. This completely
+    // blocks the main thread which is terrible. You can use this safely from a webworker.
+    // There are also cases where exposing bun sync apis (eg: existsSync) is useful especially
+    // on a first pass when migrating from Electron to Electrobun.
+    // This mechanism is designed to make any rpc call over the bridge into a sync blocking call
+    // from the browser context while bun asynchronously replies. Use it sparingly from the main thread.
+    xhr.open("POST", "views://syncrpc", false); // Synchronous call
+    xhr.send(msg);
+
+    try {
+      return JSON.parse(xhr.responseText);
+    } catch {
+      return xhr.responseText;
+    }
+  }
+
+  bunBridge(msg: string) {
     // Note: zig sets up this custom message handler bridge
     window.webkit.messageHandlers.bunBridge.postMessage(msg);
   }
 
-  bunBridgeWithReply(msg) {
+  bunBridgeWithReply(msg: string) {
     // Note: zig sets up this custom message handler bridge
     // Note: Since post message is async in the browser context and bun will reply async
     // We're using postMessage handler (via bunBridge above) without a reply, and then letting bun reply

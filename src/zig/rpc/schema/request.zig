@@ -20,4 +20,12 @@ pub fn log(params: rpcSchema.ZigSchema.requests.log.params) rpcSchema.ZigSchema.
     return parsedPayload.value;
 }
 
-pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log };
+pub fn sendSyncRequest(params: rpcSchema.ZigSchema.requests.sendSyncRequest.params) rpcSchema.ZigSchema.requests.sendSyncRequest.response {
+    const rawPayload = rpcStdout.sendRequest("syncRequest", params);
+    const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.sendSyncRequest.response, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
+}
+
+pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest };

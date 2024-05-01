@@ -74,6 +74,13 @@ const win = new BrowserWindow({
     y: 2000,
   },
   rpc: myWebviewRPC,
+  syncRpc: {
+    // TODO: make adding typescript types to syncRpc nicer
+    doSyncMath: ({ a, b }) => {
+      console.log("doing sync math in bun", a, b);
+      return a + b;
+    },
+  },
 });
 
 win.setTitle("url browserwindow");
@@ -158,11 +165,14 @@ setTimeout(() => {
         console.log("getTitle error", err);
       });
 
-    win.webview.rpc?.request.doMath({ a: 3, b: 4 }).then((result) => {
-      console.log("\n\n\n\n");
-      console.log(`I asked win1 webview to do math and it said: ${result}`);
-      console.log("\n\n\n\n");
-    });
+    win.webview.rpc?.request
+      .doMath({ a: 3, b: 4 })
+      .then((result) => {
+        console.log("\n\n\n\n");
+        console.log(`I asked win1 webview to do math and it said: ${result}`);
+        console.log("\n\n\n\n");
+      })
+      .catch(() => {});
 
     win.webview.rpc?.send.logToWebview({ msg: "hi from bun!" });
   }, 1000);

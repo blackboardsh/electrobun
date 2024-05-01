@@ -9,21 +9,23 @@ typedef struct {
 } FileResponse;
 
 // Define callback types for starting and stopping URL scheme tasks
-typedef FileResponse (*zigStartURLSchemeTaskCallback)(const char* url);
+typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const char* url, const char* body);
 
 @interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>
-@property (nonatomic, assign) zigStartURLSchemeTaskCallback assetFileLoader;
-
+@property (nonatomic, assign) zigStartURLSchemeTaskCallback fileLoader;
+@property (nonatomic, assign) uint32_t webviewId;
 @end
 
 @implementation MyURLSchemeHandler
 
 - (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
     NSURL *url = urlSchemeTask.request.URL;    
+    NSData *bodyData = urlSchemeTask.request.HTTPBody;
+    NSString *bodyString = [[NSString alloc] initWithData:bodyData encoding:NSUTF8StringEncoding];
         
     // todo: the zig handler should return the file to here, and objc can send it back to the webview
-    if (self.assetFileLoader) {        
-        FileResponse fileResponse = self.assetFileLoader(url.absoluteString.UTF8String);        
+    if (self.fileLoader) {                
+        FileResponse fileResponse = self.fileLoader(self.webviewId, url.absoluteString.UTF8String, bodyString.UTF8String);        
         
         NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:strlen(fileResponse.fileContents)];        
         // Determine MIME type from the response, or default if null
@@ -135,16 +137,18 @@ void runNSApplication() {
 
 
 // WKWebView
-WKWebView* createAndReturnWKWebView(NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader, bool autoResize) {
+WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader, bool autoResize) {
     // Create a default WKWebViewConfiguration
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];    
 
     // wire up views:// schema handler
-    MyURLSchemeHandler *schemeHandler = [[MyURLSchemeHandler alloc] init];
-    schemeHandler.assetFileLoader = assetFileLoader;    
+    MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
+    assetSchemeHandler.fileLoader = assetFileLoader;    
+    assetSchemeHandler.webviewId = webviewId;
 
-    [configuration setURLSchemeHandler:schemeHandler forURLScheme:@"views"];
-    retainObjCObject(schemeHandler);        
+    // Note: Keep "views" in sync with views:// in webview.zig
+    [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
+    retainObjCObject(assetSchemeHandler);
 
     // open devtools
     // Enable Developer Extras (right click to inspect element)

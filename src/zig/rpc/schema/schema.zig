@@ -10,6 +10,16 @@ pub const ZigSchema = struct { //
                 allow: bool,
             };
         };
+
+        pub const sendSyncRequest = struct { //
+            pub const params = struct {
+                webviewId: u32,
+                request: []const u8,
+            };
+            pub const response = struct {
+                payload: []const u8,
+            };
+        };
         // Note: this should be a message not a request
         // because we don't need a response
         pub const log = struct {
@@ -105,6 +115,7 @@ pub const Handlers = struct {
 
 pub const Requests = struct {
     decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) ZigSchema.requests.decideNavigation.response,
+    sendSyncRequest: fn (params: ZigSchema.requests.sendSyncRequest.params) ZigSchema.requests.sendSyncRequest.response,
     log: fn (params: ZigSchema.requests.log.params) ZigSchema.requests.log.response,
 };
 
@@ -116,8 +127,10 @@ pub const RequestResponseType = union(enum) {
     LoadURLResponse: BunSchema.requests.loadURL.response,
     LoadHTMLResponse: BunSchema.requests.loadHTML.response,
     DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
+    SendSyncRequestResponse: ZigSchema.requests.sendSyncRequest.response,
 };
 
+// todo: is this still used anywhere
 pub const ResponsePayloadType = union(enum) {
     DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
     // SomeOtherMethodResponse: ZigSchema.requests.someOtherMethod.response,

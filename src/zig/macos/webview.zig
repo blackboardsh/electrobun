@@ -119,12 +119,35 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         }
     };
 
-    const objcWebview = objc.createAndReturnWKWebView(.{
+    const viewsHandler = struct {
+        fn viewsHandler(webviewId: u32, url: [*:0]const u8, body: [*:0]const u8) objc.FileResponse {
+            const relPath = url[ViewsScheme.len..std.mem.len(url)];
+
+            if (std.mem.eql(u8, relPath, "syncrpc")) {
+                // Note: We use the views:// url scheme here so that we can issue our synchronous xhr
+                // request against the same origin that other local content is loaded from.
+                // js loaded from other sources (http, etc.) will be blocked (CORS) from initiating
+                // synchronous requests to bun.
+                const bodyString = fromCString(body);
+                const response = rpc.request.sendSyncRequest(.{ .webviewId = webviewId, .request = bodyString });
+
+                return objc.FileResponse{
+                    .mimeType = toCString("application/json"),
+                    .fileContents = toCString(response.payload),
+                };
+            }
+
+            return assetFileLoader(url);
+        }
+    }.viewsHandler;
+
+    const objcWebview = objc.createAndReturnWKWebView(opts.id, .{
+
         // .frame = .{ //
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
         .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         // },
-    }, assetFileLoader, opts.autoResize);
+    }, viewsHandler, opts.autoResize);
 
     if (opts.preload) |preload| {
         addPreloadScriptToWebview(objcWebview, preload, true);
