@@ -23,7 +23,7 @@ Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main proc
 
 ## Architecture
 
-Read about how Electrobun is designed, and why, in our <a href="blackboardsh/electrobun/tree/main/docs/architecture.md">architecture docs</a>.
+Read about how Electrobun is designed, and why, in our <a href="https://github.com/blackboardsh/electrobun/tree/main/docs/architecture.md">architecture docs</a>.
 
 ## Roadmap
 
