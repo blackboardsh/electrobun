@@ -76,6 +76,19 @@ pub fn loadHTML(params: rpcSchema.BunSchema.requests.loadHTML.params) RequestRes
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
+pub fn webviewTagGoBack(params: rpcSchema.BrowserSchema.messages.webviewTagGoBack) RequestResult {
+    webview.goBack(.{ .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn webviewTagGoForward(params: rpcSchema.BrowserSchema.messages.webviewTagGoForward) RequestResult {
+    webview.goForward(.{ .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn webviewTagReload(params: rpcSchema.BrowserSchema.messages.webviewTagReload) RequestResult {
+    webview.reload(.{ .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+
 // This gives type safety that every handler is implemented, and implements the correct signature
 pub const handlers = rpcSchema.Handlers{
     .createWindow = createWindow,
@@ -90,6 +103,9 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagInit = webviewTagInit,
     .webviewTagResize = webviewTagResize,
     .webviewTagUpdateSrc = webviewTagUpdateSrc,
+    .webviewTagGoBack = webviewTagGoBack,
+    .webviewTagGoForward = webviewTagGoForward,
+    .webviewTagReload = webviewTagReload,
 };
 
 pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.params) RequestResult {
@@ -188,6 +204,12 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagResize, rpcSchema.BrowserSchema.messages.webviewTagResize, message.payload);
     } else if (strEql(method, "webviewTagUpdateSrc")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdateSrc, rpcSchema.BrowserSchema.messages.webviewTagUpdateSrc, message.payload);
+    } else if (strEql(method, "webviewTagGoBack")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagGoBack, rpcSchema.BrowserSchema.messages.webviewTagGoBack, message.payload);
+    } else if (strEql(method, "webviewTagGoForward")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagGoForward, rpcSchema.BrowserSchema.messages.webviewTagGoForward, message.payload);
+    } else if (strEql(method, "webviewTagReload")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagReload, rpcSchema.BrowserSchema.messages.webviewTagReload, message.payload);
     }
 }
 

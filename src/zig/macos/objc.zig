@@ -78,3 +78,6 @@ pub extern fn addScriptMessageHandler(webView: *anyopaque, webviewId: u32, name:
 pub extern fn addScriptMessageHandlerWithReply(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) [*:0]const u8) callconv(.C) *anyopaque;
 pub extern fn evaluateJavaScriptWithNoCompletion(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
 pub extern fn resizeWebview(webView: *anyopaque, frame: NSRect) callconv(.C) void;
+pub extern fn webviewTagGoBack(webView: *anyopaque) callconv(.C) void;
+pub extern fn webviewTagGoForward(webView: *anyopaque) callconv(.C) void;
+pub extern fn webviewTagReload(webView: *anyopaque) callconv(.C) void;

@@ -141,6 +141,9 @@ pub const FromBrowserHandlers = struct {
     webviewTagInit: fn (params: BrowserSchema.requests.webviewTagInit.params) RequestResult,
     webviewTagResize: fn (params: BrowserSchema.messages.webviewTagResize) RequestResult,
     webviewTagUpdateSrc: fn (params: BrowserSchema.messages.webviewTagUpdateSrc) RequestResult,
+    webviewTagGoBack: fn (params: BrowserSchema.messages.webviewTagGoBack) RequestResult,
+    webviewTagGoForward: fn (params: BrowserSchema.messages.webviewTagGoForward) RequestResult,
+    webviewTagReload: fn (params: BrowserSchema.messages.webviewTagReload) RequestResult,
 };
 
 // Browser sends to Zig
@@ -176,5 +179,8 @@ pub const BrowserSchema = struct { //
             id: u32,
             url: []const u8,
         };
+        pub const webviewTagGoBack = struct { id: u32 };
+        pub const webviewTagGoForward = struct { id: u32 };
+        pub const webviewTagReload = struct { id: u32 };
     };
 };

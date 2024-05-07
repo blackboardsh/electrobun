@@ -8,6 +8,11 @@
 </head>
 <body style="height: 100vh;">
     <h1>Webview Tag Test</h1>
+    <button onclick="document.querySelector('electrobun-webview').goBack()">Go Back</button>
+    <button onclick="document.querySelector('electrobun-webview').goForward()">Go Forward</button>
+    <button onclick="document.querySelector('electrobun-webview').reload()">Reload</button>
+    <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
+    <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">eggbun.sh</button>
     <electrobun-webview src="https://electrobun.dev" />
 </body>
 </html>

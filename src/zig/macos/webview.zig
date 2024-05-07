@@ -330,6 +330,31 @@ pub fn loadHTML(opts: rpcSchema.BunSchema.requests.loadHTML.params) void {
     objc.loadHTMLInWebView(webview.handle, toCString(opts.html));
 }
 
+pub fn goBack(opts: rpcSchema.BrowserSchema.messages.webviewTagGoBack) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    objc.webviewTagGoBack(webview.handle);
+}
+pub fn goForward(opts: rpcSchema.BrowserSchema.messages.webviewTagGoForward) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    objc.webviewTagGoForward(webview.handle);
+}
+pub fn reload(opts: rpcSchema.BrowserSchema.messages.webviewTagReload) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    objc.webviewTagReload(webview.handle);
+}
+
 pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {
     var webview = webviewMap.get(webviewId) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}: sendLineToWebview, line: {s}\n", .{ webviewId, line });

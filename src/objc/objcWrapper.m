@@ -182,6 +182,16 @@ void loadHTMLInWebView(WKWebView *webView, const char *htmlString) {
     [webView loadHTMLString:htmlNSString baseURL:baseURL];
 }
 
+void webviewTagGoBack(WKWebView *webView) {
+    [webView goBack];
+}
+void webviewTagGoForward(WKWebView *webView) {
+    [webView goForward];
+}
+void webviewTagReload(WKWebView *webView) {
+    [webView reload];
+}
+
 void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WKNavigationActionPolicy policy) {    
     if (decisionHandler != NULL) {
         decisionHandler(policy);

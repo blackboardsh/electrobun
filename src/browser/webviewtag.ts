@@ -47,6 +47,15 @@ const ConfigureWebviewTags = (
         id: number;
         url: string;
       };
+      webviewTagGoBack: {
+        id: number;
+      };
+      webviewTagGoForward: {
+        id: number;
+      };
+      webviewTagReload: {
+        id: number;
+      };
     };
   }>;
 
@@ -231,6 +240,18 @@ const ConfigureWebviewTags = (
         id: this.webviewId,
         url: src,
       });
+    }
+
+    goBack() {
+      webviewTagRPC.send.webviewTagGoBack({ id: this.webviewId });
+    }
+
+    goForward() {
+      webviewTagRPC.send.webviewTagGoForward({ id: this.webviewId });
+    }
+
+    reload() {
+      webviewTagRPC.send.webviewTagReload({ id: this.webviewId });
     }
   }
 
