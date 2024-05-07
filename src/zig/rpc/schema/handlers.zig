@@ -89,6 +89,7 @@ pub const handlers = rpcSchema.Handlers{
 pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagInit = webviewTagInit,
     .webviewTagResize = webviewTagResize,
+    .webviewTagUpdateSrc = webviewTagUpdateSrc,
 };
 
 pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.params) RequestResult {
@@ -134,6 +135,15 @@ pub fn webviewTagResize(params: rpcSchema.BrowserSchema.messages.webviewTagResiz
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
+pub fn webviewTagUpdateSrc(params: rpcSchema.BrowserSchema.messages.webviewTagUpdateSrc) RequestResult {
+    webview.loadURL(.{
+        .webviewId = params.id,
+        .url = params.url,
+    });
+
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+
 // todo: This is currently O(n), in the worst case it needs to do a mem.eql for every method
 // ideally we modify rpcAnywhere to use enum/int for method name instead of the string method names
 // so we can parse it into a zig enum and do an optimized lookup that can take advantage of binary search
@@ -176,6 +186,8 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
 
     if (strEql(method, "webviewTagResize")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagResize, rpcSchema.BrowserSchema.messages.webviewTagResize, message.payload);
+    } else if (strEql(method, "webviewTagUpdateSrc")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdateSrc, rpcSchema.BrowserSchema.messages.webviewTagUpdateSrc, message.payload);
     }
 }
 

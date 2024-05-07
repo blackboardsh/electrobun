@@ -140,6 +140,7 @@ pub const ResponsePayloadType = union(enum) {
 pub const FromBrowserHandlers = struct {
     webviewTagInit: fn (params: BrowserSchema.requests.webviewTagInit.params) RequestResult,
     webviewTagResize: fn (params: BrowserSchema.messages.webviewTagResize) RequestResult,
+    webviewTagUpdateSrc: fn (params: BrowserSchema.messages.webviewTagUpdateSrc) RequestResult,
 };
 
 // Browser sends to Zig
@@ -170,6 +171,10 @@ pub const BrowserSchema = struct { //
                 x: f64,
                 y: f64,
             },
+        };
+        pub const webviewTagUpdateSrc = struct {
+            id: u32,
+            url: []const u8,
         };
     };
 };

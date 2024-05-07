@@ -1,16 +1,17 @@
-import ElectrobunView, {Electroview } from 'electrobun/view'
+import ElectrobunView, { Electroview } from "electrobun/view";
 
-const rpc = Electroview.defineRPC<any>({    
-    handlers: {
-        requests: {
-            
-        },
-        messages: {
-           
-        
-        }
-    }
+const rpc = Electroview.defineRPC<any>({
+  handlers: {
+    requests: {},
+    messages: {},
+  },
 });
 
+const electrobun = new ElectrobunView.Electroview({ rpc });
 
-const electrobun = new ElectrobunView.Electroview({rpc});
+setTimeout(() => {
+  console.log("updating src for webview tag");
+  document
+    .querySelector("electrobun-webview")
+    ?.setAttribute("src", "https://github.com/blackboardsh/electrobun");
+}, 2000);

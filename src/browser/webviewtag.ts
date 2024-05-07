@@ -43,6 +43,10 @@ const ConfigureWebviewTags = (
           height: number;
         };
       };
+      webviewTagUpdateSrc: {
+        id: number;
+        url: string;
+      };
     };
   }>;
 
@@ -222,10 +226,11 @@ const ConfigureWebviewTags = (
       }
     }
 
-    updateIFrameSrc(src) {
-      // Update the iframe source or any logic to handle the attribute change
-      console.log(`Loading new src: ${src}`);
-      // TODO: send update url to zig
+    updateIFrameSrc(src: string) {
+      webviewTagRPC.send.webviewTagUpdateSrc({
+        id: this.webviewId,
+        url: src,
+      });
     }
   }
 
