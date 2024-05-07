@@ -107,11 +107,11 @@ pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.pa
     });
 
     const webviewId = params.id;
-    const windowId = 3;
+    const windowId = params.windowId;
 
     _ = addWebviewToWindow(.{ .webviewId = webviewId, .windowId = windowId });
 
-    // // note this will be a separate thing as well
+    // note this will be a separate thing as well
     _ = loadURL(.{ .webviewId = webviewId, .url = params.url.? });
 
     return RequestResult{ .errorMsg = null, .payload = null };

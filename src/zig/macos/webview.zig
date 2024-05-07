@@ -172,7 +172,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
             // bun bridge just forwards messages to the bun
 
             var webview = webviewMap.get(webviewId) orelse {
-                std.debug.print("Failed to get webview from hashmap for id {}\n", .{webviewId});
+                std.debug.print("Failed to get webview from hashmap for id {}: bunBridgeHandler\n", .{webviewId});
                 return;
             };
 
@@ -295,7 +295,7 @@ pub fn addPreloadScriptToWebview(objcWindow: *anyopaque, scriptOrPath: []const u
 
 pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) void {
     var webview = webviewMap.get(opts.id) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        std.debug.print("Failed to get webview from hashmap for id {}: resizeWebview\n", .{opts.id});
         return;
     };
     // todo: update webview frame in the webviewMap.
@@ -311,7 +311,7 @@ pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) vo
 
 pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.params) void {
     var webview = webviewMap.get(opts.webviewId) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.webviewId});
+        std.debug.print("Failed to get webview from hashmap for id {}: loadURL\n", .{opts.webviewId});
         return;
     };
 
@@ -322,7 +322,7 @@ pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.params) void {
 
 pub fn loadHTML(opts: rpcSchema.BunSchema.requests.loadHTML.params) void {
     var webview = webviewMap.get(opts.webviewId) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.webviewId});
+        std.debug.print("Failed to get webview from hashmap for id {}: loadHTML\n", .{opts.webviewId});
         return;
     };
 
@@ -332,7 +332,7 @@ pub fn loadHTML(opts: rpcSchema.BunSchema.requests.loadHTML.params) void {
 
 pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {
     var webview = webviewMap.get(webviewId) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{webviewId});
+        std.debug.print("Failed to get webview from hashmap for id {}: sendLineToWebview, line: {s}\n", .{ webviewId, line });
         return;
     };
 

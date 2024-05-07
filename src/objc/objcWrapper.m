@@ -199,7 +199,6 @@ const char* getBodyFromScriptMessage(WKScriptMessage *message) {
     return body.UTF8String;
 }
 
-// Add this to your existing .m file
 void evaluateJavaScriptWithNoCompletion(WKWebView *webView, const char *jsString) {    
     NSString *javaScript = [NSString stringWithUTF8String:jsString];
     [webView evaluateJavaScript:javaScript completionHandler:nil];
@@ -248,7 +247,6 @@ void setNSWindowTitle(NSWindow *window, const char *title) {
     [window setTitle:titleString];
 }
 
-// Sets the main content view of the window
 void addWebviewToWindow(NSWindow *window, NSView *view) {
 
     [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];        

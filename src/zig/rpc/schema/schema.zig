@@ -148,6 +148,7 @@ pub const BrowserSchema = struct { //
         pub const webviewTagInit = struct {
             pub const params = struct {
                 id: u32,
+                windowId: u32,
                 url: ?[]const u8,
                 html: ?[]const u8,
                 preload: ?[]const u8,

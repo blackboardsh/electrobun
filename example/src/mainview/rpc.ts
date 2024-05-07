@@ -34,7 +34,3 @@ export type MyWebviewRPC = {
     };
   }>;
 };
-
-export type MyWebviewSyncRPC = {
-  doSyncMath: (params: { a: number; b: number }) => number;
-};

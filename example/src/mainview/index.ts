@@ -1,5 +1,5 @@
 import ElectrobunView, { Electroview } from "electrobun/view";
-import { type MyWebviewRPC, type MyWebviewSyncRPC } from "./rpc";
+import { type MyWebviewRPC } from "./rpc";
 
 const rpc = Electroview.defineRPC<MyWebviewRPC>({
   handlers: {

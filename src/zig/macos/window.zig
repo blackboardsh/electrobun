@@ -86,6 +86,16 @@ pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
         return;
     };
 
+    // Note: Keep this in sync with browser api
+    var jsScript = std.fmt.allocPrint(alloc, "window.__electrobunWindowId = {}\n", .{opts.windowId}) catch {
+        return;
+    };
+    defer alloc.free(jsScript);
+
+    // we want to make this a preload script so that it gets re-applied after navigations before any
+    // other code runs.
+    webview.addPreloadScriptToWebview(view.handle, jsScript, true);
+
     objc.addWebviewToWindow(win.window, view.handle);
 }
 

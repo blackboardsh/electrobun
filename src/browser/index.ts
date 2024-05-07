@@ -88,6 +88,9 @@ class Electroview<T> {
     // from the browser context while bun asynchronously replies. Use it sparingly from the main thread.
     xhr.open("POST", "views://syncrpc", false); // Synchronous call
     xhr.send(msg);
+    if (!xhr.responseText) {
+      return xhr.responseText;
+    }
 
     try {
       return JSON.parse(xhr.responseText);
