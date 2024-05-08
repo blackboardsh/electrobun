@@ -95,6 +95,8 @@ const ConfigureWebviewTags = (
   // created via webview tag across multiple windows don't conflict with ones created from bun
   let nextWebviewId = 10_000;
 
+  // todo: provide global types for <electrobun-webview> tag elements (like querySelector results etc.)
+
   class WebviewTag extends HTMLElement {
     // todo (yoav): come up with a better mechanism to eliminate collisions with bun created
     // webviews
@@ -252,6 +254,13 @@ const ConfigureWebviewTags = (
 
     reload() {
       webviewTagRPC.send.webviewTagReload({ id: this.webviewId });
+    }
+    loadURL(url: string) {
+      this.setAttribute("src", url);
+      webviewTagRPC.send.webviewTagUpdateSrc({
+        id: this.webviewId,
+        url,
+      });
     }
   }
 

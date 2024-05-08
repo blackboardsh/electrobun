@@ -15,3 +15,7 @@ setTimeout(() => {
     .querySelector("electrobun-webview")
     ?.setAttribute("src", "https://github.com/blackboardsh/electrobun");
 }, 2000);
+
+setTimeout(() => {
+  document.querySelector("electrobun-webview")?.loadURL("https://eggbun.sh");
+}, 5000);
