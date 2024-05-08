@@ -454,6 +454,8 @@ pub fn getMimeType(filePath: []const u8) []const u8 {
         return "application/json";
     } else if (strEql(extension, ".css")) {
         return "text/css";
+    } else if (strEql(extension, ".ttf")) {
+        return "font/ttf";
     } else if (strEql(extension, ".png")) {
         return "image/png";
     } else if (strEql(extension, ".jpg")) {
