@@ -3,6 +3,7 @@ import Electrobun, {
   BrowserView,
   type RPCSchema,
   createRPC,
+  Utils,
 } from "electrobun/bun";
 import { type MyWebviewRPC } from "../mainview/rpc";
 import { type MyExtensionSchema } from "../myextension/rpc";
@@ -120,6 +121,12 @@ const webviewTagWindow = new BrowserWindow({
     y: 100,
   },
 });
+
+// TODO: make this a unit test
+// setTimeout(() => {
+//   console.log("trashing item");
+//   Utils.moveToTrash("/Users/yoav/Desktop/600x200_copy.jpg");
+// }, 2000);
 
 // wikiWindow.setRPC()
 

@@ -76,6 +76,11 @@ pub fn loadHTML(params: rpcSchema.BunSchema.requests.loadHTML.params) RequestRes
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
+pub fn moveToTrash(params: rpcSchema.BunSchema.requests.moveToTrash.params) RequestResult {
+    _ = webview.moveToTrash(params.path);
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+
 pub fn webviewTagGoBack(params: rpcSchema.BrowserSchema.messages.webviewTagGoBack) RequestResult {
     webview.goBack(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = null };
@@ -97,6 +102,7 @@ pub const handlers = rpcSchema.Handlers{
     .addWebviewToWindow = addWebviewToWindow,
     .loadURL = loadURL,
     .loadHTML = loadHTML,
+    .moveToTrash = moveToTrash,
 };
 
 pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
@@ -182,6 +188,8 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
         return parseParamsAndCall(handlers.loadURL, BunRequests.loadURL.params, request.params);
     } else if (strEql(method, "loadHTML")) {
         return parseParamsAndCall(handlers.loadHTML, BunRequests.loadHTML.params, request.params);
+    } else if (strEql(method, "moveToTrash")) {
+        return parseParamsAndCall(handlers.moveToTrash, BunRequests.moveToTrash.params, request.params);
     } else {
         return RequestResult{ .errorMsg = "unhandled method", .payload = null };
     }

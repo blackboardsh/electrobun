@@ -161,6 +161,14 @@ type ZigHandlers = RPCSchema<{
       };
       response: void;
     };
+
+    // fs
+    moveToTrash: {
+      params: {
+        path: string;
+      };
+      response: boolean;
+    };
   };
 }>;
 
@@ -242,8 +250,16 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
       var response;
       try {
         response = handler(params);
+        // Note: Stringify(undefined) returns undefined,
+        // if we send undefined as the payload it'll crash
+        // so send an empty string which is a better analog for
+        // undefined json string
+        if (response === undefined) {
+          response = "";
+        }
       } catch (err) {
         console.log(err);
+        console.log("syncRPC failed with", { method, params });
         return { payload: String(err) };
       }
 

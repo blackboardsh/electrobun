@@ -82,3 +82,6 @@ pub extern fn resizeWebview(webView: *anyopaque, frame: NSRect) callconv(.C) voi
 pub extern fn webviewTagGoBack(webView: *anyopaque) callconv(.C) void;
 pub extern fn webviewTagGoForward(webView: *anyopaque) callconv(.C) void;
 pub extern fn webviewTagReload(webView: *anyopaque) callconv(.C) void;
+
+// fs
+pub extern fn moveToTrash(path: [*:0]const u8) callconv(.C) bool;

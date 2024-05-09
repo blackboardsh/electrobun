@@ -388,3 +388,26 @@ MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *web
 //     [view removeFromSuperview];
 //     NSLog(@"WebView removed after 10 seconds");
 // });
+
+
+// FS
+
+#import <Foundation/Foundation.h>
+
+BOOL moveToTrash(char *pathString) {        
+    NSString *path = [NSString stringWithUTF8String:pathString];
+    NSURL *fileURL = [NSURL fileURLWithPath:path];
+    NSError *error = nil;
+    NSURL *resultingURL = nil;
+    
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    BOOL success = [fileManager trashItemAtURL:fileURL resultingItemURL:&resultingURL error:&error];
+    
+    if (success) {
+        NSLog(@"Moved to Trash: %@", resultingURL);
+    } else {
+        NSLog(@"Error: %@", error);
+    }
+
+    return success;
+}

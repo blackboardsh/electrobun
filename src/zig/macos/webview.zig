@@ -367,6 +367,13 @@ pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {
     webview.sendToWebview(line);
 }
 
+// todo: this should move to util, but we need CString utils (which should also be moved to a util)
+pub fn moveToTrash(filePath: []const u8) bool {
+    const path = toCString(filePath);
+    std.debug.print("moving to trash path: {s}\n", .{filePath});
+    return objc.moveToTrash(path);
+}
+
 // todo: move to a util and dedup with window.zig
 // todo: make buffer an arg
 // todo: use a for loop with mem.copy for simpler concat

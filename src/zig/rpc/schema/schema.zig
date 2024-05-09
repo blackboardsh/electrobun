@@ -99,6 +99,14 @@ pub const BunSchema = struct {
             };
             pub const response = void;
         };
+
+        // fs
+        pub const moveToTrash = struct {
+            pub const params = struct {
+                path: []const u8,
+            };
+            pub const response = bool;
+        };
     };
 };
 
@@ -111,6 +119,7 @@ pub const Handlers = struct {
     addWebviewToWindow: fn (params: BunSchema.requests.addWebviewToWindow.params) RequestResult,
     loadURL: fn (params: BunSchema.requests.loadURL.params) RequestResult,
     loadHTML: fn (params: BunSchema.requests.loadHTML.params) RequestResult,
+    moveToTrash: fn (params: BunSchema.requests.moveToTrash.params) RequestResult,
 };
 
 pub const Requests = struct {
@@ -126,6 +135,8 @@ pub const RequestResponseType = union(enum) {
     addWebviewToWindowResponse: BunSchema.requests.addWebviewToWindow.response,
     LoadURLResponse: BunSchema.requests.loadURL.response,
     LoadHTMLResponse: BunSchema.requests.loadHTML.response,
+    moveToTrashResponse: BunSchema.requests.moveToTrash.response,
+
     DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
     SendSyncRequestResponse: ZigSchema.requests.sendSyncRequest.response,
 };
