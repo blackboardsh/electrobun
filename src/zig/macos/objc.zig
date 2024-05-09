@@ -55,9 +55,10 @@ const createNSWindowWithFrameAndStyleParams = extern struct {
 
 // Note: this struct is mirrored in objective-c, it's returned by a zig function that is called by objc function
 // so extern (c-compatible) struct is not enough
-pub const FileResponse = packed struct {
+pub const FileResponse = struct {
     mimeType: [*:0]const u8,
-    fileContents: [*:0]const u8,
+    fileContents: [*]const u8,
+    len: usize,
 };
 
 pub const FileLoader = *const fn (webviewId: u32, [*:0]const u8, [*:0]const u8) FileResponse;

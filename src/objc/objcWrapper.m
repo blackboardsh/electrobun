@@ -1,11 +1,12 @@
 #import <WebKit/WebKit.h>
 
 
-// asset:// schema handler
+// views:// schema handler
 
 typedef struct {
     const char *mimeType;
-    const char *fileContents;    
+    const char *fileContents;  
+    size_t len;  
 } FileResponse;
 
 // Define callback types for starting and stopping URL scheme tasks
@@ -25,9 +26,9 @@ typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const 
         
     // todo: the zig handler should return the file to here, and objc can send it back to the webview
     if (self.fileLoader) {                
-        FileResponse fileResponse = self.fileLoader(self.webviewId, url.absoluteString.UTF8String, bodyString.UTF8String);        
-        
-        NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:strlen(fileResponse.fileContents)];        
+        FileResponse fileResponse = self.fileLoader(self.webviewId, url.absoluteString.UTF8String, bodyString.UTF8String);                        
+
+        NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:fileResponse.len];        
         // Determine MIME type from the response, or default if null
         NSString *mimeType = fileResponse.mimeType ? [NSString stringWithUTF8String:fileResponse.mimeType] : @"application/octet-stream";
         

@@ -19,11 +19,13 @@ fn assetFileLoader(url: [*:0]const u8) objc.FileResponse {
     const relPath = url[ViewsScheme.len..std.mem.len(url)];
     const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
     const mimeType = getMimeType(relPath); // or dynamically determine MIME type
+    return objc.FileResponse{ .mimeType = toCString(mimeType), .fileContents = fileContents.ptr, .len = fileContents.len };
+}
 
-    return objc.FileResponse{
-        .mimeType = toCString(mimeType),
-        .fileContents = toCString(fileContents),
-    };
+fn readAssetFromDisk(url: [*:0]const u8) []const u8 {
+    const relPath = url[ViewsScheme.len..std.mem.len(url)];
+    const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
+    return fileContents;
 }
 
 const WebviewType = struct {
@@ -130,10 +132,11 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 // synchronous requests to bun.
                 const bodyString = fromCString(body);
                 const response = rpc.request.sendSyncRequest(.{ .webviewId = webviewId, .request = bodyString });
-
+                const responseString = response.payload[0..response.payload.len];
                 return objc.FileResponse{
                     .mimeType = toCString("application/json"),
-                    .fileContents = toCString(response.payload),
+                    .fileContents = responseString.ptr,
+                    .len = responseString.len,
                 };
             }
 
@@ -284,8 +287,8 @@ pub fn addPreloadScriptToWebview(objcWindow: *anyopaque, scriptOrPath: []const u
 
     // If it's a views:// url safely load from disk otherwise treat it as js
     if (std.mem.startsWith(u8, scriptOrPath, ViewsScheme)) {
-        const fileResult = assetFileLoader(toCString(scriptOrPath));
-        script = fromCString(fileResult.fileContents);
+        const fileResult = readAssetFromDisk(toCString(scriptOrPath));
+        script = fileResult;
     } else {
         script = scriptOrPath;
     }

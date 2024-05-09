@@ -12,7 +12,9 @@
     <button onclick="document.querySelector('electrobun-webview').goForward()">Go Forward</button>
     <button onclick="document.querySelector('electrobun-webview').reload()">Reload</button>
     <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
-    <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">eggbun.sh</button>
-    <electrobun-webview src="https://electrobun.dev" />
+    <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">github.com/blackboardsh/electrobun</button>
+    <electrobun-webview src="https://electrobun.dev" ></electrobun-webview>
+    <h2>Test loading a bundled png via views:// scheme</h2>
+    <img src="views://webviewtag/electrobun.png" />
 </body>
 </html>
