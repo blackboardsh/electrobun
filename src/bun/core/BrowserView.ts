@@ -82,6 +82,8 @@ export class BrowserView<T> {
       : { ...defaultOptions.frame };
     this.rpc = options.rpc;
     this.syncRpc = options.syncRpc;
+    // todo (yoav): since collisions can crash the app add a function that checks if the
+    // file exists first
     this.pipePrefix = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_${this.id}`;
 
     this.init();
