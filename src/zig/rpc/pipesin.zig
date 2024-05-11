@@ -14,7 +14,7 @@ const alloc = std.heap.page_allocator;
 var messageQueue = std.ArrayList([]const u8).init(alloc);
 var kqueue: std.os.fd_t = 0;
 
-pub fn pipesInEventListener() void {
+pub fn pipesInEventListener() !void {
     kqueue = std.os.kqueue() catch {
         std.log.err("Failed to create kqueue", .{});
         return;
@@ -22,7 +22,12 @@ pub fn pipesInEventListener() void {
     defer std.os.close(kqueue);
 
     const mainPipeIn = blk: {
-        const bunPipeInPath = "/private/tmp/electrobun_ipc_pipe_my-app-id_main";
+        // This is passed as an environment variable from bun
+        const MAIN_PIPE_IN = std.os.getenv("MAIN_PIPE_IN") orelse {
+            // todo: return an error here
+            return error.ELECTROBUN_MAIN_PIPE_IN_NOT_SET;
+        };
+        const bunPipeInPath = MAIN_PIPE_IN;
         const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
 
         if (bunPipeInFileResult) |file| {

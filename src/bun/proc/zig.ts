@@ -4,10 +4,17 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "../core/BrowserView";
+import { Updater } from "../core/Updater";
 
 // todo (yoav): webviewBinaryPath and ELECTROBUN_VIEWS_FOLDER should be passed in as cli/env args by the launcher binary
 // will likely be different on different platforms. Right now these are hardcoded for relative paths inside the mac app bundle.
 const webviewBinaryPath = join("native", "webview");
+
+const hash = await Updater.localInfo.hash();
+// Note: we use the build's hash to separate from different apps and different builds
+// but we also want a randomId to separate different instances of the same app
+const randomId = Math.random().toString(36).substring(7);
+const mainPipe = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_main_in`;
 
 const zigProc = Bun.spawn([webviewBinaryPath], {
   stdin: "pipe",
@@ -15,6 +22,7 @@ const zigProc = Bun.spawn([webviewBinaryPath], {
   env: {
     ...process.env,
     ELECTROBUN_VIEWS_FOLDER: resolve("../Resources/app/views"),
+    MAIN_PIPE_IN: mainPipe,
   },
   onExit: (_zigProc) => {
     // right now just exit the whole app if the webview process dies.
@@ -22,9 +30,6 @@ const zigProc = Bun.spawn([webviewBinaryPath], {
     process.exit(0);
   },
 });
-
-// todo: this needs to be globally unique across all apps (including different electrobun apps, and different versions and builds of the same app)
-const mainPipe = `/private/tmp/electrobun_ipc_pipe_${"my-app-id"}_main`;
 
 process.on("SIGINT", (code) => {
   // todo (yoav): maybe send a friendly signal to the webviews to let them know
@@ -119,6 +124,7 @@ type ZigHandlers = RPCSchema<{
     createWebview: {
       params: {
         id: number;
+        pipePrefix: string;
         url: string | null;
         html: string | null;
         frame: {

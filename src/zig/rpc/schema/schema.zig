@@ -71,6 +71,7 @@ pub const BunSchema = struct {
         pub const createWebview = struct {
             pub const params = struct {
                 id: u32,
+                pipePrefix: []const u8,
                 url: ?[]const u8,
                 html: ?[]const u8,
                 preload: ?[]const u8,

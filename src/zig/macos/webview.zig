@@ -69,6 +69,7 @@ const WebviewType = struct {
 
 const CreateWebviewOpts = struct { //
     id: u32,
+    pipePrefix: []const u8,
     url: ?[]const u8,
     html: ?[]const u8,
     preload: ?[]const u8,
@@ -89,7 +90,8 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         if (opts.id >= 10000) {
             break :blk null;
         }
-        const bunPipeInPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_in", .{opts.id});
+
+        const bunPipeInPath = concatStrings(opts.pipePrefix, "_in");
         const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
 
         if (bunPipeInFileResult) |file| {
@@ -109,7 +111,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         if (opts.id >= 10000) {
             break :blk null;
         }
-        const bunPipeOutPath = concatOrFallback("/private/tmp/electrobun_ipc_pipe_{}_1_out", .{opts.id});
+        const bunPipeOutPath = concatStrings(opts.pipePrefix, "_out");
         const bunPipeOutResult = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
 
         if (bunPipeOutResult) |file| {

@@ -10,6 +10,7 @@ import {
   type RPCOptions,
   createRPC,
 } from "rpc-anywhere";
+import { Updater } from "./Updater";
 
 const BrowserViewMap = {};
 let nextWebviewId = 1;
@@ -45,6 +46,11 @@ const defaultOptions: BrowserViewOptions = {
   },
 };
 
+const hash = await Updater.localInfo.hash();
+// Note: we use the build's hash to separate from different apps and different builds
+// but we also want a randomId to separate different instances of the same app
+const randomId = Math.random().toString(36).substring(7);
+
 export class BrowserView<T> {
   id: number = nextWebviewId++;
   url: string | null = null;
@@ -61,6 +67,7 @@ export class BrowserView<T> {
     width: 800,
     height: 600,
   };
+  pipePrefix: string;
   inStream: fs.WriteStream;
   outStream: fs.ReadStream;
   rpc?: T;
@@ -75,6 +82,7 @@ export class BrowserView<T> {
       : { ...defaultOptions.frame };
     this.rpc = options.rpc;
     this.syncRpc = options.syncRpc;
+    this.pipePrefix = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_${this.id}`;
 
     this.init();
   }
@@ -82,6 +90,7 @@ export class BrowserView<T> {
   init() {
     zigRPC.request.createWebview({
       id: this.id,
+      pipePrefix: this.pipePrefix,
       // TODO: decide whether we want to keep sending url/html
       // here, if we're manually calling loadURL/loadHTML below
       // then we can remove it from the api here
@@ -103,9 +112,8 @@ export class BrowserView<T> {
   }
 
   createStreams() {
-    const webviewPipe = `/private/tmp/electrobun_ipc_pipe_${this.id}_1`;
-    const webviewPipeIn = webviewPipe + "_in";
-    const webviewPipeOut = webviewPipe + "_out";
+    const webviewPipeIn = this.pipePrefix + "_in";
+    const webviewPipeOut = this.pipePrefix + "_out";
 
     try {
       execSync("mkfifo " + webviewPipeOut);

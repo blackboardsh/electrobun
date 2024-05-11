@@ -30,6 +30,7 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
     // std.log.info("createWebview handler preload {s}", .{params.preload});
     webview.createWebview(.{
         .id = params.id,
+        .pipePrefix = params.pipePrefix,
         .url = params.url,
         .html = params.html,
         .preload = params.preload,
@@ -115,8 +116,13 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
 };
 
 pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.params) RequestResult {
+    // todo: this should go through bun so bun is aware of the webview
+    // and so it can create and wire up the in/out pipes
     webview.createWebview(.{
         .id = params.id,
+        // note: currently setting to empty string because zig skips over pipe creation for webview tags
+        // for now.
+        .pipePrefix = "",
         .url = params.url,
         .html = params.html,
         .preload = params.preload,
