@@ -145,7 +145,7 @@ const ConfigureWebviewTags = (
       webviewTagRPC.request.webviewTagInit({
         id: this.webviewId,
         windowId: window.__electrobunWindowId,
-        url: this.src,
+        url: this.src || this.getAttribute("src"),
         html: null,
         preload: null,
         frame: {
