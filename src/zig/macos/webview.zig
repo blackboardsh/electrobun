@@ -65,6 +65,16 @@ const WebviewType = struct {
     pub fn sendToWebview(self: *WebviewType, message: []const u8) void {
         objc.evaluateJavaScriptWithNoCompletion(self.handle, toCString(message));
     }
+
+    pub fn deinit(self: *WebviewType) void {
+        // todo: implement the rest of this including objc stuff
+        if (self.bun_out_pipe) |file| {
+            file.close();
+        }
+        if (self.bun_in_pipe) |file| {
+            file.close();
+        }
+    }
 };
 
 const CreateWebviewOpts = struct { //
@@ -358,6 +368,17 @@ pub fn reload(opts: rpcSchema.BrowserSchema.messages.webviewTagReload) void {
     };
 
     objc.webviewTagReload(webview.handle);
+}
+
+pub fn remove(opts: rpcSchema.BrowserSchema.messages.webviewTagRemove) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    objc.webviewRemove(webview.handle);
+    _ = webviewMap.remove(opts.id);
+    webview.deinit();
 }
 
 pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {

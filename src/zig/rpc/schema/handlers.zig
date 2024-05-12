@@ -94,6 +94,10 @@ pub fn webviewTagReload(params: rpcSchema.BrowserSchema.messages.webviewTagReloa
     webview.reload(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
+pub fn webviewTagRemove(params: rpcSchema.BrowserSchema.messages.webviewTagRemove) RequestResult {
+    webview.remove(.{ .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
 
 // This gives type safety that every handler is implemented, and implements the correct signature
 pub const handlers = rpcSchema.Handlers{
@@ -113,6 +117,7 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagGoBack = webviewTagGoBack,
     .webviewTagGoForward = webviewTagGoForward,
     .webviewTagReload = webviewTagReload,
+    .webviewTagRemove = webviewTagRemove,
 };
 
 pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.params) RequestResult {
@@ -224,6 +229,8 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagGoForward, rpcSchema.BrowserSchema.messages.webviewTagGoForward, message.payload);
     } else if (strEql(method, "webviewTagReload")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagReload, rpcSchema.BrowserSchema.messages.webviewTagReload, message.payload);
+    } else if (strEql(method, "webviewTagRemove")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagRemove, rpcSchema.BrowserSchema.messages.webviewTagRemove, message.payload);
     }
 }
 

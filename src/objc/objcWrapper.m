@@ -193,6 +193,10 @@ void webviewTagReload(WKWebView *webView) {
     [webView reload];
 }
 
+void webviewRemove(WKWebView *webView) {
+    [webView removeFromSuperview];
+}
+
 void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WKNavigationActionPolicy policy) {    
     if (decisionHandler != NULL) {
         decisionHandler(policy);

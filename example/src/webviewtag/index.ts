@@ -19,3 +19,8 @@ setTimeout(() => {
 setTimeout(() => {
   document.querySelector("electrobun-webview")?.loadURL("https://eggbun.sh");
 }, 5000);
+
+// unit test
+// setTimeout(() => {
+//   document.querySelector("electrobun-webview")?.remove();
+// }, 1000);

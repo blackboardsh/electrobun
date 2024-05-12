@@ -56,6 +56,9 @@ const ConfigureWebviewTags = (
       webviewTagReload: {
         id: number;
       };
+      webviewTagRemove: {
+        id: number;
+      };
     };
   }>;
 
@@ -217,11 +220,13 @@ const ConfigureWebviewTags = (
     }
 
     disconnectedCallback() {
+      // removed from the dom
       clearInterval(this.positionCheckLoop);
       this.resizeObserver?.disconnect();
       this.intersectionObserver?.disconnect();
       this.mutationObserver?.disconnect();
       window.removeEventListener("resize", this.boundSyncDimensions);
+      webviewTagRPC.send.webviewTagRemove({ id: this.webviewId });
     }
 
     static get observedAttributes() {

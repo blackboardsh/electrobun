@@ -13,6 +13,8 @@ const webviewBinaryPath = join("native", "webview");
 const hash = await Updater.localInfo.hash();
 // Note: we use the build's hash to separate from different apps and different builds
 // but we also want a randomId to separate different instances of the same app
+// todo (yoav): since collisions can crash the app add a function that checks if the
+// file exists first
 const randomId = Math.random().toString(36).substring(7);
 const mainPipe = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_main_in`;
 
