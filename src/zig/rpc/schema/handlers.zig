@@ -22,6 +22,8 @@ pub fn createWindow(params: rpcSchema.BunSchema.requests.createWindow.params) Re
             .width = params.frame.width,
             .height = params.frame.height,
         },
+        .styleMask = params.styleMask,
+        .titleBarStyle = params.titleBarStyle,
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }

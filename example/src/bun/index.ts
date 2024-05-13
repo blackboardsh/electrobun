@@ -120,6 +120,7 @@ const webviewTagWindow = new BrowserWindow({
     x: 1300,
     y: 100,
   },
+  titleBarStyle: "hiddenInset",
 });
 
 // TODO: make this a unit test

@@ -120,6 +120,21 @@ type ZigHandlers = RPCSchema<{
           x: number;
           y: number;
         };
+        styleMask: {
+          Borderless: boolean;
+          Titled: boolean;
+          Closable: boolean;
+          Miniaturizable: boolean;
+          Resizable: boolean;
+          UnifiedTitleAndToolbar: boolean;
+          FullScreen: boolean;
+          FullSizeContentView: boolean;
+          UtilityWindow: boolean;
+          DocModalWindow: boolean;
+          NonactivatingPanel: boolean;
+          HUDWindow: boolean;
+        };
+        titleBarStyle: string;
       };
       response: void;
     };

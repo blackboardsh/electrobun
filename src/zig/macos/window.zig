@@ -3,6 +3,7 @@ const rpc = @import("../rpc/schema/request.zig");
 const objc = @import("./objc.zig");
 const pipesin = @import("../rpc/pipesin.zig");
 const webview = @import("./webview.zig");
+const rpcSchema = @import("../rpc/schema/schema.zig");
 
 const alloc = std.heap.page_allocator;
 
@@ -21,7 +22,27 @@ const WindowType = struct {
 };
 
 // todo: use the types in rpc.zig (or move them to a shared location)
-const CreateWindowOpts = struct { id: u32, url: ?[]const u8, html: ?[]const u8, title: []const u8, frame: struct { width: f64, height: f64, x: f64, y: f64 } };
+const CreateWindowOpts = struct {
+    id: u32,
+    url: ?[]const u8,
+    html: ?[]const u8,
+    title: []const u8,
+    frame: struct { width: f64, height: f64, x: f64, y: f64 },
+    styleMask: struct {
+        Borderless: bool,
+        Titled: bool,
+        Closable: bool,
+        Miniaturizable: bool,
+        Resizable: bool,
+        UnifiedTitleAndToolbar: bool,
+        FullScreen: bool,
+        FullSizeContentView: bool,
+        UtilityWindow: bool,
+        DocModalWindow: bool,
+        NonactivatingPanel: bool,
+        HUDWindow: bool,
+    },
+};
 const SetTitleOpts = struct {
     winId: u32,
     title: []const u8,
@@ -30,13 +51,27 @@ const SetTitleOpts = struct {
 const WindowMap = std.AutoHashMap(u32, WindowType);
 pub var windowMap: WindowMap = WindowMap.init(alloc);
 
-pub fn createWindow(opts: CreateWindowOpts) WindowType {
+pub fn createWindow(opts: rpcSchema.BunSchema.requests.createWindow.params) WindowType {
     const objcWin = objc.createNSWindowWithFrameAndStyle(.{ //
-        .styleMask = .{ .Titled = true, .Closable = true, .Resizable = true }, //
+        .styleMask = .{
+            .Borderless = opts.styleMask.Borderless,
+            .Titled = opts.styleMask.Titled,
+            .Closable = opts.styleMask.Closable,
+            .Miniaturizable = opts.styleMask.Miniaturizable,
+            .Resizable = opts.styleMask.Resizable,
+            .UnifiedTitleAndToolbar = opts.styleMask.UnifiedTitleAndToolbar,
+            .FullScreen = opts.styleMask.FullScreen,
+            .FullSizeContentView = opts.styleMask.FullSizeContentView,
+            .UtilityWindow = opts.styleMask.UtilityWindow,
+            .DocModalWindow = opts.styleMask.DocModalWindow,
+            .NonactivatingPanel = opts.styleMask.NonactivatingPanel,
+            .HUDWindow = opts.styleMask.HUDWindow,
+        },
         .frame = .{ //
             .origin = .{ .x = opts.frame.x - 600, .y = opts.frame.y - 600 },
             .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         },
+        .titleBarStyle = toCString(opts.titleBarStyle),
     });
 
     objc.setNSWindowTitle(objcWin, toCString(opts.title));

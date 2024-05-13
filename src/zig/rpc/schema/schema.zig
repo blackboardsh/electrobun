@@ -48,6 +48,21 @@ pub const BunSchema = struct {
                     x: f64,
                     y: f64,
                 },
+                styleMask: struct {
+                    Borderless: bool,
+                    Titled: bool,
+                    Closable: bool,
+                    Miniaturizable: bool,
+                    Resizable: bool,
+                    UnifiedTitleAndToolbar: bool,
+                    FullScreen: bool,
+                    FullSizeContentView: bool,
+                    UtilityWindow: bool,
+                    DocModalWindow: bool,
+                    NonactivatingPanel: bool,
+                    HUDWindow: bool,
+                },
+                titleBarStyle: []const u8,
             };
             pub const response = void;
         };

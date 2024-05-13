@@ -51,6 +51,7 @@ pub const WindowStyleMaskOptions = extern struct {
 const createNSWindowWithFrameAndStyleParams = extern struct {
     frame: NSRect,
     styleMask: WindowStyleMaskOptions,
+    titleBarStyle: [*:0]const u8,
 };
 
 // Note: this struct is mirrored in objective-c, it's returned by a zig function that is called by objc function

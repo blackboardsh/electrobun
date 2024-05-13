@@ -238,6 +238,7 @@ void addPreloadScriptToWebView(WKWebView *webView, const char *scriptContent, BO
 typedef struct {
     NSRect frame;
     WindowStyleMaskOptions styleMask;
+    const char *titleBarStyle;
 } createNSWindowWithFrameAndStyleParams;
 
 NSWindow *createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams config) {    
@@ -245,6 +246,11 @@ NSWindow *createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams 
                                                    styleMask:getNSWindowStyleMask(config.styleMask)
                                                      backing:NSBackingStoreBuffered
                                                        defer:YES];    
+
+    if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
+        window.titlebarAppearsTransparent = YES;
+        window.titleVisibility = NSWindowTitleHidden;
+    }    
 
     // Give it a default content view that can accept subviews later on                                                                                                               
     NSView *contentView = [[NSView alloc] initWithFrame:[window frame]];

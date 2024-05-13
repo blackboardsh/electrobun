@@ -20,6 +20,9 @@ type WindowOptionsType<T = undefined> = {
   preload: string | null;
   rpc?: T;
   syncRpc?: { [method: string]: (params: any) => any };
+  styleMask?: {};
+  // TODO: implement all of them
+  titleBarStyle: "hiddenInset" | "default";
 };
 
 const defaultOptions: WindowOptionsType = {
@@ -33,6 +36,7 @@ const defaultOptions: WindowOptionsType = {
   url: "https://electrobun.dev",
   html: null,
   preload: null,
+  titleBarStyle: "default",
 };
 
 const BrowserWindowMap = {};
@@ -70,10 +74,15 @@ export class BrowserWindow<T> {
     this.html = options.html || null;
     this.preload = options.preload || null;
 
-    this.init(options.rpc, options.syncRpc);
+    this.init(options);
   }
 
-  init(rpc?: T, syncRpc?: { [method: string]: (params: any) => any }) {
+  init({
+    rpc,
+    syncRpc,
+    styleMask,
+    titleBarStyle,
+  }: Partial<WindowOptionsType<T>>) {
     zigRPC.request.createWindow({
       id: this.id,
       title: this.title,
@@ -85,6 +94,28 @@ export class BrowserWindow<T> {
         x: this.frame.x,
         y: this.frame.y,
       },
+      styleMask: {
+        Borderless: false,
+        Titled: true,
+        Closable: true,
+        Miniaturizable: true,
+        Resizable: true,
+        UnifiedTitleAndToolbar: false,
+        FullScreen: false,
+        FullSizeContentView: false,
+        UtilityWindow: false,
+        DocModalWindow: false,
+        NonactivatingPanel: false,
+        HUDWindow: false,
+        ...(styleMask || {}),
+        ...(titleBarStyle === "hiddenInset"
+          ? {
+              Titled: true,
+              FullSizeContentView: true,
+            }
+          : {}),
+      },
+      titleBarStyle: titleBarStyle || "default",
     });
 
     // todo (yoav): user should be able to override this and pass in their
