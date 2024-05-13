@@ -4,18 +4,91 @@ import {
   type RPCOptions,
   type RPCMessageHandlerFn,
   type WildcardRPCMessageHandlerFn,
+  type RPCTransport,
   createRPC,
 } from "rpc-anywhere";
 import { ConfigureWebviewTags } from "./webviewtag";
+// todo: should this just be injected as a preload script?
+import { isAppRegionDrag } from "./stylesAndElements";
 
 interface ElectrobunWebviewRPCSChema {
   bun: RPCSchema;
   webview: RPCSchema;
 }
 
+const WEBVIEW_ID = window.__electrobunWebviewId;
+
+// todo (yoav): move this stuff to browser/rpc/webview.ts
+type ZigWebviewHandlers = RPCSchema<{
+  requests: {
+    webviewTagInit: {
+      params: {
+        id: number;
+        windowId: number;
+        url: string | null;
+        html: string | null;
+        preload: string | null;
+        frame: {
+          width: number;
+          height: number;
+          x: number;
+          y: number;
+        };
+      };
+      response: void;
+    };
+  };
+}>;
+
+type WebviewTagHandlers = RPCSchema<{
+  requests: {};
+  messages: {
+    webviewTagResize: {
+      id: number;
+      frame: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      };
+    };
+    webviewTagUpdateSrc: {
+      id: number;
+      url: string;
+    };
+    webviewTagGoBack: {
+      id: number;
+    };
+    webviewTagGoForward: {
+      id: number;
+    };
+    webviewTagReload: {
+      id: number;
+    };
+    webviewTagRemove: {
+      id: number;
+    };
+    startWindowMove: {
+      id: number;
+    };
+    stopWindowMove: {
+      id: number;
+    };
+    moveWindowBy: {
+      id: number;
+      x: number;
+      y: number;
+    };
+  };
+}>;
+
 class Electroview<T> {
+  // user's custom rpc browser <-> bun
   rpc?: T;
   rpcHandler?: (msg: any) => void;
+  // electrobun rpc browser <-> zig
+  zigRpc?: any;
+  zigRpcHandler?: (msg: any) => void;
   // give it a default function
   syncRpc: (params: any) => any = () => {
     console.log("syncRpc not initialized");
@@ -29,19 +102,22 @@ class Electroview<T> {
   init() {
     // todo (yoav): should init webviewTag by default when src is local
     // and have a setting that forces it enabled or disabled
-    const { receiveMessageFromZig } = ConfigureWebviewTags(true);
+    this.initZigRpc();
+    ConfigureWebviewTags(true, this.zigRpc);
+
+    this.initElectrobunListeners();
 
     window.__electrobun = {
       receiveMessageFromBun: this.receiveMessageFromBun.bind(this),
-      receiveMessageFromZig,
+      receiveMessageFromZig: this.receiveMessageFromZig.bind(this),
     };
 
     if (this.rpc) {
       this.rpc.setTransport(this.createTransport());
 
       // Note:
-      // syncRPC doesn't need to be defined since there's no need for sync 1-way message
-      // just use non-blocking async rpc for that
+      // syncRPC messages doesn't need to be defined since there's no need for sync 1-way message
+      // just use non-blocking async rpc for that, we just need sync requests
       // We don't need request ids either since we're not receiving the response on a different pipe
       if (true) {
         // TODO: define sync requests on schema (separate from async reqeusts and messages)
@@ -60,6 +136,46 @@ class Electroview<T> {
     }
   }
 
+  initZigRpc() {
+    this.zigRpc = createRPC<WebviewTagHandlers, ZigWebviewHandlers>({
+      transport: this.createZigTransport(),
+      // requestHandler: {
+
+      // },
+      maxRequestTime: 1000,
+    });
+  }
+
+  // This will be attached to the global object, zig can rpc reply by executingJavascript
+  // of that global reference to the function
+  receiveMessageFromZig(msg: any) {
+    if (this.zigRpcHandler) {
+      this.zigRpcHandler(msg);
+    }
+  }
+
+  // TODO: implement proper rpc-anywhere style rpc here
+  // todo: this is duplicated in webviewtag.ts and should be DRYed up
+  sendToZig(message: {}) {
+    window.webkit.messageHandlers.webviewTagBridge.postMessage(
+      JSON.stringify(message)
+    );
+  }
+
+  initElectrobunListeners() {
+    document.addEventListener("mousedown", (e) => {
+      if (isAppRegionDrag(e)) {
+        this.zigRpc?.send.startWindowMove({ id: WEBVIEW_ID });
+      }
+    });
+
+    document.addEventListener("mouseup", (e) => {
+      if (isAppRegionDrag(e)) {
+        this.zigRpc?.send.stopWindowMove({ id: WEBVIEW_ID });
+      }
+    });
+  }
+
   createTransport() {
     const that = this;
     return {
@@ -73,6 +189,21 @@ class Electroview<T> {
       },
       registerHandler(handler) {
         that.rpcHandler = handler;
+      },
+    };
+  }
+
+  createZigTransport(): RPCTransport {
+    const that = this;
+    return {
+      send(message) {
+        window.webkit.messageHandlers.webviewTagBridge.postMessage(
+          JSON.stringify(message)
+        );
+      },
+      registerHandler(handler) {
+        that.zigRpcHandler = handler;
+        // webview tag doesn't handle any messages from zig just yet
       },
     };
   }

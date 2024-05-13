@@ -291,6 +291,16 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         std.log.info("Error putting webview into hashmap: ", .{});
         return;
     };
+
+    // Note: Keep this in sync with browser api
+    var jsScript = std.fmt.allocPrint(alloc, "window.__electrobunWebviewId = {}\n", .{opts.id}) catch {
+        return;
+    };
+    defer alloc.free(jsScript);
+
+    // we want to make this a preload script so that it gets re-applied after navigations before any
+    // other code runs.
+    addPreloadScriptToWebview(_webview.handle, jsScript, true);
 }
 
 // todo: move everything to cStrings or non-CStrings. just pick one.
@@ -379,6 +389,24 @@ pub fn remove(opts: rpcSchema.BrowserSchema.messages.webviewTagRemove) void {
     objc.webviewRemove(webview.handle);
     _ = webviewMap.remove(opts.id);
     webview.deinit();
+}
+
+pub fn startWindowMove(opts: rpcSchema.BrowserSchema.messages.startWindowMove) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+    std.debug.print("calling objc.startWindowMove: \n", .{});
+    objc.startWindowMove(webview.handle);
+}
+
+pub fn stopWindowMove(opts: rpcSchema.BrowserSchema.messages.stopWindowMove) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    objc.stopWindowMove(webview.handle);
 }
 
 pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {

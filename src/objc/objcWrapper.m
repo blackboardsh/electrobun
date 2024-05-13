@@ -415,3 +415,69 @@ BOOL moveToTrash(char *pathString) {
 
     return success;
 }
+
+// window move
+#import <Cocoa/Cocoa.h>
+#import <WebKit/WebKit.h>
+
+static BOOL isMovingWindow = NO;
+static NSWindow *targetWindow = nil;
+static CGFloat offsetX = 0.0;
+static CGFloat offsetY = 0.0;
+static id mouseDraggedMonitor = nil;
+static id mouseUpMonitor = nil;
+
+void stopWindowMove() {    
+    isMovingWindow = NO;
+    targetWindow = nil;
+    offsetX = 0.0;
+    offsetY = 0.0;
+
+    if (mouseDraggedMonitor) {
+        [NSEvent removeMonitor:mouseDraggedMonitor];
+        mouseDraggedMonitor = nil;
+    }
+
+    if (mouseUpMonitor) {
+        [NSEvent removeMonitor:mouseUpMonitor];
+        mouseUpMonitor = nil;
+    }
+}
+
+
+void startWindowMove(WKWebView *webView) {    
+    targetWindow = webView.window;
+    if (!targetWindow) {
+        NSLog(@"No window found for the given WebView.");
+        return;
+    }
+
+    isMovingWindow = YES;
+
+    NSPoint initialLocation = [NSEvent mouseLocation];
+
+    mouseDraggedMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskMouseMoved) handler:^NSEvent *(NSEvent *event) {
+        if (isMovingWindow) {
+            NSPoint currentLocation = [NSEvent mouseLocation];
+
+            if (offsetX == 0.0 && offsetY == 0.0) {
+                NSPoint windowOrigin = targetWindow.frame.origin;
+                offsetX = initialLocation.x - windowOrigin.x;
+                offsetY = initialLocation.y - windowOrigin.y;
+            }
+
+            CGFloat newX = currentLocation.x - offsetX;
+            CGFloat newY = currentLocation.y - offsetY;            
+
+            [targetWindow setFrameOrigin:NSMakePoint(newX, newY)];
+        }
+        return event;
+    }];
+
+    mouseUpMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseUp handler:^NSEvent *(NSEvent *event) {
+        if (isMovingWindow) {
+            stopWindowMove();
+        }
+        return event;
+    }];
+}

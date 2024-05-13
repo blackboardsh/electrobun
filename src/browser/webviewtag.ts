@@ -1,98 +1,10 @@
-import { type RPCSchema, type RPCTransport, createRPC } from "rpc-anywhere";
-
 const ConfigureWebviewTags = (
-  enableWebviewTags: boolean
-): { receiveMessageFromZig: (msg: any) => void } => {
+  enableWebviewTags: boolean,
+  zigRpc: (params: any) => any
+) => {
   if (!enableWebviewTags) {
-    return {
-      receiveMessageFromZig: () => {},
-    };
+    return;
   }
-
-  // todo (yoav): move this stuff to browser/rpc/webview.ts
-  type ZigWebviewHandlers = RPCSchema<{
-    requests: {
-      webviewTagInit: {
-        params: {
-          id: number;
-          windowId: number;
-          url: string | null;
-          html: string | null;
-          preload: string | null;
-          frame: {
-            width: number;
-            height: number;
-            x: number;
-            y: number;
-          };
-        };
-        response: void;
-      };
-    };
-  }>;
-
-  type WebviewTagHandlers = RPCSchema<{
-    requests: {};
-    messages: {
-      webviewTagResize: {
-        id: number;
-        frame: {
-          x: number;
-          y: number;
-          width: number;
-          height: number;
-        };
-      };
-      webviewTagUpdateSrc: {
-        id: number;
-        url: string;
-      };
-      webviewTagGoBack: {
-        id: number;
-      };
-      webviewTagGoForward: {
-        id: number;
-      };
-      webviewTagReload: {
-        id: number;
-      };
-      webviewTagRemove: {
-        id: number;
-      };
-    };
-  }>;
-
-  let rpcHandler: (msg: any) => void;
-
-  function createStdioTransport(): RPCTransport {
-    return {
-      send(message) {
-        window.webkit.messageHandlers.webviewTagBridge.postMessage(
-          JSON.stringify(message)
-        );
-      },
-      registerHandler(handler) {
-        rpcHandler = handler;
-        // webview tag doesn't handle any messages from zig just yet
-      },
-    };
-  }
-
-  // This will be attached to the global object, zig can rpc reply by executingJavascript
-  // of that global reference to the function
-  const receiveMessageFromZig = (msg: any) => {
-    if (rpcHandler) {
-      rpcHandler(msg);
-    }
-  };
-
-  const webviewTagRPC = createRPC<WebviewTagHandlers, ZigWebviewHandlers>({
-    transport: createStdioTransport(),
-    // requestHandler: {
-
-    // },
-    maxRequestTime: 1000,
-  });
 
   // TODO: webview ids are stored in zig/objc as u32. We need a way to guarantee that ones
   // created via webview tag across multiple windows don't conflict with ones created from bun
@@ -106,7 +18,7 @@ const ConfigureWebviewTags = (
     webviewId = nextWebviewId++;
 
     // rpc
-    rpc: any;
+    zigRpc: any;
 
     // observers
     resizeObserver?: ResizeObserver;
@@ -123,6 +35,7 @@ const ConfigureWebviewTags = (
 
     constructor() {
       super();
+      this.zigRpc = zigRpc;
       console.log("webview component created.");
 
       // Give it a frame to be added to the dom and render before measuring
@@ -131,18 +44,11 @@ const ConfigureWebviewTags = (
       });
     }
 
-    // TODO: implement proper rpc-anywhere style rpc here
-    sendToZig(message: {}) {
-      window.webkit.messageHandlers.webviewTagBridge.postMessage(
-        JSON.stringify(message)
-      );
-    }
-
     initWebview() {
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
 
-      webviewTagRPC.request.webviewTagInit({
+      this.zigRpc.request.webviewTagInit({
         id: this.webviewId,
         windowId: window.__electrobunWindowId,
         url: this.src || this.getAttribute("src"),
@@ -175,7 +81,7 @@ const ConfigureWebviewTags = (
       ) {
         this.lastRect = rect;
 
-        webviewTagRPC.send.webviewTagResize({
+        this.zigRpc.send.webviewTagResize({
           id: this.webviewId,
           frame: {
             width: width,
@@ -226,7 +132,7 @@ const ConfigureWebviewTags = (
       this.intersectionObserver?.disconnect();
       this.mutationObserver?.disconnect();
       window.removeEventListener("resize", this.boundSyncDimensions);
-      webviewTagRPC.send.webviewTagRemove({ id: this.webviewId });
+      this.zigRpc.send.webviewTagRemove({ id: this.webviewId });
     }
 
     static get observedAttributes() {
@@ -243,26 +149,26 @@ const ConfigureWebviewTags = (
     }
 
     updateIFrameSrc(src: string) {
-      webviewTagRPC.send.webviewTagUpdateSrc({
+      this.zigRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
         url: src,
       });
     }
 
     goBack() {
-      webviewTagRPC.send.webviewTagGoBack({ id: this.webviewId });
+      this.zigRpc.send.webviewTagGoBack({ id: this.webviewId });
     }
 
     goForward() {
-      webviewTagRPC.send.webviewTagGoForward({ id: this.webviewId });
+      this.zigRpc.send.webviewTagGoForward({ id: this.webviewId });
     }
 
     reload() {
-      webviewTagRPC.send.webviewTagReload({ id: this.webviewId });
+      this.zigRpc.send.webviewTagReload({ id: this.webviewId });
     }
     loadURL(url: string) {
       this.setAttribute("src", url);
-      webviewTagRPC.send.webviewTagUpdateSrc({
+      this.zigRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
         url,
       });
@@ -272,10 +178,6 @@ const ConfigureWebviewTags = (
   customElements.define("electrobun-webview", WebviewTag);
 
   insertWebviewTagNormalizationStyles();
-
-  return {
-    receiveMessageFromZig,
-  };
 };
 
 // Give <electrobun-webview>s some default styles that can
