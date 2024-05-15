@@ -6,6 +6,9 @@ const pipesin = @import("../rpc/pipesin.zig");
 const window = @import("./window.zig");
 const rpcTypes = @import("../rpc/types.zig");
 const rpcHandlers = @import("../rpc/schema/handlers.zig");
+const utils = @import("../utils.zig");
+
+const strEql = utils.strEql;
 
 const alloc = std.heap.page_allocator;
 
@@ -19,7 +22,7 @@ fn assetFileLoader(url: [*:0]const u8) objc.FileResponse {
     const relPath = url[ViewsScheme.len..std.mem.len(url)];
     const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
     const mimeType = getMimeType(relPath); // or dynamically determine MIME type
-    return objc.FileResponse{ .mimeType = toCString(mimeType), .fileContents = fileContents.ptr, .len = fileContents.len };
+    return objc.FileResponse{ .mimeType = utils.toCString(mimeType), .fileContents = fileContents.ptr, .len = fileContents.len };
 }
 
 fn readAssetFromDisk(url: [*:0]const u8) []const u8 {
@@ -63,7 +66,7 @@ const WebviewType = struct {
     }
 
     pub fn sendToWebview(self: *WebviewType, message: []const u8) void {
-        objc.evaluateJavaScriptWithNoCompletion(self.handle, toCString(message));
+        objc.evaluateJavaScriptWithNoCompletion(self.handle, utils.toCString(message));
     }
 
     pub fn deinit(self: *WebviewType) void {
@@ -101,7 +104,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
             break :blk null;
         }
 
-        const bunPipeInPath = concatStrings(opts.pipePrefix, "_in");
+        const bunPipeInPath = utils.concatStrings(opts.pipePrefix, "_in");
         const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
 
         if (bunPipeInFileResult) |file| {
@@ -121,7 +124,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         if (opts.id >= 10000) {
             break :blk null;
         }
-        const bunPipeOutPath = concatStrings(opts.pipePrefix, "_out");
+        const bunPipeOutPath = utils.concatStrings(opts.pipePrefix, "_out");
         const bunPipeOutResult = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
 
         if (bunPipeOutResult) |file| {
@@ -142,11 +145,11 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 // request against the same origin that other local content is loaded from.
                 // js loaded from other sources (http, etc.) will be blocked (CORS) from initiating
                 // synchronous requests to bun.
-                const bodyString = fromCString(body);
+                const bodyString = utils.fromCString(body);
                 const response = rpc.request.sendSyncRequest(.{ .webviewId = webviewId, .request = bodyString });
                 const responseString = response.payload[0..response.payload.len];
                 return objc.FileResponse{
-                    .mimeType = toCString("application/json"),
+                    .mimeType = utils.toCString("application/json"),
                     .fileContents = responseString.ptr,
                     .len = responseString.len,
                 };
@@ -175,7 +178,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
             // to this specific webview's pipe so navigation handlers can be attached to specific webviews
             const _response = rpc.request.decideNavigation(.{
                 .webviewId = webviewId,
-                .url = fromCString(url),
+                .url = utils.fromCString(url),
             });
 
             return _response.allow;
@@ -191,7 +194,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 return;
             };
 
-            webview.sendToBun(fromCString(message)) catch |err| {
+            webview.sendToBun(utils.fromCString(message)) catch |err| {
                 std.debug.print("Failed to send message to bun: {}\n", .{err});
             };
         }
@@ -207,7 +210,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
             _ = webviewId;
             _ = message;
 
-            return toCString("hello with reply: not using this api yet");
+            return utils.toCString("hello with reply: not using this api yet");
         }
     }.HandlePostMessageCallbackWithReply);
 
@@ -215,12 +218,15 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     _ = bunBridgeWithReplyHandler;
 
     // todo: only set this up if the webview tag is enabled for this webview
+    // todo: rename this to webviewToZigBridgeHandler since it's for webview tags and the webview itself
     const webviewTagHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "webviewTagBridge", struct {
         fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) void {
-            const msgString = fromCString(message);
+            const msgString = utils.fromCString(message);
+
+            std.debug.print("Received message from webview-zig-bridge: {s}\n", .{msgString});
 
             const json = std.json.parseFromSlice(std.json.Value, alloc, msgString, .{ .ignore_unknown_fields = true }) catch |err| {
-                std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, msgString });
+                std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
                 return;
             };
 
@@ -233,7 +239,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
 
             if (std.mem.eql(u8, msgType, "request")) {
                 const _request = std.json.parseFromValue(rpcTypes._RPCRequestPacket, alloc, json.value, .{}) catch |err| {
-                    std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, msgString });
+                    std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
                     return;
                 };
 
@@ -260,7 +266,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 }
             } else if (std.mem.eql(u8, msgType, "message")) {
                 const _message = std.json.parseFromValue(rpcTypes._RPCMessagePacket, alloc, json.value, .{}) catch |err| {
-                    std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, msgString });
+                    std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
                     return;
                 };
 
@@ -309,13 +315,13 @@ pub fn addPreloadScriptToWebview(objcWindow: *anyopaque, scriptOrPath: []const u
 
     // If it's a views:// url safely load from disk otherwise treat it as js
     if (std.mem.startsWith(u8, scriptOrPath, ViewsScheme)) {
-        const fileResult = readAssetFromDisk(toCString(scriptOrPath));
+        const fileResult = readAssetFromDisk(utils.toCString(scriptOrPath));
         script = fileResult;
     } else {
         script = scriptOrPath;
     }
 
-    objc.addPreloadScriptToWebView(objcWindow, toCString(script), allFrames);
+    objc.addPreloadScriptToWebView(objcWindow, utils.toCString(script), allFrames);
 }
 
 pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) void {
@@ -342,7 +348,7 @@ pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.params) void {
 
     // todo: consider updating url. we may not need it stored in zig though.
     // webview.url = need to use webviewMap.getPtr() then webview.*.url = opts.url
-    objc.loadURLInWebView(webview.handle, toCString(opts.url));
+    objc.loadURLInWebView(webview.handle, utils.toCString(opts.url));
 }
 
 pub fn loadHTML(opts: rpcSchema.BunSchema.requests.loadHTML.params) void {
@@ -352,7 +358,7 @@ pub fn loadHTML(opts: rpcSchema.BunSchema.requests.loadHTML.params) void {
     };
 
     // webview.html = opts.html;
-    objc.loadHTMLInWebView(webview.handle, toCString(opts.html));
+    objc.loadHTMLInWebView(webview.handle, utils.toCString(opts.html));
 }
 
 pub fn goBack(opts: rpcSchema.BrowserSchema.messages.webviewTagGoBack) void {
@@ -420,49 +426,9 @@ pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {
 
 // todo: this should move to util, but we need CString utils (which should also be moved to a util)
 pub fn moveToTrash(filePath: []const u8) bool {
-    const path = toCString(filePath);
+    const path = utils.toCString(filePath);
     std.debug.print("moving to trash path: {s}\n", .{filePath});
     return objc.moveToTrash(path);
-}
-
-// todo: move to a util and dedup with window.zig
-// todo: make buffer an arg
-// todo: use a for loop with mem.copy for simpler concat
-// template string concat with arbitrary number of params
-fn concatOrFallback(comptime fmt: []const u8, params: anytype) []const u8 {
-    var buffer: [250]u8 = undefined;
-    const result = std.fmt.bufPrint(&buffer, fmt, params) catch |err| {
-        std.log.info("Error concatenating string {}", .{err});
-        return fmt;
-    };
-
-    return result;
-}
-
-// join two strings
-pub fn concatStrings(a: []const u8, b: []const u8) []u8 {
-    var totalLength: usize = a.len + b.len;
-    var result = alloc.alloc(u8, totalLength) catch unreachable;
-
-    std.mem.copy(u8, result[0..a.len], a);
-    std.mem.copy(u8, result[a.len..totalLength], b);
-
-    return result;
-}
-
-fn toCString(input: []const u8) [*:0]const u8 {
-    // Attempt to allocate memory, handle error without bubbling it up
-    const allocResult = alloc.alloc(u8, input.len + 1) catch {
-        return "console.error('failed to allocate string');";
-    };
-
-    std.mem.copy(u8, allocResult, input); // Copy input to the allocated buffer
-    allocResult[input.len] = 0; // Null-terminate
-    return allocResult[0..input.len :0]; // Correctly typed slice with null terminator
-}
-
-fn fromCString(input: [*:0]const u8) []const u8 {
-    return input[0..std.mem.len(input)];
 }
 
 pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
@@ -542,9 +508,4 @@ fn findLastIndexOfChar(slice: []const u8, char: u8) ?usize {
         }
     }
     return null;
-}
-
-// todo: move to string util (duplicated in handlers.zig)
-pub fn strEql(a: []const u8, b: []const u8) bool {
-    return std.mem.eql(u8, a, b);
 }

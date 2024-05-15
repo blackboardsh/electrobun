@@ -28,4 +28,12 @@ pub fn sendSyncRequest(params: rpcSchema.ZigSchema.requests.sendSyncRequest.para
     return parsedPayload.value;
 }
 
-pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest };
+pub fn trayEvent(params: rpcSchema.ZigSchema.requests.trayEvent.params) rpcSchema.ZigSchema.requests.trayEvent.response {
+    const rawPayload = rpcStdout.sendRequest("trayEvent", params);
+    const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.trayEvent.response, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
+}
+
+pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest, .trayEvent = trayEvent };

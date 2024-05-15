@@ -4,6 +4,7 @@ const objc = @import("./objc.zig");
 const pipesin = @import("../rpc/pipesin.zig");
 const webview = @import("./webview.zig");
 const rpcSchema = @import("../rpc/schema/schema.zig");
+const utils = @import("../utils.zig");
 
 const alloc = std.heap.page_allocator;
 
@@ -71,10 +72,10 @@ pub fn createWindow(opts: rpcSchema.BunSchema.requests.createWindow.params) Wind
             .origin = .{ .x = opts.frame.x - 600, .y = opts.frame.y - 600 },
             .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         },
-        .titleBarStyle = toCString(opts.titleBarStyle),
+        .titleBarStyle = utils.toCString(opts.titleBarStyle),
     });
 
-    objc.setNSWindowTitle(objcWin, toCString(opts.title));
+    objc.setNSWindowTitle(objcWin, utils.toCString(opts.title));
 
     const _window = WindowType{ //
         .id = opts.id,
@@ -107,7 +108,7 @@ pub fn setTitle(opts: SetTitleOpts) void {
         return;
     };
 
-    objc.setNSWindowTitle(win.window, toCString(opts.title));
+    objc.setNSWindowTitle(win.window, utils.toCString(opts.title));
 }
 
 pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
@@ -132,31 +133,4 @@ pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
     webview.addPreloadScriptToWebview(view.handle, jsScript, true);
 
     objc.addWebviewToWindow(win.window, view.handle);
-}
-
-// effecient string concatenation that returns the template if there's an error
-// this makes handling errors a bit easier
-fn concatOrFallback(comptime fmt: []const u8, params: anytype) []const u8 {
-    var buffer: [100]u8 = undefined;
-    const result = std.fmt.bufPrint(&buffer, fmt, params) catch |err| {
-        std.log.info("Error concatenating string {}", .{err});
-        return fmt;
-    };
-
-    return result;
-}
-
-fn toCString(input: []const u8) [*:0]const u8 {
-    // Attempt to allocate memory, handle error without bubbling it up
-    const allocResult = alloc.alloc(u8, input.len + 1) catch {
-        return "console.error('failed to allocate string');";
-    };
-
-    std.mem.copy(u8, allocResult, input); // Copy input to the allocated buffer
-    allocResult[input.len] = 0; // Null-terminate
-    return allocResult[0..input.len :0]; // Correctly typed slice with null terminator
-}
-
-fn fromCString(input: [*:0]const u8) []const u8 {
-    return input[0 .. std.mem.len(input) - 1];
 }

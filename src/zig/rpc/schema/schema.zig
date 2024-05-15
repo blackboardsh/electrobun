@@ -30,6 +30,17 @@ pub const ZigSchema = struct { //
                 success: bool,
             };
         };
+        // Note: this should be a message not a request
+        // no need to block the thread we don't need a response.
+        pub const trayEvent = struct {
+            pub const params = struct {
+                id: u32,
+                action: []const u8,
+            };
+            pub const response = struct {
+                success: bool,
+            };
+        };
     };
 };
 
@@ -123,6 +134,30 @@ pub const BunSchema = struct {
             };
             pub const response = bool;
         };
+
+        // system tray and menu
+        pub const createTray = struct {
+            pub const params = struct {
+                id: u32,
+                title: []const u8,
+                image: []const u8,
+            };
+            pub const response = void;
+        };
+        pub const setTrayTitle = struct {
+            pub const params = struct {
+                id: u32,
+                title: []const u8,
+            };
+            pub const response = void;
+        };
+        pub const setTrayImage = struct {
+            pub const params = struct {
+                id: u32,
+                image: []const u8,
+            };
+            pub const response = void;
+        };
     };
 };
 
@@ -136,12 +171,16 @@ pub const Handlers = struct {
     loadURL: fn (params: BunSchema.requests.loadURL.params) RequestResult,
     loadHTML: fn (params: BunSchema.requests.loadHTML.params) RequestResult,
     moveToTrash: fn (params: BunSchema.requests.moveToTrash.params) RequestResult,
+    createTray: fn (params: BunSchema.requests.createTray.params) RequestResult,
+    setTrayTitle: fn (params: BunSchema.requests.setTrayTitle.params) RequestResult,
+    setTrayImage: fn (params: BunSchema.requests.setTrayImage.params) RequestResult,
 };
 
 pub const Requests = struct {
     decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) ZigSchema.requests.decideNavigation.response,
     sendSyncRequest: fn (params: ZigSchema.requests.sendSyncRequest.params) ZigSchema.requests.sendSyncRequest.response,
     log: fn (params: ZigSchema.requests.log.params) ZigSchema.requests.log.response,
+    trayEvent: fn (params: ZigSchema.requests.trayEvent.params) ZigSchema.requests.trayEvent.response,
 };
 
 pub const RequestResponseType = union(enum) {
@@ -152,6 +191,10 @@ pub const RequestResponseType = union(enum) {
     LoadURLResponse: BunSchema.requests.loadURL.response,
     LoadHTMLResponse: BunSchema.requests.loadHTML.response,
     moveToTrashResponse: BunSchema.requests.moveToTrash.response,
+
+    createTray: BunSchema.requests.createTray.response,
+    setTrayTitle: BunSchema.requests.createTray.response,
+    setTrayImage: BunSchema.requests.createTray.response,
 
     DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
     SendSyncRequestResponse: ZigSchema.requests.sendSyncRequest.response,

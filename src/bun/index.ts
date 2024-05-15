@@ -1,6 +1,7 @@
 import electobunEventEmmitter from "./events/eventEmitter";
 import { BrowserWindow } from "./core/BrowserWindow";
 import { BrowserView } from "./core/BrowserView";
+import { Tray } from "./core/Tray";
 import { Updater } from "./core/Updater";
 import * as Utils from "./core/Utils";
 import { type RPCSchema, createRPC } from "rpc-anywhere";
@@ -11,6 +12,7 @@ export {
   createRPC,
   BrowserWindow,
   BrowserView,
+  Tray,
   Updater,
   Utils,
 };
@@ -19,6 +21,7 @@ export {
 const Electrobun = {
   BrowserWindow,
   BrowserView,
+  Tray,
   Updater,
   Utils,
   events: electobunEventEmmitter,

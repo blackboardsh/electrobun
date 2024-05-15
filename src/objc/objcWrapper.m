@@ -487,3 +487,72 @@ void startWindowMove(WKWebView *webView) {
         return event;
     }];
 }
+
+
+// system tray and menues
+// #import <Cocoa/Cocoa.h>
+#import <objc/runtime.h>
+
+typedef void (*MenuHandler)(const char *menuItemId);
+typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
+
+@interface StatusItemTarget : NSObject
+@property (nonatomic, assign) NSStatusItem *statusItem;
+@property (nonatomic, assign) ZigStatusItemHandler zigHandler;
+@property (nonatomic, assign) uint32_t trayId;
+
+- (void)zigHandlerWrapper:(id)sender;
+
+@end
+
+@implementation StatusItemTarget
+- (void)zigHandlerWrapper:(id)sender {
+    if (self.zigHandler) {
+        self.zigHandler(self.trayId, "click");
+    }
+}
+@end
+
+NSStatusItem* createTray(uint32_t trayId, const char *pathToImage, const char *title, ZigStatusItemHandler zigHandler) {
+    NSString *pathToImageString = [NSString stringWithUTF8String:pathToImage];
+    NSString *titleString = [NSString stringWithUTF8String:title];
+    NSStatusItem *statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+
+    if (pathToImageString.length > 0) {
+        statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:pathToImageString];
+    }
+    if (titleString.length > 0) {
+        statusItem.button.title = titleString;
+    }
+
+    if (zigHandler) {
+        StatusItemTarget *target = [[StatusItemTarget alloc] init];
+        target.statusItem = statusItem;
+        target.zigHandler = zigHandler;
+        target.trayId = trayId;
+
+        objc_setAssociatedObject(statusItem.button, "statusItemTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [statusItem.button setTarget:target];
+        [statusItem.button setAction:@selector(zigHandlerWrapper:)];
+        
+        // Ensure the button listens for both left and right mouse up events
+        [statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
+    }
+
+    retainObjCObject(statusItem);
+
+    return statusItem;
+}
+
+void setTrayTitle(NSStatusItem *statusItem, const char *title) {
+    if (statusItem) {
+        statusItem.button.title = [NSString stringWithUTF8String:title];
+    }
+}
+
+void setTrayImage(NSStatusItem *statusItem, const char *image) {
+    if (statusItem) {
+        statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:[NSString stringWithUTF8String:image]];
+    }
+}
+

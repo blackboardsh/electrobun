@@ -4,7 +4,11 @@ const RequestResult = rpcSchema.RequestResult;
 // todo: capitalize files and consts Window and Webview
 const window = @import("../../macos/window.zig");
 const webview = @import("../../macos/webview.zig");
+const tray = @import("../../macos/tray.zig");
 const std = @import("std");
+const utils = @import("../../utils.zig");
+
+const strEql = utils.strEql;
 
 const rpc = @import("./request.zig");
 
@@ -109,8 +113,28 @@ pub fn stopWindowMove(params: rpcSchema.BrowserSchema.messages.stopWindowMove) R
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
+pub fn createTray(params: rpcSchema.BunSchema.requests.createTray.params) RequestResult {
+    _ = tray.createTray(.{
+        .id = params.id,
+        .title = params.title,
+        .image = params.image,
+    });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn setTrayTitle(params: rpcSchema.BunSchema.requests.setTrayTitle.params) RequestResult {
+    _ = tray.setTrayTitle(.{ .id = params.id, .title = params.title });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn setTrayImage(params: rpcSchema.BunSchema.requests.setTrayImage.params) RequestResult {
+    _ = tray.setTrayImage(.{
+        .id = params.id,
+        .image = params.image,
+    });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+
 // This gives type safety that every handler is implemented, and implements the correct signature
-pub const handlers = rpcSchema.Handlers{
+pub const handlers = rpcSchema.Handlers{ //
     .createWindow = createWindow,
     .createWebview = createWebview,
     .setTitle = setTitle,
@@ -118,6 +142,9 @@ pub const handlers = rpcSchema.Handlers{
     .loadURL = loadURL,
     .loadHTML = loadHTML,
     .moveToTrash = moveToTrash,
+    .createTray = createTray,
+    .setTrayTitle = setTrayTitle,
+    .setTrayImage = setTrayImage,
 };
 
 pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
@@ -213,6 +240,12 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
         return parseParamsAndCall(handlers.loadHTML, BunRequests.loadHTML.params, request.params);
     } else if (strEql(method, "moveToTrash")) {
         return parseParamsAndCall(handlers.moveToTrash, BunRequests.moveToTrash.params, request.params);
+    } else if (strEql(method, "createTray")) {
+        return parseParamsAndCall(handlers.createTray, BunRequests.createTray.params, request.params);
+    } else if (strEql(method, "setTrayTitle")) {
+        return parseParamsAndCall(handlers.setTrayTitle, BunRequests.setTrayTitle.params, request.params);
+    } else if (strEql(method, "setTrayImage")) {
+        return parseParamsAndCall(handlers.setTrayImage, BunRequests.setTrayImage.params, request.params);
     } else {
         return RequestResult{ .errorMsg = "unhandled method", .payload = null };
     }
@@ -257,9 +290,4 @@ pub fn parseParamsAndCall(handler: anytype, paramsSchema: anytype, unparsedParam
     };
 
     return handler(parsedParams.value);
-}
-
-// todo: move to string util (duplicated in webview.zig)
-pub fn strEql(a: []const u8, b: []const u8) bool {
-    return std.mem.eql(u8, a, b);
 }

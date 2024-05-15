@@ -89,3 +89,10 @@ pub extern fn stopWindowMove(webView: *anyopaque) callconv(.C) void;
 
 // fs
 pub extern fn moveToTrash(path: [*:0]const u8) callconv(.C) bool;
+
+// system tray and menu
+pub const MenuHandler = fn (trayId: u32, action: [*:0]const u8) void;
+
+pub extern fn createTray(id: u32, pathToImage: [*:0]const u8, title: [*:0]const u8, handler: ?*const MenuHandler) *anyopaque;
+pub extern fn setTrayTitle(trayItem: *anyopaque, title: [*:0]const u8) callconv(.C) void;
+pub extern fn setTrayImage(trayItem: *anyopaque, image: [*:0]const u8) callconv(.C) void;

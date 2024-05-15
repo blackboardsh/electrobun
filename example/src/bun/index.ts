@@ -1,6 +1,7 @@
 import Electrobun, {
   BrowserWindow,
   BrowserView,
+  Tray,
   type RPCSchema,
   createRPC,
   Utils,
@@ -37,6 +38,20 @@ if (updateInfo.updateReady) {
 //         // }
 //     }
 // });
+
+const tray = new Tray({
+  title: "Example Tray Item",
+  // Note: __dirname here will evaulate to src/bun when running in dev mode
+  // todo: we should include it as an asset and use that url
+  image: `${__dirname}/../../../assets/electrobun-logo-32.png`,
+});
+
+console.log(__dirname);
+
+tray.on("tray-clicked", (e) => {
+  // respond to left and right clicks on the tray icon/name
+  console.log("event listener for tray clicked", e);
+});
 
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
   maxRequestTime: 5000,

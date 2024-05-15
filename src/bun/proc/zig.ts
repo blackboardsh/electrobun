@@ -5,6 +5,7 @@ import * as fs from "fs";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "../core/BrowserView";
 import { Updater } from "../core/Updater";
+import { Tray } from "../core/Tray";
 
 // todo (yoav): webviewBinaryPath and ELECTROBUN_VIEWS_FOLDER should be passed in as cli/env args by the launcher binary
 // will likely be different on different platforms. Right now these are hardcoded for relative paths inside the mac app bundle.
@@ -192,6 +193,30 @@ type ZigHandlers = RPCSchema<{
       };
       response: boolean;
     };
+
+    // tray and menu
+    createTray: {
+      params: {
+        id: number;
+        title: string;
+        image: string;
+      };
+      response: void;
+    };
+    setTrayTitle: {
+      params: {
+        id: number;
+        title: string;
+      };
+      response: void;
+    };
+    setTrayImage: {
+      params: {
+        id: number;
+        image: string;
+      };
+      response: void;
+    };
   };
 }>;
 
@@ -218,6 +243,15 @@ type BunHandlers = RPCSchema<{
     log: {
       params: {
         msg: string;
+      };
+      response: {
+        success: boolean;
+      };
+    };
+    trayEvent: {
+      params: {
+        id: number;
+        action: string;
       };
       response: {
         success: boolean;
@@ -291,6 +325,29 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
     },
     log: ({ msg }) => {
       console.log("zig: ", msg);
+      return { success: true };
+    },
+    trayEvent: ({ id, action }) => {
+      const tray = Tray.getById(id);
+      if (!tray) {
+        return { success: true };
+      }
+
+      if (action === "click") {
+        const trayClickedEvent = electrobunEventEmitter.events.tray.trayClicked(
+          {
+            id,
+            action,
+          }
+        );
+
+        let result;
+        // global event
+        result = electrobunEventEmitter.emitEvent(trayClickedEvent);
+
+        result = electrobunEventEmitter.emitEvent(trayClickedEvent, id);
+        // Note: we don't care about the result right now
+      }
       return { success: true };
     },
   },
