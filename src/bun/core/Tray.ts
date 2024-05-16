@@ -1,4 +1,4 @@
-import { zigRPC } from "../proc/zig";
+import { zigRPC, type MenuItemConfig } from "../proc/zig";
 import electrobunEventEmitter from "../events/eventEmitter";
 
 let nextTrayId = 1;
@@ -26,7 +26,15 @@ export class Tray {
     zigRPC.request.setTrayImage({ id: this.id, image });
   }
 
-  on(name: "tray-clicked", handler) {
+  setMenu(menu: Array<MenuItemConfig>) {
+    const menuWithDefaults = menuConfigWithDefaults(menu);
+    zigRPC.request.setTrayMenu({
+      id: this.id,
+      menuConfig: JSON.stringify(menuWithDefaults),
+    });
+  }
+
+  on(name: "tray-clicked" | "tray-menu-clicked", handler) {
     const specificName = `${name}-${this.id}`;
     electrobunEventEmitter.on(specificName, handler);
   }
@@ -39,3 +47,27 @@ export class Tray {
     return Object.values(TrayMap);
   }
 }
+
+const menuConfigWithDefaults = (
+  menu: Array<MenuItemConfig>
+): Array<MenuItemConfig> => {
+  return menu.map((item) => {
+    if (item.type === "divider") {
+      return { type: "divider" };
+    } else {
+      return {
+        label: item.label || "",
+        type: item.type || "normal",
+        action: item.action || "",
+        // default enabled to true unless explicitly set to false
+        enabled: item.enabled === false ? false : true,
+        checked: Boolean(item.checked),
+        hidden: Boolean(item.hidden),
+        tooltip: item.tooltip || undefined,
+        ...(item.submenu
+          ? { submenu: menuConfigWithDefaults(item.submenu) }
+          : {}),
+      };
+    }
+  });
+};

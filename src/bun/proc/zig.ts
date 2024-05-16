@@ -106,6 +106,19 @@ function createStdioTransport(proc): RPCTransport {
   };
 }
 
+export type MenuItemConfig =
+  | { type: "divider" }
+  | {
+      type: "normal";
+      label: string;
+      tooltip?: string;
+      action?: string;
+      submenu?: Array<MenuItemConfig>;
+      enabled?: boolean;
+      checked?: boolean;
+      hidden?: boolean;
+    };
+
 // todo (yoav): move this stuff to bun/rpc/zig.ts
 type ZigHandlers = RPCSchema<{
   requests: {
@@ -217,6 +230,14 @@ type ZigHandlers = RPCSchema<{
       };
       response: void;
     };
+    setTrayMenu: {
+      params: {
+        id: number;
+        // json string of config
+        menuConfig: string;
+      };
+      response: void;
+    };
   };
 }>;
 
@@ -240,6 +261,7 @@ type BunHandlers = RPCSchema<{
         payload: string;
       };
     };
+    // todo: make these messages instead of requests
     log: {
       params: {
         msg: string;
@@ -333,21 +355,18 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
         return { success: true };
       }
 
-      if (action === "click") {
-        const trayClickedEvent = electrobunEventEmitter.events.tray.trayClicked(
-          {
-            id,
-            action,
-          }
-        );
+      const event = electrobunEventEmitter.events.tray.trayClicked({
+        id,
+        action,
+      });
 
-        let result;
-        // global event
-        result = electrobunEventEmitter.emitEvent(trayClickedEvent);
+      let result;
+      // global event
+      result = electrobunEventEmitter.emitEvent(event);
 
-        result = electrobunEventEmitter.emitEvent(trayClickedEvent, id);
-        // Note: we don't care about the result right now
-      }
+      result = electrobunEventEmitter.emitEvent(event, id);
+      // Note: we don't care about the result right now
+
       return { success: true };
     },
   },

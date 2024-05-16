@@ -158,6 +158,13 @@ pub const BunSchema = struct {
             };
             pub const response = void;
         };
+        pub const setTrayMenu = struct {
+            pub const params = struct {
+                id: u32,
+                menuConfig: []const u8,
+            };
+            pub const response = void;
+        };
     };
 };
 
@@ -174,6 +181,7 @@ pub const Handlers = struct {
     createTray: fn (params: BunSchema.requests.createTray.params) RequestResult,
     setTrayTitle: fn (params: BunSchema.requests.setTrayTitle.params) RequestResult,
     setTrayImage: fn (params: BunSchema.requests.setTrayImage.params) RequestResult,
+    setTrayMenu: fn (params: BunSchema.requests.setTrayMenu.params) RequestResult,
 };
 
 pub const Requests = struct {
@@ -193,8 +201,9 @@ pub const RequestResponseType = union(enum) {
     moveToTrashResponse: BunSchema.requests.moveToTrash.response,
 
     createTray: BunSchema.requests.createTray.response,
-    setTrayTitle: BunSchema.requests.createTray.response,
-    setTrayImage: BunSchema.requests.createTray.response,
+    setTrayTitle: BunSchema.requests.setTrayTitle.response,
+    setTrayImage: BunSchema.requests.setTrayImage.response,
+    setTrayMenu: BunSchema.requests.setTrayMenu.response,
 
     DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
     SendSyncRequestResponse: ZigSchema.requests.sendSyncRequest.response,

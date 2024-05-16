@@ -501,19 +501,31 @@ typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
 @property (nonatomic, assign) ZigStatusItemHandler zigHandler;
 @property (nonatomic, assign) uint32_t trayId;
 
-- (void)zigHandlerWrapper:(id)sender;
+- (void)statusItemClicked:(id)sender;
+- (void)menuItemClicked:(id)sender;
 
 @end
 
 @implementation StatusItemTarget
-- (void)zigHandlerWrapper:(id)sender {
+- (void)statusItemClicked:(id)sender {
+    // If there's not menu associated with this status item, then clicking and right clicking on it will
+    // trigger this. If there's a menu, then this click is ignored and menu clicks call menuItemClicked instead.
     if (self.zigHandler) {
-        self.zigHandler(self.trayId, "click");
+        self.zigHandler(self.trayId, "");
+    }
+}
+- (void)menuItemClicked:(id)sender {   
+    // If there's a menu then only menu     
+    NSMenuItem *menuItem = (NSMenuItem *)sender;
+    NSString *action = menuItem.representedObject;
+
+    if (self.zigHandler) {
+        self.zigHandler(self.trayId, [action UTF8String]);
     }
 }
 @end
 
-NSStatusItem* createTray(uint32_t trayId, const char *pathToImage, const char *title, ZigStatusItemHandler zigHandler) {
+NSStatusItem* createTray(uint32_t trayId, const char *pathToImage, const char *title, ZigStatusItemHandler zigTrayItemHandler) {
     NSString *pathToImageString = [NSString stringWithUTF8String:pathToImage];
     NSString *titleString = [NSString stringWithUTF8String:title];
     NSStatusItem *statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
@@ -525,15 +537,15 @@ NSStatusItem* createTray(uint32_t trayId, const char *pathToImage, const char *t
         statusItem.button.title = titleString;
     }
 
-    if (zigHandler) {
+    if (zigTrayItemHandler) {
         StatusItemTarget *target = [[StatusItemTarget alloc] init];
         target.statusItem = statusItem;
-        target.zigHandler = zigHandler;
+        target.zigHandler = zigTrayItemHandler;
         target.trayId = trayId;
 
         objc_setAssociatedObject(statusItem.button, "statusItemTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [statusItem.button setTarget:target];
-        [statusItem.button setAction:@selector(zigHandlerWrapper:)];
+        [statusItem.button setAction:@selector(statusItemClicked:)];
         
         // Ensure the button listens for both left and right mouse up events
         [statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
@@ -556,3 +568,69 @@ void setTrayImage(NSStatusItem *statusItem, const char *image) {
     }
 }
 
+NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
+    NSMenu *menu = [[NSMenu alloc] init];
+
+    // Disable auto-enabling of menu items. This lets us set enabled = false for specific items.
+    [menu setAutoenablesItems:NO];  
+
+
+    for (NSDictionary *itemData in menuConfig) {
+        NSString *type = itemData[@"type"];
+        NSString *label = itemData[@"label"];
+        NSString *action = itemData[@"action"];
+        NSArray *submenuConfig = itemData[@"submenu"];
+
+        BOOL enabled = [itemData[@"enabled"] boolValue];
+        BOOL checked = [itemData[@"checked"] boolValue];
+        BOOL hidden = [itemData[@"hidden"] boolValue];
+        NSString *tooltip = itemData[@"tooltip"];
+
+        NSMenuItem *menuItem;
+        if ([type isEqualToString:@"divider"]) {
+            menuItem = [NSMenuItem separatorItem];
+        } else {
+            // todo: add support for keyEquivalent
+            menuItem = [[NSMenuItem alloc] initWithTitle:label action:@selector(menuItemClicked:) keyEquivalent:@""];
+            menuItem.representedObject = action;
+            menuItem.target = target;
+                         
+            menuItem.enabled = enabled;            
+            menuItem.state = checked ? NSControlStateValueOn : NSControlStateValueOff;            
+            menuItem.hidden = hidden;
+            menuItem.toolTip = tooltip;
+
+            if (submenuConfig) {
+                NSMenu *submenu = createMenuFromConfig(submenuConfig, target);
+                [menu setSubmenu:submenu forItem:menuItem];
+            }
+        }
+        [menu addItem:menuItem];
+    }
+
+    return menu;
+}
+
+void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {    
+    if (statusItem) {
+        StatusItemTarget *target = objc_getAssociatedObject(statusItem.button, "statusItemTarget");
+
+        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSError *error;
+        NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+
+        if (error) {
+            NSLog(@"Failed to parse JSON: %@", error);
+            return;
+        }
+
+        NSMenu *menu = createMenuFromConfig(menuArray, target);
+        [statusItem setMenu:menu];
+    }
+}
+
+void setTrayMenu(NSStatusItem *statusItem, const char *menuConfig) {    
+    if (statusItem) {
+        setTrayMenuFromJSON(statusItem, menuConfig);        
+    }
+}

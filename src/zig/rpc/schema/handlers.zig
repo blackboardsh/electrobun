@@ -132,6 +132,13 @@ pub fn setTrayImage(params: rpcSchema.BunSchema.requests.setTrayImage.params) Re
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
+pub fn setTrayMenu(params: rpcSchema.BunSchema.requests.setTrayMenu.params) RequestResult {
+    _ = tray.setTrayMenu(.{
+        .id = params.id,
+        .menuConfig = params.menuConfig,
+    });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
 
 // This gives type safety that every handler is implemented, and implements the correct signature
 pub const handlers = rpcSchema.Handlers{ //
@@ -145,6 +152,7 @@ pub const handlers = rpcSchema.Handlers{ //
     .createTray = createTray,
     .setTrayTitle = setTrayTitle,
     .setTrayImage = setTrayImage,
+    .setTrayMenu = setTrayMenu,
 };
 
 pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
@@ -246,6 +254,8 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
         return parseParamsAndCall(handlers.setTrayTitle, BunRequests.setTrayTitle.params, request.params);
     } else if (strEql(method, "setTrayImage")) {
         return parseParamsAndCall(handlers.setTrayImage, BunRequests.setTrayImage.params, request.params);
+    } else if (strEql(method, "setTrayMenu")) {
+        return parseParamsAndCall(handlers.setTrayMenu, BunRequests.setTrayMenu.params, request.params);
     } else {
         return RequestResult{ .errorMsg = "unhandled method", .payload = null };
     }
@@ -285,7 +295,7 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
 
 pub fn parseParamsAndCall(handler: anytype, paramsSchema: anytype, unparsedParams: anytype) RequestResult {
     const parsedParams = std.json.parseFromValue(paramsSchema, alloc, unparsedParams, .{}) catch |err| {
-        std.log.info("Error casting parsed json to zig type from stdin createWindow - {}: \n", .{err});
+        std.log.info("Error casting parsed json to zig type from stdin - {}: \n", .{err});
         return RequestResult{ .errorMsg = "failed to parse params", .payload = null };
     };
 

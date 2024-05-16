@@ -8,6 +8,7 @@ import Electrobun, {
 } from "electrobun/bun";
 import { type MyWebviewRPC } from "../mainview/rpc";
 import { type MyExtensionSchema } from "../myextension/rpc";
+import type ElectrobunEvent from "../../../src/bun/events/event";
 
 // Electrobun.Updater.getLocalVersion();
 
@@ -40,17 +41,69 @@ if (updateInfo.updateReady) {
 // });
 
 const tray = new Tray({
-  title: "Example Tray Item",
+  title: "Example Tray Item (click to create menu)",
   // Note: __dirname here will evaulate to src/bun when running in dev mode
   // todo: we should include it as an asset and use that url
   image: `${__dirname}/../../../assets/electrobun-logo-32.png`,
 });
 
-console.log(__dirname);
+// map action names to clicked state
+const menuState = {
+  "item-1": false,
+  "sub-item-1": false,
+  "sub-item-2": true,
+};
 
+const updateTrayMenu = () => {
+  tray.setMenu([
+    {
+      type: "normal",
+      label: `Toggle me`,
+      action: "item-1",
+      checked: menuState["item-1"],
+      tooltip: `I'm a tooltip`,
+      submenu: [
+        {
+          type: "normal",
+          label: "Click me to toggle sub-item 2",
+          tooltip: "i will also unhide sub-item-3",
+          action: "sub-item-1",
+        },
+        {
+          type: "divider",
+        },
+        {
+          type: "normal",
+          label: "Toggle sub-item-3's visibility",
+          action: "sub-item-2",
+          enabled: menuState["sub-item-1"],
+        },
+        {
+          type: "normal",
+          label: "I was hidden",
+          action: "sub-item-3",
+          hidden: menuState["sub-item-2"],
+        },
+      ],
+    },
+  ]);
+};
+
+// TODO: events should be typed
 tray.on("tray-clicked", (e) => {
+  const { id, action } = e.data as { id: number; action: string };
+
+  if (action === "") {
+    // main menu was clicked before we create a system tray menu for it.
+    updateTrayMenu();
+    tray.setTitle("Example Tray Item (click to open menu)");
+  } else {
+    // once there's a menu, we can toggle the state of the menu items
+    menuState[action] = !menuState[action];
+    updateTrayMenu();
+  }
   // respond to left and right clicks on the tray icon/name
-  console.log("event listener for tray clicked", e);
+  console.log("event listener for tray clicked", e.data.action);
 });
 
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
