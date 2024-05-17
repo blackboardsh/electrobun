@@ -34,7 +34,7 @@ export class Tray {
     });
   }
 
-  on(name: "tray-clicked" | "tray-menu-clicked", handler) {
+  on(name: "tray-clicked", handler) {
     const specificName = `${name}-${this.id}`;
     electrobunEventEmitter.on(specificName, handler);
   }
