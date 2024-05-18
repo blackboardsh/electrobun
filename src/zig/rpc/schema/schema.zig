@@ -41,6 +41,16 @@ pub const ZigSchema = struct { //
                 success: bool,
             };
         };
+        // Note: this should be a message not a request
+        // no need to block the thread we don't need a response.
+        pub const applicationMenuEvent = struct {
+            pub const params = struct {
+                action: []const u8,
+            };
+            pub const response = struct {
+                success: bool,
+            };
+        };
     };
 };
 
@@ -165,6 +175,12 @@ pub const BunSchema = struct {
             };
             pub const response = void;
         };
+        pub const setApplicationMenu = struct {
+            pub const params = struct {
+                menuConfig: []const u8,
+            };
+            pub const response = void;
+        };
     };
 };
 
@@ -182,6 +198,7 @@ pub const Handlers = struct {
     setTrayTitle: fn (params: BunSchema.requests.setTrayTitle.params) RequestResult,
     setTrayImage: fn (params: BunSchema.requests.setTrayImage.params) RequestResult,
     setTrayMenu: fn (params: BunSchema.requests.setTrayMenu.params) RequestResult,
+    setApplicationMenu: fn (params: BunSchema.requests.setApplicationMenu.params) RequestResult,
 };
 
 pub const Requests = struct {
@@ -189,6 +206,7 @@ pub const Requests = struct {
     sendSyncRequest: fn (params: ZigSchema.requests.sendSyncRequest.params) ZigSchema.requests.sendSyncRequest.response,
     log: fn (params: ZigSchema.requests.log.params) ZigSchema.requests.log.response,
     trayEvent: fn (params: ZigSchema.requests.trayEvent.params) ZigSchema.requests.trayEvent.response,
+    applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) ZigSchema.requests.applicationMenuEvent.response,
 };
 
 pub const RequestResponseType = union(enum) {
@@ -204,6 +222,8 @@ pub const RequestResponseType = union(enum) {
     setTrayTitle: BunSchema.requests.setTrayTitle.response,
     setTrayImage: BunSchema.requests.setTrayImage.response,
     setTrayMenu: BunSchema.requests.setTrayMenu.response,
+
+    setApplicationMenu: BunSchema.requests.setApplicationMenu.response,
 
     DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
     SendSyncRequestResponse: ZigSchema.requests.sendSyncRequest.response,

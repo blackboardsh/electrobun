@@ -67,3 +67,19 @@ pub fn setTrayMenu(opts: rpcSchema.BunSchema.requests.setTrayMenu.params) void {
     // and serialize it once.
     _ = objc.setTrayMenu(tray.handle, utils.toCString(opts.menuConfig));
 }
+
+fn applicationMenuHandler(id: u32, action: [*:0]const u8) void {
+    // note: we don't need an id here, it's just a remnant of using the trayhandler
+    // in objc
+    _ = id;
+    // Note: the action will be an empty string if there is no menu and the tray is clicked
+    // it'll also be an empty string if there is a menu and the menu item has no action defined.
+    _ = rpc.request.applicationMenuEvent(.{
+        .action = utils.fromCString(action),
+    });
+}
+
+// todo: consider moving this to general Application file
+pub fn setApplicationMenu(opts: rpcSchema.BunSchema.requests.setApplicationMenu.params) void {
+    _ = objc.setApplicationMenu(utils.toCString(opts.menuConfig), applicationMenuHandler);
+}

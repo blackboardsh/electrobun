@@ -9,6 +9,7 @@ import Electrobun, {
 import { type MyWebviewRPC } from "../mainview/rpc";
 import { type MyExtensionSchema } from "../myextension/rpc";
 import type ElectrobunEvent from "../../../src/bun/events/event";
+import { setApplicationMenu } from "../../../src/bun/core/ApplicationMenu";
 
 // Electrobun.Updater.getLocalVersion();
 
@@ -104,6 +105,41 @@ tray.on("tray-clicked", (e) => {
   }
   // respond to left and right clicks on the tray icon/name
   console.log("event listener for tray clicked", e.data.action);
+});
+
+setApplicationMenu([
+  {
+    submenu: [{ label: "Quit", role: "quit" }],
+  },
+  {
+    label: "Edit",
+    submenu: [
+      { role: "undo" },
+      { role: "redo" },
+      { type: "separator" },
+      {
+        label: "Custom Menu Item  🚀",
+        action: "custom-action-1",
+        tooltip: "I'm a tooltip",
+      },
+      {
+        label: "Custom menu disabled",
+        enabled: false,
+        action: "custom-action-2",
+      },
+      { type: "separator" },
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      { role: "pasteAndMatchStyle" },
+      { role: "delete" },
+      { role: "selectAll" },
+    ],
+  },
+]);
+
+Electrobun.events.on("application-menu-clicked", (e) => {
+  console.log("application menu clicked", e.data.action); // custom-actino
 });
 
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({

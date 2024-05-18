@@ -52,7 +52,7 @@ const menuConfigWithDefaults = (
   menu: Array<MenuItemConfig>
 ): Array<MenuItemConfig> => {
   return menu.map((item) => {
-    if (item.type === "divider") {
+    if (item.type === "divider" || item.type === "separator") {
       return { type: "divider" };
     } else {
       return {

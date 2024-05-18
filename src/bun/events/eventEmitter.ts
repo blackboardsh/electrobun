@@ -1,6 +1,7 @@
 import EventEmitter from "events";
 import webviewEvents from "./webviewEvents";
 import trayEvents from "./trayEvents";
+import applicationEvents from "./applicationEvents";
 import ElectrobunEvent from "./event";
 
 class ElectrobunEventEmitter extends EventEmitter {
@@ -28,6 +29,9 @@ class ElectrobunEventEmitter extends EventEmitter {
     },
     tray: {
       ...trayEvents,
+    },
+    app: {
+      ...applicationEvents,
     },
   };
 }

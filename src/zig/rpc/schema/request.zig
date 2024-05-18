@@ -36,4 +36,12 @@ pub fn trayEvent(params: rpcSchema.ZigSchema.requests.trayEvent.params) rpcSchem
     return parsedPayload.value;
 }
 
-pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest, .trayEvent = trayEvent };
+pub fn applicationMenuEvent(params: rpcSchema.ZigSchema.requests.applicationMenuEvent.params) rpcSchema.ZigSchema.requests.applicationMenuEvent.response {
+    const rawPayload = rpcStdout.sendRequest("applicationMenuEvent", params);
+    const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.applicationMenuEvent.response, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
+}
+
+pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest, .trayEvent = trayEvent, .applicationMenuEvent = applicationMenuEvent };

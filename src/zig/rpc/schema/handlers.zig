@@ -139,6 +139,12 @@ pub fn setTrayMenu(params: rpcSchema.BunSchema.requests.setTrayMenu.params) Requ
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
+pub fn setApplicationMenu(params: rpcSchema.BunSchema.requests.setApplicationMenu.params) RequestResult {
+    _ = tray.setApplicationMenu(.{
+        .menuConfig = params.menuConfig,
+    });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
 
 // This gives type safety that every handler is implemented, and implements the correct signature
 pub const handlers = rpcSchema.Handlers{ //
@@ -153,6 +159,7 @@ pub const handlers = rpcSchema.Handlers{ //
     .setTrayTitle = setTrayTitle,
     .setTrayImage = setTrayImage,
     .setTrayMenu = setTrayMenu,
+    .setApplicationMenu = setApplicationMenu,
 };
 
 pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
@@ -256,6 +263,8 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
         return parseParamsAndCall(handlers.setTrayImage, BunRequests.setTrayImage.params, request.params);
     } else if (strEql(method, "setTrayMenu")) {
         return parseParamsAndCall(handlers.setTrayMenu, BunRequests.setTrayMenu.params, request.params);
+    } else if (strEql(method, "setApplicationMenu")) {
+        return parseParamsAndCall(handlers.setApplicationMenu, BunRequests.setApplicationMenu.params, request.params);
     } else {
         return RequestResult{ .errorMsg = "unhandled method", .payload = null };
     }

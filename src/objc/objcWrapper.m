@@ -514,7 +514,7 @@ typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
         self.zigHandler(self.trayId, "");
     }
 }
-- (void)menuItemClicked:(id)sender {   
+- (void)menuItemClicked:(id)sender {       
     // If there's a menu then only menu     
     NSMenuItem *menuItem = (NSMenuItem *)sender;
     NSString *action = menuItem.representedObject;
@@ -568,18 +568,20 @@ void setTrayImage(NSStatusItem *statusItem, const char *image) {
     }
 }
 
+// application menus
+// todo: consider consolidating with tray menus
 NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
     NSMenu *menu = [[NSMenu alloc] init];
-
-    // Disable auto-enabling of menu items. This lets us set enabled = false for specific items.
-    [menu setAutoenablesItems:NO];  
-
+    [menu setAutoenablesItems:NO];  // Disable auto-enabling of menu items
 
     for (NSDictionary *itemData in menuConfig) {
         NSString *type = itemData[@"type"];
         NSString *label = itemData[@"label"];
         NSString *action = itemData[@"action"];
         NSArray *submenuConfig = itemData[@"submenu"];
+        NSString *role = itemData[@"role"];
+        NSString *accelerator = itemData[@"accelerator"];
+        NSNumber *modifierMask = itemData[@"modifierMask"];
 
         BOOL enabled = [itemData[@"enabled"] boolValue];
         BOOL checked = [itemData[@"checked"] boolValue];
@@ -587,16 +589,104 @@ NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
         NSString *tooltip = itemData[@"tooltip"];
 
         NSMenuItem *menuItem;
+
         if ([type isEqualToString:@"divider"]) {
             menuItem = [NSMenuItem separatorItem];
         } else {
-            // todo: add support for keyEquivalent
             menuItem = [[NSMenuItem alloc] initWithTitle:label action:@selector(menuItemClicked:) keyEquivalent:@""];
-            menuItem.representedObject = action;
-            menuItem.target = target;
-                         
-            menuItem.enabled = enabled;            
-            menuItem.state = checked ? NSControlStateValueOn : NSControlStateValueOff;            
+            menuItem.representedObject = action;            
+            menuItem.target = target;            
+
+            if (role) {
+                if ([role isEqualToString:@"quit"]) {
+                    menuItem.action = @selector(terminate:);
+                } else if ([role isEqualToString:@"hide"]) {
+                    menuItem.action = @selector(hide:);
+                } else if ([role isEqualToString:@"hideOthers"]) {
+                    menuItem.action = @selector(hideOtherApplications:);
+                } else if ([role isEqualToString:@"showAll"]) {
+                    menuItem.action = @selector(unhideAllApplications:);
+                } else if ([role isEqualToString:@"undo"]) {
+                    menuItem.action = @selector(undo:);
+                } else if ([role isEqualToString:@"redo"]) {
+                    menuItem.action = @selector(redo:);
+                } else if ([role isEqualToString:@"cut"]) {
+                    menuItem.action = @selector(cut:);
+                } else if ([role isEqualToString:@"copy"]) {
+                    menuItem.action = @selector(copy:);
+                } else if ([role isEqualToString:@"paste"]) {
+                    menuItem.action = @selector(paste:);
+                } else if ([role isEqualToString:@"pasteAndMatchStyle"]) {
+                    menuItem.action = @selector(pasteAsPlainText:);
+                } else if ([role isEqualToString:@"delete"]) {
+                    menuItem.action = @selector(delete:);
+                } else if ([role isEqualToString:@"selectAll"]) {
+                    menuItem.action = @selector(selectAll:);
+                } else if ([role isEqualToString:@"startSpeaking"]) {
+                    menuItem.action = @selector(startSpeaking:);
+                } else if ([role isEqualToString:@"stopSpeaking"]) {
+                    menuItem.action = @selector(stopSpeaking:);
+                } else if ([role isEqualToString:@"enterFullScreen"]) {
+                    menuItem.action = @selector(enterFullScreen:);
+                } else if ([role isEqualToString:@"exitFullScreen"]) {
+                    menuItem.action = @selector(exitFullScreen:);
+                } else if ([role isEqualToString:@"toggleFullScreen"]) {
+                    menuItem.action = @selector(toggleFullScreen:);
+                } else if ([role isEqualToString:@"minimize"]) {
+                    menuItem.action = @selector(performMiniaturize:);
+                } else if ([role isEqualToString:@"zoom"]) {
+                    menuItem.action = @selector(performZoom:);
+                } else if ([role isEqualToString:@"bringAllToFront"]) {
+                    menuItem.action = @selector(arrangeInFront:);
+                } else if ([role isEqualToString:@"close"]) {
+                    menuItem.action = @selector(performClose:);
+                } else if ([role isEqualToString:@"cycleThroughWindows"]) {
+                    menuItem.action = @selector(selectNextKeyView:);
+                } else if ([role isEqualToString:@"showHelp"]) {
+                    menuItem.action = @selector(showHelp:);
+                }
+
+                if (!accelerator) {
+                    // set 'default' keyboard shortcuts for given roles
+                    if ([role isEqualToString:@"undo"]) {
+                        menuItem.keyEquivalent = @"z";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"redo"]) {
+                        menuItem.keyEquivalent = @"Z";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+                    } else if ([role isEqualToString:@"cut"]) {
+                        menuItem.keyEquivalent = @"x";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"copy"]) {
+                        menuItem.keyEquivalent = @"c";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"paste"]) {
+                        menuItem.keyEquivalent = @"v";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"pasteAndMatchStyle"]) {
+                        menuItem.keyEquivalent = @"V";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+                    } else if ([role isEqualToString:@"delete"]) {
+                        menuItem.keyEquivalent = [NSString stringWithFormat:@"%c", (char)NSDeleteCharacter]; // Delete key
+                        menuItem.keyEquivalentModifierMask = 0;
+                    } else if ([role isEqualToString:@"selectAll"]) {
+                        menuItem.keyEquivalent = @"a";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    }
+                }
+            }
+
+            if (accelerator) {
+                menuItem.keyEquivalent = accelerator;
+                if (modifierMask) {
+                    menuItem.keyEquivalentModifierMask = [modifierMask unsignedIntegerValue];
+                } else {
+                    menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand; // Default to Command key if no modifier specified
+                }
+            } 
+
+            menuItem.enabled = enabled;
+            menuItem.state = checked ? NSControlStateValueOn : NSControlStateValueOff;
             menuItem.hidden = hidden;
             menuItem.toolTip = tooltip;
 
@@ -633,4 +723,32 @@ void setTrayMenu(NSStatusItem *statusItem, const char *menuConfig) {
     if (statusItem) {
         setTrayMenuFromJSON(statusItem, menuConfig);        
     }
+}
+
+
+
+
+void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
+    NSLog(@"Setting application menu from JSON in objc");
+
+    NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+    NSError *error;
+    NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+
+    if (error) {
+        NSLog(@"Failed to parse JSON: %@", error);
+        return;
+    }
+
+    // Note: consider using a generic target for both system tray and application menu
+    // for now we just create a status item that just serves as a way to reference the zig menu click handler
+    StatusItemTarget *target = [[StatusItemTarget alloc] init];
+    target.zigHandler = zigTrayItemHandler;
+    target.trayId = 0;
+    NSMenu *menu = createMenuFromConfig(menuArray, target);
+
+    retainObjCObject(target);
+
+
+    [NSApp setMainMenu:menu];
 }

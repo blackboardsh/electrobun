@@ -97,3 +97,6 @@ pub extern fn createTray(id: u32, pathToImage: [*:0]const u8, title: [*:0]const 
 pub extern fn setTrayTitle(trayItem: *anyopaque, title: [*:0]const u8) callconv(.C) void;
 pub extern fn setTrayImage(trayItem: *anyopaque, image: [*:0]const u8) callconv(.C) void;
 pub extern fn setTrayMenu(trayItem: *anyopaque, menuConfigJson: [*:0]const u8) callconv(.C) void;
+
+// application menu
+pub extern fn setApplicationMenu(menuConfigJson: [*:0]const u8, zigTrayItemHandler: ?*const TrayItemHandler) callconv(.C) void;

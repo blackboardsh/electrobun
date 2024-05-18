@@ -106,14 +106,38 @@ function createStdioTransport(proc): RPCTransport {
   };
 }
 
+// todo: consider renaming to TrayMenuItemConfig
 export type MenuItemConfig =
-  | { type: "divider" }
+  | { type: "divider" | "separator" }
   | {
       type: "normal";
       label: string;
       tooltip?: string;
       action?: string;
       submenu?: Array<MenuItemConfig>;
+      enabled?: boolean;
+      checked?: boolean;
+      hidden?: boolean;
+    };
+
+export type ApplicationMenuItemConfig =
+  | { type: "divider" | "separator" }
+  | {
+      type?: "normal";
+      label: string;
+      tooltip?: string;
+      action?: string;
+      submenu?: Array<ApplicationMenuItemConfig>;
+      enabled?: boolean;
+      checked?: boolean;
+      hidden?: boolean;
+    }
+  | {
+      type?: "normal";
+      label?: string;
+      tooltip?: string;
+      role?: string;
+      submenu?: Array<ApplicationMenuItemConfig>;
       enabled?: boolean;
       checked?: boolean;
       hidden?: boolean;
@@ -238,6 +262,13 @@ type ZigHandlers = RPCSchema<{
       };
       response: void;
     };
+    setApplicationMenu: {
+      params: {
+        // json string of config
+        menuConfig: string;
+      };
+      response: void;
+    };
   };
 }>;
 
@@ -271,6 +302,15 @@ type BunHandlers = RPCSchema<{
       };
     };
     trayEvent: {
+      params: {
+        id: number;
+        action: string;
+      };
+      response: {
+        success: boolean;
+      };
+    };
+    applicationMenuEvent: {
       params: {
         id: number;
         action: string;
@@ -366,6 +406,18 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
 
       result = electrobunEventEmitter.emitEvent(event, id);
       // Note: we don't care about the result right now
+
+      return { success: true };
+    },
+    applicationMenuEvent: ({ id, action }) => {
+      const event = electrobunEventEmitter.events.app.applicationMenuClicked({
+        id,
+        action,
+      });
+
+      let result;
+      // global event
+      result = electrobunEventEmitter.emitEvent(event);
 
       return { success: true };
     },
