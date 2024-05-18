@@ -595,7 +595,7 @@ NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
         } else {
             menuItem = [[NSMenuItem alloc] initWithTitle:label action:@selector(menuItemClicked:) keyEquivalent:@""];
             menuItem.representedObject = action;            
-            menuItem.target = target;            
+            
 
             if (role) {
                 if ([role isEqualToString:@"quit"]) {
@@ -674,6 +674,10 @@ NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
                         menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
                     }
                 }
+            } else {
+                // Note: if we set the target it will look for the method on the target. eg: copy instead
+                // of letting the os handle it
+                menuItem.target = target;            
             }
 
             if (accelerator) {
