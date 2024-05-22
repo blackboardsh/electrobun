@@ -26,6 +26,8 @@ const ConfigureWebviewTags = (
     mutationObserver?: MutationObserver;
 
     positionCheckLoop?: Timer;
+    positionCheckLoopReset?: Timer;
+
     lastRect = {
       x: 0,
       y: 0,
@@ -79,6 +81,11 @@ const ConfigureWebviewTags = (
         lastRect.width !== width ||
         lastRect.height !== height
       ) {
+        // if we're not already in an accelerated loop then accelerate it
+        if (!this.positionCheckLoopReset) {
+          this.setPositionCheckLoop(true);
+        }
+
         this.lastRect = rect;
 
         this.zigRpc.send.webviewTagResize({
@@ -95,7 +102,25 @@ const ConfigureWebviewTags = (
 
     boundSyncDimensions = () => this.syncDimensions(true);
 
-    connectedCallback() {
+    setPositionCheckLoop(accelerate = false) {
+      if (this.positionCheckLoop) {
+        clearInterval(this.positionCheckLoop);
+        this.positionCheckLoop = undefined;
+      }
+
+      if (this.positionCheckLoopReset) {
+        clearTimeout(this.positionCheckLoopReset);
+        this.positionCheckLoopReset = undefined;
+      }
+
+      const delay = accelerate ? 0 : 400;
+
+      if (accelerate) {
+        this.positionCheckLoopReset = setTimeout(
+          () => this.setPositionCheckLoop(false),
+          5000
+        );
+      }
       // Note: Since there's not catch all way to listen for x/y changes
       // we have a 400ms interval to check
       // on m1 max this 400ms interval for one nested webview
@@ -108,7 +133,11 @@ const ConfigureWebviewTags = (
       // todo: consider having an option to disable this and let user
       // trigger position sync for high performance cases (like
       // a browser with a hundred tabs)
-      this.positionCheckLoop = setInterval(() => this.syncDimensions(), 400);
+      this.positionCheckLoop = setInterval(() => this.syncDimensions(), delay);
+    }
+
+    connectedCallback() {
+      this.setPositionCheckLoop();
 
       this.resizeObserver = new ResizeObserver(() => {
         this.syncDimensions();
