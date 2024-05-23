@@ -79,6 +79,18 @@ type WebviewTagHandlers = RPCSchema<{
       x: number;
       y: number;
     };
+    webviewTagGetScreenshot: {
+      id: number;
+      hostId: number;
+    };
+    webviewTagSetTransparent: {
+      id: number;
+      transparent: boolean;
+    };
+    webviewTagSetPassthrough: {
+      id: number;
+      enablePassthrough: boolean;
+    };
   };
 }>;
 

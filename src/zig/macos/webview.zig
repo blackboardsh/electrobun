@@ -386,6 +386,48 @@ pub fn reload(opts: rpcSchema.BrowserSchema.messages.webviewTagReload) void {
     objc.webviewTagReload(webview.handle);
 }
 
+pub fn webviewTagGetScreenshot(opts: rpcSchema.BrowserSchema.messages.webviewTagGetScreenshot) void {
+    // Note: this is the webview inside the webviewTag that we're screenshotting.
+    var webviewToScreenshot = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    const zigHandler = struct {
+        fn zigHandler(hostWebviewId: u32, webviewToScreenshotId: u32, pngData: [*:0]const u8) void {
+            // Note: webviewId is the host webview that
+            const pngDataURISlice = utils.fromCString(pngData);
+            var jsCall = std.fmt.allocPrint(alloc, "document.querySelector('#electrobun-webview-{d}').setScreenImage('{s}');\n", .{ webviewToScreenshotId, pngDataURISlice }) catch {
+                return;
+            };
+            defer alloc.free(jsCall);
+
+            sendLineToWebview(hostWebviewId, jsCall);
+        }
+    }.zigHandler;
+
+    const screenshotData = objc.getWebviewSnapshot(opts.hostId, opts.id, webviewToScreenshot.handle, zigHandler);
+    _ = screenshotData;
+}
+
+pub fn webviewTagSetTransparent(opts: rpcSchema.BrowserSchema.messages.webviewTagSetTransparent) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    objc.webviewTagSetTransparent(webview.handle, opts.transparent);
+}
+
+pub fn webviewTagSetPassthrough(opts: rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    objc.webviewTagSetPassthrough(webview.handle, opts.enablePassthrough);
+}
+
 pub fn remove(opts: rpcSchema.BrowserSchema.messages.webviewTagRemove) void {
     var webview = webviewMap.get(opts.id) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});

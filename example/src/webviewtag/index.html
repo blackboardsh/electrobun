@@ -14,7 +14,12 @@
     <button onclick="document.querySelector('electrobun-webview').reload()">Reload</button>
     <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
     <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">github.com/blackboardsh/electrobun</button>
+    <button onclick="document.querySelector('electrobun-webview').syncScreenshot()">Sync Screenshot</button>
+    <button onclick="document.querySelector('electrobun-webview').toggleTransparent()">ToggleTransparent</button>
+    <button onclick="document.querySelector('electrobun-webview').togglePassthrough()">togglePassthrough</button>
     <electrobun-webview src="https://electrobun.dev" ></electrobun-webview>
+
+    <iframe src="https://electrobun.dev" width="800" height="300" ></iframe>
     <h2>Test loading a bundled png via views:// scheme</h2>
     <img src="views://webviewtag/electrobun.png" />
 </body>

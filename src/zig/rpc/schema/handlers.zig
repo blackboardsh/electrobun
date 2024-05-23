@@ -112,6 +112,18 @@ pub fn stopWindowMove(params: rpcSchema.BrowserSchema.messages.stopWindowMove) R
     webview.stopWindowMove(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
+pub fn webviewTagGetScreenshot(params: rpcSchema.BrowserSchema.messages.webviewTagGetScreenshot) RequestResult {
+    webview.webviewTagGetScreenshot(.{ .hostId = params.hostId, .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn webviewTagSetTransparent(params: rpcSchema.BrowserSchema.messages.webviewTagSetTransparent) RequestResult {
+    webview.webviewTagSetTransparent(.{ .id = params.id, .transparent = params.transparent });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn webviewTagSetPassthrough(params: rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough) RequestResult {
+    webview.webviewTagSetPassthrough(.{ .id = params.id, .enablePassthrough = params.enablePassthrough });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
 
 pub fn createTray(params: rpcSchema.BunSchema.requests.createTray.params) RequestResult {
     _ = tray.createTray(.{
@@ -172,6 +184,9 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagRemove = webviewTagRemove,
     .startWindowMove = startWindowMove,
     .stopWindowMove = stopWindowMove,
+    .webviewTagGetScreenshot = webviewTagGetScreenshot,
+    .webviewTagSetTransparent = webviewTagSetTransparent,
+    .webviewTagSetPassthrough = webviewTagSetPassthrough,
 };
 
 pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.params) RequestResult {
@@ -299,6 +314,12 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.startWindowMove, rpcSchema.BrowserSchema.messages.startWindowMove, message.payload);
     } else if (strEql(method, "stopWindowMove")) {
         _ = parseParamsAndCall(fromBrowserHandlers.stopWindowMove, rpcSchema.BrowserSchema.messages.stopWindowMove, message.payload);
+    } else if (strEql(method, "webviewTagGetScreenshot")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagGetScreenshot, rpcSchema.BrowserSchema.messages.webviewTagGetScreenshot, message.payload);
+    } else if (strEql(method, "webviewTagSetTransparent")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetTransparent, rpcSchema.BrowserSchema.messages.webviewTagSetTransparent, message.payload);
+    } else if (strEql(method, "webviewTagSetPassthrough")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetPassthrough, rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough, message.payload);
     }
 }
 

@@ -13,6 +13,7 @@ typedef struct {
 typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const char* url, const char* body);
 
 @interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>
+// todo: rename fileLoader to zigContentLoader or zigResponseLoader
 @property (nonatomic, assign) zigStartURLSchemeTaskCallback fileLoader;
 @property (nonatomic, assign) uint32_t webviewId;
 @end
@@ -138,7 +139,25 @@ void runNSApplication() {
 
 
 // WKWebView
-WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader, bool autoResize) {
+// custom WKWebView that allows mouse events to pass through
+@interface TransparentWKWebView : WKWebView
+
+@property (nonatomic, assign) BOOL isMousePassthroughEnabled;
+
+@end
+@implementation TransparentWKWebView
+
+- (NSView *)hitTest:(NSPoint)point {
+    if (self.isMousePassthroughEnabled) {
+        return nil; // Pass through all mouse events
+    }
+    return [super hitTest:point];
+}
+
+@end
+
+
+WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader, zigStartURLSchemeTaskCallback httpsLoader, bool autoResize) {
     // Create a default WKWebViewConfiguration
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];    
 
@@ -151,13 +170,26 @@ WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartUR
     [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
     retainObjCObject(assetSchemeHandler);
 
+    MyURLSchemeHandler *httpsSchemeHandler = [[MyURLSchemeHandler alloc] init];
+    httpsSchemeHandler.fileLoader = httpsLoader;    
+    httpsSchemeHandler.webviewId = webviewId;
+
+    [configuration setURLSchemeHandler:httpsSchemeHandler forURLScheme:@"remote"];
+    retainObjCObject(httpsSchemeHandler);
+
     // open devtools
     // Enable Developer Extras (right click to inspect element)
     [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
 
-
     // Allocate and initialize the WKWebView
-    WKWebView *webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
+    TransparentWKWebView *webView = [[TransparentWKWebView alloc] initWithFrame:frame configuration:configuration];
+
+    // Note: This makes webview have a transparent background by default.
+    // todo: consider making this configurable during webview creation and/or
+    // adding a toggle function for it.
+    [webView setValue:@NO forKey:@"drawsBackground"];
+    webView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+    webView.layer.opaque = NO;    
     
     // Since all wkwebviews are children of a generic NSView we need to tell them to 
     // auto size with the window. 
@@ -274,11 +306,59 @@ void addWebviewToWindow(NSWindow *window, NSView *view) {
 
     CGFloat adjustedY = view.superview.bounds.size.height - view.frame.origin.y - view.frame.size.height;
     view.frame = NSMakeRect(view.frame.origin.x, adjustedY, view.frame.size.width, view.frame.size.height);
+    
 }
 
 void resizeWebview(NSView *view, NSRect frame) {
     CGFloat adjustedY = view.superview.bounds.size.height - frame.origin.y - frame.size.height;
     view.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+}
+
+typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
+
+void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId, WKWebView *webView, zigSnapshotCallback callback){
+    // Create a snapshot configuration
+    WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];
+    
+    // Capture the snapshot
+    [webView takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {
+        if (error) {           
+            NSLog(@"Error capturing snapshot: %@", error);              
+            return;
+        }
+        
+        // Convert the image to PNG data         
+        NSBitmapImageRep *imgRep = [[NSBitmapImageRep alloc] initWithData:[snapshotImage TIFFRepresentation]];
+        NSData *pngData = [imgRep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        
+        // Convert PNG data to Base64 string
+        NSString *base64String = [pngData base64EncodedStringWithOptions:0];
+        
+        // Create Data URL
+        NSString *dataUrl = [NSString stringWithFormat:@"data:image/png;base64,%@", base64String];
+        
+        // Return the Data URL
+        if (callback) {
+            callback(hostId, webviewId, [dataUrl UTF8String]);
+        }
+    }];
+}
+
+// This makes the webview invisible.
+void webviewTagSetTransparent(WKWebView *webview, BOOL transparent) {
+    if (transparent) {       
+        webview.layer.opacity = 0; 
+    } else {        
+        webview.layer.opacity = 1; 
+    }
+}
+
+void webviewTagSetPassthrough(TransparentWKWebView *webview, BOOL enablePassthrough) {
+    if (enablePassthrough) {       
+        webview.isMousePassthroughEnabled = YES;
+    } else {        
+        webview.isMousePassthroughEnabled = NO;
+    }
 }
 
 NSRect createNSRectWrapper(double x, double y, double width, double height) {    

@@ -63,6 +63,7 @@ pub const FileResponse = struct {
 };
 
 pub const FileLoader = *const fn (webviewId: u32, [*:0]const u8, [*:0]const u8) FileResponse;
+pub const SnapshotHandler = *const fn (hostId: u32, id: u32, [*:0]const u8) void;
 
 pub extern fn createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams) callconv(.C) *anyopaque;
 pub extern fn makeNSWindowKeyAndOrderFront(window: *anyopaque) callconv(.C) void;
@@ -86,6 +87,9 @@ pub extern fn webviewTagReload(webView: *anyopaque) callconv(.C) void;
 pub extern fn webviewRemove(webView: *anyopaque) callconv(.C) void;
 pub extern fn startWindowMove(webView: *anyopaque) callconv(.C) void;
 pub extern fn stopWindowMove(webView: *anyopaque) callconv(.C) void;
+pub extern fn getWebviewSnapshot(hostId: u32, id: u32, webView: *anyopaque, snapshotHandler: SnapshotHandler) callconv(.C) void;
+pub extern fn webviewTagSetTransparent(webView: *anyopaque, transparent: bool) callconv(.C) void;
+pub extern fn webviewTagSetPassthrough(webView: *anyopaque, enablePassthrough: bool) callconv(.C) void;
 
 // fs
 pub extern fn moveToTrash(path: [*:0]const u8) callconv(.C) bool;
