@@ -206,7 +206,10 @@ if (commandArg === "init") {
 </dict>
 </plist>`;
 
-  Bun.write(join(appBundleFolderContentsPath, "Info.plist"), InfoPlistContents);
+  await Bun.write(
+    join(appBundleFolderContentsPath, "Info.plist"),
+    InfoPlistContents
+  );
 
   // in dev builds the log file is a named pipe so we can stream it back to the terminal
   // in canary/stable builds it'll be a regular log file
@@ -426,7 +429,7 @@ if (commandArg === "init") {
     identifier: config.app.identifier,
   });
 
-  Bun.write(
+  await Bun.write(
     join(appBundleFolderResourcesPath, "version.json"),
     versionJsonContent
   );
@@ -564,7 +567,7 @@ if (commandArg === "init") {
       dereference: true,
     });
 
-    Bun.write(
+    await Bun.write(
       join(selfExtractingBundle.appBundleFolderContentsPath, "Info.plist"),
       InfoPlistContents
     );
@@ -627,7 +630,7 @@ if (commandArg === "init") {
       // bucketUrl: config.release.bucketUrl
     });
 
-    Bun.write(join(artifactFolder, "update.json"), updateJsonContent);
+    await Bun.write(join(artifactFolder, "update.json"), updateJsonContent);
 
     // generate bsdiff
     // https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst

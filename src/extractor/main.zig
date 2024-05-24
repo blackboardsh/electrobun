@@ -192,7 +192,7 @@ pub fn getFilenameFromExtension(allocator: std.mem.Allocator, folderPath: []cons
             return fileName;
         }
     }
-    // std.debug.print("No file found with extension: {s} {s}\n", .{ folderPath, extension });
+
     return error.FileNotFound;
 }
 

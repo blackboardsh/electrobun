@@ -19,6 +19,12 @@ const hash = await Updater.localInfo.hash();
 const randomId = Math.random().toString(36).substring(7);
 const mainPipe = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_main_in`;
 
+try {
+  execSync("mkfifo " + mainPipe);
+} catch (e) {
+  console.log("pipe out already exists");
+}
+
 const zigProc = Bun.spawn([webviewBinaryPath], {
   stdin: "pipe",
   stdout: "pipe",
@@ -49,11 +55,6 @@ process.on("exit", (code) => {
   zigProc.kill();
 });
 
-try {
-  execSync("mkfifo " + mainPipe);
-} catch (e) {
-  console.log("pipe out already exists");
-}
 const inStream = fs.createWriteStream(mainPipe, {
   flags: "r+",
 });

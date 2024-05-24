@@ -33,7 +33,7 @@ pub fn pipesInEventListener() !void {
         if (bunPipeInFileResult) |file| {
             break :blk file;
         } else |err| {
-            std.debug.print("Failed to open file: {}\n", .{err});
+            std.debug.print("Failed to main pipe file: {}\n", .{err});
             break :blk null;
         }
     };
