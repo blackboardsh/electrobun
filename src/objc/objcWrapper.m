@@ -1,4 +1,8 @@
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
+#import <Cocoa/Cocoa.h>
+#import <WebKit/WebKit.h>
+#import <Foundation/Foundation.h>
 
 
 // views:// schema handler
@@ -65,6 +69,9 @@ typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const 
 
 // manually retain and release objects so they don't get deallocated
 // Function to retain any Objective-C object
+// Note: retainObj / releaseObj increments and decrements the retain count of the object
+// prefer using objc_setAssociatedObject to store objects in other objects
+// this lets arc count that association as a reference and auto-cleanup when it's no longer needed
 void retainObjCObject(id objcObject) {
     CFRetain((__bridge CFTypeRef)objcObject);
 }
@@ -133,8 +140,35 @@ NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
 }
 
 // application
-void runNSApplication() {
-    [[NSApplication sharedApplication] run];        
+
+@interface AppDelegate : NSObject <NSApplicationDelegate>
+@end
+
+@implementation AppDelegate
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    NSLog(@"Intercepting application termination");
+    // todo: implement a way to cancel sudden termination from bun
+    // in order to allow for cleanup 
+    // return NSTerminateCancel;
+    return NSTerminateNow;
+}
+
+@end
+
+
+void runNSApplication() {    
+    
+        NSApplication *app = [NSApplication sharedApplication];    
+        AppDelegate *delegate = [[AppDelegate alloc] init];
+        [app setDelegate:delegate];
+
+        retainObjCObject(delegate);
+
+        [app run];    
+    
+    NSLog(@"after run!!!");
+    
 }
 
 
@@ -267,6 +301,23 @@ void addPreloadScriptToWebView(WKWebView *webView, const char *scriptContent, BO
 }
 
 // NSWindow
+@interface WindowDelegate : NSObject <NSWindowDelegate>
+@end
+
+@implementation WindowDelegate
+- (BOOL)windowShouldClose:(NSWindow *)sender {    
+    // todo: Implement a way to prevent a window closing
+
+   return YES;
+}
+- (void)windowWillClose:(NSNotification *)notification {
+    // todo: Perform any cleanup needed    
+    NSWindow *window = [notification object];
+    // [window setContentView:nil]; // Release content view if needed    
+}
+@end
+
+
 typedef struct {
     NSRect frame;
     WindowStyleMaskOptions styleMask;
@@ -275,7 +326,7 @@ typedef struct {
 
 NSWindow *createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams config) {    
     NSWindow *window = [[NSWindow alloc] initWithContentRect:config.frame
-                                                   styleMask:getNSWindowStyleMask(config.styleMask)
+                                                   styleMask:getNSWindowStyleMask(config.styleMask)                                                                                                
                                                      backing:NSBackingStoreBuffered
                                                        defer:YES];    
 
@@ -283,6 +334,14 @@ NSWindow *createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams 
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;
     }    
+
+    WindowDelegate *delegate = [[WindowDelegate alloc] init];
+    [window setDelegate:delegate];
+    objc_setAssociatedObject(window, "WindowDelegate", delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // ARC will try to release the window or something which will be one too many
+    // or something leading to a panic crash.. or something. Anyway after
+    // losing my mind over this behaviour all day setting this to NO fixes it.
+    window.releasedWhenClosed = NO; 
 
     // Give it a default content view that can accept subviews later on                                                                                                               
     NSView *contentView = [[NSView alloc] initWithFrame:[window frame]];
@@ -292,7 +351,7 @@ NSWindow *createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams 
 }
 
 void makeNSWindowKeyAndOrderFront(NSWindow *window) {
-    [window makeKeyAndOrderFront:nil];        
+    [window makeKeyAndOrderFront:nil];            
 }
 
 void setNSWindowTitle(NSWindow *window, const char *title) {    
@@ -482,7 +541,7 @@ MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *web
 
 // FS
 
-#import <Foundation/Foundation.h>
+
 
 BOOL moveToTrash(char *pathString) {        
     NSString *path = [NSString stringWithUTF8String:pathString];
@@ -503,8 +562,7 @@ BOOL moveToTrash(char *pathString) {
 }
 
 // window move
-#import <Cocoa/Cocoa.h>
-#import <WebKit/WebKit.h>
+
 
 static BOOL isMovingWindow = NO;
 static NSWindow *targetWindow = nil;
@@ -570,9 +628,6 @@ void startWindowMove(WKWebView *webView) {
 
 
 // system tray and menues
-// #import <Cocoa/Cocoa.h>
-#import <objc/runtime.h>
-
 typedef void (*MenuHandler)(const char *menuItemId);
 typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
 
@@ -631,7 +686,7 @@ NSStatusItem* createTray(uint32_t trayId, const char *pathToImage, const char *t
         [statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
     }
 
-    retainObjCObject(statusItem);
+    retainObjCObject(statusItem);   
 
     return statusItem;
 }
