@@ -224,6 +224,13 @@ type ZigHandlers = RPCSchema<{
       response: void;
     };
 
+    closeWindow: {
+      params: {
+        winId: number;
+      };
+      response: void;
+    };
+
     // fs
     moveToTrash: {
       params: {

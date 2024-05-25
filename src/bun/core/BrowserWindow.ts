@@ -165,6 +165,10 @@ export class BrowserWindow<T> {
     return zigRPC.request.setTitle({ winId: this.id, title });
   }
 
+  close() {
+    return zigRPC.request.closeWindow({ winId: this.id });
+  }
+
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserWindow events
   on(name, handler) {

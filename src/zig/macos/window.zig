@@ -12,7 +12,7 @@ const WindowType = struct {
     id: u32,
     // todo: rename this to 'handle'
     window: *anyopaque,
-    webview: ?u32,
+    webviews: std.ArrayList(u32),
     title: []const u8,
     frame: struct {
         width: f64,
@@ -20,6 +20,19 @@ const WindowType = struct {
         x: f64,
         y: f64,
     },
+
+    pub fn deinit(self: *WindowType) void {
+        for (self.webviews.items) |webviewId| {
+            var view = webview.webviewMap.get(webviewId) orelse {
+                continue;
+            };
+
+            view.deinit();
+            _ = webview.webviewMap.remove(webviewId);
+        }
+
+        self.webviews.deinit();
+    }
 };
 
 // todo: use the types in rpc.zig (or move them to a shared location)
@@ -87,8 +100,7 @@ pub fn createWindow(opts: rpcSchema.BunSchema.requests.createWindow.params) Wind
             .y = opts.frame.y,
         },
         .window = objcWin,
-        // todo: make it an array of webview ids or something
-        .webview = null,
+        .webviews = std.ArrayList(u32).init(alloc),
     };
 
     windowMap.put(opts.id, _window) catch {
@@ -111,6 +123,20 @@ pub fn setTitle(opts: SetTitleOpts) void {
     objc.setNSWindowTitle(win.window, utils.toCString(opts.title));
 }
 
+pub fn closeWindow(opts: rpcSchema.BunSchema.requests.closeWindow.params) void {
+    var win = windowMap.get(opts.winId) orelse {
+        std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.winId});
+        return;
+    };
+
+    objc.closeNSWindow(
+        win.window,
+    );
+
+    defer win.deinit();
+    _ = windowMap.remove(opts.winId);
+}
+
 pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
     var win = windowMap.get(opts.windowId) orelse {
         std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.windowId});
@@ -131,6 +157,11 @@ pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
     // we want to make this a preload script so that it gets re-applied after navigations before any
     // other code runs.
     webview.addPreloadScriptToWebview(view.handle, jsScript, true);
+
+    win.webviews.append(opts.webviewId) catch {
+        std.debug.print("Failed to append webview id to window\n", .{});
+        return;
+    };
 
     objc.addWebviewToWindow(win.window, view.handle);
 }

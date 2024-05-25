@@ -201,16 +201,17 @@ WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartUR
     assetSchemeHandler.webviewId = webviewId;
 
     // Note: Keep "views" in sync with views:// in webview.zig
-    [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
-    retainObjCObject(assetSchemeHandler);
+    [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];    
+    objc_setAssociatedObject(configuration, "assetSchemeHandler", assetSchemeHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);    
 
+    // todo: remove - we're not using this anymore
     MyURLSchemeHandler *httpsSchemeHandler = [[MyURLSchemeHandler alloc] init];
     httpsSchemeHandler.fileLoader = httpsLoader;    
     httpsSchemeHandler.webviewId = webviewId;
 
     [configuration setURLSchemeHandler:httpsSchemeHandler forURLScheme:@"remote"];
-    retainObjCObject(httpsSchemeHandler);
-
+    objc_setAssociatedObject(configuration, "httpsSchemeHandler", httpsSchemeHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    
     // open devtools
     // Enable Developer Extras (right click to inspect element)
     [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
@@ -261,6 +262,12 @@ void webviewTagReload(WKWebView *webView) {
 
 void webviewRemove(WKWebView *webView) {
     [webView removeFromSuperview];
+
+    // todo: supposedly good practice but not necessary for now
+    // webView.navigationDelegate = nil;
+    // webView.UIDelegate = nil;    
+
+    releaseObjCObject(webView);
 }
 
 void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WKNavigationActionPolicy policy) {    
@@ -359,6 +366,10 @@ void setNSWindowTitle(NSWindow *window, const char *title) {
     [window setTitle:titleString];
 }
 
+void closeNSWindow(NSWindow *window) {
+    [window close];    
+}
+
 void addWebviewToWindow(NSWindow *window, NSView *view) {
 
     [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];        
@@ -452,9 +463,8 @@ MyNavigationDelegate* setNavigationDelegateWithCallback(WKWebView *webView, uint
     delegate.zigCallback = callback;
     delegate.webviewId = webviewId;
     webView.navigationDelegate = delegate;        
-
-    // todo: release this delegate when the window is closed from zig
-    retainObjCObject(delegate);
+    
+    objc_setAssociatedObject(webView, "NavigationDelegate", delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     
     return delegate;
 }
@@ -483,8 +493,9 @@ MyScriptMessageHandler* addScriptMessageHandler(WKWebView *webView, uint32_t web
     handler.zigCallback = callback;    
     handler.webviewId = webviewId;
     [webView.configuration.userContentController addScriptMessageHandler:handler name:[NSString stringWithUTF8String:name]];
-    // todo: release this handler when the window is closed from zig
-    retainObjCObject(handler);
+    
+    NSString *key = [NSString stringWithFormat:@"PostMessageHandler{%s}", name];
+    objc_setAssociatedObject(webView, key.UTF8String, handler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     return handler;
 }
@@ -523,8 +534,9 @@ MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *web
     // Use the new API to add the script message handler
     [webView.configuration.userContentController addScriptMessageHandlerWithReply:handler contentWorld:WKContentWorld.pageWorld name:[NSString stringWithUTF8String:name]];
     
-    // Retain the handler if necessary; handle lifecycle management appropriately
-    retainObjCObject(handler);
+    NSString *key = [NSString stringWithFormat:@"PostMessageHandlerWithReply{%s}", name];
+    objc_setAssociatedObject(webView, key.UTF8String, handler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    
 
     return handler;
 }
@@ -685,7 +697,7 @@ NSStatusItem* createTray(uint32_t trayId, const char *pathToImage, const char *t
         // Ensure the button listens for both left and right mouse up events
         [statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
     }
-
+    
     retainObjCObject(statusItem);   
 
     return statusItem;
@@ -885,8 +897,8 @@ void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItem
     target.zigHandler = zigTrayItemHandler;
     target.trayId = 0;
     NSMenu *menu = createMenuFromConfig(menuArray, target);
-
-    retainObjCObject(target);
+    
+    objc_setAssociatedObject(NSApp, "AppMenuTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
 
     [NSApp setMainMenu:menu];

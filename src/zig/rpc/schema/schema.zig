@@ -103,6 +103,13 @@ pub const BunSchema = struct {
             };
             pub const response = void;
         };
+        pub const closeWindow = struct { //
+            pub const params = struct {
+                // todo: be consistent about winId vs windowId
+                winId: u32,
+            };
+            pub const response = void;
+        };
 
         pub const createWebview = struct {
             pub const params = struct {
@@ -190,6 +197,7 @@ pub const Handlers = struct {
     createWindow: fn (params: BunSchema.requests.createWindow.params) RequestResult,
     createWebview: fn (params: BunSchema.requests.createWebview.params) RequestResult,
     setTitle: fn (params: BunSchema.requests.setTitle.params) RequestResult,
+    closeWindow: fn (params: BunSchema.requests.closeWindow.params) RequestResult,
     addWebviewToWindow: fn (params: BunSchema.requests.addWebviewToWindow.params) RequestResult,
     loadURL: fn (params: BunSchema.requests.loadURL.params) RequestResult,
     loadHTML: fn (params: BunSchema.requests.loadHTML.params) RequestResult,
@@ -213,6 +221,7 @@ pub const RequestResponseType = union(enum) {
     CreateWindowResponse: BunSchema.requests.createWindow.response,
     CreateWebviewResponse: BunSchema.requests.createWebview.response,
     SetTitleResponse: BunSchema.requests.setTitle.response,
+    closeWindowResponse: BunSchema.requests.closeWindow.response,
     addWebviewToWindowResponse: BunSchema.requests.addWebviewToWindow.response,
     LoadURLResponse: BunSchema.requests.loadURL.response,
     LoadHTMLResponse: BunSchema.requests.loadHTML.response,
