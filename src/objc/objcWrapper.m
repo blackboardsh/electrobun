@@ -414,6 +414,7 @@ void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId, WKWebView *webView,
     }];
 }
 
+// todo: rename these from webviewTagX to webviewX
 // This makes the webview invisible.
 void webviewTagSetTransparent(WKWebView *webview, BOOL transparent) {
     if (transparent) {       
@@ -424,11 +425,19 @@ void webviewTagSetTransparent(WKWebView *webview, BOOL transparent) {
 }
 
 void webviewTagSetPassthrough(TransparentWKWebView *webview, BOOL enablePassthrough) {
-    if (enablePassthrough) {       
-        webview.isMousePassthroughEnabled = YES;
+    if (enablePassthrough) {               
+        webview.isMousePassthroughEnabled = YES;        
     } else {        
         webview.isMousePassthroughEnabled = NO;
     }
+}
+
+void webviewSetHidden(WKWebView *webview, BOOL hidden) {
+    if (hidden) {
+        [webview setHidden:YES];
+    } else {
+        [webview setHidden:NO];
+    }    
 }
 
 NSRect createNSRectWrapper(double x, double y, double width, double height) {    

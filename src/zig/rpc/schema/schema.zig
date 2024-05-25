@@ -258,6 +258,7 @@ pub const FromBrowserHandlers = struct {
     webviewTagGetScreenshot: fn (params: BrowserSchema.messages.webviewTagGetScreenshot) RequestResult,
     webviewTagSetTransparent: fn (params: BrowserSchema.messages.webviewTagSetTransparent) RequestResult,
     webviewTagSetPassthrough: fn (params: BrowserSchema.messages.webviewTagSetPassthrough) RequestResult,
+    webviewTagSetHidden: fn (params: BrowserSchema.messages.webviewTagSetHidden) RequestResult,
 };
 
 // Browser sends to Zig
@@ -302,5 +303,6 @@ pub const BrowserSchema = struct { //
         pub const webviewTagGetScreenshot = struct { hostId: u32, id: u32 };
         pub const webviewTagSetTransparent = struct { id: u32, transparent: bool };
         pub const webviewTagSetPassthrough = struct { id: u32, enablePassthrough: bool };
+        pub const webviewTagSetHidden = struct { id: u32, hidden: bool };
     };
 };

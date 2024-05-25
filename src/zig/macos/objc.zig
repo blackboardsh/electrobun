@@ -91,6 +91,7 @@ pub extern fn stopWindowMove(webView: *anyopaque) callconv(.C) void;
 pub extern fn getWebviewSnapshot(hostId: u32, id: u32, webView: *anyopaque, snapshotHandler: SnapshotHandler) callconv(.C) void;
 pub extern fn webviewTagSetTransparent(webView: *anyopaque, transparent: bool) callconv(.C) void;
 pub extern fn webviewTagSetPassthrough(webView: *anyopaque, enablePassthrough: bool) callconv(.C) void;
+pub extern fn webviewSetHidden(webView: *anyopaque, hidden: bool) callconv(.C) void;
 
 // fs
 pub extern fn moveToTrash(path: [*:0]const u8) callconv(.C) bool;

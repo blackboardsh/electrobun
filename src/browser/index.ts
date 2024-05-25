@@ -91,6 +91,10 @@ type WebviewTagHandlers = RPCSchema<{
       id: number;
       enablePassthrough: boolean;
     };
+    webviewTagSetHidden: {
+      id: number;
+      hidden: boolean;
+    };
   };
 }>;
 

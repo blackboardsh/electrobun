@@ -130,6 +130,10 @@ pub fn webviewTagSetPassthrough(params: rpcSchema.BrowserSchema.messages.webview
     webview.webviewTagSetPassthrough(.{ .id = params.id, .enablePassthrough = params.enablePassthrough });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
+pub fn webviewTagSetHidden(params: rpcSchema.BrowserSchema.messages.webviewTagSetHidden) RequestResult {
+    webview.webviewSetHidden(.{ .id = params.id, .hidden = params.hidden });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
 
 pub fn createTray(params: rpcSchema.BunSchema.requests.createTray.params) RequestResult {
     _ = tray.createTray(.{
@@ -194,6 +198,7 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagGetScreenshot = webviewTagGetScreenshot,
     .webviewTagSetTransparent = webviewTagSetTransparent,
     .webviewTagSetPassthrough = webviewTagSetPassthrough,
+    .webviewTagSetHidden = webviewTagSetHidden,
 };
 
 pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.params) RequestResult {
@@ -329,6 +334,8 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetTransparent, rpcSchema.BrowserSchema.messages.webviewTagSetTransparent, message.payload);
     } else if (strEql(method, "webviewTagSetPassthrough")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetPassthrough, rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough, message.payload);
+    } else if (strEql(method, "webviewTagSetHidden")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetHidden, rpcSchema.BrowserSchema.messages.webviewTagSetHidden, message.payload);
     }
 }
 

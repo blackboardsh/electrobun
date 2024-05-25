@@ -39,6 +39,7 @@ const ConfigureWebviewTags = (
 
     transparent: boolean = false;
     passthroughEnabled: boolean = false;
+    hidden: boolean = false;
     delegateMode: boolean = false;
 
     constructor() {
@@ -108,7 +109,7 @@ const ConfigureWebviewTags = (
       }
     }
 
-    boundSyncDimensions = () => this.syncDimensions(true);
+    boundSyncDimensions = () => this.syncDimensions();
 
     setPositionCheckLoop(accelerate = false) {
       if (this.positionCheckLoop) {
@@ -278,6 +279,21 @@ const ConfigureWebviewTags = (
       });
     }
 
+    toggleHidden(hidden?: boolean, bypassState?: boolean) {
+      if (!bypassState) {
+        if (typeof hidden === "undefined") {
+          this.hidden = !this.hidden;
+        } else {
+          this.hidden = hidden;
+        }
+      }
+
+      this.zigRpc.send.webviewTagSetHidden({
+        id: this.webviewId,
+        hidden: this.hidden || Boolean(hidden),
+      });
+    }
+
     // Note: Delegate mode can be used when we want to temporarily layer the webview contents
     // in the host webview's z-index. This is done by:
     // 1. getting a screenshot of the webview's contents and setting it to the background of the webviewtag on the host
@@ -286,14 +302,13 @@ const ConfigureWebviewTags = (
       this.delegateMode = delegateMode;
       if (delegateMode === true) {
         this.syncScreenshot();
-        // give it a non-deterministic instant to load to avoid flicker
+        // give it a non-deterministic instant to load to reduce flicker
         setTimeout(() => {
-          this.togglePassthrough(true, true);
-          this.toggleTransparent(true, true);
+          this.toggleHidden(true, true);
         }, 100);
       } else {
-        this.togglePassthrough(this.passthroughEnabled);
-        this.toggleTransparent(this.transparent);
+        this.syncDimensions();
+        this.toggleHidden(this.hidden);
       }
     }
   }

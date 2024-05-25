@@ -428,6 +428,15 @@ pub fn webviewTagSetPassthrough(opts: rpcSchema.BrowserSchema.messages.webviewTa
     objc.webviewTagSetPassthrough(webview.handle, opts.enablePassthrough);
 }
 
+pub fn webviewSetHidden(opts: rpcSchema.BrowserSchema.messages.webviewTagSetHidden) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    objc.webviewSetHidden(webview.handle, opts.hidden);
+}
+
 pub fn remove(opts: rpcSchema.BrowserSchema.messages.webviewTagRemove) void {
     var webview = webviewMap.get(opts.id) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
