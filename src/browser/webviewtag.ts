@@ -41,11 +41,11 @@ const ConfigureWebviewTags = (
     passthroughEnabled: boolean = false;
     hidden: boolean = false;
     delegateMode: boolean = false;
+    hiddenMirrorMode: boolean = false;
 
     constructor() {
       super();
       this.zigRpc = zigRpc;
-      console.log("webview component created.");
 
       // Give it a frame to be added to the dom and render before measuring
       requestAnimationFrame(() => {
@@ -74,13 +74,27 @@ const ConfigureWebviewTags = (
       });
     }
 
+    // Note: since <electrobun-webview> is an anchor for a native webview
+    // on osx even if we hide it, enable mouse passthrough etc. There
+    // are still events like drag events which are natively handled deep in the window manager
+    // and will be handled incorrectly. To get around this for now we need to
+    // move the webview off screen during delegate mode.
+    adjustDimensionsForDelegateMode(rect: DOMRect) {
+      if (this.delegateMode) {
+        rect.x = 0 - rect.width;
+      }
+
+      return rect;
+    }
+
     // Call this via document.querySelector('electrobun-webview').syncDimensions();
     // That way the host can trigger an alignment with the nested webview when they
     // know that they're chaning something in order to eliminate the lag that the
     // catch all loop will catch
     syncDimensions(force: boolean = false) {
       const rect = this.getBoundingClientRect();
-      const { x, y, width, height } = rect;
+      const { x, y, width, height } =
+        this.adjustDimensionsForDelegateMode(rect);
       const lastRect = this.lastRect;
 
       if (
@@ -91,9 +105,9 @@ const ConfigureWebviewTags = (
         lastRect.height !== height
       ) {
         // if we're not already in an accelerated loop then accelerate it
-        // if (!this.positionCheckLoopReset) {
-        this.setPositionCheckLoop(true);
-        // }
+        if (!this.positionCheckLoopReset) {
+          this.setPositionCheckLoop(true);
+        }
 
         this.lastRect = rect;
 
@@ -125,15 +139,15 @@ const ConfigureWebviewTags = (
       const delay = accelerate ? 100 : 400;
 
       if (accelerate) {
-        this.setDelegateMode(true);
+        this.setHiddenMirrorMode(true);
         clearTimeout(this.positionCheckLoopReset);
         this.positionCheckLoopReset = setTimeout(() => {
           this.setPositionCheckLoop(false);
-          this.setDelegateMode(false);
-          // if (!this.transparent) {
-          //   this.clearScreenImage();
-          // }
-        }, 1000);
+          this.setHiddenMirrorMode(false);
+          if (!this.transparent) {
+            this.tryClearScreenImage();
+          }
+        }, 400);
       }
       // Note: Since there's not catch all way to listen for x/y changes
       // we have a 400ms interval to check
@@ -231,18 +245,26 @@ const ConfigureWebviewTags = (
     }
     // This is called from zig, typically with a png data url
     setScreenImage(dataUrl: string) {
-      console.log("setScreenImage");
       // preload the image before applying it so we don't see it load in the dom
       const img = new Image();
       img.src = dataUrl;
       img.onload = () => {
-        // console.log("setScreenImage, dataUrl", dataUrl);
         this.style.backgroundImage = `url(${dataUrl})`;
       };
     }
     clearScreenImage() {
-      console.log("clearScreenImage");
       this.style.backgroundImage = "";
+    }
+
+    tryClearScreenImage() {
+      if (
+        !this.transparent &&
+        !this.hiddenMirrorMode &&
+        !this.delegateMode &&
+        !this.hidden
+      ) {
+        this.clearScreenImage();
+      }
     }
     // This sets the native webview hovering over the dom to be transparent
     toggleTransparent(transparent?: boolean, bypassState?: boolean) {
@@ -255,7 +277,7 @@ const ConfigureWebviewTags = (
       }
 
       if (!this.transparent && !transparent) {
-        this.clearScreenImage();
+        this.tryClearScreenImage();
       }
 
       this.zigRpc.send.webviewTagSetTransparent({
@@ -294,13 +316,33 @@ const ConfigureWebviewTags = (
       });
     }
 
+    toggleDelegateMode(delegateMode?: boolean) {
+      const _newDelegateMode =
+        typeof delegateMode === "undefined" ? !this.delegateMode : delegateMode;
+
+      if (_newDelegateMode) {
+        this.syncScreenshot();
+        // give it a non-deterministic instant to load to reduce flicker
+        setTimeout(() => {
+          this.delegateMode = _newDelegateMode;
+          this.syncDimensions();
+          this.toggleHidden(true, true);
+        }, 100);
+      } else {
+        this.delegateMode = _newDelegateMode;
+        this.syncDimensions();
+        this.tryClearScreenImage();
+        this.toggleHidden(this.hidden);
+      }
+    }
+
     // Note: Delegate mode can be used when we want to temporarily layer the webview contents
     // in the host webview's z-index. This is done by:
     // 1. getting a screenshot of the webview's contents and setting it to the background of the webviewtag on the host
     // 2. setting the hovering native webview for the nested webviewtag to be invisible and pass through mouse events
-    setDelegateMode(delegateMode: boolean) {
-      this.delegateMode = delegateMode;
-      if (delegateMode === true) {
+    setHiddenMirrorMode(enable: boolean) {
+      this.hiddenMirrorMode = enable;
+      if (enable === true) {
         this.syncScreenshot();
         // give it a non-deterministic instant to load to reduce flicker
         setTimeout(() => {
@@ -309,6 +351,7 @@ const ConfigureWebviewTags = (
       } else {
         this.syncDimensions();
         this.toggleHidden(this.hidden);
+        this.tryClearScreenImage();
       }
     }
   }
