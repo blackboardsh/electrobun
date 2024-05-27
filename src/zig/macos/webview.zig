@@ -362,6 +362,24 @@ pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) vo
     });
 }
 
+pub fn canGoBack(opts: rpcSchema.BrowserSchema.requests.webviewTagCanGoBack.params) bool {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}: canGoBack\n", .{opts.id});
+        return false;
+    };
+
+    return objc.webviewCanGoBack(webview.handle);
+}
+
+pub fn canGoForward(opts: rpcSchema.BrowserSchema.requests.webviewTagCanGoForward.params) bool {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}: canGoForward\n", .{opts.id});
+        return false;
+    };
+
+    return objc.webviewCanGoForward(webview.handle);
+}
+
 pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.params) void {
     var webview = webviewMap.get(opts.webviewId) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}: loadURL\n", .{opts.webviewId});

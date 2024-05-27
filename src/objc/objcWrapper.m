@@ -340,6 +340,14 @@ void updatePreloadScriptToWebView(WKWebView *webView, const char *scriptIdentifi
     [contentController addUserScript:newUserScript];
 }
 
+BOOL webviewCanGoBack(WKWebView *webView) {
+    return [webView canGoBack];
+}
+
+BOOL webviewCanGoForward(WKWebView *webView) {
+    return [webView canGoForward];
+}
+
 // NSWindow
 @interface WindowDelegate : NSObject <NSWindowDelegate>
 @end

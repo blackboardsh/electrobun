@@ -187,6 +187,8 @@ pub const handlers = rpcSchema.Handlers{ //
 
 pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagInit = webviewTagInit,
+    .webviewTagCanGoBack = webviewTagCanGoBack,
+    .webviewTagCanGoForward = webviewTagCanGoForward,
     .webviewTagResize = webviewTagResize,
     .webviewTagUpdateSrc = webviewTagUpdateSrc,
     .webviewTagUpdateHtml = webviewTagUpdateHtml,
@@ -236,6 +238,16 @@ pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.pa
     }
 
     return RequestResult{ .errorMsg = null, .payload = null };
+}
+
+pub fn webviewTagCanGoBack(params: rpcSchema.BrowserSchema.requests.webviewTagCanGoBack.params) RequestResult {
+    const canGoBack = webview.canGoBack(.{ .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = .{ .webviewTagCanGoBackResponse = canGoBack } };
+}
+
+pub fn webviewTagCanGoForward(params: rpcSchema.BrowserSchema.requests.webviewTagCanGoForward.params) RequestResult {
+    const canGoForward = webview.canGoForward(.{ .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = .{ .webviewTagCanGoForwardResponse = canGoForward } };
 }
 
 pub fn webviewTagResize(params: rpcSchema.BrowserSchema.messages.webviewTagResize) RequestResult {
@@ -325,6 +337,10 @@ pub fn fromBrowserHandleRequest(request: rpcTypes._RPCRequestPacket) RequestResu
 
     if (strEql(method, "webviewTagInit")) {
         return parseParamsAndCall(fromBrowserHandlers.webviewTagInit, rpcSchema.BrowserSchema.requests.webviewTagInit.params, request.params);
+    } else if (strEql(method, "webviewTagCanGoBack")) {
+        return parseParamsAndCall(fromBrowserHandlers.webviewTagCanGoBack, rpcSchema.BrowserSchema.requests.webviewTagCanGoBack.params, request.params);
+    } else if (strEql(method, "webviewTagCanGoForward")) {
+        return parseParamsAndCall(fromBrowserHandlers.webviewTagCanGoForward, rpcSchema.BrowserSchema.requests.webviewTagCanGoForward.params, request.params);
     } else {
         return RequestResult{ .errorMsg = "unhandled method", .payload = null };
     }

@@ -217,6 +217,9 @@ pub const Requests = struct {
     applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) ZigSchema.requests.applicationMenuEvent.response,
 };
 
+// todo: currently the the keys will be a key of the payload struct because of how unions work in zig.
+// so it'll be payload = .{ webviewTagCAnGoBackResponse: true} since the payload in schema is defined as bool.
+// rather than payload = true;
 pub const RequestResponseType = union(enum) {
     CreateWindowResponse: BunSchema.requests.createWindow.response,
     CreateWebviewResponse: BunSchema.requests.createWebview.response,
@@ -236,6 +239,9 @@ pub const RequestResponseType = union(enum) {
 
     DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
     SendSyncRequestResponse: ZigSchema.requests.sendSyncRequest.response,
+
+    webviewTagCanGoBackResponse: BrowserSchema.requests.webviewTagCanGoBack.response,
+    webviewTagCanGoForwardResponse: BrowserSchema.requests.webviewTagCanGoForward.response,
 };
 
 // todo: is this still used anywhere
@@ -246,7 +252,11 @@ pub const ResponsePayloadType = union(enum) {
 
 // browser -> zig schema
 pub const FromBrowserHandlers = struct {
+    // requests
     webviewTagInit: fn (params: BrowserSchema.requests.webviewTagInit.params) RequestResult,
+    webviewTagCanGoBack: fn (params: BrowserSchema.requests.webviewTagCanGoBack.params) RequestResult,
+    webviewTagCanGoForward: fn (params: BrowserSchema.requests.webviewTagCanGoForward.params) RequestResult,
+    // messages
     webviewTagResize: fn (params: BrowserSchema.messages.webviewTagResize) RequestResult,
     webviewTagUpdateSrc: fn (params: BrowserSchema.messages.webviewTagUpdateSrc) RequestResult,
     webviewTagUpdateHtml: fn (params: BrowserSchema.messages.webviewTagUpdateHtml) RequestResult,
@@ -280,6 +290,14 @@ pub const BrowserSchema = struct { //
                     y: f64,
                 },
             };
+        };
+        pub const webviewTagCanGoBack = struct {
+            pub const params = struct { id: u32 };
+            pub const response = bool;
+        };
+        pub const webviewTagCanGoForward = struct {
+            pub const params = struct { id: u32 };
+            pub const response = bool;
         };
     };
     pub const messages = struct {

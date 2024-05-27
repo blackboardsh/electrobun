@@ -76,6 +76,22 @@ const ConfigureWebviewTags = (
       });
     }
 
+    async canGoBack() {
+      const {
+        payload: { webviewTagCanGoBackResponse },
+      } = await this.zigRpc.request.webviewTagCanGoBack({ id: this.webviewId });
+      return webviewTagCanGoBackResponse;
+    }
+
+    async canGoForward() {
+      const {
+        payload: { webviewTagCanGoForwardResponse },
+      } = await this.zigRpc.request.webviewTagCanGoForward({
+        id: this.webviewId,
+      });
+      return webviewTagCanGoForwardResponse;
+    }
+
     // propertie setters/getters. keeps them in sync with dom attributes
     updateAttr(name: string, value: string | null) {
       if (value) {
