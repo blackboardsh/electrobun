@@ -57,14 +57,16 @@ const ConfigureWebviewTags = (
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
 
+      // todo: replace zig -> webviewtag communication with a global instead of
+      // queryselector based on id
       this.setAttribute("id", this.id);
 
       this.zigRpc.request.webviewTagInit({
         id: this.webviewId,
         windowId: window.__electrobunWindowId,
-        url: this.src || this.getAttribute("src"),
-        html: null,
-        preload: null,
+        url: this.src || this.getAttribute("src") || null,
+        html: this.html || this.getAttribute("html") || null,
+        preload: this.preload || this.getAttribute("preload") || null,
         frame: {
           width: rect.width,
           height: rect.height,
@@ -372,7 +374,7 @@ electrobun-webview {
     display: block;
     width: 800px;
     height: 300px;
-    background: #333;
+    background: #fff;
 }
 `;
 

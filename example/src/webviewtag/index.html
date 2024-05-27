@@ -21,7 +21,8 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
     <button onclick="document.querySelector('electrobun-webview').toggleHidden()">hide webview</button>
     <button onclick="document.querySelector('electrobun-webview').toggleDelegateMode()">Toggle delegate mode</button>
     
-    <electrobun-webview  src="https://electrobun.dev" ></electrobun-webview>    
+    <electrobun-webview  src="https://electrobun.dev" preload="" ></electrobun-webview>    
+    <electrobun-webview preload="window.onload = () => {document.body.innerHTML += 'hello from preload';}"  html="<html><body><h1>webview tag with html</h1></body></html>" ></electrobun-webview>    
     <h2>Test loading a bundled png via views:// scheme</h2>
     <img src="views://webviewtag/electrobun.png" />
 

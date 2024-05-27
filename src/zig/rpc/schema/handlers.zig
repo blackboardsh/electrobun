@@ -226,8 +226,12 @@ pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.pa
 
     _ = addWebviewToWindow(.{ .webviewId = webviewId, .windowId = windowId });
 
-    // note this will be a separate thing as well
-    _ = loadURL(.{ .webviewId = webviewId, .url = params.url.? });
+    if (params.url) |url| {
+        // note this will be a separate thing as well
+        _ = loadURL(.{ .webviewId = webviewId, .url = url });
+    } else if (params.html) |html| {
+        _ = loadHTML(.{ .webviewId = webviewId, .html = html });
+    }
 
     return RequestResult{ .errorMsg = null, .payload = null };
 }
