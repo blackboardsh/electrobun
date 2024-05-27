@@ -76,6 +76,39 @@ const ConfigureWebviewTags = (
       });
     }
 
+    // propertie setters/getters. keeps them in sync with dom attributes
+    updateAttr(name: string, value: string | null) {
+      if (value) {
+        this.setAttribute(name, value);
+      } else {
+        this.removeAttribute(name);
+      }
+    }
+
+    get src() {
+      return this.getAttribute("src");
+    }
+
+    set src(value) {
+      this.updateAttr("src", value);
+    }
+
+    get html() {
+      return this.getAttribute("html");
+    }
+
+    set html(value) {
+      this.updateAttr("html", value);
+    }
+
+    get preload() {
+      return this.getAttribute("preload");
+    }
+
+    set preload(value) {
+      this.updateAttr("preload", value);
+    }
+
     // Note: since <electrobun-webview> is an anchor for a native webview
     // on osx even if we hide it, enable mouse passthrough etc. There
     // are still events like drag events which are natively handled deep in the window manager
