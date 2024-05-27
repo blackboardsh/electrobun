@@ -183,6 +183,7 @@ type ZigHandlers = RPCSchema<{
         pipePrefix: string;
         url: string | null;
         html: string | null;
+        preload: string | null;
         frame: {
           x: number;
           y: number;

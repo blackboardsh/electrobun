@@ -307,6 +307,39 @@ void addPreloadScriptToWebView(WKWebView *webView, const char *scriptContent, BO
     [webView.configuration.userContentController addUserScript:userScript];
 }
 
+
+// This adds a commend with a unique script identifier to the user script, and removes any existing ones with that identifier
+// This is useful for cases where you want to change an existing user script during the lifetime of a webview
+void updatePreloadScriptToWebView(WKWebView *webView, const char *scriptIdentifier, const char *scriptContent, BOOL forMainFrameOnly) {
+    WKUserContentController *contentController = webView.configuration.userContentController;
+    
+    // Prepare the script identifier as a comment
+    NSString *identifierComment = [NSString stringWithFormat:@"// %@\n", [NSString stringWithUTF8String:scriptIdentifier]];
+    NSString *newScriptSource = [identifierComment stringByAppendingString:[NSString stringWithUTF8String:scriptContent]];
+    
+    // Store existing scripts except the one to be updated
+    NSMutableArray *newScripts = [NSMutableArray array];
+    for (WKUserScript *userScript in contentController.userScripts) {
+        if (![userScript.source containsString:identifierComment]) {
+            [newScripts addObject:userScript];
+        }
+    }
+
+    // Clear all scripts
+    [contentController removeAllUserScripts];
+    
+    // Add back the non-updated scripts
+    for (WKUserScript *userScript in newScripts) {
+        [contentController addUserScript:userScript];
+    }
+
+    // Add the new user script
+    WKUserScript *newUserScript = [[WKUserScript alloc] initWithSource:newScriptSource
+                                                          injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                       forMainFrameOnly:forMainFrameOnly];
+    [contentController addUserScript:newUserScript];
+}
+
 // NSWindow
 @interface WindowDelegate : NSObject <NSWindowDelegate>
 @end

@@ -189,6 +189,8 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagInit = webviewTagInit,
     .webviewTagResize = webviewTagResize,
     .webviewTagUpdateSrc = webviewTagUpdateSrc,
+    .webviewTagUpdateHtml = webviewTagUpdateHtml,
+    .webviewTagUpdatePreload = webviewTagUpdatePreload,
     .webviewTagGoBack = webviewTagGoBack,
     .webviewTagGoForward = webviewTagGoForward,
     .webviewTagReload = webviewTagReload,
@@ -262,6 +264,21 @@ pub fn webviewTagUpdateSrc(params: rpcSchema.BrowserSchema.messages.webviewTagUp
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
+pub fn webviewTagUpdateHtml(params: rpcSchema.BrowserSchema.messages.webviewTagUpdateHtml) RequestResult {
+    webview.loadHTML(.{
+        .webviewId = params.id,
+        .html = params.html,
+    });
+
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+
+pub fn webviewTagUpdatePreload(params: rpcSchema.BrowserSchema.messages.webviewTagUpdatePreload) RequestResult {
+    webview.updatePreloadScriptToWebview(params.id, "electrobun_custom_preload_script", params.preload, true);
+
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+
 // todo: This is currently O(n), in the worst case it needs to do a mem.eql for every method
 // ideally we modify rpcAnywhere to use enum/int for method name instead of the string method names
 // so we can parse it into a zig enum and do an optimized lookup that can take advantage of binary search
@@ -320,6 +337,10 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagResize, rpcSchema.BrowserSchema.messages.webviewTagResize, message.payload);
     } else if (strEql(method, "webviewTagUpdateSrc")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdateSrc, rpcSchema.BrowserSchema.messages.webviewTagUpdateSrc, message.payload);
+    } else if (strEql(method, "webviewTagUpdateHtml")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdateHtml, rpcSchema.BrowserSchema.messages.webviewTagUpdateHtml, message.payload);
+    } else if (strEql(method, "webviewTagUpdatePreload")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdatePreload, rpcSchema.BrowserSchema.messages.webviewTagUpdatePreload, message.payload);
     } else if (strEql(method, "webviewTagGoBack")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagGoBack, rpcSchema.BrowserSchema.messages.webviewTagGoBack, message.payload);
     } else if (strEql(method, "webviewTagGoForward")) {

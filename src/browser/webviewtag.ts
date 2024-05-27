@@ -199,12 +199,16 @@ const ConfigureWebviewTags = (
 
     static get observedAttributes() {
       // TODO: support html, preload, and other stuff here
-      return ["src", "class", "style"];
+      return ["src", "html", "preload", "class", "style"];
     }
 
     attributeChangedCallback(name, oldValue, newValue) {
       if (name === "src" && oldValue !== newValue) {
         this.updateIFrameSrc(newValue);
+      } else if (name === "html" && oldValue !== newValue) {
+        this.updateIFrameHtml(newValue);
+      } else if (name === "preload" && oldValue !== newValue) {
+        this.updateIFramePreload(newValue);
       } else {
         this.syncDimensions();
       }
@@ -214,6 +218,20 @@ const ConfigureWebviewTags = (
       this.zigRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
         url: src,
+      });
+    }
+
+    updateIFrameHtml(html: string) {
+      this.zigRpc.send.webviewTagUpdateHtml({
+        id: this.webviewId,
+        html,
+      });
+    }
+
+    updateIFramePreload(preload: string) {
+      this.zigRpc.send.webviewTagUpdatePreload({
+        id: this.webviewId,
+        preload,
       });
     }
 

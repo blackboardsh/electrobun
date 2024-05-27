@@ -75,6 +75,7 @@ pub extern fn addWebviewToWindow(window: *anyopaque, view: *anyopaque) callconv(
 // webview
 pub extern fn createAndReturnWKWebView(webviewId: u32, frame: NSRect, assetFileLoader: FileLoader, autoResize: bool) callconv(.C) *anyopaque;
 pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
+pub extern fn updatePreloadScriptToWebView(webView: *anyopaque, scriptIdentifier: [*:0]const u8, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;
 pub extern fn loadHTMLInWebView(webView: *anyopaque, html: [*:0]const u8) callconv(.C) void;
 pub extern fn setNavigationDelegateWithCallback(webView: *anyopaque, webviewId: u32, delegate: *const fn (u32, [*:0]const u8) bool) callconv(.C) *anyopaque;

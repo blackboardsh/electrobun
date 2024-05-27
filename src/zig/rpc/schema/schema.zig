@@ -249,6 +249,8 @@ pub const FromBrowserHandlers = struct {
     webviewTagInit: fn (params: BrowserSchema.requests.webviewTagInit.params) RequestResult,
     webviewTagResize: fn (params: BrowserSchema.messages.webviewTagResize) RequestResult,
     webviewTagUpdateSrc: fn (params: BrowserSchema.messages.webviewTagUpdateSrc) RequestResult,
+    webviewTagUpdateHtml: fn (params: BrowserSchema.messages.webviewTagUpdateHtml) RequestResult,
+    webviewTagUpdatePreload: fn (params: BrowserSchema.messages.webviewTagUpdatePreload) RequestResult,
     webviewTagGoBack: fn (params: BrowserSchema.messages.webviewTagGoBack) RequestResult,
     webviewTagGoForward: fn (params: BrowserSchema.messages.webviewTagGoForward) RequestResult,
     webviewTagReload: fn (params: BrowserSchema.messages.webviewTagReload) RequestResult,
@@ -293,6 +295,14 @@ pub const BrowserSchema = struct { //
         pub const webviewTagUpdateSrc = struct {
             id: u32,
             url: []const u8,
+        };
+        pub const webviewTagUpdateHtml = struct {
+            id: u32,
+            html: []const u8,
+        };
+        pub const webviewTagUpdatePreload = struct {
+            id: u32,
+            preload: []const u8,
         };
         pub const webviewTagGoBack = struct { id: u32 };
         pub const webviewTagGoForward = struct { id: u32 };

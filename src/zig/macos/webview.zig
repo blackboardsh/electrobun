@@ -167,10 +167,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         // },
     }, viewsHandler, opts.autoResize);
 
-    if (opts.preload) |preload| {
-        addPreloadScriptToWebview(objcWebview, preload, true);
-    }
-
     // Can only define functions inline in zig within a struct
     const delegate = objc.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
         fn decideNavigation(webviewId: u32, url: [*:0]const u8) bool {
@@ -307,10 +303,15 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     // we want to make this a preload script so that it gets re-applied after navigations before any
     // other code runs.
     addPreloadScriptToWebview(_webview.handle, jsScript, true);
+
+    // Add user's custom preload script if set
+    if (opts.preload) |preload| {
+        updatePreloadScriptToWebview(opts.id, "electrobun_custom_preload_script", preload, true);
+    }
 }
 
 // todo: move everything to cStrings or non-CStrings. just pick one.
-pub fn addPreloadScriptToWebview(objcWindow: *anyopaque, scriptOrPath: []const u8, allFrames: bool) void {
+pub fn addPreloadScriptToWebview(webview: *anyopaque, scriptOrPath: []const u8, allFrames: bool) void {
     var script: []const u8 = undefined;
 
     // If it's a views:// url safely load from disk otherwise treat it as js
@@ -321,7 +322,28 @@ pub fn addPreloadScriptToWebview(objcWindow: *anyopaque, scriptOrPath: []const u
         script = scriptOrPath;
     }
 
-    objc.addPreloadScriptToWebView(objcWindow, utils.toCString(script), allFrames);
+    objc.addPreloadScriptToWebView(webview, utils.toCString(script), allFrames);
+}
+
+pub fn updatePreloadScriptToWebview(webviewId: u32, identifier: []const u8, scriptOrPath: []const u8, allFrames: bool) void {
+    var webview = webviewMap.get(webviewId) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}: resizeWebview\n", .{webviewId});
+        return;
+    };
+
+    var script: []const u8 = undefined;
+
+    // If it's a views:// url safely load from disk otherwise treat it as js
+    if (std.mem.startsWith(u8, scriptOrPath, ViewsScheme)) {
+        const fileResult = readAssetFromDisk(utils.toCString(scriptOrPath));
+        script = fileResult;
+    } else {
+        script = scriptOrPath;
+    }
+
+    // todo: remove only the user-defined custom script
+
+    objc.updatePreloadScriptToWebView(webview.handle, utils.toCString(identifier), utils.toCString(script), allFrames);
 }
 
 pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) void {
