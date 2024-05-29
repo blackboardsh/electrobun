@@ -191,7 +191,7 @@ void runNSApplication() {
 @end
 
 
-WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader, zigStartURLSchemeTaskCallback httpsLoader, bool autoResize) {
+WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader, bool autoResize) {
     // Create a default WKWebViewConfiguration
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];    
 
@@ -206,7 +206,7 @@ WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartUR
 
     // todo: remove - we're not using this anymore
     MyURLSchemeHandler *httpsSchemeHandler = [[MyURLSchemeHandler alloc] init];
-    httpsSchemeHandler.fileLoader = httpsLoader;    
+    
     httpsSchemeHandler.webviewId = webviewId;
 
     [configuration setURLSchemeHandler:httpsSchemeHandler forURLScheme:@"remote"];

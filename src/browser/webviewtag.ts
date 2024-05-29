@@ -196,6 +196,7 @@ const ConfigureWebviewTags = (
     }
 
     boundSyncDimensions = () => this.syncDimensions();
+    boundForceSyncDimensions = () => this.syncDimensions(true);
 
     setPositionCheckLoop(accelerate = false) {
       if (this.positionCheckLoop) {
@@ -247,7 +248,7 @@ const ConfigureWebviewTags = (
       // In those cases the getBoundingClientRect() will return the same value, but
       // we still need to send it to objc to calculate from its bottom left position
       // otherwise it'll move around unexpectedly.
-      window.addEventListener("resize", this.boundSyncDimensions);
+      window.addEventListener("resize", this.boundForceSyncDimensions);
 
       window.addEventListener("scroll", this.boundSyncDimensions);
 
@@ -262,7 +263,7 @@ const ConfigureWebviewTags = (
       this.resizeObserver?.disconnect();
       this.intersectionObserver?.disconnect();
       this.mutationObserver?.disconnect();
-      window.removeEventListener("resize", this.boundSyncDimensions);
+      window.removeEventListener("resize", this.boundForceSyncDimensions);
       window.removeEventListener("scroll", this.boundSyncDimensions);
       this.zigRpc.send.webviewTagRemove({ id: this.webviewId });
     }
@@ -463,6 +464,7 @@ electrobun-webview {
     width: 800px;
     height: 300px;
     background: #fff;
+    background-repeat: no-repeat!important;
 }
 `;
 
