@@ -217,7 +217,7 @@ WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartUR
     [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
 
     // Allocate and initialize the WKWebView
-    TransparentWKWebView *webView = [[TransparentWKWebView alloc] initWithFrame:frame configuration:configuration];
+    TransparentWKWebView *webView = [[TransparentWKWebView alloc] initWithFrame:frame configuration:configuration];    
 
     // Note: This makes webview have a transparent background by default.
     // todo: consider making this configurable during webview creation and/or
@@ -519,19 +519,50 @@ typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const 
 
 @end
 
+// UIDelegate, handle opening new windows
+@interface MyWebViewUIDelegate : NSObject <WKUIDelegate>
+@property (nonatomic, assign) WebviewEventHandler zigEventHandler;
+@property (nonatomic, assign) uint32_t webviewId;
+@end
+
+@implementation MyWebViewUIDelegate
+
+// Handle new window requests by emitting an event
+// user can handle the new-window-open event and choose to create a new webview, new window, new tab, or whatever
+// fits their app. They can also inject js into the browser context to capture cmd + t and open a new window or tab or 
+// whatever
+- (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)navigationAction windowFeatures:(WKWindowFeatures *)windowFeatures {    
+    if (!navigationAction.targetFrame.isMainFrame) {        
+        self.zigEventHandler(self.webviewId, "new-window-open", navigationAction.request.URL.absoluteString.UTF8String);        
+    }
+    return nil;
+}
+
+@end
+
 
 
 MyNavigationDelegate* setNavigationDelegateWithCallback(WKWebView *webView, uint32_t webviewId, DecideNavigationCallback callback, WebviewEventHandler eventHandler) {        
-    MyNavigationDelegate *delegate = [[MyNavigationDelegate alloc] init];
-    delegate.zigCallback = callback;
-    delegate.zigEventHandler = eventHandler;
-    delegate.webviewId = webviewId;
-    webView.navigationDelegate = delegate;        
+    MyNavigationDelegate *navigationDelegate = [[MyNavigationDelegate alloc] init];
+    navigationDelegate.zigCallback = callback;
+    navigationDelegate.zigEventHandler = eventHandler;
+    navigationDelegate.webviewId = webviewId;
+    webView.navigationDelegate = navigationDelegate;        
     
-    objc_setAssociatedObject(webView, "NavigationDelegate", delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(webView, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+
+    MyWebViewUIDelegate *uiDelegate = [[MyWebViewUIDelegate alloc] init];
+    uiDelegate.zigEventHandler = eventHandler;
+    uiDelegate.webviewId = webviewId;
+    webView.UIDelegate = uiDelegate;
     
-    return delegate;
+    objc_setAssociatedObject(webView, "UIDelegate", uiDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    
+    // todo: we don't have to return this to free from zig since we're using objc_setAssociatedObject now
+    return navigationDelegate;
 }
+
 
 // add postMessage handler
 typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);

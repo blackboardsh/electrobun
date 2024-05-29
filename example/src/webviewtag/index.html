@@ -47,6 +47,10 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
             console.log('dom-ready is fired', e.detail);
         });
 
+        document.querySelector('electrobun-webview').on('new-window-open', (e) => {
+            console.log('new-window-open is fired', e.detail);
+        });
+
     </script>
 </body>
 </html>

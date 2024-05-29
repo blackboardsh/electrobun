@@ -446,6 +446,7 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
         "did-navigate-in-page": "didNavigateInPage",
         "did-commit-navigation": "didCommitNavigation",
         "dom-ready": "domReady",
+        "new-window-open": "newWindowOpen",
       };
 
       // todo: the events map should use the same hyphenated names instead of camelCase

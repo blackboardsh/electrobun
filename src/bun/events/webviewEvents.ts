@@ -14,4 +14,6 @@ export default {
     new ElectrobunEvent<{ detail: string }, {}>("did-commit-navigation", data),
   domReady: (data) =>
     new ElectrobunEvent<{ detail: string }, {}>("dom-ready", data),
+  newWindowOpen: (data) =>
+    new ElectrobunEvent<{ detail: string }, {}>("new-window-open", data),
 };
