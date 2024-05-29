@@ -36,6 +36,7 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
     // std.log.info("createWebview handler preload {s}", .{params.preload});
     webview.createWebview(.{
         .id = params.id,
+        .hostWebviewId = null,
         .pipePrefix = params.pipePrefix,
         .url = params.url,
         .html = params.html,
@@ -134,6 +135,10 @@ pub fn webviewTagSetHidden(params: rpcSchema.BrowserSchema.messages.webviewTagSe
     webview.webviewSetHidden(.{ .id = params.id, .hidden = params.hidden });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
+pub fn webviewEvent(params: rpcSchema.BrowserSchema.messages.webviewEvent) RequestResult {
+    webview.webviewEvent(.{ .id = params.id, .eventName = params.eventName, .detail = params.detail });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
 
 pub fn createTray(params: rpcSchema.BunSchema.requests.createTray.params) RequestResult {
     _ = tray.createTray(.{
@@ -203,6 +208,7 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagSetTransparent = webviewTagSetTransparent,
     .webviewTagSetPassthrough = webviewTagSetPassthrough,
     .webviewTagSetHidden = webviewTagSetHidden,
+    .webviewEvent = webviewEvent,
 };
 
 pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.params) RequestResult {
@@ -212,6 +218,7 @@ pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.pa
         .id = params.id,
         // note: currently setting to empty string because zig skips over pipe creation for webview tags
         // for now.
+        .hostWebviewId = params.hostWebviewId,
         .pipePrefix = "",
         .url = params.url,
         .html = params.html,
@@ -377,6 +384,8 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetPassthrough, rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough, message.payload);
     } else if (strEql(method, "webviewTagSetHidden")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetHidden, rpcSchema.BrowserSchema.messages.webviewTagSetHidden, message.payload);
+    } else if (strEql(method, "webviewEvent")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewEvent, rpcSchema.BrowserSchema.messages.webviewEvent, message.payload);
     }
 }
 

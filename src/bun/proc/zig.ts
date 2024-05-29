@@ -328,6 +328,16 @@ type BunHandlers = RPCSchema<{
         success: boolean;
       };
     };
+    webviewEvent: {
+      params: {
+        id: number;
+        eventName: string;
+        detail: string;
+      };
+      response: {
+        success: boolean;
+      };
+    };
   };
 }>;
 
@@ -427,6 +437,37 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
       let result;
       // global event
       result = electrobunEventEmitter.emitEvent(event);
+
+      return { success: true };
+    },
+    webviewEvent: ({ id, eventName, detail }) => {
+      const eventMap = {
+        "did-navigate": "didNavigate",
+        "did-navigate-in-page": "didNavigateInPage",
+        "did-commit-navigation": "didCommitNavigation",
+        "dom-ready": "domReady",
+      };
+
+      // todo: the events map should use the same hyphenated names instead of camelCase
+      const handler =
+        electrobunEventEmitter.events.webview[eventMap[eventName]];
+
+      if (!handler) {
+        console.log(`!!!no handler for webview event ${eventName}`);
+        return { success: false };
+      }
+
+      const event = handler({
+        id,
+        detail,
+      });
+
+      let result;
+      // global event
+      result = electrobunEventEmitter.emitEvent(event);
+
+      result = electrobunEventEmitter.emitEvent(event, id);
+      // Note: we don't care about the result right now
 
       return { success: true };
     },

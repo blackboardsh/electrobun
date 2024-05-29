@@ -34,6 +34,7 @@ fn readAssetFromDisk(url: [*:0]const u8) []const u8 {
 const WebviewType = struct {
     id: u32,
     handle: *anyopaque,
+    hostWebviewId: ?u32,
     frame: struct {
         width: f64,
         height: f64,
@@ -82,6 +83,7 @@ const WebviewType = struct {
 
 const CreateWebviewOpts = struct { //
     id: u32,
+    hostWebviewId: ?u32,
     pipePrefix: []const u8,
     url: ?[]const u8,
     html: ?[]const u8,
@@ -179,7 +181,15 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
 
             return _response.allow;
         }
-    }.decideNavigation);
+    }.decideNavigation, struct {
+        fn handleWebviewEvent(webviewId: u32, eventName: [*:0]const u8, url: [*:0]const u8) void {
+            webviewEvent(.{
+                .id = webviewId,
+                .eventName = utils.fromCString(eventName),
+                .detail = utils.fromCString(url),
+            });
+        }
+    }.handleWebviewEvent);
 
     const bunBridgeHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "bunBridge", struct {
         fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) void {
@@ -275,6 +285,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
 
     const _webview = WebviewType{ //
         .id = opts.id,
+        .hostWebviewId = opts.hostWebviewId,
         .frame = .{
             .width = opts.frame.width,
             .height = opts.frame.height,
@@ -295,14 +306,37 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     };
 
     // Note: Keep this in sync with browser api
-    var jsScript = std.fmt.allocPrint(alloc, "window.__electrobunWebviewId = {}\n", .{opts.id}) catch {
+    var jsScriptSubstitutions = std.fmt.allocPrint(alloc, "window.__electrobunWebviewId = {};\n", .{opts.id}) catch {
         return;
     };
-    defer alloc.free(jsScript);
+    defer alloc.free(jsScriptSubstitutions);
+
+    // todo: move this to a separate file and embed it in zig so it can be properly
+    // edited as js
+    var jsScript = utils.concatStrings(jsScriptSubstitutions,
+        \\ function emitWebviewEvent (eventName, detail) {
+        \\     window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
+        \\ };                 
+        \\
+        \\ window.addEventListener('load', function(event) {
+        \\   // Check if the current window is the top-level window        
+        \\   if (window === window.top) {        
+        \\    emitWebviewEvent('dom-ready', document.location.href);        
+        \\   }
+        \\ });
+        \\
+        \\ window.addEventListener('popstate', function(event) {
+        \\  emitWebviewEvent('did-navigate-in-page', window.location.href);
+        \\ });
+        \\
+        \\ window.addEventListener('hashchange', function(event) {
+        \\  emitWebviewEvent('did-navigate-in-page', window.location.href);    
+        \\ });
+    );
 
     // we want to make this a preload script so that it gets re-applied after navigations before any
     // other code runs.
-    addPreloadScriptToWebview(_webview.handle, jsScript, true);
+    addPreloadScriptToWebview(_webview.handle, jsScript, false);
 
     // Add user's custom preload script if set
     if (opts.preload) |preload| {
@@ -436,6 +470,8 @@ pub fn webviewTagGetScreenshot(opts: rpcSchema.BrowserSchema.messages.webviewTag
     const zigHandler = struct {
         fn zigHandler(hostWebviewId: u32, webviewToScreenshotId: u32, pngData: [*:0]const u8) void {
             // Note: webviewId is the host webview that
+            // todo: hostWebviewId is now stored in WebviewType in the webviewMap so we don't have to pass it through
+            // we can fetch it from the hashmap
             const pngDataURISlice = utils.fromCString(pngData);
             var jsCall = std.fmt.allocPrint(alloc, "document.querySelector('#electrobun-webview-{d}').setScreenImage('{s}');\n", .{ webviewToScreenshotId, pngDataURISlice }) catch {
                 return;
@@ -475,6 +511,33 @@ pub fn webviewSetHidden(opts: rpcSchema.BrowserSchema.messages.webviewTagSetHidd
     };
 
     objc.webviewSetHidden(webview.handle, opts.hidden);
+}
+
+pub fn webviewEvent(opts: rpcSchema.BrowserSchema.messages.webviewEvent) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    _ = rpc.request.webviewEvent(.{
+        .id = webview.id,
+        .eventName = opts.eventName,
+        .detail = opts.detail,
+    });
+
+    // If this is a webview tag, we need to forward the event to the host webview so any in-browser listeners
+    // can be notified.
+    if (webview.hostWebviewId) |hostId| {
+        // todo: can we type this at all? maybe convert to json or something.
+        // todo: use a global register in the browser-context for webview tags instead of querySelectors and attributes
+        // Note: see webviewtag. emitEvent(name, detail) {}
+        var jsCall = std.fmt.allocPrint(alloc, "document.querySelector('#electrobun-webview-{d}').emit(`{s}`, `{s}`);\n", .{ webview.id, opts.eventName, opts.detail }) catch {
+            return;
+        };
+        defer alloc.free(jsCall);
+
+        sendLineToWebview(hostId, jsCall);
+    }
 }
 
 pub fn remove(opts: rpcSchema.BrowserSchema.messages.webviewTagRemove) void {

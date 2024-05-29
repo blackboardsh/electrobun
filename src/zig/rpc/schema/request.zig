@@ -44,4 +44,12 @@ pub fn applicationMenuEvent(params: rpcSchema.ZigSchema.requests.applicationMenu
     return parsedPayload.value;
 }
 
-pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest, .trayEvent = trayEvent, .applicationMenuEvent = applicationMenuEvent };
+pub fn webviewEvent(params: rpcSchema.ZigSchema.requests.webviewEvent.params) rpcSchema.ZigSchema.requests.webviewEvent.response {
+    const rawPayload = rpcStdout.sendRequest("webviewEvent", params);
+    const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.webviewEvent.response, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
+}
+
+pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest, .trayEvent = trayEvent, .applicationMenuEvent = applicationMenuEvent, .webviewEvent = webviewEvent };

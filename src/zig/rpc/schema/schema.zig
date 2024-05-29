@@ -51,6 +51,18 @@ pub const ZigSchema = struct { //
                 success: bool,
             };
         };
+        // Note: this should be a message not a request
+        // no need to block the thread we don't need a response.
+        pub const webviewEvent = struct {
+            pub const params = struct {
+                id: u32,
+                eventName: []const u8,
+                detail: []const u8,
+            };
+            pub const response = struct {
+                success: bool,
+            };
+        };
     };
 };
 
@@ -215,6 +227,7 @@ pub const Requests = struct {
     log: fn (params: ZigSchema.requests.log.params) ZigSchema.requests.log.response,
     trayEvent: fn (params: ZigSchema.requests.trayEvent.params) ZigSchema.requests.trayEvent.response,
     applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) ZigSchema.requests.applicationMenuEvent.response,
+    webviewEvent: fn (params: ZigSchema.requests.webviewEvent.params) ZigSchema.requests.webviewEvent.response,
 };
 
 // todo: currently the the keys will be a key of the payload struct because of how unions work in zig.
@@ -271,6 +284,7 @@ pub const FromBrowserHandlers = struct {
     webviewTagSetTransparent: fn (params: BrowserSchema.messages.webviewTagSetTransparent) RequestResult,
     webviewTagSetPassthrough: fn (params: BrowserSchema.messages.webviewTagSetPassthrough) RequestResult,
     webviewTagSetHidden: fn (params: BrowserSchema.messages.webviewTagSetHidden) RequestResult,
+    webviewEvent: fn (params: BrowserSchema.messages.webviewEvent) RequestResult,
 };
 
 // Browser sends to Zig
@@ -280,6 +294,7 @@ pub const BrowserSchema = struct { //
             pub const params = struct {
                 id: u32,
                 windowId: u32,
+                hostWebviewId: u32,
                 url: ?[]const u8,
                 html: ?[]const u8,
                 preload: ?[]const u8,
@@ -332,5 +347,10 @@ pub const BrowserSchema = struct { //
         pub const webviewTagSetTransparent = struct { id: u32, transparent: bool };
         pub const webviewTagSetPassthrough = struct { id: u32, enablePassthrough: bool };
         pub const webviewTagSetHidden = struct { id: u32, hidden: bool };
+        pub const webviewEvent = struct {
+            id: u32,
+            eventName: []const u8,
+            detail: []const u8,
+        };
     };
 };

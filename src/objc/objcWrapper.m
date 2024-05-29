@@ -492,25 +492,39 @@ NSRect getWindowBounds(NSWindow *window) {
 
 // navigation delegate that 
 typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
+typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
 
 @interface MyNavigationDelegate : NSObject <WKNavigationDelegate>
 @property (nonatomic, assign) DecideNavigationCallback zigCallback;
+@property (nonatomic, assign) WebviewEventHandler zigEventHandler;
 @property (nonatomic, assign) uint32_t webviewId;
 @end
 
 @implementation MyNavigationDelegate
 
-- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {        
-    NSURL *url = navigationAction.request.URL;
-    BOOL shouldAllow = self.zigCallback(self.webviewId, url.absoluteString.UTF8String);
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {            
+    NSURL *newURL = navigationAction.request.URL;
+    
+    BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
     decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
+}
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {    
+    self.zigEventHandler(self.webviewId, "did-navigate", webView.URL.absoluteString.UTF8String);    
+}
+
+- (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {            
+    self.zigEventHandler(self.webviewId, "did-commit-navigation", webView.URL.absoluteString.UTF8String);    
 }
 
 @end
 
-MyNavigationDelegate* setNavigationDelegateWithCallback(WKWebView *webView, uint32_t webviewId, DecideNavigationCallback callback) {        
+
+
+MyNavigationDelegate* setNavigationDelegateWithCallback(WKWebView *webView, uint32_t webviewId, DecideNavigationCallback callback, WebviewEventHandler eventHandler) {        
     MyNavigationDelegate *delegate = [[MyNavigationDelegate alloc] init];
     delegate.zigCallback = callback;
+    delegate.zigEventHandler = eventHandler;
     delegate.webviewId = webviewId;
     webView.navigationDelegate = delegate;        
     

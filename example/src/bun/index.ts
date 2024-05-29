@@ -257,6 +257,13 @@ wikiWindow.webview.on("will-navigate", (e) => {
   }
 });
 
+wikiWindow.webview.on("did-navigate", (e) => {
+  console.log(
+    "did-navigate event handler in bun for wikiWindow",
+    e.data.detail
+  );
+});
+
 wikiWindow.setTitle("New title from bun");
 
 setTimeout(() => {

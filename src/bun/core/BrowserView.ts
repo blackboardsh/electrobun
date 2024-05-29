@@ -180,7 +180,15 @@ export class BrowserView<T> {
   // name should only allow browserView events
   // Note: normalize event names to willNavigate instead of ['will-navigate'] to save
   // 5 characters per usage and allow minification to be more effective.
-  on(name: "will-navigate", handler) {
+  on(
+    name:
+      | "will-navigate"
+      | "did-navigate"
+      | "did-navigate-in-page"
+      | "did-commit-navigation"
+      | "dom-ready",
+    handler
+  ) {
     const specificName = `${name}-${this.id}`;
     electrobunEventEmitter.on(specificName, handler);
   }

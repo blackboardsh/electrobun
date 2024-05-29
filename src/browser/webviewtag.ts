@@ -1,3 +1,9 @@
+type WebviewEventTypes =
+  | "did-navigate"
+  | "did-navigate-in-page"
+  | "did-commit-navigation"
+  | "dom-ready";
+
 const ConfigureWebviewTags = (
   enableWebviewTags: boolean,
   zigRpc: (params: any) => any
@@ -63,6 +69,7 @@ const ConfigureWebviewTags = (
 
       this.zigRpc.request.webviewTagInit({
         id: this.webviewId,
+        hostWebviewId: window.__electrobunWebviewId,
         windowId: window.__electrobunWindowId,
         url: this.src || this.getAttribute("src") || null,
         html: this.html || this.getAttribute("html") || null,
@@ -136,6 +143,20 @@ const ConfigureWebviewTags = (
       }
 
       return rect;
+    }
+
+    // Note: in the brwoser-context we can ride on the dom element's uilt in event emitter for managing custom events
+    on(event: WebviewEventTypes, listener: () => {}) {
+      this.addEventListener(event, listener);
+    }
+
+    off(event: WebviewEventTypes, listener: () => {}) {
+      this.removeEventListener(event, listener);
+    }
+
+    // This is typically called by injected js from zig
+    emit(event: WebviewEventTypes, detail: any) {
+      this.dispatchEvent(new CustomEvent(event, { detail }));
     }
 
     // Call this via document.querySelector('electrobun-webview').syncDimensions();
