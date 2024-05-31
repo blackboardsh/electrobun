@@ -278,6 +278,13 @@ type ZigHandlers = RPCSchema<{
       };
       response: void;
     };
+    showContextMenu: {
+      params: {
+        // json string of config
+        menuConfig: string;
+      };
+      response: void;
+    };
   };
 }>;
 
@@ -322,6 +329,14 @@ type BunHandlers = RPCSchema<{
     applicationMenuEvent: {
       params: {
         id: number;
+        action: string;
+      };
+      response: {
+        success: boolean;
+      };
+    };
+    contextMenuEvent: {
+      params: {
         action: string;
       };
       response: {
@@ -431,6 +446,17 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
     applicationMenuEvent: ({ id, action }) => {
       const event = electrobunEventEmitter.events.app.applicationMenuClicked({
         id,
+        action,
+      });
+
+      let result;
+      // global event
+      result = electrobunEventEmitter.emitEvent(event);
+
+      return { success: true };
+    },
+    contextMenuEvent: ({ action }) => {
+      const event = electrobunEventEmitter.events.app.applicationMenuClicked({
         action,
       });
 

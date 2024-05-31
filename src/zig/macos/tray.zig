@@ -83,3 +83,21 @@ fn applicationMenuHandler(id: u32, action: [*:0]const u8) void {
 pub fn setApplicationMenu(opts: rpcSchema.BunSchema.requests.setApplicationMenu.params) void {
     _ = objc.setApplicationMenu(utils.toCString(opts.menuConfig), applicationMenuHandler);
 }
+
+fn contextMenuHandler(id: u32, action: [*:0]const u8) void {
+    std.debug.print("contextMenuHandler: {d} {s}\n", .{ id, utils.fromCString(action) });
+    // note: we don't need an id here, it's just a remnant of using the trayhandler
+    // in objc
+    // _ = id;
+    // Note: the action will be an empty string if there is no menu and the tray is clicked
+    // it'll also be an empty string if there is a menu and the menu item has no action defined.
+    _ = rpc.request.contextMenuEvent(.{
+        .action = utils.fromCString(action),
+    });
+}
+
+// todo: consider moving this to general Application file
+pub fn showContextMenu(opts: rpcSchema.BunSchema.requests.showContextMenu.params) void {
+    std.debug.print("showContextMenu: {s}\n", .{opts.menuConfig});
+    _ = objc.showContextMenu(utils.toCString(opts.menuConfig), contextMenuHandler);
+}

@@ -44,6 +44,14 @@ pub fn applicationMenuEvent(params: rpcSchema.ZigSchema.requests.applicationMenu
     return parsedPayload.value;
 }
 
+pub fn contextMenuEvent(params: rpcSchema.ZigSchema.requests.contextMenuEvent.params) rpcSchema.ZigSchema.requests.contextMenuEvent.response {
+    const rawPayload = rpcStdout.sendRequest("contextMenuEvent", params);
+    const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.contextMenuEvent.response, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
+}
+
 pub fn webviewEvent(params: rpcSchema.ZigSchema.requests.webviewEvent.params) rpcSchema.ZigSchema.requests.webviewEvent.response {
     const rawPayload = rpcStdout.sendRequest("webviewEvent", params);
     const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.webviewEvent.response, alloc, rawPayload.?, .{}) catch {
@@ -52,4 +60,4 @@ pub fn webviewEvent(params: rpcSchema.ZigSchema.requests.webviewEvent.params) rp
     return parsedPayload.value;
 }
 
-pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest, .trayEvent = trayEvent, .applicationMenuEvent = applicationMenuEvent, .webviewEvent = webviewEvent };
+pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest, .trayEvent = trayEvent, .applicationMenuEvent = applicationMenuEvent, .contextMenuEvent = contextMenuEvent, .webviewEvent = webviewEvent };

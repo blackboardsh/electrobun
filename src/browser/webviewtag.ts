@@ -28,8 +28,8 @@ const ConfigureWebviewTags = (
 
     // observers
     resizeObserver?: ResizeObserver;
-    intersectionObserver?: IntersectionObserver;
-    mutationObserver?: MutationObserver;
+    // intersectionObserver?: IntersectionObserver;
+    // mutationObserver?: MutationObserver;
 
     positionCheckLoop?: Timer;
     positionCheckLoopReset?: Timer;
@@ -48,6 +48,7 @@ const ConfigureWebviewTags = (
     hidden: boolean = false;
     delegateMode: boolean = false;
     hiddenMirrorMode: boolean = false;
+    wasZeroRect: boolean = false;
 
     constructor() {
       super();
@@ -169,6 +170,14 @@ const ConfigureWebviewTags = (
         this.adjustDimensionsForDelegateMode(rect);
       const lastRect = this.lastRect;
 
+      if (width === 0 && height === 0) {
+        if (this.wasZeroRect === false) {
+          this.wasZeroRect = true;
+          this.toggleHidden(true, true);
+        }
+        return;
+      }
+
       if (
         force ||
         lastRect.x !== x ||
@@ -192,6 +201,11 @@ const ConfigureWebviewTags = (
             y: y,
           },
         });
+      }
+
+      if (this.wasZeroRect) {
+        this.wasZeroRect = false;
+        this.toggleHidden(false, true);
       }
     }
 
@@ -261,8 +275,8 @@ const ConfigureWebviewTags = (
       // removed from the dom
       clearInterval(this.positionCheckLoop);
       this.resizeObserver?.disconnect();
-      this.intersectionObserver?.disconnect();
-      this.mutationObserver?.disconnect();
+      // this.intersectionObserver?.disconnect();
+      // this.mutationObserver?.disconnect();
       window.removeEventListener("resize", this.boundForceSyncDimensions);
       window.removeEventListener("scroll", this.boundSyncDimensions);
       this.zigRpc.send.webviewTagRemove({ id: this.webviewId });

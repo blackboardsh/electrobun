@@ -1,15 +1,16 @@
 import Electrobun, {
   BrowserWindow,
   BrowserView,
+  ApplicationMenu,
+  ContextMenu,
   Tray,
   type RPCSchema,
+  type ElectrobunEvent,
   createRPC,
   Utils,
 } from "electrobun/bun";
 import { type MyWebviewRPC } from "../mainview/rpc";
 import { type MyExtensionSchema } from "../myextension/rpc";
-import type ElectrobunEvent from "../../../src/bun/events/event";
-import { setApplicationMenu } from "../../../src/bun/core/ApplicationMenu";
 
 // Electrobun.Updater.getLocalVersion();
 
@@ -107,7 +108,7 @@ tray.on("tray-clicked", (e) => {
   console.log("event listener for tray clicked", e.data.action);
 });
 
-setApplicationMenu([
+ApplicationMenu.setApplicationMenu([
   {
     submenu: [{ label: "Quit", role: "quit" }],
   },
@@ -140,6 +141,38 @@ setApplicationMenu([
 
 Electrobun.events.on("application-menu-clicked", (e) => {
   console.log("application menu clicked", e.data.action); // custom-actino
+});
+
+// typically you'd wire up a frontend rightclick event, preventDefault, rpc to bun, then fire this.
+// but you can also fire and handle context menus entirely from bun globally positioned on screen
+// even if you have no windows open and another app is focused
+setTimeout(() => {
+  ContextMenu.showContextMenu([
+    { role: "undo" },
+    { role: "redo" },
+    { type: "separator" },
+    {
+      label: "Custom Menu Item  🚀",
+      action: "custom-action-1",
+      tooltip: "I'm a tooltip",
+    },
+    {
+      label: "Custom menu disabled",
+      enabled: false,
+      action: "custom-action-2",
+    },
+    { type: "separator" },
+    { role: "cut" },
+    { role: "copy" },
+    { role: "paste" },
+    { role: "pasteAndMatchStyle" },
+    { role: "delete" },
+    { role: "selectAll" },
+  ]);
+}, 5000);
+
+Electrobun.events.on("context-menu-clicked", (e) => {
+  console.log("context event", e.data.action);
 });
 
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({

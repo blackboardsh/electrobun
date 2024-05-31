@@ -756,14 +756,23 @@ typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
         self.zigHandler(self.trayId, "");
     }
 }
-- (void)menuItemClicked:(id)sender {       
+- (void)menuItemClicked:(id)sender {          
     // If there's a menu then only menu     
     NSMenuItem *menuItem = (NSMenuItem *)sender;
     NSString *action = menuItem.representedObject;
 
-    if (self.zigHandler) {
-        self.zigHandler(self.trayId, [action UTF8String]);
+    if (!action) {
+        NSLog(@"No action found for menu item");
+        return;
+    } 
+
+    if (!self.zigHandler) {
+        NSLog(@"No zig handler found for menu item");
+        return;
     }
+
+    self.zigHandler(self.trayId, [action UTF8String]);
+    
 }
 @end
 
@@ -998,3 +1007,54 @@ void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItem
 
     [NSApp setMainMenu:menu];
 }
+
+void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
+    NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+    NSError *error;
+    NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+
+    if (error) {
+        NSLog(@"Failed to parse JSON: %@", error);
+        return;
+    }
+
+    // Note: consider using a generic target for both system tray and application menu
+    // for now we just create a status item that just serves as a way to reference the zig menu click handler
+    StatusItemTarget *target = [[StatusItemTarget alloc] init];
+    target.zigHandler = contextMenuHandler;
+    target.trayId = 0;
+    NSMenu *menu = createMenuFromConfig(menuArray, target);
+    
+    objc_setAssociatedObject(menu, "ContextMenuTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    NSPoint mouseLocation = [NSEvent mouseLocation];            
+
+    NSEvent *event = [NSEvent mouseEventWithType:NSEventTypeRightMouseUp
+                                         location:mouseLocation
+                                    modifierFlags:0
+                                        timestamp:0
+                                     windowNumber:0
+                                          context:nil
+                                      eventNumber:0
+                                       clickCount:1
+                                         pressure:1];
+
+
+    // Note: can associate it with a view if needed, but I like the idea of being able to programmatically opening a context
+    // menu where the mouse is even if there are no windows open. There's a class of desktop apps like clipboard managers
+    // or screen capture tools that maybe have a system tray icon but no windows open when you want a global context menu.
+
+    // NSWindow *activeWindow = [NSApp keyWindow];    
+    // [NSMenu popUpContextMenu:menu withEvent:event forView:contentView];
+    // NSView *contentView = activeWindow.contentView;                                    
+    // NSPoint windowMouseLocation = [activeWindow convertRectFromScreen:NSMakeRect(mouseLocation.x, mouseLocation.y, 0, 0)].origin;
+    // [menu popUpMenuPositioningItem:nil atLocation:windowMouseLocation inView:contentView];
+    
+    [menu popUpMenuPositioningItem:nil atLocation:mouseLocation inView:nil];
+
+
+    objc_setAssociatedObject(NSApp, "ContextMenu", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+
+

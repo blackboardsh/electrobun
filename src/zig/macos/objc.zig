@@ -109,3 +109,7 @@ pub extern fn setTrayMenu(trayItem: *anyopaque, menuConfigJson: [*:0]const u8) c
 
 // application menu
 pub extern fn setApplicationMenu(menuConfigJson: [*:0]const u8, zigTrayItemHandler: ?*const TrayItemHandler) callconv(.C) void;
+
+// context menu
+// pub const ZigContextMenuHandler = fn (action: [*:0]const u8) void;
+pub extern fn showContextMenu(menuConfigJson: [*:0]const u8, zigContextMenuHandler: ?*const TrayItemHandler) callconv(.C) void;
