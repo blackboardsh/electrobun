@@ -456,7 +456,7 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
       return { success: true };
     },
     contextMenuEvent: ({ action }) => {
-      const event = electrobunEventEmitter.events.app.applicationMenuClicked({
+      const event = electrobunEventEmitter.events.app.contextMenuClicked({
         action,
       });
 
