@@ -19,6 +19,7 @@ type BrowserViewOptions<T = undefined> = {
   url: string | null;
   html: string | null;
   preload: string | null;
+  partition: string | null;
   frame: {
     x: number;
     y: number;
@@ -56,6 +57,7 @@ export class BrowserView<T> {
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
+  partition: string | null = null;
   frame: {
     x: number;
     y: number;
@@ -82,6 +84,7 @@ export class BrowserView<T> {
       : { ...defaultOptions.frame };
     this.rpc = options.rpc;
     this.syncRpc = options.syncRpc;
+    this.partition = options.partition || null;
     // todo (yoav): since collisions can crash the app add a function that checks if the
     // file exists first
     this.pipePrefix = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_${this.id}`;
@@ -93,6 +96,7 @@ export class BrowserView<T> {
     zigRPC.request.createWebview({
       id: this.id,
       pipePrefix: this.pipePrefix,
+      partition: this.partition,
       // TODO: decide whether we want to keep sending url/html
       // here, if we're manually calling loadURL/loadHTML below
       // then we can remove it from the api here

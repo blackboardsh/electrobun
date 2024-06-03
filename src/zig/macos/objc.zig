@@ -73,7 +73,7 @@ pub extern fn getWindowBounds(window: *anyopaque) callconv(.C) *anyopaque;
 pub extern fn addWebviewToWindow(window: *anyopaque, view: *anyopaque) callconv(.C) void;
 
 // webview
-pub extern fn createAndReturnWKWebView(webviewId: u32, frame: NSRect, assetFileLoader: FileLoader, autoResize: bool) callconv(.C) *anyopaque;
+pub extern fn createAndReturnWKWebView(webviewId: u32, frame: NSRect, assetFileLoader: FileLoader, autoResize: bool, partition: [*:0]const u8) callconv(.C) *anyopaque;
 pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn updatePreloadScriptToWebView(webView: *anyopaque, scriptIdentifier: [*:0]const u8, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;

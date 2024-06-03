@@ -3,7 +3,7 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #import <Foundation/Foundation.h>
-
+#import <CommonCrypto/CommonCrypto.h>
 
 // views:// schema handler
 
@@ -173,6 +173,42 @@ void runNSApplication() {
 
 
 // WKWebView
+
+NSUUID *UUIDFromString(NSString *string) {
+    // Create a SHA-256 hash of the string
+    unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(string.UTF8String, (CC_LONG)strlen(string.UTF8String), hash);
+    
+    // Construct the UUID from the first 16 bytes of the hash
+    uuid_t uuid;
+    memcpy(uuid, hash, sizeof(uuid));
+    
+    // Create the NSUUID from the UUID bytes
+    NSUUID *uuidObject = [[NSUUID alloc] initWithUUIDBytes:uuid];
+    return uuidObject;
+}
+
+WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier) {
+    NSString *identifier = [NSString stringWithUTF8String:partitionIdentifier];
+    
+    if ([identifier hasPrefix:@"persist:"]) {
+        // Create or retrieve a persistent data store with the given identifier
+        identifier = [identifier substringFromIndex:8]; // Remove the "persist:" prefix
+        // We use a hash function (SHA256) to predictably generate a UUID from a string
+        // so we don't have to store the UUIDs anywhere
+        NSUUID *uuid = UUIDFromString(identifier);        
+        if (uuid) {
+            return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
+        } else {
+            NSLog(@"Invalid UUID for identifier: %@", identifier);
+            return [WKWebsiteDataStore defaultDataStore]; // Fall back to default data store
+        }
+    } else {
+        // Create a non-persistent data store
+        return [WKWebsiteDataStore nonPersistentDataStore];
+    }
+}
+
 // custom WKWebView that allows mouse events to pass through
 @interface TransparentWKWebView : WKWebView
 
@@ -191,9 +227,12 @@ void runNSApplication() {
 @end
 
 
-WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader, bool autoResize) {
+WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader, bool autoResize, const char *partitionIdentifier) {
     // Create a default WKWebViewConfiguration
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];    
+
+    // wire up partition    
+    configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);    
 
     // wire up views:// schema handler
     MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];

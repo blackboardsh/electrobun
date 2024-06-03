@@ -41,6 +41,7 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
         .url = params.url,
         .html = params.html,
         .preload = params.preload,
+        .partition = params.partition,
         .frame = .{ //
             .x = params.frame.x,
             .y = params.frame.y,
@@ -230,6 +231,7 @@ pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.pa
         .url = params.url,
         .html = params.html,
         .preload = params.preload,
+        .partition = params.partition,
         .frame = .{ //
             .x = params.frame.x,
             .y = params.frame.y,

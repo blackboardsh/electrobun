@@ -161,6 +161,17 @@ setTimeout(() => {
       enabled: false,
       action: "custom-action-2",
     },
+    {
+      label: "Custom menu disabled",
+      enabled: false,
+      action: "custom-action-2",
+      // todo: support a data property on all menus (app, tray, context)
+      data: {
+        some: "data",
+        that: "is serialized",
+        nested: { thing: 23 },
+      },
+    },
     { type: "separator" },
     { role: "cut" },
     { role: "copy" },

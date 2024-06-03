@@ -88,6 +88,7 @@ const CreateWebviewOpts = struct { //
     url: ?[]const u8,
     html: ?[]const u8,
     preload: ?[]const u8,
+    partition: ?[]const u8,
     frame: struct { //
         width: f64,
         height: f64,
@@ -161,13 +162,15 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         }
     }.viewsHandler;
 
+    const parition = opts.partition orelse "persist:default";
+
     const objcWebview = objc.createAndReturnWKWebView(opts.id, .{
 
         // .frame = .{ //
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
         .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         // },
-    }, viewsHandler, opts.autoResize);
+    }, viewsHandler, opts.autoResize, utils.toCString(parition));
 
     // Can only define functions inline in zig within a struct
     const delegate = objc.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
@@ -519,6 +522,7 @@ pub fn webviewEvent(opts: rpcSchema.BrowserSchema.messages.webviewEvent) void {
         return;
     };
 
+    // todo: we need these to timeout
     _ = rpc.request.webviewEvent(.{
         .id = webview.id,
         .eventName = opts.eventName,

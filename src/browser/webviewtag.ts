@@ -50,6 +50,8 @@ const ConfigureWebviewTags = (
     hiddenMirrorMode: boolean = false;
     wasZeroRect: boolean = false;
 
+    partition: string | null = null;
+
     constructor() {
       super();
       this.zigRpc = zigRpc;
@@ -75,6 +77,7 @@ const ConfigureWebviewTags = (
         url: this.src || this.getAttribute("src") || null,
         html: this.html || this.getAttribute("html") || null,
         preload: this.preload || this.getAttribute("preload") || null,
+        partition: this.partition || this.getAttribute("partition") || null,
         frame: {
           width: rect.width,
           height: rect.height,
