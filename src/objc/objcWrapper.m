@@ -423,15 +423,27 @@ typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGF
     if (self.resizeHandler) {
         NSWindow *window = [notification object];             
         NSRect windowFrame = [window frame];
+
+        NSScreen *mainScreen = [NSScreen mainScreen];
+        NSRect screenFrame = [mainScreen frame];
+        windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
+        
         // Note: send x and y when resizing in case window is resized from the top left corner
         self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y, windowFrame.size.width, windowFrame.size.height);
     }
 }
 
 - (void)windowDidMove:(NSNotification *)notification {
-    if (self.moveHandler) {                      
+    if (self.moveHandler) {                              
         NSWindow *window = [notification object];
+        // Note: windowFrame will be the bottom-left corner of the window's position relative to the bottom-left corner of the screen
+        // so we need to adjust it
         NSRect windowFrame = [window frame];    
+        NSScreen *mainScreen = [NSScreen mainScreen];
+        NSRect screenFrame = [mainScreen frame];
+        windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
+
+
         // todo: double check later about how we position windows (contentRect) vs move and resize handlers that use the frame
         // may cause offset differences between frame and frameless windows    
         self.moveHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y);
