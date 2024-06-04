@@ -388,6 +388,11 @@ BOOL webviewCanGoForward(WKWebView *webView) {
 }
 
 // NSWindow
+NSScreen *getPrimaryScreen() {    
+    NSArray *screens = [NSScreen screens];    
+    return screens[0];    
+}
+
 NSRect getWindowBounds(NSWindow *window) {
     NSView *contentView = [window contentView];
     return [contentView bounds];
@@ -423,9 +428,9 @@ typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGF
     if (self.resizeHandler) {
         NSWindow *window = [notification object];             
         NSRect windowFrame = [window frame];
-
-        NSScreen *mainScreen = [NSScreen mainScreen];
-        NSRect screenFrame = [mainScreen frame];
+        
+        NSScreen *primaryScreen = getPrimaryScreen();
+        NSRect screenFrame = [primaryScreen frame];    
         windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
         
         // Note: send x and y when resizing in case window is resized from the top left corner
@@ -438,11 +443,10 @@ typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGF
         NSWindow *window = [notification object];
         // Note: windowFrame will be the bottom-left corner of the window's position relative to the bottom-left corner of the screen
         // so we need to adjust it
-        NSRect windowFrame = [window frame];    
-        NSScreen *mainScreen = [NSScreen mainScreen];
-        NSRect screenFrame = [mainScreen frame];
+        NSRect windowFrame = [window frame];            
+        NSScreen *primaryScreen = getPrimaryScreen();
+        NSRect screenFrame = [primaryScreen frame];    
         windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
-
 
         // todo: double check later about how we position windows (contentRect) vs move and resize handlers that use the frame
         // may cause offset differences between frame and frameless windows    
@@ -459,11 +463,28 @@ typedef struct {
 } createNSWindowWithFrameAndStyleParams;
 
 NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId, createNSWindowWithFrameAndStyleParams config, WindowCloseHandler zigCloseHandler, WindowMoveHandler zigMoveHandler, WindowResizeHandler zigResizeHandler) {    
+    
+    // frame is top-left window corner relative to screen's top-left corner
+    // but NSWindow wants bottom-left window corner relative to screen's bottom-left corner
+    // so we need to adjust the y position    
+    NSScreen *primaryScreen = getPrimaryScreen();
+    NSRect screenFrame = [primaryScreen frame];    
+    
+    config.frame.origin.y = screenFrame.size.height - config.frame.origin.y;
+    
     NSWindow *window = [[NSWindow alloc] initWithContentRect:config.frame
                                                    styleMask:getNSWindowStyleMask(config.styleMask)                                                                                                
                                                      backing:NSBackingStoreBuffered
-                                                       defer:YES];    
+                                                       defer:YES
+                                                        screen:primaryScreen];    
+    
+    // Note: there's something funky about initWithContentRect, no matter what screen it's positioned on the active
+    // screen will somehow make a difference when subtracting the config.frame.size.height (to switch from bottom-left
+    // of window to top-left of window positioning) so we need to use setFrameTopLeftPoint to get consistent
+    // behaviour
+    [window setFrameTopLeftPoint:config.frame.origin];
 
+                                
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;

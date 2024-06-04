@@ -94,7 +94,7 @@ pub fn createWindow(opts: rpcSchema.BunSchema.requests.createWindow.params) Wind
             .HUDWindow = opts.styleMask.HUDWindow,
         },
         .frame = .{ //
-            .origin = .{ .x = opts.frame.x - 600, .y = opts.frame.y - 600 },
+            .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
             .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         },
         .titleBarStyle = utils.toCString(opts.titleBarStyle),

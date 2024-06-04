@@ -239,9 +239,9 @@ const wikiWindow = new BrowserWindow({
   url: "https://en.wikipedia.org/wiki/Special:Random",
   preload: "views://myextension/preload.js",
   frame: {
-    width: 1800,
+    width: 600,
     height: 600,
-    x: 1000,
+    x: 0,
     y: 0,
   },
   // todo (yoav): can we pass this to the webview's preload code so it doesn't have to be included
