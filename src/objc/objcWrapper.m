@@ -388,12 +388,25 @@ BOOL webviewCanGoForward(WKWebView *webView) {
 }
 
 // NSWindow
+NSRect getWindowBounds(NSWindow *window) {
+    NSView *contentView = [window contentView];
+    return [contentView bounds];
+}
+
+typedef void (*WindowCloseHandler)(uint32_t windowId);
+typedef void (*WindowMoveHandler)(uint32_t windowId, CGFloat x, CGFloat y);
+typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGFloat width, CGFloat height);
+
 @interface WindowDelegate : NSObject <NSWindowDelegate>
+@property (nonatomic, assign) WindowCloseHandler closeHandler;
+@property (nonatomic, assign) WindowMoveHandler moveHandler;
+@property (nonatomic, assign) WindowResizeHandler resizeHandler;
+@property (nonatomic, assign) uint32_t windowId;
 @end
 
 @implementation WindowDelegate
 - (BOOL)windowShouldClose:(NSWindow *)sender {    
-    // todo: Implement a way to prevent a window closing
+    // todo: Implement a way to prevent a window closing from bun
 
    return YES;
 }
@@ -401,6 +414,28 @@ BOOL webviewCanGoForward(WKWebView *webView) {
     // todo: Perform any cleanup needed    
     NSWindow *window = [notification object];
     // [window setContentView:nil]; // Release content view if needed    
+
+    if (self.closeHandler) {
+        self.closeHandler(self.windowId);
+    }
+}
+- (void)windowDidResize:(NSNotification *)notification {
+    if (self.resizeHandler) {
+        NSWindow *window = [notification object];             
+        NSRect windowFrame = [window frame];
+        // Note: send x and y when resizing in case window is resized from the top left corner
+        self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y, windowFrame.size.width, windowFrame.size.height);
+    }
+}
+
+- (void)windowDidMove:(NSNotification *)notification {
+    if (self.moveHandler) {                      
+        NSWindow *window = [notification object];
+        NSRect windowFrame = [window frame];    
+        // todo: double check later about how we position windows (contentRect) vs move and resize handlers that use the frame
+        // may cause offset differences between frame and frameless windows    
+        self.moveHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y);
+    }
 }
 @end
 
@@ -411,7 +446,7 @@ typedef struct {
     const char *titleBarStyle;
 } createNSWindowWithFrameAndStyleParams;
 
-NSWindow *createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams config) {    
+NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId, createNSWindowWithFrameAndStyleParams config, WindowCloseHandler zigCloseHandler, WindowMoveHandler zigMoveHandler, WindowResizeHandler zigResizeHandler) {    
     NSWindow *window = [[NSWindow alloc] initWithContentRect:config.frame
                                                    styleMask:getNSWindowStyleMask(config.styleMask)                                                                                                
                                                      backing:NSBackingStoreBuffered
@@ -423,6 +458,10 @@ NSWindow *createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams 
     }    
 
     WindowDelegate *delegate = [[WindowDelegate alloc] init];
+    delegate.closeHandler = zigCloseHandler;
+    delegate.resizeHandler = zigResizeHandler;
+    delegate.moveHandler = zigMoveHandler;
+    delegate.windowId = windowId;
     [window setDelegate:delegate];
     objc_setAssociatedObject(window, "WindowDelegate", delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     // ARC will try to release the window or something which will be one too many
@@ -524,10 +563,7 @@ NSRect createNSRectWrapper(double x, double y, double width, double height) {
     return NSMakeRect(x, y, width, height);
 }
 
-NSRect getWindowBounds(NSWindow *window) {
-    NSView *contentView = [window contentView];
-    return [contentView bounds];
-}
+
 
 // navigation delegate that 
 typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);

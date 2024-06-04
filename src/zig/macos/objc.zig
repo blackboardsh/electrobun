@@ -64,8 +64,11 @@ pub const FileResponse = struct {
 
 pub const FileLoader = *const fn (webviewId: u32, [*:0]const u8, [*:0]const u8) FileResponse;
 pub const SnapshotHandler = *const fn (hostId: u32, id: u32, [*:0]const u8) void;
+pub const windowCloseHandler = *const fn (winId: u32) void;
+pub const windowMoveHandler = *const fn (winId: u32, x: f64, y: f64) void;
+pub const windowResizeHandler = *const fn (winId: u32, x: f64, y: f64, width: f64, height: f64) void;
 
-pub extern fn createNSWindowWithFrameAndStyle(createNSWindowWithFrameAndStyleParams) callconv(.C) *anyopaque;
+pub extern fn createNSWindowWithFrameAndStyle(windowId: u32, createNSWindowWithFrameAndStyleParams, zigCloseHandler: windowCloseHandler, zigMoveHandler: windowMoveHandler, zigResizeHandler: windowResizeHandler) callconv(.C) *anyopaque;
 pub extern fn makeNSWindowKeyAndOrderFront(window: *anyopaque) callconv(.C) void;
 pub extern fn setNSWindowTitle(window: *anyopaque, title: [*:0]const u8) callconv(.C) void;
 pub extern fn closeNSWindow(window: *anyopaque) callconv(.C) void;

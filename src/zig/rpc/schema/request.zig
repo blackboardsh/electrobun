@@ -60,4 +60,39 @@ pub fn webviewEvent(params: rpcSchema.ZigSchema.requests.webviewEvent.params) rp
     return parsedPayload.value;
 }
 
-pub const request = rpcSchema.Requests{ .decideNavigation = decideNavigation, .log = log, .sendSyncRequest = sendSyncRequest, .trayEvent = trayEvent, .applicationMenuEvent = applicationMenuEvent, .contextMenuEvent = contextMenuEvent, .webviewEvent = webviewEvent };
+pub fn windowClose(params: rpcSchema.ZigSchema.requests.windowClose.params) rpcSchema.ZigSchema.requests.windowClose.response {
+    const rawPayload = rpcStdout.sendRequest("windowClose", params);
+    const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.windowClose.response, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
+}
+
+pub fn windowMove(params: rpcSchema.ZigSchema.requests.windowMove.params) rpcSchema.ZigSchema.requests.windowMove.response {
+    const rawPayload = rpcStdout.sendRequest("windowMove", params);
+    const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.windowMove.response, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
+}
+
+pub fn windowResize(params: rpcSchema.ZigSchema.requests.windowResize.params) rpcSchema.ZigSchema.requests.windowResize.response {
+    const rawPayload = rpcStdout.sendRequest("windowResize", params);
+    const parsedPayload = std.json.parseFromValue(rpcSchema.ZigSchema.requests.windowResize.response, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
+}
+
+pub const request = rpcSchema.Requests{ //
+    .decideNavigation = decideNavigation,
+    .log = log,
+    .sendSyncRequest = sendSyncRequest,
+    .trayEvent = trayEvent,
+    .applicationMenuEvent = applicationMenuEvent,
+    .contextMenuEvent = contextMenuEvent,
+    .webviewEvent = webviewEvent,
+    .windowClose = windowClose,
+    .windowMove = windowMove,
+    .windowResize = windowResize,
+};

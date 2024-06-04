@@ -354,6 +354,36 @@ type BunHandlers = RPCSchema<{
         success: boolean;
       };
     };
+    windowClose: {
+      params: {
+        id: number;
+      };
+      response: {
+        success: boolean;
+      };
+    };
+    windowMove: {
+      params: {
+        id: number;
+        x: number;
+        y: number;
+      };
+      response: {
+        success: boolean;
+      };
+    };
+    windowResize: {
+      params: {
+        id: number;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      };
+      response: {
+        success: boolean;
+      };
+    };
   };
 }>;
 
@@ -498,6 +528,60 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
       // Note: we don't care about the result right now
 
       return { success: true };
+    },
+    windowClose: ({ id }) => {
+      const handler = electrobunEventEmitter.events.window.close;
+
+      const event = handler({
+        id,
+      });
+
+      let result;
+      // global event
+      result = electrobunEventEmitter.emitEvent(event);
+
+      result = electrobunEventEmitter.emitEvent(event, id);
+      // Note: we don't care about the result right now
+
+      return { success: false };
+    },
+    windowMove: ({ id, x, y }) => {
+      const handler = electrobunEventEmitter.events.window.move;
+
+      const event = handler({
+        id,
+        x,
+        y,
+      });
+
+      let result;
+      // global event
+      result = electrobunEventEmitter.emitEvent(event);
+
+      result = electrobunEventEmitter.emitEvent(event, id);
+      // Note: we don't care about the result right now
+
+      return { success: false };
+    },
+    windowResize: ({ id, x, y, width, height }) => {
+      const handler = electrobunEventEmitter.events.window.resize;
+
+      const event = handler({
+        id,
+        x,
+        y,
+        width,
+        height,
+      });
+
+      let result;
+      // global event
+      result = electrobunEventEmitter.emitEvent(event);
+
+      result = electrobunEventEmitter.emitEvent(event, id);
+      // Note: we don't care about the result right now
+
+      return { success: false };
     },
   },
   maxRequestTime: 25000,

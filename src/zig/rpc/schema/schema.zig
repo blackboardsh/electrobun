@@ -73,6 +73,36 @@ pub const ZigSchema = struct { //
                 success: bool,
             };
         };
+        pub const windowClose = struct {
+            pub const params = struct {
+                id: u32,
+            };
+            pub const response = struct {
+                success: bool,
+            };
+        };
+        pub const windowMove = struct {
+            pub const params = struct {
+                id: u32,
+                x: f64,
+                y: f64,
+            };
+            pub const response = struct {
+                success: bool,
+            };
+        };
+        pub const windowResize = struct {
+            pub const params = struct {
+                id: u32,
+                x: f64,
+                y: f64,
+                width: f64,
+                height: f64,
+            };
+            pub const response = struct {
+                success: bool,
+            };
+        };
     };
 };
 
@@ -247,6 +277,9 @@ pub const Requests = struct {
     applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) ZigSchema.requests.applicationMenuEvent.response,
     contextMenuEvent: fn (params: ZigSchema.requests.contextMenuEvent.params) ZigSchema.requests.contextMenuEvent.response,
     webviewEvent: fn (params: ZigSchema.requests.webviewEvent.params) ZigSchema.requests.webviewEvent.response,
+    windowClose: fn (params: ZigSchema.requests.windowClose.params) ZigSchema.requests.windowClose.response,
+    windowMove: fn (params: ZigSchema.requests.windowMove.params) ZigSchema.requests.windowMove.response,
+    windowResize: fn (params: ZigSchema.requests.windowResize.params) ZigSchema.requests.windowResize.response,
 };
 
 // todo: currently the the keys will be a key of the payload struct because of how unions work in zig.

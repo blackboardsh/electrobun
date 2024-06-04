@@ -259,6 +259,21 @@ const wikiWindow = new BrowserWindow({
   }),
 });
 
+wikiWindow.on("close", (event) => {
+  const { id } = event.data;
+  console.log("wiki window closed", id);
+});
+
+wikiWindow.on("resize", (event) => {
+  const { id, x, y, width, height } = event.data;
+  console.log("wiki window resized", id, x, y, width, height);
+});
+
+wikiWindow.on("move", (event) => {
+  const { id, x, y } = event.data;
+  console.log("wiki window moved", id, x, y);
+});
+
 const webviewTagWindow = new BrowserWindow({
   title: "webview tag test",
   url: "views://webviewtag/index.html",

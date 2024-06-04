@@ -65,8 +65,20 @@ const SetTitleOpts = struct {
 const WindowMap = std.AutoHashMap(u32, WindowType);
 pub var windowMap: WindowMap = WindowMap.init(alloc);
 
+pub fn windowCloseHandler(windowId: u32) void {
+    _ = rpc.request.windowClose(.{ .id = windowId });
+}
+
+pub fn windowMoveHandler(windowId: u32, x: f64, y: f64) void {
+    _ = rpc.request.windowMove(.{ .id = windowId, .x = x, .y = y });
+}
+
+pub fn windowResizeHandler(windowId: u32, x: f64, y: f64, width: f64, height: f64) void {
+    _ = rpc.request.windowResize(.{ .id = windowId, .x = x, .y = y, .width = width, .height = height });
+}
+
 pub fn createWindow(opts: rpcSchema.BunSchema.requests.createWindow.params) WindowType {
-    const objcWin = objc.createNSWindowWithFrameAndStyle(.{ //
+    const objcWin = objc.createNSWindowWithFrameAndStyle(opts.id, .{ //
         .styleMask = .{
             .Borderless = opts.styleMask.Borderless,
             .Titled = opts.styleMask.Titled,
@@ -86,7 +98,7 @@ pub fn createWindow(opts: rpcSchema.BunSchema.requests.createWindow.params) Wind
             .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         },
         .titleBarStyle = utils.toCString(opts.titleBarStyle),
-    });
+    }, windowCloseHandler, windowMoveHandler, windowResizeHandler);
 
     objc.setNSWindowTitle(objcWin, utils.toCString(opts.title));
 
