@@ -11,6 +11,9 @@ import Electrobun, {
 } from "electrobun/bun";
 import { type MyWebviewRPC } from "../mainview/rpc";
 import { type MyExtensionSchema } from "../myextension/rpc";
+import { resolve, resolveSync } from "bun";
+import { homedir } from "os";
+import { join } from "path";
 
 // Electrobun.Updater.getLocalVersion();
 
@@ -294,8 +297,24 @@ const webviewTagWindow = new BrowserWindow({
 
 // TODO: make this a unit test
 // setTimeout(() => {
-//   console.log("trashing item");
+//   console.log("open in finder");
 //   Utils.showItemInFolder("/Users/yoav/Desktop/600x200_copy.jpg");
+// }, 2000);
+
+// TODO: make this a unit test
+// will always return an array whether multiple selection is enabled or not
+// if no file is chosen the array will be [""] ie: index 0 will have an empty string
+// setTimeout(async () => {
+//   console.log("open file dialogue");
+//   const chosenPaths = await Utils.openFileDialog({
+//     startingFolder: join(homedir(), "Desktop"),
+//     allowedFileTypes: "*",
+//     // allowedFileTypes: "png,jpg",
+//     canChooseFiles: true,
+//     canChooseDirectory: false,
+//     allowsMultipleSelection: true,
+//   });
+//   console.log("chosen paths", chosenPaths);
 // }, 2000);
 
 // wikiWindow.setRPC()

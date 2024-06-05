@@ -246,6 +246,16 @@ type ZigHandlers = RPCSchema<{
       };
       response: boolean;
     };
+    openFileDialog: {
+      params: {
+        startingFolder: string | null;
+        allowedFileTypes: string | null;
+        canChooseFiles: boolean;
+        canChooseDirectory: boolean;
+        allowsMultipleSelection: boolean;
+      };
+      response: { openFileDialogResponse: string };
+    };
 
     // tray and menu
     createTray: {

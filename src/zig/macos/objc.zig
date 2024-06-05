@@ -102,6 +102,7 @@ pub extern fn webviewCanGoForward(webView: *anyopaque) callconv(.C) bool;
 // fs
 pub extern fn moveToTrash(path: [*:0]const u8) callconv(.C) bool;
 pub extern fn showItemInFolder(path: [*:0]const u8) callconv(.C) bool;
+pub extern fn openFileDialog(startingFolder: [*:0]const u8, allowedFileTypes: [*:0]const u8, canChooseFiles: bool, canChooseDirectory: bool, allowsMultipleSelection: bool) callconv(.C) ?[*:0]const u8;
 
 // system tray and menu
 pub const TrayItemHandler = fn (trayId: u32, action: [*:0]const u8) void;

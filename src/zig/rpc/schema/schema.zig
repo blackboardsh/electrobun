@@ -210,6 +210,16 @@ pub const BunSchema = struct {
             };
             pub const response = bool;
         };
+        pub const openFileDialog = struct {
+            pub const params = struct {
+                startingFolder: []const u8,
+                allowedFileTypes: []const u8,
+                canChooseFiles: bool,
+                canChooseDirectory: bool,
+                allowsMultipleSelection: bool,
+            };
+            pub const response = []const u8;
+        };
 
         // system tray and menu
         pub const createTray = struct {
@@ -268,6 +278,7 @@ pub const Handlers = struct {
     loadHTML: fn (params: BunSchema.requests.loadHTML.params) RequestResult,
     moveToTrash: fn (params: BunSchema.requests.moveToTrash.params) RequestResult,
     showItemInFolder: fn (params: BunSchema.requests.showItemInFolder.params) RequestResult,
+    openFileDialog: fn (params: BunSchema.requests.openFileDialog.params) RequestResult,
     createTray: fn (params: BunSchema.requests.createTray.params) RequestResult,
     setTrayTitle: fn (params: BunSchema.requests.setTrayTitle.params) RequestResult,
     setTrayImage: fn (params: BunSchema.requests.setTrayImage.params) RequestResult,
@@ -290,7 +301,7 @@ pub const Requests = struct {
 };
 
 // todo: currently the the keys will be a key of the payload struct because of how unions work in zig.
-// so it'll be payload = .{ webviewTagCAnGoBackResponse: true} since the payload in schema is defined as bool.
+// so it'll be payload = .{ webviewTagCanGoBackResponse: true} since the payload in schema is defined as bool.
 // rather than payload = true;
 pub const RequestResponseType = union(enum) {
     CreateWindowResponse: BunSchema.requests.createWindow.response,
@@ -302,6 +313,7 @@ pub const RequestResponseType = union(enum) {
     LoadHTMLResponse: BunSchema.requests.loadHTML.response,
     moveToTrashResponse: BunSchema.requests.moveToTrash.response,
     showItemInFolderResponse: BunSchema.requests.showItemInFolder.response,
+    openFileDialogResponse: BunSchema.requests.openFileDialog.response,
 
     createTray: BunSchema.requests.createTray.response,
     setTrayTitle: BunSchema.requests.setTrayTitle.response,

@@ -595,6 +595,17 @@ pub fn showItemInFolder(filePath: []const u8) bool {
     return objc.showItemInFolder(path);
 }
 
+// todo: this should move to util, but we need CString utils (which should also be moved to a util)
+pub fn openFileDialog(startingFolder: []const u8, allowedFileTypes: []const u8, canChooseFiles: bool, canChooseDirectory: bool, allowsMultipleSelection: bool) []const u8 {
+    const _chosenPath = objc.openFileDialog(utils.toCString(startingFolder), utils.toCString(allowedFileTypes), canChooseFiles, canChooseDirectory, allowsMultipleSelection);
+
+    if (_chosenPath) |chosenPath| {
+        return utils.fromCString(chosenPath);
+    } else {
+        return "";
+    }
+}
+
 pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
     const ELECTROBUN_VIEWS_FOLDER = std.os.getenv("ELECTROBUN_VIEWS_FOLDER") orelse {
         // todo: return an error here

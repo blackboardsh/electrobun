@@ -782,6 +782,42 @@ void showItemInFolder(char *path) {
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[fileURL]];
 }
 
+const char *openFileDialog(const char *startingFolder, const char *allowedFileTypes, BOOL canChooseFiles, BOOL canChooseDirectories, BOOL allowsMultipleSelection) {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    [panel setCanChooseFiles:canChooseFiles];
+    [panel setCanChooseDirectories:canChooseDirectories];
+    [panel setAllowsMultipleSelection:allowsMultipleSelection];
+
+     // Set the starting directory
+    NSString *startingFolderString = [NSString stringWithUTF8String:startingFolder];
+    [panel setDirectoryURL:[NSURL fileURLWithPath:startingFolderString]];
+    
+    // Set allowed file types
+    if (allowedFileTypes != NULL && strcmp(allowedFileTypes, "*") != 0 && strcmp(allowedFileTypes, "") != 0) {
+        NSString *allowedFileTypesString = [NSString stringWithUTF8String:allowedFileTypes];
+        NSArray *fileTypesArray = [allowedFileTypesString componentsSeparatedByString:@","];
+        // Note: this is deprecated but it still works for now and is simpler than the current solution
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [panel setAllowedFileTypes:fileTypesArray];
+        #pragma clang diagnostic pop
+    }
+    
+    NSInteger result = [panel runModal];
+    // return a comma separated list of file paths
+    if (result == NSModalResponseOK) {
+        NSArray<NSURL *> *selectedFileURLs = [panel URLs];
+        NSMutableArray<NSString *> *pathStrings = [NSMutableArray array];
+        for (NSURL *url in selectedFileURLs) {
+            [pathStrings addObject:[url path]];
+        }
+        NSString *concatenatedPaths = [pathStrings componentsJoinedByString:@","];        
+        return strdup([concatenatedPaths UTF8String]);
+    }
+    
+    return NULL;
+}
+
 
 // window move
 

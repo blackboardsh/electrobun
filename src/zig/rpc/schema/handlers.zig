@@ -101,6 +101,11 @@ pub fn showItemInFolder(params: rpcSchema.BunSchema.requests.showItemInFolder.pa
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
+pub fn openFileDialog(params: rpcSchema.BunSchema.requests.openFileDialog.params) RequestResult {
+    const result = webview.openFileDialog(params.startingFolder, params.allowedFileTypes, params.canChooseFiles, params.canChooseDirectory, params.allowsMultipleSelection);
+    return RequestResult{ .errorMsg = null, .payload = .{ .openFileDialogResponse = result } };
+}
+
 pub fn webviewTagGoBack(params: rpcSchema.BrowserSchema.messages.webviewTagGoBack) RequestResult {
     webview.goBack(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = null };
@@ -196,6 +201,7 @@ pub const handlers = rpcSchema.Handlers{ //
     .loadHTML = loadHTML,
     .moveToTrash = moveToTrash,
     .showItemInFolder = showItemInFolder,
+    .openFileDialog = openFileDialog,
     .createTray = createTray,
     .setTrayTitle = setTrayTitle,
     .setTrayImage = setTrayImage,
@@ -341,6 +347,8 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
         return parseParamsAndCall(handlers.moveToTrash, BunRequests.moveToTrash.params, request.params);
     } else if (strEql(method, "showItemInFolder")) {
         return parseParamsAndCall(handlers.showItemInFolder, BunRequests.showItemInFolder.params, request.params);
+    } else if (strEql(method, "openFileDialog")) {
+        return parseParamsAndCall(handlers.openFileDialog, BunRequests.openFileDialog.params, request.params);
     } else if (strEql(method, "createTray")) {
         return parseParamsAndCall(handlers.createTray, BunRequests.createTray.params, request.params);
     } else if (strEql(method, "setTrayTitle")) {
