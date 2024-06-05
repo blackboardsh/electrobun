@@ -4,3 +4,7 @@ import { zigRPC } from "../proc/zig";
 export const moveToTrash = (path: string) => {
   return zigRPC.request.moveToTrash({ path });
 };
+
+export const showItemInFolder = (path: string) => {
+  return zigRPC.request.showItemInFolder({ path });
+};

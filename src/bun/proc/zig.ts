@@ -240,6 +240,12 @@ type ZigHandlers = RPCSchema<{
       };
       response: boolean;
     };
+    showItemInFolder: {
+      params: {
+        path: string;
+      };
+      response: boolean;
+    };
 
     // tray and menu
     createTray: {

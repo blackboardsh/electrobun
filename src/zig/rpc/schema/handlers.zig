@@ -96,6 +96,11 @@ pub fn moveToTrash(params: rpcSchema.BunSchema.requests.moveToTrash.params) Requ
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
+pub fn showItemInFolder(params: rpcSchema.BunSchema.requests.showItemInFolder.params) RequestResult {
+    _ = webview.showItemInFolder(params.path);
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+
 pub fn webviewTagGoBack(params: rpcSchema.BrowserSchema.messages.webviewTagGoBack) RequestResult {
     webview.goBack(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = null };
@@ -190,6 +195,7 @@ pub const handlers = rpcSchema.Handlers{ //
     .loadURL = loadURL,
     .loadHTML = loadHTML,
     .moveToTrash = moveToTrash,
+    .showItemInFolder = showItemInFolder,
     .createTray = createTray,
     .setTrayTitle = setTrayTitle,
     .setTrayImage = setTrayImage,
@@ -333,6 +339,8 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
         return parseParamsAndCall(handlers.loadHTML, BunRequests.loadHTML.params, request.params);
     } else if (strEql(method, "moveToTrash")) {
         return parseParamsAndCall(handlers.moveToTrash, BunRequests.moveToTrash.params, request.params);
+    } else if (strEql(method, "showItemInFolder")) {
+        return parseParamsAndCall(handlers.showItemInFolder, BunRequests.showItemInFolder.params, request.params);
     } else if (strEql(method, "createTray")) {
         return parseParamsAndCall(handlers.createTray, BunRequests.createTray.params, request.params);
     } else if (strEql(method, "setTrayTitle")) {

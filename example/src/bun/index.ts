@@ -292,6 +292,12 @@ const webviewTagWindow = new BrowserWindow({
 //   Utils.moveToTrash("/Users/yoav/Desktop/600x200_copy.jpg");
 // }, 2000);
 
+// TODO: make this a unit test
+// setTimeout(() => {
+//   console.log("trashing item");
+//   Utils.showItemInFolder("/Users/yoav/Desktop/600x200_copy.jpg");
+// }, 2000);
+
 // wikiWindow.setRPC()
 
 // todo (yoav): typescript types should resolve for e and e.setResponse

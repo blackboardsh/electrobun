@@ -204,6 +204,12 @@ pub const BunSchema = struct {
             };
             pub const response = bool;
         };
+        pub const showItemInFolder = struct {
+            pub const params = struct {
+                path: []const u8,
+            };
+            pub const response = bool;
+        };
 
         // system tray and menu
         pub const createTray = struct {
@@ -261,6 +267,7 @@ pub const Handlers = struct {
     loadURL: fn (params: BunSchema.requests.loadURL.params) RequestResult,
     loadHTML: fn (params: BunSchema.requests.loadHTML.params) RequestResult,
     moveToTrash: fn (params: BunSchema.requests.moveToTrash.params) RequestResult,
+    showItemInFolder: fn (params: BunSchema.requests.showItemInFolder.params) RequestResult,
     createTray: fn (params: BunSchema.requests.createTray.params) RequestResult,
     setTrayTitle: fn (params: BunSchema.requests.setTrayTitle.params) RequestResult,
     setTrayImage: fn (params: BunSchema.requests.setTrayImage.params) RequestResult,
@@ -294,6 +301,7 @@ pub const RequestResponseType = union(enum) {
     LoadURLResponse: BunSchema.requests.loadURL.response,
     LoadHTMLResponse: BunSchema.requests.loadHTML.response,
     moveToTrashResponse: BunSchema.requests.moveToTrash.response,
+    showItemInFolderResponse: BunSchema.requests.showItemInFolder.response,
 
     createTray: BunSchema.requests.createTray.response,
     setTrayTitle: BunSchema.requests.setTrayTitle.response,

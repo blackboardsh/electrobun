@@ -776,6 +776,13 @@ BOOL moveToTrash(char *pathString) {
     return success;
 }
 
+void showItemInFolder(char *path) {
+    NSString *pathString = [NSString stringWithUTF8String:path];
+    NSURL *fileURL = [NSURL fileURLWithPath:pathString];
+    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[fileURL]];
+}
+
+
 // window move
 
 
@@ -1163,6 +1170,5 @@ void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHan
 
     objc_setAssociatedObject(NSApp, "ContextMenu", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
-
 
 

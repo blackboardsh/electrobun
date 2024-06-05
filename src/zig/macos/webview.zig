@@ -588,6 +588,12 @@ pub fn moveToTrash(filePath: []const u8) bool {
     std.debug.print("moving to trash path: {s}\n", .{filePath});
     return objc.moveToTrash(path);
 }
+// todo: this should move to util, but we need CString utils (which should also be moved to a util)
+pub fn showItemInFolder(filePath: []const u8) bool {
+    const path = utils.toCString(filePath);
+    std.debug.print("moving to trash path: {s}\n", .{filePath});
+    return objc.showItemInFolder(path);
+}
 
 pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
     const ELECTROBUN_VIEWS_FOLDER = std.os.getenv("ELECTROBUN_VIEWS_FOLDER") orelse {
