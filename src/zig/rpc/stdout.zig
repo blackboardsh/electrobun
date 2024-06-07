@@ -3,13 +3,16 @@ const rpcTypes = @import("types.zig");
 const rpcSchema = @import("schema/schema.zig");
 
 var _waitingForResponse = false;
-var _response: ?std.json.Value = null;
+var _response: ?[]u8 = null;
 var m = std.Thread.Mutex{};
 var c = std.Thread.Condition{};
 
-pub fn sendRequest(method: []const u8, params: anytype) ?std.json.Value {
+const alloc = std.heap.page_allocator;
+
+pub fn sendRequest(method: []const u8, params: anytype, PayloadType: anytype) PayloadType {
+    const id = idGen.nextId();
     send(.{
-        .id = idGen.nextId(),
+        .id = id,
         .type = "request",
         .method = method,
         .params = params,
@@ -24,7 +27,15 @@ pub fn sendRequest(method: []const u8, params: anytype) ?std.json.Value {
         c.wait(&m);
     }
 
-    return _response;
+    const responseWrapper = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, _response.?, .{}) catch {
+        unreachable;
+    };
+
+    const rawPayload = responseWrapper.value.payload;
+    const parsedPayload = std.json.parseFromValue(PayloadType, alloc, rawPayload.?, .{}) catch {
+        unreachable;
+    };
+    return parsedPayload.value;
 }
 
 pub fn setResponse(id: u32, response: anytype) void {

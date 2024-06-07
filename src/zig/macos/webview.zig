@@ -149,13 +149,18 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 // js loaded from other sources (http, etc.) will be blocked (CORS) from initiating
                 // synchronous requests to bun.
                 const bodyString = utils.fromCString(body);
+
                 const response = rpc.request.sendSyncRequest(.{ .webviewId = webviewId, .request = bodyString });
-                const responseString = response.payload[0..response.payload.len];
-                return objc.FileResponse{
-                    .mimeType = utils.toCString("application/json"),
-                    .fileContents = responseString.ptr,
-                    .len = responseString.len,
-                };
+                if (response.payload) |payload| {
+                    const responseString = payload[0..payload.len];
+                    return objc.FileResponse{
+                        .mimeType = utils.toCString("application/json"),
+                        .fileContents = responseString.ptr,
+                        .len = responseString.len,
+                    };
+                } else {
+                    std.debug.print("Failed to get response from sync rpc request, no payload\n", .{});
+                }
             }
 
             return assetFileLoader(url);

@@ -29,6 +29,10 @@ export const openFileDialog = async (
     ...opts,
   };
 
+  // todo: extend the timeout for this one (this version of rpc-anywhere doesn't seem to be able to set custom timeouts per request)
+  // we really want it to be infinity since the open file dialog blocks everything anyway.
+  // todo: there's the timeout between bun and zig, and the timeout between browser and bun since user likely requests
+  // from a browser context
   const result = await zigRPC.request.openFileDialog({
     startingFolder: optsWithDefault.startingFolder,
     allowedFileTypes: optsWithDefault.allowedFileTypes,

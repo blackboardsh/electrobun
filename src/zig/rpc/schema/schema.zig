@@ -17,7 +17,7 @@ pub const ZigSchema = struct { //
                 request: []const u8,
             };
             pub const response = struct {
-                payload: []const u8,
+                payload: ?[]const u8,
             };
         };
         // Note: this should be a message not a request

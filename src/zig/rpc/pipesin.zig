@@ -58,8 +58,8 @@ pub fn pipesInEventListener() !void {
             if (ev.filter == std.os.darwin.EVFILT_READ) {
                 // Note: readLineFromPipe reads until the end of the buffer or the delimeter.
                 // so the buffer is the max size of a line.
-                // setting it to 1MB
-                var buffer: [1024 * 1024]u8 = undefined;
+                // setting it to 10MB
+                var buffer: [1024 * 1024 * 10]u8 = undefined;
                 const bytesRead = readLineFromPipe(&buffer, ev.ident);
 
                 if (bytesRead) |line| {
@@ -136,12 +136,12 @@ pub fn handleLineFromMainPipe(line: []const u8) void {
 
     if (std.mem.eql(u8, messageWithType.value.type, "response")) {
         // todo: handle _RPCResponsePacketError
-        const _response = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, line, .{}) catch |err| {
-            std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
+        const lineCopy = alloc.dupe(u8, line) catch {
+            // Handle the error here, e.g., log it or set a default value
+            std.debug.print("Error: {s}\n", .{line});
             return;
         };
-        // handle response
-        rpcStdout.setResponse(messageWithType.value.id, _response.value.payload);
+        rpcStdout.setResponse(messageWithType.value.id, lineCopy);
     } else {
         // Handle UI events on main thread
         // since line is re-used we need to copy it to the heap
