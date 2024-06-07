@@ -213,24 +213,33 @@ export class BrowserView<T> {
       registerHandler(handler) {
         let buffer = "";
         // todo (yoav): readStream function is identical to the one in zig.ts
-        that.outStream.on("data", (chunk) => {
-          buffer += chunk.toString();
-          let eolIndex;
+        // todo: There seems to be a bug in bun where if you open multiple windows at the same time
+        // that.outStream.on("data") doesn't register the handler for some of them so add a timeout to
+        // help ensure it does.
+        // could be a delay in the pipe creation and the way bun lazy loads things where it just doesn't
+        // subscribe to data events properly.
+        // hopefully this is fixed in a bun version bump.
+        // readable streams have an on('ready') event but it fires too soon to be useful here.
+        setTimeout(() => {
+          that.outStream.on("data", (chunk) => {
+            buffer += chunk.toString();
+            let eolIndex;
 
-          while ((eolIndex = buffer.indexOf("\n")) >= 0) {
-            const line = buffer.slice(0, eolIndex).trim();
-            buffer = buffer.slice(eolIndex + 1);
-            if (line) {
-              try {
-                const event = JSON.parse(line);
-                handler(event);
-              } catch (error) {
-                // Non-json things are just bubbled up to the console.
-                console.error("webview: ", line);
+            while ((eolIndex = buffer.indexOf("\n")) >= 0) {
+              const line = buffer.slice(0, eolIndex).trim();
+              buffer = buffer.slice(eolIndex + 1);
+              if (line) {
+                try {
+                  const event = JSON.parse(line);
+                  handler(event);
+                } catch (error) {
+                  // Non-json things are just bubbled up to the console.
+                  console.error("webview: ", line);
+                }
               }
             }
-          }
-        });
+          });
+        }, 500);
       },
     };
   };
