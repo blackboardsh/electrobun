@@ -10,6 +10,7 @@ import {
 import { ConfigureWebviewTags } from "./webviewtag";
 // todo: should this just be injected as a preload script?
 import { isAppRegionDrag } from "./stylesAndElements";
+import type { BuiltinBunToWebviewSchema } from "./builtinrpcSchema";
 
 interface ElectrobunWebviewRPCSChema {
   bun: RPCSchema;
@@ -312,19 +313,54 @@ class Electroview<T> {
     // electrobun also treats messages as "requests that we don't wait for to complete", and normalizes specifying the
     // handlers for them alongside request handlers.
 
+    const builtinHandlers: {
+      requests: RPCRequestHandler<BuiltinBunToWebviewSchema["requests"]>;
+    } = {
+      requests: {
+        evaluateJavascriptWithResponse: ({ script }) => {
+          return new Promise((resolve) => {
+            try {
+              const resultFunction = new Function(`return (${script});`);
+              const result = resultFunction();
+
+              if (result instanceof Promise) {
+                result
+                  .then((resolvedResult) => {
+                    resolve(resolvedResult);
+                  })
+                  .catch((error) => {
+                    console.error("bun: async script execution failed", error);
+                    resolve(String(error));
+                  });
+              } else {
+                resolve(result);
+              }
+            } catch (error) {
+              console.error("bun: failed to eval script", error);
+              resolve(String(error));
+            }
+          });
+        },
+      },
+    };
+
     type mixedWebviewSchema = {
       requests: BunSchema["requests"];
       messages: WebviewSchema["messages"];
     };
 
     type mixedBunSchema = {
-      requests: WebviewSchema["requests"];
+      requests: WebviewSchema["requests"] &
+        BuiltinBunToWebviewSchema["requests"];
       messages: BunSchema["messages"];
     };
 
     const rpcOptions = {
       maxRequestTime: config.maxRequestTime,
-      requestHandler: config.handlers.requests,
+      requestHandler: {
+        ...config.handlers.requests,
+        ...builtinHandlers.requests,
+      },
       transport: {
         // Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey
         registerHandler: () => {},

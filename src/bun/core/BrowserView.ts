@@ -11,6 +11,7 @@ import {
   createRPC,
 } from "rpc-anywhere";
 import { Updater } from "./Updater";
+import type { BuiltinBunToWebviewSchema } from "../../browser/builtinrpcSchema";
 
 const BrowserViewMap = {};
 let nextWebviewId = 1;
@@ -301,7 +302,8 @@ export class BrowserView<T> {
     };
 
     type mixedBunSchema = {
-      requests: WebviewSchema["requests"];
+      requests: WebviewSchema["requests"] &
+        BuiltinBunToWebviewSchema["requests"];
       messages: BunSchema["messages"];
     };
 

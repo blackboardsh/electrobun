@@ -237,6 +237,23 @@ const win = new BrowserWindow({
 
 win.setTitle("url browserwindow");
 
+setTimeout(async () => {
+  const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+    // script: `document.body.textContent`,
+    script: `
+    new Promise(
+      resolve => {
+        setTimeout(() => {
+          resolve(document.body.textContent + 'hi hi hi')
+        }, 1000)
+      }
+    )
+    `,
+  });
+
+  console.log("evaluateJavascriptWithResponse", result);
+}, 1000);
+
 const wikiWindow = new BrowserWindow({
   title: "my url window",
   url: "https://en.wikipedia.org/wiki/Special:Random",
