@@ -49,7 +49,7 @@ const PATHS = DEBUG_MODE
       BUN_BINARY: join(ELECTROBUN_PATH, "dist", "bun"),
       ZIG_NATIVE_WRAPPER: join(ELECTROBUN_PATH, "dist", "webview"),
       BSPATCH: join(ELECTROBUN_PATH, "dist", "bspatch"),
-      EXTRACTOR: join(ELECTROBUN_PATH, "dest", "extractor"),
+      EXTRACTOR: join(ELECTROBUN_PATH, "dist", "extractor"),
       BSDIFF: join(ELECTROBUN_PATH, "dist", "bsdiff"),
     };
 
