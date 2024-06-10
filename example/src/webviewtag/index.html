@@ -61,6 +61,28 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
             console.log('new-window-open is fired', e.detail);
         });
 
+        setTimeout(() => {
+            document.querySelector('electrobun-webview').callAsyncJavaScript({
+                // script: `document.body.innerHTML = 'hello from host browser context'`,
+                // script: `document.body.textContent`,
+                script: `
+                return new Promise(
+                    resolve => {
+                        setTimeout(() => {
+                            resolve(document.location.href + 'from host browser context')
+                        }, 1000)
+                    }
+                )
+                `,
+                }).then(result => {
+                    console.log('evalResult', result);
+                }).catch(err => {
+                    // Note: add a typo to the script to see the error
+                    console.error('evalError', err);
+                });
+        }, 1000)
+
+        
     </script>
 </body>
 </html>

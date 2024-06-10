@@ -342,6 +342,7 @@ pub const FromBrowserHandlers = struct {
     webviewTagInit: fn (params: BrowserSchema.requests.webviewTagInit.params) RequestResult,
     webviewTagCanGoBack: fn (params: BrowserSchema.requests.webviewTagCanGoBack.params) RequestResult,
     webviewTagCanGoForward: fn (params: BrowserSchema.requests.webviewTagCanGoForward.params) RequestResult,
+    webviewTagCallAsyncJavaScript: fn (params: BrowserSchema.requests.webviewTagCallAsyncJavaScript.params) RequestResult,
     // messages
     webviewTagResize: fn (params: BrowserSchema.messages.webviewTagResize) RequestResult,
     webviewTagUpdateSrc: fn (params: BrowserSchema.messages.webviewTagUpdateSrc) RequestResult,
@@ -387,6 +388,10 @@ pub const BrowserSchema = struct { //
         pub const webviewTagCanGoForward = struct {
             pub const params = struct { id: u32 };
             pub const response = bool;
+        };
+        // todo: maybe this should be a message
+        pub const webviewTagCallAsyncJavaScript = struct {
+            pub const params = struct { messageId: []const u8, webviewId: u32, hostWebviewId: u32, script: []const u8 };
         };
     };
     pub const messages = struct {

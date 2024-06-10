@@ -38,6 +38,15 @@ type ZigWebviewHandlers = RPCSchema<{
       };
       response: void;
     };
+    webviewTagCallAsyncJavaScript: {
+      params: {
+        messageId: string;
+        webviewId: number;
+        hostWebviewId: number;
+        script: string;
+      };
+      response: void;
+    };
   };
 }>;
 
@@ -320,7 +329,7 @@ class Electroview<T> {
         evaluateJavascriptWithResponse: ({ script }) => {
           return new Promise((resolve) => {
             try {
-              const resultFunction = new Function(`return (${script});`);
+              const resultFunction = new Function(script);
               const result = resultFunction();
 
               if (result instanceof Promise) {

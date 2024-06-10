@@ -67,6 +67,7 @@ pub const SnapshotHandler = *const fn (hostId: u32, id: u32, [*:0]const u8) void
 pub const windowCloseHandler = *const fn (winId: u32) void;
 pub const windowMoveHandler = *const fn (winId: u32, x: f64, y: f64) void;
 pub const windowResizeHandler = *const fn (winId: u32, x: f64, y: f64, width: f64, height: f64) void;
+pub const callAsyncJavascriptCompletionHandler = *const fn (messageId: [*:0]const u8, webviewId: u32, hostWebviewId: u32, responseJSON: [*:0]const u8) void;
 
 pub extern fn createNSWindowWithFrameAndStyle(windowId: u32, createNSWindowWithFrameAndStyleParams, zigCloseHandler: windowCloseHandler, zigMoveHandler: windowMoveHandler, zigResizeHandler: windowResizeHandler) callconv(.C) *anyopaque;
 pub extern fn makeNSWindowKeyAndOrderFront(window: *anyopaque) callconv(.C) void;
@@ -85,6 +86,7 @@ pub extern fn setNavigationDelegateWithCallback(webView: *anyopaque, webviewId: 
 pub extern fn addScriptMessageHandler(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) void) callconv(.C) *anyopaque;
 pub extern fn addScriptMessageHandlerWithReply(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) [*:0]const u8) callconv(.C) *anyopaque;
 pub extern fn evaluateJavaScriptWithNoCompletion(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
+pub extern fn callAsyncJavaScript(messageId: [*:0]const u8, webView: *anyopaque, script: [*:0]const u8, webviewId: u32, hostWebviewId: u32, handler: callAsyncJavascriptCompletionHandler) callconv(.C) void;
 pub extern fn resizeWebview(webView: *anyopaque, frame: NSRect) callconv(.C) void;
 pub extern fn webviewTagGoBack(webView: *anyopaque) callconv(.C) void;
 pub extern fn webviewTagGoForward(webView: *anyopaque) callconv(.C) void;

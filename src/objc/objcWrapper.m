@@ -1,7 +1,6 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 #import <Cocoa/Cocoa.h>
-#import <WebKit/WebKit.h>
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonCrypto.h>
 
@@ -313,7 +312,7 @@ void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WK
     if (decisionHandler != NULL) {
         decisionHandler(policy);
     }
-}
+} 
 
 const char* getUrlFromNavigationAction(WKNavigationAction *navigationAction) {
     NSURLRequest *request = navigationAction.request;
@@ -329,6 +328,38 @@ const char* getBodyFromScriptMessage(WKScriptMessage *message) {
 void evaluateJavaScriptWithNoCompletion(WKWebView *webView, const char *jsString) {    
     NSString *javaScript = [NSString stringWithUTF8String:jsString];
     [webView evaluateJavaScript:javaScript completionHandler:nil];
+}
+
+typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
+
+void callAsyncJavaScript(const char *messageId, WKWebView *webView, const char *jsString, uint32_t webviewId, uint32_t hostWebviewId, callAsyncJavascriptCompletionHandler callback) {     
+    NSString *javaScript = [NSString stringWithUTF8String:jsString];    
+    NSDictionary *arguments = @{};    
+    
+    // todo: let dev specify the content world and the frame
+    [webView callAsyncJavaScript:javaScript arguments:arguments inFrame:nil inContentWorld:WKContentWorld.pageWorld completionHandler:^(id result, NSError *error) {
+        NSError *jsonError;
+        NSData *jsonData;
+        
+        if (error != nil) {            
+            jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": error.localizedDescription} options:0 error:&jsonError];                        
+        } else {            
+            if (result == nil) {
+                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [NSNull null]} options:0 error:&jsonError];
+            } else if ([NSJSONSerialization isValidJSONObject:result]) {
+                jsonData = [NSJSONSerialization dataWithJSONObject:result options:0 error:&jsonError];
+            } else {
+                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [result description]} options:0 error:&jsonError];
+            }
+            
+            if (jsonError) {                
+                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": jsonError.localizedDescription} options:0 error:&jsonError];            
+            }
+        }
+        
+        NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];        
+        callback(messageId, webviewId, hostWebviewId, jsonString.UTF8String);
+    }];     
 }
 
 void* getNilValue() {

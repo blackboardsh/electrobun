@@ -241,7 +241,7 @@ setTimeout(async () => {
   const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
     // script: `document.body.textContent`,
     script: `
-    new Promise(
+    return new Promise(
       resolve => {
         setTimeout(() => {
           resolve(document.body.textContent + 'hi hi hi')

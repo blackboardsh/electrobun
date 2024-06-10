@@ -214,6 +214,7 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagInit = webviewTagInit,
     .webviewTagCanGoBack = webviewTagCanGoBack,
     .webviewTagCanGoForward = webviewTagCanGoForward,
+    .webviewTagCallAsyncJavaScript = webviewTagCallAsyncJavaScript,
     .webviewTagResize = webviewTagResize,
     .webviewTagUpdateSrc = webviewTagUpdateSrc,
     .webviewTagUpdateHtml = webviewTagUpdateHtml,
@@ -276,6 +277,23 @@ pub fn webviewTagCanGoBack(params: rpcSchema.BrowserSchema.requests.webviewTagCa
 pub fn webviewTagCanGoForward(params: rpcSchema.BrowserSchema.requests.webviewTagCanGoForward.params) RequestResult {
     const canGoForward = webview.canGoForward(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = .{ .webviewTagCanGoForwardResponse = canGoForward } };
+}
+
+pub fn webviewTagCallAsyncJavaScript(params: rpcSchema.BrowserSchema.requests.webviewTagCallAsyncJavaScript.params) RequestResult {
+    const handler = struct {
+        pub fn handler(messageId: [*:0]const u8, webviewId: u32, hostWebviewId: u32, responseJSON: [*:0]const u8) void {
+            var jsCall = std.fmt.allocPrint(alloc, "document.querySelector('#electrobun-webview-{d}').setCallAsyncJavaScriptResponse(`{s}`, `{s}`);\n", .{ webviewId, messageId, responseJSON }) catch {
+                return;
+            };
+            defer alloc.free(jsCall);
+
+            webview.sendLineToWebview(hostWebviewId, jsCall);
+        }
+    }.handler;
+
+    webview.callAsyncJavaScript(params.messageId, params.webviewId, params.hostWebviewId, params.script, handler);
+
+    return RequestResult{ .errorMsg = null, .payload = null };
 }
 
 pub fn webviewTagResize(params: rpcSchema.BrowserSchema.messages.webviewTagResize) RequestResult {
@@ -375,6 +393,8 @@ pub fn fromBrowserHandleRequest(request: rpcTypes._RPCRequestPacket) RequestResu
         return parseParamsAndCall(fromBrowserHandlers.webviewTagCanGoBack, rpcSchema.BrowserSchema.requests.webviewTagCanGoBack.params, request.params);
     } else if (strEql(method, "webviewTagCanGoForward")) {
         return parseParamsAndCall(fromBrowserHandlers.webviewTagCanGoForward, rpcSchema.BrowserSchema.requests.webviewTagCanGoForward.params, request.params);
+    } else if (strEql(method, "webviewTagCallAsyncJavaScript")) {
+        return parseParamsAndCall(fromBrowserHandlers.webviewTagCallAsyncJavaScript, rpcSchema.BrowserSchema.requests.webviewTagCallAsyncJavaScript.params, request.params);
     } else {
         return RequestResult{ .errorMsg = "unhandled method", .payload = null };
     }

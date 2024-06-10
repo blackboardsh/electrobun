@@ -87,6 +87,43 @@ const ConfigureWebviewTags = (
       });
     }
 
+    asyncResolvers: {
+      [id: string]: { resolve: (arg: any) => void; reject: (arg: any) => void };
+    } = {};
+
+    callAsyncJavaScript({ script }: { script: string }) {
+      return new Promise((resolve, reject) => {
+        const messageId = "" + Date.now() + Math.random();
+        this.asyncResolvers[messageId] = {
+          resolve,
+          reject,
+        };
+
+        this.zigRpc.request.webviewTagCallAsyncJavaScript({
+          messageId,
+          webviewId: this.webviewId,
+          hostWebviewId: window.__electrobunWebviewId,
+          script,
+        });
+      });
+    }
+
+    setCallAsyncJavaScriptResponse(messageId: string, response: any) {
+      const resolvers = this.asyncResolvers[messageId];
+      delete this.asyncResolvers[messageId];
+      try {
+        response = JSON.parse(response);
+
+        if (response.result) {
+          resolvers.resolve(response.result);
+        } else {
+          resolvers.reject(response.error);
+        }
+      } catch (e: any) {
+        resolvers.reject(e.message);
+      }
+    }
+
     async canGoBack() {
       const {
         payload: { webviewTagCanGoBackResponse },

@@ -340,6 +340,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         \\ window.addEventListener('hashchange', function(event) {
         \\  emitWebviewEvent('did-navigate-in-page', window.location.href);    
         \\ });
+        \\
     );
 
     // we want to make this a preload script so that it gets re-applied after navigations before any
@@ -585,6 +586,16 @@ pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {
     };
 
     webview.sendToWebview(line);
+}
+
+// This will wait for promises if a promise is returned from the dev's script and call the completion handler when done
+pub fn callAsyncJavaScript(messageId: []const u8, webviewId: u32, hostWebviewId: u32, script: []const u8, handler: objc.callAsyncJavascriptCompletionHandler) void {
+    var webview = webviewMap.get(webviewId) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}: callAsyncJavaScript, line: {s}\n", .{ webviewId, script });
+        return;
+    };
+
+    objc.callAsyncJavaScript(utils.toCString(messageId), webview.handle, utils.toCString(script), webviewId, hostWebviewId, handler);
 }
 
 // todo: this should move to util, but we need CString utils (which should also be moved to a util)
