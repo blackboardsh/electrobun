@@ -390,6 +390,10 @@ if (commandArg === "init") {
   if (config.scripts.postBuild) {
     Bun.spawnSync([bunBinarySourcePath, config.scripts.postBuild], {
       stdio: ["ignore", "inherit", "inherit"],
+      env: {
+        ...process.env,
+        ELECTROBUN_BUILD_ENV: buildEnvironment,
+      },
     });
   }
 

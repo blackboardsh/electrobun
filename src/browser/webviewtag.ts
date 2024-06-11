@@ -519,6 +519,7 @@ electrobun-webview {
     height: 300px;
     background: #fff;
     background-repeat: no-repeat!important;
+    background-size: cover!important;
 }
 `;
 
