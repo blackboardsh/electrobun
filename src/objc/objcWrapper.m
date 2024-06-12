@@ -170,6 +170,85 @@ void runNSApplication() {
     
 }
 
+// cursor
+
+// Note: WkWebviews are all in different threads and calling mouse cursor methods individually
+// Regardless of layering they will often come in out of order
+// Regardless of trying to stop propagation of native mousemove events they will still be called
+// Because of the way it checks the current NSApp cursor it only calls set when it's different from the one it wants
+// Because it's delayed it can't play off the sequence of wkwebkits handling the cursor within a single round trip
+// https://github.com/WebKit/WebKit/blob/579f828a4c55913c59cc26a9e6e316e6cf40a45b/Source/WebKit/UIProcess/mac/PageClientImplMac.mm#L324
+// Our best hope of smoothing out the cursor wiggle when having layered wkwebviews (like <electrobun-webview> elements)
+// is to keep track of the last 20 cursor sets. set the most recent non-arrow one. This still causes a flicker
+// every 20 or so sets which is smooth enough to not look super janky, but often enough that the cursor still feels responsive
+// I am disgusted by this.
+
+NSMutableArray<NSCursor *> *recentCursors;
+const NSInteger maxCursorHistory = 30;
+
+@implementation NSCursor (Swizzling)
+
++ (void)load {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        recentCursors = [NSMutableArray array]; 
+        Class class = [self class];
+
+        SEL originalSelector = @selector(set);
+        SEL swizzledSelector = @selector(swizzled_set);
+
+        Method originalMethod = class_getInstanceMethod(class, originalSelector);
+        Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
+
+        BOOL didAddMethod = class_addMethod(class,
+                                            originalSelector,
+                                            method_getImplementation(swizzledMethod),
+                                            method_getTypeEncoding(swizzledMethod));
+
+        if (didAddMethod) {
+            class_replaceMethod(class,
+                                swizzledSelector,
+                                method_getImplementation(originalMethod),
+                                method_getTypeEncoding(originalMethod));
+        } else {
+            method_exchangeImplementations(originalMethod, swizzledMethod);
+        }
+    });
+}
+
+- (void)swizzled_set {        
+        [self updateRecentCursors:self];                
+
+        NSCursor *nonArrayCursorToSet = [self mostRecentNonArrowCursor];
+        NSCursor *cursorToSet;
+        if (nonArrayCursorToSet) {
+            cursorToSet = nonArrayCursorToSet;
+        } else {
+            cursorToSet = [NSCursor arrowCursor];                 
+        }
+         
+        [cursorToSet swizzled_set];            
+}
+
+- (void)updateRecentCursors:(NSCursor *)cursor {
+    if (recentCursors.count >= maxCursorHistory) {
+        [recentCursors removeObjectAtIndex:0];
+    }
+    
+    [recentCursors addObject:cursor];
+}
+
+- (NSCursor *)mostRecentNonArrowCursor {
+    for (NSCursor *cursor in [recentCursors reverseObjectEnumerator]) {
+        if (cursor != [NSCursor arrowCursor]) {
+            return cursor;
+        }
+    }
+    return nil;
+}
+
+@end
+
 
 // WKWebView
 
