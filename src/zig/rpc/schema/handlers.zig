@@ -130,10 +130,6 @@ pub fn stopWindowMove(params: rpcSchema.BrowserSchema.messages.stopWindowMove) R
     webview.stopWindowMove(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
-pub fn webviewTagGetScreenshot(params: rpcSchema.BrowserSchema.messages.webviewTagGetScreenshot) RequestResult {
-    webview.webviewTagGetScreenshot(.{ .hostId = params.hostId, .id = params.id });
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
 pub fn webviewTagSetTransparent(params: rpcSchema.BrowserSchema.messages.webviewTagSetTransparent) RequestResult {
     webview.webviewTagSetTransparent(.{ .id = params.id, .transparent = params.transparent });
     return RequestResult{ .errorMsg = null, .payload = null };
@@ -225,7 +221,6 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagRemove = webviewTagRemove,
     .startWindowMove = startWindowMove,
     .stopWindowMove = stopWindowMove,
-    .webviewTagGetScreenshot = webviewTagGetScreenshot,
     .webviewTagSetTransparent = webviewTagSetTransparent,
     .webviewTagSetPassthrough = webviewTagSetPassthrough,
     .webviewTagSetHidden = webviewTagSetHidden,
@@ -423,8 +418,6 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.startWindowMove, rpcSchema.BrowserSchema.messages.startWindowMove, message.payload);
     } else if (strEql(method, "stopWindowMove")) {
         _ = parseParamsAndCall(fromBrowserHandlers.stopWindowMove, rpcSchema.BrowserSchema.messages.stopWindowMove, message.payload);
-    } else if (strEql(method, "webviewTagGetScreenshot")) {
-        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagGetScreenshot, rpcSchema.BrowserSchema.messages.webviewTagGetScreenshot, message.payload);
     } else if (strEql(method, "webviewTagSetTransparent")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetTransparent, rpcSchema.BrowserSchema.messages.webviewTagSetTransparent, message.payload);
     } else if (strEql(method, "webviewTagSetPassthrough")) {

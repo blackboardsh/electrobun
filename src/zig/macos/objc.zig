@@ -60,6 +60,7 @@ pub const FileResponse = struct {
     mimeType: [*:0]const u8,
     fileContents: [*]const u8,
     len: usize,
+    opaquePointer: ?*anyopaque,
 };
 
 pub const FileLoader = *const fn (webviewId: u32, [*:0]const u8, [*:0]const u8) FileResponse;

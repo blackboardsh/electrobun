@@ -10,6 +10,7 @@ typedef struct {
     const char *mimeType;
     const char *fileContents;  
     size_t len;  
+    void *opaquePointer;
 } FileResponse;
 
 // Define callback types for starting and stopping URL scheme tasks
@@ -29,31 +30,75 @@ typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const 
     NSString *bodyString = [[NSString alloc] initWithData:bodyData encoding:NSUTF8StringEncoding];
         
     // todo: the zig handler should return the file to here, and objc can send it back to the webview
-    if (self.fileLoader) {                
+    if (self.fileLoader) {     
         FileResponse fileResponse = self.fileLoader(self.webviewId, url.absoluteString.UTF8String, bodyString.UTF8String);                        
-
-        NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:fileResponse.len];        
         // Determine MIME type from the response, or default if null
         NSString *mimeType = fileResponse.mimeType ? [NSString stringWithUTF8String:fileResponse.mimeType] : @"application/octet-stream";
+
+
+        if ([mimeType isEqualToString:@"screenshot"]) {
+            // Note: for the screenshot api currently we just use zig to get a handle to the 
+            // requested webview that we want to snapshot. We take the snapshot here and
+            // resolve the url request here.            
+
+            WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];            
+            WKWebView *targetWebview = (__bridge WKWebView *)fileResponse.opaquePointer;
+
+            // Capture the snapshot
+            [targetWebview takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {
+                if (error) {           
+                    NSLog(@"Error capturing snapshot: %@", error);              
+                    return;
+                }
+                // bmp - twice as fast as jpg which is twice as fast as png
+                NSDictionary *bmpProperties = @{NSImageCompressionFactor: @1.0}; // Adjust compression factor as needed
+                NSBitmapImageRep *imgRepbmp = [[NSBitmapImageRep alloc] initWithData:[snapshotImage TIFFRepresentation]];
+                NSData *imgData = [imgRepbmp representationUsingType:NSBitmapImageFileTypeBMP properties:bmpProperties];                
+
+                
         
-        // Create a response - you might need to adjust the MIME type
-        NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
-        // Webkit will try guess the mimetype based on the file extension. supports common file types  https://github.com/WebKit/WebKit/blob/a78127adb38a402b5d0fe6b17367aba32a38eb22/Source/WebCore/platform/playstation/MIMETypeRegistryPlayStation.cpp#L34-L55
-        // If/when we need to support more file types, we can implement that in zig cross-platform and allow extending with more
-        // bun also has comprehensive mimetype detection written in zig that could be used but increases the binary size
-                                                            MIMEType:mimeType 
-                                               expectedContentLength:data.length
-                                                    textEncodingName:nil];
-        
-        // Inform the urlSchemeTask of the response
-        [urlSchemeTask didReceiveResponse:response];
-        
-        // Send the data
-        [urlSchemeTask didReceiveData:data];
-        
-        // Complete the task
-        [urlSchemeTask didFinish];
-        // how to send the fileContents back to the webview?
+                // Create a response - you might need to adjust the MIME type
+                NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
+                // Webkit will try guess the mimetype based on the file extension. supports common file types  https://github.com/WebKit/WebKit/blob/a78127adb38a402b5d0fe6b17367aba32a38eb22/Source/WebCore/platform/playstation/MIMETypeRegistryPlayStation.cpp#L34-L55
+                // If/when we need to support more file types, we can implement that in zig cross-platform and allow extending with more
+                // bun also has comprehensive mimetype detection written in zig that could be used but increases the binary size
+                                                                    MIMEType:@"image/bmp" 
+                                                    expectedContentLength:imgData.length
+                                                            textEncodingName:nil];
+
+
+                // Inform the urlSchemeTask of the response
+                [urlSchemeTask didReceiveResponse:response];
+                
+                // Send the data
+                [urlSchemeTask didReceiveData:imgData];
+                
+                // Complete the task
+                [urlSchemeTask didFinish];
+                // how to send the fileContents back to the webview?                                
+            }];            
+        } else {        
+            NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:fileResponse.len];        
+            
+            // Create a response - you might need to adjust the MIME type
+            NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
+            // Webkit will try guess the mimetype based on the file extension. supports common file types  https://github.com/WebKit/WebKit/blob/a78127adb38a402b5d0fe6b17367aba32a38eb22/Source/WebCore/platform/playstation/MIMETypeRegistryPlayStation.cpp#L34-L55
+            // If/when we need to support more file types, we can implement that in zig cross-platform and allow extending with more
+            // bun also has comprehensive mimetype detection written in zig that could be used but increases the binary size
+                                                                MIMEType:mimeType 
+                                                expectedContentLength:data.length
+                                                        textEncodingName:nil];
+            
+            // Inform the urlSchemeTask of the response
+            [urlSchemeTask didReceiveResponse:response];
+            
+            // Send the data
+            [urlSchemeTask didReceiveData:data];
+            
+            // Complete the task
+            [urlSchemeTask didFinish];
+            // how to send the fileContents back to the webview?
+        }
     }
 }
 
@@ -955,7 +1000,6 @@ void stopWindowMove() {
         mouseUpMonitor = nil;
     }
 }
-
 
 void startWindowMove(WKWebView *webView) {    
     targetWindow = webView.window;

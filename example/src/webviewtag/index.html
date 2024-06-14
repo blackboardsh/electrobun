@@ -16,10 +16,15 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
     <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
     <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">github.com/blackboardsh/electrobun</button>
     <button onclick="document.querySelector('electrobun-webview').syncScreenshot()">Sync Screenshot</button>
+    <button onclick="document.querySelector('electrobun-webview').startMirroring()">Start Mirroring</button>
+    <button onclick="document.querySelector('electrobun-webview').stopMirroring()">Stop Mirroring</button>
+    <button onclick="document.querySelector('electrobun-webview').syncScreenshot()">Sync Screenshot</button>
     <button onclick="document.querySelector('electrobun-webview').toggleTransparent()">Toggle Transparent</button>
     <button onclick="document.querySelector('electrobun-webview').togglePassthrough()">Toggle Passthrough</button>
     <button onclick="document.querySelector('electrobun-webview').toggleHidden()">hide webview</button>
     <button onclick="document.querySelector('electrobun-webview').toggleDelegateMode()">Toggle delegate mode</button>
+    <button onclick="document.querySelector('electrobun-webview').toggleHiddenMirrorMode()">Toggle Hidden Mirror mode</button>
+    
     
     <electrobun-webview  src="https://electrobun.dev" preload="" ></electrobun-webview>    
     <electrobun-webview preload="window.onload = () => {document.body.innerHTML += 'hello from preload';}"  html="<html><body><h1>webview tag with html</h1></body></html>" ></electrobun-webview>    
@@ -81,6 +86,7 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
                     console.error('evalError', err);
                 });
         }, 1000)
+
 
         
     </script>

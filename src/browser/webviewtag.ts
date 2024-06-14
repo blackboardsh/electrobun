@@ -178,8 +178,8 @@ const ConfigureWebviewTags = (
     // are still events like drag events which are natively handled deep in the window manager
     // and will be handled incorrectly. To get around this for now we need to
     // move the webview off screen during delegate mode.
-    adjustDimensionsForDelegateMode(rect: DOMRect) {
-      if (this.delegateMode) {
+    adjustDimensionsForHiddenMirrorMode(rect: DOMRect) {
+      if (this.hiddenMirrorMode) {
         rect.x = 0 - rect.width;
       }
 
@@ -207,7 +207,7 @@ const ConfigureWebviewTags = (
     syncDimensions(force: boolean = false) {
       const rect = this.getBoundingClientRect();
       const { x, y, width, height } =
-        this.adjustDimensionsForDelegateMode(rect);
+        this.adjustDimensionsForHiddenMirrorMode(rect);
       const lastRect = this.lastRect;
 
       if (width === 0 && height === 0) {
@@ -266,15 +266,14 @@ const ConfigureWebviewTags = (
       const delay = accelerate ? 100 : 400;
 
       if (accelerate) {
-        this.setHiddenMirrorMode(true);
+        if (!this.hiddenMirrorMode) {
+          this.toggleHiddenMirrorMode(true);
+        }
         clearTimeout(this.positionCheckLoopReset);
         this.positionCheckLoopReset = setTimeout(() => {
           this.setPositionCheckLoop(false);
-          this.setHiddenMirrorMode(false);
-          if (!this.transparent) {
-            this.tryClearScreenImage();
-          }
-        }, 400);
+          this.toggleHiddenMirrorMode(false);
+        }, 600);
       }
       // Note: Since there's not catch all way to listen for x/y changes
       // we have a 400ms interval to check
@@ -380,23 +379,42 @@ const ConfigureWebviewTags = (
     }
     // Note: you can set an interval and do this 60 times a second and it's pretty smooth
     // but it uses quite a bit of cpu
-    syncScreenshot() {
-      // This will async fetch a screenshot of the nested webview from zig/objc and it'll call setScreenImage
-      // for this webview when it's done
-      this.zigRpc.send.webviewTagGetScreenshot({
-        id: this.webviewId,
-        hostId: window.__electrobunWebviewId,
-      });
-    }
-    // This is called from zig, typically with a png data url
-    setScreenImage(dataUrl: string) {
-      // preload the image before applying it so we don't see it load in the dom
+    // todo: change this to "mirror to dom"
+    syncScreenshot(callback?: () => void) {
+      const cacheBustString = `?${Date.now()}`;
+      const url = `views://screenshot/${this.webviewId}${cacheBustString}`;
       const img = new Image();
-      img.src = dataUrl;
+      img.src = url;
       img.onload = () => {
-        this.style.backgroundImage = `url(${dataUrl})`;
+        this.style.backgroundImage = `url(${url})`;
+        if (callback) {
+          // We've preloaded the image, but we still want to give it a chance to render
+          // after setting the background style. give it quite a bit longer than a rafr
+          setTimeout(callback, 100);
+        }
       };
     }
+
+    DEFAULT_FRAME_RATE = Math.round(1000 / 30); // 30fps
+    streamScreenInterval?: Timer;
+
+    startMirroring(frameRate: number = this.DEFAULT_FRAME_RATE) {
+      if (this.streamScreenInterval) {
+        clearInterval(this.streamScreenInterval);
+      }
+
+      this.streamScreenInterval = setInterval(() => {
+        this.syncScreenshot();
+      }, frameRate);
+    }
+
+    stopMirroring() {
+      if (this.streamScreenInterval) {
+        clearInterval(this.streamScreenInterval);
+        this.streamScreenInterval = undefined;
+      }
+    }
+
     clearScreenImage() {
       this.style.backgroundImage = "";
     }
@@ -461,42 +479,51 @@ const ConfigureWebviewTags = (
       });
     }
 
+    // note: delegateMode and hiddenMirrorMode are experimental
+    // ideally delegate mode would move the webview off screen
+    // and delegate mouse and keyboard events to the webview while
+    // streaming the screen so it can be fully layered in the dom
+    // and fully interactive.
     toggleDelegateMode(delegateMode?: boolean) {
       const _newDelegateMode =
         typeof delegateMode === "undefined" ? !this.delegateMode : delegateMode;
 
       if (_newDelegateMode) {
-        this.syncScreenshot();
-        // give it a non-deterministic instant to load to reduce flicker
-        setTimeout(() => {
-          this.delegateMode = _newDelegateMode;
-          this.syncDimensions();
-          this.toggleHidden(true, true);
-        }, 100);
+        this.syncScreenshot(() => {
+          this.delegateMode = true;
+          this.toggleTransparent(true, true);
+          this.startMirroring();
+        });
       } else {
-        this.delegateMode = _newDelegateMode;
-        this.syncDimensions();
+        this.delegateMode = false;
+        this.stopMirroring();
+        this.toggleTransparent(this.transparent);
         this.tryClearScreenImage();
-        this.toggleHidden(this.hidden);
       }
     }
 
-    // Note: Delegate mode can be used when we want to temporarily layer the webview contents
-    // in the host webview's z-index. This is done by:
-    // 1. getting a screenshot of the webview's contents and setting it to the background of the webviewtag on the host
-    // 2. setting the hovering native webview for the nested webviewtag to be invisible and pass through mouse events
-    setHiddenMirrorMode(enable: boolean) {
-      this.hiddenMirrorMode = enable;
+    // While hiddenMirroMode would be similar to delegate mode but non-interactive
+    // This is used while scrolling or resizing the <electrobun-webviewtag> to
+    // make it smoother (scrolls with the dom) but disables interaction so that
+    // during the scroll we don't need to worry about the webview being misaligned
+    // with the mirror and accidentlly clicking on the wrong thing.
+    toggleHiddenMirrorMode(force: boolean) {
+      const enable =
+        typeof force === "undefined" ? !this.hiddenMirrorMode : force;
+
       if (enable === true) {
-        this.syncScreenshot();
-        // give it a non-deterministic instant to load to reduce flicker
-        setTimeout(() => {
+        this.syncScreenshot(() => {
+          this.hiddenMirrorMode = true;
           this.toggleHidden(true, true);
-        }, 100);
+          this.togglePassthrough(true, true);
+          this.startMirroring();
+        });
       } else {
-        this.syncDimensions();
+        this.stopMirroring();
         this.toggleHidden(this.hidden);
+        this.togglePassthrough(this.passthroughEnabled);
         this.tryClearScreenImage();
+        this.hiddenMirrorMode = false;
       }
     }
   }

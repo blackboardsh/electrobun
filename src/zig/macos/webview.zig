@@ -22,7 +22,7 @@ fn assetFileLoader(url: [*:0]const u8) objc.FileResponse {
     const relPath = url[ViewsScheme.len..std.mem.len(url)];
     const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
     const mimeType = getMimeType(relPath); // or dynamically determine MIME type
-    return objc.FileResponse{ .mimeType = utils.toCString(mimeType), .fileContents = fileContents.ptr, .len = fileContents.len };
+    return objc.FileResponse{ .mimeType = utils.toCString(mimeType), .fileContents = fileContents.ptr, .len = fileContents.len, .opaquePointer = null };
 }
 
 fn readAssetFromDisk(url: [*:0]const u8) []const u8 {
@@ -153,14 +153,27 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 const response = rpc.request.sendSyncRequest(.{ .webviewId = webviewId, .request = bodyString });
                 if (response.payload) |payload| {
                     const responseString = payload[0..payload.len];
-                    return objc.FileResponse{
-                        .mimeType = utils.toCString("application/json"),
-                        .fileContents = responseString.ptr,
-                        .len = responseString.len,
-                    };
+                    return objc.FileResponse{ .mimeType = utils.toCString("application/json"), .fileContents = responseString.ptr, .len = responseString.len, .opaquePointer = null };
                 } else {
                     std.debug.print("Failed to get response from sync rpc request, no payload\n", .{});
                 }
+            } else if (std.mem.startsWith(u8, relPath, "screenshot/")) {
+                // the relPath is screenshot/<webviewId>?<cachebuster>
+                // get the target webview info for objc, the screenshoting and resolving is done
+                // in objc
+                const start = "screenshot/".len;
+                const end = std.mem.indexOf(u8, relPath, "?") orelse relPath.len;
+                const numStr = relPath[start..end];
+                const targetWebviewId = std.fmt.parseInt(u32, numStr, 10) catch 0;
+
+                var targetWebview = webviewMap.get(targetWebviewId) orelse {
+                    std.debug.print("Failed to get webview from hashmap for id {}: screenshot api\n", .{targetWebviewId});
+                    return assetFileLoader(url);
+                };
+
+                // const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
+                // const mimeType = getMimeType(relPath); // or dynamically determine MIME type
+                return objc.FileResponse{ .opaquePointer = targetWebview.handle, .mimeType = utils.toCString("screenshot"), .fileContents = utils.toCString(""), .len = 0 };
             }
 
             return assetFileLoader(url);
@@ -467,32 +480,6 @@ pub fn reload(opts: rpcSchema.BrowserSchema.messages.webviewTagReload) void {
     };
 
     objc.webviewTagReload(webview.handle);
-}
-
-pub fn webviewTagGetScreenshot(opts: rpcSchema.BrowserSchema.messages.webviewTagGetScreenshot) void {
-    // Note: this is the webview inside the webviewTag that we're screenshotting.
-    var webviewToScreenshot = webviewMap.get(opts.id) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
-        return;
-    };
-
-    const zigHandler = struct {
-        fn zigHandler(hostWebviewId: u32, webviewToScreenshotId: u32, pngData: [*:0]const u8) void {
-            // Note: webviewId is the host webview that
-            // todo: hostWebviewId is now stored in WebviewType in the webviewMap so we don't have to pass it through
-            // we can fetch it from the hashmap
-            const pngDataURISlice = utils.fromCString(pngData);
-            var jsCall = std.fmt.allocPrint(alloc, "document.querySelector('#electrobun-webview-{d}').setScreenImage('{s}');\n", .{ webviewToScreenshotId, pngDataURISlice }) catch {
-                return;
-            };
-            defer alloc.free(jsCall);
-
-            sendLineToWebview(hostWebviewId, jsCall);
-        }
-    }.zigHandler;
-
-    const screenshotData = objc.getWebviewSnapshot(opts.hostId, opts.id, webviewToScreenshot.handle, zigHandler);
-    _ = screenshotData;
 }
 
 pub fn webviewTagSetTransparent(opts: rpcSchema.BrowserSchema.messages.webviewTagSetTransparent) void {
