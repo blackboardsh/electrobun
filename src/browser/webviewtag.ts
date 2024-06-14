@@ -214,6 +214,7 @@ const ConfigureWebviewTags = (
         if (this.wasZeroRect === false) {
           this.wasZeroRect = true;
           this.toggleHidden(true, true);
+          this.stopMirroring();
         }
         return;
       }
@@ -266,13 +267,9 @@ const ConfigureWebviewTags = (
       const delay = accelerate ? 100 : 400;
 
       if (accelerate) {
-        if (!this.hiddenMirrorMode) {
-          this.toggleHiddenMirrorMode(true);
-        }
         clearTimeout(this.positionCheckLoopReset);
         this.positionCheckLoopReset = setTimeout(() => {
           this.setPositionCheckLoop(false);
-          this.toggleHiddenMirrorMode(false);
         }, 600);
       }
       // Note: Since there's not catch all way to listen for x/y changes
@@ -313,6 +310,8 @@ const ConfigureWebviewTags = (
     disconnectedCallback() {
       // removed from the dom
       clearInterval(this.positionCheckLoop);
+      this.stopMirroring();
+
       this.resizeObserver?.disconnect();
       // this.intersectionObserver?.disconnect();
       // this.mutationObserver?.disconnect();
@@ -379,7 +378,7 @@ const ConfigureWebviewTags = (
     }
     // Note: you can set an interval and do this 60 times a second and it's pretty smooth
     // but it uses quite a bit of cpu
-    // todo: change this to "mirror to dom"
+    // todo: change this to "mirror to dom" or something
     syncScreenshot(callback?: () => void) {
       const cacheBustString = `?${Date.now()}`;
       const url = `views://screenshot/${this.webviewId}${cacheBustString}`;
@@ -398,6 +397,8 @@ const ConfigureWebviewTags = (
     DEFAULT_FRAME_RATE = Math.round(1000 / 30); // 30fps
     streamScreenInterval?: Timer;
 
+    // todo: add a flag to disable automirroring since it's cpu intensive and
+    // developers may want to disable it in specific cases
     startMirroring(frameRate: number = this.DEFAULT_FRAME_RATE) {
       if (this.streamScreenInterval) {
         clearInterval(this.streamScreenInterval);
