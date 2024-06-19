@@ -354,6 +354,20 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         \\  emitWebviewEvent('did-navigate-in-page', window.location.href);    
         \\ });
         \\
+        \\ document.addEventListener('click', function(event) {
+        \\  if ((event.metaKey || event.ctrlKey) && event.target.tagName === 'A') {
+        \\    event.preventDefault();
+        \\    event.stopPropagation();
+        \\
+        \\    // Get the href of the link
+        \\    const url = event.target.href;        
+        \\    
+        \\    // Open the URL in a new window or tab
+        \\    // Note: we already handle new windows in objc
+        \\    window.open(url, '_blank');
+        \\  }
+        \\}, true);
+        \\
     );
 
     // we want to make this a preload script so that it gets re-applied after navigations before any

@@ -229,7 +229,7 @@ void runNSApplication() {
 // I am disgusted by this.
 
 NSMutableArray<NSCursor *> *recentCursors;
-const NSInteger maxCursorHistory = 30;
+const NSInteger maxCursorHistory = 20;
 
 @implementation NSCursor (Swizzling)
 
@@ -262,10 +262,20 @@ const NSInteger maxCursorHistory = 30;
 }
 
 - (void)swizzled_set {        
-        [self updateRecentCursors:self];                
+        [self updateRecentCursors:self];   
+
+        // todo: if there's only one webivew then set the cursor and skip everything else             
+        // todo: need to track which window is the last one to set the cursor, can maybe track
+        // via mousemove events
 
         NSCursor *nonArrayCursorToSet = [self mostRecentNonArrowCursor];
         NSCursor *cursorToSet;
+
+        // todo: if the latest cursor is normal, and te nonArrayCursorToSet is not
+        // check to see if there are two webviews at this mouse location
+        // so when moving outside of the webviewtag it resets immediately.
+        // set the cursor and reset the recentNonArrowCursors
+
         if (nonArrayCursorToSet) {
             cursorToSet = nonArrayCursorToSet;
         } else {
