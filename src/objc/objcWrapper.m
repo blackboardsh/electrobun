@@ -372,6 +372,9 @@ WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartUR
     assetSchemeHandler.fileLoader = assetFileLoader;    
     assetSchemeHandler.webviewId = webviewId;
 
+    // fullscreen settings    
+    [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
+
     // Note: Keep "views" in sync with views:// in webview.zig
     [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];    
     objc_setAssociatedObject(configuration, "assetSchemeHandler", assetSchemeHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);    
