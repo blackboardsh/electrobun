@@ -36,7 +36,7 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
     // std.log.info("createWebview handler preload {s}", .{params.preload});
     webview.createWebview(.{
         .id = params.id,
-        .hostWebviewId = null,
+        .hostWebviewId = params.hostWebviewId,
         .pipePrefix = params.pipePrefix,
         .url = params.url,
         .html = params.html,
@@ -207,7 +207,6 @@ pub const handlers = rpcSchema.Handlers{ //
 };
 
 pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
-    .webviewTagInit = webviewTagInit,
     .webviewTagCanGoBack = webviewTagCanGoBack,
     .webviewTagCanGoForward = webviewTagCanGoForward,
     .webviewTagCallAsyncJavaScript = webviewTagCallAsyncJavaScript,
@@ -226,43 +225,6 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagSetHidden = webviewTagSetHidden,
     .webviewEvent = webviewEvent,
 };
-
-pub fn webviewTagInit(params: rpcSchema.BrowserSchema.requests.webviewTagInit.params) RequestResult {
-    // todo: this should go through bun so bun is aware of the webview
-    // and so it can create and wire up the in/out pipes
-    webview.createWebview(.{
-        .id = params.id,
-        // note: currently setting to empty string because zig skips over pipe creation for webview tags
-        // for now.
-        .hostWebviewId = params.hostWebviewId,
-        .pipePrefix = "",
-        .url = params.url,
-        .html = params.html,
-        .preload = params.preload,
-        .partition = params.partition,
-        .frame = .{ //
-            .x = params.frame.x,
-            .y = params.frame.y,
-            .width = params.frame.width,
-            .height = params.frame.height,
-        },
-        .autoResize = false,
-    });
-
-    const webviewId = params.id;
-    const windowId = params.windowId;
-
-    _ = addWebviewToWindow(.{ .webviewId = webviewId, .windowId = windowId });
-
-    if (params.url) |url| {
-        // note this will be a separate thing as well
-        _ = loadURL(.{ .webviewId = webviewId, .url = url });
-    } else if (params.html) |html| {
-        _ = loadHTML(.{ .webviewId = webviewId, .html = html });
-    }
-
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
 
 pub fn webviewTagCanGoBack(params: rpcSchema.BrowserSchema.requests.webviewTagCanGoBack.params) RequestResult {
     const canGoBack = webview.canGoBack(.{ .id = params.id });
@@ -382,9 +344,7 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
 pub fn fromBrowserHandleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
     const method = request.method;
 
-    if (strEql(method, "webviewTagInit")) {
-        return parseParamsAndCall(fromBrowserHandlers.webviewTagInit, rpcSchema.BrowserSchema.requests.webviewTagInit.params, request.params);
-    } else if (strEql(method, "webviewTagCanGoBack")) {
+    if (strEql(method, "webviewTagCanGoBack")) {
         return parseParamsAndCall(fromBrowserHandlers.webviewTagCanGoBack, rpcSchema.BrowserSchema.requests.webviewTagCanGoBack.params, request.params);
     } else if (strEql(method, "webviewTagCanGoForward")) {
         return parseParamsAndCall(fromBrowserHandlers.webviewTagCanGoForward, rpcSchema.BrowserSchema.requests.webviewTagCanGoForward.params, request.params);

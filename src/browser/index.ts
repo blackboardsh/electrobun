@@ -22,22 +22,6 @@ const WEBVIEW_ID = window.__electrobunWebviewId;
 // todo (yoav): move this stuff to browser/rpc/webview.ts
 type ZigWebviewHandlers = RPCSchema<{
   requests: {
-    webviewTagInit: {
-      params: {
-        id: number;
-        windowId: number;
-        url: string | null;
-        html: string | null;
-        preload: string | null;
-        frame: {
-          width: number;
-          height: number;
-          x: number;
-          y: number;
-        };
-      };
-      response: void;
-    };
     webviewTagCallAsyncJavaScript: {
       params: {
         messageId: string;
@@ -125,7 +109,25 @@ class Electroview<T> {
     // todo (yoav): should init webviewTag by default when src is local
     // and have a setting that forces it enabled or disabled
     this.initZigRpc();
-    ConfigureWebviewTags(true, this.zigRpc);
+    // Note:
+    // syncRPC messages doesn't need to be defined since there's no need for sync 1-way message
+    // just use non-blocking async rpc for that, we just need sync requests
+    // We don't need request ids either since we're not receiving the response on a different pipe
+    if (true) {
+      // TODO: define sync requests on schema (separate from async reqeusts and messages)
+      this.syncRpc = (msg: { method: string; params: any }) => {
+        try {
+          const messageString = JSON.stringify(msg);
+          return this.bunBridgeSync(messageString);
+        } catch (error) {
+          console.error(
+            "bun: failed to serialize message to webview syncRpc",
+            error
+          );
+        }
+      };
+    }
+    ConfigureWebviewTags(true, this.zigRpc, this.syncRpc);
 
     this.initElectrobunListeners();
 
@@ -136,25 +138,6 @@ class Electroview<T> {
 
     if (this.rpc) {
       this.rpc.setTransport(this.createTransport());
-
-      // Note:
-      // syncRPC messages doesn't need to be defined since there's no need for sync 1-way message
-      // just use non-blocking async rpc for that, we just need sync requests
-      // We don't need request ids either since we're not receiving the response on a different pipe
-      if (true) {
-        // TODO: define sync requests on schema (separate from async reqeusts and messages)
-        this.syncRpc = (msg: { method: string; params: any }) => {
-          try {
-            const messageString = JSON.stringify(msg);
-            return this.bunBridgeSync(messageString);
-          } catch (error) {
-            console.error(
-              "bun: failed to serialize message to webview syncRpc",
-              error
-            );
-          }
-        };
-      }
     }
   }
 

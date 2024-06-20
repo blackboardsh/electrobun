@@ -180,6 +180,7 @@ type ZigHandlers = RPCSchema<{
     createWebview: {
       params: {
         id: number;
+        hostWebviewId: number | null;
         pipePrefix: string;
         url: string | null;
         html: string | null;

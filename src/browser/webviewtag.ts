@@ -6,25 +6,23 @@ type WebviewEventTypes =
 
 const ConfigureWebviewTags = (
   enableWebviewTags: boolean,
-  zigRpc: (params: any) => any
+  zigRpc: (params: any) => any,
+  syncRpc: (params: any) => any
 ) => {
   if (!enableWebviewTags) {
     return;
   }
-
-  // TODO: webview ids are stored in zig/objc as u32. We need a way to guarantee that ones
-  // created via webview tag across multiple windows don't conflict with ones created from bun
-  let nextWebviewId = 10_000;
 
   // todo: provide global types for <electrobun-webview> tag elements (like querySelector results etc.)
 
   class WebviewTag extends HTMLElement {
     // todo (yoav): come up with a better mechanism to eliminate collisions with bun created
     // webviews
-    webviewId = nextWebviewId++;
+    webviewId?: number; // = nextWebviewId++;
 
     // rpc
     zigRpc: any;
+    syncRpc: any;
 
     // observers
     resizeObserver?: ResizeObserver;
@@ -41,8 +39,6 @@ const ConfigureWebviewTags = (
       height: 0,
     };
 
-    id = `electrobun-webview-${this.webviewId}`;
-
     transparent: boolean = false;
     passthroughEnabled: boolean = false;
     hidden: boolean = false;
@@ -55,6 +51,7 @@ const ConfigureWebviewTags = (
     constructor() {
       super();
       this.zigRpc = zigRpc;
+      this.syncRpc = syncRpc;
 
       // Give it a frame to be added to the dom and render before measuring
       requestAnimationFrame(() => {
@@ -66,25 +63,29 @@ const ConfigureWebviewTags = (
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
 
+      const webviewId = this.syncRpc({
+        method: "webviewTagInit",
+        params: {
+          hostWebviewId: window.__electrobunWebviewId,
+          windowId: window.__electrobunWindowId,
+          url: this.src || this.getAttribute("src") || null,
+          html: this.html || this.getAttribute("html") || null,
+          preload: this.preload || this.getAttribute("preload") || null,
+          partition: this.partition || this.getAttribute("partition") || null,
+          frame: {
+            width: rect.width,
+            height: rect.height,
+            x: rect.x,
+            y: rect.y,
+          },
+        },
+      });
+
+      this.webviewId = webviewId;
+      this.id = `electrobun-webview-${this.webviewId}`;
       // todo: replace zig -> webviewtag communication with a global instead of
       // queryselector based on id
       this.setAttribute("id", this.id);
-
-      this.zigRpc.request.webviewTagInit({
-        id: this.webviewId,
-        hostWebviewId: window.__electrobunWebviewId,
-        windowId: window.__electrobunWindowId,
-        url: this.src || this.getAttribute("src") || null,
-        html: this.html || this.getAttribute("html") || null,
-        preload: this.preload || this.getAttribute("preload") || null,
-        partition: this.partition || this.getAttribute("partition") || null,
-        frame: {
-          width: rect.width,
-          height: rect.height,
-          x: rect.x,
-          y: rect.y,
-        },
-      });
     }
 
     asyncResolvers: {
@@ -338,6 +339,9 @@ const ConfigureWebviewTags = (
     }
 
     updateIFrameSrc(src: string) {
+      if (!this.webviewId) {
+        return;
+      }
       this.zigRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
         url: src,
@@ -345,6 +349,9 @@ const ConfigureWebviewTags = (
     }
 
     updateIFrameHtml(html: string) {
+      if (!this.webviewId) {
+        return;
+      }
       this.zigRpc.send.webviewTagUpdateHtml({
         id: this.webviewId,
         html,
@@ -352,6 +359,9 @@ const ConfigureWebviewTags = (
     }
 
     updateIFramePreload(preload: string) {
+      if (!this.webviewId) {
+        return;
+      }
       this.zigRpc.send.webviewTagUpdatePreload({
         id: this.webviewId,
         preload,

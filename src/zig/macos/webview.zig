@@ -99,14 +99,6 @@ const CreateWebviewOpts = struct { //
 };
 pub fn createWebview(opts: CreateWebviewOpts) void {
     const bunPipeIn = blk: {
-        // todo: currently webviewtags which have ids starting at 10000
-        // don't have bun creating or listening on named pipes. It should
-        // ideally report to bun and connect them so bun can do things
-        // like "get all webviews" including nested <webview> tags
-        if (opts.id >= 10000) {
-            break :blk null;
-        }
-
         const bunPipeInPath = utils.concatStrings(opts.pipePrefix, "_in");
         const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
 
@@ -124,9 +116,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     }
 
     const bunPipeOut = blk: {
-        if (opts.id >= 10000) {
-            break :blk null;
-        }
         const bunPipeOutPath = utils.concatStrings(opts.pipePrefix, "_out");
         const bunPipeOutResult = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
 
@@ -249,8 +238,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     const webviewTagHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "webviewTagBridge", struct {
         fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) void {
             const msgString = utils.fromCString(message);
-
-            std.debug.print("Received message from webview-zig-bridge: {s}\n", .{msgString});
 
             const json = std.json.parseFromSlice(std.json.Value, alloc, msgString, .{ .ignore_unknown_fields = true }) catch |err| {
                 std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });

@@ -29,6 +29,7 @@ type BrowserViewOptions<T = undefined> = {
   };
   rpc: T;
   syncRpc: { [method: string]: (params: any) => any };
+  hostWebviewId: number;
 };
 
 interface ElectrobunWebviewRPCSChema {
@@ -48,6 +49,47 @@ const defaultOptions: BrowserViewOptions = {
   },
 };
 
+const internalSyncRpcHandlers = {
+  webviewTagInit: ({
+    hostWebviewId,
+    windowId,
+    url,
+    html,
+    preload,
+    partition,
+    frame,
+  }) => {
+    const webviewForTag = new BrowserView({
+      url,
+      html,
+      preload,
+      partition,
+      frame,
+      hostWebviewId,
+    });
+
+    // Note: we have to give it a couple of ticks to fully create the browserview
+    // which has a settimout init() which calls rpc that has a settimeout and all the serialization/deserialization
+
+    // TODO: we really need a better way to handle the whole view creation flow and
+    // maybe an onready event or something.
+    setTimeout(() => {
+      zigRPC.request.addWebviewToWindow({
+        windowId: windowId,
+        webviewId: webviewForTag.id,
+      });
+
+      if (url) {
+        webviewForTag.loadURL(url);
+      } else if (html) {
+        webviewForTag.loadHTML(html);
+      }
+    }, 100);
+
+    return webviewForTag.id;
+  },
+};
+
 const hash = await Updater.localInfo.hash();
 // Note: we use the build's hash to separate from different apps and different builds
 // but we also want a randomId to separate different instances of the same app
@@ -55,6 +97,7 @@ const randomId = Math.random().toString(36).substring(7);
 
 export class BrowserView<T> {
   id: number = nextWebviewId++;
+  hostWebviewId?: number;
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
@@ -84,18 +127,21 @@ export class BrowserView<T> {
       ? { ...defaultOptions.frame, ...options.frame }
       : { ...defaultOptions.frame };
     this.rpc = options.rpc;
-    this.syncRpc = options.syncRpc;
+    this.syncRpc = { ...(options.syncRpc || {}), ...internalSyncRpcHandlers };
     this.partition = options.partition || null;
     // todo (yoav): since collisions can crash the app add a function that checks if the
     // file exists first
     this.pipePrefix = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_${this.id}`;
+    this.hostWebviewId = options.hostWebviewId;
 
     this.init();
   }
 
   init() {
+    // TODO: add a then to this that fires an onReady event
     zigRPC.request.createWebview({
       id: this.id,
+      hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
       partition: this.partition,
       // TODO: decide whether we want to keep sending url/html

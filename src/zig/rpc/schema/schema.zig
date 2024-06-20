@@ -166,6 +166,7 @@ pub const BunSchema = struct {
         pub const createWebview = struct {
             pub const params = struct {
                 id: u32,
+                hostWebviewId: ?u32,
                 pipePrefix: []const u8,
                 url: ?[]const u8,
                 html: ?[]const u8,
@@ -339,7 +340,6 @@ pub const ResponsePayloadType = union(enum) {
 // browser -> zig schema
 pub const FromBrowserHandlers = struct {
     // requests
-    webviewTagInit: fn (params: BrowserSchema.requests.webviewTagInit.params) RequestResult,
     webviewTagCanGoBack: fn (params: BrowserSchema.requests.webviewTagCanGoBack.params) RequestResult,
     webviewTagCanGoForward: fn (params: BrowserSchema.requests.webviewTagCanGoForward.params) RequestResult,
     webviewTagCallAsyncJavaScript: fn (params: BrowserSchema.requests.webviewTagCallAsyncJavaScript.params) RequestResult,
@@ -363,23 +363,6 @@ pub const FromBrowserHandlers = struct {
 // Browser sends to Zig
 pub const BrowserSchema = struct { //
     pub const requests = struct { //
-        pub const webviewTagInit = struct {
-            pub const params = struct {
-                id: u32,
-                windowId: u32,
-                hostWebviewId: u32,
-                url: ?[]const u8,
-                html: ?[]const u8,
-                preload: ?[]const u8,
-                partition: ?[]const u8,
-                frame: struct {
-                    width: f64,
-                    height: f64,
-                    x: f64,
-                    y: f64,
-                },
-            };
-        };
         pub const webviewTagCanGoBack = struct {
             pub const params = struct { id: u32 };
             pub const response = bool;
