@@ -25,6 +25,11 @@ let updateInfo: {
 };
 
 const Updater = {
+  // workaround for some weird state stuff in this old version of bun
+  // todo: revisit after updating to the latest bun
+  updateInfo: () => {
+    return updateInfo;
+  },
   // todo: allow switching channels, by default will check the current channel
   checkForUpdate: async () => {
     const localInfo = await Updater.getLocallocalInfo();
