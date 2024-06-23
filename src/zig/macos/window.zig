@@ -23,15 +23,10 @@ const WindowType = struct {
 
     pub fn deinit(self: *WindowType) void {
         for (self.webviews.items) |webviewId| {
-            var view = webview.webviewMap.get(webviewId) orelse {
-                continue;
-            };
-
-            view.deinit();
-            _ = webview.webviewMap.remove(webviewId);
+            webview.remove(.{ .id = webviewId });
         }
 
-        self.webviews.deinit();
+        defer self.webviews.deinit();
     }
 };
 
@@ -67,6 +62,7 @@ pub var windowMap: WindowMap = WindowMap.init(alloc);
 
 pub fn windowCloseHandler(windowId: u32) void {
     _ = rpc.request.windowClose(.{ .id = windowId });
+    windowCleanup(windowId);
 }
 
 pub fn windowMoveHandler(windowId: u32, x: f64, y: f64) void {
@@ -135,6 +131,16 @@ pub fn setTitle(opts: SetTitleOpts) void {
     objc.setNSWindowTitle(win.window, utils.toCString(opts.title));
 }
 
+pub fn windowCleanup(winId: u32) void {
+    var win = windowMap.get(winId) orelse {
+        std.debug.print("Failed to get window from hashmap for id {}\n", .{winId});
+        return;
+    };
+
+    defer win.deinit();
+    _ = windowMap.remove(winId);
+}
+
 pub fn closeWindow(opts: rpcSchema.BunSchema.requests.closeWindow.params) void {
     var win = windowMap.get(opts.winId) orelse {
         std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.winId});
@@ -144,9 +150,6 @@ pub fn closeWindow(opts: rpcSchema.BunSchema.requests.closeWindow.params) void {
     objc.closeNSWindow(
         win.window,
     );
-
-    defer win.deinit();
-    _ = windowMap.remove(opts.winId);
 }
 
 pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
@@ -172,6 +175,13 @@ pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
 
     win.webviews.append(opts.webviewId) catch {
         std.debug.print("Failed to append webview id to window\n", .{});
+        return;
+    };
+
+    // at least in 0.11.0 get() returns a copy so you have to put it back to persist
+    // any changes
+    windowMap.put(opts.windowId, win) catch {
+        std.debug.print("Failed to put window back into hashmap {}\n", .{opts.windowId});
         return;
     };
 

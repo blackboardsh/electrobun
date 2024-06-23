@@ -209,9 +209,7 @@ void runNSApplication() {
 
         retainObjCObject(delegate);
 
-        [app run];    
-    
-    NSLog(@"after run!!!");
+        [app run];            
     
 }
 
@@ -435,13 +433,15 @@ void webviewTagReload(WKWebView *webView) {
     [webView reload];
 }
 
-void webviewRemove(WKWebView *webView) {
+void webviewRemove(WKWebView *webView) {          
+    [webView stopLoading];    
     [webView removeFromSuperview];
-
-    // todo: supposedly good practice but not necessary for now
-    // webView.navigationDelegate = nil;
-    // webView.UIDelegate = nil;    
-
+        
+    webView.navigationDelegate = nil;
+    webView.UIDelegate = nil;
+    
+    [webView evaluateJavaScript:@"document.body.innerHTML='';" completionHandler:nil];
+    
     releaseObjCObject(webView);
 }
 
@@ -687,6 +687,7 @@ void setNSWindowTitle(NSWindow *window, const char *title) {
 }
 
 void closeNSWindow(NSWindow *window) {
+    // todo: close all the webviews
     [window close];    
 }
 
