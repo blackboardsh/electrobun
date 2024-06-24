@@ -1095,13 +1095,15 @@ typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
 }
 @end
 
-NSStatusItem* createTray(uint32_t trayId, const char *pathToImage, const char *title, ZigStatusItemHandler zigTrayItemHandler) {
+NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool template, uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
     NSString *pathToImageString = [NSString stringWithUTF8String:pathToImage];
     NSString *titleString = [NSString stringWithUTF8String:title];
     NSStatusItem *statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
 
     if (pathToImageString.length > 0) {
         statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:pathToImageString];
+        statusItem.button.image.template = template;
+        statusItem.button.image.size = NSMakeSize(width, height);
     }
     if (titleString.length > 0) {
         statusItem.button.title = titleString;

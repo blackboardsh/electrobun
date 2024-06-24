@@ -546,6 +546,9 @@ pub fn remove(opts: rpcSchema.BrowserSchema.messages.webviewTagRemove) void {
 
     objc.webviewRemove(webview.handle);
     _ = webviewMap.remove(opts.id);
+
+    // todo: remove it from the window map as well
+
     webview.deinit();
 }
 

@@ -264,6 +264,9 @@ type ZigHandlers = RPCSchema<{
         id: number;
         title: string;
         image: string;
+        template: boolean;
+        width: number;
+        height: number;
       };
       response: void;
     };

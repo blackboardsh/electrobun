@@ -224,11 +224,7 @@ pub const BunSchema = struct {
 
         // system tray and menu
         pub const createTray = struct {
-            pub const params = struct {
-                id: u32,
-                title: []const u8,
-                image: []const u8,
-            };
+            pub const params = struct { id: u32, title: []const u8, image: []const u8, template: bool, width: u32, height: u32 };
             pub const response = void;
         };
         pub const setTrayTitle = struct {

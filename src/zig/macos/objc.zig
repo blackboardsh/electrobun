@@ -110,7 +110,7 @@ pub extern fn openFileDialog(startingFolder: [*:0]const u8, allowedFileTypes: [*
 // system tray and menu
 pub const TrayItemHandler = fn (trayId: u32, action: [*:0]const u8) void;
 
-pub extern fn createTray(id: u32, pathToImage: [*:0]const u8, title: [*:0]const u8, trayItemHandler: ?*const TrayItemHandler) *anyopaque;
+pub extern fn createTray(id: u32, title: [*:0]const u8, pathToImage: [*:0]const u8, template: bool, width: u32, height: u32, trayItemHandler: ?*const TrayItemHandler) *anyopaque;
 pub extern fn setTrayTitle(trayItem: *anyopaque, title: [*:0]const u8) callconv(.C) void;
 pub extern fn setTrayImage(trayItem: *anyopaque, image: [*:0]const u8) callconv(.C) void;
 pub extern fn setTrayMenu(trayItem: *anyopaque, menuConfigJson: [*:0]const u8) callconv(.C) void;

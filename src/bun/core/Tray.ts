@@ -1,5 +1,7 @@
 import { zigRPC, type MenuItemConfig } from "../proc/zig";
 import electrobunEventEmitter from "../events/eventEmitter";
+import { VIEWS_FOLDER } from "./Paths";
+import { join } from "path";
 
 let nextTrayId = 1;
 const TrayMap = {};
@@ -7,23 +9,53 @@ const TrayMap = {};
 type ConstructorOptions = {
   title?: string;
   image?: string;
+  template?: boolean;
+  width?: number;
+  height?: number;
 };
 
 export class Tray {
   id: number = nextTrayId++;
 
-  constructor({ title = "", image = "" }: ConstructorOptions = {}) {
-    zigRPC.request.createTray({ id: this.id, title, image });
+  constructor({
+    title = "",
+    image = "",
+    template = true,
+    width = 16,
+    height = 16,
+  }: ConstructorOptions = {}) {
+    console.log("img", image);
+    console.log("img", this.resolveImagePath(image));
+    zigRPC.request.createTray({
+      id: this.id,
+      title,
+      image: this.resolveImagePath(image),
+      template,
+      width,
+      height,
+    });
 
     TrayMap[this.id] = this;
+  }
+
+  resolveImagePath(imgPath: string) {
+    if (imgPath.startsWith("views://")) {
+      return join(VIEWS_FOLDER, imgPath.replace("views://", ""));
+    } else {
+      // can specify any file path here
+      return imgPath;
+    }
   }
 
   setTitle(title: string) {
     zigRPC.request.setTrayTitle({ id: this.id, title });
   }
 
-  setImage(image: string) {
-    zigRPC.request.setTrayImage({ id: this.id, image });
+  setImage(imgPath: string) {
+    zigRPC.request.setTrayImage({
+      id: this.id,
+      image: this.resolveImagePath(imgPath),
+    });
   }
 
   setMenu(menu: Array<MenuItemConfig>) {

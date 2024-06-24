@@ -24,7 +24,7 @@ fn trayItemHandler(trayId: u32, action: [*:0]const u8) void {
 }
 
 pub fn createTray(opts: rpcSchema.BunSchema.requests.createTray.params) TrayType {
-    const trayHandle = objc.createTray(opts.id, utils.toCString(opts.image), utils.toCString(opts.title), trayItemHandler);
+    const trayHandle = objc.createTray(opts.id, utils.toCString(opts.title), utils.toCString(opts.image), opts.template, opts.width, opts.height, trayItemHandler);
     const _tray = TrayType{ //
         .id = opts.id,
         .handle = trayHandle,

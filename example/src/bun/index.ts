@@ -49,7 +49,11 @@ const tray = new Tray({
   title: "Example Tray Item (click to create menu)",
   // Note: __dirname here will evaulate to src/bun when running in dev mode
   // todo: we should include it as an asset and use that url
-  image: `${__dirname}/../../../assets/electrobun-logo-32.png`,
+  // This can be a views url or an absolute file path
+  image: `views://assets/electrobun-logo-32-template.png`,
+  template: true,
+  width: 32,
+  height: 32,
 });
 
 // map action names to clicked state

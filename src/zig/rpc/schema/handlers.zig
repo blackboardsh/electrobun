@@ -152,6 +152,9 @@ pub fn createTray(params: rpcSchema.BunSchema.requests.createTray.params) Reques
         .id = params.id,
         .title = params.title,
         .image = params.image,
+        .template = params.template,
+        .width = params.width,
+        .height = params.height,
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
