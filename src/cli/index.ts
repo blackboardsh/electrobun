@@ -89,6 +89,7 @@ const defaultConfig = {
         // This entitlement is required for Electrobun apps with a hardened runtime (required for notarization) to run on macos
         "com.apple.security.cs.allow-jit": true,
       },
+      icons: "icon.iconset",
     },
   },
   scripts: {
@@ -128,6 +129,25 @@ const artifactFolder = join(
   buildSubFolder
 );
 
+const buildIcons = (appBundleFolderResourcesPath: string) => {
+  if (config.build.mac.icons) {
+    const iconSourceFolder = join(projectRoot, config.build.mac.icons);
+    const iconDestPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
+    if (existsSync(iconSourceFolder)) {
+      Bun.spawnSync(
+        ["iconutil", "-c", "icns", "-o", iconDestPath, iconSourceFolder],
+        {
+          cwd: appBundleFolderResourcesPath,
+          stdio: ["ignore", "inherit", "inherit"],
+          env: {
+            ...process.env,
+            ELECTROBUN_BUILD_ENV: buildEnvironment,
+          },
+        }
+      );
+    }
+  }
+};
 // MyApp
 
 // const appName = config.app.name.replace(/\s/g, '-').toLowerCase();
@@ -203,6 +223,8 @@ if (commandArg === "init") {
     <string>${config.app.version}</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>`;
 
@@ -385,6 +407,8 @@ if (commandArg === "init") {
     // todo (yoav): add ability to swap out BUILD VARS
     cpSync(source, destination, { recursive: true, dereference: true });
   }
+
+  buildIcons(appBundleFolderResourcesPath);
 
   // Run postBuild script
   if (config.scripts.postBuild) {
@@ -570,6 +594,8 @@ if (commandArg === "init") {
     cpSync(selfExtractorBinSourcePath, selfExtractorBinDestinationPath, {
       dereference: true,
     });
+
+    buildIcons(appBundleFolderResourcesPath);
 
     await Bun.write(
       join(selfExtractingBundle.appBundleFolderContentsPath, "Info.plist"),
