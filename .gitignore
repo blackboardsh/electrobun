@@ -4,3 +4,4 @@
 **/zig-out
 node_modules
 build
+/vendors

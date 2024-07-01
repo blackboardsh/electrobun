@@ -57,6 +57,8 @@ Ways to get involved at this early stage:
 
 ## Building
 
+run `bun run install-zig` to install the right version of zig to vendors/zig
+
 `bun dev:example` and `bun dev:example:canary` will compile everything in electrobun in either dev or release modes and then compile the example app in either dev or canary modes and run it.
 
 Note: For now `bun build:release` will build all the electrobun components in release mode and copy them to the /dist folder.
