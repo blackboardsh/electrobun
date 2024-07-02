@@ -77,7 +77,7 @@ const defaultConfig = {
   app: {
     name: "MyApp",
     identifier: "com.example.myapp",
-    version: "0.1",
+    version: "0.1.0",
   },
   build: {
     buildFolder: "build",
@@ -148,6 +148,41 @@ const buildIcons = (appBundleFolderResourcesPath: string) => {
     }
   }
 };
+
+function escapePathForTerminal(filePath: string) {
+  // List of special characters to escape
+  const specialChars = [
+    " ",
+    "(",
+    ")",
+    "&",
+    "|",
+    ";",
+    "<",
+    ">",
+    "`",
+    "\\",
+    '"',
+    "'",
+    "$",
+    "*",
+    "?",
+    "[",
+    "]",
+    "#",
+  ];
+
+  let escapedPath = "";
+  for (const char of filePath) {
+    if (specialChars.includes(char)) {
+      escapedPath += `\\${char}`;
+    } else {
+      escapedPath += char;
+    }
+  }
+
+  return escapedPath;
+}
 // MyApp
 
 // const appName = config.app.name.replace(/\s/g, '-').toLowerCase();
@@ -214,11 +249,11 @@ if (commandArg === "init") {
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>${appFileName}</string>
+    <string>launcher</string>
     <key>CFBundleIdentifier</key>
     <string>${config.app.identifier}</string>
     <key>CFBundleName</key>
-    <string>${bundleFileName}</string>
+    <string>${appFileName}</string>
     <key>CFBundleVersion</key>
     <string>${config.app.version}</string>
     <key>CFBundlePackageType</key>
@@ -272,7 +307,7 @@ if (commandArg === "init") {
         PATHS.LAUNCHER_DEV
       : // Note: for release use the zig launcher optimized for smol size
         PATHS.LAUNCHER_RELEASE;
-  const bunCliLauncherDestination = join(appBundleMacOSPath, appFileName);
+  const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher");
   const destLauncherFolder = dirname(bunCliLauncherDestination);
   if (!existsSync(destLauncherFolder)) {
     // console.info('creating folder: ', destFolder);
@@ -492,18 +527,22 @@ if (commandArg === "init") {
       // console.info('creating folder: ', debugPipesFolder);
       mkdirSync(debugPipesFolder, { recursive: true });
     }
-    const toLauncherPipePath = join(debugPipesFolder, "toLauncher");
-    const toCliPipePath = join(debugPipesFolder, "toCli");
+    const toLauncherPipePath = escapePathForTerminal(
+      join(debugPipesFolder, "toLauncher")
+    );
+    const toCliPipePath = escapePathForTerminal(
+      join(debugPipesFolder, "toCli")
+    );
     try {
       execSync("mkfifo " + toLauncherPipePath);
     } catch (e) {
-      console.log("pipe out already exists");
+      console.log("pipe out already exists", e);
     }
 
     try {
       execSync("mkfifo " + toCliPipePath);
     } catch (e) {
-      console.log("pipe out already exists");
+      console.log("pipe out already exists", e);
     }
   } else {
     const artifactsToUpload = [];
@@ -588,7 +627,7 @@ if (commandArg === "init") {
     const selfExtractorBinSourcePath = PATHS.EXTRACTOR;
     const selfExtractorBinDestinationPath = join(
       selfExtractingBundle.appBundleMacOSPath,
-      appFileName
+      "launcher"
     );
 
     cpSync(selfExtractorBinSourcePath, selfExtractorBinDestinationPath, {
