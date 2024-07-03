@@ -664,7 +664,9 @@ if (commandArg === "init") {
     // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
     // Note: use UDBZ for better compression vs. UDZO
     execSync(
-      `hdiutil create -volname "${appFileName}" -srcfolder ${appBundleFolderPath} -ov -format UDBZ ${dmgPath}`
+      `hdiutil create -volname "${appFileName}" -srcfolder ${escapePathForTerminal(
+        appBundleFolderPath
+      )} -ov -format UDBZ ${escapePathForTerminal(dmgPath)}`
     );
 
     if (shouldCodesign) {
@@ -715,6 +717,14 @@ if (commandArg === "init") {
     const updateJsonResponse = await fetch(
       urlToPrevUpdateJson + `?${cacheBuster}`
     );
+
+    const urlToLatestTarball = join(
+      config.release.bucketUrl,
+      buildEnvironment,
+      `${appFileName}.app.tar.zst`
+    );
+
+    // attempt to get the previous version to create a patch file
     if (updateJsonResponse.ok) {
       const prevUpdateJson = await updateJsonResponse.json();
 
@@ -722,11 +732,7 @@ if (commandArg === "init") {
       console.log("PREVIOUS HASH", prevHash);
 
       // todo (yoav): should be able to stream and decompress in the same step
-      const urlToLatestTarball = join(
-        config.release.bucketUrl,
-        buildEnvironment,
-        `${appFileName}.app.tar.zst`
-      );
+
       const response = await fetch(urlToLatestTarball + `?${cacheBuster}`);
       const prevVersionCompressedTarballPath = join(
         buildFolder,
@@ -745,36 +751,36 @@ if (commandArg === "init") {
         }
         await writer.flush();
         writer.end();
-      } else {
-        console.log("prevoius version not found at: ", urlToLatestTarball);
-        console.log("skipping diff generation");
-      }
 
-      console.log("decompress prev funn bundle...");
-      const prevTarballPath = join(buildFolder, "prev.tar");
-      await ZstdInit().then(async ({ ZstdSimple }) => {
-        const data = new Uint8Array(
-          await Bun.file(prevVersionCompressedTarballPath).arrayBuffer()
+        console.log("decompress prev funn bundle...");
+        const prevTarballPath = join(buildFolder, "prev.tar");
+        await ZstdInit().then(async ({ ZstdSimple }) => {
+          const data = new Uint8Array(
+            await Bun.file(prevVersionCompressedTarballPath).arrayBuffer()
+          );
+          const uncompressedData = ZstdSimple.decompress(data);
+          await Bun.write(prevTarballPath, uncompressedData);
+        });
+
+        console.log("diff previous and new tarballs...");
+        // Run it as a separate process to leverage multi-threadedness
+        // especially for creating multiple diffs in parallel
+        const bsdiffpath = PATHS.BSDIFF;
+        const patchFilePath = join(buildFolder, `${prevHash}.patch`);
+        artifactsToUpload.push(patchFilePath);
+        const result = Bun.spawnSync(
+          [bsdiffpath, prevTarballPath, tarPath, patchFilePath, "--use-zstd"],
+          { cwd: buildFolder }
         );
-        const uncompressedData = ZstdSimple.decompress(data);
-        await Bun.write(prevTarballPath, uncompressedData);
-      });
-
-      console.log("diff previous and new tarballs...");
-      // Run it as a separate process to leverage multi-threadedness
-      // especially for creating multiple diffs in parallel
-      const bsdiffpath = PATHS.BSDIFF;
-      const patchFilePath = join(buildFolder, `${prevHash}.patch`);
-      artifactsToUpload.push(patchFilePath);
-      const result = Bun.spawnSync(
-        [bsdiffpath, prevTarballPath, tarPath, patchFilePath, "--use-zstd"],
-        { cwd: buildFolder }
-      );
-      console.log(
-        "bsdiff result: ",
-        result.stdout.toString(),
-        result.stderr.toString()
-      );
+        console.log(
+          "bsdiff result: ",
+          result.stdout.toString(),
+          result.stderr.toString()
+        );
+      }
+    } else {
+      console.log("prevoius version not found at: ", urlToLatestTarball);
+      console.log("skipping diff generation");
     }
 
     // compress all the upload files
