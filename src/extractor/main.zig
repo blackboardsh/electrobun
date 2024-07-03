@@ -45,7 +45,7 @@ pub fn main() !void {
         return error.UnexpectedNull;
     };
 
-    const bundleName = try getPlistStringValue(plistContents, "CFBundleExecutable") orelse {
+    const bundleName = try getPlistStringValue(plistContents, "CFBundleName") orelse {
         return error.UnexpectedNull;
     };
 

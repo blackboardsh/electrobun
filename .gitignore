@@ -5,3 +5,5 @@
 node_modules
 build
 /vendors
+/src/extractor/.zig-cache
+/src/launcher/.zig-cache

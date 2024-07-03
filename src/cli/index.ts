@@ -1059,11 +1059,15 @@ function codesignAppBundle(
     Bun.write(entitlementsFilePath, entitlementsFileContents);
 
     execSync(
-      `codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --entitlements ${entitlementsFilePath} ${appBundleOrDmgPath}`
+      `codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --entitlements ${entitlementsFilePath} ${escapePathForTerminal(
+        appBundleOrDmgPath
+      )}`
     );
   } else {
     execSync(
-      `codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${appBundleOrDmgPath}`
+      `codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${escapePathForTerminal(
+        appBundleOrDmgPath
+      )}`
     );
   }
 }
@@ -1083,9 +1087,14 @@ function notarizeAndStaple(appOrDmgPath: string) {
   // if (appOrDmgPath.endsWith('.app')) {
   const appBundleFileName = basename(appOrDmgPath);
   // if we're codesigning the .app we have to zip it first
-  execSync(`zip -r -9 ${zipPath} ${appBundleFileName}`, {
-    cwd: dirname(appOrDmgPath),
-  });
+  execSync(
+    `zip -r -9 ${escapePathForTerminal(zipPath)} ${escapePathForTerminal(
+      appBundleFileName
+    )}`,
+    {
+      cwd: dirname(appOrDmgPath),
+    }
+  );
   fileToNotarize = zipPath;
   // }
 
@@ -1114,7 +1123,9 @@ function notarizeAndStaple(appOrDmgPath: string) {
   // todo (yoav): follow up on options here like --s3-acceleration and --webhook
   // todo (yoav): don't use execSync since it's blocking and we'll only see the output at the end
   const statusInfo = execSync(
-    `xcrun notarytool submit --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" --wait ${fileToNotarize}`
+    `xcrun notarytool submit --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" --wait ${escapePathForTerminal(
+      fileToNotarize
+    )}`
   ).toString();
   const uuid = statusInfo.match(/id: ([^\n]+)/)?.[1];
   console.log("statusInfo", statusInfo);
@@ -1134,7 +1145,7 @@ function notarizeAndStaple(appOrDmgPath: string) {
 
   // stable notarization
   console.log("stapling...");
-  execSync(`xcrun stapler staple ${appOrDmgPath}`);
+  execSync(`xcrun stapler staple ${escapePathForTerminal(appOrDmgPath)}`);
 
   if (existsSync(zipPath)) {
     unlinkSync(zipPath);
