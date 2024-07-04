@@ -1052,6 +1052,8 @@ function codesignAppBundle(
   // todo (yoav): consider allowing separate entitlements config for each binary
   // const entitlementsFilePath = join(buildFolder, 'entitlements.plist');
 
+  // codesign --deep --force --verbose --timestamp --sign "ELECTROBUN_DEVELOPER_ID" --options runtime --entitlements entitlementsFilePath appBundleOrDmgPath`
+
   if (entitlementsFilePath) {
     const entitlementsFileContents = buildEntitlementsFile(
       config.build.mac.entitlements
@@ -1088,7 +1090,7 @@ function notarizeAndStaple(appOrDmgPath: string) {
   const appBundleFileName = basename(appOrDmgPath);
   // if we're codesigning the .app we have to zip it first
   execSync(
-    `zip -r -9 ${escapePathForTerminal(zipPath)} ${escapePathForTerminal(
+    `zip -y -r -9 ${escapePathForTerminal(zipPath)} ${escapePathForTerminal(
       appBundleFileName
     )}`,
     {

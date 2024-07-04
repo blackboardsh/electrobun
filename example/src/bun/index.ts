@@ -25,7 +25,7 @@ if (updateInfo.updateAvailable) {
   await Electrobun.Updater.downloadUpdate();
 }
 
-if (Electrobun.Updater.updateInfo().updateReady) {
+if (Electrobun.Updater.updateInfo()?.updateReady) {
   console.log("update app");
   await Electrobun.Updater.applyUpdate();
 }
