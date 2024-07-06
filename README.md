@@ -37,7 +37,7 @@ See the detailed <a href="https://github.com/blackboardsh/electrobun/issues/2">d
 | ✅  | Packaging and signing | Packaging and code signing for MacOS                                                                                                      |
 | ✅  | Shipping updates      | Integrated auto-updator                                                                                                                   |
 | ✅  | Webview Tag           | Cross browser electrobun implementation of the <webview> tag that electron has, for isolated nested webviews                              |
-|     | Port Eggbun           | Harden implementation and enough electron parity to migrate <a href="https://Eggbun.sh">https://Eggbun.sh</a> from Electron to Electrobun |
+| ✅  | Port Eggbun           | Harden implementation and enough electron parity to migrate <a href="https://Eggbun.sh">https://Eggbun.sh</a> from Electron to Electrobun |
 |     | Custom Web Runtime    | Optionally use a cross-platform web runtime (Chromium) instead of the system's native webview                                             |
 |     | Intel Mac Builds      | build on and distribute to intel macs                                                                                                     |
 |     | API Parity            | Accelerate development of Electrobun apis and native integrations to enable apps to migrate from Electron and Tauri                       |
