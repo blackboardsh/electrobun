@@ -1,0 +1,3 @@
+[submodule "src/bsdiff/zstd"]
+	path = src/bsdiff/zstd
+	url = https://github.com/facebook/zstd
