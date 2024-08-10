@@ -1,22 +1,25 @@
 {
   "name": "electrobun",
-  "version": "0.0.1",
+  "version": "0.0.2",
+  "description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
   "license": "MIT",
-  "private": true,
+  "author": "Blackboard Technologies Inc.",
+  "keywords": ["bun", "desktop", "app", "cross-platform", "typescript"],
   "exports": {
     ".": "./src/bun/index.ts",
     "./bun": "./src/bun/index.ts",
     "./view": "./src/browser/index.ts"
   },
   "bin": {
-    "electrobun": "src/cli/build/electrobun"    
+    "electrobun": "src/cli/build/electrobun"
   },
+  "homepage": "https://electrobun.dev",
   "repository": {
     "type": "git",
     "url": "https://github.com/blackboardsh/electrobun.git"
   },
   "scripts": {
-    "start": "bun src/bun/index.ts",    
+    "start": "bun src/bun/index.ts",
     "check-zig-version": "vendors/zig/zig version",
     "install-zig": "mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.11.0/zig-macos-aarch64-0.11.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-macos-aarch64-0.11.0/zig zig-macos-aarch64-0.11.0/lib",
     "build:objc:object": "mkdir -p src/objc/build && clang -c src/objc/objcWrapper.m -o src/objc/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs",
@@ -31,7 +34,7 @@
     "build:launcher:release": "cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall",
     "build:extractor:release": "cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall",
     "build:browser": "bun build src/browser/index.ts --outdir src/zig/build/",
-    "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",    
+    "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",
     "build:dev": "bun install && bun build:zig:trdiff && bun build:objc && bun build:browser && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
     "build:release": "bun build:objc && bun build:zig:trdiff:release && bun build:browser && bun build:zig:release && bun build:launcher:release && bun build:extractor:release && bun build:cli",
     "release:dist": "bun build:release && cp src/launcher/zig-out/bin/launcher dist/launcher && cp src/extractor/zig-out/bin/extractor dist/extractor && cp src/bsdiff/zig-out/bin/bsdiff dist/bsdiff && cp src/bsdiff/zig-out/bin/bspatch dist/bspatch && cp src/zig/zig-out/bin/webview dist/webview && cp node_modules/.bin/bun dist/bun",
@@ -45,6 +48,9 @@
     "bun": "1.0.26"
   },
   "dependencies": {
-    "rpc-anywhere": "1.5.0", "tar": "^6.2.1", "@oneidentity/zstd-js": "^1.0.3" 
+    "@oneidentity/zstd-js": "^1.0.3",
+    "electrobun": "^0.0.2",
+    "rpc-anywhere": "1.5.0",
+    "tar": "^6.2.1"
   }
 }

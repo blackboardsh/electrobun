@@ -1,0 +1,12 @@
+.DS_Store
+/vendors
+**/target
+**/zig-cache
+/src/extractor/.zig-cache
+/src/launcher/.zig-cache
+.zig-cache
+/example
+/vendors
+/src/bsdiff
+/src/objc
+/src/zig
