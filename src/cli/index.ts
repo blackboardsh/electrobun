@@ -716,7 +716,9 @@ if (commandArg === "init") {
     const cacheBuster = Math.random().toString(36).substring(7);
     const updateJsonResponse = await fetch(
       urlToPrevUpdateJson + `?${cacheBuster}`
-    );
+    ).catch((err) => {
+      console.log("bucketURL not found: ", err);
+    });
 
     const urlToLatestTarball = join(
       config.release.bucketUrl,

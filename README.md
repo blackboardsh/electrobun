@@ -13,6 +13,8 @@
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
 Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in <a href="https://ziglang.org/">zig</a>.
 
+Visit <a href="https://www.electrobun.dev/">Electrobun.dev</a> to see api documentation, guides, and more.
+
 **Project Goals**
 
 - Write typescript for the main process and webviews without having to think about it.
@@ -23,7 +25,7 @@ Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main proc
 
 ## Architecture
 
-Read about how Electrobun is designed, and why, in our <a href="https://github.com/blackboardsh/electrobun/tree/main/docs/architecture.md">architecture docs</a>.
+Read about how Electrobun is designed, and why, in our <a href="https://www.electrobun.dev/docs/guides/Architecture/Overview">architecture docs</a>.
 
 ## Roadmap
 
@@ -31,17 +33,17 @@ See the detailed <a href="https://github.com/blackboardsh/electrobun/issues/2">d
 
 **High level roadmap**
 
-|     | Milestones            | Description                                                                                                                               |
-| :-- | :-------------------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
-| ✅  | Core Architecture     | Ship a working proof of concept with most of the core architecture wired up                                                               |
-| ✅  | Packaging and signing | Packaging and code signing for MacOS                                                                                                      |
-| ✅  | Shipping updates      | Integrated auto-updator                                                                                                                   |
-| ✅  | Webview Tag           | Cross browser electrobun implementation of the <webview> tag that electron has, for isolated nested webviews                              |
-| ✅  | Port Eggbun           | Harden implementation and enough electron parity to migrate <a href="https://Eggbun.sh">https://Eggbun.sh</a> from Electron to Electrobun |
-|     | Custom Web Runtime    | Optionally use a cross-platform web runtime (Chromium) instead of the system's native webview                                             |
-|     | Intel Mac Builds      | build on and distribute to intel macs                                                                                                     |
-|     | API Parity            | Accelerate development of Electrobun apis and native integrations to enable apps to migrate from Electron and Tauri                       |
-|     | Windows support       | build for and distribute to Windows                                                                                                       |
+|     | Milestones            | Description                                                                                                                             |
+| :-- | :-------------------- | :-------------------------------------------------------------------------------------------------------------------------------------- |
+| ✅  | Core Architecture     | Ship a working proof of concept with most of the core architecture wired up                                                             |
+| ✅  | Packaging and signing | Packaging and code signing for MacOS                                                                                                    |
+| ✅  | Shipping updates      | Integrated auto-updator                                                                                                                 |
+| ✅  | Webview Tag           | Cross browser electrobun implementation of the <webview> tag that electron has, for isolated nested webviews                            |
+| ✅  | Port co(lab)          | Harden implementation and enough electron parity to migrate <a href="https://colab.sh">https://colab.sh</a> from Electron to Electrobun |
+|     | Custom Web Runtime    | Optionally use a cross-platform web runtime (Chromium) instead of the system's native webview                                           |
+|     | Intel Mac Builds      | build on and distribute to intel macs                                                                                                   |
+|     | API Parity            | Accelerate development of Electrobun apis and native integrations to enable apps to migrate from Electron and Tauri                     |
+|     | Windows support       | build for and distribute to Windows                                                                                                     |
 
 ## Contributing
 

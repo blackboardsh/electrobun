@@ -41,7 +41,9 @@
     "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
     "dev:example": "bun build:dev && cd example && npm install && bun build:dev && bun start",
     "dev:example:rerun": "cd example && bun start",
-    "dev:example:canary": "bun build:release && cd example && npm install && bun build:canary"
+    "dev:example:canary": "bun build:release && cd example && npm install && bun build:canary",
+    "dev:docs": "cd documentation && bun start",
+    "build:docs:release": "cd documentation && bun run build"
   },
   "devDependencies": {
     "@types/bun": "^1.0.8",
