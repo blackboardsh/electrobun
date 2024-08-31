@@ -49,17 +49,27 @@ const WebviewType = struct {
     bun_in_pipe: ?std.fs.File,
     // Function to send a message to Bun
     pub fn sendToBun(self: *WebviewType, message: []const u8) !void {
-        if (self.bun_out_pipe) |file| {
-            // convert null terminated string to slice
-            // const message_slice: []const u8 = message[0..std.mem.len(message)];
-            // Write the message to the named pipe
-            file.writeAll(message) catch |err| {
-                std.debug.print("Failed to write to file: {}\n", .{err});
-            };
+        const chunk_size: usize = 4 * 1024; // 4KB chunk size
+        var offset: usize = 0;
 
-            file.writeAll("\n") catch |err| {
-                std.debug.print("Failed to write to file: {}\n", .{err});
-            };
+        if (self.bun_out_pipe) |file| {
+            while (offset < message.len) {
+                const remaining = message.len - offset;
+                var current_chunk: []const u8 = undefined;
+
+                if (remaining > chunk_size) {
+                    current_chunk = message[offset .. offset + chunk_size];
+                } else {
+                    current_chunk = message[offset..];
+                }
+
+                try file.writeAll(current_chunk);
+
+                offset += current_chunk.len;
+            }
+
+            // Write the final newline after all chunks are sent
+            try file.writeAll("\n");
         } else {
             // If bun_out_pipe is null, print an error or the message to stdio
             std.debug.print("Error: No valid pipe to write to. Message was: {s}\n", .{message});
@@ -204,7 +214,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     const bunBridgeHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "bunBridge", struct {
         fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) void {
             // bun bridge just forwards messages to the bun
-
             var webview = webviewMap.get(webviewId) orelse {
                 std.debug.print("Failed to get webview from hashmap for id {}: bunBridgeHandler\n", .{webviewId});
                 return;

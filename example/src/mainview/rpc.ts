@@ -10,6 +10,10 @@ export type MyWebviewRPC = {
         };
         response: number;
       };
+      bigRequest: {
+        params: string;
+        response: string;
+      };
     };
     messages: {
       logToBun: {

@@ -1,7 +1,8 @@
-import ElectrobunView, { Electroview } from "electrobun/view";
+import Electrobun, { Electroview } from "electrobun/view";
 import { type MyWebviewRPC } from "./rpc";
 
 const rpc = Electroview.defineRPC<MyWebviewRPC>({
+  maxRequestTime: 5000,
   handlers: {
     requests: {
       doMath: ({ a, b }) => {
@@ -16,7 +17,7 @@ const rpc = Electroview.defineRPC<MyWebviewRPC>({
     },
   },
 });
-const electrobun = new ElectrobunView.Electroview({ rpc });
+const electrobun = new Electrobun.Electroview({ rpc });
 
 setTimeout(() => {
   // sync rpc test
@@ -41,5 +42,15 @@ setTimeout(() => {
       .catch(() => {});
 
     electrobun.rpc.send.logToBun({ msg: "hello from webview" });
+  }
+}, 5000);
+
+setTimeout(() => {
+  console.log("sending big request:");
+  if (electrobun.rpc) {
+    const bigRequest = "z".repeat(1024 * 1024 * 2) + "z";
+    electrobun.rpc.request.bigRequest(bigRequest).then((result) => {
+      console.log("big response: ", result.length);
+    });
   }
 }, 5000);

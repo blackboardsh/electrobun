@@ -384,8 +384,8 @@ class Electroview<T> {
 
 export { type RPCSchema, createRPC, Electroview };
 
-const ElectrobunView = {
+const Electrobun = {
   Electroview,
 };
 
-export default ElectrobunView;
+export default Electrobun;

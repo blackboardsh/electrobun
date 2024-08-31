@@ -16,6 +16,8 @@ import type { BuiltinBunToWebviewSchema } from "../../browser/builtinrpcSchema";
 const BrowserViewMap = {};
 let nextWebviewId = 1;
 
+const CHUNK_SIZE = 4096; // 4KB
+
 type BrowserViewOptions<T = undefined> = {
   url: string | null;
   html: string | null;
@@ -213,8 +215,19 @@ export class BrowserView<T> {
     this.executeJavascript(wrappedMessage);
   }
 
+  // Note: the OS has a buffer limit on named pipes. If we overflow it
+  // it won't trigger the kevent for zig to read the pipe and we'll be stuck.
+  // so we have to chunk it
   executeJavascript(js: string) {
-    this.inStream.write(js + "\n");
+    let offset = 0;
+    while (offset < js.length) {
+      const chunk = js.slice(offset, offset + CHUNK_SIZE);
+      this.inStream.write(chunk);
+      offset += CHUNK_SIZE;
+    }
+
+    // Ensure the newline is written after all chunks
+    this.inStream.write("\n");
   }
 
   loadURL(url: string) {

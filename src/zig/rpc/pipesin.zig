@@ -57,8 +57,9 @@ pub fn pipesInEventListener() !void {
             // Check ev.ident to see which fd has an event
             if (ev.filter == std.os.darwin.EVFILT_READ) {
                 // Note: readLineFromPipe reads until the end of the buffer or the delimeter.
-                // so the buffer is the max size of a line.
-                // setting it to 10MB
+                // so the buffer has to fit the whole line after the chunks have been joined.
+                // setting it to 10MB for now. todo: make this dynamic after upgrading to latest
+                // zig version
                 var buffer: [1024 * 1024 * 10]u8 = undefined;
                 const bytesRead = readLineFromPipe(&buffer, ev.ident);
 
@@ -111,18 +112,19 @@ pub fn addPipe(fd: std.os.fd_t, webviewId: u32) void {
 }
 
 pub fn readLineFromPipe(buffer: []u8, fd: usize) ?[]const u8 {
-
     // Wrap the file descriptor in a std.os.File
     const file = std.fs.File{ .handle = @as(c_int, @intCast(fd)) };
 
     // Create a buffered reader for more efficient reading
     var pipeReader = file.reader();
-    // var buffer: [1024]u8 = undefined;
+    // Create a FixedBufferStream to hold the data
+    var fbs = std.io.fixedBufferStream(buffer);
+    _ = pipeReader.streamUntilDelimiter(fbs.writer(), '\n', null) catch return null;
+    const output = fbs.getWritten();
 
-    const bytesRead = pipeReader.readUntilDelimiterOrEof(buffer, '\n') catch return null;
-
-    if (bytesRead) |line| {
-        return line;
+    if (output.len > 0) {
+        // Return the slice of the buffer with the data that was read
+        return output[0..output.len];
     } else {
         return null;
     }
