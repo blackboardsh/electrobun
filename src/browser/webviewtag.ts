@@ -265,7 +265,7 @@ const ConfigureWebviewTags = (
         this.positionCheckLoopReset = undefined;
       }
 
-      const delay = accelerate ? 100 : 400;
+      const delay = accelerate ? 0 : 300;
 
       if (accelerate) {
         clearTimeout(this.positionCheckLoopReset);
@@ -407,9 +407,8 @@ const ConfigureWebviewTags = (
     DEFAULT_FRAME_RATE = Math.round(1000 / 30); // 30fps
     streamScreenInterval?: Timer;
 
-    // todo: add a flag to disable automirroring since it's cpu intensive and
-    // developers may want to disable it in specific cases
-    startMirroring(frameRate: number = this.DEFAULT_FRAME_RATE) {
+    // NOTE: This is very cpu intensive, Prefer startMirroring where possible
+    startMirroringToDom(frameRate: number = this.DEFAULT_FRAME_RATE) {
       if (this.streamScreenInterval) {
         clearInterval(this.streamScreenInterval);
       }
@@ -419,11 +418,25 @@ const ConfigureWebviewTags = (
       }, frameRate);
     }
 
-    stopMirroring() {
+    stopMirroringToDom() {
       if (this.streamScreenInterval) {
         clearInterval(this.streamScreenInterval);
         this.streamScreenInterval = undefined;
       }
+    }
+
+    startMirroring() {
+      this.zigRpc.send.webviewTagToggleMirroring({
+        id: this.webviewId,
+        enable: true,
+      });
+    }
+
+    stopMirroring() {
+      this.zigRpc.send.webviewTagToggleMirroring({
+        id: this.webviewId,
+        enable: false,
+      });
     }
 
     clearScreenImage() {
@@ -503,11 +516,11 @@ const ConfigureWebviewTags = (
         this.syncScreenshot(() => {
           this.delegateMode = true;
           this.toggleTransparent(true, true);
-          this.startMirroring();
+          this.startMirroringToDom();
         });
       } else {
         this.delegateMode = false;
-        this.stopMirroring();
+        this.stopMirroringToDom();
         this.toggleTransparent(this.transparent);
         this.tryClearScreenImage();
       }
@@ -527,10 +540,10 @@ const ConfigureWebviewTags = (
           this.hiddenMirrorMode = true;
           this.toggleHidden(true, true);
           this.togglePassthrough(true, true);
-          this.startMirroring();
+          this.startMirroringToDom();
         });
       } else {
-        this.stopMirroring();
+        this.stopMirroringToDom();
         this.toggleHidden(this.hidden);
         this.togglePassthrough(this.passthroughEnabled);
         this.tryClearScreenImage();

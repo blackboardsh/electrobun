@@ -3,6 +3,7 @@
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonCrypto.h>
+#import <QuartzCore/QuartzCore.h>
 
 // views:// schema handler
 
@@ -344,15 +345,110 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
 @interface TransparentWKWebView : WKWebView
 
 @property (nonatomic, assign) BOOL isMousePassthroughEnabled;
+@property (nonatomic, strong) NSView *containerview;
+@property (nonatomic, strong) CALayer *mirroredLayer;
+@property (nonatomic, assign) BOOL mirrorModeEnabled;
+@property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, assign) BOOL mirrorSnapshotInProgress;
+
+- (void)toggleMirrorMode:(BOOL)enabled;
 
 @end
+
 @implementation TransparentWKWebView
+
+- (instancetype)initWithFrame:(CGRect)frame configuration:(WKWebViewConfiguration *)configuration {
+    self = [super initWithFrame:frame configuration:configuration];
+    if (self) {           
+        self.frame = NSMakeRect(0, 0, frame.size.width, frame.size.height);
+        _containerview = [[NSView alloc] initWithFrame:frame];
+        
+        // Add the webview to the container view
+        [_containerview addSubview:self];
+
+        _mirroredLayer = [CALayer layer];
+        _mirroredLayer.backgroundColor = [[NSColor clearColor] CGColor];
+        _mirroredLayer.frame = self.frame;
+        // Set the layer to resize with its parent view
+        _mirroredLayer.autoresizingMask =  kCALayerNotSizable;
+        
+        _mirrorModeEnabled = NO;
+        _timer = nil; // Timer will be initialized when mirror mode is enabled         
+         self.mirrorSnapshotInProgress = NO;
+        
+    }
+    return self;
+}
 
 - (NSView *)hitTest:(NSPoint)point {
     if (self.isMousePassthroughEnabled) {
         return nil; // Pass through all mouse events
     }
     return [super hitTest:point];
+}
+
+
+- (void)toggleMirrorMode:(BOOL)enable {
+    if (self.mirrorModeEnabled == enable) {
+        return;
+    }
+
+    self.mirrorModeEnabled = enable;
+    
+    if (enable) {
+        // Enable mirror mode: Hide the WKWebView and show the mirrored layer                
+        [_containerview.layer addSublayer:self.mirroredLayer];                        
+        
+        // Start the timer to update the snapshot 30 times per second
+        self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0/30.0
+                                                      target:self
+                                                    selector:@selector(takeSnapshotAndUpdateLayer)
+                                                    userInfo:nil
+                                                     repeats:YES];
+
+        // Add the timer to the run loop in common modes. If we don't do this then special event
+        // modes like while dragging a window resize handle will stop the timer from firing
+        [[NSRunLoop mainRunLoop] addTimer:self.timer forMode:NSRunLoopCommonModes];                                                     
+    } else {
+        // Disable mirror mode: Show the WKWebView and remove the mirrored layer
+        // Stop the timer
+        [self.timer invalidate];
+        self.timer = nil;        
+        self.frame = CGRectOffset(self.frame, 10000, 10000); // Move back on screen
+        self.mirroredLayer.contents = nil;
+        [self.mirroredLayer removeFromSuperlayer];
+        self.mirrorSnapshotInProgress = NO;        
+    }
+}
+
+- (void)takeSnapshotAndUpdateLayer {
+    WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];
+
+    // We want it to keep taking screenshots throughout and as fast as possible
+    // since we're on a timer we also don't want it to wait for the next frame
+    snapshotConfig.afterScreenUpdates = NO;
+    snapshotConfig.rect = self.bounds;
+
+    if (self.mirrorSnapshotInProgress == YES) {
+        return;
+    }    
+
+    self.mirrorSnapshotInProgress = YES;
+    [self takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {        
+        self.mirrorSnapshotInProgress = NO;
+
+        if (!error) {
+            CGImageRef cgImage = [snapshotImage CGImageForProposedRect:nil context:nil hints:nil];
+            self.mirroredLayer.contents = (__bridge id)cgImage;
+            // we only want to move the frame offscreen once the first snapshot
+            // is ready, and we don't want it to race disabling it.
+            if (self.mirrorModeEnabled == YES && self.frame.origin.x == 0) {
+                self.frame = CGRectOffset(self.frame, -10000, -10000); // Move offscreen
+            }
+        } else {
+            NSLog(@"Error taking snapshot: %@", error);
+        }
+    }];
 }
 
 @end
@@ -398,11 +494,19 @@ WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartUR
     [webView setValue:@NO forKey:@"drawsBackground"];
     webView.layer.backgroundColor = [[NSColor clearColor] CGColor];
     webView.layer.opaque = NO;    
+
+    webView.containerview.layer.backgroundColor = [[NSColor clearColor] CGColor];
+    webView.containerview.layer.opaque = NO;    
     
     // Since all wkwebviews are children of a generic NSView we need to tell them to 
     // auto size with the window. 
-    if (autoResize) {
+    if (autoResize) {        
+        webView.containerview.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    } else {        
+        webView.containerview.autoresizingMask = NSViewNotSizable;//NSViewMaxXMargin | NSViewMaxYMargin;;
+        // Disable autoresizing for the container view
+        webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;//NSViewNotSizable;
     }
 
     retainObjCObject(webView);
@@ -691,18 +795,36 @@ void closeNSWindow(NSWindow *window) {
     [window close];    
 }
 
-void addWebviewToWindow(NSWindow *window, NSView *view) {
+void addWebviewToWindow(NSWindow *window, TransparentWKWebView *view) {
+    [window.contentView addSubview:view.containerview positioned:NSWindowAbove relativeTo:nil];        
 
-    [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];        
-
-    CGFloat adjustedY = view.superview.bounds.size.height - view.frame.origin.y - view.frame.size.height;
-    view.frame = NSMakeRect(view.frame.origin.x, adjustedY, view.frame.size.width, view.frame.size.height);
-    
+    CGFloat adjustedY = view.containerview.superview.bounds.size.height - view.containerview.frame.origin.y - view.containerview.frame.size.height;
+    view.containerview.frame = NSMakeRect(view.containerview.frame.origin.x, adjustedY, view.containerview.frame.size.width, view.containerview.frame.size.height);    
 }
 
-void resizeWebview(NSView *view, NSRect frame) {
-    CGFloat adjustedY = view.superview.bounds.size.height - frame.origin.y - frame.size.height;
-    view.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+void resizeWebview(TransparentWKWebView *view, NSRect frame) {
+    CGFloat adjustedX = ceilf(frame.origin.x);
+    CGFloat adjustedWidth = ceilf(frame.size.width);
+    CGFloat adjustedHeight = ceilf(frame.size.height);
+    CGFloat adjustedY = ceilf(view.containerview.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
+    // Log the input and calculated values
+    NSLog(@"Original Frame: %@", NSStringFromRect(frame));
+    NSLog(@"Adjusted Y: %f", adjustedY);
+
+
+    if (view.mirrorModeEnabled) {
+        // Use a transaction to disable animations
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        view.containerview.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);        
+        view.frame = NSMakeRect(-10000, -10000, adjustedWidth, adjustedHeight);        
+        view.mirroredLayer.frame = NSMakeRect(0, 0, adjustedWidth, adjustedHeight);
+        [CATransaction commit];        
+    } else {
+        view.containerview.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
+        view.frame = NSMakeRect(0, 0, adjustedWidth, adjustedHeight);
+        view.mirroredLayer.frame = NSMakeRect(0, 0, adjustedWidth, adjustedHeight);        
+    }
 }
 
 typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
@@ -737,11 +859,19 @@ void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId, WKWebView *webView,
 
 // todo: rename these from webviewTagX to webviewX
 // This makes the webview invisible.
-void webviewTagSetTransparent(WKWebView *webview, BOOL transparent) {
-    if (transparent) {       
+void webviewTagSetTransparent(TransparentWKWebView *webview, BOOL transparent) {    
+    if (transparent) {   
         webview.layer.opacity = 0; 
-    } else {        
+    } else {
         webview.layer.opacity = 1; 
+    }
+}
+
+void webviewTagToggleMirroring(TransparentWKWebView *webview, BOOL enable) {
+    if (enable) {               
+        [webview toggleMirrorMode:YES];
+    } else {        
+        [webview toggleMirrorMode:NO];
     }
 }
 
@@ -764,8 +894,6 @@ void webviewSetHidden(WKWebView *webview, BOOL hidden) {
 NSRect createNSRectWrapper(double x, double y, double width, double height) {    
     return NSMakeRect(x, y, width, height);
 }
-
-
 
 // navigation delegate that 
 typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);

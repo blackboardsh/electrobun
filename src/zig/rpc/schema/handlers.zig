@@ -48,8 +48,9 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
             .width = params.frame.width,
             .height = params.frame.height,
         },
-        .autoResize = true,
+        .autoResize = params.autoResize,
     });
+
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
@@ -132,6 +133,10 @@ pub fn stopWindowMove(params: rpcSchema.BrowserSchema.messages.stopWindowMove) R
 }
 pub fn webviewTagSetTransparent(params: rpcSchema.BrowserSchema.messages.webviewTagSetTransparent) RequestResult {
     webview.webviewTagSetTransparent(.{ .id = params.id, .transparent = params.transparent });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn webviewTagToggleMirroring(params: rpcSchema.BrowserSchema.messages.webviewTagToggleMirroring) RequestResult {
+    webview.webviewTagToggleMirroring(.{ .id = params.id, .enable = params.enable });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 pub fn webviewTagSetPassthrough(params: rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough) RequestResult {
@@ -224,6 +229,7 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .startWindowMove = startWindowMove,
     .stopWindowMove = stopWindowMove,
     .webviewTagSetTransparent = webviewTagSetTransparent,
+    .webviewTagToggleMirroring = webviewTagToggleMirroring,
     .webviewTagSetPassthrough = webviewTagSetPassthrough,
     .webviewTagSetHidden = webviewTagSetHidden,
     .webviewEvent = webviewEvent,
@@ -383,6 +389,8 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.stopWindowMove, rpcSchema.BrowserSchema.messages.stopWindowMove, message.payload);
     } else if (strEql(method, "webviewTagSetTransparent")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetTransparent, rpcSchema.BrowserSchema.messages.webviewTagSetTransparent, message.payload);
+    } else if (strEql(method, "webviewTagToggleMirroring")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagToggleMirroring, rpcSchema.BrowserSchema.messages.webviewTagToggleMirroring, message.payload);
     } else if (strEql(method, "webviewTagSetPassthrough")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetPassthrough, rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough, message.payload);
     } else if (strEql(method, "webviewTagSetHidden")) {

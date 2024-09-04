@@ -32,6 +32,7 @@ type BrowserViewOptions<T = undefined> = {
   rpc: T;
   syncRpc: { [method: string]: (params: any) => any };
   hostWebviewId: number;
+  autoResize: boolean;
 };
 
 interface ElectrobunWebviewRPCSChema {
@@ -68,6 +69,7 @@ const internalSyncRpcHandlers = {
       partition,
       frame,
       hostWebviewId,
+      autoResize: false,
     });
 
     // Note: we have to give it a couple of ticks to fully create the browserview
@@ -104,6 +106,7 @@ export class BrowserView<T> {
   html: string | null = null;
   preload: string | null = null;
   partition: string | null = null;
+  autoResize: boolean = true;
   frame: {
     x: number;
     y: number;
@@ -135,6 +138,7 @@ export class BrowserView<T> {
     // file exists first
     this.pipePrefix = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_${this.id}`;
     this.hostWebviewId = options.hostWebviewId;
+    this.autoResize = options.autoResize === false ? false : true;
 
     this.init();
   }
@@ -158,7 +162,7 @@ export class BrowserView<T> {
         x: this.frame.x,
         y: this.frame.y,
       },
-      //   autoResize: true,
+      autoResize: this.autoResize,
     });
 
     this.createStreams();

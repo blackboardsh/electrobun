@@ -192,6 +192,7 @@ type ZigHandlers = RPCSchema<{
           width: number;
           height: number;
         };
+        autoResize: boolean;
       };
       response: void;
     };

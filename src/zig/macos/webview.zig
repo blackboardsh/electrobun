@@ -501,6 +501,15 @@ pub fn webviewTagSetTransparent(opts: rpcSchema.BrowserSchema.messages.webviewTa
     objc.webviewTagSetTransparent(webview.handle, opts.transparent);
 }
 
+pub fn webviewTagToggleMirroring(opts: rpcSchema.BrowserSchema.messages.webviewTagToggleMirroring) void {
+    var webview = webviewMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+
+    objc.webviewTagToggleMirroring(webview.handle, opts.enable);
+}
+
 pub fn webviewTagSetPassthrough(opts: rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough) void {
     var webview = webviewMap.get(opts.id) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});

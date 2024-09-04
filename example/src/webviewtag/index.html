@@ -16,9 +16,11 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
     <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
     <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">github.com/blackboardsh/electrobun</button>
     <button onclick="document.querySelector('electrobun-webview').syncScreenshot()">Sync Screenshot</button>
+    <button onclick="document.querySelector('electrobun-webview').clearScreenImage()">clearScreenImage</button>
     <button onclick="document.querySelector('electrobun-webview').startMirroring()">Start Mirroring</button>
     <button onclick="document.querySelector('electrobun-webview').stopMirroring()">Stop Mirroring</button>
-    <button onclick="document.querySelector('electrobun-webview').syncScreenshot()">Sync Screenshot</button>
+    <button onclick="document.querySelector('electrobun-webview').startMirroringToDom()">Start Mirroring to DOM</button>
+    <button onclick="document.querySelector('electrobun-webview').stopMirroringToDom()">Stop Mirroring to DOM</button>
     <button onclick="document.querySelector('electrobun-webview').toggleTransparent()">Toggle Transparent</button>
     <button onclick="document.querySelector('electrobun-webview').togglePassthrough()">Toggle Passthrough</button>
     <button onclick="document.querySelector('electrobun-webview').toggleHidden()">Toggle Hidden</button>
@@ -26,7 +28,7 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
     <button onclick="document.querySelector('electrobun-webview').toggleHiddenMirrorMode()">Toggle Hidden Mirror mode</button>
     
     
-    <electrobun-webview  src="https://electrobun.dev" preload="" ></electrobun-webview>    
+    <electrobun-webview  style="width:80%; height: 80%; " src="https://electrobun.dev" preload="" ></electrobun-webview>    
     <electrobun-webview preload="window.onload = () => {document.body.innerHTML += 'hello from preload';}"  html="<html><body><h1>webview tag with html</h1></body></html>" ></electrobun-webview>    
     <h2>Test loading a bundled png via views:// scheme</h2>
     <img src="views://webviewtag/electrobun.png" />

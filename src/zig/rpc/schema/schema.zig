@@ -178,6 +178,7 @@ pub const BunSchema = struct {
                     x: f64,
                     y: f64,
                 },
+                autoResize: bool,
             };
             pub const response = void;
         };
@@ -351,6 +352,7 @@ pub const FromBrowserHandlers = struct {
     startWindowMove: fn (params: BrowserSchema.messages.startWindowMove) RequestResult,
     stopWindowMove: fn (params: BrowserSchema.messages.stopWindowMove) RequestResult,
     webviewTagSetTransparent: fn (params: BrowserSchema.messages.webviewTagSetTransparent) RequestResult,
+    webviewTagToggleMirroring: fn (params: BrowserSchema.messages.webviewTagToggleMirroring) RequestResult,
     webviewTagSetPassthrough: fn (params: BrowserSchema.messages.webviewTagSetPassthrough) RequestResult,
     webviewTagSetHidden: fn (params: BrowserSchema.messages.webviewTagSetHidden) RequestResult,
     webviewEvent: fn (params: BrowserSchema.messages.webviewEvent) RequestResult,
@@ -401,6 +403,7 @@ pub const BrowserSchema = struct { //
         pub const startWindowMove = struct { id: u32 };
         pub const stopWindowMove = struct { id: u32 };
         pub const webviewTagSetTransparent = struct { id: u32, transparent: bool };
+        pub const webviewTagToggleMirroring = struct { id: u32, enable: bool };
         pub const webviewTagSetPassthrough = struct { id: u32, enablePassthrough: bool };
         pub const webviewTagSetHidden = struct { id: u32, hidden: bool };
         pub const webviewEvent = struct {
