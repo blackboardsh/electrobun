@@ -271,6 +271,7 @@ pub fn webviewTagResize(params: rpcSchema.BrowserSchema.messages.webviewTagResiz
             .width = params.frame.width,
             .height = params.frame.height,
         },
+        .masks = params.masks,
     });
 
     // We don't really need to return anything here since it's a message and not a request

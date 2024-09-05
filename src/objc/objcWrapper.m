@@ -346,6 +346,7 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
 
 @property (nonatomic, assign) BOOL isMousePassthroughEnabled;
 @property (nonatomic, assign) BOOL mirrorModeEnabled;
+@property (nonatomic, assign) TransparentWKWebView *hostView;
 
 - (void)toggleMirrorMode:(BOOL)enabled;
 
@@ -739,9 +740,50 @@ void addWebviewToWindow(NSWindow *window, TransparentWKWebView *view) {
 
 }
 
-void resizeWebview(TransparentWKWebView *view, NSRect frame) {
+// For creating a CALayer mask, we need to handle potential overlaps between multiple rects.
+// Instead of trying to redefine all the rects into a single path or converting to a bitmap
+// for CI Filters. We can just use an evenOdd rule for the rects and for each overlap add
+// an additional rect of the overlapping region to keep it even or keep it odd.
+NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
+    NSMutableArray<NSValue *> *resultingRects = [NSMutableArray array];
+    
+    for (NSDictionary *rectDict in rectsArray) {
+        CGFloat x = [rectDict[@"x"] floatValue];
+        CGFloat y = [rectDict[@"y"] floatValue];
+        CGFloat width = [rectDict[@"width"] floatValue];
+        CGFloat height = [rectDict[@"height"] floatValue];
+        NSRect newRect = NSMakeRect(x, y, width, height);
+        
+        NSMutableArray<NSValue *> *overlapRects = [NSMutableArray array]; 
+        
+        // Iterate over the existing rectangles to check for overlaps
+        for (NSValue *existingRectValue in resultingRects) {
+            NSRect existingRect = [existingRectValue rectValue];
+
+            // Check if the new rectangle overlaps with any existing rectangle
+            if (NSIntersectsRect(existingRect, newRect)) {
+                // Calculate the intersection (overlap area)
+                NSRect overlapRect = NSIntersectionRect(existingRect, newRect);
+                if (!NSIsEmptyRect(overlapRect)) {
+                    [overlapRects addObject:[NSValue valueWithRect:overlapRect]]; 
+                }
+            }
+        }
+
+        // Add the new rectangle to the result set
+        [resultingRects addObject:[NSValue valueWithRect:newRect]];
+        
+        // After all checks are done, append the overlaps
+        [resultingRects addObjectsFromArray:overlapRects];
+    }
+
+    return resultingRects;
+}
+
+void resizeWebview(TransparentWKWebView *view, NSRect frame, const char *masksJson) {
+
     // Round everything here to avoid bugs where different internal things
-    // round subpixels in different directions (ceil or floor).
+    // will round subpixels in different directions (ceil or floor).
     // ceil() since we're trying to cover the anchor in the host webview's dom
     CGFloat adjustedX = ceilf(frame.origin.x);
     CGFloat adjustedWidth = ceilf(frame.size.width);
@@ -755,6 +797,37 @@ void resizeWebview(TransparentWKWebView *view, NSRect frame) {
     } else {
         view.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);        
     }
+
+    // Convert the C string to an NSString
+    NSString *jsonString = [NSString stringWithUTF8String:masksJson];
+    
+    // Deserialize the JSON string into an NSArray of NSDictionary
+    NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
+    NSError *error;
+    NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+
+    // Process the rectangles to handle overlaps by adding additional overlap rects
+    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray);
+    
+    CAShapeLayer *maskLayer = [CAShapeLayer layer];
+    maskLayer.frame = view.layer.bounds;  // Mask should cover the whole view
+    
+    // Create a path that fills the entire layer (opaque background)
+    CGMutablePathRef path = CGPathCreateMutable();
+    CGPathAddRect(path, NULL, maskLayer.bounds); 
+
+    // Add the processed rectangles as transparent areas
+    for (NSValue *rectValue in processedRects) {
+        NSRect rect = [rectValue rectValue];
+        CGPathAddRect(path, NULL, rect);
+    }
+    
+    maskLayer.fillRule = kCAFillRuleEvenOdd;    
+    maskLayer.path = path;    
+    view.layer.mask = maskLayer;
+    
+    // Release the path
+    CGPathRelease(path);
 }
 
 typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);

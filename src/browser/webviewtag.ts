@@ -4,6 +4,8 @@ type WebviewEventTypes =
   | "did-commit-navigation"
   | "dom-ready";
 
+type Rect = { x: number; y: number; width: number; height: number };
+
 const ConfigureWebviewTags = (
   enableWebviewTags: boolean,
   zigRpc: (params: any) => any,
@@ -24,6 +26,10 @@ const ConfigureWebviewTags = (
     zigRpc: any;
     syncRpc: any;
 
+    // querySelectors for elements that you want to appear
+    // in front of the webview.
+    maskSelectors: Set<string> = new Set();
+
     // observers
     resizeObserver?: ResizeObserver;
     // intersectionObserver?: IntersectionObserver;
@@ -39,12 +45,16 @@ const ConfigureWebviewTags = (
       height: 0,
     };
 
+    lastMasksJSON: string = "";
+    lastMasks: Rect[] = [];
+
     transparent: boolean = false;
     passthroughEnabled: boolean = false;
     hidden: boolean = false;
     delegateMode: boolean = false;
     hiddenMirrorMode: boolean = false;
     wasZeroRect: boolean = false;
+    isMirroring: boolean = false;
 
     partition: string | null = null;
 
@@ -57,6 +67,16 @@ const ConfigureWebviewTags = (
       requestAnimationFrame(() => {
         this.initWebview();
       });
+    }
+
+    addMaskSelector(selector: string) {
+      this.maskSelectors.add(selector);
+      this.syncDimensions();
+    }
+
+    removeMaskSelector(selector: string) {
+      this.maskSelectors.delete(selector);
+      this.syncDimensions();
     }
 
     initWebview() {
@@ -206,6 +226,10 @@ const ConfigureWebviewTags = (
     // know that they're chaning something in order to eliminate the lag that the
     // catch all loop will catch
     syncDimensions(force: boolean = false) {
+      if (!force && this.hidden) {
+        return;
+      }
+
       const rect = this.getBoundingClientRect();
       const { x, y, width, height } =
         this.adjustDimensionsForHiddenMirrorMode(rect);
@@ -220,19 +244,45 @@ const ConfigureWebviewTags = (
         return;
       }
 
+      const masks: Rect[] = [];
+      this.maskSelectors.forEach((selector) => {
+        const els = document.querySelectorAll(selector);
+
+        for (let i = 0; i < els.length; i++) {
+          const el = els[i];
+
+          if (el) {
+            const maskRect = el.getBoundingClientRect();
+
+            masks.push({
+              // reposition the bounding rect to be relative to the webview rect
+              // so objc can apply the mask correctly and handle the actual overlap
+              x: maskRect.x - x,
+              y: maskRect.y - y,
+              width: maskRect.width,
+              height: maskRect.height,
+            });
+          }
+        }
+      });
+
+      // store jsonStringified last masks value to compare
+      const masksJson = masks.length ? JSON.stringify(masks) : "";
+
       if (
         force ||
         lastRect.x !== x ||
         lastRect.y !== y ||
         lastRect.width !== width ||
-        lastRect.height !== height
+        lastRect.height !== height ||
+        this.lastMasksJSON !== masksJson
       ) {
-        // if we're not already in an accelerated loop then accelerate it
-        if (!this.positionCheckLoopReset) {
-          this.setPositionCheckLoop(true);
-        }
+        // let it know we're still accelerating
+        this.setPositionCheckLoop(true);
 
         this.lastRect = rect;
+        this.lastMasks = masks;
+        this.lastMasksJSON = masksJson;
 
         this.zigRpc.send.webviewTagResize({
           id: this.webviewId,
@@ -242,6 +292,7 @@ const ConfigureWebviewTags = (
             x: x,
             y: y,
           },
+          masks: masksJson,
         });
       }
 
@@ -268,10 +319,9 @@ const ConfigureWebviewTags = (
       const delay = accelerate ? 0 : 300;
 
       if (accelerate) {
-        clearTimeout(this.positionCheckLoopReset);
         this.positionCheckLoopReset = setTimeout(() => {
           this.setPositionCheckLoop(false);
-        }, 600);
+        }, 2000);
       }
       // Note: Since there's not catch all way to listen for x/y changes
       // we have a 400ms interval to check
@@ -288,6 +338,59 @@ const ConfigureWebviewTags = (
       this.positionCheckLoop = setInterval(() => this.syncDimensions(), delay);
     }
 
+    // The global document mousemove will fire even when the mouse is over
+    // an OOPIF that's layered above this host webview. The two edge cases we
+    // solve for are:
+    // 1. dragging an element on the host over or dropping on the webview anchor
+    // 2. clicking on an element that's "layered over" the OOPIF visually but really uses a
+    // mask to make a section transparent. We want the underlying overlay UI to be
+    // interactive not the OOPIF.
+    //
+    // Solution: Have mirroing on by default.
+    // 1. mouse move events don't fire during drag. So the OOPIF remains non-interactive
+    // and effectively passes through to the host's anchor element underneath letting you
+    // react to drag events on the host as needed.
+    // 2. Detect when the mouse is moving over the anchor and turn mirroring off to make
+    // it interactive. Unless the mouse is over a masked area in which case we want to
+    // keep it non-interactive and pass through to the host "overylay UI".
+    handleDocumentMouseMove(e: MouseEvent) {
+      if (this.hidden) {
+        return;
+      }
+
+      const isInBounds =
+        e.clientX >= this.lastRect.x &&
+        e.clientX <= this.lastRect.x + this.lastRect.width &&
+        e.clientY >= this.lastRect.y &&
+        e.clientY <= this.lastRect.y + this.lastRect.height;
+
+      if (isInBounds) {
+        const isInMaskBounds = this.lastMasks.find((mask) => {
+          // we send relative x/y to objc but here we need the clientX/Y
+          // to compare against. consider doing the opposite or storing both.
+          const clientX = this.lastRect.x + mask.x;
+          const clientY = this.lastRect.y + mask.y;
+          const isInMaskBounds =
+            e.clientX >= clientX &&
+            e.clientX <= clientX + mask.width &&
+            e.clientY <= clientY + mask.height &&
+            e.clientY >= clientY;
+
+          return isInMaskBounds;
+        });
+        if (isInMaskBounds) {
+          this.startMirroring();
+        } else {
+          this.stopMirroring();
+        }
+      } else {
+        this.startMirroring();
+      }
+    }
+
+    boundhandleDocumentMouseMove = (e: MouseEvent) =>
+      this.handleDocumentMouseMove(e);
+
     connectedCallback() {
       this.setPositionCheckLoop();
 
@@ -300,8 +403,14 @@ const ConfigureWebviewTags = (
       // we still need to send it to objc to calculate from its bottom left position
       // otherwise it'll move around unexpectedly.
       window.addEventListener("resize", this.boundForceSyncDimensions);
-
       window.addEventListener("scroll", this.boundSyncDimensions);
+      // Note: mousemove won't fire during a drag so we get that behaviour
+      // for free without doing calculations.
+      document.addEventListener(
+        "mousemove",
+        this.boundhandleDocumentMouseMove,
+        true
+      );
 
       // todo: For chromium webviews (windows native or chromium bundled)
       // should be able to use performanceObservers on layout-shift to
@@ -318,6 +427,10 @@ const ConfigureWebviewTags = (
       // this.mutationObserver?.disconnect();
       window.removeEventListener("resize", this.boundForceSyncDimensions);
       window.removeEventListener("scroll", this.boundSyncDimensions);
+      document.removeEventListener(
+        "mousemove",
+        this.boundhandleDocumentMouseMove
+      );
       this.zigRpc.send.webviewTagRemove({ id: this.webviewId });
     }
 
@@ -426,17 +539,23 @@ const ConfigureWebviewTags = (
     }
 
     startMirroring() {
-      this.zigRpc.send.webviewTagToggleMirroring({
-        id: this.webviewId,
-        enable: true,
-      });
+      if (this.isMirroring === false) {
+        this.isMirroring = true;
+        this.zigRpc.send.webviewTagToggleMirroring({
+          id: this.webviewId,
+          enable: true,
+        });
+      }
     }
 
     stopMirroring() {
-      this.zigRpc.send.webviewTagToggleMirroring({
-        id: this.webviewId,
-        enable: false,
-      });
+      if (this.isMirroring === true) {
+        this.isMirroring = false;
+        this.zigRpc.send.webviewTagToggleMirroring({
+          id: this.webviewId,
+          enable: false,
+        });
+      }
     }
 
     clearScreenImage() {

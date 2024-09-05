@@ -417,6 +417,7 @@ pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) vo
         std.debug.print("Failed to get webview from hashmap for id {}: resizeWebview\n", .{opts.id});
         return;
     };
+
     // todo: update webview frame in the webviewMap.
     // not doing this yet to see when we run into issues. it's possible
     // we don't need to store this in zig at all since the "last one set"
@@ -425,7 +426,7 @@ pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) vo
     objc.resizeWebview(webview.handle, .{
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
         .size = .{ .width = opts.frame.width, .height = opts.frame.height },
-    });
+    }, utils.toCString(opts.masks));
 }
 
 pub fn canGoBack(opts: rpcSchema.BrowserSchema.requests.webviewTagCanGoBack.params) bool {

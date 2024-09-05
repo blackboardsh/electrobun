@@ -45,6 +45,7 @@ type WebviewTagHandlers = RPCSchema<{
         width: number;
         height: number;
       };
+      masks: string;
     };
     webviewTagUpdateSrc: {
       id: number;

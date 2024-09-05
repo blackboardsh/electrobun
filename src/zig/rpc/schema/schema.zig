@@ -383,6 +383,7 @@ pub const BrowserSchema = struct { //
                 x: f64,
                 y: f64,
             },
+            masks: []const u8,
         };
         pub const webviewTagUpdateSrc = struct {
             id: u32,
