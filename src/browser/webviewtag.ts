@@ -239,7 +239,6 @@ const ConfigureWebviewTags = (
         if (this.wasZeroRect === false) {
           this.wasZeroRect = true;
           this.toggleHidden(true, true);
-          this.stopMirroring();
         }
         return;
       }
