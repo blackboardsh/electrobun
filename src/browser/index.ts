@@ -241,23 +241,31 @@ class Electroview<T> {
   }
 
   bunBridge(msg: string) {
-    // Note: zig sets up this custom message handler bridge
-    window.webkit.messageHandlers.bunBridge.postMessage(msg);
-  }
+    // Note: messageHandlers seem to freeze when sending large messages
+    // but xhr to views://rpc can run into CORS issues on non views://
+    // loaded content (eg: when writing extensions/preload scripts for
+    // remote content).
 
-  bunBridgeWithReply(msg: string) {
-    // Note: zig sets up this custom message handler bridge
-    // Note: Since post message is async in the browser context and bun will reply async
-    // We're using postMessage handler (via bunBridge above) without a reply, and then letting bun reply
-    // via pipesin and evaluateJavascript.
-    // addScriptMessageHandlerWithReply is just here as reference and for future use cases.
-    return window.webkit.messageHandlers.bunBridgeWithReply.postMessage(msg);
-  }
+    // Since most messages--especially those on remote content, are small
+    // we can solve most use cases by having a fallback to xhr for
+    // large messages
 
-  // webviewTagBridge(msg) {
-  //     // Note: zig sets up this custom message handler bridge
-  //     window.webkit.messageHandlers.webviewTagBridge.postMessage(msg);
-  // }
+    // TEMP: disable the fallback for now. for some reason suddenly can't
+    // repro now that other places are chunking messages and laptop restart
+    if (true || msg.length < 8 * 1024) {
+      window.webkit.messageHandlers.bunBridge.postMessage(msg);
+    } else {
+      var xhr = new XMLHttpRequest();
+
+      // Note: we're only using synchronouse http on this async
+      // call to get around CORS for now
+      // Note: DO NOT use postMessage handlers since it
+      // freezes the process when sending lots of large messages
+
+      xhr.open("POST", "views://rpc", false); // sychronous call
+      xhr.send(msg);
+    }
+  }
 
   receiveMessageFromBun(msg) {
     // NOTE: in the webview messages are passed by executing ElectrobunView.receiveMessageFromBun(object)

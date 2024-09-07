@@ -10,6 +10,8 @@ const utils = @import("../utils.zig");
 
 const strEql = utils.strEql;
 
+const O_NONBLOCK = 0x0004; // For Unix-based systems
+
 const alloc = std.heap.page_allocator;
 
 const ELECTROBUN_BROWSER_API_SCRIPT = @embedFile("../build/index.js");
@@ -130,6 +132,14 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         const bunPipeOutResult = std.fs.cwd().openFile(bunPipeOutPath, .{ .mode = .read_write });
 
         if (bunPipeOutResult) |file| {
+            // open in non-blocking mode
+            // const flags = std.os.fcntl(file.handle, std.os.F.GETFL, 0) catch {
+            //     std.debug.print("Failed to get flags on bunPipeOut\n", .{});
+            //     return;
+            // };
+            // _ = std.os.fcntl(file.handle, std.os.F.SETFL, flags | O_NONBLOCK) catch {
+            //     std.debug.print("Failed to set O_NONBLOCK on bunPipeOut\n", .{});
+            // };
             break :blk file;
         } else |err| {
             std.debug.print("Failed to open bunPipeOut: {}\n", .{err});
@@ -156,6 +166,21 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 } else {
                     std.debug.print("Failed to get response from sync rpc request, no payload\n", .{});
                 }
+            } else if (std.mem.eql(u8, relPath, "rpc")) {
+                const bodyString = utils.fromCString(body);
+
+                var webview = webviewMap.get(webviewId) orelse {
+                    std.debug.print("Failed to get webview from hashmap for id {}: screenshot api\n", .{webviewId});
+                    return assetFileLoader(url);
+                };
+
+                webview.sendToBun(bodyString) catch |err| {
+                    std.debug.print("Failed to send message to bun: {}\n", .{err});
+                };
+
+                const responseString = "";
+
+                return objc.FileResponse{ .mimeType = utils.toCString("text/plaintext"), .fileContents = responseString.ptr, .len = responseString.len, .opaquePointer = null };
             } else if (std.mem.startsWith(u8, relPath, "screenshot/")) {
                 // the relPath is screenshot/<webviewId>?<cachebuster>
                 // get the target webview info for objc, the screenshoting and resolving is done
@@ -224,24 +249,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
             };
         }
     }.HandlePostMessage);
-
-    // Note: Since post message is async in the browser context and bun will reply async
-    // We're using postMessage handler (above) without a reply, and then letting bun reply
-    // via pipesin and evaluateJavascript. addScriptMessageHandlerWithReply is just here
-    // as reference and for future use cases. This may be useful for exposing zig/objc apis
-    // to the browser context without needing to use more complex rpc.
-    const bunBridgeWithReplyHandler = objc.addScriptMessageHandlerWithReply(objcWebview, opts.id, "bunBridgeWithReply", struct {
-        fn HandlePostMessageCallbackWithReply(webviewId: u32, message: [*:0]const u8) [*:0]const u8 {
-            _ = webviewId;
-            _ = message;
-
-            return utils.toCString("hello with reply: not using this api yet");
-        }
-    }.HandlePostMessageCallbackWithReply);
-
-    // todo: store the returned value so we can free the memory when the webview is destroyed
-    _ = bunBridgeWithReplyHandler;
-
     // todo: only set this up if the webview tag is enabled for this webview
     // todo: rename this to webviewToZigBridgeHandler since it's for webview tags and the webview itself
     const webviewTagHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "webviewTagBridge", struct {

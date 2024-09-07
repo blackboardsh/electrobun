@@ -206,7 +206,7 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
       },
       bigRequest: (input: string) => {
         console.log("big request received", input.length);
-        return "y".repeat(1024 * 1024 * 1) + "y";
+        return "y".repeat(1024 * 1024 * 2) + "y";
       },
     },
     messages: {

@@ -16,7 +16,7 @@ import type { BuiltinBunToWebviewSchema } from "../../browser/builtinrpcSchema";
 const BrowserViewMap = {};
 let nextWebviewId = 1;
 
-const CHUNK_SIZE = 4096; // 4KB
+const CHUNK_SIZE = 1024 * 4; // 4KB
 
 type BrowserViewOptions<T = undefined> = {
   url: string | null;
