@@ -784,11 +784,11 @@ void resizeWebview(TransparentWKWebView *view, NSRect frame, const char *masksJs
 
     // Round everything here to avoid bugs where different internal things
     // will round subpixels in different directions (ceil or floor).
-    // ceil() since we're trying to cover the anchor in the host webview's dom
-    CGFloat adjustedX = ceilf(frame.origin.x);
+    // round to maximize the area since we're trying to cover the anchor in the host webview's dom
+    CGFloat adjustedX = floor(frame.origin.x);
     CGFloat adjustedWidth = ceilf(frame.size.width);
     CGFloat adjustedHeight = ceilf(frame.size.height);
-    CGFloat adjustedY = ceilf(view.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);    
+    CGFloat adjustedY = floor(view.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);    
 
     if (view.mirrorModeEnabled) {
         // // Use a transaction to disable animations        
