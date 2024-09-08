@@ -214,96 +214,6 @@ void runNSApplication() {
     
 }
 
-// cursor
-
-// Note: WkWebviews are all in different threads and calling mouse cursor methods individually
-// Regardless of layering they will often come in out of order
-// Regardless of trying to stop propagation of native mousemove events they will still be called
-// Because of the way it checks the current NSApp cursor it only calls set when it's different from the one it wants
-// Because it's delayed it can't play off the sequence of wkwebkits handling the cursor within a single round trip
-// https://github.com/WebKit/WebKit/blob/579f828a4c55913c59cc26a9e6e316e6cf40a45b/Source/WebKit/UIProcess/mac/PageClientImplMac.mm#L324
-// Our best hope of smoothing out the cursor wiggle when having layered wkwebviews (like <electrobun-webview> elements)
-// is to keep track of the last 20 cursor sets. set the most recent non-arrow one. This still causes a flicker
-// every 20 or so sets which is smooth enough to not look super janky, but often enough that the cursor still feels responsive
-// I am disgusted by this.
-
-NSMutableArray<NSCursor *> *recentCursors;
-const NSInteger maxCursorHistory = 20;
-
-@implementation NSCursor (Swizzling)
-
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        recentCursors = [NSMutableArray array]; 
-        Class class = [self class];
-
-        SEL originalSelector = @selector(set);
-        SEL swizzledSelector = @selector(swizzled_set);
-
-        Method originalMethod = class_getInstanceMethod(class, originalSelector);
-        Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
-
-        BOOL didAddMethod = class_addMethod(class,
-                                            originalSelector,
-                                            method_getImplementation(swizzledMethod),
-                                            method_getTypeEncoding(swizzledMethod));
-
-        if (didAddMethod) {
-            class_replaceMethod(class,
-                                swizzledSelector,
-                                method_getImplementation(originalMethod),
-                                method_getTypeEncoding(originalMethod));
-        } else {
-            method_exchangeImplementations(originalMethod, swizzledMethod);
-        }
-    });
-}
-
-- (void)swizzled_set {        
-        [self updateRecentCursors:self];   
-
-        // todo: if there's only one webivew then set the cursor and skip everything else             
-        // todo: need to track which window is the last one to set the cursor, can maybe track
-        // via mousemove events
-
-        NSCursor *nonArrayCursorToSet = [self mostRecentNonArrowCursor];
-        NSCursor *cursorToSet;
-
-        // todo: if the latest cursor is normal, and te nonArrayCursorToSet is not
-        // check to see if there are two webviews at this mouse location
-        // so when moving outside of the webviewtag it resets immediately.
-        // set the cursor and reset the recentNonArrowCursors
-
-        if (nonArrayCursorToSet) {
-            cursorToSet = nonArrayCursorToSet;
-        } else {
-            cursorToSet = [NSCursor arrowCursor];                 
-        }
-         
-        [cursorToSet swizzled_set];            
-}
-
-- (void)updateRecentCursors:(NSCursor *)cursor {
-    if (recentCursors.count >= maxCursorHistory) {
-        [recentCursors removeObjectAtIndex:0];
-    }
-    
-    [recentCursors addObject:cursor];
-}
-
-- (NSCursor *)mostRecentNonArrowCursor {
-    for (NSCursor *cursor in [recentCursors reverseObjectEnumerator]) {
-        if (cursor != [NSCursor arrowCursor]) {
-            return cursor;
-        }
-    }
-    return nil;
-}
-
-@end
-
-
 // WKWebView
 
 NSUUID *UUIDFromString(NSString *string) {
@@ -347,6 +257,7 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
 @property (nonatomic, assign) BOOL isMousePassthroughEnabled;
 @property (nonatomic, assign) BOOL mirrorModeEnabled;
 @property (nonatomic, assign) TransparentWKWebView *hostView;
+@property (nonatomic, assign) uint32_t webviewId;
 
 - (void)toggleMirrorMode:(BOOL)enabled;
 
@@ -428,6 +339,8 @@ WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartUR
 
     // Allocate and initialize the WKWebView
     TransparentWKWebView *webView = [[TransparentWKWebView alloc] initWithFrame:frame configuration:configuration];    
+
+    webView.webviewId = webviewId;
 
     // Note: This makes webview have a transparent background by default.
     // todo: consider making this configurable during webview creation and/or
@@ -607,6 +520,84 @@ NSRect getWindowBounds(NSWindow *window) {
     return [contentView bounds];
 }
 
+// container view
+// this is used as the main contentView for NSWindows. all the other views
+// both "main" and "nested" are children of this view and siblings to eachother
+@interface ContainerView : NSView
+@end
+
+@implementation ContainerView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        // Add a tracking area to track mouse movements within this view
+        NSTrackingArea *trackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
+                                                                   options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow
+                                                                     owner:self
+                                                                  userInfo:nil];
+        [self addTrackingArea:trackingArea];
+    }
+    return self;
+}
+
+- (void)mouseMoved:(NSEvent *)event {
+    NSPoint mouseLocation = [self convertPoint:[event locationInWindow] fromView:nil];            
+    // Access all subviews in the window's main content view. This includes both
+    // "main" webviews and "nested" webviews that use <electrobun-webview> tags
+    NSArray *subviews = [self subviews];    
+    BOOL stillSearching = true;
+
+    // Loop through subviews (front-most to back-most) to decide which one to
+    // make interactive and stop mirroring
+    for (TransparentWKWebView *subview in [subviews reverseObjectEnumerator]) {                
+        if (stillSearching) {            
+            // Whether the interactive parts of the wkwebview is currently mirrored and offscreen or not 
+            // its render layer will always be positioned on screen, so we use that as the frame.
+            NSRect subviewRenderLayerFrame = subview.layer.frame;
+            
+            // Is the mouse event over this webview?
+            if (NSPointInRect(mouseLocation, subviewRenderLayerFrame)) {            
+                // The mask layer defines transparent holes punched in the webview                                
+                // to simulate UI over the webviews. Get the mask layer's path if there is one.
+                CAShapeLayer *maskLayer = (CAShapeLayer *)subview.layer.mask;                                
+                CGPathRef maskPath = maskLayer ? maskLayer.path : NULL;
+                                   
+                if (maskPath) {                       
+                    // Note: In objc the event coordinates are from bottom left.                                                
+                    CGPoint mousePositionInMaskPath = CGPointMake(
+                        // For the x axis we just need to get the x position relative to the render layer's frame
+                        // which will be in the NSWindow's coordinate space whether the webview is mirrored or not
+                        mouseLocation.x - subviewRenderLayerFrame.origin.x, 
+                        // For the y axis we need to get it relative to the render layer's frame, but also invert it within
+                        // layer's coordinate space to match the mask shape's coordinate space that it's measuring against
+                        subviewRenderLayerFrame.size.height - (mouseLocation.y - subviewRenderLayerFrame.origin.y)
+                    );
+
+                    // The 4th property tells it to use the same evenOdd algorithm on the shape to 
+                    // determine regions of transparency. If there's no intersection it means it's
+                    // transparent and we should set this webview to mirrored and look at the next
+                    // webview behind it in the next loop iteration.                        
+                    if (!CGPathContainsPoint(maskPath, NULL, mousePositionInMaskPath, true)) {                            
+                        [subview toggleMirrorMode:YES];
+                        continue;
+                    }
+                } 
+                                
+                // We found the webview that should be interactive so disable mirroring for it
+                [subview toggleMirrorMode:NO];
+                stillSearching = false;                
+                continue;                
+            }
+        }
+        
+        // Make the view non-interactive by turning on mirror mode
+        [subview toggleMirrorMode:YES];        
+    }
+}
+
+@end
+
 typedef void (*WindowCloseHandler)(uint32_t windowId);
 typedef void (*WindowMoveHandler)(uint32_t windowId, CGFloat x, CGFloat y);
 typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGFloat width, CGFloat height);
@@ -616,6 +607,7 @@ typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGF
 @property (nonatomic, assign) WindowMoveHandler moveHandler;
 @property (nonatomic, assign) WindowResizeHandler resizeHandler;
 @property (nonatomic, assign) uint32_t windowId;
+@property (nonatomic, strong) NSWindow *window;
 @end
 
 @implementation WindowDelegate
@@ -692,7 +684,6 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId, createNSWindowWithF
     // of window to top-left of window positioning) so we need to use setFrameTopLeftPoint to get consistent
     // behaviour
     [window setFrameTopLeftPoint:config.frame.origin];
-
                                 
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
         window.titlebarAppearsTransparent = YES;
@@ -704,6 +695,7 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId, createNSWindowWithF
     delegate.resizeHandler = zigResizeHandler;
     delegate.moveHandler = zigMoveHandler;
     delegate.windowId = windowId;
+    delegate.window = window;
     [window setDelegate:delegate];
     objc_setAssociatedObject(window, "WindowDelegate", delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     // ARC will try to release the window or something which will be one too many
@@ -712,8 +704,9 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId, createNSWindowWithF
     window.releasedWhenClosed = NO; 
 
     // Give it a default content view that can accept subviews later on                                                                                                               
-    NSView *contentView = [[NSView alloc] initWithFrame:[window frame]];
+    ContainerView *contentView = [[ContainerView alloc] initWithFrame:[window frame]];
     [window setContentView:contentView];
+    
 
     return window; 
 }
@@ -807,7 +800,7 @@ void resizeWebview(TransparentWKWebView *view, NSRect frame, const char *masksJs
     NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
 
     // Process the rectangles to handle overlaps by adding additional overlap rects
-    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray);
+    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray);    
     
     CAShapeLayer *maskLayer = [CAShapeLayer layer];
     maskLayer.frame = view.layer.bounds;  // Mask should cover the whole view
@@ -824,10 +817,10 @@ void resizeWebview(TransparentWKWebView *view, NSRect frame, const char *masksJs
     
     maskLayer.fillRule = kCAFillRuleEvenOdd;    
     maskLayer.path = path;    
-    view.layer.mask = maskLayer;
+    view.layer.mask = maskLayer;    
     
     // Release the path
-    CGPathRelease(path);
+    CGPathRelease(path);    
 }
 
 typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);

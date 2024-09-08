@@ -337,59 +337,6 @@ const ConfigureWebviewTags = (
       this.positionCheckLoop = setInterval(() => this.syncDimensions(), delay);
     }
 
-    // The global document mousemove will fire even when the mouse is over
-    // an OOPIF that's layered above this host webview. The two edge cases we
-    // solve for are:
-    // 1. dragging an element on the host over or dropping on the webview anchor
-    // 2. clicking on an element that's "layered over" the OOPIF visually but really uses a
-    // mask to make a section transparent. We want the underlying overlay UI to be
-    // interactive not the OOPIF.
-    //
-    // Solution: Have mirroing on by default.
-    // 1. mouse move events don't fire during drag. So the OOPIF remains non-interactive
-    // and effectively passes through to the host's anchor element underneath letting you
-    // react to drag events on the host as needed.
-    // 2. Detect when the mouse is moving over the anchor and turn mirroring off to make
-    // it interactive. Unless the mouse is over a masked area in which case we want to
-    // keep it non-interactive and pass through to the host "overylay UI".
-    handleDocumentMouseMove(e: MouseEvent) {
-      if (this.hidden) {
-        return;
-      }
-
-      const isInBounds =
-        e.clientX >= this.lastRect.x &&
-        e.clientX <= this.lastRect.x + this.lastRect.width &&
-        e.clientY >= this.lastRect.y &&
-        e.clientY <= this.lastRect.y + this.lastRect.height;
-
-      if (isInBounds) {
-        const isInMaskBounds = this.lastMasks.find((mask) => {
-          // we send relative x/y to objc but here we need the clientX/Y
-          // to compare against. consider doing the opposite or storing both.
-          const clientX = this.lastRect.x + mask.x;
-          const clientY = this.lastRect.y + mask.y;
-          const isInMaskBounds =
-            e.clientX >= clientX &&
-            e.clientX <= clientX + mask.width &&
-            e.clientY <= clientY + mask.height &&
-            e.clientY >= clientY;
-
-          return isInMaskBounds;
-        });
-        if (isInMaskBounds) {
-          this.startMirroring();
-        } else {
-          this.stopMirroring();
-        }
-      } else {
-        this.startMirroring();
-      }
-    }
-
-    boundhandleDocumentMouseMove = (e: MouseEvent) =>
-      this.handleDocumentMouseMove(e);
-
     connectedCallback() {
       this.setPositionCheckLoop();
 
@@ -403,13 +350,6 @@ const ConfigureWebviewTags = (
       // otherwise it'll move around unexpectedly.
       window.addEventListener("resize", this.boundForceSyncDimensions);
       window.addEventListener("scroll", this.boundSyncDimensions);
-      // Note: mousemove won't fire during a drag so we get that behaviour
-      // for free without doing calculations.
-      document.addEventListener(
-        "mousemove",
-        this.boundhandleDocumentMouseMove,
-        true
-      );
 
       // todo: For chromium webviews (windows native or chromium bundled)
       // should be able to use performanceObservers on layout-shift to
@@ -419,17 +359,12 @@ const ConfigureWebviewTags = (
     disconnectedCallback() {
       // removed from the dom
       clearInterval(this.positionCheckLoop);
-      this.stopMirroring();
 
       this.resizeObserver?.disconnect();
       // this.intersectionObserver?.disconnect();
       // this.mutationObserver?.disconnect();
       window.removeEventListener("resize", this.boundForceSyncDimensions);
       window.removeEventListener("scroll", this.boundSyncDimensions);
-      document.removeEventListener(
-        "mousemove",
-        this.boundhandleDocumentMouseMove
-      );
       this.zigRpc.send.webviewTagRemove({ id: this.webviewId });
     }
 
@@ -538,6 +473,11 @@ const ConfigureWebviewTags = (
     }
 
     startMirroring() {
+      // TEMP: mirroring now happens automatically in objc
+      // when the mouse moves. I'm leaving this here for now
+      // because I suspect there may still be use cases to
+      // toggle it from the dom outside of the mouse moving.
+      return;
       if (this.isMirroring === false) {
         this.isMirroring = true;
         this.zigRpc.send.webviewTagToggleMirroring({
@@ -548,6 +488,7 @@ const ConfigureWebviewTags = (
     }
 
     stopMirroring() {
+      return;
       if (this.isMirroring === true) {
         this.isMirroring = false;
         this.zigRpc.send.webviewTagToggleMirroring({
