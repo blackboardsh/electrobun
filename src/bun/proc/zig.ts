@@ -6,7 +6,7 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "../core/BrowserView";
 import { Updater } from "../core/Updater";
 import { Tray } from "../core/Tray";
-
+const CHUNK_SIZE = 1024 * 4; // 4KB
 // todo (yoav): webviewBinaryPath and ELECTROBUN_VIEWS_FOLDER should be passed in as cli/env args by the launcher binary
 // will likely be different on different platforms. Right now these are hardcoded for relative paths inside the mac app bundle.
 const webviewBinaryPath = join("native", "webview");
@@ -63,8 +63,19 @@ function createStdioTransport(proc): RPCTransport {
   return {
     send(message) {
       try {
+        // TODO: this is the same chunking code as browserview pipes,
+        // should dedupe
         const messageString = JSON.stringify(message) + "\n";
-        inStream.write(messageString);
+
+        let offset = 0;
+        while (offset < messageString.length) {
+          const chunk = messageString.slice(offset, offset + CHUNK_SIZE);
+          inStream.write(chunk);
+          offset += CHUNK_SIZE;
+        }
+
+        // Ensure the newline is written after all chunks
+        inStream.write("\n");
       } catch (error) {
         console.error("bun: failed to serialize message to zig", error);
       }

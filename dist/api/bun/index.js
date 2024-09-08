@@ -8700,7 +8700,13 @@ var createStdioTransport = function(proc) {
     send(message) {
       try {
         const messageString = JSON.stringify(message) + "\n";
-        inStream.write(messageString);
+        let offset = 0;
+        while (offset < messageString.length) {
+          const chunk = messageString.slice(offset, offset + CHUNK_SIZE2);
+          inStream.write(chunk);
+          offset += CHUNK_SIZE2;
+        }
+        inStream.write("\n");
       } catch (error) {
         console.error("bun: failed to serialize message to zig", error);
       }
@@ -8739,6 +8745,7 @@ var createStdioTransport = function(proc) {
     }
   };
 };
+var CHUNK_SIZE2 = 4096;
 var webviewBinaryPath = join3("native", "webview");
 var hash2 = await Updater.localInfo.hash();
 var randomId2 = Math.random().toString(36).substring(7);
@@ -9244,4 +9251,4 @@ export {
   exports_ApplicationMenu as ApplicationMenu
 };
 
-//# debugId=BB24F63C865C761064756e2164756e21
+//# debugId=6C7DA4A50F37B3BE64756e2164756e21
