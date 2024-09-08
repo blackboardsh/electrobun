@@ -564,7 +564,7 @@ NSRect getWindowBounds(NSWindow *window) {
             NSRect subviewRenderLayerFrame = subview.layer.frame;
             
             // Is the mouse event over this webview?
-            if (NSPointInRect(mouseLocation, subviewRenderLayerFrame)) {            
+            if (NSPointInRect(mouseLocation, subviewRenderLayerFrame) && !subview.hidden) {            
                 // The mask layer defines transparent holes punched in the webview                                
                 // to simulate UI over the webviews. Get the mask layer's path if there is one.
                 CAShapeLayer *maskLayer = (CAShapeLayer *)subview.layer.mask;                                
