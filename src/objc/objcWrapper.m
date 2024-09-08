@@ -542,7 +542,14 @@ NSRect getWindowBounds(NSWindow *window) {
 }
 
 - (void)mouseMoved:(NSEvent *)event {
-    NSPoint mouseLocation = [self convertPoint:[event locationInWindow] fromView:nil];            
+    NSPoint mouseLocation = [self convertPoint:[event locationInWindow] fromView:nil];        
+    [self updateActiveWebviewForMousePosition:mouseLocation];
+}
+
+// Note: Call this manually with 
+// NSPoint currentMousePosition = [window mouseLocationOutsideOfEventStream];
+// [window.containerView updateActiveWebviewForMousePosition:currentMousePosition];
+- (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation {    
     // Access all subviews in the window's main content view. This includes both
     // "main" webviews and "nested" webviews that use <electrobun-webview> tags
     NSArray *subviews = [self subviews];    
