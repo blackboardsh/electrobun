@@ -824,7 +824,14 @@ void resizeWebview(TransparentWKWebView *view, NSRect frame, const char *masksJs
     
     maskLayer.fillRule = kCAFillRuleEvenOdd;    
     maskLayer.path = path;    
-    view.layer.mask = maskLayer;    
+    view.layer.mask = maskLayer;   
+
+    // Note: There are cases where scrolling a "parent" view can cause an OOPIF "nested" view
+    // to come under the mouse cursor. Typically we call this on mouse move but if you just click
+    // or scroll without moving the mouse it should go to the nested view that's under the mouse.
+    NSPoint currentMousePosition = [view.window mouseLocationOutsideOfEventStream];
+    ContainerView *containerView = (ContainerView *)view.superview;
+    [containerView updateActiveWebviewForMousePosition:currentMousePosition]; 
     
     // Release the path
     CGPathRelease(path);    
