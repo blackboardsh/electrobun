@@ -290,6 +290,15 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
         return;
     }
 
+    // Note: In most cases a drag operation will pause webkit from firing mouse move events
+    // but there are some edge cases where they still get through. We don't ever want the active
+    // webview to change while dragging so if the mouse is down we just ignore the toggle.
+    BOOL isLeftMouseButtonDown = ([NSEvent pressedMouseButtons] & (1 << 0)) != 0;
+
+    if (isLeftMouseButtonDown) {        
+        return;
+    } 
+
     self.mirrorModeEnabled = enable;
 
     if (enable) {
