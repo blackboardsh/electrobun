@@ -7,6 +7,8 @@
 
 // views:// schema handler
 
+CGFloat OFFSCREEN_OFFSET = -20000;
+
 typedef struct {
     const char *mimeType;
     const char *fileContents;  
@@ -258,6 +260,7 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
 @property (nonatomic, assign) BOOL mirrorModeEnabled;
 @property (nonatomic, assign) TransparentWKWebView *hostView;
 @property (nonatomic, assign) uint32_t webviewId;
+@property (nonatomic, assign) BOOL fullSize;
 
 - (void)toggleMirrorMode:(BOOL)enabled;
 
@@ -269,7 +272,7 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
     self = [super initWithFrame:frame configuration:configuration];
     if (self) {           
         self.frame = frame;                
-        _mirrorModeEnabled = NO;                
+        _mirrorModeEnabled = NO;                  
     }
     return self;
 }
@@ -288,18 +291,18 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
     }
 
     self.mirrorModeEnabled = enable;
-    
+
     if (enable) {
         // Move the webview offscreen, and position the layer that webkit is rendering to
         // where it was to create a non-interactive mirror or projection of the content that
         // doesn't eat random dom events from the host.
         CGFloat positionX = self.frame.origin.x;
-        CGFloat positionY = self.frame.origin.y;
-        self.frame = CGRectOffset(self.frame, -10000, -10000); // Move offscreen
-        self.layer.position = CGPointMake(positionX, positionY);
+        CGFloat positionY = self.frame.origin.y;        
+        self.frame = CGRectOffset(self.frame, OFFSCREEN_OFFSET, OFFSCREEN_OFFSET); // Move offscreen
+        self.layer.position = CGPointMake(positionX, positionY);        
     } else {                
-        // Note: when you set the frame the layer position is also reset to match it  
-        self.frame = CGRectMake(self.layer.position.x, self.layer.position.y, self.frame.size.width, self.frame.size.height); // Move back on screen       
+        // Note: When you set the frame the layer position is also reset to match it  
+        self.frame = CGRectMake(self.layer.position.x, self.layer.position.y, self.frame.size.width, self.frame.size.height); // Move back on screen               
     }
 }
 
@@ -351,12 +354,19 @@ WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSRect frame, zigStartUR
     
     // Since all wkwebviews are children of a generic NSView we need to tell them to 
     // auto size with the window. 
-    if (autoResize) {                
-        webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    if (autoResize) {     
+        // Note: We can't use `webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;`
+        // because every time the frame is moved the layer moves with it
+        // which interferes with the mirroring/interactivity toggling. 
+        // So we have to manually resize "fullsize" webviews when the 
+        // window resizes.
+        webView.autoresizingMask = NSViewNotSizable;
+        webView.fullSize = YES;
     } else {                
         // Disable autoresizing typically for <electrobun-webviews> that are sized based
         // on the anchor in the host webview's dom
         webView.autoresizingMask = NSViewNotSizable;
+        webView.fullSize = NO;
     }
 
     retainObjCObject(webView);
@@ -605,6 +615,105 @@ NSRect getWindowBounds(NSWindow *window) {
 
 @end
 
+// For creating a CALayer mask, we need to handle potential overlaps between multiple rects.
+// Instead of trying to redefine all the rects into a single path or converting to a bitmap
+// for CI Filters. We can just use an evenOdd rule for the rects and for each overlap add
+// an additional rect of the overlapping region to keep it even or keep it odd.
+NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
+    NSMutableArray<NSValue *> *resultingRects = [NSMutableArray array];
+    
+    for (NSDictionary *rectDict in rectsArray) {
+        CGFloat x = [rectDict[@"x"] floatValue];
+        CGFloat y = [rectDict[@"y"] floatValue];
+        CGFloat width = [rectDict[@"width"] floatValue];
+        CGFloat height = [rectDict[@"height"] floatValue];
+        NSRect newRect = NSMakeRect(x, y, width, height);
+        
+        NSMutableArray<NSValue *> *overlapRects = [NSMutableArray array]; 
+        
+        // Iterate over the existing rectangles to check for overlaps
+        for (NSValue *existingRectValue in resultingRects) {
+            NSRect existingRect = [existingRectValue rectValue];
+
+            // Check if the new rectangle overlaps with any existing rectangle
+            if (NSIntersectsRect(existingRect, newRect)) {
+                // Calculate the intersection (overlap area)
+                NSRect overlapRect = NSIntersectionRect(existingRect, newRect);
+                if (!NSIsEmptyRect(overlapRect)) {
+                    [overlapRects addObject:[NSValue valueWithRect:overlapRect]]; 
+                }
+            }
+        }
+
+        // Add the new rectangle to the result set
+        [resultingRects addObject:[NSValue valueWithRect:newRect]];
+        
+        // After all checks are done, append the overlaps
+        [resultingRects addObjectsFromArray:overlapRects];
+    }
+
+    return resultingRects;
+}
+
+void resizeWebview(TransparentWKWebView *view, NSRect frame, const char *masksJson) {
+
+    // Round everything here to avoid bugs where different internal things
+    // will round subpixels in different directions (ceil or floor).
+    // round to maximize the area since we're trying to cover the anchor in the host webview's dom
+    CGFloat adjustedX = floor(frame.origin.x);
+    CGFloat adjustedWidth = ceilf(frame.size.width);
+    CGFloat adjustedHeight = ceilf(frame.size.height);
+    CGFloat adjustedY = floor(view.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);    
+
+    if (view.mirrorModeEnabled) {
+        // // Use a transaction to disable animations        
+        view.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);        
+        view.layer.position = CGPointMake(adjustedX, adjustedY);        
+    } else {
+        view.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);        
+    }
+
+    // Convert the C string to an NSString
+    NSString *jsonString = [NSString stringWithUTF8String:masksJson];
+    
+    // Deserialize the JSON string into an NSArray of NSDictionary
+    NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
+    NSError *error;
+    NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+
+    // Process the rectangles to handle overlaps by adding additional overlap rects
+    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray);    
+    
+    CAShapeLayer *maskLayer = [CAShapeLayer layer];
+    maskLayer.frame = view.layer.bounds;  // Mask should cover the whole view
+    
+    // Create a path that fills the entire layer (opaque background)
+    CGMutablePathRef path = CGPathCreateMutable();
+    CGPathAddRect(path, NULL, maskLayer.bounds); 
+
+    // Add the processed rectangles as transparent areas
+    for (NSValue *rectValue in processedRects) {
+        NSRect rect = [rectValue rectValue];
+        CGPathAddRect(path, NULL, rect);
+    }
+    
+    maskLayer.fillRule = kCAFillRuleEvenOdd;    
+    maskLayer.path = path;    
+    view.layer.mask = maskLayer;   
+
+    // Note: There are cases where scrolling a "parent" view can cause an OOPIF "nested" view
+    // to come under the mouse cursor. Typically we call this on mouse move but if you just click
+    // or scroll without moving the mouse it should go to the nested view that's under the mouse.
+    NSPoint currentMousePosition = [view.window mouseLocationOutsideOfEventStream];
+    ContainerView *containerView = (ContainerView *)view.superview;
+    [containerView updateActiveWebviewForMousePosition:currentMousePosition]; 
+    
+    // Release the path
+    CGPathRelease(path);    
+}
+
+
+// NSWindow
 typedef void (*WindowCloseHandler)(uint32_t windowId);
 typedef void (*WindowMoveHandler)(uint32_t windowId, CGFloat x, CGFloat y);
 typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGFloat width, CGFloat height);
@@ -633,10 +742,29 @@ typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGF
     }
 }
 - (void)windowDidResize:(NSNotification *)notification {
-    if (self.resizeHandler) {
-        NSWindow *window = [notification object];             
-        NSRect windowFrame = [window frame];
-        
+    NSWindow *window = [notification object];             
+    NSRect windowFrame = [window frame];
+    
+    // Loop over all the webviews in this window that want to be fullsize
+    // and update their size to match the window. We can't use an autoResizingMask
+    // because it interferes with the mirroring/interactivity toggling.
+    NSRect fullFrame = [window frame];
+    fullFrame.origin.x = 0;
+    fullFrame.origin.y = 0;
+    
+    NSView *contentView = [self.window contentView];
+    
+    for (NSView *subview in contentView.subviews) {        
+        if ([subview isKindOfClass:[TransparentWKWebView class]]) {
+            TransparentWKWebView *webView = (TransparentWKWebView *)subview;
+                        
+            if (webView.fullSize) {                                                
+                resizeWebview(webView, fullFrame, "");  
+            }
+        }
+    }
+
+    if (self.resizeHandler) {                
         NSScreen *primaryScreen = getPrimaryScreen();
         NSRect screenFrame = [primaryScreen frame];    
         windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
@@ -738,103 +866,6 @@ void addWebviewToWindow(NSWindow *window, TransparentWKWebView *view) {
     CGFloat adjustedY = view.superview.bounds.size.height - view.frame.origin.y - view.frame.size.height;
     view.frame = NSMakeRect(view.frame.origin.x, adjustedY, view.frame.size.width, view.frame.size.height);    
 
-}
-
-// For creating a CALayer mask, we need to handle potential overlaps between multiple rects.
-// Instead of trying to redefine all the rects into a single path or converting to a bitmap
-// for CI Filters. We can just use an evenOdd rule for the rects and for each overlap add
-// an additional rect of the overlapping region to keep it even or keep it odd.
-NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
-    NSMutableArray<NSValue *> *resultingRects = [NSMutableArray array];
-    
-    for (NSDictionary *rectDict in rectsArray) {
-        CGFloat x = [rectDict[@"x"] floatValue];
-        CGFloat y = [rectDict[@"y"] floatValue];
-        CGFloat width = [rectDict[@"width"] floatValue];
-        CGFloat height = [rectDict[@"height"] floatValue];
-        NSRect newRect = NSMakeRect(x, y, width, height);
-        
-        NSMutableArray<NSValue *> *overlapRects = [NSMutableArray array]; 
-        
-        // Iterate over the existing rectangles to check for overlaps
-        for (NSValue *existingRectValue in resultingRects) {
-            NSRect existingRect = [existingRectValue rectValue];
-
-            // Check if the new rectangle overlaps with any existing rectangle
-            if (NSIntersectsRect(existingRect, newRect)) {
-                // Calculate the intersection (overlap area)
-                NSRect overlapRect = NSIntersectionRect(existingRect, newRect);
-                if (!NSIsEmptyRect(overlapRect)) {
-                    [overlapRects addObject:[NSValue valueWithRect:overlapRect]]; 
-                }
-            }
-        }
-
-        // Add the new rectangle to the result set
-        [resultingRects addObject:[NSValue valueWithRect:newRect]];
-        
-        // After all checks are done, append the overlaps
-        [resultingRects addObjectsFromArray:overlapRects];
-    }
-
-    return resultingRects;
-}
-
-void resizeWebview(TransparentWKWebView *view, NSRect frame, const char *masksJson) {
-
-    // Round everything here to avoid bugs where different internal things
-    // will round subpixels in different directions (ceil or floor).
-    // round to maximize the area since we're trying to cover the anchor in the host webview's dom
-    CGFloat adjustedX = floor(frame.origin.x);
-    CGFloat adjustedWidth = ceilf(frame.size.width);
-    CGFloat adjustedHeight = ceilf(frame.size.height);
-    CGFloat adjustedY = floor(view.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);    
-
-    if (view.mirrorModeEnabled) {
-        // // Use a transaction to disable animations        
-        view.frame = NSMakeRect(-10000, -10000, adjustedWidth, adjustedHeight);        
-        view.layer.position = CGPointMake(adjustedX, adjustedY);        
-    } else {
-        view.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);        
-    }
-
-    // Convert the C string to an NSString
-    NSString *jsonString = [NSString stringWithUTF8String:masksJson];
-    
-    // Deserialize the JSON string into an NSArray of NSDictionary
-    NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
-    NSError *error;
-    NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-
-    // Process the rectangles to handle overlaps by adding additional overlap rects
-    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray);    
-    
-    CAShapeLayer *maskLayer = [CAShapeLayer layer];
-    maskLayer.frame = view.layer.bounds;  // Mask should cover the whole view
-    
-    // Create a path that fills the entire layer (opaque background)
-    CGMutablePathRef path = CGPathCreateMutable();
-    CGPathAddRect(path, NULL, maskLayer.bounds); 
-
-    // Add the processed rectangles as transparent areas
-    for (NSValue *rectValue in processedRects) {
-        NSRect rect = [rectValue rectValue];
-        CGPathAddRect(path, NULL, rect);
-    }
-    
-    maskLayer.fillRule = kCAFillRuleEvenOdd;    
-    maskLayer.path = path;    
-    view.layer.mask = maskLayer;   
-
-    // Note: There are cases where scrolling a "parent" view can cause an OOPIF "nested" view
-    // to come under the mouse cursor. Typically we call this on mouse move but if you just click
-    // or scroll without moving the mouse it should go to the nested view that's under the mouse.
-    NSPoint currentMousePosition = [view.window mouseLocationOutsideOfEventStream];
-    ContainerView *containerView = (ContainerView *)view.superview;
-    [containerView updateActiveWebviewForMousePosition:currentMousePosition]; 
-    
-    // Release the path
-    CGPathRelease(path);    
 }
 
 typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
