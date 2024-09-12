@@ -550,14 +550,29 @@ NSRect getWindowBounds(NSWindow *window) {
 - (instancetype)initWithFrame:(NSRect)frameRect {
     self = [super initWithFrame:frameRect];
     if (self) {
-        // Add a tracking area to track mouse movements within this view
-        NSTrackingArea *trackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
-                                                                   options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow
-                                                                     owner:self
-                                                                  userInfo:nil];
-        [self addTrackingArea:trackingArea];
+        // Initialize tracking area
+        [self updateTrackingAreas];       
     }
     return self;
+}
+
+// Note: When parent window is resized it'll call updateTracking areas
+// all the way down. We need to override that method to actually
+// update the tracking areas we want.
+- (void)updateTrackingAreas {
+    NSLog(@"Updating tracking areas");
+    // There is no update bounds method you have to remove and re-add them.    
+    for (NSTrackingArea *area in self.trackingAreas) {
+        [self removeTrackingArea:area];
+    }
+    
+    // Create a new tracking area with the updated bounds
+    NSTrackingArea *mouseTrackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
+        options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow
+        owner:self
+        userInfo:nil];
+
+    [self addTrackingArea:mouseTrackingArea];
 }
 
 - (void)mouseMoved:(NSEvent *)event {
@@ -763,14 +778,12 @@ typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGF
     
     NSView *contentView = [self.window contentView];
     
-    for (NSView *subview in contentView.subviews) {        
-        if ([subview isKindOfClass:[TransparentWKWebView class]]) {
-            TransparentWKWebView *webView = (TransparentWKWebView *)subview;
-                        
-            if (webView.fullSize) {                                                
-                resizeWebview(webView, fullFrame, "");  
-            }
-        }
+    for (NSView *subview in contentView.subviews) {                
+        TransparentWKWebView *webView = (TransparentWKWebView *)subview;
+                    
+        if (webView.fullSize) {            
+            resizeWebview(webView, fullFrame, "");  
+        }        
     }
 
     if (self.resizeHandler) {                
@@ -849,6 +862,8 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId, createNSWindowWithF
 
     // Give it a default content view that can accept subviews later on                                                                                                               
     ContainerView *contentView = [[ContainerView alloc] initWithFrame:[window frame]];
+    contentView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    
     [window setContentView:contentView];
     
 
