@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
     // todo: should probably rename webview to something else
     const exe = b.addExecutable(.{
         .name = "launcher",
-        .root_source_file = .{ .path = "main.zig" },
+        .root_source_file = b.path("main.zig"),
         .target = target,
         .optimize = optimize,
     });

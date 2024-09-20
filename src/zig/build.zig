@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
     // todo: should probably rename webview to something else
     const exe = b.addExecutable(.{
         .name = "webview",
-        .root_source_file = .{ .path = "main.zig" },
+        .root_source_file = b.path("main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     exe.linkFramework("QuartzCore"); // used for compositing nested webviews
 
     // Embed our static objc wrapping library in the zig binary
-    exe.addLibraryPath(.{ .path = "build" });
+    exe.addLibraryPath(b.path("build"));
     // Note: zig will add the lib prefix and .a suffix in the library Path above
     // so src/zig/build/libObjcWrapperLib.a will be linked in
     exe.linkSystemLibrary("ObjcWrapper");

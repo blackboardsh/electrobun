@@ -7,17 +7,6 @@ const BUNLE_RESOURCES_REL_PATH = "../Resources/";
 // todo: for some reason it's saying std.compress.zstd.DecompressorOptions doesn't exist so hardcoding the value
 pub const default_window_buffer_len = 8 * 1024 * 1024;
 
-// Note: in 0.11.0 there's a bug in the zstd signature, hardcoding the fix here since the api for 0.12.0 looks like it's changing substantially
-// zstd.DecompressStream(@TypeOf(reader, options)) bug
-// zstd.DecompressStream(@TypeOf(reader), options) fix
-pub fn decompressStreamOptions(
-    allocator: std.mem.Allocator,
-    reader: anytype,
-    comptime options: zstd.DecompressStreamOptions,
-) zstd.DecompressStream(@TypeOf(reader), options) {
-    return zstd.DecompressStream(@TypeOf(reader), options).init(allocator, reader);
-}
-
 pub fn main() !void {
     var allocator = std.heap.page_allocator;
 
@@ -79,10 +68,8 @@ pub fn main() !void {
     const src_reader = compressedAppBundle.reader();
 
     // Initialize the decompressor
-    // Set window size to 128 MiB which facebook's zstd docs state is the max
-    var zstd_stream = decompressStreamOptions(allocator, src_reader, .{ .window_size_max = 128 << 20 });
-
-    defer zstd_stream.deinit();
+    var window_buffer: [4096]u8 = undefined;
+    var zstd_stream = zstd.decompressor(src_reader, .{ .verify_checksum = false, .window_buffer = window_buffer[0..] });
 
     // compressedTarballPath replace extension
     // remove the .zst extension from filename.tar.zst
@@ -99,16 +86,17 @@ pub fn main() !void {
     var dst_writer = dst_file.writer();
 
     // Allocate a buffer for reading decompressed data chunks
-    var buffer: [4096]u8 = undefined;
+    var decompressed_buffer: [4096]u8 = undefined;
 
     // Read from the decompressor and write to the destination file
     while (true) {
         // Read a chunk of decompressed data into the buffer
-        const read_bytes = try zstd_stream.reader().read(&buffer);
+        const read_bytes = try zstd_stream.reader().read(&decompressed_buffer);
+
         if (read_bytes == 0) break; // Check for end of the decompressed stream
 
         // Write the decompressed chunk to the destination file
-        try dst_writer.writeAll(buffer[0..read_bytes]);
+        try dst_writer.writeAll(decompressed_buffer[0..read_bytes]);
     }
 
     std.debug.print("Time taken to decompress: {} ns\n", .{std.time.nanoTimestamp() - startTime});
@@ -156,7 +144,7 @@ pub fn main() !void {
     try std.fs.renameAbsolute(newBundlePath, APPBUNDLE_PATH);
 
     const argv = &[_][]const u8{ "open", APPBUNDLE_PATH };
-    var child_process = std.ChildProcess.init(argv, allocator);
+    var child_process = std.process.Child.init(argv, allocator);
 
     // The open command will exit and run the opened app (the unpacked/updated app bundle in a separate process)
     // so we want to just spawn (so it detaches) and exit as soon as possible
@@ -165,7 +153,7 @@ pub fn main() !void {
         return;
     };
 
-    std.os.exit(0);
+    std.process.exit(0);
 
     //     }
     // } else |_| {
@@ -176,19 +164,14 @@ pub fn main() !void {
 }
 
 pub fn getFilenameFromExtension(allocator: std.mem.Allocator, folderPath: []const u8, extension: []const u8) ![]const u8 {
-    // std.debug.print("one\n", .{});
-    const iterableDir = try std.fs.openIterableDirAbsolute(folderPath, .{});
-    var extractionFolderWalker = try iterableDir.walk(allocator);
-    // std.debug.print("two\n", .{});
-    defer extractionFolderWalker.deinit();
+    const dir = try std.fs.cwd().openDir(folderPath, .{});
+    var iterator = dir.iterate();
 
-    while (try extractionFolderWalker.next()) |entry| {
-        const entryName = entry.basename;
+    while (try iterator.next()) |entry| {
+        const entryName = entry.name;
         if (std.mem.eql(u8, std.fs.path.extension(entryName), extension)) {
-            // Copy the filename to the allocator since we deinit the walker in here
-            // and the entryName will be deallocated along with it
             const fileName = try allocator.alloc(u8, entryName.len);
-            std.mem.copy(u8, fileName, entryName);
+            @memcpy(fileName, entryName);
             return fileName;
         }
     }

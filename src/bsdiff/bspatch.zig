@@ -35,7 +35,7 @@ const zstd = @cImport({
     @cInclude("zstd.h");
 });
 
-const vectorSize = std.simd.suggestVectorSize(u8) orelse 4;
+const vectorSize = std.simd.suggestVectorLength(u8) orelse 4;
 
 pub fn main() !void {
     var allocator = std.heap.page_allocator;
@@ -60,7 +60,7 @@ pub fn main() !void {
     defer oldFile.close();
 
     const oldFileSize = try oldFile.getEndPos();
-    var oldFileBuff = try allocator.alloc(u8, oldFileSize);
+    const oldFileBuff = try allocator.alloc(u8, oldFileSize);
     defer allocator.free(oldFileBuff);
     _ = try oldFile.readAll(oldFileBuff);
 
@@ -68,7 +68,7 @@ pub fn main() !void {
     defer patchFile.close();
 
     const patchFileSize = try patchFile.getEndPos();
-    var patchFileBuff = try allocator.alloc(u8, patchFileSize);
+    const patchFileBuff = try allocator.alloc(u8, patchFileSize);
     defer allocator.free(patchFileBuff);
     _ = try patchFile.readAll(patchFileBuff);
 

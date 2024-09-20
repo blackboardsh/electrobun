@@ -60,16 +60,16 @@ const SetTitleOpts = struct {
 const WindowMap = std.AutoHashMap(u32, WindowType);
 pub var windowMap: WindowMap = WindowMap.init(alloc);
 
-pub fn windowCloseHandler(windowId: u32) void {
+pub fn windowCloseHandler(windowId: u32) callconv(.C) void {
     _ = rpc.request.windowClose(.{ .id = windowId });
     windowCleanup(windowId);
 }
 
-pub fn windowMoveHandler(windowId: u32, x: f64, y: f64) void {
+pub fn windowMoveHandler(windowId: u32, x: f64, y: f64) callconv(.C) void {
     _ = rpc.request.windowMove(.{ .id = windowId, .x = x, .y = y });
 }
 
-pub fn windowResizeHandler(windowId: u32, x: f64, y: f64, width: f64, height: f64) void {
+pub fn windowResizeHandler(windowId: u32, x: f64, y: f64, width: f64, height: f64) callconv(.C) void {
     _ = rpc.request.windowResize(.{ .id = windowId, .x = x, .y = y, .width = width, .height = height });
 }
 
@@ -142,7 +142,7 @@ pub fn windowCleanup(winId: u32) void {
 }
 
 pub fn closeWindow(opts: rpcSchema.BunSchema.requests.closeWindow.params) void {
-    var win = windowMap.get(opts.winId) orelse {
+    const win = windowMap.get(opts.winId) orelse {
         std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.winId});
         return;
     };
@@ -158,13 +158,13 @@ pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
         return;
     };
 
-    var view = webview.webviewMap.get(opts.webviewId) orelse {
+    const view = webview.webviewMap.get(opts.webviewId) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.webviewId});
         return;
     };
 
     // Note: Keep this in sync with browser api
-    var jsScript = std.fmt.allocPrint(alloc, "window.__electrobunWindowId = {}\n", .{opts.windowId}) catch {
+    const jsScript = std.fmt.allocPrint(alloc, "window.__electrobunWindowId = {}\n", .{opts.windowId}) catch {
         return;
     };
     defer alloc.free(jsScript);

@@ -8,22 +8,24 @@ const rpcStdout = @import("stdout.zig");
 const rpcHandlers = @import("schema/handlers.zig");
 const handlers = rpcHandlers.handlers;
 const webview = @import("../macos/webview.zig");
+const builtin = @import("builtin");
 
 const alloc = std.heap.page_allocator;
 
 var messageQueue = std.ArrayList([]const u8).init(alloc);
-var kqueue: std.os.fd_t = 0;
+
+var kqueue: std.posix.fd_t = 0; // On macOS/Linux this will be i32, on Windows it will be HANDLE.
 
 pub fn pipesInEventListener() !void {
-    kqueue = std.os.kqueue() catch {
+    kqueue = std.posix.kqueue() catch {
         std.log.err("Failed to create kqueue", .{});
         return;
     };
-    defer std.os.close(kqueue);
+    defer std.posix.close(kqueue);
 
     const mainPipeIn = blk: {
         // This is passed as an environment variable from bun
-        const MAIN_PIPE_IN = std.os.getenv("MAIN_PIPE_IN") orelse {
+        const MAIN_PIPE_IN = std.posix.getenv("MAIN_PIPE_IN") orelse {
             // todo: return an error here
             return error.ELECTROBUN_MAIN_PIPE_IN_NOT_SET;
         };
@@ -42,12 +44,12 @@ pub fn pipesInEventListener() !void {
         addPipe(pipeInFile.handle, 0);
     }
 
-    var events: [10]std.os.Kevent = undefined; // todo: Adjust based on expected concurrency
-    var changelist: []std.os.Kevent = &[_]std.os.Kevent{};
+    var events: [10]std.posix.Kevent = undefined; // todo: Adjust based on expected concurrency
+    const changelist: []std.posix.Kevent = &[_]std.posix.Kevent{};
 
     // Event loop
     while (true) {
-        const n = std.os.kevent(kqueue, changelist, &events, null) catch |err| {
+        const n = std.posix.kevent(kqueue, changelist, &events, null) catch |err| {
             std.log.err("Error in kevent: {}", .{err});
             continue;
         };
@@ -55,7 +57,7 @@ pub fn pipesInEventListener() !void {
         for (0..n) |i| {
             const ev = events[i];
             // Check ev.ident to see which fd has an event
-            if (ev.filter == std.os.darwin.EVFILT_READ) {
+            if (ev.filter == std.c.EVFILT_READ) {
                 // Note: readLineFromPipe reads until the end of the buffer or the delimeter.
                 // so the buffer has to fit the whole line after the chunks have been joined.
                 // setting it to 10MB for now. todo: make this dynamic after upgrading to latest
@@ -83,12 +85,12 @@ pub fn pipesInEventListener() !void {
     }
 }
 
-pub fn addPipe(fd: std.os.fd_t, webviewId: u32) void {
-    var events: [10]std.os.Kevent = undefined;
-    var event = std.os.Kevent{
+pub fn addPipe(fd: std.posix.fd_t, webviewId: u32) void {
+    var events: [10]std.posix.Kevent = undefined;
+    const event = std.posix.Kevent{
         .ident = @as(usize, @intCast(fd)),
-        .filter = std.os.darwin.EVFILT_READ,
-        .flags = std.os.darwin.EV_ADD | std.os.darwin.EV_ENABLE,
+        .filter = std.c.EVFILT_READ,
+        .flags = std.c.EV_ADD | std.c.EV_ENABLE,
         .fflags = 0,
         .data = 0,
         // The .udata field is typically used to store user-defined data or a pointer to user-defined data that can be retrieved when an event occurs.
@@ -96,11 +98,11 @@ pub fn addPipe(fd: std.os.fd_t, webviewId: u32) void {
         .udata = @as(usize, @intCast(webviewId)),
     };
 
-    var changes: [1]std.os.Kevent = undefined;
+    var changes: [1]std.posix.Kevent = undefined;
     changes[0] = event;
 
     // Register the event
-    const nev = std.os.kevent(kqueue, &changes, &events, null) catch |err| {
+    const nev = std.posix.kevent(kqueue, &changes, &events, null) catch |err| {
         std.log.err("Failed to register kqueue event: {}\n", .{err});
         return;
     };
