@@ -19,11 +19,11 @@ pub fn concatOrFallback(comptime fmt: []const u8, params: anytype) []const u8 {
 
 // join two strings
 pub fn concatStrings(a: []const u8, b: []const u8) []u8 {
-    var totalLength: usize = a.len + b.len;
+    const totalLength: usize = a.len + b.len;
     var result = alloc.alloc(u8, totalLength) catch unreachable;
 
-    std.mem.copy(u8, result[0..a.len], a);
-    std.mem.copy(u8, result[a.len..totalLength], b);
+    std.mem.copyForwards(u8, result[0..a.len], a);
+    std.mem.copyForwards(u8, result[a.len..totalLength], b);
 
     return result;
 }
@@ -34,7 +34,7 @@ pub fn toCString(input: []const u8) [*:0]const u8 {
         return "console.error('failed to allocate string');";
     };
 
-    std.mem.copy(u8, allocResult, input); // Copy input to the allocated buffer
+    std.mem.copyForwards(u8, allocResult, input);
     allocResult[input.len] = 0; // Null-terminate
     return allocResult[0..input.len :0]; // Correctly typed slice with null terminator
 }

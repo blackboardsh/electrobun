@@ -45,7 +45,7 @@ const zstd = @cImport({
     @cInclude("zstd.h");
 });
 
-const vectorSize = std.simd.suggestVectorSize(u8) orelse 4;
+const vectorSize = std.simd.suggestVectorLength(u8) orelse 4;
 
 // 1. create a bsdiff implementation that supports bzip2 classic bsdiff, and a mode that doesn't compress the patch file at all (so you can apply any compression to the whole file)
 // since only the electrobun cli needs to compress the file size doesn't matter, we just need prebuilt binaries to electrobun build on different platforms
@@ -95,7 +95,7 @@ pub fn main() !void {
     defer oldFile.close();
 
     const oldFileSize = try oldFile.getEndPos();
-    var oldFileBuff = try allocator.alloc(u8, oldFileSize);
+    const oldFileBuff = try allocator.alloc(u8, oldFileSize);
     defer allocator.free(oldFileBuff);
     _ = try oldFile.readAll(oldFileBuff);
 
@@ -103,7 +103,7 @@ pub fn main() !void {
     defer newFile.close();
 
     const newFileSize = try newFile.getEndPos();
-    var newFileBuff = try allocator.alloc(u8, newFileSize);
+    const newFileBuff = try allocator.alloc(u8, newFileSize);
     defer allocator.free(newFileBuff);
     _ = try newFile.readAll(newFileBuff);
 
@@ -122,7 +122,7 @@ fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, newD
     }
 
     // Allocate memory for the suffix array based on the length of the old data
-    var suffixIndexes = try allocator.alloc(i64, oldData.len + 1);
+    const suffixIndexes = try allocator.alloc(i64, oldData.len + 1);
     defer allocator.free(suffixIndexes);
 
     // Note: This is where a significant amount of time is spent in the diffing process
@@ -138,20 +138,20 @@ fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, newD
     var controlBlockStreamOffset: usize = 0;
     var controlBlockStream = try allocator.alloc(u8, newsize);
     var controlBlockInput = zstd.ZSTD_inBuffer{ .src = controlBlockStream.ptr, .size = 0, .pos = 0 };
-    var controlBlockCompressed = try allocator.alloc(u8, zstd.ZSTD_compressBound(controlBlockStream.len));
+    const controlBlockCompressed = try allocator.alloc(u8, zstd.ZSTD_compressBound(controlBlockStream.len));
     var controlBlockOutput = zstd.ZSTD_outBuffer{ .dst = controlBlockCompressed.ptr, .size = controlBlockCompressed.len, .pos = 0 };
     const controlBlockThread = try std.Thread.spawn(.{}, compressBlockStream, .{ &controlBlockInput, &controlBlockOutput, &streamingBytes });
     // diff block
     // var diffBlockStreamOffset: usize = 0;
     var diffBlockStream = try allocator.alloc(u8, newsize);
     var diffBlockInput = zstd.ZSTD_inBuffer{ .src = diffBlockStream.ptr, .size = 0, .pos = 0 };
-    var diffBlockCompressed = try allocator.alloc(u8, zstd.ZSTD_compressBound(diffBlockStream.len));
+    const diffBlockCompressed = try allocator.alloc(u8, zstd.ZSTD_compressBound(diffBlockStream.len));
     var diffBlockOutput = zstd.ZSTD_outBuffer{ .dst = diffBlockCompressed.ptr, .size = diffBlockCompressed.len, .pos = 0 };
     const diffBlockThread = try std.Thread.spawn(.{}, compressBlockStream, .{ &diffBlockInput, &diffBlockOutput, &streamingBytes });
     // extra block
     var extraBlockStream = try allocator.alloc(u8, newsize);
     var extraBlockInput = zstd.ZSTD_inBuffer{ .src = extraBlockStream.ptr, .size = 0, .pos = 0 };
-    var extraBlockCompressed = try allocator.alloc(u8, zstd.ZSTD_compressBound(extraBlockStream.len));
+    const extraBlockCompressed = try allocator.alloc(u8, zstd.ZSTD_compressBound(extraBlockStream.len));
     var extraBlockOutput = zstd.ZSTD_outBuffer{ .dst = extraBlockCompressed.ptr, .size = extraBlockCompressed.len, .pos = 0 };
     const extraBlockThread = try std.Thread.spawn(.{}, compressBlockStream, .{ &extraBlockInput, &extraBlockOutput, &streamingBytes });
 
@@ -298,9 +298,9 @@ fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, newD
             while (i < forwardLength) {
                 // perf: use simd for calculations where possible
                 if (i + vectorSize <= forwardLength) {
-                    var oldpos: usize = @intCast(lastMatchPosition + i);
-                    var newpos: usize = @intCast(lastScanIndex + i);
-                    var diffpos: usize = @intCast(diffBlockInput.size + @as(usize, @intCast(i)));
+                    const oldpos: usize = @intCast(lastMatchPosition + i);
+                    const newpos: usize = @intCast(lastScanIndex + i);
+                    const diffpos: usize = @intCast(diffBlockInput.size + @as(usize, @intCast(i)));
 
                     const newVec: @Vector(vectorSize, u8) = newData[newpos..][0..vectorSize].*;
                     const oldVec: @Vector(vectorSize, u8) = oldData[oldpos..][0..vectorSize].*;
@@ -399,7 +399,7 @@ var totalCompressedSize: usize = 0;
 fn compressBlock(allocator: *std.mem.Allocator, block: []const u8) !void {
     // non-streaming
     const maxCompressedSize = zstd.ZSTD_compressBound(block.len);
-    var compressedBlock = try allocator.alloc(u8, maxCompressedSize);
+    const compressedBlock = try allocator.alloc(u8, maxCompressedSize);
     // defer allocator.free(compressedBlock);
 
     const compressedSize = zstd.ZSTD_compress(compressedBlock.ptr, compressedBlock.len, block.ptr, block.len, 22);
@@ -511,7 +511,7 @@ fn compareSlicesFast(a: []const u8, b: []const u8) i64 {
     const minSize = @min(a.len, b.len);
     var i: usize = 0;
     var lookAheadIndex: usize = 0;
-    var lookAheadDistance: usize = 8;
+    const lookAheadDistance: usize = 8;
 
     while (i < minSize) {
         if (i >= lookAheadIndex and i + lookAheadDistance < minSize) {
@@ -524,8 +524,8 @@ fn compareSlicesFast(a: []const u8, b: []const u8) i64 {
                 const aSlicePointer: *const [8]u8 = @ptrCast(&aSlice[0]);
                 const bSlicePointer: *const [8]u8 = @ptrCast(&bSlice[0]);
 
-                const aAs64 = std.mem.readIntBig(u64, aSlicePointer);
-                const bAs64 = std.mem.readIntBig(u64, bSlicePointer);
+                const aAs64 = std.mem.readInt(u64, aSlicePointer, std.builtin.Endian.big);
+                const bAs64 = std.mem.readInt(u64, bSlicePointer, std.builtin.Endian.big);
 
                 if (aAs64 == bAs64) {
                     i = lookAheadIndex;
@@ -580,7 +580,7 @@ fn matchlenFast(oldData: []const u8, newData: []const u8) usize {
     var lookAheadIndex: usize = 0;
     // This works well with 8, you tend be able to skip more iteration loops and get more matches with 7
     // eg: in a 48MB file diff, you skip an additional 50 million iterations with 7 than with 8
-    var lookAheadDistance: usize = 7;
+    const lookAheadDistance: usize = 7;
 
     const oldsize = oldData.len;
     const newsize = newData.len;
@@ -598,8 +598,8 @@ fn matchlenFast(oldData: []const u8, newData: []const u8) usize {
                 const oldSlicePointer: *const [7]u8 = @ptrCast(&oldSlice[0]);
                 const newSlicePointer: *const [7]u8 = @ptrCast(&newSlice[0]);
 
-                const oldAs56 = std.mem.readIntBig(u56, oldSlicePointer);
-                const newAs56 = std.mem.readIntBig(u56, newSlicePointer);
+                const oldAs56 = std.mem.readInt(u56, oldSlicePointer, std.builtin.Endian.big);
+                const newAs56 = std.mem.readInt(u56, newSlicePointer, std.builtin.Endian.big);
 
                 if (oldAs56 == newAs56) {
                     matchLength = lookAheadIndex;

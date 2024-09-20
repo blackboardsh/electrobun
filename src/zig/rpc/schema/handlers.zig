@@ -247,8 +247,8 @@ pub fn webviewTagCanGoForward(params: rpcSchema.BrowserSchema.requests.webviewTa
 
 pub fn webviewTagCallAsyncJavaScript(params: rpcSchema.BrowserSchema.requests.webviewTagCallAsyncJavaScript.params) RequestResult {
     const handler = struct {
-        pub fn handler(messageId: [*:0]const u8, webviewId: u32, hostWebviewId: u32, responseJSON: [*:0]const u8) void {
-            var jsCall = std.fmt.allocPrint(alloc, "document.querySelector('#electrobun-webview-{d}').setCallAsyncJavaScriptResponse(`{s}`, `{s}`);\n", .{ webviewId, messageId, responseJSON }) catch {
+        pub fn handler(messageId: [*:0]const u8, webviewId: u32, hostWebviewId: u32, responseJSON: [*:0]const u8) callconv(.C) void {
+            const jsCall = std.fmt.allocPrint(alloc, "document.querySelector('#electrobun-webview-{d}').setCallAsyncJavaScriptResponse(`{s}`, `{s}`);\n", .{ webviewId, messageId, responseJSON }) catch {
                 return;
             };
             defer alloc.free(jsCall);
