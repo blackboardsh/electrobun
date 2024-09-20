@@ -1,7 +1,9 @@
 // src/browser/node_modules/rpc-anywhere/dist/esm/rpc.js
-var missingTransportMethodError = function(methods, action) {
+var missingTransportMethodError = function (methods, action) {
   const methodsString = methods.map((method) => `"${method}"`).join(", ");
-  return new Error(`This RPC instance cannot ${action} because the transport did not provide one or more of these methods: ${methodsString}`);
+  return new Error(
+    `This RPC instance cannot ${action} because the transport did not provide one or more of these methods: ${methodsString}`
+  );
 };
 function _createRPC(options = {}) {
   let debugHooks = {};
@@ -10,8 +12,7 @@ function _createRPC(options = {}) {
   }
   let transport = {};
   function setTransport(newTransport) {
-    if (transport.unregisterHandler)
-      transport.unregisterHandler();
+    if (transport.unregisterHandler) transport.unregisterHandler();
     transport = newTransport;
     transport.registerHandler?.(handler);
   }
@@ -23,8 +24,7 @@ function _createRPC(options = {}) {
     }
     requestHandler = (method, params) => {
       const handlerFn = handler2[method];
-      if (handlerFn)
-        return handlerFn(params);
+      if (handlerFn) return handlerFn(params);
       const fallbackHandler = handler2._;
       if (!fallbackHandler)
         throw new Error(`The requested method has no handler: ${method}`);
@@ -32,20 +32,16 @@ function _createRPC(options = {}) {
     };
   }
   const { maxRequestTime = DEFAULT_MAX_REQUEST_TIME } = options;
-  if (options.transport)
-    setTransport(options.transport);
-  if (options.requestHandler)
-    setRequestHandler(options.requestHandler);
-  if (options._debugHooks)
-    _setDebugHooks(options._debugHooks);
+  if (options.transport) setTransport(options.transport);
+  if (options.requestHandler) setRequestHandler(options.requestHandler);
+  if (options._debugHooks) _setDebugHooks(options._debugHooks);
   let lastRequestId = 0;
   function getRequestId() {
-    if (lastRequestId <= MAX_ID)
-      return ++lastRequestId;
-    return lastRequestId = 0;
+    if (lastRequestId <= MAX_ID) return ++lastRequestId;
+    return (lastRequestId = 0);
   }
-  const requestListeners = new Map;
-  const requestTimeouts = new Map;
+  const requestListeners = new Map();
+  const requestTimeouts = new Map();
   function requestFn(method, ...args) {
     const params = args[0];
     return new Promise((resolve, reject) => {
@@ -56,24 +52,26 @@ function _createRPC(options = {}) {
         type: "request",
         id: requestId,
         method,
-        params
+        params,
       };
       requestListeners.set(requestId, { resolve, reject });
       if (maxRequestTime !== Infinity)
-        requestTimeouts.set(requestId, setTimeout(() => {
-          requestTimeouts.delete(requestId);
-          reject(new Error("RPC request timed out."));
-        }, maxRequestTime));
+        requestTimeouts.set(
+          requestId,
+          setTimeout(() => {
+            requestTimeouts.delete(requestId);
+            reject(new Error("RPC request timed out."));
+          }, maxRequestTime)
+        );
       debugHooks.onSend?.(request2);
       transport.send(request2);
     });
   }
   const request = new Proxy(requestFn, {
     get: (target, prop, receiver) => {
-      if (prop in target)
-        return Reflect.get(target, prop, receiver);
+      if (prop in target) return Reflect.get(target, prop, receiver);
       return (params) => requestFn(prop, params);
-    }
+    },
   });
   const requestProxy = request;
   function sendFn(message, ...args) {
@@ -83,30 +81,32 @@ function _createRPC(options = {}) {
     const rpcMessage = {
       type: "message",
       id: message,
-      payload
+      payload,
     };
     debugHooks.onSend?.(rpcMessage);
     transport.send(rpcMessage);
   }
   const send = new Proxy(sendFn, {
     get: (target, prop, receiver) => {
-      if (prop in target)
-        return Reflect.get(target, prop, receiver);
+      if (prop in target) return Reflect.get(target, prop, receiver);
       return (payload) => sendFn(prop, payload);
-    }
+    },
   });
   const sendProxy = send;
-  const messageListeners = new Map;
-  const wildcardMessageListeners = new Set;
+  const messageListeners = new Map();
+  const wildcardMessageListeners = new Set();
   function addMessageListener(message, listener) {
     if (!transport.registerHandler)
-      throw missingTransportMethodError(["registerHandler"], "register message listeners");
+      throw missingTransportMethodError(
+        ["registerHandler"],
+        "register message listeners"
+      );
     if (message === "*") {
       wildcardMessageListeners.add(listener);
       return;
     }
     if (!messageListeners.has(message))
-      messageListeners.set(message, new Set);
+      messageListeners.set(message, new Set());
     messageListeners.get(message)?.add(listener);
   }
   function removeMessageListener(message, listener) {
@@ -124,7 +124,10 @@ function _createRPC(options = {}) {
       throw new Error("Message does not contain a type.");
     if (message.type === "request") {
       if (!transport.send || !requestHandler)
-        throw missingTransportMethodError(["send", "requestHandler"], "handle requests");
+        throw missingTransportMethodError(
+          ["send", "requestHandler"],
+          "handle requests"
+        );
       const { id, method, params } = message;
       let response;
       try {
@@ -132,16 +135,15 @@ function _createRPC(options = {}) {
           type: "response",
           id,
           success: true,
-          payload: await requestHandler(method, params)
+          payload: await requestHandler(method, params),
         };
       } catch (error) {
-        if (!(error instanceof Error))
-          throw error;
+        if (!(error instanceof Error)) throw error;
         response = {
           type: "response",
           id,
           success: false,
-          error: error.message
+          error: error.message,
         };
       }
       debugHooks.onSend?.(response);
@@ -150,23 +152,18 @@ function _createRPC(options = {}) {
     }
     if (message.type === "response") {
       const timeout = requestTimeouts.get(message.id);
-      if (timeout != null)
-        clearTimeout(timeout);
+      if (timeout != null) clearTimeout(timeout);
       const { resolve, reject } = requestListeners.get(message.id) ?? {};
-      if (!message.success)
-        reject?.(new Error(message.error));
-      else
-        resolve?.(message.payload);
+      if (!message.success) reject?.(new Error(message.error));
+      else resolve?.(message.payload);
       return;
     }
     if (message.type === "message") {
       for (const listener of wildcardMessageListeners)
         listener(message.id, message.payload);
       const listeners = messageListeners.get(message.id);
-      if (!listeners)
-        return;
-      for (const listener of listeners)
-        listener(message.payload);
+      if (!listeners) return;
+      for (const listener of listeners) listener(message.payload);
       return;
     }
     throw new Error(`Unexpected RPC message type: ${message.type}`);
@@ -182,7 +179,7 @@ function _createRPC(options = {}) {
     addMessageListener,
     removeMessageListener,
     proxy,
-    _setDebugHooks
+    _setDebugHooks,
   };
 }
 var MAX_ID = 10000000000;
@@ -202,7 +199,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
     webviewId;
     zigRpc;
     syncRpc;
-    maskSelectors = new Set;
+    maskSelectors = new Set();
     resizeObserver;
     positionCheckLoop;
     positionCheckLoopReset;
@@ -210,7 +207,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       x: 0,
       y: 0,
       width: 0,
-      height: 0
+      height: 0,
     };
     lastMasksJSON = "";
     lastMasks = [];
@@ -254,9 +251,9 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
             width: rect.width,
             height: rect.height,
             x: rect.x,
-            y: rect.y
-          }
-        }
+            y: rect.y,
+          },
+        },
       });
       this.webviewId = webviewId;
       this.id = `electrobun-webview-${this.webviewId}`;
@@ -268,13 +265,13 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
         const messageId = "" + Date.now() + Math.random();
         this.asyncResolvers[messageId] = {
           resolve,
-          reject
+          reject,
         };
         this.zigRpc.request.webviewTagCallAsyncJavaScript({
           messageId,
           webviewId: this.webviewId,
           hostWebviewId: window.__electrobunWebviewId,
-          script
+          script,
         });
       });
     }
@@ -294,15 +291,15 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
     }
     async canGoBack() {
       const {
-        payload: { webviewTagCanGoBackResponse }
+        payload: { webviewTagCanGoBackResponse },
       } = await this.zigRpc.request.webviewTagCanGoBack({ id: this.webviewId });
       return webviewTagCanGoBackResponse;
     }
     async canGoForward() {
       const {
-        payload: { webviewTagCanGoForwardResponse }
+        payload: { webviewTagCanGoForwardResponse },
       } = await this.zigRpc.request.webviewTagCanGoForward({
-        id: this.webviewId
+        id: this.webviewId,
       });
       return webviewTagCanGoForwardResponse;
     }
@@ -351,7 +348,8 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
         return;
       }
       const rect = this.getBoundingClientRect();
-      const { x, y, width, height } = this.adjustDimensionsForHiddenMirrorMode(rect);
+      const { x, y, width, height } =
+        this.adjustDimensionsForHiddenMirrorMode(rect);
       const lastRect = this.lastRect;
       if (width === 0 && height === 0) {
         if (this.wasZeroRect === false) {
@@ -363,7 +361,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       const masks = [];
       this.maskSelectors.forEach((selector) => {
         const els = document.querySelectorAll(selector);
-        for (let i = 0;i < els.length; i++) {
+        for (let i = 0; i < els.length; i++) {
           const el = els[i];
           if (el) {
             const maskRect = el.getBoundingClientRect();
@@ -371,26 +369,43 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
               x: maskRect.x - x,
               y: maskRect.y - y,
               width: maskRect.width,
-              height: maskRect.height
+              height: maskRect.height,
             });
           }
         }
       });
       const masksJson = masks.length ? JSON.stringify(masks) : "";
-      if (force || lastRect.x !== x || lastRect.y !== y || lastRect.width !== width || lastRect.height !== height || this.lastMasksJSON !== masksJson) {
+      if (
+        force ||
+        lastRect.x !== x ||
+        lastRect.y !== y ||
+        lastRect.width !== width ||
+        lastRect.height !== height ||
+        this.lastMasksJSON !== masksJson
+      ) {
         this.setPositionCheckLoop(true);
         this.lastRect = rect;
         this.lastMasks = masks;
         this.lastMasksJSON = masksJson;
+        console.trace("tagResize", {
+          id: this.webviewId,
+          frame: {
+            width,
+            height,
+            x,
+            y,
+          },
+          masks: masksJson,
+        });
         this.zigRpc.send.webviewTagResize({
           id: this.webviewId,
           frame: {
             width,
             height,
             x,
-            y
+            y,
           },
-          masks: masksJson
+          masks: masksJson,
         });
       }
       if (this.wasZeroRect) {
@@ -418,6 +433,12 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       this.positionCheckLoop = setInterval(() => this.syncDimensions(), delay);
     }
     connectedCallback() {
+      // We don't need it trying to resize before it has a webviewId
+      if (typeof this.webviewId === "undefined") {
+        setTimeout(() => this.connectedCallback(), 100);
+        return;
+      }
+
       this.setPositionCheckLoop();
       this.resizeObserver = new ResizeObserver(() => {
         this.syncDimensions();
@@ -436,6 +457,15 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       return ["src", "html", "preload", "class", "style"];
     }
     attributeChangedCallback(name, oldValue, newValue) {
+      // We don't need it trying to do stuff before it has a webviewId
+      if (typeof this.webviewId === "undefined") {
+        setTimeout(
+          () => this.attributeChangedCallback(name, oldValue, newValue),
+          100
+        );
+        return;
+      }
+
       if (name === "src" && oldValue !== newValue) {
         this.updateIFrameSrc(newValue);
       } else if (name === "html" && oldValue !== newValue) {
@@ -452,7 +482,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       }
       this.zigRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
-        url: src
+        url: src,
       });
     }
     updateIFrameHtml(html) {
@@ -461,7 +491,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       }
       this.zigRpc.send.webviewTagUpdateHtml({
         id: this.webviewId,
-        html
+        html,
       });
     }
     updateIFramePreload(preload) {
@@ -470,7 +500,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       }
       this.zigRpc.send.webviewTagUpdatePreload({
         id: this.webviewId,
-        preload
+        preload,
       });
     }
     goBack() {
@@ -486,13 +516,13 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       this.setAttribute("src", url);
       this.zigRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
-        url
+        url,
       });
     }
     syncScreenshot(callback) {
       const cacheBustString = `?${Date.now()}`;
       const url = `views://screenshot/${this.webviewId}${cacheBustString}`;
-      const img = new Image;
+      const img = new Image();
       img.src = url;
       img.onload = () => {
         this.style.backgroundImage = `url(${url})`;
@@ -523,7 +553,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
         this.isMirroring = true;
         this.zigRpc.send.webviewTagToggleMirroring({
           id: this.webviewId,
-          enable: true
+          enable: true,
         });
       }
     }
@@ -533,7 +563,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
         this.isMirroring = false;
         this.zigRpc.send.webviewTagToggleMirroring({
           id: this.webviewId,
-          enable: false
+          enable: false,
         });
       }
     }
@@ -541,7 +571,12 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       this.style.backgroundImage = "";
     }
     tryClearScreenImage() {
-      if (!this.transparent && !this.hiddenMirrorMode && !this.delegateMode && !this.hidden) {
+      if (
+        !this.transparent &&
+        !this.hiddenMirrorMode &&
+        !this.delegateMode &&
+        !this.hidden
+      ) {
         this.clearScreenImage();
       }
     }
@@ -558,7 +593,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       }
       this.zigRpc.send.webviewTagSetTransparent({
         id: this.webviewId,
-        transparent: this.transparent || Boolean(transparent)
+        transparent: this.transparent || Boolean(transparent),
       });
     }
     togglePassthrough(enablePassthrough, bypassState) {
@@ -571,7 +606,8 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       }
       this.zigRpc.send.webviewTagSetPassthrough({
         id: this.webviewId,
-        enablePassthrough: this.passthroughEnabled || Boolean(enablePassthrough)
+        enablePassthrough:
+          this.passthroughEnabled || Boolean(enablePassthrough),
       });
     }
     toggleHidden(hidden, bypassState) {
@@ -584,11 +620,12 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       }
       this.zigRpc.send.webviewTagSetHidden({
         id: this.webviewId,
-        hidden: this.hidden || Boolean(hidden)
+        hidden: this.hidden || Boolean(hidden),
       });
     }
     toggleDelegateMode(delegateMode) {
-      const _newDelegateMode = typeof delegateMode === "undefined" ? !this.delegateMode : delegateMode;
+      const _newDelegateMode =
+        typeof delegateMode === "undefined" ? !this.delegateMode : delegateMode;
       if (_newDelegateMode) {
         this.syncScreenshot(() => {
           this.delegateMode = true;
@@ -603,7 +640,8 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
       }
     }
     toggleHiddenMirrorMode(force) {
-      const enable = typeof force === "undefined" ? !this.hiddenMirrorMode : force;
+      const enable =
+        typeof force === "undefined" ? !this.hiddenMirrorMode : force;
       if (enable === true) {
         this.syncScreenshot(() => {
           this.hiddenMirrorMode = true;
@@ -676,7 +714,10 @@ class Electroview {
           const messageString = JSON.stringify(msg);
           return this.bunBridgeSync(messageString);
         } catch (error) {
-          console.error("bun: failed to serialize message to webview syncRpc", error);
+          console.error(
+            "bun: failed to serialize message to webview syncRpc",
+            error
+          );
         }
       };
     }
@@ -684,7 +725,7 @@ class Electroview {
     this.initElectrobunListeners();
     window.__electrobun = {
       receiveMessageFromBun: this.receiveMessageFromBun.bind(this),
-      receiveMessageFromZig: this.receiveMessageFromZig.bind(this)
+      receiveMessageFromZig: this.receiveMessageFromZig.bind(this),
     };
     if (this.rpc) {
       this.rpc.setTransport(this.createTransport());
@@ -693,7 +734,7 @@ class Electroview {
   initZigRpc() {
     this.zigRpc = createRPC({
       transport: this.createZigTransport(),
-      maxRequestTime: 1000
+      maxRequestTime: 1000,
     });
   }
   receiveMessageFromZig(msg) {
@@ -702,7 +743,9 @@ class Electroview {
     }
   }
   sendToZig(message) {
-    window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify(message));
+    window.webkit.messageHandlers.webviewTagBridge.postMessage(
+      JSON.stringify(message)
+    );
   }
   initElectrobunListeners() {
     document.addEventListener("mousedown", (e) => {
@@ -729,22 +772,24 @@ class Electroview {
       },
       registerHandler(handler) {
         that.rpcHandler = handler;
-      }
+      },
     };
   }
   createZigTransport() {
     const that = this;
     return {
       send(message) {
-        window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify(message));
+        window.webkit.messageHandlers.webviewTagBridge.postMessage(
+          JSON.stringify(message)
+        );
       },
       registerHandler(handler) {
         that.zigRpcHandler = handler;
-      }
+      },
     };
   }
   bunBridgeSync(msg) {
-    var xhr = new XMLHttpRequest;
+    var xhr = new XMLHttpRequest();
     xhr.open("POST", "views://syncrpc", false);
     xhr.send(msg);
     if (!xhr.responseText) {
@@ -777,12 +822,14 @@ class Electroview {
               const resultFunction = new Function(script);
               const result = resultFunction();
               if (result instanceof Promise) {
-                result.then((resolvedResult) => {
-                  resolve(resolvedResult);
-                }).catch((error) => {
-                  console.error("bun: async script execution failed", error);
-                  resolve(String(error));
-                });
+                result
+                  .then((resolvedResult) => {
+                    resolve(resolvedResult);
+                  })
+                  .catch((error) => {
+                    console.error("bun: async script execution failed", error);
+                    resolve(String(error));
+                  });
               } else {
                 resolve(result);
               }
@@ -791,19 +838,18 @@ class Electroview {
               resolve(String(error));
             }
           });
-        }
-      }
+        },
+      },
     };
     const rpcOptions = {
       maxRequestTime: config.maxRequestTime,
       requestHandler: {
         ...config.handlers.requests,
-        ...builtinHandlers.requests
+        ...builtinHandlers.requests,
       },
       transport: {
-        registerHandler: () => {
-        }
-      }
+        registerHandler: () => {},
+      },
     };
     const rpc2 = createRPC(rpcOptions);
     const messageHandlers = config.handlers.messages;
@@ -823,13 +869,9 @@ class Electroview {
   }
 }
 var Electrobun = {
-  Electroview
+  Electroview,
 };
 var browser_default = Electrobun;
-export {
-  browser_default as default,
-  createRPC,
-  Electroview
-};
+export { browser_default as default, createRPC, Electroview };
 
 //# debugId=5A7994858FFC99B964756e2164756e21
