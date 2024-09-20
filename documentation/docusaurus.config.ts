@@ -45,6 +45,7 @@ const config: Config = {
       } satisfies Preset.Options,
     ],
   ],
+  clientModules: [require.resolve("./src/modules/mixpanelModule.ts")],
 
   themeConfig: {
     colorMode: {

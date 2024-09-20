@@ -5,7 +5,7 @@ authors: yoav
 tags: [electrobun]
 ---
 
-Earlier this year I was just wrapping up a beta of [co(lab)](https://colab.sh) a hybrid web browser + code editor for deep work. Mostly written in Typescript, SolidJS, and Tailwid. I'd been building it in Electron and after figuring out how to get code signing and notarization working, how to distribute it and so on I ended up with a distributable that was 80MB+ compressed.
+Earlier this year I was just wrapping up a beta of [co(lab)](https://colab.sh) a hybrid web browser + code editor for deep work. Mostly written in Typescript, SolidJS, and Tailwind. I'd been building it in Electron and after figuring out how to get code signing and notarization working, how to distribute it and so on I ended up with a distributable that was 80MB+ compressed.
 
 I'd added an update mechanism as well (from yet another separate project) that was supposed to be the gold standard that uses blockmap technology. This segments your next version into blocks and lets you only download the blocks you need when an update is available. It does this on the uncompressed version of your app which in my case was over 150MB+. However if you happen to make a change that affects a part of your app at the beginning, even if it's only a single character, then all the blocks will shift with different checksums meaning each of your users will likely have to download almost 150MB.
 
@@ -17,6 +17,6 @@ So I picked up zig, C, C++, and Objc and got to work. Once I'd built enough func
 
 After 20 years at small startups and unicorns, and spending so much time earlier in my career with Adobe Flex/AIR, being able to ship desktop apps in Typescript with a batteries included framework at the speed of the web is just the thing I've always wanted.
 
-Next steps for Electrobun are to upgrade the Bun and Zig versions, support distributing your apps to Windows and Linux, and enable more functionality like shipping a cross-platform web renderer instead of relying on the system's webview.
+Next steps for Electrobun are to upgrade the Bun and Zig versions, support distributing your apps to Windows and Linux, and enable more functionality like shipping a cross-platform web renderer for developers that prioritize rendering consistency over initial download size, instead of relying on the default setting of using system's webview.
 
 Technically Electrobun is the first thing I'm shipping from my startup lab [Blackboard](https://blackboard.sh). I hope you like it as much as I do.

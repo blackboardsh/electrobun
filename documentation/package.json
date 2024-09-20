@@ -19,6 +19,7 @@
     "@docusaurus/preset-classic": "3.5.1",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^2.0.0",
+    "mixpanel-browser": "^2.58.0",
     "prism-react-renderer": "^2.3.0",
     "react": "^18.0.0",
     "react-dom": "^18.0.0"
