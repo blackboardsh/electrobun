@@ -61,9 +61,6 @@ Ways to get involved at this early stage:
 
 run `bun run install-zig` to install the right version of zig to vendors/zig
 
-`bun dev:example` and `bun dev:example:canary` will compile everything in electrobun in either dev or release modes and then compile the example app in either dev or canary modes and run it.
+`bun dev:example` and `bun dev:example:canary` will compile everything in electrobun in either dev mode and then compile the example app in either dev or canary modes and run it.
 
-Note: For now `bun build:release` will build all the electrobun components in release mode and copy them to the /dist folder.
-Setting up a more complex release process is a todo, since those binaries should ideally stay in sync with the bun and browser typescript apis.
-
-More work is needed to separate out "build everything in release mode for testing with the example app" vs. "build everything in release mode and prepare for distribution"
+Note: use `lldb <path-to-bundle>/Contents/MacOS/launcher` and then `run` to debug release builds

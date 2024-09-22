@@ -6,7 +6,6 @@ import {
   rmdirSync,
   mkdirSync,
   createWriteStream,
-  createReadStream,
   unlinkSync,
 } from "fs";
 import { execSync } from "child_process";
@@ -24,35 +23,23 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
   arg.includes("electrobun")
 );
 const commandArg = process.argv[indexOfElectrobun + 1] || "launcher";
-const DEBUG_MODE = process.argv.includes("ELECTROBUN_DEBUG_MODE");
 
-const ELECTROBUN_PATH = join(projectRoot, "node_modules", "electrobun");
-const SRC_PATH = join(ELECTROBUN_PATH, "src");
-const ZIGOUT_BIN = join("zig-out", "bin");
+const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
+// const SRC_PATH = join(ELECTROBUN_DEP_PATH, "src");
+// const ZIGOUT_BIN = join("zig-out", "bin");
 
 // When debugging electrobun with the example app use the builds (dev or release) right from the source folder
 // For developers using electrobun cli via npm use the release versions in /dist
 // This lets us not have to commit src build folders to git and provide pre-built binaries
-const PATHS = DEBUG_MODE
-  ? {
-      // todo: in debug_mode it should use the the dev build of the cli
-      LAUNCHER_DEV: join(SRC_PATH, "cli", "build", "electrobun"),
-      LAUNCHER_RELEASE: join(SRC_PATH, "launcher", ZIGOUT_BIN, "launcher"),
-      BUN_BINARY: join(ELECTROBUN_PATH, "node_modules", ".bin", "bun"),
-      ZIG_NATIVE_WRAPPER: join(SRC_PATH, "zig", ZIGOUT_BIN, "webview"),
-      BSPATCH: join(SRC_PATH, "bsdiff", ZIGOUT_BIN, "bspatch"),
-      EXTRACTOR: join(SRC_PATH, "extractor", ZIGOUT_BIN, "extractor"),
-      BSDIFF: join(SRC_PATH, "bsdiff", ZIGOUT_BIN, "bsdiff"),
-    }
-  : {
-      LAUNCHER_DEV: join(projectRoot, "node_modules", ".bin", "electrobun"),
-      LAUNCHER_RELEASE: join(ELECTROBUN_PATH, "dist", "launcher"),
-      BUN_BINARY: join(ELECTROBUN_PATH, "dist", "bun"),
-      ZIG_NATIVE_WRAPPER: join(ELECTROBUN_PATH, "dist", "webview"),
-      BSPATCH: join(ELECTROBUN_PATH, "dist", "bspatch"),
-      EXTRACTOR: join(ELECTROBUN_PATH, "dist", "extractor"),
-      BSDIFF: join(ELECTROBUN_PATH, "dist", "bsdiff"),
-    };
+const PATHS = {
+  BUN_BINARY: join(ELECTROBUN_DEP_PATH, "dist", "bun"),
+  LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun"),
+  LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher"),
+  ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview"),
+  BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch"),
+  EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor"),
+  BSDIFF: join(ELECTROBUN_DEP_PATH, "dist", "bsdiff"),
+};
 
 const commandDefaults = {
   init: {
@@ -891,6 +878,8 @@ if (commandArg === "init") {
     // Call the async function to ensure it runs non-blocking
     const reader = stream.getReader();
     readFromPipe(reader);
+  } else {
+    console.log("opening", buildEnvironment, "app bundle");
   }
 } else {
   // no commands so run as the debug launcher inside the app bundle

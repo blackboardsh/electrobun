@@ -9,3 +9,4 @@ build
 /src/launcher/.zig-cache
 .zig-cache
 .colab.json
+dist
