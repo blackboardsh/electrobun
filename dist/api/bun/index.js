@@ -1,7 +1,7 @@
 // @bun
 var __create = Object.create;
-var __defProp = Object.defineProperty;
 var __getProtoOf = Object.getPrototypeOf;
+var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __toESM = (mod, isNodeMode, target) => {
@@ -26,7 +26,7 @@ var __export = (target, all) => {
     });
 };
 
-// src/bun/node_modules/tar/lib/high-level-opt.js
+// node_modules/tar/lib/high-level-opt.js
 var require_high_level_opt = __commonJS((exports, module) => {
   var argmap = new Map([
     ["C", "cwd"],
@@ -55,7 +55,7 @@ var require_high_level_opt = __commonJS((exports, module) => {
   ]).reduce((set, kv) => (set[kv[0]] = kv[1], set), Object.create(null)) : {};
 });
 
-// src/bun/node_modules/minipass/index.js
+// node_modules/minipass/index.js
 var require_minipass = __commonJS((exports) => {
   var proc = typeof process === "object" && process ? process : {
     stdout: null,
@@ -641,7 +641,7 @@ var require_minipass = __commonJS((exports) => {
   exports.Minipass = Minipass;
 });
 
-// src/bun/node_modules/minizlib/constants.js
+// node_modules/minizlib/constants.js
 var require_constants = __commonJS((exports, module) => {
   var realZlibConstants = import.meta.require("zlib").constants || { ZLIB_VERNUM: 4736 };
   module.exports = Object.freeze(Object.assign(Object.create(null), {
@@ -754,7 +754,7 @@ var require_constants = __commonJS((exports, module) => {
   }, realZlibConstants));
 });
 
-// src/bun/node_modules/minizlib/node_modules/minipass/index.js
+// node_modules/minizlib/node_modules/minipass/index.js
 var require_minipass2 = __commonJS((exports, module) => {
   var proc = typeof process === "object" && process ? process : {
     stdout: null,
@@ -1265,7 +1265,7 @@ var require_minipass2 = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/minizlib/index.js
+// node_modules/minizlib/index.js
 var require_minizlib = __commonJS((exports) => {
   var assert = import.meta.require("assert");
   var Buffer2 = import.meta.require("buffer").Buffer;
@@ -1539,13 +1539,13 @@ var require_minizlib = __commonJS((exports) => {
   }
 });
 
-// src/bun/node_modules/tar/lib/normalize-windows-path.js
+// node_modules/tar/lib/normalize-windows-path.js
 var require_normalize_windows_path = __commonJS((exports, module) => {
   var platform = process.env.TESTING_TAR_FAKE_PLATFORM || process.platform;
   module.exports = platform !== "win32" ? (p) => p : (p) => p && p.replace(/\\/g, "/");
 });
 
-// src/bun/node_modules/tar/lib/read-entry.js
+// node_modules/tar/lib/read-entry.js
 var require_read_entry = __commonJS((exports, module) => {
   var { Minipass } = require_minipass();
   var normPath = require_normalize_windows_path();
@@ -1636,7 +1636,7 @@ var require_read_entry = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/types.js
+// node_modules/tar/lib/types.js
 var require_types = __commonJS((exports) => {
   exports.name = new Map([
     ["0", "File"],
@@ -1664,7 +1664,7 @@ var require_types = __commonJS((exports) => {
   exports.code = new Map(Array.from(exports.name).map((kv) => [kv[1], kv[0]]));
 });
 
-// src/bun/node_modules/tar/lib/large-numbers.js
+// node_modules/tar/lib/large-numbers.js
 var require_large_numbers = __commonJS((exports, module) => {
   var encode = (num, buf) => {
     if (!Number.isSafeInteger(num)) {
@@ -1751,7 +1751,7 @@ var require_large_numbers = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/header.js
+// node_modules/tar/lib/header.js
 var require_header = __commonJS((exports, module) => {
   var types2 = require_types();
   var pathModule = import.meta.require("path").posix;
@@ -1966,7 +1966,7 @@ var require_header = __commonJS((exports, module) => {
   module.exports = Header;
 });
 
-// src/bun/node_modules/tar/lib/pax.js
+// node_modules/tar/lib/pax.js
 var require_pax = __commonJS((exports, module) => {
   var Header = require_header();
   var path = import.meta.require("path");
@@ -2062,7 +2062,7 @@ var require_pax = __commonJS((exports, module) => {
   module.exports = Pax;
 });
 
-// src/bun/node_modules/tar/lib/strip-trailing-slashes.js
+// node_modules/tar/lib/strip-trailing-slashes.js
 var require_strip_trailing_slashes = __commonJS((exports, module) => {
   module.exports = (str) => {
     let i = str.length - 1;
@@ -2075,7 +2075,7 @@ var require_strip_trailing_slashes = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/warn-mixin.js
+// node_modules/tar/lib/warn-mixin.js
 var require_warn_mixin = __commonJS((exports, module) => {
   module.exports = (Base) => class extends Base {
     warn(code, message, data = {}) {
@@ -2102,7 +2102,7 @@ var require_warn_mixin = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/winchars.js
+// node_modules/tar/lib/winchars.js
 var require_winchars = __commonJS((exports, module) => {
   var raw = [
     "|",
@@ -2120,7 +2120,7 @@ var require_winchars = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/strip-absolute-path.js
+// node_modules/tar/lib/strip-absolute-path.js
 var require_strip_absolute_path = __commonJS((exports, module) => {
   var { isAbsolute, parse } = import.meta.require("path").win32;
   module.exports = (path) => {
@@ -2136,7 +2136,7 @@ var require_strip_absolute_path = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/mode-fix.js
+// node_modules/tar/lib/mode-fix.js
 var require_mode_fix = __commonJS((exports, module) => {
   module.exports = (mode, isDir, portable) => {
     mode &= 4095;
@@ -2158,7 +2158,7 @@ var require_mode_fix = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/write-entry.js
+// node_modules/tar/lib/write-entry.js
 var require_write_entry = __commonJS((exports, module) => {
   var { Minipass } = require_minipass();
   var Pax = require_pax();
@@ -2616,7 +2616,7 @@ var require_write_entry = __commonJS((exports, module) => {
   module.exports = WriteEntry;
 });
 
-// src/bun/node_modules/yallist/iterator.js
+// node_modules/yallist/iterator.js
 var require_iterator = __commonJS((exports, module) => {
   module.exports = function(Yallist) {
     Yallist.prototype[Symbol.iterator] = function* () {
@@ -2627,9 +2627,9 @@ var require_iterator = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/yallist/yallist.js
+// node_modules/yallist/yallist.js
 var require_yallist = __commonJS((exports, module) => {
-  var Yallist = function(list) {
+  function Yallist(list) {
     var self2 = this;
     if (!(self2 instanceof Yallist)) {
       self2 = new Yallist;
@@ -2647,8 +2647,8 @@ var require_yallist = __commonJS((exports, module) => {
       }
     }
     return self2;
-  };
-  var insert = function(self2, node, value) {
+  }
+  function insert(self2, node, value) {
     var inserted = node === self2.head ? new Node(value, null, node, self2) : new Node(value, node, node.next, self2);
     if (inserted.next === null) {
       self2.tail = inserted;
@@ -2658,22 +2658,22 @@ var require_yallist = __commonJS((exports, module) => {
     }
     self2.length++;
     return inserted;
-  };
-  var push = function(self2, item) {
+  }
+  function push(self2, item) {
     self2.tail = new Node(item, self2.tail, null, self2);
     if (!self2.head) {
       self2.head = self2.tail;
     }
     self2.length++;
-  };
-  var unshift = function(self2, item) {
+  }
+  function unshift(self2, item) {
     self2.head = new Node(item, null, self2.head, self2);
     if (!self2.tail) {
       self2.tail = self2.head;
     }
     self2.length++;
-  };
-  var Node = function(value, prev, next, list) {
+  }
+  function Node(value, prev, next, list) {
     if (!(this instanceof Node)) {
       return new Node(value, prev, next, list);
     }
@@ -2691,7 +2691,7 @@ var require_yallist = __commonJS((exports, module) => {
     } else {
       this.next = null;
     }
-  };
+  }
   module.exports = Yallist;
   Yallist.Node = Node;
   Yallist.create = Yallist;
@@ -2993,7 +2993,7 @@ var require_yallist = __commonJS((exports, module) => {
   }
 });
 
-// src/bun/node_modules/tar/lib/pack.js
+// node_modules/tar/lib/pack.js
 var require_pack = __commonJS((exports, module) => {
   class PackJob {
     constructor(path2, absolute) {
@@ -3357,7 +3357,7 @@ var require_pack = __commonJS((exports, module) => {
   module.exports = Pack;
 });
 
-// src/bun/node_modules/fs-minipass/node_modules/minipass/index.js
+// node_modules/fs-minipass/node_modules/minipass/index.js
 var require_minipass3 = __commonJS((exports, module) => {
   var proc = typeof process === "object" && process ? process : {
     stdout: null,
@@ -3868,7 +3868,7 @@ var require_minipass3 = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/fs-minipass/index.js
+// node_modules/fs-minipass/index.js
 var require_fs_minipass = __commonJS((exports) => {
   var MiniPass = require_minipass3();
   var EE = import.meta.require("events").EventEmitter;
@@ -4231,7 +4231,7 @@ var require_fs_minipass = __commonJS((exports) => {
   exports.WriteStreamSync = WriteStreamSync;
 });
 
-// src/bun/node_modules/tar/lib/parse.js
+// node_modules/tar/lib/parse.js
 var require_parse = __commonJS((exports, module) => {
   var warner = require_warn_mixin();
   var Header = require_header();
@@ -4652,7 +4652,7 @@ var require_parse = __commonJS((exports, module) => {
   });
 });
 
-// src/bun/node_modules/tar/lib/list.js
+// node_modules/tar/lib/list.js
 var require_list = __commonJS((exports, module) => {
   var hlo = require_high_level_opt();
   var Parser = require_parse();
@@ -4763,7 +4763,7 @@ var require_list = __commonJS((exports, module) => {
   var list = (opt) => new Parser(opt);
 });
 
-// src/bun/node_modules/tar/lib/create.js
+// node_modules/tar/lib/create.js
 var require_create = __commonJS((exports, module) => {
   var hlo = require_high_level_opt();
   var Pack = require_pack();
@@ -4854,7 +4854,7 @@ var require_create = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/replace.js
+// node_modules/tar/lib/replace.js
 var require_replace = __commonJS((exports, module) => {
   var hlo = require_high_level_opt();
   var Pack = require_pack();
@@ -5054,7 +5054,7 @@ var require_replace = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/update.js
+// node_modules/tar/lib/update.js
 var require_update = __commonJS((exports, module) => {
   var hlo = require_high_level_opt();
   var r = require_replace();
@@ -5082,7 +5082,7 @@ var require_update = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/mkdirp/lib/opts-arg.js
+// node_modules/mkdirp/lib/opts-arg.js
 var require_opts_arg = __commonJS((exports, module) => {
   var { promisify } = import.meta.require("util");
   var fs = import.meta.require("fs");
@@ -5108,7 +5108,7 @@ var require_opts_arg = __commonJS((exports, module) => {
   module.exports = optsArg;
 });
 
-// src/bun/node_modules/mkdirp/lib/path-arg.js
+// node_modules/mkdirp/lib/path-arg.js
 var require_path_arg = __commonJS((exports, module) => {
   var platform = process.env.__TESTING_MKDIRP_PLATFORM__ || process.platform;
   var { resolve, parse } = import.meta.require("path");
@@ -5135,7 +5135,7 @@ var require_path_arg = __commonJS((exports, module) => {
   module.exports = pathArg;
 });
 
-// src/bun/node_modules/mkdirp/lib/find-made.js
+// node_modules/mkdirp/lib/find-made.js
 var require_find_made = __commonJS((exports, module) => {
   var { dirname } = import.meta.require("path");
   var findMade = (opts, parent, path = undefined) => {
@@ -5155,7 +5155,7 @@ var require_find_made = __commonJS((exports, module) => {
   module.exports = { findMade, findMadeSync };
 });
 
-// src/bun/node_modules/mkdirp/lib/mkdirp-manual.js
+// node_modules/mkdirp/lib/mkdirp-manual.js
 var require_mkdirp_manual = __commonJS((exports, module) => {
   var { dirname } = import.meta.require("path");
   var mkdirpManual = (path, opts, made) => {
@@ -5214,7 +5214,7 @@ var require_mkdirp_manual = __commonJS((exports, module) => {
   module.exports = { mkdirpManual, mkdirpManualSync };
 });
 
-// src/bun/node_modules/mkdirp/lib/mkdirp-native.js
+// node_modules/mkdirp/lib/mkdirp-native.js
 var require_mkdirp_native = __commonJS((exports, module) => {
   var { dirname } = import.meta.require("path");
   var { findMade, findMadeSync } = require_find_made();
@@ -5250,7 +5250,7 @@ var require_mkdirp_native = __commonJS((exports, module) => {
   module.exports = { mkdirpNative, mkdirpNativeSync };
 });
 
-// src/bun/node_modules/mkdirp/lib/use-native.js
+// node_modules/mkdirp/lib/use-native.js
 var require_use_native = __commonJS((exports, module) => {
   var fs = import.meta.require("fs");
   var version = process.env.__TESTING_MKDIRP_NODE_VERSION__ || process.version;
@@ -5261,7 +5261,7 @@ var require_use_native = __commonJS((exports, module) => {
   module.exports = { useNative, useNativeSync };
 });
 
-// src/bun/node_modules/mkdirp/index.js
+// node_modules/mkdirp/index.js
 var require_mkdirp = __commonJS((exports, module) => {
   var optsArg = require_opts_arg();
   var pathArg = require_path_arg();
@@ -5286,7 +5286,7 @@ var require_mkdirp = __commonJS((exports, module) => {
   module.exports = mkdirp;
 });
 
-// src/bun/node_modules/chownr/chownr.js
+// node_modules/chownr/chownr.js
 var require_chownr = __commonJS((exports, module) => {
   var fs = import.meta.require("fs");
   var path = import.meta.require("path");
@@ -5414,7 +5414,7 @@ var require_chownr = __commonJS((exports, module) => {
   chownr.sync = chownrSync;
 });
 
-// src/bun/node_modules/tar/lib/mkdir.js
+// node_modules/tar/lib/mkdir.js
 var require_mkdir = __commonJS((exports, module) => {
   var mkdirp = require_mkdirp();
   var fs = import.meta.require("fs");
@@ -5605,7 +5605,7 @@ var require_mkdir = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/normalize-unicode.js
+// node_modules/tar/lib/normalize-unicode.js
 var require_normalize_unicode = __commonJS((exports, module) => {
   var normalizeCache = Object.create(null);
   var { hasOwnProperty } = Object.prototype;
@@ -5617,7 +5617,7 @@ var require_normalize_unicode = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/path-reservations.js
+// node_modules/tar/lib/path-reservations.js
 var require_path_reservations = __commonJS((exports, module) => {
   var assert = import.meta.require("assert");
   var normalize = require_normalize_unicode();
@@ -5727,7 +5727,7 @@ var require_path_reservations = __commonJS((exports, module) => {
   };
 });
 
-// src/bun/node_modules/tar/lib/get-write-flag.js
+// node_modules/tar/lib/get-write-flag.js
 var require_get_write_flag = __commonJS((exports, module) => {
   var platform = process.env.__FAKE_PLATFORM__ || process.platform;
   var isWindows = platform === "win32";
@@ -5739,7 +5739,7 @@ var require_get_write_flag = __commonJS((exports, module) => {
   module.exports = !fMapEnabled ? () => "w" : (size) => size < fMapLimit ? fMapFlag : "w";
 });
 
-// src/bun/node_modules/tar/lib/unpack.js
+// node_modules/tar/lib/unpack.js
 var require_unpack = __commonJS((exports, module) => {
   var assert = import.meta.require("assert");
   var Parser = require_parse();
@@ -6418,7 +6418,7 @@ var require_unpack = __commonJS((exports, module) => {
   module.exports = Unpack;
 });
 
-// src/bun/node_modules/tar/lib/extract.js
+// node_modules/tar/lib/extract.js
 var require_extract = __commonJS((exports, module) => {
   var hlo = require_high_level_opt();
   var Unpack = require_unpack();
@@ -6500,7 +6500,7 @@ var require_extract = __commonJS((exports, module) => {
   var extract = (opt) => new Unpack(opt);
 });
 
-// src/bun/node_modules/tar/index.js
+// node_modules/tar/index.js
 var require_tar = __commonJS((exports) => {
   exports.c = exports.create = require_create();
   exports.r = exports.replace = require_replace();
@@ -6602,12 +6602,12 @@ var electrobunEventEmitter = new ElectrobunEventEmitter;
 var eventEmitter_default = electrobunEventEmitter;
 
 // src/bun/proc/zig.ts
-import {join as join3, resolve as resolve3} from "path";
-// src/bun/node_modules/rpc-anywhere/dist/esm/rpc.js
-var missingTransportMethodError = function(methods, action) {
+import { join as join3, resolve as resolve3 } from "path";
+// node_modules/rpc-anywhere/dist/esm/rpc.js
+function missingTransportMethodError(methods, action) {
   const methodsString = methods.map((method) => `"${method}"`).join(", ");
   return new Error(`This RPC instance cannot ${action} because the transport did not provide one or more of these methods: ${methodsString}`);
-};
+}
 function _createRPC(options = {}) {
   let debugHooks = {};
   function _setDebugHooks(newDebugHooks) {
@@ -6793,34 +6793,34 @@ function _createRPC(options = {}) {
 var MAX_ID = 10000000000;
 var DEFAULT_MAX_REQUEST_TIME = 1000;
 
-// src/bun/node_modules/rpc-anywhere/dist/esm/create-rpc.js
+// node_modules/rpc-anywhere/dist/esm/create-rpc.js
 function createRPC(options) {
   return _createRPC(options);
 }
 // src/bun/proc/zig.ts
-import {execSync as execSync2} from "child_process";
+import { execSync as execSync2 } from "child_process";
 import * as fs2 from "fs";
 
 // src/bun/core/BrowserView.ts
 import * as fs from "fs";
-import {execSync} from "child_process";
+import { execSync } from "child_process";
 
 // src/bun/core/Updater.ts
 var import_tar = __toESM(require_tar(), 1);
-import {join, dirname, resolve} from "path";
-import {homedir} from "os";
-import {renameSync, unlinkSync, mkdirSync, rmdirSync, statSync} from "fs";
+import { join, dirname, resolve } from "path";
+import { homedir } from "os";
+import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync } from "fs";
 
-// src/bun/node_modules/@oneidentity/zstd-js/wasm/index.js
-var I = function(I2, g) {
+// node_modules/@oneidentity/zstd-js/wasm/index.js
+function I(I2, g) {
   if (typeof g != "function" && g !== null)
     throw new TypeError("Class extends value " + String(g) + " is not a constructor or null");
   function B() {
     this.constructor = I2;
   }
   A(I2, g), I2.prototype = g === null ? Object.create(g) : (B.prototype = g.prototype, new B);
-};
-var g = function(A, I2, g2, B) {
+}
+function g(A, I2, g2, B) {
   return new (g2 || (g2 = Promise))(function(C, Q) {
     function E(A2) {
       try {
@@ -6844,8 +6844,8 @@ var g = function(A, I2, g2, B) {
     }
     o((B = B.apply(A, I2 || [])).next());
   });
-};
-var B = function(A, I2) {
+}
+function B(A, I2) {
   var g2, B2, C, Q, E = { label: 0, sent: function() {
     if (1 & C[0])
       throw C[1];
@@ -6908,8 +6908,8 @@ var B = function(A, I2) {
       }([Q2, i2]);
     };
   }
-};
-var s = function() {
+}
+function s() {
   return g(this, undefined, undefined, function() {
     return B(this, function(A) {
       return [2, (I2 = E, g2 = { ZstdSimple: y, ZstdStream: F }, new Promise(function(A2, B2) {
@@ -6922,8 +6922,8 @@ var s = function() {
       var I2, g2;
     });
   });
-};
-var __dirname = "/Users/yoav/code/electrobun/src/bun/node_modules/@oneidentity/zstd-js/wasm", __filename = "/Users/yoav/code/electrobun/src/bun/node_modules/@oneidentity/zstd-js/wasm/index.js";
+}
+var __dirname = "/Users/yoav/code/electrobun/node_modules/@oneidentity/zstd-js/wasm", __filename = "/Users/yoav/code/electrobun/node_modules/@oneidentity/zstd-js/wasm/index.js";
 /*! *****************************************************************************
 Copyright (c) Microsoft Corporation.
 
@@ -8383,7 +8383,7 @@ var Updater = {
 // src/bun/core/BrowserView.ts
 var BrowserViewMap = {};
 var nextWebviewId = 1;
-var CHUNK_SIZE = 4096;
+var CHUNK_SIZE = 1024 * 4;
 var defaultOptions = {
   url: "https://electrobun.dev",
   html: null,
@@ -8501,9 +8501,7 @@ class BrowserView {
     });
     inStream.write("\n");
     this.inStream = inStream;
-    const outStream = fs.createReadStream(webviewPipeOut, {
-      flags: "r+"
-    });
+    const outStream = Bun.file(webviewPipeOut).stream();
     this.outStream = outStream;
     if (this.rpc) {
       this.rpc.setTransport(this.createTransport());
@@ -8547,25 +8545,30 @@ class BrowserView {
         }
       },
       registerHandler(handler) {
-        let buffer = "";
-        setTimeout(() => {
-          that.outStream.on("data", (chunk) => {
-            buffer += chunk.toString();
+        async function readFromPipe(reader2) {
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader2.read();
+            if (done)
+              break;
+            buffer += new TextDecoder().decode(value);
             let eolIndex;
             while ((eolIndex = buffer.indexOf("\n")) >= 0) {
               const line = buffer.slice(0, eolIndex).trim();
               buffer = buffer.slice(eolIndex + 1);
               if (line) {
                 try {
-                  const event5 = JSON.parse(line);
-                  handler(event5);
+                  const event = JSON.parse(line);
+                  handler(event);
                 } catch (error) {
                   console.error("webview: ", line);
                 }
               }
             }
-          });
-        }, 500);
+          }
+        }
+        const reader = that.outStream.getReader();
+        readFromPipe(reader);
       }
     };
   };
@@ -8584,10 +8587,10 @@ class BrowserView {
         }
       }
     };
-    const rpc2 = createRPC(rpcOptions);
+    const rpc = createRPC(rpcOptions);
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
-      rpc2.addMessageListener("*", (messageName, payload) => {
+      rpc.addMessageListener("*", (messageName, payload) => {
         const globalHandler = messageHandlers["*"];
         if (globalHandler) {
           globalHandler(messageName, payload);
@@ -8598,25 +8601,21 @@ class BrowserView {
         }
       });
     }
-    return rpc2;
+    return rpc;
   }
 }
 
 // src/bun/core/Paths.ts
 var exports_Paths = {};
 __export(exports_Paths, {
-  VIEWS_FOLDER: () => {
-    {
-      return VIEWS_FOLDER;
-    }
-  }
+  VIEWS_FOLDER: () => VIEWS_FOLDER
 });
-import {resolve as resolve2} from "path";
+import { resolve as resolve2 } from "path";
 var RESOURCES_FOLDER = resolve2("../Resources/");
 var VIEWS_FOLDER = resolve2(RESOURCES_FOLDER, "app/views");
 
 // src/bun/core/Tray.ts
-import {join as join2} from "path";
+import { join as join2 } from "path";
 var nextTrayId = 1;
 var TrayMap = {};
 
@@ -8695,7 +8694,7 @@ var menuConfigWithDefaults = (menu) => {
 };
 
 // src/bun/proc/zig.ts
-var createStdioTransport = function(proc) {
+function createStdioTransport(proc) {
   return {
     send(message) {
       try {
@@ -8706,7 +8705,6 @@ var createStdioTransport = function(proc) {
           inStream.write(chunk);
           offset += CHUNK_SIZE2;
         }
-        inStream.write("\n");
       } catch (error) {
         console.error("bun: failed to serialize message to zig", error);
       }
@@ -8727,8 +8725,8 @@ var createStdioTransport = function(proc) {
               buffer = buffer.slice(eolIndex + 1);
               if (line) {
                 try {
-                  const event5 = JSON.parse(line);
-                  handler(event5);
+                  const event = JSON.parse(line);
+                  handler(event);
                 } catch (error) {
                   console.error("zig: ", line);
                 }
@@ -8744,8 +8742,8 @@ var createStdioTransport = function(proc) {
       readStream(proc.stdout);
     }
   };
-};
-var CHUNK_SIZE2 = 4096;
+}
+var CHUNK_SIZE2 = 1024 * 4;
 var webviewBinaryPath = join3("native", "webview");
 var hash2 = await Updater.localInfo.hash();
 var randomId2 = Math.random().toString(36).substring(7);
@@ -8836,30 +8834,30 @@ var zigRPC = createRPC({
       if (!tray) {
         return { success: true };
       }
-      const event5 = eventEmitter_default.events.tray.trayClicked({
+      const event = eventEmitter_default.events.tray.trayClicked({
         id,
         action
       });
       let result;
-      result = eventEmitter_default.emitEvent(event5);
-      result = eventEmitter_default.emitEvent(event5, id);
+      result = eventEmitter_default.emitEvent(event);
+      result = eventEmitter_default.emitEvent(event, id);
       return { success: true };
     },
     applicationMenuEvent: ({ id, action }) => {
-      const event5 = eventEmitter_default.events.app.applicationMenuClicked({
+      const event = eventEmitter_default.events.app.applicationMenuClicked({
         id,
         action
       });
       let result;
-      result = eventEmitter_default.emitEvent(event5);
+      result = eventEmitter_default.emitEvent(event);
       return { success: true };
     },
     contextMenuEvent: ({ action }) => {
-      const event5 = eventEmitter_default.events.app.contextMenuClicked({
+      const event = eventEmitter_default.events.app.contextMenuClicked({
         action
       });
       let result;
-      result = eventEmitter_default.emitEvent(event5);
+      result = eventEmitter_default.emitEvent(event);
       return { success: true };
     },
     webviewEvent: ({ id, eventName, detail }) => {
@@ -8875,40 +8873,40 @@ var zigRPC = createRPC({
         console.log(`!!!no handler for webview event ${eventName}`);
         return { success: false };
       }
-      const event5 = handler({
+      const event = handler({
         id,
         detail
       });
       let result;
-      result = eventEmitter_default.emitEvent(event5);
-      result = eventEmitter_default.emitEvent(event5, id);
+      result = eventEmitter_default.emitEvent(event);
+      result = eventEmitter_default.emitEvent(event, id);
       return { success: true };
     },
     windowClose: ({ id }) => {
       const handler = eventEmitter_default.events.window.close;
-      const event5 = handler({
+      const event = handler({
         id
       });
       let result;
-      result = eventEmitter_default.emitEvent(event5);
-      result = eventEmitter_default.emitEvent(event5, id);
+      result = eventEmitter_default.emitEvent(event);
+      result = eventEmitter_default.emitEvent(event, id);
       return { success: false };
     },
     windowMove: ({ id, x, y: y2 }) => {
       const handler = eventEmitter_default.events.window.move;
-      const event5 = handler({
+      const event = handler({
         id,
         x,
         y: y2
       });
       let result;
-      result = eventEmitter_default.emitEvent(event5);
-      result = eventEmitter_default.emitEvent(event5, id);
+      result = eventEmitter_default.emitEvent(event);
+      result = eventEmitter_default.emitEvent(event, id);
       return { success: false };
     },
     windowResize: ({ id, x, y: y2, width, height }) => {
       const handler = eventEmitter_default.events.window.resize;
-      const event5 = handler({
+      const event = handler({
         id,
         x,
         y: y2,
@@ -8916,8 +8914,8 @@ var zigRPC = createRPC({
         height
       });
       let result;
-      result = eventEmitter_default.emitEvent(event5);
-      result = eventEmitter_default.emitEvent(event5, id);
+      result = eventEmitter_default.emitEvent(event);
+      result = eventEmitter_default.emitEvent(event, id);
       return { success: false };
     }
   },
@@ -8964,7 +8962,7 @@ class BrowserWindow {
     this.init(options);
   }
   init({
-    rpc: rpc2,
+    rpc,
     syncRpc,
     styleMask,
     titleBarStyle
@@ -9011,7 +9009,7 @@ class BrowserWindow {
         width: this.frame.width,
         height: this.frame.height
       },
-      rpc: rpc2,
+      rpc,
       syncRpc
     });
     this.webviewId = webview.id;
@@ -9045,16 +9043,8 @@ class BrowserWindow {
 // src/bun/core/ApplicationMenu.ts
 var exports_ApplicationMenu = {};
 __export(exports_ApplicationMenu, {
-  setApplicationMenu: () => {
-    {
-      return setApplicationMenu;
-    }
-  },
-  on: () => {
-    {
-      return on;
-    }
-  }
+  setApplicationMenu: () => setApplicationMenu,
+  on: () => on
 });
 var setApplicationMenu = (menu) => {
   const menuWithDefaults = menuConfigWithDefaults2(menu);
@@ -9113,16 +9103,8 @@ var menuConfigWithDefaults2 = (menu) => {
 // src/bun/core/ContextMenu.ts
 var exports_ContextMenu = {};
 __export(exports_ContextMenu, {
-  showContextMenu: () => {
-    {
-      return showContextMenu;
-    }
-  },
-  on: () => {
-    {
-      return on2;
-    }
-  }
+  showContextMenu: () => showContextMenu,
+  on: () => on2
 });
 var showContextMenu = (menu) => {
   const menuWithDefaults = menuConfigWithDefaults3(menu);
@@ -9181,21 +9163,9 @@ var menuConfigWithDefaults3 = (menu) => {
 // src/bun/core/Utils.ts
 var exports_Utils = {};
 __export(exports_Utils, {
-  showItemInFolder: () => {
-    {
-      return showItemInFolder;
-    }
-  },
-  openFileDialog: () => {
-    {
-      return openFileDialog;
-    }
-  },
-  moveToTrash: () => {
-    {
-      return moveToTrash;
-    }
-  }
+  showItemInFolder: () => showItemInFolder,
+  openFileDialog: () => openFileDialog,
+  moveToTrash: () => moveToTrash
 });
 var moveToTrash = (path) => {
   return zigRPC.request.moveToTrash({ path });
@@ -9251,4 +9221,4 @@ export {
   exports_ApplicationMenu as ApplicationMenu
 };
 
-//# debugId=6C7DA4A50F37B3BE64756e2164756e21
+//# debugId=AC8AD0F9AA7A6CCC64756E2164756E21

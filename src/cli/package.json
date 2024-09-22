@@ -3,14 +3,12 @@
   "module": "index.ts",
   "type": "module",
   "devDependencies": {
-    "@types/bun": "latest"
+    
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
-  "dependencies": {
-    "@oneidentity/zstd-js": "^1.0.3",    
-    "tar": "^6.2.1"
+  "dependencies": {    
   },
   "trustedDependencies": []
 }

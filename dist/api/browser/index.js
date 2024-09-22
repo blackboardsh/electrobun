@@ -1,8 +1,8 @@
-// src/browser/node_modules/rpc-anywhere/dist/esm/rpc.js
-var missingTransportMethodError = function(methods, action) {
+// node_modules/rpc-anywhere/dist/esm/rpc.js
+function missingTransportMethodError(methods, action) {
   const methodsString = methods.map((method) => `"${method}"`).join(", ");
   return new Error(`This RPC instance cannot ${action} because the transport did not provide one or more of these methods: ${methodsString}`);
-};
+}
 function _createRPC(options = {}) {
   let debugHooks = {};
   function _setDebugHooks(newDebugHooks) {
@@ -188,7 +188,7 @@ function _createRPC(options = {}) {
 var MAX_ID = 10000000000;
 var DEFAULT_MAX_REQUEST_TIME = 1000;
 
-// src/browser/node_modules/rpc-anywhere/dist/esm/create-rpc.js
+// node_modules/rpc-anywhere/dist/esm/create-rpc.js
 function createRPC(options) {
   return _createRPC(options);
 }
@@ -501,7 +501,7 @@ var ConfigureWebviewTags = (enableWebviewTags, zigRpc, syncRpc) => {
         }
       };
     }
-    DEFAULT_FRAME_RATE = Math.round(33.333333333333336);
+    DEFAULT_FRAME_RATE = Math.round(1000 / 30);
     streamScreenInterval;
     startMirroringToDom(frameRate = this.DEFAULT_FRAME_RATE) {
       if (this.streamScreenInterval) {
@@ -805,10 +805,10 @@ class Electroview {
         }
       }
     };
-    const rpc2 = createRPC(rpcOptions);
+    const rpc = createRPC(rpcOptions);
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
-      rpc2.addMessageListener("*", (messageName, payload) => {
+      rpc.addMessageListener("*", (messageName, payload) => {
         const globalHandler = messageHandlers["*"];
         if (globalHandler) {
           globalHandler(messageName, payload);
@@ -819,7 +819,7 @@ class Electroview {
         }
       });
     }
-    return rpc2;
+    return rpc;
   }
 }
 var Electrobun = {
@@ -832,4 +832,4 @@ export {
   Electroview
 };
 
-//# debugId=5A7994858FFC99B964756e2164756e21
+//# debugId=0C464F3546058B4E64756E2164756E21

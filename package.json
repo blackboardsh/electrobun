@@ -35,7 +35,7 @@
     "build:extractor:release": "cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall",
     "build:browser": "bun build src/browser/index.ts --outdir src/zig/build/",
     "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",
-    "build:dev": "bun install && bun build:zig:trdiff && bun build:objc && bun build:browser && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
+    "build:dev": "npm install && bun build:zig:trdiff && bun build:objc && bun build:browser && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
     "build:release": "bun build:objc && bun build:zig:trdiff:release && bun build:browser && bun build:zig:release && bun build:launcher:release && bun build:extractor:release && bun build:cli",
     "build:package": "bun ./scripts/npm-pre-publish.ts",
     "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
@@ -46,13 +46,12 @@
     "build:docs:release": "cd documentation && bun run build"
   },
   "devDependencies": {
-    "@types/bun": "^1.0.8",
-    "bun": "1.0.26"
+    "@types/bun": "1.1.9",
+    "bun": "1.1.29"
   },
   "dependencies": {
-    "@oneidentity/zstd-js": "^1.0.3",
-    "electrobun": "^0.0.2",
+    "@oneidentity/zstd-js": "^1.0.3",    
     "rpc-anywhere": "1.5.0",
-    "tar": "^6.2.1"
+    "tar": "^6.2.1"    
   }
 }

@@ -73,9 +73,6 @@ function createStdioTransport(proc): RPCTransport {
           inStream.write(chunk);
           offset += CHUNK_SIZE;
         }
-
-        // Ensure the newline is written after all chunks
-        inStream.write("\n");
       } catch (error) {
         console.error("bun: failed to serialize message to zig", error);
       }
@@ -558,7 +555,6 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
 
       result = electrobunEventEmitter.emitEvent(event, id);
       // Note: we don't care about the result right now
-
       return { success: true };
     },
     windowClose: ({ id }) => {
