@@ -1,6 +1,6 @@
 {
   "name": "electrobun",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
   "license": "MIT",
   "author": "Blackboard Technologies Inc.",
@@ -45,7 +45,7 @@
     "dev:example:canary": "bun build:debug && cd example && npm install && bun build:canary && bun start:canary",
     "dev:docs": "cd documentation && bun start",
     "build:docs:release": "cd documentation && bun run build",
-    "npm:publish": "build:package && npm publish"
+    "npm:publish": "bun build:package && npm publish"
   },
   "devDependencies": {
     "@types/bun": "1.1.9",
