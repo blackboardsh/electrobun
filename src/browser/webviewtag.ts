@@ -102,7 +102,7 @@ const ConfigureWebviewTags = (
       });
 
       this.webviewId = webviewId;
-      this.id = `electrobun-webview-${this.webviewId}`;
+      this.id = `electrobun-webview-${webviewId}`;
       // todo: replace zig -> webviewtag communication with a global instead of
       // queryselector based on id
       this.setAttribute("id", this.id);
@@ -226,7 +226,7 @@ const ConfigureWebviewTags = (
     // know that they're chaning something in order to eliminate the lag that the
     // catch all loop will catch
     syncDimensions(force: boolean = false) {
-      if (!force && this.hidden) {
+      if (!this.webviewId || (!force && this.hidden)) {
         return;
       }
 

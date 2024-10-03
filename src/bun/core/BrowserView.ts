@@ -120,7 +120,7 @@ export class BrowserView<T> {
   };
   pipePrefix: string;
   inStream: fs.WriteStream;
-  outStream: fs.ReadStream;
+  outStream: ReadableStream<Uint8Array>;
   rpc?: T;
   syncRpc?: { [method: string]: (params: any) => any };
 
@@ -197,11 +197,7 @@ export class BrowserView<T> {
     this.inStream = inStream;
 
     // Open the named pipe for reading
-
-    const outStream = fs.createReadStream(webviewPipeOut, {
-      flags: "r+",
-    });
-
+    const outStream = Bun.file(webviewPipeOut).stream();
     this.outStream = outStream;
 
     if (this.rpc) {
@@ -275,18 +271,15 @@ export class BrowserView<T> {
         }
       },
       registerHandler(handler) {
-        let buffer = "";
-        // todo (yoav): readStream function is identical to the one in zig.ts
-        // todo: There seems to be a bug in bun where if you open multiple windows at the same time
-        // that.outStream.on("data") doesn't register the handler for some of them so add a timeout to
-        // help ensure it does.
-        // could be a delay in the pipe creation and the way bun lazy loads things where it just doesn't
-        // subscribe to data events properly.
-        // hopefully this is fixed in a bun version bump.
-        // readable streams have an on('ready') event but it fires too soon to be useful here.
-        setTimeout(() => {
-          that.outStream.on("data", (chunk) => {
-            buffer += chunk.toString();
+        async function readFromPipe(
+          reader: ReadableStreamDefaultReader<Uint8Array>
+        ) {
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += new TextDecoder().decode(value);
             let eolIndex;
 
             while ((eolIndex = buffer.indexOf("\n")) >= 0) {
@@ -297,13 +290,15 @@ export class BrowserView<T> {
                   const event = JSON.parse(line);
                   handler(event);
                 } catch (error) {
-                  // Non-json things are just bubbled up to the console.
                   console.error("webview: ", line);
                 }
               }
             }
-          });
-        }, 500);
+          }
+        }
+
+        const reader = that.outStream.getReader();
+        readFromPipe(reader);
       },
     };
   };

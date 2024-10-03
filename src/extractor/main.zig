@@ -4,8 +4,6 @@ const zstd = std.compress.zstd;
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "/Users/yoav/code/electrobun/example/build/canary/ElectrobunPlayground-0-0-1-canary.app/Contents/Resources/compressed.tar.zst";
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "../Resources/compressed.tar.zst";
 const BUNLE_RESOURCES_REL_PATH = "../Resources/";
-// todo: for some reason it's saying std.compress.zstd.DecompressorOptions doesn't exist so hardcoding the value
-pub const default_window_buffer_len = 8 * 1024 * 1024;
 
 pub fn main() !void {
     var allocator = std.heap.page_allocator;
@@ -68,8 +66,11 @@ pub fn main() !void {
     const src_reader = compressedAppBundle.reader();
 
     // Initialize the decompressor
-    var window_buffer: [4096]u8 = undefined;
-    var zstd_stream = zstd.decompressor(src_reader, .{ .verify_checksum = false, .window_buffer = window_buffer[0..] });
+    // Note: because it's a big boy we need to allocate it on the heap
+    const window_buffer = try allocator.alloc(u8, 128 * 1024 * 1024); // 128MB Buffer
+    defer allocator.free(window_buffer);
+
+    var zstd_stream = zstd.decompressor(src_reader, .{ .verify_checksum = false, .window_buffer = window_buffer });
 
     // compressedTarballPath replace extension
     // remove the .zst extension from filename.tar.zst

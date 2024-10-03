@@ -1,7 +1,6 @@
 import { $ } from "bun";
 import { rmdirSync } from "fs";
 
-await $`bun build:release`;
 // await $`rm -r dist`; // this segfaults in current bun
 rmdirSync("dist", { recursive: true });
 await $`mkdir -p dist/api`;
