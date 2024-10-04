@@ -17,6 +17,8 @@ import { join } from "path";
 
 // Electrobun.Updater.getLocalVersion();
 
+// Note: the Canary Playground app will always try update to the latest version
+// We should make this a button in the playground UI
 setTimeout(async () => {
   const updateInfo = await Electrobun.Updater.checkForUpdate();
 

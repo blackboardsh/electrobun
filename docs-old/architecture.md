@@ -8,7 +8,7 @@
 /src/zig - zig native bindings, compiles to the native renderer process. 
 /src/zig/build - where the compiled src/objc ends up so zig can see it and embed it
 /src/cli - a cli for building and running developer apps, it reads electrobun.config files
-/example - Interactive example using the library. 
+/playground - Interactive playground using the library. 
 </pre>
 
 ## Building
@@ -22,18 +22,18 @@ Tldr;
 
 ## Working on Electrobun
 
-There are some npm scripts to facilitate building everything from the objc, zig, bundling webview api, transpiling the bun api and so an, as well as building the example app and executing it.
+There are some npm scripts to facilitate building everything from the objc, zig, bundling webview api, transpiling the bun api and so an, as well as building the playground app and executing it.
 
-The example app is meant to be an interactive example of Electrobun's functionality, it's useful when implementing new functionality in any part of Electrobun to have everything rebuilt so you can interact with it in the example app which then doubles as a demo app for developers wanting to explore what Electrobun can do.
+The playground app is meant to be an interactive playground of Electrobun's functionality, it's useful when implementing new functionality in any part of Electrobun to have everything rebuilt so you can interact with it in the playground app which then doubles as a demo app for developers wanting to explore what Electrobun can do.
 
 You currently need zig installed globally, and to be on an ARM mac. I dunno if you have to install xcode or xcode tools to get clang on your system. Will iron out a better dev flow in the future.
 
 For now you can simply
 
 1. clone the repo
-2. in the repo root run `bun run dev:example`
+2. in the repo root run `bun run dev:playground`
 
-If you take a look at the repo's package.json as well as example app's package.json and electrobun.config you'll get a better sense of what's happening for each step.
+If you take a look at the repo's package.json as well as playground app's package.json and electrobun.config you'll get a better sense of what's happening for each step.
 
 ## How Developer apps are built
 

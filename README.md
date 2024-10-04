@@ -61,6 +61,6 @@ Ways to get involved at this early stage:
 
 run `bun run install-zig` to install the right version of zig to vendors/zig
 
-`bun dev:example` and `bun dev:example:canary` will compile everything in electrobun in either dev mode and then compile the example app in either dev or canary modes and run it.
+`bun dev:playground` and `bun dev:playground:canary` will compile everything in electrobun in either dev mode and then compile the playground app in either dev or canary modes and run it.
 
 Note: use `lldb <path-to-bundle>/Contents/MacOS/launcher` and then `run` to debug release builds
