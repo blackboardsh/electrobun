@@ -14,8 +14,6 @@ const O_NONBLOCK = 0x0004; // For Unix-based systems
 
 const alloc = std.heap.page_allocator;
 
-const ELECTROBUN_BROWSER_API_SCRIPT = @embedFile("../build/index.js");
-
 const WebviewMap = std.AutoHashMap(u32, WebviewType);
 pub var webviewMap: WebviewMap = WebviewMap.init(alloc);
 const ViewsScheme = "views://";

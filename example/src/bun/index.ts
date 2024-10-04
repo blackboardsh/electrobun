@@ -17,18 +17,20 @@ import { join } from "path";
 
 // Electrobun.Updater.getLocalVersion();
 
-const updateInfo = await Electrobun.Updater.checkForUpdate();
+setTimeout(async () => {
+  const updateInfo = await Electrobun.Updater.checkForUpdate();
 
-if (updateInfo.updateAvailable) {
-  console.log("update available");
-  // todo (yoav): add a button to the UI to trigger this
-  await Electrobun.Updater.downloadUpdate();
-}
+  if (updateInfo.updateAvailable) {
+    console.log("update available", updateInfo);
+    // todo (yoav): add a button to the UI to trigger this
+    await Electrobun.Updater.downloadUpdate();
+  }
 
-if (Electrobun.Updater.updateInfo()?.updateReady) {
-  console.log("update app");
-  await Electrobun.Updater.applyUpdate();
-}
+  if (Electrobun.Updater.updateInfo()?.updateReady) {
+    console.log("update app");
+    await Electrobun.Updater.applyUpdate();
+  }
+}, 5000);
 
 // const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
 //     maxRequestTime: 5000,

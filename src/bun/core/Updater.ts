@@ -45,12 +45,11 @@ const Updater = {
     }
 
     const channelBucketUrl = await Updater.channelBucketUrl();
-
     const cacheBuster = Math.random().toString(36).substring(7);
+    const updateInfoUrl = join(channelBucketUrl, `update.json?${cacheBuster}`);
+
     try {
-      const updateInfoResponse = await fetch(
-        join(channelBucketUrl, `update.json?${cacheBuster}`)
-      );
+      const updateInfoResponse = await fetch(updateInfoUrl);
 
       if (updateInfoResponse.ok) {
         // todo: this seems brittle
@@ -65,7 +64,7 @@ const Updater = {
           hash: "",
           updateAvailable: false,
           updateReady: false,
-          error: "Failed to fetch update info",
+          error: `Failed to fetch update info from ${updateInfoUrl}`,
         };
       }
     } catch (error) {
@@ -74,7 +73,7 @@ const Updater = {
         hash: "",
         updateAvailable: false,
         updateReady: false,
-        error: "Failed to fetch update info",
+        error: `Failed to fetch update info from ${updateInfoUrl}`,
       };
     }
 
