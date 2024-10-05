@@ -41,7 +41,7 @@ export default function Home(): JSX.Element {
             </p>
           </div>
           <hr style={{ margin: "35px 0" }} />
-          <h2>Install Electrobun v0.1.0</h2>
+          <h2>Install Electrobun</h2>
           <div
             style={{
               display: "flex",

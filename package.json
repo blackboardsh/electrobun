@@ -1,14 +1,14 @@
 {
   "name": "electrobun",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
   "license": "MIT",
   "author": "Blackboard Technologies Inc.",
   "keywords": ["bun", "desktop", "app", "cross-platform", "typescript"],
   "exports": {
-    ".": "./dist/api/bun/index.js",
-    "./bun": "./dist/api/bun/index.js",
-    "./view": "./dist/api/browser/index.js"
+    ".": "./dist/api/bun/index.ts",
+    "./bun": "./dist/api/bun/index.ts",
+    "./view": "./dist/api/browser/index.ts"
   },
   "bin": {
     "electrobun": "dist/electrobun"
@@ -32,17 +32,13 @@
     "build:zig:release": "cd src/zig && ../../vendors/zig/zig build -Doptimize=ReleaseFast",
     "build:zig:trdiff:release": "cd src/bsdiff && ../../vendors/zig/zig build -Doptimize=ReleaseFast",
     "build:launcher:release": "cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall",
-    "build:extractor:release": "cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall",
-    "build:api:browser": "rm -r src/browser/build && bun build src/browser/index.ts --target=browser --sourcemap=external --outdir src/browser/build/",
-    "build:api:bun": "rm -r src/bun/build && bun build src/bun/index.ts --target=bun --sourcemap=external --outdir src/bun/build/",    
-    "build:api:browser:release": "rm -r src/browser/build && bun build src/browser/index.ts --sourcemap=none --target=browser --outdir src/browser/build/",
-    "build:api:bun:release": "rm -r src/bun/build && bun build src/bun/index.ts --sourcemap=none --target=bun --outdir src/bun/build/",    
+    "build:extractor:release": "cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall",    
     "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",
-    "build:debug": "npm install && bun build:zig:trdiff && bun build:objc && bun build:api:browser && bun build:api:bun && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
-    "build:release": "bun build:objc && bun build:zig:trdiff:release && bun build:api:browser:release && bun build:api:bun:release && bun build:zig:release && bun build:launcher:release && bun build:extractor:release && bun build:cli",
+    "build:debug": "npm install && bun build:zig:trdiff && bun build:objc && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
+    "build:release": "bun build:objc && bun build:zig:trdiff:release && bun build:zig:release && bun build:launcher:release && bun build:extractor:release && bun build:cli",
     "build:package": "bun build:release && bun ./scripts/copy-to-dist.ts",
     "build:dev": "bun build:debug && bun ./scripts/copy-to-dist.ts",
-    "build:electrobun": "bun build:objc && bun build:browser && bun build:zig && bun build:bun",
+    "build:electrobun": "bun build:objc && bun build:zig && bun build:bun",
     "dev:playground": "bun build:dev && cd playground && npm install && bun build:dev && bun start",    
     "dev:playground:rerun": "cd playground && bun start",
     "dev:playground:canary": "bun build:package && cd playground && npm install && bun build:canary && bun start:canary",
