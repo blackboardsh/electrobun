@@ -13,6 +13,9 @@ import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
 
+// MacOS named pipes hang at around 4KB
+const MAX_CHUNK_SIZE = 1024 * 2;
+
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
 const configName = "electrobun.config";
@@ -865,8 +868,8 @@ if (commandArg === "init") {
               } else if (line === "subprocess exited command") {
                 // Handle subprocess exit
               }
-              const event = JSON.parse(line);
-              // handler(event)
+
+              console.log("bun: ", line);
             } catch (error) {
               console.log("bun: ", line);
             }
@@ -933,7 +936,13 @@ if (commandArg === "init") {
 
   async function streamPipeToCli(stream) {
     for await (const chunk of stream) {
-      toCliPipe.write(chunk);
+      let buffer = chunk;
+      while (buffer.length > 0) {
+        const chunkSize = Math.min(buffer.length, MAX_CHUNK_SIZE);
+        const chunkToSend = buffer.slice(0, chunkSize);
+        buffer = buffer.slice(chunkSize);
+        toCliPipe.write(chunkToSend);
+      }
     }
   }
   streamPipeToCli(proc.stdout);
