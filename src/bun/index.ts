@@ -9,6 +9,7 @@ import * as Utils from "./core/Utils";
 import { type RPCSchema, createRPC } from "rpc-anywhere";
 import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
+import * as Socket from "./core/Socket";
 
 // Named Exports
 export {
@@ -23,6 +24,7 @@ export {
   ApplicationMenu,
   ContextMenu,
   PATHS,
+  Socket,
 };
 
 // Default Export
@@ -36,6 +38,7 @@ const Electrobun = {
   ContextMenu,
   events: electobunEventEmmitter,
   PATHS,
+  Socket,
 };
 
 // Electrobun

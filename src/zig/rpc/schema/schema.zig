@@ -166,6 +166,7 @@ pub const BunSchema = struct {
         pub const createWebview = struct {
             pub const params = struct {
                 id: u32,
+                rpcPort: u32,
                 hostWebviewId: ?u32,
                 pipePrefix: []const u8,
                 url: ?[]const u8,

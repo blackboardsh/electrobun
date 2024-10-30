@@ -12,8 +12,11 @@ import {
 } from "rpc-anywhere";
 import { Updater } from "./Updater";
 import type { BuiltinBunToWebviewSchema } from "../../browser/builtinrpcSchema";
+import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
 
-const BrowserViewMap = {};
+const BrowserViewMap: {
+  [id: number]: BrowserView<any>;
+} = {};
 let nextWebviewId = 1;
 
 const CHUNK_SIZE = 1024 * 4; // 4KB
@@ -40,7 +43,7 @@ interface ElectrobunWebviewRPCSChema {
   webview: RPCSchema;
 }
 
-const defaultOptions: BrowserViewOptions = {
+const defaultOptions: Partial<BrowserViewOptions> = {
   url: "https://electrobun.dev",
   html: null,
   preload: null,
@@ -61,7 +64,7 @@ const internalSyncRpcHandlers = {
     preload,
     partition,
     frame,
-  }) => {
+  }: BrowserViewOptions & { windowId: number }) => {
     const webviewForTag = new BrowserView({
       url,
       html,
@@ -123,11 +126,12 @@ export class BrowserView<T> {
   outStream: ReadableStream<Uint8Array>;
   rpc?: T;
   syncRpc?: { [method: string]: (params: any) => any };
+  rpcHandler?: (msg: any) => void;
 
   constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
-    this.url = options.url || defaultOptions.url;
-    this.html = options.html || defaultOptions.html;
-    this.preload = options.preload || defaultOptions.preload;
+    this.url = options.url || defaultOptions.url || null;
+    this.html = options.html || defaultOptions.html || null;
+    this.preload = options.preload || defaultOptions.preload || null;
     this.frame = options.frame
       ? { ...defaultOptions.frame, ...options.frame }
       : { ...defaultOptions.frame };
@@ -147,6 +151,7 @@ export class BrowserView<T> {
     // TODO: add a then to this that fires an onReady event
     zigRPC.request.createWebview({
       id: this.id,
+      rpcPort: rpcPort,
       hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
       partition: this.partition,
@@ -205,7 +210,7 @@ export class BrowserView<T> {
     }
   }
 
-  sendMessageToWebview(jsonMessage) {
+  sendMessageToWebviewViaExecute(jsonMessage) {
     const stringifiedMessage =
       typeof jsonMessage === "string"
         ? jsonMessage
@@ -261,16 +266,21 @@ export class BrowserView<T> {
     const that = this;
 
     return {
-      send(message) {
-        // todo (yoav): note: this is the same as the zig transport
-        try {
-          const messageString = JSON.stringify(message);
-          that.sendMessageToWebview(messageString);
-        } catch (error) {
-          console.error("bun: failed to serialize message to webview", error);
+      send(message: any) {
+        const sentOverSocket = sendMessageToWebviewViaSocket(that.id, message);
+
+        if (!sentOverSocket) {
+          try {
+            const messageString = JSON.stringify(message);
+            that.sendMessageToWebviewViaExecute(messageString);
+          } catch (error) {
+            console.error("bun: failed to serialize message to webview", error);
+          }
         }
       },
       registerHandler(handler) {
+        that.rpcHandler = handler;
+
         async function readFromPipe(
           reader: ReadableStreamDefaultReader<Uint8Array>
         ) {

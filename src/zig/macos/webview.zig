@@ -94,6 +94,7 @@ const WebviewType = struct {
 const CreateWebviewOpts = struct { //
     id: u32,
     hostWebviewId: ?u32,
+    rpcPort: u32,
     pipePrefix: []const u8,
     url: ?[]const u8,
     html: ?[]const u8,
@@ -328,7 +329,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     };
 
     // Note: Keep this in sync with browser api
-    const jsScriptSubstitutions = std.fmt.allocPrint(alloc, "window.__electrobunWebviewId = {};\n", .{opts.id}) catch {
+    const jsScriptSubstitutions = std.fmt.allocPrint(alloc, "window.__electrobunWebviewId = {};window.__electrobunRpcSocketPort = {};\n", .{ opts.id, opts.rpcPort }) catch {
         return;
     };
     defer alloc.free(jsScriptSubstitutions);

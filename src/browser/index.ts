@@ -18,6 +18,7 @@ interface ElectrobunWebviewRPCSChema {
 }
 
 const WEBVIEW_ID = window.__electrobunWebviewId;
+const RPC_SOCKET_PORT = window.__electrobunRpcSocketPort;
 
 // todo (yoav): move this stuff to browser/rpc/webview.ts
 type ZigWebviewHandlers = RPCSchema<{
@@ -94,6 +95,7 @@ type WebviewTagHandlers = RPCSchema<{
 }>;
 
 class Electroview<T> {
+  bunSocket?: WebSocket;
   // user's custom rpc browser <-> bun
   rpc?: T;
   rpcHandler?: (msg: any) => void;
@@ -114,6 +116,7 @@ class Electroview<T> {
     // todo (yoav): should init webviewTag by default when src is local
     // and have a setting that forces it enabled or disabled
     this.initZigRpc();
+    this.initSocketToBun();
     // Note:
     // syncRPC messages doesn't need to be defined since there's no need for sync 1-way message
     // just use non-blocking async rpc for that, we just need sync requests
@@ -153,6 +156,42 @@ class Electroview<T> {
 
       // },
       maxRequestTime: 1000,
+    });
+  }
+
+  initSocketToBun() {
+    // todo: upgrade to tls
+    const socket = new WebSocket(
+      `ws://localhost:${RPC_SOCKET_PORT}/socket?webviewId=${WEBVIEW_ID}`
+    );
+
+    this.bunSocket = socket;
+
+    socket.addEventListener("open", () => {
+      // this.bunSocket?.send("Hello from webview " + WEBVIEW_ID);
+    });
+
+    socket.addEventListener("message", (event) => {
+      if (typeof event.data === "string") {
+        try {
+          const msg = JSON.parse(event.data);
+          this.rpcHandler?.(msg);
+        } catch (err) {
+          console.error("Error parsing bun message:", err);
+        }
+      } else if (event.data instanceof Blob) {
+        // Handle binary data (e.g., convert Blob to ArrayBuffer if needed)
+      } else {
+        console.error("UNKNOWN DATA TYPE RECEIVED:", event.data);
+      }
+    });
+
+    socket.addEventListener("error", (event) => {
+      console.error("Socket error:", event);
+    });
+
+    socket.addEventListener("close", (event) => {
+      // console.log("Socket closed:", event);
     });
   }
 
@@ -220,6 +259,7 @@ class Electroview<T> {
 
   // call any of your bun syncrpc methods in a way that appears synchronous from the browser context
   bunBridgeSync(msg: string) {
+    console.warn("DEPRECATED: use async rpc if possible");
     var xhr = new XMLHttpRequest();
     // Note: setting false here makes the xhr request blocking. This completely
     // blocks the main thread which is terrible. You can use this safely from a webworker.
@@ -241,6 +281,17 @@ class Electroview<T> {
   }
 
   bunBridge(msg: string) {
+    if (this.bunSocket?.readyState === WebSocket.OPEN) {
+      try {
+        this.bunSocket.send(msg);
+        return;
+      } catch (error) {
+        console.error("Error sending message to bun via socket:", error);
+      }
+    }
+
+    // if socket's are unavailable, fallback to postMessage
+
     // Note: messageHandlers seem to freeze when sending large messages
     // but xhr to views://rpc can run into CORS issues on non views://
     // loaded content (eg: when writing extensions/preload scripts for
@@ -252,6 +303,7 @@ class Electroview<T> {
 
     // TEMP: disable the fallback for now. for some reason suddenly can't
     // repro now that other places are chunking messages and laptop restart
+
     if (true || msg.length < 8 * 1024) {
       window.webkit.messageHandlers.bunBridge.postMessage(msg);
     } else {

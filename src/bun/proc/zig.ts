@@ -188,6 +188,7 @@ type ZigHandlers = RPCSchema<{
     createWebview: {
       params: {
         id: number;
+        rpcPort: number;
         hostWebviewId: number | null;
         pipePrefix: string;
         url: string | null;
@@ -458,7 +459,7 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
         console.log(err);
         return { payload: err };
       }
-
+      console.warn("DEPRECATED: use async rpc if possible", method);
       const handler = webview.syncRpc[method];
       var response;
       try {
