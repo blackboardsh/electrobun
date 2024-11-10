@@ -80,6 +80,10 @@ const WebviewType = struct {
         objc.evaluateJavaScriptWithNoCompletion(self.handle, utils.toCString(message));
     }
 
+    pub fn sendToWebviewSecureWorld(self: *WebviewType, message: []const u8) void {
+        objc.evaluateJavaScriptinSecureContentWorld(self.handle, utils.toCString(message));
+    }
+
     pub fn deinit(self: *WebviewType) void {
         // todo: implement the rest of this including objc stuff
         if (self.bun_out_pipe) |file| {
@@ -95,6 +99,7 @@ const CreateWebviewOpts = struct { //
     id: u32,
     hostWebviewId: ?u32,
     rpcPort: u32,
+    secretKey: []const u8,
     pipePrefix: []const u8,
     url: ?[]const u8,
     html: ?[]const u8,
@@ -328,8 +333,94 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         return;
     };
 
+    // Note: The only way for code in the secure world to communicate with the page world
+    // is via postMessage which requires serialization. So might be useful but not for efficient rpc.
+    // objc.evaluateJavaScriptinSecureContentWorld(_webview.handle, utils.toCString(
+    //     \\ const test = 567;
+    //     \\ console.log('test', test);
+    //     \\ window.test44 = 44;
+    // ));
+    // objc.evaluateJavaScriptWithNoCompletion(_webview.handle, utils.toCString("const test = 567; console.log('test', test);"));
+
     // Note: Keep this in sync with browser api
-    const jsScriptSubstitutions = std.fmt.allocPrint(alloc, "window.__electrobunWebviewId = {};window.__electrobunRpcSocketPort = {};\n", .{ opts.id, opts.rpcPort }) catch {
+    const jsScriptSubstitutions = std.fmt.allocPrint(alloc,
+        \\ window.__electrobunWebviewId = {};
+        \\window.__electrobunRpcSocketPort = {};
+        \\(async () => {{
+        \\
+        \\ function base64ToUint8Array(base64) {{
+        \\   return new Uint8Array(atob(base64).split('').map(char => char.charCodeAt(0)));
+        \\ }}
+        \\
+        \\function uint8ArrayToBase64(uint8Array) {{
+        \\ let binary = '';
+        \\ for (let i = 0; i < uint8Array.length; i++) {{
+        \\   binary += String.fromCharCode(uint8Array[i]);
+        \\ }}
+        \\ return btoa(binary);
+        \\}}
+        \\ const generateKeyFromText = async (rawKey) => {{
+        // \\   const encoder = new TextEncoder();
+        // \\   const rawKey = encoder.encode(text); // Convert the text to a Uint8Array
+        \\ 
+        \\   return await window.crypto.subtle.importKey(
+        \\     'raw',                  // Key format
+        \\     rawKey,                 // Key data
+        \\     {{ name: 'AES-GCM' }},    // Algorithm details
+        \\     true,                   // Extractable (set to false for better security)
+        \\     ['encrypt', 'decrypt']  // Key usages
+        \\   );
+        \\ }};        
+        \\ const secretKey = await generateKeyFromText(new Uint8Array([{s}]));
+        \\
+        \\ const encryptString = async (plaintext) => {{
+        \\   const encoder = new TextEncoder();
+        \\   const encodedText = encoder.encode(plaintext);
+        \\   const iv = window.crypto.getRandomValues(new Uint8Array(12)); // Initialization vector (12 bytes)
+        \\   const encryptedBuffer = await window.crypto.subtle.encrypt(
+        \\    {{
+        \\     name: "AES-GCM",
+        \\     iv: iv,
+        \\    }},
+        \\    secretKey,
+        \\    encodedText
+        \\   );
+        \\        
+        \\        
+        \\   // Split the tag (last 16 bytes) from the ciphertext
+        \\   const encryptedData = new Uint8Array(encryptedBuffer.slice(0, -16));
+        \\   const tag = new Uint8Array(encryptedBuffer.slice(-16));
+        \\
+        \\   return {{ encryptedData: uint8ArrayToBase64(encryptedData), iv: uint8ArrayToBase64(iv), tag: uint8ArrayToBase64(tag) }};
+        \\ }};
+        \\ 
+        \\ // All args passed in as base64 strings
+        \\ const decryptString = async (encryptedData, iv, tag) => {{
+        \\  encryptedData = base64ToUint8Array(encryptedData);
+        \\  iv = base64ToUint8Array(iv);
+        \\  tag = base64ToUint8Array(tag);
+        \\  // Combine encrypted data and tag to match the format expected by SubtleCrypto
+        \\  const combinedData = new Uint8Array(encryptedData.length + tag.length);
+        \\  combinedData.set(encryptedData);
+        \\  combinedData.set(tag, encryptedData.length);
+        \\  const decryptedBuffer = await window.crypto.subtle.decrypt(
+        \\    {{
+        \\      name: "AES-GCM",
+        \\      iv: iv,
+        \\    }},
+        \\    secretKey,
+        \\    combinedData // Pass the combined data (ciphertext + tag)
+        \\  );
+        \\  const decoder = new TextDecoder();
+        \\  return decoder.decode(decryptedBuffer);
+        \\ }};
+        \\
+        \\ window.__electrobun_encrypt = encryptString;
+        \\ window.__electrobun_decrypt = decryptString;
+        \\}})()
+        \\
+    , .{ opts.id, opts.rpcPort, opts.secretKey }) catch {
+        // NOTE: key must be at least 32 characters long
         return;
     };
     defer alloc.free(jsScriptSubstitutions);

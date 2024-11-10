@@ -37,6 +37,7 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
     webview.createWebview(.{
         .id = params.id,
         .rpcPort = params.rpcPort,
+        .secretKey = params.secretKey,
         .hostWebviewId = params.hostWebviewId,
         .pipePrefix = params.pipePrefix,
         .url = params.url,

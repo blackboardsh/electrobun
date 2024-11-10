@@ -13,6 +13,7 @@ import {
 import { Updater } from "./Updater";
 import type { BuiltinBunToWebviewSchema } from "../../browser/builtinrpcSchema";
 import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
+import { randomBytes } from "crypto";
 
 const BrowserViewMap: {
   [id: number]: BrowserView<any>;
@@ -124,6 +125,7 @@ export class BrowserView<T> {
   pipePrefix: string;
   inStream: fs.WriteStream;
   outStream: ReadableStream<Uint8Array>;
+  secretKey: Uint8Array;
   rpc?: T;
   syncRpc?: { [method: string]: (params: any) => any };
   rpcHandler?: (msg: any) => void;
@@ -136,6 +138,7 @@ export class BrowserView<T> {
       ? { ...defaultOptions.frame, ...options.frame }
       : { ...defaultOptions.frame };
     this.rpc = options.rpc;
+    this.secretKey = new Uint8Array(randomBytes(32));
     this.syncRpc = { ...(options.syncRpc || {}), ...internalSyncRpcHandlers };
     this.partition = options.partition || null;
     // todo (yoav): since collisions can crash the app add a function that checks if the
@@ -152,6 +155,8 @@ export class BrowserView<T> {
     zigRPC.request.createWebview({
       id: this.id,
       rpcPort: rpcPort,
+      // todo: consider sending secretKey as base64
+      secretKey: this.secretKey.toString(),
       hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
       partition: this.partition,

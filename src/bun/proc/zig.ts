@@ -189,6 +189,7 @@ type ZigHandlers = RPCSchema<{
       params: {
         id: number;
         rpcPort: number;
+        secretKey: string;
         hostWebviewId: number | null;
         pipePrefix: string;
         url: string | null;

@@ -1,7 +1,44 @@
 import type { ServerWebSocket } from "bun";
 import { BrowserView } from "./BrowserView";
+import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
 
-const AUTH_TOKEN = "secret";
+function base64ToUint8Array(base64: string) {
+  {
+    return new Uint8Array(
+      atob(base64)
+        .split("")
+        .map((char) => char.charCodeAt(0))
+    );
+  }
+}
+
+// Encrypt function
+function encrypt(secretKey: Uint8Array, text: string) {
+  const iv = new Uint8Array(randomBytes(12)); // IV for AES-GCM
+  const cipher = createCipheriv("aes-256-gcm", secretKey, iv);
+  const encrypted = Buffer.concat([
+    new Uint8Array(cipher.update(text, "utf8")),
+    new Uint8Array(cipher.final()),
+  ]).toString("base64");
+  const tag = cipher.getAuthTag().toString("base64");
+  return { encrypted, iv: Buffer.from(iv).toString("base64"), tag };
+}
+
+// Decrypt function
+function decrypt(
+  secretKey: Uint8Array,
+  encryptedData: Uint8Array,
+  iv: Uint8Array,
+  tag: Uint8Array
+) {
+  const decipher = createDecipheriv("aes-256-gcm", secretKey, iv);
+  decipher.setAuthTag(tag);
+  const decrypted = Buffer.concat([
+    new Uint8Array(decipher.update(encryptedData)),
+    new Uint8Array(decipher.final()),
+  ]);
+  return decrypted.toString("utf8");
+}
 
 export const socketMap: {
   [webviewId: string]: {
@@ -40,11 +77,6 @@ const startRPCServer = () => {
 
           console.log("unhandled RPC Server request", req.url);
         },
-        //   tls: {
-        //     key: Bun.file("key.pem"),
-        //     cert: Bun.file("cert.pem"),
-        //   },
-
         websocket: {
           idleTimeout: 960,
           maxPayloadLength: 1024 * 1024 * 500, // 500MB
@@ -71,7 +103,19 @@ const startRPCServer = () => {
             if (browserView.rpcHandler) {
               if (typeof message === "string") {
                 try {
-                  browserView.rpcHandler(JSON.parse(message));
+                  const encryptedPacket = JSON.parse(message);
+                  const decrypted = decrypt(
+                    browserView.secretKey,
+                    base64ToUint8Array(encryptedPacket.encryptedData),
+                    base64ToUint8Array(encryptedPacket.iv),
+                    base64ToUint8Array(encryptedPacket.tag)
+                  );
+
+                  // Note: At this point the secretKey for the webview id would
+                  // have had to match the encrypted packet data, so we can trust
+                  // that this message can be passed to this browserview's rpc
+                  // methods.
+                  browserView.rpcHandler(JSON.parse(decrypted));
                 } catch (error) {
                   console.log("Error handling message:", error);
                 }
@@ -106,10 +150,22 @@ export const sendMessageToWebviewViaSocket = (
   message: any
 ): boolean => {
   const rpc = socketMap[webviewId];
+  const browserView = BrowserView.getById(webviewId);
 
   if (rpc?.socket?.readyState === WebSocket.OPEN) {
     try {
-      rpc.socket.send(JSON.stringify(message));
+      const unencryptedString = JSON.stringify(message);
+      const encrypted = encrypt(browserView.secretKey, unencryptedString);
+
+      const encryptedPacket = {
+        encryptedData: encrypted.encrypted,
+        iv: encrypted.iv,
+        tag: encrypted.tag,
+      };
+
+      const encryptedPacketString = JSON.stringify(encryptedPacket);
+
+      rpc.socket.send(encryptedPacketString);
       return true;
     } catch (error) {
       console.error("Error sending message to webview via socket:", error);

@@ -87,6 +87,7 @@ pub extern fn setNavigationDelegateWithCallback(webView: *anyopaque, webviewId: 
 pub extern fn addScriptMessageHandler(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) callconv(.C) void) callconv(.C) *anyopaque;
 pub extern fn addScriptMessageHandlerWithReply(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) [*:0]const u8) callconv(.C) *anyopaque;
 pub extern fn evaluateJavaScriptWithNoCompletion(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
+pub extern fn evaluateJavaScriptinSecureContentWorld(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
 pub extern fn callAsyncJavaScript(messageId: [*:0]const u8, webView: *anyopaque, script: [*:0]const u8, webviewId: u32, hostWebviewId: u32, handler: callAsyncJavascriptCompletionHandler) callconv(.C) void;
 pub extern fn resizeWebview(webView: *anyopaque, frame: NSRect, masks: [*:0]const u8) callconv(.C) void;
 pub extern fn webviewTagGoBack(webView: *anyopaque) callconv(.C) void;

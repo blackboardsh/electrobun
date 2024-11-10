@@ -171,15 +171,23 @@ class Electroview<T> {
       // this.bunSocket?.send("Hello from webview " + WEBVIEW_ID);
     });
 
-    socket.addEventListener("message", (event) => {
-      if (typeof event.data === "string") {
+    socket.addEventListener("message", async (event) => {
+      const message = event.data;
+      if (typeof message === "string") {
         try {
-          const msg = JSON.parse(event.data);
-          this.rpcHandler?.(msg);
+          const encryptedPacket = JSON.parse(message);
+
+          const decrypted = await window.__electrobun_decrypt(
+            encryptedPacket.encryptedData,
+            encryptedPacket.iv,
+            encryptedPacket.tag
+          );
+
+          this.rpcHandler?.(JSON.parse(decrypted));
         } catch (err) {
           console.error("Error parsing bun message:", err);
         }
-      } else if (event.data instanceof Blob) {
+      } else if (message instanceof Blob) {
         // Handle binary data (e.g., convert Blob to ArrayBuffer if needed)
       } else {
         console.error("UNKNOWN DATA TYPE RECEIVED:", event.data);
@@ -280,10 +288,20 @@ class Electroview<T> {
     }
   }
 
-  bunBridge(msg: string) {
+  async bunBridge(msg: string) {
     if (this.bunSocket?.readyState === WebSocket.OPEN) {
       try {
-        this.bunSocket.send(msg);
+        const { encryptedData, iv, tag } = await window.__electrobun_encrypt(
+          msg
+        );
+
+        const encryptedPacket = {
+          encryptedData: encryptedData,
+          iv: iv,
+          tag: tag,
+        };
+        const encryptedPacketString = JSON.stringify(encryptedPacket);
+        this.bunSocket.send(encryptedPacketString);
         return;
       } catch (error) {
         console.error("Error sending message to bun via socket:", error);
