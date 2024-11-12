@@ -50,6 +50,7 @@ export const socketMap: {
 const startRPCServer = () => {
   const startPort = 50000;
   const endPort = 65535;
+  const payloadLimit = 1024 * 1024 * 500; // 500MB
   let port = startPort;
   let server = null;
 
@@ -79,8 +80,10 @@ const startRPCServer = () => {
         },
         websocket: {
           idleTimeout: 960,
-          maxPayloadLength: 1024 * 1024 * 500, // 500MB
-          //   backpressureLimit: Infinity,
+          // 500MB max payload should be plenty
+          maxPayloadLength: payloadLimit,
+          // Anything beyond the backpressure limit will be dropped
+          backpressureLimit: payloadLimit * 2,
           open(ws) {
             const { webviewId } = ws.data;
 
