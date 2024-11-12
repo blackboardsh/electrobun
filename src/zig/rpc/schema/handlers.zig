@@ -36,6 +36,8 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
     // std.log.info("createWebview handler preload {s}", .{params.preload});
     webview.createWebview(.{
         .id = params.id,
+        .rpcPort = params.rpcPort,
+        .secretKey = params.secretKey,
         .hostWebviewId = params.hostWebviewId,
         .pipePrefix = params.pipePrefix,
         .url = params.url,

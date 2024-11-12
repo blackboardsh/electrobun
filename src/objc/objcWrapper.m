@@ -435,9 +435,19 @@ const char* getBodyFromScriptMessage(WKScriptMessage *message) {
     return body.UTF8String;
 }
 
-void evaluateJavaScriptWithNoCompletion(WKWebView *webView, const char *jsString) {    
+void evaluateJavaScriptWithNoCompletion(WKWebView *webView, const char *jsString) {        
+    WKContentWorld *isolatedWorld = [WKContentWorld pageWorld];
+
     NSString *javaScript = [NSString stringWithUTF8String:jsString];
-    [webView evaluateJavaScript:javaScript completionHandler:nil];
+    [webView evaluateJavaScript:javaScript inFrame:nil inContentWorld:isolatedWorld completionHandler:nil];    
+}
+
+void evaluateJavaScriptinSecureContentWorld(WKWebView *webView, const char *jsString) {    
+    WKContentWorld *secureWorld = [WKContentWorld worldWithName:@"ElectrobunSecureWorld"];    
+
+    NSString *javaScript = [NSString stringWithUTF8String:jsString];
+    [webView evaluateJavaScript:javaScript inFrame:nil inContentWorld:secureWorld completionHandler:nil];
+    
 }
 
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
@@ -486,7 +496,6 @@ void addPreloadScriptToWebView(WKWebView *webView, const char *scriptContent, BO
     // Add the user script to the content controller
     [webView.configuration.userContentController addUserScript:userScript];
 }
-
 
 // This adds a commend with a unique script identifier to the user script, and removes any existing ones with that identifier
 // This is useful for cases where you want to change an existing user script during the lifetime of a webview

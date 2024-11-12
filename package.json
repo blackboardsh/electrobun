@@ -1,6 +1,6 @@
 {
   "name": "electrobun",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
   "license": "MIT",
   "author": "Blackboard Technologies Inc.",
@@ -32,14 +32,14 @@
     "build:zig:release": "cd src/zig && ../../vendors/zig/zig build -Doptimize=ReleaseFast",
     "build:zig:trdiff:release": "cd src/bsdiff && ../../vendors/zig/zig build -Doptimize=ReleaseFast",
     "build:launcher:release": "cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall",
-    "build:extractor:release": "cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall",    
+    "build:extractor:release": "cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall",
     "build:cli": "bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun",
     "build:debug": "npm install && bun build:zig:trdiff && bun build:objc && bun build:zig && bun build:launcher && bun build:extractor && bun build:cli",
     "build:release": "bun build:objc && bun build:zig:trdiff:release && bun build:zig:release && bun build:launcher:release && bun build:extractor:release && bun build:cli",
     "build:package": "bun build:release && bun ./scripts/copy-to-dist.ts",
     "build:dev": "bun build:debug && bun ./scripts/copy-to-dist.ts",
     "build:electrobun": "bun build:objc && bun build:zig && bun build:bun",
-    "dev:playground": "bun build:dev && cd playground && npm install && bun build:dev && bun start",    
+    "dev:playground": "bun build:dev && cd playground && npm install && bun build:dev && bun start",
     "dev:playground:rerun": "cd playground && bun start",
     "dev:playground:canary": "bun build:package && cd playground && npm install && bun build:canary && bun start:canary",
     "dev:docs": "cd documentation && bun start",
@@ -51,8 +51,8 @@
     "bun": "1.1.29"
   },
   "dependencies": {
-    "@oneidentity/zstd-js": "^1.0.3",    
-    "rpc-anywhere": "1.5.0",
-    "tar": "^6.2.1"    
+    "@oneidentity/zstd-js": "^1.0.3",
+    "rpc-anywhere": "1.5.0",    
+    "tar": "^6.2.1"
   }
 }
