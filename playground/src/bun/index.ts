@@ -121,7 +121,7 @@ tray.on("tray-clicked", (e) => {
 
 ApplicationMenu.setApplicationMenu([
   {
-    submenu: [{ label: "Quit", role: "quit" }],
+    submenu: [{ label: "Quit", role: "quit", accelerator: "q" }],
   },
   {
     label: "Edit",

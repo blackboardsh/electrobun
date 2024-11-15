@@ -140,6 +140,7 @@ export type ApplicationMenuItemConfig =
       enabled?: boolean;
       checked?: boolean;
       hidden?: boolean;
+      accelerator?: string;
     }
   | {
       type?: "normal";
@@ -150,6 +151,7 @@ export type ApplicationMenuItemConfig =
       enabled?: boolean;
       checked?: boolean;
       hidden?: boolean;
+      accelerator?: string;
     };
 
 // todo (yoav): move this stuff to bun/rpc/zig.ts
