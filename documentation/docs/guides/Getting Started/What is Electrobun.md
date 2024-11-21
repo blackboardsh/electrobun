@@ -12,7 +12,7 @@ What makes electrobun different, aside from our approach to achitecture are our 
 
 ### Batteries included
 
-- Write typescript without waisting time on devops
+- Write typescript without wasting time on devops
 - Everything needed to build, test, codesign, update
 
 ### Iteration speed
