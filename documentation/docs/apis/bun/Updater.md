@@ -1,7 +1,7 @@
 > Electrobun's built-in update mechanism for your app
 
 ```typescript title="/src/bun/index.ts"
-import { Updator } from "electrobun/bun";
+import { Updater } from "electrobun/bun";
 ```
 
 ```json title="/electrobun.config"
@@ -27,7 +27,7 @@ The electrobun `cli` will automatically generate an `artifacts` folder for each 
 Get the local version info for display in your app or other logic. This will read the `version.json` file bundled with your app.
 
 ```
-const localInfo = await Electrobun.Updator.getLocal;
+const localInfo = await Electrobun.Updater.getLocal;
 
 localInfo: {
   version: string;
