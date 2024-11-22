@@ -79,7 +79,7 @@ export default function Home(): JSX.Element {
             >
               <h3>Typescript</h3>
               <p>
-                Write typescript for the main process and webviews without
+                Write Typescript for the main process and webviews without
                 having to think about it. One language, no hassle.
               </p>
             </div>
