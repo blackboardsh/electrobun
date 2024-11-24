@@ -88,16 +88,13 @@ const Updater = {
     let currentHash = (await Updater.getLocallocalInfo()).hash;
     let latestHash = (await Updater.checkForUpdate()).hash;
 
-    let currentTarPath = join(
-      appDataFolder,
-      "self-extraction",
-      `${currentHash}.tar`
-    );
-    const latestTarPath = join(
-      appDataFolder,
-      "self-extraction",
-      `${latestHash}.tar`
-    );
+    const extractionFolder = join(appDataFolder, "self-extraction");
+    if (!(await Bun.file(extractionFolder).exists())) {
+      mkdirSync(extractionFolder, { recursive: true });
+    }
+
+    let currentTarPath = join(extractionFolder, `${currentHash}.tar`);
+    const latestTarPath = join(extractionFolder, `${latestHash}.tar`);
 
     const seenHashes = [];
 
@@ -276,6 +273,10 @@ const Updater = {
     if (updateInfo?.updateReady) {
       const appDataFolder = await Updater.appDataFolder();
       const extractionFolder = join(appDataFolder, "self-extraction");
+      if (!(await Bun.file(extractionFolder).exists())) {
+        mkdirSync(extractionFolder, { recursive: true });
+      }
+
       let latestHash = (await Updater.checkForUpdate()).hash;
       const latestTarPath = join(extractionFolder, `${latestHash}.tar`);
 
