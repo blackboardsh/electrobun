@@ -37,7 +37,7 @@ export default function Home(): JSX.Element {
             <img src="/img/electrobun-logo-256.png"></img>
             <p>
               Under the hood it uses bun to execute the main process and to
-              bundle webview typescript, and has native bindings written in zig.
+              bundle webview Typescript, and has native bindings written in zig.
             </p>
           </div>
           <hr style={{ margin: "35px 0" }} />
@@ -79,7 +79,7 @@ export default function Home(): JSX.Element {
             >
               <h3>Typescript</h3>
               <p>
-                Write typescript for the main process and webviews without
+                Write Typescript for the main process and webviews without
                 having to think about it. One language, no hassle.
               </p>
             </div>
