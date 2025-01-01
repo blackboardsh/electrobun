@@ -29,7 +29,7 @@ Read about how Electrobun is designed, and why, in our <a href="https://www.elec
 
 ## Roadmap
 
-See the <a href="https://github.com/orgs/blackboardsh/projects/5">detailed Roadmap</a>. |
+See the <a href="https://github.com/orgs/blackboardsh/projects/5">roadmap</a>
 
 ## Contributing
 
