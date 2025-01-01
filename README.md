@@ -8,7 +8,7 @@
 
 ## What is Electrobun?
 
-> Electrobun is in the **_very_** early stages. We currently only support development on arm macs, it has memory leaks, has no tests, it's not available in npm yet, and many core things are still missing.
+> Electrobun is in the **_very_** early stages. We currently only support development on arm macs, it has memory leaks, has no tests, and many core things are still missing. We're actively working on adding Windows and Linux support.
 
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
 Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in <a href="https://ziglang.org/">zig</a>.
@@ -29,21 +29,7 @@ Read about how Electrobun is designed, and why, in our <a href="https://www.elec
 
 ## Roadmap
 
-See the detailed <a href="https://github.com/blackboardsh/electrobun/issues/2">detailed Roadmap</a>.
-
-**High level roadmap**
-
-|     | Milestones            | Description                                                                                                                             |
-| :-- | :-------------------- | :-------------------------------------------------------------------------------------------------------------------------------------- |
-| ✅  | Core Architecture     | Ship a working proof of concept with most of the core architecture wired up                                                             |
-| ✅  | Packaging and signing | Packaging and code signing for MacOS                                                                                                    |
-| ✅  | Shipping updates      | Integrated auto-updator                                                                                                                 |
-| ✅  | Webview Tag           | Cross browser electrobun implementation of the <webview> tag that electron has, for isolated nested webviews                            |
-| ✅  | Port co(lab)          | Harden implementation and enough electron parity to migrate <a href="https://colab.sh">https://colab.sh</a> from Electron to Electrobun |
-|     | Custom Web Runtime    | Optionally use a cross-platform web runtime (Chromium) instead of the system's native webview                                           |
-|     | Intel Mac Builds      | build on and distribute to intel macs                                                                                                   |
-|     | API Parity            | Accelerate development of Electrobun apis and native integrations to enable apps to migrate from Electron and Tauri                     |
-|     | Windows support       | build for and distribute to Windows                                                                                                     |
+See the <a href="https://github.com/orgs/blackboardsh/projects/5">detailed Roadmap</a>. |
 
 ## Contributing
 
@@ -53,7 +39,7 @@ As we get closer to 1.0.0 I'll probably make guidelines for PRs and stuff. In th
 
 Ways to get involved at this early stage:
 
-- Follow us on X for updates <a href="https://twitter.com/BlackboardTech">@BlackboardTech</a>
+- Follow us on X for updates <a href="https://twitter.com/BlackboardTech">@BlackboardTech</a> or <a href="https://bsky.app/profile/yoav.codes">@yoav.codes</a>
 - Join the conversation on <a href="https://discord.gg/ueKE4tjaCE">Discord</a>
 - Create and participate in Github issues and discussions
 
