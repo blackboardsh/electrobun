@@ -21,7 +21,8 @@
   "scripts": {
     "start": "bun src/bun/index.ts",
     "check-zig-version": "vendors/zig/zig version",
-    "install-zig": "mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-macos-aarch64-0.13.0/zig zig-macos-aarch64-0.13.0/lib  zig-macos-aarch64-0.13.0/doc",
+    "install-zig:mac": "mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-macos-aarch64-0.13.0/zig zig-macos-aarch64-0.13.0/lib  zig-macos-aarch64-0.13.0/doc",
+    "install-zig:windows": "mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-windows-aarch64-0.13.0.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/zig-windows-aarch64-0.13.0/zig.exe vendors/zig && mv vendors/zig-temp/zig-windows-aarch64-0.13.0/lib vendors/zig/",
     "install-cef": "cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH=\"arm64\" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper",
     "build:objc:object": "mkdir -p src/objc/build && clang++ -c src/objc/objcWrapper.mm -o src/objc/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef -std=c++17",
     "build:objc:staticlib": "mkdir -p src/zig/build && clang++ -o src/zig/build/libObjcWrapper.dylib src/objc/build/objcWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libObjcWrapper.dylib",
