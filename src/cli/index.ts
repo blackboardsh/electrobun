@@ -39,9 +39,19 @@ const PATHS = {
   LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun"),
   LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher"),
   ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview"),
+  NATIVE_WRAPPER_MACOS: join(
+    ELECTROBUN_DEP_PATH,
+    "dist",
+    "libObjcWrapper.dylib"
+  ),
   BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch"),
   EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor"),
   BSDIFF: join(ELECTROBUN_DEP_PATH, "dist", "bsdiff"),
+  CEF_FRAMEWORK_MACOS: join(
+    ELECTROBUN_DEP_PATH,
+    "dist",
+    "Chromium Embedded Framework.framework"
+  ),
 };
 
 const commandDefaults = {
@@ -340,6 +350,37 @@ if (commandArg === "init") {
   }
 
   cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {
+    recursive: true,
+    dereference: true,
+  });
+
+  // copy native wrapper dynamic library next to zig native binary
+  const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;
+  const nativeWrapperMacosDestination = join(
+    appBundleMacOSPath,
+    "native",
+    "libObjcWrapper.dylib"
+  );
+  cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
+    dereference: true,
+  });
+
+  const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
+  const cefFrameworkDestination = join(
+    appBundleMacOSPath,
+    "Frameworks",
+    "Chromium Embedded Framework.framework"
+  );
+
+  // temp: need to remove the /native folder and use the proper
+  // Frameworks folder
+  const destFolder3 = join(appBundleMacOSPath, "Frameworks");
+  if (!existsSync(destFolder3)) {
+    // console.info('creating folder: ', destFolder3);
+    mkdirSync(destFolder3, { recursive: true });
+  }
+
+  cpSync(cefFrameworkSource, cefFrameworkDestination, {
     recursive: true,
     dereference: true,
   });

@@ -13,3 +13,5 @@ await $`cp node_modules/.bin/bun dist/bun`;
 await $`cp src/cli/build/electrobun dist/electrobun`;
 await $`cp -r src/bun/ dist/api/bun/`;
 await $`cp -r src/browser/ dist/api/browser/`;
+await $`cp -r src/zig/build/libObjcWrapper.dylib dist/libObjcWrapper.dylib`;
+await $`cp -r vendors/cef/Release/Chromium\ Embedded\ Framework.framework dist/Chromium\ Embedded\ Framework.framework`;

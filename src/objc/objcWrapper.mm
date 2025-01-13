@@ -5,9 +5,128 @@
 #import <CommonCrypto/CommonCrypto.h>
 #import <QuartzCore/QuartzCore.h>
 
-// since this is a c++ file now (to interface with CEF) we have to use
-// extern C to prevent c++ name mangling
+// CEF
+#include "include/base/cef_ref_counted.h"
+#include "include/base/cef_logging.h"
+#include "include/cef_base.h"
+#include "include/cef_app.h"
+#include "include/cef_client.h"
+#include "include/cef_browser.h"
+#include "include/cef_life_span_handler.h"
+#include "include/cef_application_mac.h"
+#include "include/wrapper/cef_library_loader.h"
+#include "include/wrapper/cef_helpers.h"
+
+// Forward declare the classes
+class CefApp;
+class CefClient;
+class CefLifeSpanHandler;
+class CefBrowser;
+
+// Provide the CefAppProtocol implementation
+@interface ElectrobunNSApplication : NSApplication <CefAppProtocol> {
+ @private
+  BOOL handlingSendEvent_;
+}
+@end
+
+@implementation ElectrobunNSApplication
+- (BOOL)isHandlingSendEvent {
+  return handlingSendEvent_;
+}
+
+- (void)setHandlingSendEvent:(BOOL)handlingSendEvent {
+  handlingSendEvent_ = handlingSendEvent;
+}
+
+- (void)sendEvent:(NSEvent*)event {
+  CefScopedSendingEvent sendingEventScoper;
+  [super sendEvent:event];
+}
+@end
+
+// Implementation of CefApp
+class ElectrobunApp : public CefApp {
+public:
+    ElectrobunApp() {} // Default constructor
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunApp);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunApp);
+};
+
+// Implementation of CefClient
+class ElectrobunClient : public CefClient, public CefLifeSpanHandler {
+public:
+    ElectrobunClient() {} // Default constructor
+
+    virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { 
+        return this; 
+    }
+
+    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        // Handle browser closing
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunClient);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
+};
+
+// Global CEF reference
+CefRefPtr<ElectrobunApp> g_app;
+
 extern "C" {
+
+bool initializeCEF() {
+    static bool initialized = false;
+    if (initialized) {
+        return true;
+    }
+
+    // Load the CEF framework library at runtime
+    static CefScopedLibraryLoader library_loader;
+    if (!library_loader.LoadInMain()) {
+        NSLog(@"Failed to load CEF library");
+        return false;
+    }
+
+    // Create the process-wide command line object
+    CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
+    command_line->InitFromArgv(0, nullptr);  // Empty command line
+
+    // Specify CEF global settings
+    CefSettings settings;
+    settings.no_sandbox = true;
+
+    // Convert paths to CefString
+    NSString *frameworkPath = [[NSBundle mainBundle] privateFrameworksPath];
+    CefString(&settings.framework_dir_path).FromString([frameworkPath UTF8String]);
+    
+    NSString *resourcePath = [[NSBundle mainBundle] resourcePath];
+    CefString(&settings.browser_subprocess_path).FromString([resourcePath UTF8String]);
+    
+    settings.log_severity = LOGSEVERITY_VERBOSE;  // Enable verbose logging for debugging
+
+    // Main Args
+    int argc = 0;
+    CefMainArgs main_args(argc, nullptr);
+    
+    // Initialize the application
+    [ElectrobunNSApplication sharedApplication];
+    
+    // Create the app
+    g_app = new ElectrobunApp();
+    
+    // Initialize CEF
+    bool result = CefInitialize(main_args, settings, g_app.get(), nullptr);
+    if (result) {
+        initialized = true;
+    }
+    return result;
+}
+
+// END CEF
 
 // views:// schema handler
 
@@ -209,15 +328,30 @@ NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
 
 
 void runNSApplication() {    
-    
+    @autoreleasepool {
+        // Initialize CEF first
+        if (!initializeCEF()) {
+            NSLog(@"Failed to initialize CEF");
+            return;
+        }
+
+        // Set up NSApplication
         NSApplication *app = [NSApplication sharedApplication];    
         AppDelegate *delegate = [[AppDelegate alloc] init];
         [app setDelegate:delegate];
-
         retainObjCObject(delegate);
 
-        [app run];            
-    
+        // Finished launching
+        [NSApp finishLaunching];
+        
+        // Run CEF message loop
+        CefRunMessageLoop();
+        
+        // Cleanup
+        CefShutdown();
+    }
+
+    // [app run] is not needed since CefRunMessageLoop handles everything                
 }
 
 // WKWebView
@@ -898,11 +1032,39 @@ void closeNSWindow(NSWindow *window) {
 }
 
 void addWebviewToWindow(NSWindow *window, TransparentWKWebView *view) {
-    [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];        
+    // [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];        
 
-    CGFloat adjustedY = view.superview.bounds.size.height - view.frame.origin.y - view.frame.size.height;
-    view.frame = NSMakeRect(view.frame.origin.x, adjustedY, view.frame.size.width, view.frame.size.height);    
+    // CGFloat adjustedY = view.superview.bounds.size.height - view.frame.origin.y - view.frame.size.height;
+    // view.frame = NSMakeRect(view.frame.origin.x, adjustedY, view.frame.size.width, view.frame.size.height);    
 
+    // Create CEF browser settings
+    CefBrowserSettings browserSettings;
+    
+    // Create the browser window info
+    CefWindowInfo window_info;
+    NSView *contentView = window.contentView;
+    NSRect bounds = [contentView bounds];
+    
+    window_info.SetAsChild((__bridge void*)contentView,
+                          CefRect(0, 0,
+                                 static_cast<int>(bounds.size.width),
+                                 static_cast<int>(bounds.size.height)));
+    
+    // Create CEF client
+    CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
+    
+    // Create the browser
+    CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
+        window_info,
+        client,
+        "about:blank",
+        browserSettings,
+        nullptr,
+        nullptr);
+
+    objc_setAssociatedObject(window, "CefBrowser", (__bridge id)browser.get(), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    
 }
 
 typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
@@ -1583,6 +1745,9 @@ void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHan
     objc_setAssociatedObject(NSApp, "ContextMenu", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+void shutdownApplication() {
+    CefShutdown();
+}
 
 
 }
