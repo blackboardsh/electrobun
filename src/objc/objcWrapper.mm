@@ -5,6 +5,10 @@
 #import <CommonCrypto/CommonCrypto.h>
 #import <QuartzCore/QuartzCore.h>
 
+// since this is a c++ file now (to interface with CEF) we have to use
+// extern C to prevent c++ name mangling
+extern "C" {
+
 // views:// schema handler
 
 CGFloat OFFSCREEN_OFFSET = -20000;
@@ -1297,14 +1301,14 @@ typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
 }
 @end
 
-NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool template, uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
+NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate, uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
     NSString *pathToImageString = [NSString stringWithUTF8String:pathToImage];
     NSString *titleString = [NSString stringWithUTF8String:title];
     NSStatusItem *statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
 
     if (pathToImageString.length > 0) {
         statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:pathToImageString];
-        statusItem.button.image.template = template;
+        [statusItem.button.image setTemplate:isTemplate];
         statusItem.button.image.size = NSMakeSize(width, height);
     }
     if (titleString.length > 0) {
@@ -1580,3 +1584,5 @@ void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHan
 }
 
 
+
+}

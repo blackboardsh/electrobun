@@ -22,7 +22,7 @@
     "start": "bun src/bun/index.ts",
     "check-zig-version": "vendors/zig/zig version",
     "install-zig": "mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-macos-aarch64-0.13.0/zig zig-macos-aarch64-0.13.0/lib  zig-macos-aarch64-0.13.0/doc",
-    "build:objc:object": "mkdir -p src/objc/build && clang -c src/objc/objcWrapper.m -o src/objc/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs",
+    "build:objc:object": "mkdir -p src/objc/build && clang++ -c src/objc/objcWrapper.mm -o src/objc/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs",
     "build:objc:staticlib": "ar rcs src/zig/build/libObjcWrapper.a src/objc/build/objcWrapper.o",
     "build:objc": "bun build:objc:object && bun build:objc:staticlib",
     "build:zig": "cd src/zig && ../../vendors/zig/zig build",
