@@ -16,6 +16,7 @@
 #include "include/cef_application_mac.h"
 #include "include/wrapper/cef_library_loader.h"
 #include "include/wrapper/cef_helpers.h"
+#include <list>
 
 // Forward declare the classes
 class CefApp;
@@ -23,9 +24,10 @@ class CefClient;
 class CefLifeSpanHandler;
 class CefBrowser;
 
+
 // Provide the CefAppProtocol implementation
 @interface ElectrobunNSApplication : NSApplication <CefAppProtocol> {
- @private
+@private
   BOOL handlingSendEvent_;
 }
 @end
@@ -45,10 +47,118 @@ class CefBrowser;
 }
 @end
 
-// Implementation of CefApp
-class ElectrobunApp : public CefApp {
+class ElectrobunHandler : public CefClient,
+                         public CefDisplayHandler,
+                         public CefLifeSpanHandler,
+                         public CefLoadHandler {
 public:
-    ElectrobunApp() {} // Default constructor
+    static ElectrobunHandler* GetInstance() {
+        return g_instance;
+    }
+
+    ElectrobunHandler() {
+        DCHECK(!g_instance);
+        g_instance = this;
+    }
+
+    ~ElectrobunHandler() {
+        g_instance = nullptr;
+    }
+
+    // CefClient methods
+    CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+    CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+    CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
+
+    // Required lifecycle methods
+    void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+        CEF_REQUIRE_UI_THREAD();
+        browser_list_.push_back(browser);
+    }
+
+    bool DoClose(CefRefPtr<CefBrowser> browser) override {
+        CEF_REQUIRE_UI_THREAD();
+        if (browser_list_.size() == 1) {
+            is_closing_ = true;
+        }
+        return false;
+    }
+
+    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        CEF_REQUIRE_UI_THREAD();
+        
+        for (auto bit = browser_list_.begin(); bit != browser_list_.end(); ++bit) {
+            if ((*bit)->IsSame(browser)) {
+                browser_list_.erase(bit);
+                break;
+            }
+        }
+
+        if (browser_list_.empty()) {
+            CefQuitMessageLoop();
+        }
+    }
+
+private:
+    static ElectrobunHandler* g_instance;
+    typedef std::list<CefRefPtr<CefBrowser>> BrowserList;
+    BrowserList browser_list_;
+    bool is_closing_ = false;
+
+    IMPLEMENT_REFCOUNTING(ElectrobunHandler);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunHandler);
+};
+
+ElectrobunHandler* ElectrobunHandler::g_instance = nullptr;
+
+// Implementation of CefApp
+class ElectrobunApp : public CefApp, public CefBrowserProcessHandler {
+public:
+    ElectrobunApp() {}
+
+    // // CefApp methods:
+    // CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
+    //     return this;
+    // }
+
+     void OnBeforeCommandLineProcessing(const CefString& process_type,
+                                     CefRefPtr<CefCommandLine> command_line) override {
+        NSLog(@"OnBeforeCommandLineProcessing - Process type: %s", process_type.ToString().c_str());
+        NSLog(@"Command line program: %s", command_line->GetProgram().ToString().c_str());
+    }
+
+    void OnRegisterCustomSchemes(
+        CefRawPtr<CefSchemeRegistrar> registrar) override {
+        NSLog(@"OnRegisterCustomSchemes called");
+    }
+
+    CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
+        return this;
+    }
+
+    CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {
+        NSLog(@"GetRenderProcessHandler called");
+        return nullptr;
+    }
+
+    virtual void OnBeforeChildProcessLaunch(
+        CefRefPtr<CefCommandLine> command_line) override {
+        NSLog(@"OnBeforeChildProcessLaunch - Command line program: %s", 
+              command_line->GetProgram().ToString().c_str());
+        std::vector<CefString> args;
+        command_line->GetArguments(args);
+        for (const auto& arg : args) {
+            NSLog(@"  Arg: %s", arg.ToString().c_str());
+        }
+    }
+
+    // CefBrowserProcessHandler methods:
+    void OnContextInitialized() override {
+        // This is where you set up browser creation
+    }
+    CefRefPtr<CefClient> GetDefaultClient() override {
+        return ElectrobunHandler::GetInstance();
+    }
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunApp);
@@ -73,6 +183,8 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
 };
 
+
+
 // Global CEF reference
 CefRefPtr<ElectrobunApp> g_app;
 
@@ -84,49 +196,84 @@ bool initializeCEF() {
         return true;
     }
 
-    // Load the CEF framework library at runtime
-    static CefScopedLibraryLoader library_loader;
-    if (!library_loader.LoadInMain()) {
-        NSLog(@"Failed to load CEF library");
+    NSLog(@"[CEF] Starting initialization");
+
+    NSLog(@"[CEF] Creating application instance");
+    [ElectrobunNSApplication sharedApplication];
+
+    NSLog(@"[CEF] Verifying application class");
+    if (![NSApp isKindOfClass:[ElectrobunNSApplication class]]) {
+        NSLog(@"[CEF] Failed to create ElectrobunNSApplication instance");
         return false;
     }
 
-    // Create the process-wide command line object
-    CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
-    command_line->InitFromArgv(0, nullptr);  // Empty command line
+    // Build argv
+    NSProcessInfo* processInfo = [NSProcessInfo processInfo];
+    NSArray* arguments = [processInfo arguments];
+    int argc = (int)[arguments count];
+    char** argv = (char**)malloc(sizeof(char*) * argc);
+    for (int i = 0; i < argc; i++) {
+        argv[i] = strdup([[arguments objectAtIndex:i] UTF8String]);
+    }
 
-    // Specify CEF global settings
+    NSLog(@"[CEF] Creating main args with argc: %d", argc);
+    CefMainArgs main_args(argc, argv);
+
+    // Create the global app instance (used by both sub- and main processes).
+    NSLog(@"[CEF] Creating app instance");
+    g_app = new ElectrobunApp();
+
+    // ---------------------------------------------------------
+    // 1) If this is the helper process, run it & return
+    // ---------------------------------------------------------
+    int exit_code = CefExecuteProcess(main_args, g_app.get(), nullptr);
+    if (exit_code >= 0) {
+        // Free argv before returning
+        for (int i = 0; i < argc; i++) {
+            free(argv[i]);
+        }
+        free(argv);
+
+        NSLog(@"[CEF] Subprocess exit_code: %d", exit_code);
+        return true; // or false, depending on your design
+    }
+
+    // ---------------------------------------------------------
+    // 2) Now we’re the main (browser) process
+    // ---------------------------------------------------------
+    NSLog(@"[CEF] Setting up global settings");
     CefSettings settings;
     settings.no_sandbox = true;
 
-    // Convert paths to CefString
-    NSString *frameworkPath = [[NSBundle mainBundle] privateFrameworksPath];
-    CefString(&settings.framework_dir_path).FromString([frameworkPath UTF8String]);
+    settings.log_severity = LOGSEVERITY_VERBOSE;
     
-    NSString *resourcePath = [[NSBundle mainBundle] resourcePath];
-    CefString(&settings.browser_subprocess_path).FromString([resourcePath UTF8String]);
-    
-    settings.log_severity = LOGSEVERITY_VERBOSE;  // Enable verbose logging for debugging
 
-    // Main Args
-    int argc = 0;
-    CefMainArgs main_args(argc, nullptr);
-    
-    // Initialize the application
-    [ElectrobunNSApplication sharedApplication];
-    
-    // Create the app
-    g_app = new ElectrobunApp();
-    
-    // Initialize CEF
+
+    NSLog(@"[CEF] Creating command line");
+    CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
+    command_line->InitFromArgv(argc, argv);
+
+    NSLog(@"[CEF] About to call CefInitialize");
     bool result = CefInitialize(main_args, settings, g_app.get(), nullptr);
-    if (result) {
-        initialized = true;
-    }
-    return result;
-}
+    NSLog(@"[CEF] CefInitialize returned: %d", result);
 
+    // Clean up argv
+    for (int i = 0; i < argc; i++) {
+        free(argv[i]);
+    }
+    free(argv);
+
+    if (!result) {
+        NSLog(@"[CEF] Initialization failed");
+        return false;
+    }
+
+    NSLog(@"[CEF] Initialization completed successfully");
+    initialized = true;
+    return true;
+}
 // END CEF
+
 
 // views:// schema handler
 
@@ -1751,3 +1898,5 @@ void shutdownApplication() {
 
 
 }
+
+

@@ -9,7 +9,8 @@ import { Tray } from "../core/Tray";
 const CHUNK_SIZE = 1024 * 4; // 4KB
 // todo (yoav): webviewBinaryPath and ELECTROBUN_VIEWS_FOLDER should be passed in as cli/env args by the launcher binary
 // will likely be different on different platforms. Right now these are hardcoded for relative paths inside the mac app bundle.
-const webviewBinaryPath = join("native", "webview");
+const webviewBinaryPath = "./webview";
+// const webviewBinaryPath = "../Frameworks/Electrobun.app/Contents/MacOS/webview";
 
 const hash = await Updater.localInfo.hash();
 // Note: we use the build's hash to separate from different apps and different builds

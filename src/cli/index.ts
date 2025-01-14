@@ -52,6 +52,7 @@ const PATHS = {
     "dist",
     "Chromium Embedded Framework.framework"
   ),
+  CEF_HELPER_MACOS: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
 };
 
 const commandDefaults = {
@@ -230,6 +231,7 @@ if (commandArg === "init") {
     appBundleFolderContentsPath,
     appBundleMacOSPath,
     appBundleFolderResourcesPath,
+    appBundleFolderFrameworksPath,
   } = createAppBundle(appFileName, buildFolder);
 
   const appBundleAppCodePath = join(appBundleFolderResourcesPath, "app");
@@ -338,11 +340,7 @@ if (commandArg === "init") {
   // todo (yoav): build native bindings for target
   // copy native bindings
   const zigNativeBinarySource = PATHS.ZIG_NATIVE_WRAPPER;
-  const zigNativeBinaryDestination = join(
-    appBundleMacOSPath,
-    "native",
-    "webview"
-  );
+  const zigNativeBinaryDestination = join(appBundleMacOSPath, "webview");
   const destFolder = dirname(zigNativeBinaryDestination);
   if (!existsSync(destFolder)) {
     // console.info('creating folder: ', destFolder);
@@ -358,7 +356,6 @@ if (commandArg === "init") {
   const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;
   const nativeWrapperMacosDestination = join(
     appBundleMacOSPath,
-    "native",
     "libObjcWrapper.dylib"
   );
   cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
@@ -367,8 +364,7 @@ if (commandArg === "init") {
 
   const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
   const cefFrameworkDestination = join(
-    appBundleMacOSPath,
-    "Frameworks",
+    appBundleFolderFrameworksPath,
     "Chromium Embedded Framework.framework"
   );
 
@@ -383,6 +379,35 @@ if (commandArg === "init") {
   cpSync(cefFrameworkSource, cefFrameworkDestination, {
     recursive: true,
     dereference: true,
+  });
+
+  // cef helpers
+  const cefHelperNames = [
+    "webview Helper",
+    "webview Helper (Alerts)",
+    "webview Helper (GPU)",
+    "webview Helper (Plugin)",
+    "webview Helper (Renderer)",
+  ];
+
+  const helperSourcePath = PATHS.CEF_HELPER_MACOS;
+  cefHelperNames.forEach((helperName) => {
+    const destinationPath = join(
+      appBundleFolderFrameworksPath,
+      `${helperName}.app`,
+      `Contents`,
+      `MacOS`,
+      `${helperName}`
+    );
+    const destFolder4 = basename(destinationPath);
+    if (!existsSync(destFolder4)) {
+      // console.info('creating folder: ', destFolder4);
+      mkdirSync(destFolder4, { recursive: true });
+    }
+    cpSync(helperSourcePath, destinationPath, {
+      recursive: true,
+      dereference: true,
+    });
   });
 
   // copy native bindings
@@ -1225,16 +1250,22 @@ function createAppBundle(bundleName: string, parentFolder: string) {
     appBundleFolderContentsPath,
     "Resources"
   );
+  const appBundleFolderFrameworksPath = join(
+    appBundleFolderContentsPath,
+    "Frameworks"
+  );
 
   // we don't have to make all the folders, just the deepest ones
   // todo (yoav): check if folders exist already before creating them
   mkdirSync(appBundleMacOSPath, { recursive: true });
   mkdirSync(appBundleFolderResourcesPath, { recursive: true });
+  mkdirSync(appBundleFolderFrameworksPath, { recursive: true });
 
   return {
     appBundleFolderPath,
     appBundleFolderContentsPath,
     appBundleMacOSPath,
     appBundleFolderResourcesPath,
+    appBundleFolderFrameworksPath,
   };
 }
