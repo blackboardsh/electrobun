@@ -249,22 +249,24 @@ const win = new BrowserWindow({
 
 win.setTitle("url browserwindow");
 
-setTimeout(async () => {
-  const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
-    // script: `document.body.textContent`,
-    script: `
-    return new Promise(
-      resolve => {
-        setTimeout(() => {
-          resolve(document.body.textContent + 'hi hi hi')
-        }, 1000)
-      }
-    )
-    `,
-  });
+// TODO: this causes a crash. FIX it
 
-  console.log("evaluateJavascriptWithResponse", result);
-}, 1000);
+// setTimeout(async () => {
+//   const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+//     // script: `document.body.textContent`,
+//     script: `
+//     return new Promise(
+//       resolve => {
+//         setTimeout(() => {
+//           resolve(document.body.textContent + 'hi hi hi')
+//         }, 1000)
+//       }
+//     )
+//     `,
+//   });
+
+//   console.log("evaluateJavascriptWithResponse", result);
+// }, 1000);
 
 const wikiWindow = new BrowserWindow({
   title: "my url window",

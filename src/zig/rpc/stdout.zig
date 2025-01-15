@@ -9,7 +9,7 @@ var c = std.Thread.Condition{};
 
 const alloc = std.heap.page_allocator;
 
-pub fn sendRequest(method: []const u8, params: anytype, PayloadType: anytype) PayloadType {
+pub fn sendRequest(method: []const u8, params: anytype, PayloadType: anytype) void {
     const id = idGen.nextId();
     send(.{
         .id = id,
@@ -18,24 +18,27 @@ pub fn sendRequest(method: []const u8, params: anytype, PayloadType: anytype) Pa
         .params = params,
     });
 
-    m.lock();
-    defer m.unlock();
-    _waitingForResponse = true;
-    _response = null;
+    _ = PayloadType;
 
-    while (_waitingForResponse) {
-        c.wait(&m);
-    }
+    // m.lock();
+    // defer m.unlock();
+    // _waitingForResponse = true;
+    // _response = null;
 
-    const responseWrapper = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, _response.?, .{}) catch {
-        unreachable;
-    };
+    // while (_waitingForResponse) {
+    //     // c.wait(&m);
+    //     std.time.sleep(std.time.ns_per_ms * 100);
+    // }
 
-    const rawPayload = responseWrapper.value.payload;
-    const parsedPayload = std.json.parseFromValue(PayloadType, alloc, rawPayload.?, .{}) catch {
-        unreachable;
-    };
-    return parsedPayload.value;
+    // const responseWrapper = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, _response.?, .{}) catch {
+    //     unreachable;
+    // };
+
+    // const rawPayload = responseWrapper.value.payload;
+    // const parsedPayload = std.json.parseFromValue(PayloadType, alloc, rawPayload.?, .{}) catch {
+    //     unreachable;
+    // };
+    // return parsedPayload.value;
 }
 
 pub fn setResponse(id: u32, response: anytype) void {
@@ -45,11 +48,11 @@ pub fn setResponse(id: u32, response: anytype) void {
     // this yet
     _ = id;
 
-    m.lock();
-    defer m.unlock();
+    // m.lock();
+    // defer m.unlock();
     _response = response;
     _waitingForResponse = false;
-    c.signal();
+    // c.signal();
 }
 
 pub fn sendResponseSuccess(id: u32, payload: ?rpcSchema.RequestResponseType) void {

@@ -61,12 +61,12 @@ const WindowMap = std.AutoHashMap(u32, WindowType);
 pub var windowMap: WindowMap = WindowMap.init(alloc);
 
 pub fn windowCloseHandler(windowId: u32) callconv(.C) void {
-    _ = rpc.request.windowClose(.{ .id = windowId });
+    rpc.request.windowClose(.{ .id = windowId });
     windowCleanup(windowId);
 }
 
 pub fn windowMoveHandler(windowId: u32, x: f64, y: f64) callconv(.C) void {
-    _ = rpc.request.windowMove(.{ .id = windowId, .x = x, .y = y });
+    rpc.request.windowMove(.{ .id = windowId, .x = x, .y = y });
 }
 
 pub fn windowResizeHandler(windowId: u32, x: f64, y: f64, width: f64, height: f64) callconv(.C) void {

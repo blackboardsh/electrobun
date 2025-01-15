@@ -83,23 +83,23 @@ const ConfigureWebviewTags = (
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
 
-      const webviewId = this.syncRpc({
-        method: "webviewTagInit",
-        params: {
-          hostWebviewId: window.__electrobunWebviewId,
-          windowId: window.__electrobunWindowId,
-          url: this.src || this.getAttribute("src") || null,
-          html: this.html || this.getAttribute("html") || null,
-          preload: this.preload || this.getAttribute("preload") || null,
-          partition: this.partition || this.getAttribute("partition") || null,
-          frame: {
-            width: rect.width,
-            height: rect.height,
-            x: rect.x,
-            y: rect.y,
-          },
-        },
-      });
+      // const webviewId = this.syncRpc({
+      //   method: "webviewTagInit",
+      //   params: {
+      //     hostWebviewId: window.__electrobunWebviewId,
+      //     windowId: window.__electrobunWindowId,
+      //     url: this.src || this.getAttribute("src") || null,
+      //     html: this.html || this.getAttribute("html") || null,
+      //     preload: this.preload || this.getAttribute("preload") || null,
+      //     partition: this.partition || this.getAttribute("partition") || null,
+      //     frame: {
+      //       width: rect.width,
+      //       height: rect.height,
+      //       x: rect.x,
+      //       y: rect.y,
+      //     },
+      //   },
+      // });
 
       this.webviewId = webviewId;
       this.id = `electrobun-webview-${webviewId}`;

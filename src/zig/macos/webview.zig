@@ -161,15 +161,16 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 // request against the same origin that other local content is loaded from.
                 // js loaded from other sources (http, etc.) will be blocked (CORS) from initiating
                 // synchronous requests to bun.
-                const bodyString = utils.fromCString(body);
+                return assetFileLoader(url);
+                // const bodyString = utils.fromCString(body);
 
-                const response = rpc.request.sendSyncRequest(.{ .webviewId = webviewId, .request = bodyString });
-                if (response.payload) |payload| {
-                    const responseString = payload[0..payload.len];
-                    return objc.FileResponse{ .mimeType = utils.toCString("application/json"), .fileContents = responseString.ptr, .len = responseString.len, .opaquePointer = null };
-                } else {
-                    std.debug.print("Failed to get response from sync rpc request, no payload\n", .{});
-                }
+                // const response = rpc.request.sendSyncRequest(.{ .webviewId = webviewId, .request = bodyString });
+                // if (response.payload) |payload| {
+                //     const responseString = payload[0..payload.len];
+                //     return objc.FileResponse{ .mimeType = utils.toCString("application/json"), .fileContents = responseString.ptr, .len = responseString.len, .opaquePointer = null };
+                // } else {
+                //     std.debug.print("Failed to get response from sync rpc request, no payload\n", .{});
+                // }
             } else if (std.mem.eql(u8, relPath, "rpc")) {
                 const bodyString = utils.fromCString(body);
 
@@ -221,14 +222,17 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     // Can only define functions inline in zig within a struct
     const delegate = objc.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
         fn decideNavigation(webviewId: u32, url: [*:0]const u8) callconv(.C) bool {
+            _ = webviewId;
+            _ = url;
             // todo: right now this reaches a generic rpc request, but it should be attached
             // to this specific webview's pipe so navigation handlers can be attached to specific webviews
-            const _response = rpc.request.decideNavigation(.{
-                .webviewId = webviewId,
-                .url = utils.fromCString(url),
-            });
+            // const _response = rpc.request.decideNavigation(.{
+            //     .webviewId = webviewId,
+            //     .url = utils.fromCString(url),
+            // });
 
-            return _response.allow;
+            // TODO: Bun should provide this webview a rule list instead of it fireing an event
+            return true;
         }
     }.decideNavigation, struct {
         fn handleWebviewEvent(webviewId: u32, eventName: [*:0]const u8, url: [*:0]const u8) callconv(.C) void {
@@ -633,7 +637,7 @@ pub fn webviewEvent(opts: rpcSchema.BrowserSchema.messages.webviewEvent) void {
     };
 
     // todo: we need these to timeout
-    _ = rpc.request.webviewEvent(.{
+    rpc.request.webviewEvent(.{
         .id = webview.id,
         .eventName = opts.eventName,
         .detail = opts.detail,

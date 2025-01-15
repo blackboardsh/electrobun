@@ -288,16 +288,16 @@ pub const Handlers = struct {
 };
 
 pub const Requests = struct {
-    decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) ZigSchema.requests.decideNavigation.response,
-    sendSyncRequest: fn (params: ZigSchema.requests.sendSyncRequest.params) ZigSchema.requests.sendSyncRequest.response,
-    log: fn (params: ZigSchema.requests.log.params) ZigSchema.requests.log.response,
-    trayEvent: fn (params: ZigSchema.requests.trayEvent.params) ZigSchema.requests.trayEvent.response,
-    applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) ZigSchema.requests.applicationMenuEvent.response,
-    contextMenuEvent: fn (params: ZigSchema.requests.contextMenuEvent.params) ZigSchema.requests.contextMenuEvent.response,
-    webviewEvent: fn (params: ZigSchema.requests.webviewEvent.params) ZigSchema.requests.webviewEvent.response,
-    windowClose: fn (params: ZigSchema.requests.windowClose.params) ZigSchema.requests.windowClose.response,
-    windowMove: fn (params: ZigSchema.requests.windowMove.params) ZigSchema.requests.windowMove.response,
-    windowResize: fn (params: ZigSchema.requests.windowResize.params) ZigSchema.requests.windowResize.response,
+    decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) void,
+    sendSyncRequest: fn (params: ZigSchema.requests.sendSyncRequest.params) void,
+    log: fn (params: ZigSchema.requests.log.params) void,
+    trayEvent: fn (params: ZigSchema.requests.trayEvent.params) void,
+    applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) void,
+    contextMenuEvent: fn (params: ZigSchema.requests.contextMenuEvent.params) void,
+    webviewEvent: fn (params: ZigSchema.requests.webviewEvent.params) void,
+    windowClose: fn (params: ZigSchema.requests.windowClose.params) void,
+    windowMove: fn (params: ZigSchema.requests.windowMove.params) void,
+    windowResize: fn (params: ZigSchema.requests.windowResize.params) void,
 };
 
 // todo: currently the the keys will be a key of the payload struct because of how unions work in zig.

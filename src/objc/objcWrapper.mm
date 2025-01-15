@@ -24,6 +24,8 @@ class CefClient;
 class CefLifeSpanHandler;
 class CefBrowser;
 
+// temp: make this useCEF and make it configurable
+BOOL useCEF = true;
 
 // Provide the CefAppProtocol implementation
 @interface ElectrobunNSApplication : NSApplication <CefAppProtocol> {
@@ -246,12 +248,12 @@ bool initializeCEF() {
     settings.no_sandbox = true;
 
     settings.log_severity = LOGSEVERITY_VERBOSE;
-    
-
 
     NSLog(@"[CEF] Creating command line");
+    // CefCommandLine::GetGlobalCommandLine()->AppendSwitch("disable-hang-monitor");
     CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
-    command_line->InitFromArgv(argc, argv);
+    command_line->InitFromArgv(argc, argv);    
+    // command_line->AppendSwitch("use-native"); // disable CEF's views framework to use native os windows and such.
 
     NSLog(@"[CEF] About to call CefInitialize");
     bool result = CefInitialize(main_args, settings, g_app.get(), nullptr);
@@ -474,31 +476,41 @@ NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
 @end
 
 
-void runNSApplication() {    
-    @autoreleasepool {
-        // Initialize CEF first
-        if (!initializeCEF()) {
-            NSLog(@"Failed to initialize CEF");
-            return;
+void runNSApplication() {  
+    
+    if (useCEF) {
+        @autoreleasepool {
+            // Initialize CEF first
+            if (!initializeCEF()) {
+                NSLog(@"Failed to initialize CEF");
+                return;
+            }
+
+            // Set up NSApplication
+            NSApplication *app = [NSApplication sharedApplication];    
+            AppDelegate *delegate = [[AppDelegate alloc] init];
+            [app setDelegate:delegate];
+            retainObjCObject(delegate);
+
+            // Finished launching
+            [NSApp finishLaunching];
+            
+            // Run CEF message loop
+            CefRunMessageLoop();
+            
+            // Cleanup
+            CefShutdown();
         }
 
-        // Set up NSApplication
+    } else {
+        // is not needed when CEF is used since CefRunMessageLoop handles everything                
         NSApplication *app = [NSApplication sharedApplication];    
         AppDelegate *delegate = [[AppDelegate alloc] init];
         [app setDelegate:delegate];
+
         retainObjCObject(delegate);
-
-        // Finished launching
-        [NSApp finishLaunching];
-        
-        // Run CEF message loop
-        CefRunMessageLoop();
-        
-        // Cleanup
-        CefShutdown();
+        [app run]; 
     }
-
-    // [app run] is not needed since CefRunMessageLoop handles everything                
 }
 
 // WKWebView
@@ -870,6 +882,7 @@ NSRect getWindowBounds(NSWindow *window) {
 }
 
 - (void)mouseMoved:(NSEvent *)event {
+    NSLog(@"mouseMoved");
     NSPoint mouseLocation = [self convertPoint:[event locationInWindow] fromView:nil];        
     [self updateActiveWebviewForMousePosition:mouseLocation];
 }
@@ -878,6 +891,7 @@ NSRect getWindowBounds(NSWindow *window) {
 // NSPoint currentMousePosition = [window mouseLocationOutsideOfEventStream];
 // [window.containerView updateActiveWebviewForMousePosition:currentMousePosition];
 - (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation {    
+    NSLog(@"updateActiveWebviewForMousePosition");
     // Access all subviews in the window's main content view. This includes both
     // "main" webviews and "nested" webviews that use <electrobun-webview> tags
     NSArray *subviews = [self subviews];    
@@ -974,6 +988,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
 }
 
 void resizeWebview(TransparentWKWebView *view, NSRect frame, const char *masksJson) {
+    NSLog(@"resizeWEbview");
 
     // Round everything here to avoid bugs where different internal things
     // will round subpixels in different directions (ceil or floor).
@@ -1178,41 +1193,170 @@ void closeNSWindow(NSWindow *window) {
     [window close];    
 }
 
-void addWebviewToWindow(NSWindow *window, TransparentWKWebView *view) {
-    // [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];        
+void addCEFWebviewToWindow(NSWindow *window) {
+    // We have to wait for the NSWindow to be ready before we can create the CEF browser
+    // otherwise it will crash.
+    void (^createCEFBrowser)(void) = ^{
+        NSLog(@"Creating CEF browser...");  // Debug log
+        CefBrowserSettings browserSettings;
+        CefWindowInfo window_info;
+        NSView *contentView = window.contentView;
+        NSRect bounds = [contentView bounds];
+        
+        [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+        [contentView setAutoresizesSubviews:YES];
+        
+        CefRect cefBounds(
+            static_cast<int>(bounds.origin.x),
+            static_cast<int>(bounds.origin.y),
+            static_cast<int>(bounds.size.width),
+            static_cast<int>(bounds.size.height)
+        );
+        
+        window_info.SetAsChild((__bridge void*)contentView, cefBounds);
+        CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
+        CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
+            window_info,
+            client,
+            "https://google.com",
+            browserSettings,
+            nullptr,
+            nullptr);
 
-    // CGFloat adjustedY = view.superview.bounds.size.height - view.frame.origin.y - view.frame.size.height;
-    // view.frame = NSMakeRect(view.frame.origin.x, adjustedY, view.frame.size.width, view.frame.size.height);    
+        objc_setAssociatedObject(window, "CefBrowser", (__bridge id)browser.get(), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    };
 
-    // Create CEF browser settings
-    CefBrowserSettings browserSettings;
+    // Try multiple window lifecycle events
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
     
-    // Create the browser window info
-    CefWindowInfo window_info;
-    NSView *contentView = window.contentView;
-    NSRect bounds = [contentView bounds];
+    NSArray *notificationNames = @[
+        NSWindowDidBecomeMainNotification,
+        NSWindowDidBecomeKeyNotification,
+        NSWindowDidUpdateNotification,
+        NSWindowDidExposeNotification
+    ];
     
-    window_info.SetAsChild((__bridge void*)contentView,
-                          CefRect(0, 0,
-                                 static_cast<int>(bounds.size.width),
-                                 static_cast<int>(bounds.size.height)));
-    
-    // Create CEF client
-    CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
-    
-    // Create the browser
-    CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
-        window_info,
-        client,
-        "about:blank",
-        browserSettings,
-        nullptr,
-        nullptr);
+    // Debug current window state
+    NSLog(@"Window state - isKey: %d, isMain: %d, isVisible: %d", 
+          [window isKeyWindow], 
+          [window isMainWindow],
+          [window isVisible]);
 
-    objc_setAssociatedObject(window, "CefBrowser", (__bridge id)browser.get(), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
+    __block BOOL hasCreatedBrowser = NO;
     
+    for (NSString *notificationName in notificationNames) {
+        [center addObserverForName:notificationName
+                           object:window
+                            queue:[NSOperationQueue mainQueue]
+                       usingBlock:^(NSNotification *note) {
+            NSLog(@"Received notification: %@", notificationName);  // Debug log
+            if (!hasCreatedBrowser) {
+                hasCreatedBrowser = YES;
+                createCEFBrowser();
+            }
+        }];
+    }
+    
+    [window makeKeyAndOrderFront:nil];
+
+
+
+    // THIS WORKS!
+    // dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+
+    // // [window makeKeyAndOrderFront:nil];
+    
+    // // // Queue the CEF creation on the main thread after window is ready
+    // // dispatch_async(dispatch_get_main_queue(), ^{
+    // // NSRect windowRect = NSMakeRect(100, 100, 800, 600); // x, y, width, height
+    // // NSWindow *window = [[NSWindow alloc] 
+    // //     initWithContentRect:windowRect
+    // //     styleMask:(NSWindowStyleMaskTitled |
+    // //               NSWindowStyleMaskClosable |
+    // //               NSWindowStyleMaskMiniaturizable |
+    // //               NSWindowStyleMaskResizable)
+    // //     backing:NSBackingStoreBuffered
+    // //     defer:NO];
+    
+    // // [window setTitle:@"CEF Browser Window"];
+    // // [window center]; // Center on screen
+    // // [window makeKeyAndOrderFront:nil];
+    //  // Create CEF browser settings
+    // CefBrowserSettings browserSettings;
+    
+    // // Create the browser window info
+    // CefWindowInfo window_info;
+    // NSView *contentView = window.contentView;
+    // NSRect bounds = [contentView bounds];
+    
+    // // window_info.SetAsChild((__bridge void*)contentView,
+    // //                       CefRect(0, 0,
+    // //                              static_cast<int>(bounds.size.width),
+    // //                              static_cast<int>(bounds.size.height)));
+
+    // CefWindowHandle windowHandle = (__bridge void*)contentView;
+
+    // [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+    // [contentView setAutoresizesSubviews:YES];
+
+
+    // // Create CefRect from NSRect bounds
+    // CefRect cefBounds(
+    //     static_cast<int>(bounds.origin.x),
+    //     static_cast<int>(bounds.origin.y),
+    //     static_cast<int>(bounds.size.width),
+    //     static_cast<int>(bounds.size.height)
+    // );
+    
+    // // Set up window info for embedding // causes crash
+    // window_info.SetAsChild(windowHandle, cefBounds);
+    
+    
+    
+    // // Create CEF client
+    // CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
+    
+    // // Create the browser
+    // CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
+    //     window_info,
+    //     client,
+    //     "https://google.com",
+    //     browserSettings,
+    //     nullptr,
+    //     nullptr);
+
+    // // // Get the native view from CEF
+    // // CefRefPtr<CefBrowserHost> host = browser->GetHost();
+    // // NSView* browserView = (__bridge NSView*)host->GetWindowHandle();
+    
+    // // // Get the content view of our window and set up for the browser view
+    // // NSView *contentView = window.contentView;
+    // // NSRect bounds = [contentView bounds];
+    
+    // // // Configure the browser view's frame and autoresizing
+    // // [browserView setFrame:bounds];
+    // // [browserView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+    
+    // // // Add the browser view to our window's content view
+    // // [contentView addSubview:browserView];
+
+    // objc_setAssociatedObject(window, "CefBrowser", (__bridge id)browser.get(), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // // });
+    // });
 }
+
+void addWebviewToWindow(NSWindow *window, TransparentWKWebView *view) {
+    [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];        
+
+    CGFloat adjustedY = view.superview.bounds.size.height - view.frame.origin.y - view.frame.size.height;
+    view.frame = NSMakeRect(view.frame.origin.x, adjustedY, view.frame.size.width, view.frame.size.height);    
+
+    // if (false) {
+        addCEFWebviewToWindow(window);
+    // }
+}
+
+
 
 typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
 
@@ -1297,8 +1441,9 @@ typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {            
     NSURL *newURL = navigationAction.request.URL;
     
-    BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
-    decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
+    // BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
+    // decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
+    decisionHandler(WKNavigationActionPolicyAllow);
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {    

@@ -23,13 +23,12 @@ setTimeout(() => {
   // sync rpc test
   // The entire thread will halt while waiting for bun to respond
   // todo: make it nice to add typescript types for syncrpc
-  const syncMathResult = electrobun.syncRpc({
-    method: "doSyncMath",
-    params: { a: 5, b: 9 },
-  });
-
-  console.log("----> sync result:", syncMathResult);
-  document.body.innerHTML += `<br> \nsync result: ${syncMathResult}\n`;
+  // const syncMathResult = electrobun.syncRpc({
+  //   method: "doSyncMath",
+  //   params: { a: 5, b: 9 },
+  // });
+  // console.log("----> sync result:", syncMathResult);
+  // document.body.innerHTML += `<br> \nsync result: ${syncMathResult}\n`;
 }, 5000);
 
 setTimeout(() => {
