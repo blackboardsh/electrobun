@@ -6,20 +6,20 @@ pub const ZigSchema = struct { //
                 webviewId: u32,
                 url: []const u8,
             };
-            pub const response = struct {
-                allow: bool,
+             pub const response = struct {
+                success: bool,
             };
         };
 
-        pub const sendSyncRequest = struct { //
-            pub const params = struct {
-                webviewId: u32,
-                request: []const u8,
-            };
-            pub const response = struct {
-                payload: ?[]const u8,
-            };
-        };
+        // pub const sendSyncRequest = struct { //
+        //     pub const params = struct {
+        //         webviewId: u32,
+        //         request: []const u8,
+        //     };
+        //     pub const response = struct {
+        //         payload: ?[]const u8,
+        //     };
+        // };
         // Note: this should be a message not a request
         // because we don't need a response
         pub const log = struct {
@@ -288,8 +288,8 @@ pub const Handlers = struct {
 };
 
 pub const Requests = struct {
-    decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) void,
-    sendSyncRequest: fn (params: ZigSchema.requests.sendSyncRequest.params) void,
+    // decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) void,
+    // sendSyncRequest: fn (params: ZigSchema.requests.sendSyncRequest.params) void,
     log: fn (params: ZigSchema.requests.log.params) void,
     trayEvent: fn (params: ZigSchema.requests.trayEvent.params) void,
     applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) void,
@@ -323,16 +323,13 @@ pub const RequestResponseType = union(enum) {
     setApplicationMenu: BunSchema.requests.setApplicationMenu.response,
     showContextMenu: BunSchema.requests.showContextMenu.response,
 
-    DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
-    SendSyncRequestResponse: ZigSchema.requests.sendSyncRequest.response,
-
     webviewTagCanGoBackResponse: BrowserSchema.requests.webviewTagCanGoBack.response,
     webviewTagCanGoForwardResponse: BrowserSchema.requests.webviewTagCanGoForward.response,
 };
 
 // todo: is this still used anywhere
 pub const ResponsePayloadType = union(enum) {
-    DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
+    // DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
     // SomeOtherMethodResponse: ZigSchema.requests.someOtherMethod.response,
 };
 

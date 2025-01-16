@@ -10,7 +10,7 @@ const utils = @import("../../utils.zig");
 
 const strEql = utils.strEql;
 
-const rpc = @import("./request.zig");
+// const rpc = @import("./request.zig");
 
 const alloc = std.heap.page_allocator;
 

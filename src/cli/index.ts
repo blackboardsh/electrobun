@@ -368,14 +368,6 @@ if (commandArg === "init") {
     "Chromium Embedded Framework.framework"
   );
 
-  // temp: need to remove the /native folder and use the proper
-  // Frameworks folder
-  const destFolder3 = join(appBundleMacOSPath, "Frameworks");
-  if (!existsSync(destFolder3)) {
-    // console.info('creating folder: ', destFolder3);
-    mkdirSync(destFolder3, { recursive: true });
-  }
-
   cpSync(cefFrameworkSource, cefFrameworkDestination, {
     recursive: true,
     dereference: true,

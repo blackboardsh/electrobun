@@ -38,8 +38,11 @@ pub fn stdInListener() void {
                 // _response = payload.allow;
 
                 std.log.info("decide Navigation - {}", .{_response.value.payload.?});
-
-                rpcStdout.setResponse(messageWithType.value.id, _response.value.payload);
+                
+                _ = _response;
+                // rpcStdout.setResponse(messageWithType.value.id, _response.value.payload);
+                
+                // Todo: handle response
             } else {
                 // Handle UI events on main thread
                 // since line is re-used we need to copy it to the heap

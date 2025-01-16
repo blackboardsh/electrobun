@@ -125,8 +125,13 @@ public:
 
      void OnBeforeCommandLineProcessing(const CefString& process_type,
                                      CefRefPtr<CefCommandLine> command_line) override {
-        NSLog(@"OnBeforeCommandLineProcessing - Process type: %s", process_type.ToString().c_str());
-        NSLog(@"Command line program: %s", command_line->GetProgram().ToString().c_str());
+        
+        // TODO: this should only be used when working on electrobun itself since it's annoying to keep getting
+        // shown the popup.
+        // We could modify the CEF/chromium source to use a different password store but internally in KeyChain
+        // Chromium is segmenting the secure data for different apps. So each electrobun app is actually isolated
+        // and using different keys for secure cookies and all that.
+        command_line->AppendSwitch("use-mock-keychain");
     }
 
     void OnRegisterCustomSchemes(
@@ -194,75 +199,37 @@ extern "C" {
 
 bool initializeCEF() {
     static bool initialized = false;
-    if (initialized) {
-        return true;
-    }
+    if (initialized) return true;
 
     NSLog(@"[CEF] Starting initialization");
 
-    NSLog(@"[CEF] Creating application instance");
     [ElectrobunNSApplication sharedApplication];
 
-    NSLog(@"[CEF] Verifying application class");
     if (![NSApp isKindOfClass:[ElectrobunNSApplication class]]) {
         NSLog(@"[CEF] Failed to create ElectrobunNSApplication instance");
         return false;
     }
 
-    // Build argv
     NSProcessInfo* processInfo = [NSProcessInfo processInfo];
     NSArray* arguments = [processInfo arguments];
     int argc = (int)[arguments count];
     char** argv = (char**)malloc(sizeof(char*) * argc);
+
     for (int i = 0; i < argc; i++) {
         argv[i] = strdup([[arguments objectAtIndex:i] UTF8String]);
     }
 
-    NSLog(@"[CEF] Creating main args with argc: %d", argc);
     CefMainArgs main_args(argc, argv);
-
-    // Create the global app instance (used by both sub- and main processes).
-    NSLog(@"[CEF] Creating app instance");
     g_app = new ElectrobunApp();
 
-    // ---------------------------------------------------------
-    // 1) If this is the helper process, run it & return
-    // ---------------------------------------------------------
-    int exit_code = CefExecuteProcess(main_args, g_app.get(), nullptr);
-    if (exit_code >= 0) {
-        // Free argv before returning
-        for (int i = 0; i < argc; i++) {
-            free(argv[i]);
-        }
-        free(argv);
-
-        NSLog(@"[CEF] Subprocess exit_code: %d", exit_code);
-        return true; // or false, depending on your design
-    }
-
-    // ---------------------------------------------------------
-    // 2) Now we’re the main (browser) process
-    // ---------------------------------------------------------
-    NSLog(@"[CEF] Setting up global settings");
     CefSettings settings;
+    // TODO: we should enable sandboxing (likely requires a different build of the process helper)    
     settings.no_sandbox = true;
+    // settings.log_severity = LOGSEVERITY_VERBOSE;    
 
-    settings.log_severity = LOGSEVERITY_VERBOSE;
-
-    NSLog(@"[CEF] Creating command line");
-    // CefCommandLine::GetGlobalCommandLine()->AppendSwitch("disable-hang-monitor");
-    CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
-    command_line->InitFromArgv(argc, argv);    
-    // command_line->AppendSwitch("use-native"); // disable CEF's views framework to use native os windows and such.
-
-    NSLog(@"[CEF] About to call CefInitialize");
     bool result = CefInitialize(main_args, settings, g_app.get(), nullptr);
-    NSLog(@"[CEF] CefInitialize returned: %d", result);
 
-    // Clean up argv
-    for (int i = 0; i < argc; i++) {
-        free(argv[i]);
-    }
+    for (int i = 0; i < argc; i++) free(argv[i]);
     free(argv);
 
     if (!result) {
@@ -274,6 +241,7 @@ bool initializeCEF() {
     initialized = true;
     return true;
 }
+
 // END CEF
 
 
@@ -899,12 +867,18 @@ NSRect getWindowBounds(NSWindow *window) {
 
     // Loop through subviews (front-most to back-most) to decide which one to
     // make interactive and stop mirroring
-    for (TransparentWKWebView *subview in [subviews reverseObjectEnumerator]) {                
+    for (TransparentWKWebView *subview in [subviews reverseObjectEnumerator]) {  
+                  
         if (stillSearching) {            
             // Whether the interactive parts of the wkwebview is currently mirrored and offscreen or not 
             // its render layer will always be positioned on screen, so we use that as the frame.
             NSRect subviewRenderLayerFrame = subview.layer.frame;
             
+            
+            // TODO: abstract wkWebview and CEFWebview into a common interface
+            continue;    
+
+
             // Is the mouse event over this webview?
             if (NSPointInRect(mouseLocation, subviewRenderLayerFrame) && !subview.hidden) {            
                 // The mask layer defines transparent holes punched in the webview                                
@@ -1221,7 +1195,7 @@ void addCEFWebviewToWindow(NSWindow *window) {
             "https://google.com",
             browserSettings,
             nullptr,
-            nullptr);
+            nullptr);        
 
         objc_setAssociatedObject(window, "CefBrowser", (__bridge id)browser.get(), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     };
@@ -1253,96 +1227,13 @@ void addCEFWebviewToWindow(NSWindow *window) {
             if (!hasCreatedBrowser) {
                 hasCreatedBrowser = YES;
                 createCEFBrowser();
+
+                
             }
         }];
     }
     
     [window makeKeyAndOrderFront:nil];
-
-
-
-    // THIS WORKS!
-    // dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-
-    // // [window makeKeyAndOrderFront:nil];
-    
-    // // // Queue the CEF creation on the main thread after window is ready
-    // // dispatch_async(dispatch_get_main_queue(), ^{
-    // // NSRect windowRect = NSMakeRect(100, 100, 800, 600); // x, y, width, height
-    // // NSWindow *window = [[NSWindow alloc] 
-    // //     initWithContentRect:windowRect
-    // //     styleMask:(NSWindowStyleMaskTitled |
-    // //               NSWindowStyleMaskClosable |
-    // //               NSWindowStyleMaskMiniaturizable |
-    // //               NSWindowStyleMaskResizable)
-    // //     backing:NSBackingStoreBuffered
-    // //     defer:NO];
-    
-    // // [window setTitle:@"CEF Browser Window"];
-    // // [window center]; // Center on screen
-    // // [window makeKeyAndOrderFront:nil];
-    //  // Create CEF browser settings
-    // CefBrowserSettings browserSettings;
-    
-    // // Create the browser window info
-    // CefWindowInfo window_info;
-    // NSView *contentView = window.contentView;
-    // NSRect bounds = [contentView bounds];
-    
-    // // window_info.SetAsChild((__bridge void*)contentView,
-    // //                       CefRect(0, 0,
-    // //                              static_cast<int>(bounds.size.width),
-    // //                              static_cast<int>(bounds.size.height)));
-
-    // CefWindowHandle windowHandle = (__bridge void*)contentView;
-
-    // [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-    // [contentView setAutoresizesSubviews:YES];
-
-
-    // // Create CefRect from NSRect bounds
-    // CefRect cefBounds(
-    //     static_cast<int>(bounds.origin.x),
-    //     static_cast<int>(bounds.origin.y),
-    //     static_cast<int>(bounds.size.width),
-    //     static_cast<int>(bounds.size.height)
-    // );
-    
-    // // Set up window info for embedding // causes crash
-    // window_info.SetAsChild(windowHandle, cefBounds);
-    
-    
-    
-    // // Create CEF client
-    // CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
-    
-    // // Create the browser
-    // CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
-    //     window_info,
-    //     client,
-    //     "https://google.com",
-    //     browserSettings,
-    //     nullptr,
-    //     nullptr);
-
-    // // // Get the native view from CEF
-    // // CefRefPtr<CefBrowserHost> host = browser->GetHost();
-    // // NSView* browserView = (__bridge NSView*)host->GetWindowHandle();
-    
-    // // // Get the content view of our window and set up for the browser view
-    // // NSView *contentView = window.contentView;
-    // // NSRect bounds = [contentView bounds];
-    
-    // // // Configure the browser view's frame and autoresizing
-    // // [browserView setFrame:bounds];
-    // // [browserView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-    
-    // // // Add the browser view to our window's content view
-    // // [contentView addSubview:browserView];
-
-    // objc_setAssociatedObject(window, "CefBrowser", (__bridge id)browser.get(), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    // // });
-    // });
 }
 
 void addWebviewToWindow(NSWindow *window, TransparentWKWebView *view) {
@@ -1441,7 +1332,9 @@ typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {            
     NSURL *newURL = navigationAction.request.URL;
     
-    // BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
+    BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
+
+    self.zigEventHandler(self.webviewId, "will-navigate", webView.URL.absoluteString.UTF8String);    
     // decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
     decisionHandler(WKNavigationActionPolicyAllow);
 }

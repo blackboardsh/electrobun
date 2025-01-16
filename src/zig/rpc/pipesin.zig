@@ -145,7 +145,9 @@ pub fn handleLineFromMainPipe(line: []const u8) void {
             std.debug.print("Error: {s}\n", .{line});
             return;
         };
-        rpcStdout.setResponse(messageWithType.value.id, lineCopy);
+        // rpcStdout.setResponse(messageWithType.value.id, lineCopy);
+        // Todo: handle response
+        _ = lineCopy;
     } else {
         // Handle UI events on main thread
         // since line is re-used we need to copy it to the heap
