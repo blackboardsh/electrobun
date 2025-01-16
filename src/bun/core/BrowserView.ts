@@ -34,9 +34,13 @@ type BrowserViewOptions<T = undefined> = {
     height: number;
   };
   rpc: T;
+  // todo: remove syncrpc and internal syncrpc
   syncRpc: { [method: string]: (params: any) => any };
   hostWebviewId: number;
   autoResize: boolean;
+
+  windowId: number;
+  // renderer: "native" | "cef";
 };
 
 interface ElectrobunWebviewRPCSChema {
@@ -74,6 +78,7 @@ const internalSyncRpcHandlers = {
       frame,
       hostWebviewId,
       autoResize: false,
+      windowId,
     });
 
     // Note: we have to give it a couple of ticks to fully create the browserview
@@ -82,10 +87,10 @@ const internalSyncRpcHandlers = {
     // TODO: we really need a better way to handle the whole view creation flow and
     // maybe an onready event or something.
     setTimeout(() => {
-      zigRPC.request.addWebviewToWindow({
-        windowId: windowId,
-        webviewId: webviewForTag.id,
-      });
+      // zigRPC.request.addWebviewToWindow({
+      //   windowId: windowId,
+      //   webviewId: webviewForTag.id,
+      // });
 
       if (url) {
         webviewForTag.loadURL(url);
@@ -106,6 +111,7 @@ const randomId = Math.random().toString(36).substring(7);
 export class BrowserView<T> {
   id: number = nextWebviewId++;
   hostWebviewId?: number;
+  windowId: number;
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
@@ -145,6 +151,7 @@ export class BrowserView<T> {
     // file exists first
     this.pipePrefix = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_${this.id}`;
     this.hostWebviewId = options.hostWebviewId;
+    this.windowId = options.windowId;
     this.autoResize = options.autoResize === false ? false : true;
 
     this.init();
@@ -154,6 +161,8 @@ export class BrowserView<T> {
     // TODO: add a then to this that fires an onReady event
     zigRPC.request.createWebview({
       id: this.id,
+      windowId: this.windowId,
+      renderer: "cef", // todo: make this configurable
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),

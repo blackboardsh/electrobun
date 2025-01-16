@@ -36,6 +36,8 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
     // std.log.info("createWebview handler preload {s}", .{params.preload});
     webview.createWebview(.{
         .id = params.id,
+        .windowId = params.windowId,
+        .renderer = params.renderer,
         .rpcPort = params.rpcPort,
         .secretKey = params.secretKey,
         .hostWebviewId = params.hostWebviewId,
@@ -53,14 +55,6 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
         .autoResize = params.autoResize,
     });
 
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
-
-pub fn addWebviewToWindow(params: rpcSchema.BunSchema.requests.addWebviewToWindow.params) RequestResult {
-    window.addWebviewToWindow(.{
-        .webviewId = params.webviewId,
-        .windowId = params.windowId,
-    });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
@@ -201,8 +195,7 @@ pub const handlers = rpcSchema.Handlers{ //
     .createWindow = createWindow,
     .createWebview = createWebview,
     .setTitle = setTitle,
-    .closeWindow = closeWindow,
-    .addWebviewToWindow = addWebviewToWindow,
+    .closeWindow = closeWindow,    
     .loadURL = loadURL,
     .loadHTML = loadHTML,
     .moveToTrash = moveToTrash,
@@ -322,8 +315,6 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
         return parseParamsAndCall(handlers.setTitle, BunRequests.setTitle.params, request.params);
     } else if (strEql(method, "closeWindow")) {
         return parseParamsAndCall(handlers.closeWindow, BunRequests.closeWindow.params, request.params);
-    } else if (strEql(method, "addWebviewToWindow")) {
-        return parseParamsAndCall(handlers.addWebviewToWindow, BunRequests.addWebviewToWindow.params, request.params);
     } else if (strEql(method, "createWebview")) {
         return parseParamsAndCall(handlers.createWebview, BunRequests.createWebview.params, request.params);
     } else if (strEql(method, "loadURL")) {

@@ -136,14 +136,15 @@ export class BrowserWindow<T> {
       },
       rpc,
       syncRpc,
+      // todo: we need to send the window here and attach it in one go
+      // then the view creation code in objc can toggle between offscreen
+      // or on screen views depending on if windowId is null
+      // does this mean browserView needs to track the windowId or handle it ephemerally?
+      windowId: this.id,
+      renderer: "cef", // or native(default) // passed on from opt
     });
 
     this.webviewId = webview.id;
-
-    zigRPC.request.addWebviewToWindow({
-      windowId: this.id,
-      webviewId: webview.id,
-    });
 
     if (this.url) {
       webview.loadURL(this.url);

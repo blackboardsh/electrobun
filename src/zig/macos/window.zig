@@ -151,39 +151,3 @@ pub fn closeWindow(opts: rpcSchema.BunSchema.requests.closeWindow.params) void {
         win.window,
     );
 }
-
-pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
-    var win = windowMap.get(opts.windowId) orelse {
-        std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.windowId});
-        return;
-    };
-
-    const view = webview.webviewMap.get(opts.webviewId) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.webviewId});
-        return;
-    };
-
-    // Note: Keep this in sync with browser api
-    const jsScript = std.fmt.allocPrint(alloc, "window.__electrobunWindowId = {}\n", .{opts.windowId}) catch {
-        return;
-    };
-    defer alloc.free(jsScript);
-
-    // we want to make this a preload script so that it gets re-applied after navigations before any
-    // other code runs.
-    webview.addPreloadScriptToWebview(view.handle, jsScript, true);
-
-    win.webviews.append(opts.webviewId) catch {
-        std.debug.print("Failed to append webview id to window\n", .{});
-        return;
-    };
-
-    // at least in 0.11.0 get() returns a copy so you have to put it back to persist
-    // any changes
-    windowMap.put(opts.windowId, win) catch {
-        std.debug.print("Failed to put window back into hashmap {}\n", .{opts.windowId});
-        return;
-    };
-
-    objc.addWebviewToWindow(win.window, view.handle);
-}

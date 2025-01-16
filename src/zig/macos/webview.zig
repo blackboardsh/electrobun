@@ -8,6 +8,7 @@ const rpcTypes = @import("../rpc/types.zig");
 const rpcHandlers = @import("../rpc/schema/handlers.zig");
 const utils = @import("../utils.zig");
 
+
 const strEql = utils.strEql;
 
 const O_NONBLOCK = 0x0004; // For Unix-based systems
@@ -41,6 +42,7 @@ const WebviewType = struct {
         x: f64,
         y: f64,
     },
+    renderer: []const u8, // native, cef, etc.
     // todo: de-init these using objc.releaseObjCObject() when the webview closes
     delegate: *anyopaque,
     bunBridgeHandler: *anyopaque,
@@ -97,6 +99,8 @@ const WebviewType = struct {
 
 const CreateWebviewOpts = struct { //
     id: u32,
+    windowId: u32,
+    renderer: []const u8,
     hostWebviewId: ?u32,
     rpcPort: u32,
     secretKey: []const u8,
@@ -211,8 +215,13 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
 
     const parition = opts.partition orelse "persist:default";
 
-    const objcWebview = objc.createAndReturnWKWebView(opts.id, .{
+    const win = window.windowMap.get(opts.windowId) orelse {
+        std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.windowId});
+        return;
+    };
 
+    // todo: windowId should actually be a pointer to the window
+    const objcWebview = objc.createAndReturnWKWebView(opts.id, win.window, utils.toCString(opts.renderer), .{                
         // .frame = .{ //
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
         .size = .{ .width = opts.frame.width, .height = opts.frame.height },
@@ -318,6 +327,8 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     const _webview = WebviewType{ //
         .id = opts.id,
         .hostWebviewId = opts.hostWebviewId,
+        // .windowId = opts.windowId,
+        .renderer = opts.renderer,
         .frame = .{
             .width = opts.frame.width,
             .height = opts.frame.height,
@@ -345,10 +356,11 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     //     \\ window.test44 = 44;
     // ));
     // objc.evaluateJavaScriptWithNoCompletion(_webview.handle, utils.toCString("const test = 567; console.log('test', test);"));
-
+    
     // Note: Keep this in sync with browser api
     const jsScriptSubstitutions = std.fmt.allocPrint(alloc,
         \\ window.__electrobunWebviewId = {};
+        \\ window.__electrobunWindowId = {}
         \\window.__electrobunRpcSocketPort = {};
         \\(async () => {{
         \\
@@ -423,7 +435,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         \\ window.__electrobun_decrypt = decryptString;
         \\}})()
         \\
-    , .{ opts.id, opts.rpcPort, opts.secretKey }) catch {
+    , .{ opts.id, opts.windowId, opts.rpcPort, opts.secretKey }) catch {
         // NOTE: key must be at least 32 characters long
         return;
     };

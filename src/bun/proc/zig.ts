@@ -191,6 +191,8 @@ type ZigHandlers = RPCSchema<{
     createWebview: {
       params: {
         id: number;
+        windowId: number;
+        renderer: "cef" | "native";
         rpcPort: number;
         secretKey: string;
         hostWebviewId: number | null;
@@ -206,14 +208,6 @@ type ZigHandlers = RPCSchema<{
           height: number;
         };
         autoResize: boolean;
-      };
-      response: void;
-    };
-
-    addWebviewToWindow: {
-      params: {
-        windowId: number;
-        webviewId: number;
       };
       response: void;
     };
