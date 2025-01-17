@@ -123,19 +123,19 @@ class Electroview<T> {
     // We don't need request ids either since we're not receiving the response on a different pipe
     if (true) {
       // TODO: define sync requests on schema (separate from async reqeusts and messages)
-      this.syncRpc = (msg: { method: string; params: any }) => {
-        try {
-          const messageString = JSON.stringify(msg);
-          return this.bunBridgeSync(messageString);
-        } catch (error) {
-          console.error(
-            "bun: failed to serialize message to webview syncRpc",
-            error
-          );
-        }
-      };
+      // this.syncRpc = (msg: { method: string; params: any }) => {
+      //   try {
+      //     const messageString = JSON.stringify(msg);
+      //     return this.bunBridge(messageString);
+      //   } catch (error) {
+      //     console.error(
+      //       "bun: failed to serialize message to webview syncRpc",
+      //       error
+      //     );
+      //   }
+      // };
     }
-    ConfigureWebviewTags(true, this.zigRpc, this.syncRpc);
+    ConfigureWebviewTags(true, this.zigRpc, this.rpc);
 
     this.initElectrobunListeners();
 
@@ -239,6 +239,7 @@ class Electroview<T> {
       send(message) {
         try {
           const messageString = JSON.stringify(message);
+          console.log("sending message bunbridge", messageString);
           that.bunBridge(messageString);
         } catch (error) {
           console.error("bun: failed to serialize message to webview", error);

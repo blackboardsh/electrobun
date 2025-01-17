@@ -61,15 +61,17 @@ const defaultOptions: Partial<BrowserViewOptions> = {
 };
 
 const internalSyncRpcHandlers = {
+  // todo: this shouldn't be getting method, just params.
   webviewTagInit: ({
-    hostWebviewId,
-    windowId,
-    url,
-    html,
-    preload,
-    partition,
-    frame,
-  }: BrowserViewOptions & { windowId: number }) => {
+    method,
+    params,
+  }: {
+    method: string;
+    params: BrowserViewOptions & { windowId: number };
+  }) => {
+    const { hostWebviewId, windowId, url, html, preload, partition, frame } =
+      params;
+
     const webviewForTag = new BrowserView({
       url,
       html,
@@ -79,6 +81,7 @@ const internalSyncRpcHandlers = {
       hostWebviewId,
       autoResize: false,
       windowId,
+      renderer: "cef",
     });
 
     // Note: we have to give it a couple of ticks to fully create the browserview
@@ -137,6 +140,12 @@ export class BrowserView<T> {
   rpcHandler?: (msg: any) => void;
 
   constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
+    // const rpc = options.rpc;
+
+    // if (rpc) {
+    //   rpc.
+    // }
+
     this.url = options.url || defaultOptions.url || null;
     this.html = options.html || defaultOptions.html || null;
     this.preload = options.preload || defaultOptions.preload || null;
@@ -219,9 +228,12 @@ export class BrowserView<T> {
     const outStream = Bun.file(webviewPipeOut).stream();
     this.outStream = outStream;
 
-    if (this.rpc) {
-      this.rpc.setTransport(this.createTransport());
+    if (!this.rpc) {
+      this.rpc = BrowserView.defineRPC({
+        handlers: { requests: {}, messages: {} },
+      });
     }
+    this.rpc.setTransport(this.createTransport());
   }
 
   sendMessageToWebviewViaExecute(jsonMessage) {
@@ -293,6 +305,7 @@ export class BrowserView<T> {
         }
       },
       registerHandler(handler) {
+        console.log("))))))))REGISTERING HANDLER", that.id);
         that.rpcHandler = handler;
 
         async function readFromPipe(
@@ -312,6 +325,13 @@ export class BrowserView<T> {
               if (line) {
                 try {
                   const event = JSON.parse(line);
+                  //"{\"type\":\"request\",\"id\":5,\"method\":\"webviewTagInit\",\"params\":{\"method\":\"webviewTagInit\",\"params\":{\"hostWebviewId\":3,\"windowId\":3,\"url\":\"http://wikipedia.org\",\"html\":null,\"preload\":null,\"partition\":\"persist:test1\",\"frame\":{\"width\":800,\"height\":300,\"x\":8,\"y\":1947.5}}}}"
+
+                  console.log("-=-=-=-=-=-=-= received event", event);
+
+                  // if (event.method === 'webviewTagInit') {
+                  //   internalSyncRpcHandlers.webviewTagInit(event.params);
+                  // }
                   handler(event);
                 } catch (error) {
                   console.error("webview: ", line);
@@ -391,7 +411,10 @@ export class BrowserView<T> {
 
     const rpcOptions = {
       maxRequestTime: config.maxRequestTime,
-      requestHandler: config.handlers.requests,
+      requestHandler: {
+        ...config.handlers.requests,
+        ...internalSyncRpcHandlers,
+      },
       transport: {
         // Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey
         registerHandler: () => {},

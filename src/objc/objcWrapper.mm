@@ -583,7 +583,7 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
 @end
 
 
-void addCEFWebviewToWindow(NSWindow *window) {
+void addCEFWebviewToWindow(NSWindow *window, NSRect frame) {
     // We have to wait for the NSWindow to be ready before we can create the CEF browser
     // otherwise it will crash.
     void (^createCEFBrowser)(void) = ^{
@@ -591,35 +591,31 @@ void addCEFWebviewToWindow(NSWindow *window) {
         CefBrowserSettings browserSettings;
         CefWindowInfo window_info;
         NSView *contentView = window.contentView;
-        NSRect bounds = [contentView bounds];
-
-        NSLog(@"Creating CEF browser...1");  // Debug log
+        // NSRect bounds = [contentView bounds];
+        
         
         [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
         [contentView setAutoresizesSubviews:YES];
 
-        NSLog(@"Creating CEF browser...2");  // Debug log
-        
+        CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
+
         CefRect cefBounds(
-            static_cast<int>(bounds.origin.x),
-            static_cast<int>(bounds.origin.y),
-            static_cast<int>(bounds.size.width),
-            static_cast<int>(bounds.size.height)
-        );
-        NSLog(@"Creating CEF browser...3");  // Debug log
+            static_cast<int>(frame.origin.x),
+            static_cast<int>(adjustedY),
+            static_cast<int>(frame.size.width),
+            static_cast<int>(frame.size.height)
+        );        
         
         window_info.SetAsChild((__bridge void*)contentView, cefBounds);
-        CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
-        NSLog(@"Creating CEF browser...4");  // Debug log
+        CefRefPtr<ElectrobunClient> client(new ElectrobunClient());        
         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
             window_info,
             client,
-            "https://google.com",
+            "https://electrobun.dev",
             browserSettings,
             nullptr,
             nullptr);        
-
-        NSLog(@"Creating CEF browser...5");  // Debug log
+        
 
         // objc_setAssociatedObject(window, "CefBrowser", (__bridge id)browser.get(), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     };
@@ -664,7 +660,7 @@ WKWebView* createAndReturnWKWebView(uint32_t webviewId, NSWindow *window, const 
 
     // TEMP: create a new cef window
 
-    addCEFWebviewToWindow(window);
+    addCEFWebviewToWindow(window, frame);
 
     
 

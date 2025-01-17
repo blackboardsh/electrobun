@@ -319,24 +319,47 @@ type ZigHandlers = RPCSchema<{
 
 type BunHandlers = RPCSchema<{
   requests: {
-    decideNavigation: {
-      params: {
-        webviewId: number;
-        url: string;
-      };
-      response: {
-        allow: boolean;
-      };
-    };
-    syncRequest: {
-      params: {
-        webviewId: number;
-        request: string;
-      };
-      response: {
-        payload: string;
-      };
-    };
+    // decideNavigation: {
+    //   params: {
+    //     webviewId: number;
+    //     url: string;
+    //   };
+    //   response: {
+    //     allow: boolean;
+    //   };
+    // };
+    // syncRequest: {
+    //   params: {
+    //     webviewId: number;
+    //     request: string;
+    //   };
+    //   response: {
+    //     payload: string;
+    //   };
+    // };
+    // webviewTagInit: {
+    //   params: {
+    //     hostWebviewId: number;
+    //     windowId: number;
+    //     renderer: "cef" | "native";
+    //     rpcPort: number;
+    //     secretKey: string;
+    //     pipePrefix: string;
+    //     url: string | null;
+    //     html: string | null;
+    //     partition: string | null;
+    //     preload: string | null;
+    //     frame: {
+    //       x: number;
+    //       y: number;
+    //       width: number;
+    //       height: number;
+    //     };
+    //   };
+    //   response: {
+    //     webviewId: number;
+    //   };
+    // };
     // todo: make these messages instead of requests
     log: {
       params: {
@@ -418,66 +441,102 @@ type BunHandlers = RPCSchema<{
 const zigRPC = createRPC<BunHandlers, ZigHandlers>({
   transport: createStdioTransport(zigProc),
   requestHandler: {
-    decideNavigation: ({ webviewId, url }) => {
-      const willNavigate = electrobunEventEmitter.events.webview.willNavigate({
-        url,
-        webviewId,
-      });
+    // decideNavigation: ({ webviewId, url }) => {
+    //   const willNavigate = electrobunEventEmitter.events.webview.willNavigate({
+    //     url,
+    //     webviewId,
+    //   });
 
-      let result;
-      // global will-navigate event
-      result = electrobunEventEmitter.emitEvent(willNavigate);
+    //   let result;
+    //   // global will-navigate event
+    //   result = electrobunEventEmitter.emitEvent(willNavigate);
 
-      result = electrobunEventEmitter.emitEvent(willNavigate, webviewId);
+    //   result = electrobunEventEmitter.emitEvent(willNavigate, webviewId);
 
-      if (willNavigate.responseWasSet) {
-        return willNavigate.response || { allow: true };
-      } else {
-        return { allow: true };
-      }
-    },
-    syncRequest: ({ webviewId, request: requestStr }) => {
-      const webview = BrowserView.getById(webviewId);
-      const { method, params } = JSON.parse(requestStr);
+    //   if (willNavigate.responseWasSet) {
+    //     return willNavigate.response || { allow: true };
+    //   } else {
+    //     return { allow: true };
+    //   }
+    // },
+    // syncRequest: ({ webviewId, request: requestStr }) => {
+    //   const webview = BrowserView.getById(webviewId);
+    //   const { method, params } = JSON.parse(requestStr);
 
-      if (!webview) {
-        const err = `error: could not find webview with id ${webviewId}`;
-        console.log(err);
-        return { payload: err };
-      }
+    //   if (!webview) {
+    //     const err = `error: could not find webview with id ${webviewId}`;
+    //     console.log(err);
+    //     return { payload: err };
+    //   }
 
-      if (!method) {
-        const err = `error: request missing a method`;
-        console.log(err);
-        return { payload: err };
-      }
+    //   if (!method) {
+    //     const err = `error: request missing a method`;
+    //     console.log(err);
+    //     return { payload: err };
+    //   }
 
-      if (!webview.syncRpc || !webview.syncRpc[method]) {
-        const err = `error: webview does not have a handler for method ${method}`;
-        console.log(err);
-        return { payload: err };
-      }
-      console.warn("DEPRECATED: use async rpc if possible", method);
-      const handler = webview.syncRpc[method];
-      var response;
-      try {
-        response = handler(params);
-        // Note: Stringify(undefined) returns undefined,
-        // if we send undefined as the payload it'll crash
-        // so send an empty string which is a better analog for
-        // undefined json string
-        if (response === undefined) {
-          response = "";
-        }
-      } catch (err) {
-        console.log(err);
-        console.log("syncRPC failed with", { method, params });
-        return { payload: String(err) };
-      }
+    //   if (!webview.syncRpc || !webview.syncRpc[method]) {
+    //     const err = `error: webview does not have a handler for method ${method}`;
+    //     console.log(err);
+    //     return { payload: err };
+    //   }
+    //   console.warn("DEPRECATED: use async rpc if possible", method);
+    //   const handler = webview.syncRpc[method];
+    //   var response;
+    //   try {
+    //     response = handler(params);
+    //     // Note: Stringify(undefined) returns undefined,
+    //     // if we send undefined as the payload it'll crash
+    //     // so send an empty string which is a better analog for
+    //     // undefined json string
+    //     if (response === undefined) {
+    //       response = "";
+    //     }
+    //   } catch (err) {
+    //     console.log(err);
+    //     console.log("syncRPC failed with", { method, params });
+    //     return { payload: String(err) };
+    //   }
 
-      const payload = JSON.stringify(response);
-      return { payload };
-    },
+    //   const payload = JSON.stringify(response);
+    //   return { payload };
+    // },
+    // webviewTagInit: ({
+    //   hostWebviewId,
+    //   windowId,
+    //   renderer,
+    //   rpcPort,
+    //   secretKey,
+    //   pipePrefix,
+    //   url,
+    //   html,
+    //   partition,
+    //   preload,
+    //   frame,
+    // }) => {
+    //   const webviewForTag = new BrowserView({
+    //     url,
+    //     html,
+    //     preload,
+    //     partition,
+    //     frame,
+    //     hostWebviewId,
+    //     autoResize: false,
+    //     windowId,
+    //   });
+
+    //   setTimeout(() => {
+    //     if (url) {
+    //       webviewForTag.loadURL(url);
+    //     } else if (html) {
+    //       webviewForTag.loadHTML(html);
+    //     }
+    //   }, 100);
+
+    //   return {
+    //     webviewId: webviewForTag.id,
+    //   };
+    // },
     log: ({ msg }) => {
       console.log("zig: ", msg);
       return { success: true };

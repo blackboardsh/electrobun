@@ -79,29 +79,30 @@ const ConfigureWebviewTags = (
       this.syncDimensions();
     }
 
-    initWebview() {
+    async initWebview() {
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
+      console.log("initWebview!!!", rect, window.__electrobunWindowId);
+      const webviewId = await this.syncRpc.request.webviewTagInit({
+        // const webviewId = await this.syncRpc({
+        method: "webviewTagInit",
+        params: {
+          hostWebviewId: window.__electrobunWebviewId,
+          windowId: window.__electrobunWindowId,
+          url: this.src || this.getAttribute("src") || null,
+          html: this.html || this.getAttribute("html") || null,
+          preload: this.preload || this.getAttribute("preload") || null,
+          partition: this.partition || this.getAttribute("partition") || null,
+          frame: {
+            width: rect.width,
+            height: rect.height,
+            x: rect.x,
+            y: rect.y,
+          },
+        },
+      });
 
-      // const webviewId = this.syncRpc({
-      //   method: "webviewTagInit",
-      //   params: {
-      //     hostWebviewId: window.__electrobunWebviewId,
-      //     windowId: window.__electrobunWindowId,
-      //     url: this.src || this.getAttribute("src") || null,
-      //     html: this.html || this.getAttribute("html") || null,
-      //     preload: this.preload || this.getAttribute("preload") || null,
-      //     partition: this.partition || this.getAttribute("partition") || null,
-      //     frame: {
-      //       width: rect.width,
-      //       height: rect.height,
-      //       x: rect.x,
-      //       y: rect.y,
-      //     },
-      //   },
-      // });
-
-      this.webviewId = webviewId;
+      // this.webviewId = webviewId;
       this.id = `electrobun-webview-${webviewId}`;
       // todo: replace zig -> webviewtag communication with a global instead of
       // queryselector based on id

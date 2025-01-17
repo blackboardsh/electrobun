@@ -284,6 +284,7 @@ const wikiWindow = new BrowserWindow({
   //     maxRequestTime: 5000,
   //     // requestHandler: {}
   // })         ,
+  // todo: this should be in browserview so we can add internal handlers.
   rpc: BrowserView.defineRPC<MyExtensionSchema>({
     maxRequestTime: 5000,
     handlers: {
