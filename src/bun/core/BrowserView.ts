@@ -167,11 +167,13 @@ export class BrowserView<T> {
   }
 
   init() {
+    this.createStreams();
+
     // TODO: add a then to this that fires an onReady event
     zigRPC.request.createWebview({
       id: this.id,
       windowId: this.windowId,
-      renderer: "cef", // todo: make this configurable
+      renderer: "native", //"cef", // todo: make this configurable
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),
@@ -192,8 +194,6 @@ export class BrowserView<T> {
       },
       autoResize: this.autoResize,
     });
-
-    this.createStreams();
 
     BrowserViewMap[this.id] = this;
   }
@@ -305,7 +305,6 @@ export class BrowserView<T> {
         }
       },
       registerHandler(handler) {
-        console.log("))))))))REGISTERING HANDLER", that.id);
         that.rpcHandler = handler;
 
         async function readFromPipe(
@@ -325,13 +324,7 @@ export class BrowserView<T> {
               if (line) {
                 try {
                   const event = JSON.parse(line);
-                  //"{\"type\":\"request\",\"id\":5,\"method\":\"webviewTagInit\",\"params\":{\"method\":\"webviewTagInit\",\"params\":{\"hostWebviewId\":3,\"windowId\":3,\"url\":\"http://wikipedia.org\",\"html\":null,\"preload\":null,\"partition\":\"persist:test1\",\"frame\":{\"width\":800,\"height\":300,\"x\":8,\"y\":1947.5}}}}"
 
-                  console.log("-=-=-=-=-=-=-= received event", event);
-
-                  // if (event.method === 'webviewTagInit') {
-                  //   internalSyncRpcHandlers.webviewTagInit(event.params);
-                  // }
                   handler(event);
                 } catch (error) {
                   console.error("webview: ", line);

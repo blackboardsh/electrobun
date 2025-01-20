@@ -44,9 +44,9 @@ const WebviewType = struct {
     },
     renderer: []const u8, // native, cef, etc.
     // todo: de-init these using objc.releaseObjCObject() when the webview closes
-    delegate: *anyopaque,
-    bunBridgeHandler: *anyopaque,
-    webviewTagHandler: *anyopaque,
+    // delegate: *anyopaque,
+    // bunBridgeHandler: *anyopaque,
+    // webviewTagHandler: *anyopaque,
     bun_out_pipe: ?std.fs.File, //?anyerror!std.fs.File,
     bun_in_pipe: ?std.fs.File,
     // Function to send a message to Bun
@@ -221,15 +221,12 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     };
 
     // todo: windowId should actually be a pointer to the window
-    const objcWebview = objc.createAndReturnWKWebView(opts.id, win.window, utils.toCString(opts.renderer), .{                
+    const objcWebview = objc.initWebview(opts.id, win.window, utils.toCString(opts.renderer), .{                
         // .frame = .{ //
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
         .size = .{ .width = opts.frame.width, .height = opts.frame.height },
         // },
-    }, viewsHandler, opts.autoResize, utils.toCString(parition));
-
-    // Can only define functions inline in zig within a struct
-    const delegate = objc.setNavigationDelegateWithCallback(objcWebview, opts.id, struct {
+    }, viewsHandler, opts.autoResize, utils.toCString(parition), struct {
         fn decideNavigation(webviewId: u32, url: [*:0]const u8) callconv(.C) bool {
             _ = webviewId;
             _ = url;
@@ -251,10 +248,8 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 .detail = utils.fromCString(url),
             });
         }
-    }.handleWebviewEvent);
-
-    const bunBridgeHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "bunBridge", struct {
-        fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) callconv(.C) void {
+    }.handleWebviewEvent, struct {
+        fn BunBridgeHandler(webviewId: u32, message: [*:0]const u8) callconv(.C) void {
             // bun bridge just forwards messages to the bun
             var webview = webviewMap.get(webviewId) orelse {
                 std.debug.print("Failed to get webview from hashmap for id {}: bunBridgeHandler\n", .{webviewId});
@@ -265,11 +260,8 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 std.debug.print("Failed to send message to bun: {}\n", .{err});
             };
         }
-    }.HandlePostMessage);
-    // todo: only set this up if the webview tag is enabled for this webview
-    // todo: rename this to webviewToZigBridgeHandler since it's for webview tags and the webview itself
-    const webviewTagHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "webviewTagBridge", struct {
-        fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) callconv(.C) void {
+    }.BunBridgeHandler, struct {
+        fn WebviewTagBridgeHandler(webviewId: u32, message: [*:0]const u8) callconv(.C) void {
             const msgString = utils.fromCString(message);
 
             const json = std.json.parseFromSlice(std.json.Value, alloc, msgString, .{ .ignore_unknown_fields = true }) catch |err| {
@@ -322,7 +314,79 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 std.log.info("it's an unhandled meatball", .{});
             }
         }
-    }.HandlePostMessage);
+    }.WebviewTagBridgeHandler);
+
+
+    // const bunBridgeHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "bunBridge", struct {
+    //     fn BunBridgeHandler(webviewId: u32, message: [*:0]const u8) callconv(.C) void {
+    //         // bun bridge just forwards messages to the bun
+    //         var webview = webviewMap.get(webviewId) orelse {
+    //             std.debug.print("Failed to get webview from hashmap for id {}: bunBridgeHandler\n", .{webviewId});
+    //             return;
+    //         };
+
+    //         webview.sendToBun(utils.fromCString(message)) catch |err| {
+    //             std.debug.print("Failed to send message to bun: {}\n", .{err});
+    //         };
+    //     }
+    // }.BunBridgeHandler);
+    // todo: only set this up if the webview tag is enabled for this webview
+    // todo: rename this to webviewToZigBridgeHandler since it's for webview tags and the webview itself
+    // const webviewTagHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "webviewTagBridge", struct {
+    //     fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) callconv(.C) void {
+    //         const msgString = utils.fromCString(message);
+
+    //         const json = std.json.parseFromSlice(std.json.Value, alloc, msgString, .{ .ignore_unknown_fields = true }) catch |err| {
+    //             std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
+    //             return;
+    //         };
+
+    //         defer json.deinit();
+
+    //         const msgType = blk: {
+    //             const obj = json.value.object.get("type").?;
+    //             break :blk obj.string;
+    //         };
+
+    //         if (std.mem.eql(u8, msgType, "request")) {
+    //             const _request = std.json.parseFromValue(rpcTypes._RPCRequestPacket, alloc, json.value, .{}) catch |err| {
+    //                 std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
+    //                 return;
+    //             };
+
+    //             const result = rpcHandlers.fromBrowserHandleRequest(_request.value);
+
+    //             if (result.errorMsg == null) {
+    //                 const responseSuccess = .{ .id = _request.value.id, .type = "response", .success = true, .payload = result };
+
+    //                 const buffer = std.json.stringifyAlloc(alloc, responseSuccess, .{}) catch {
+    //                     return;
+    //                 };
+    //                 defer alloc.free(buffer);
+
+    //                 // Prepare the JavaScript function call
+    //                 const jsCall = std.fmt.allocPrint(alloc, "window.__electrobun.receiveMessageFromZig({s})\n", .{buffer}) catch {
+    //                     return;
+    //                 };
+    //                 defer alloc.free(jsCall);
+
+    //                 sendLineToWebview(webviewId, jsCall);
+    //             } else {
+    //                 // todo: this doesn't work yet
+    //                 // rpcStdout.sendResponseError(_request.value.id, result.errorMsg.?);
+    //             }
+    //         } else if (std.mem.eql(u8, msgType, "message")) {
+    //             const _message = std.json.parseFromValue(rpcTypes._RPCMessagePacket, alloc, json.value, .{}) catch |err| {
+    //                 std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
+    //                 return;
+    //             };
+
+    //             rpcHandlers.fromBrowserHandleMessage(_message.value);
+    //         } else {
+    //             std.log.info("it's an unhandled meatball", .{});
+    //         }
+    //     }
+    // }.HandlePostMessage);
 
     const _webview = WebviewType{ //
         .id = opts.id,
@@ -338,9 +402,9 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         .handle = objcWebview,
         .bun_out_pipe = bunPipeOut,
         .bun_in_pipe = bunPipeIn,
-        .delegate = delegate,
-        .bunBridgeHandler = bunBridgeHandler,
-        .webviewTagHandler = webviewTagHandler,
+        // .delegate = delegate,
+        // .bunBridgeHandler = bunBridgeHandler,
+        // .webviewTagHandler = webviewTagHandler,
     };
 
     webviewMap.put(opts.id, _webview) catch {
@@ -565,7 +629,7 @@ pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.params) void {
         std.debug.print("Failed to get webview from hashmap for id {}: loadURL\n", .{opts.webviewId});
         return;
     };
-
+    std.debug.print("zig: loadURL: {s}\n", .{opts.url});
     // todo: consider updating url. we may not need it stored in zig though.
     // webview.url = need to use webviewMap.getPtr() then webview.*.url = opts.url
     objc.loadURLInWebView(webview.handle, utils.toCString(opts.url));
@@ -682,24 +746,6 @@ pub fn remove(opts: rpcSchema.BrowserSchema.messages.webviewTagRemove) void {
     // todo: remove it from the window map as well
 
     webview.deinit();
-}
-
-pub fn startWindowMove(opts: rpcSchema.BrowserSchema.messages.startWindowMove) void {
-    const webview = webviewMap.get(opts.id) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
-        return;
-    };
-    std.debug.print("calling objc.startWindowMove: \n", .{});
-    objc.startWindowMove(webview.handle);
-}
-
-pub fn stopWindowMove(opts: rpcSchema.BrowserSchema.messages.stopWindowMove) void {
-    const webview = webviewMap.get(opts.id) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
-        return;
-    };
-
-    objc.stopWindowMove(webview.handle);
 }
 
 pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {

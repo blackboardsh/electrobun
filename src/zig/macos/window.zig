@@ -131,6 +131,23 @@ pub fn setTitle(opts: SetTitleOpts) void {
     objc.setNSWindowTitle(win.window, utils.toCString(opts.title));
 }
 
+pub fn startWindowMove(opts: rpcSchema.BrowserSchema.messages.startWindowMove) void {
+    const window = windowMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+    std.debug.print("calling objc.startWindowMove: \n", .{});
+    objc.startWindowMove(window.window);
+}
+
+pub fn stopWindowMove(opts: rpcSchema.BrowserSchema.messages.stopWindowMove) void {
+     const window = windowMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+    objc.stopWindowMove(window.window);
+}
+
 pub fn windowCleanup(winId: u32) void {
     var win = windowMap.get(winId) orelse {
         std.debug.print("Failed to get window from hashmap for id {}\n", .{winId});

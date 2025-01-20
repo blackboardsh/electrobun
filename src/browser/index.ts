@@ -18,6 +18,7 @@ interface ElectrobunWebviewRPCSChema {
 }
 
 const WEBVIEW_ID = window.__electrobunWebviewId;
+const WINDOW_ID = window.__electrobunWindowId;
 const RPC_SOCKET_PORT = window.__electrobunRpcSocketPort;
 
 // todo (yoav): move this stuff to browser/rpc/webview.ts
@@ -222,13 +223,13 @@ class Electroview<T> {
   initElectrobunListeners() {
     document.addEventListener("mousedown", (e) => {
       if (isAppRegionDrag(e)) {
-        this.zigRpc?.send.startWindowMove({ id: WEBVIEW_ID });
+        this.zigRpc?.send.startWindowMove({ id: WINDOW_ID });
       }
     });
 
     document.addEventListener("mouseup", (e) => {
       if (isAppRegionDrag(e)) {
-        this.zigRpc?.send.stopWindowMove({ id: WEBVIEW_ID });
+        this.zigRpc?.send.stopWindowMove({ id: WINDOW_ID });
       }
     });
   }

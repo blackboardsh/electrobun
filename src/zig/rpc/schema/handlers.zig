@@ -65,6 +65,14 @@ pub fn setTitle(params: rpcSchema.BunSchema.requests.setTitle.params) RequestRes
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
+pub fn startWindowMove(params: rpcSchema.BrowserSchema.messages.startWindowMove) RequestResult {
+    window.startWindowMove(.{ .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn stopWindowMove(params: rpcSchema.BrowserSchema.messages.stopWindowMove) RequestResult {
+    window.stopWindowMove(.{ .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
 pub fn closeWindow(params: rpcSchema.BunSchema.requests.closeWindow.params) RequestResult {
     _ = window.closeWindow(.{
         .winId = params.winId,
@@ -119,14 +127,7 @@ pub fn webviewTagRemove(params: rpcSchema.BrowserSchema.messages.webviewTagRemov
     webview.remove(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
-pub fn startWindowMove(params: rpcSchema.BrowserSchema.messages.startWindowMove) RequestResult {
-    webview.startWindowMove(.{ .id = params.id });
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
-pub fn stopWindowMove(params: rpcSchema.BrowserSchema.messages.stopWindowMove) RequestResult {
-    webview.stopWindowMove(.{ .id = params.id });
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
+
 pub fn webviewTagSetTransparent(params: rpcSchema.BrowserSchema.messages.webviewTagSetTransparent) RequestResult {
     webview.webviewTagSetTransparent(.{ .id = params.id, .transparent = params.transparent });
     return RequestResult{ .errorMsg = null, .payload = null };

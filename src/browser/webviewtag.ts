@@ -82,9 +82,8 @@ const ConfigureWebviewTags = (
     async initWebview() {
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
-      console.log("initWebview!!!", rect, window.__electrobunWindowId);
+
       const webviewId = await this.syncRpc.request.webviewTagInit({
-        // const webviewId = await this.syncRpc({
         method: "webviewTagInit",
         params: {
           hostWebviewId: window.__electrobunWebviewId,
@@ -102,7 +101,7 @@ const ConfigureWebviewTags = (
         },
       });
 
-      // this.webviewId = webviewId;
+      this.webviewId = webviewId;
       this.id = `electrobun-webview-${webviewId}`;
       // todo: replace zig -> webviewtag communication with a global instead of
       // queryselector based on id

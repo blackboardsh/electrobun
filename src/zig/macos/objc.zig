@@ -78,13 +78,25 @@ pub extern fn getWindowBounds(window: *anyopaque) callconv(.C) *anyopaque;
 
 // webview
 // todo: rename to createAndReturnWebview
-pub extern fn createAndReturnWKWebView(webviewId: u32, window: *anyopaque, renderer: [*:0]const u8, frame: NSRect, assetFileLoader: FileLoader, autoResize: bool, partition: [*:0]const u8) callconv(.C) *anyopaque;
+pub extern fn initWebview(
+    webviewId: u32, 
+    window: *anyopaque, 
+    renderer: [*:0]const u8, 
+    frame: NSRect, 
+    assetFileLoader: FileLoader, 
+    autoResize: bool, 
+    partition: [*:0]const u8, 
+    decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool, 
+    webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void, 
+    bunBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+    webviewTagBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+) callconv(.C) *anyopaque;
 pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn updatePreloadScriptToWebView(webView: *anyopaque, scriptIdentifier: [*:0]const u8, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;
 pub extern fn loadHTMLInWebView(webView: *anyopaque, html: [*:0]const u8) callconv(.C) void;
-pub extern fn setNavigationDelegateWithCallback(webView: *anyopaque, webviewId: u32, decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool, webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void) callconv(.C) *anyopaque;
-pub extern fn addScriptMessageHandler(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) callconv(.C) void) callconv(.C) *anyopaque;
+// pub extern fn setNavigationDelegateWithCallback(webView: *anyopaque, webviewId: u32, decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool, webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void) callconv(.C) *anyopaque;
+// pub extern fn addScriptMessageHandler(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) callconv(.C) void) callconv(.C) *anyopaque;
 pub extern fn addScriptMessageHandlerWithReply(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) [*:0]const u8) callconv(.C) *anyopaque;
 pub extern fn evaluateJavaScriptWithNoCompletion(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
 pub extern fn evaluateJavaScriptinSecureContentWorld(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
@@ -94,8 +106,8 @@ pub extern fn webviewTagGoBack(webView: *anyopaque) callconv(.C) void;
 pub extern fn webviewTagGoForward(webView: *anyopaque) callconv(.C) void;
 pub extern fn webviewTagReload(webView: *anyopaque) callconv(.C) void;
 pub extern fn webviewRemove(webView: *anyopaque) callconv(.C) void;
-pub extern fn startWindowMove(webView: *anyopaque) callconv(.C) void;
-pub extern fn stopWindowMove(webView: *anyopaque) callconv(.C) void;
+pub extern fn startWindowMove(window: *anyopaque) callconv(.C) void;
+pub extern fn stopWindowMove(window: *anyopaque) callconv(.C) void;
 pub extern fn getWebviewSnapshot(hostId: u32, id: u32, webView: *anyopaque, snapshotHandler: SnapshotHandler) callconv(.C) void;
 pub extern fn webviewTagSetTransparent(webView: *anyopaque, transparent: bool) callconv(.C) void;
 pub extern fn webviewTagToggleMirroring(webView: *anyopaque, enable: bool) callconv(.C) void;
