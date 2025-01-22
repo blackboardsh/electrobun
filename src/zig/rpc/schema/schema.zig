@@ -176,6 +176,7 @@ pub const BunSchema = struct {
                     y: f64,
                 },
                 autoResize: bool,
+                navigationRules: ?[]const u8,
             };
             pub const response = void;
         };

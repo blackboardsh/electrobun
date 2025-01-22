@@ -208,6 +208,7 @@ type ZigHandlers = RPCSchema<{
           height: number;
         };
         autoResize: boolean;
+        navigationRules: string | null;
       };
       response: void;
     };
@@ -586,6 +587,7 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
     },
     webviewEvent: ({ id, eventName, detail }) => {
       const eventMap = {
+        "will-navigate": "willNavigate",
         "did-navigate": "didNavigate",
         "did-navigate-in-page": "didNavigateInPage",
         "did-commit-navigation": "didCommitNavigation",

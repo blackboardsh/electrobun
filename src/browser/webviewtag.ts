@@ -98,6 +98,8 @@ const ConfigureWebviewTags = (
             x: rect.x,
             y: rect.y,
           },
+          // todo: wire up to a param and a method to update them
+          navigationRules: null,
         },
       });
 

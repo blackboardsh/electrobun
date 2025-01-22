@@ -39,8 +39,11 @@ pub fn toCString(input: []const u8) [*:0]const u8 {
     return allocResult[0..input.len :0]; // Correctly typed slice with null terminator
 }
 
-pub fn fromCString(input: [*:0]const u8) []const u8 {
-    return input[0..std.mem.len(input)];
+pub fn fromCString(input: ?[*:0]const u8) []const u8 {
+    if (input) |ptr| {
+        return ptr[0..std.mem.len(ptr)];
+    }
+    return "";
 }
 
 // todo: move to string util (duplicated in handlers.zig)

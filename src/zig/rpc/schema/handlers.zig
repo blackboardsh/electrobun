@@ -53,6 +53,7 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
             .height = params.frame.height,
         },
         .autoResize = params.autoResize,
+        .navigationRules = params.navigationRules,
     });
 
     return RequestResult{ .errorMsg = null, .payload = null };

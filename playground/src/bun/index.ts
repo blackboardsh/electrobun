@@ -353,20 +353,12 @@ const webviewTagWindow = new BrowserWindow({
 
 // todo (yoav): typescript types should resolve for e and e.setResponse
 Electrobun.events.on("will-navigate", (e) => {
-  console.log(
-    "example global will navigate handler",
-    e.data.url,
-    e.data.webviewId
-  );
+  console.log("example global will navigate handler", e.data.detail);
   e.response = { allow: true };
 });
 
 wikiWindow.webview.on("will-navigate", (e) => {
-  console.log(
-    "example webview will navigate handler",
-    e.data.url,
-    e.data.webviewId
-  );
+  console.log("example webview will navigate handler", e.data.detail);
   if (e.responseWasSet && e.response.allow === false) {
     e.response.allow = true;
     // e.clearResponse();

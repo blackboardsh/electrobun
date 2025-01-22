@@ -15,6 +15,130 @@ const O_NONBLOCK = 0x0004; // For Unix-based systems
 
 const alloc = std.heap.page_allocator;
 
+pub const NavigationRule = struct {
+    pattern: []const u8,
+    is_deny_rule: bool,
+
+    pub fn fromString(allocator: std.mem.Allocator, str: []const u8) ?NavigationRule {
+        const trimmed = std.mem.trim(u8, str, " ");
+        if (trimmed.len == 0) return null;
+        
+        const pattern = if (trimmed[0] == '^') 
+            allocator.dupe(u8, trimmed[1..]) catch return null
+            else allocator.dupe(u8, trimmed) catch return null;
+            
+        return NavigationRule{
+            .pattern = pattern,
+            .is_deny_rule = trimmed[0] == '^',
+        };
+    }
+
+    pub fn deinit(self: *const NavigationRule, allocator: std.mem.Allocator) void {
+        allocator.free(self.pattern);
+    }
+};
+// eg: 
+// block everything, except wikipedia.org and subdomains like en.wikipedia.org
+// "^*, *.wikipedia.org, wikipedia.org"
+
+// allow everything, except wikipedia.org and subdomains like en.wikipedia.org
+// "^*.wikipedia.org, ^wikipedia.org"
+
+pub const NavigationRuleList = struct {
+    rules: []NavigationRule,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) NavigationRuleList {
+        return .{
+            .rules = &[_]NavigationRule{},
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *NavigationRuleList) void {
+        for (self.rules) |rule| {
+            rule.deinit(self.allocator);
+        }
+        self.allocator.free(self.rules);
+    }
+
+    // Note: we store the rules backwards so developers can write them from general to specific
+    // and so we can iterate from specific to general (stopping at the first encountered match)
+
+    // comma separated list of rules
+    // use a * to match any character
+    // start with a ^ to make it a deny rule
+    pub fn fromString(allocator: std.mem.Allocator, rules_str: ?[]const u8) NavigationRuleList {
+        var list = NavigationRuleList.init(allocator);
+        
+        const str = rules_str orelse return list;
+        if (str.len == 0) return list;
+        
+        var rules = std.ArrayList(NavigationRule).init(allocator);
+        
+        var it = std.mem.split(u8, str, ",");
+        while (it.next()) |rule_str| {
+            if (NavigationRule.fromString(allocator, rule_str)) |rule| {
+                // Insert at beginning to reverse order
+                rules.insert(0, rule) catch continue;
+            }
+        }
+
+        list.rules = rules.toOwnedSlice() catch {
+            rules.deinit();
+            return list;
+        };
+        
+        return list;
+    }
+
+    pub fn isUrlAllowed(self: *const NavigationRuleList, url: []const u8) bool {
+         const uri = std.Uri.parse(url) catch return true;
+        
+        // No scheme? Match against full URL as pattern
+        if (uri.scheme.len == 0) {
+            for (self.rules) |rule| {
+                if (std.mem.eql(u8, rule.pattern, url)) {
+                    return !rule.is_deny_rule;
+                }
+            }
+            return true;
+        }
+
+        // Has scheme but no host? Match against just the scheme
+        const host = uri.host orelse {
+            const scheme = uri.scheme;
+            for (self.rules) |rule| {
+                if (std.mem.eql(u8, rule.pattern, scheme)) {
+                    return !rule.is_deny_rule;
+                }
+            }
+            return true;
+        };
+
+        // Regular domain matching
+        for (self.rules) |rule| {
+            if (self.matchesDomainPattern(rule.pattern, host.percent_encoded)) {
+                return !rule.is_deny_rule;
+            }
+        }
+
+        return true;
+    }
+
+    fn matchesDomainPattern(self: *const NavigationRuleList, pattern: []const u8, host: []const u8) bool {
+        _ = self;
+        if (std.mem.eql(u8, pattern, "*")) return true;
+        
+        if (pattern[0] == '*' and pattern.len > 1 and pattern[1] == '.') {
+            return std.mem.endsWith(u8, host, pattern[2..]);
+        }
+
+        return std.mem.eql(u8, pattern, host);
+    }
+};
+
+
 const WebviewMap = std.AutoHashMap(u32, WebviewType);
 pub var webviewMap: WebviewMap = WebviewMap.init(alloc);
 const ViewsScheme = "views://";
@@ -43,6 +167,7 @@ const WebviewType = struct {
         y: f64,
     },
     renderer: []const u8, // native, cef, etc.
+    navigationRules: NavigationRuleList,
     // todo: de-init these using objc.releaseObjCObject() when the webview closes
     // delegate: *anyopaque,
     // bunBridgeHandler: *anyopaque,
@@ -116,6 +241,7 @@ const CreateWebviewOpts = struct { //
         y: f64,
     },
     autoResize: bool,
+    navigationRules: ?[]const u8,
 };
 pub fn createWebview(opts: CreateWebviewOpts) void {
     const bunPipeIn = blk: {
@@ -228,8 +354,8 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         // },
     }, viewsHandler, opts.autoResize, utils.toCString(parition), struct {
         fn decideNavigation(webviewId: u32, url: [*:0]const u8) callconv(.C) bool {
-            _ = webviewId;
-            _ = url;
+            // _ = webviewId;
+            // _ = url;
             // todo: right now this reaches a generic rpc request, but it should be attached
             // to this specific webview's pipe so navigation handlers can be attached to specific webviews
             // const _response = rpc.request.decideNavigation(.{
@@ -238,10 +364,17 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
             // });
 
             // TODO: Bun should provide this webview a rule list instead of it fireing an event
-            return true;
+
+            const webview = webviewMap.get(webviewId) orelse {
+                std.debug.print("Failed to get webview from hashmap for id {}: decideNavigation\n", .{webviewId});
+                return false;
+            };
+
+            return webview.navigationRules.isUrlAllowed(utils.fromCString(url));
+            
         }
     }.decideNavigation, struct {
-        fn handleWebviewEvent(webviewId: u32, eventName: [*:0]const u8, url: [*:0]const u8) callconv(.C) void {
+        fn handleWebviewEvent(webviewId: u32, eventName: ?[*:0]const u8, url: ?[*:0]const u8) callconv(.C) void {
             webviewEvent(.{
                 .id = webviewId,
                 .eventName = utils.fromCString(eventName),
@@ -402,6 +535,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         .handle = objcWebview,
         .bun_out_pipe = bunPipeOut,
         .bun_in_pipe = bunPipeIn,
+        .navigationRules = NavigationRuleList.fromString(alloc, opts.navigationRules),
         // .delegate = delegate,
         // .bunBridgeHandler = bunBridgeHandler,
         // .webviewTagHandler = webviewTagHandler,
@@ -594,6 +728,8 @@ pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) vo
         std.debug.print("Failed to get webview from hashmap for id {}: resizeWebview\n", .{opts.id});
         return;
     };
+
+    std.debug.print("===========-------- resizeWebview:: {}", .{opts.id});
 
     // todo: update webview frame in the webviewMap.
     // not doing this yet to see when we run into issues. it's possible

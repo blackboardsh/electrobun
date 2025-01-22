@@ -347,6 +347,7 @@ startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
         }
         [subview toggleMirrorMode:YES];
     }
+    NSLog(@"updateActiveWebviewForMousePosition COMPLETE");
 }
 @end
 // ----------------------------------------------------------------------------

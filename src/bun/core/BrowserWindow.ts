@@ -23,6 +23,7 @@ type WindowOptionsType<T = undefined> = {
   styleMask?: {};
   // TODO: implement all of them
   titleBarStyle: "hiddenInset" | "default";
+  navigationRules: string | null;
 };
 
 const defaultOptions: WindowOptionsType = {
@@ -37,6 +38,7 @@ const defaultOptions: WindowOptionsType = {
   html: null,
   preload: null,
   titleBarStyle: "default",
+  navigationRules: null,
 };
 
 const BrowserWindowMap = {};
@@ -73,6 +75,7 @@ export class BrowserWindow<T> {
     this.url = options.url || null;
     this.html = options.html || null;
     this.preload = options.preload || null;
+    this.navigationRules = options.navigationRules || null;
 
     this.init(options);
   }
@@ -142,6 +145,7 @@ export class BrowserWindow<T> {
       // does this mean browserView needs to track the windowId or handle it ephemerally?
       windowId: this.id,
       renderer: "cef", // or native(default) // passed on from opt
+      navigationRules: this.navigationRules,
     });
 
     this.webviewId = webview.id;

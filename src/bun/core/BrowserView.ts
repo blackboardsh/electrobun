@@ -40,6 +40,7 @@ type BrowserViewOptions<T = undefined> = {
   autoResize: boolean;
 
   windowId: number;
+  navigationRules: string | null;
   // renderer: "native" | "cef";
 };
 
@@ -69,8 +70,16 @@ const internalSyncRpcHandlers = {
     method: string;
     params: BrowserViewOptions & { windowId: number };
   }) => {
-    const { hostWebviewId, windowId, url, html, preload, partition, frame } =
-      params;
+    const {
+      hostWebviewId,
+      windowId,
+      url,
+      html,
+      preload,
+      partition,
+      frame,
+      navigationRules,
+    } = params;
 
     const webviewForTag = new BrowserView({
       url,
@@ -82,6 +91,7 @@ const internalSyncRpcHandlers = {
       autoResize: false,
       windowId,
       renderer: "cef",
+      navigationRules,
     });
 
     // Note: we have to give it a couple of ticks to fully create the browserview
@@ -138,6 +148,7 @@ export class BrowserView<T> {
   rpc?: T;
   syncRpc?: { [method: string]: (params: any) => any };
   rpcHandler?: (msg: any) => void;
+  navigationRules: string | null;
 
   constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
     // const rpc = options.rpc;
@@ -162,6 +173,7 @@ export class BrowserView<T> {
     this.hostWebviewId = options.hostWebviewId;
     this.windowId = options.windowId;
     this.autoResize = options.autoResize === false ? false : true;
+    this.navigationRules = options.navigationRules || null;
 
     this.init();
   }
@@ -193,6 +205,7 @@ export class BrowserView<T> {
         y: this.frame.y,
       },
       autoResize: this.autoResize,
+      navigationRules: this.navigationRules,
     });
 
     BrowserViewMap[this.id] = this;
