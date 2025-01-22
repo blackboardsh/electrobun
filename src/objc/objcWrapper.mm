@@ -110,6 +110,7 @@ void releaseObjCObject(id objcObject) {
 
 - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString;
 - (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString;
+- (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler;
 - (void)addPreloadScriptToWebView:(const char*)jsString;
 - (void)updatePreloadScriptInWebView:(const char*)jsString;
 
@@ -139,6 +140,7 @@ void releaseObjCObject(id objcObject) {
 
 - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
 - (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
+- (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler { [self doesNotRecognizeSelector:_cmd]; }
 - (void)addPreloadScriptToWebView:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
 - (void)updatePreloadScriptInWebView:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
 @end
@@ -739,6 +741,45 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
                    completionHandler:nil];
 }
 
+- (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
+    NSString *javaScript = [NSString stringWithUTF8String:jsString ?: ""];
+    NSDictionary *arguments = @{};
+    [self.webView callAsyncJavaScript:javaScript
+                       arguments:arguments
+                         inFrame:nil
+                 inContentWorld:WKContentWorld.pageWorld
+              completionHandler:^(id result, NSError *error) {
+        NSError *jsonError;
+        NSData *jsonData;
+        if (error) {
+            jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": error.localizedDescription}
+                                                       options:0
+                                                         error:&jsonError];
+        } else {
+            if (result == nil) {
+                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [NSNull null]}
+                                                           options:0
+                                                             error:&jsonError];
+            } else if ([NSJSONSerialization isValidJSONObject:result]) {
+                jsonData = [NSJSONSerialization dataWithJSONObject:result
+                                                           options:0
+                                                             error:&jsonError];
+            } else {
+                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [result description]}
+                                                           options:0
+                                                             error:&jsonError];
+            }
+            if (jsonError) {
+                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": jsonError.localizedDescription}
+                                                           options:0
+                                                             error:&jsonError];
+            }
+        }
+        NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+        completionHandler(messageId, webviewId, hostWebviewId, jsonString.UTF8String);
+    }];
+}
+
 - (void)addPreloadScriptToWebView:(const char*)jsString {
     NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
     WKUserScript *script = [[WKUserScript alloc] initWithSource:code
@@ -1086,52 +1127,21 @@ extern "C" void evaluateJavaScriptinSecureContentWorld(AbstractWebView *webView,
     [webView evaluateJavaScriptInSecureContentWorld:jsString];    
 }
 
-typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
+// typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
 
 extern "C" void callAsyncJavaScript(const char *messageId,
                                     AbstractWebView *abstractView,
                                     const char *jsString,
                                     uint32_t webviewId,
                                     uint32_t hostWebviewId,
-                                    callAsyncJavascriptCompletionHandler callback) {
+                                    callAsyncJavascriptCompletionHandler completionHandler) {
 
-    NSLog(@"TODO: IMPLEMENT: Calling async JavaScript: %s", jsString);                                    
-    // NSString *javaScript = [NSString stringWithUTF8String:jsString ?: ""];
-    // NSDictionary *arguments = @{};
-    // [abstractView.nativeView callAsyncJavaScript:javaScript
-    //                    arguments:arguments
-    //                      inFrame:nil
-    //              inContentWorld:WKContentWorld.pageWorld
-    //           completionHandler:^(id result, NSError *error) {
-    //     NSError *jsonError;
-    //     NSData *jsonData;
-    //     if (error) {
-    //         jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": error.localizedDescription}
-    //                                                    options:0
-    //                                                      error:&jsonError];
-    //     } else {
-    //         if (result == nil) {
-    //             jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [NSNull null]}
-    //                                                        options:0
-    //                                                          error:&jsonError];
-    //         } else if ([NSJSONSerialization isValidJSONObject:result]) {
-    //             jsonData = [NSJSONSerialization dataWithJSONObject:result
-    //                                                        options:0
-    //                                                          error:&jsonError];
-    //         } else {
-    //             jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [result description]}
-    //                                                        options:0
-    //                                                          error:&jsonError];
-    //         }
-    //         if (jsonError) {
-    //             jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": jsonError.localizedDescription}
-    //                                                        options:0
-    //                                                          error:&jsonError];
-    //         }
-    //     }
-    //     NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-    //     callback(messageId, webviewId, hostWebviewId, jsonString.UTF8String);
-    // }];
+    
+   [abstractView callAsyncJavascript:messageId
+                        jsString:jsString
+                       webviewId:webviewId
+                  hostWebviewId:hostWebviewId
+               completionHandler:completionHandler];
 }
 
 extern "C" void addPreloadScriptToWebView(AbstractWebView *webView, const char *scriptContent, BOOL forMainFrameOnly) {            
