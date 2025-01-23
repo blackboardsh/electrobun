@@ -316,7 +316,7 @@ startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
 }
 
 - (void)mouseMoved:(NSEvent *)event {
-    NSLog(@"mouseMoved");
+    // NSLog(@"mouseMoved");
     NSPoint mouseLocation = [self convertPoint:[event locationInWindow] fromView:nil];
     [self updateActiveWebviewForMousePosition:mouseLocation];
 }
@@ -324,11 +324,17 @@ startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
 // This function tries to figure out which "TransparentWKWebView" should be interactive
 // vs mirrored, based on mouse position and layering.
 - (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation {
-    NSLog(@"updateActiveWebviewForMousePosition");
+    // NSLog(@"updateActiveWebviewForMousePosition");
     NSArray *subviews = [self subviews];
     BOOL stillSearching = YES;
+    
+    for (NSView *view in [subviews reverseObjectEnumerator]) {
+        if (![view isKindOfClass:[TransparentWKWebView class]]) {            
+            continue;  
+        }
+        
+        TransparentWKWebView *subview = (TransparentWKWebView *)view;
 
-    for (TransparentWKWebView *subview in [subviews reverseObjectEnumerator]) {
         if (stillSearching) {
             NSRect subviewRenderLayerFrame = subview.layer.frame;
             if (NSPointInRect(mouseLocation, subviewRenderLayerFrame) && !subview.hidden) {
@@ -338,7 +344,7 @@ startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
                     CGPoint mousePositionInMaskPath = CGPointMake(mouseLocation.x - subviewRenderLayerFrame.origin.x,
                                                                   subviewRenderLayerFrame.size.height - (mouseLocation.y - subviewRenderLayerFrame.origin.y));
                     if (!CGPathContainsPoint(maskPath, NULL, mousePositionInMaskPath, true)) {
-                        [subview toggleMirrorMode:YES];
+                        [subview toggleMirrorMode:YES];                        
                         continue;
                     }
                 }
@@ -348,8 +354,7 @@ startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
             }
         }
         [subview toggleMirrorMode:YES];
-    }
-    NSLog(@"updateActiveWebviewForMousePosition COMPLETE");
+    }    
 }
 @end
 // ----------------------------------------------------------------------------
@@ -531,7 +536,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
         // configuration
         WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
         configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
-        [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+        [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
         [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
 
         // Add scheme handler
@@ -671,10 +676,9 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
 
 - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {
     if (!self.webView) return;
-    TransparentWKWebView *twv = (TransparentWKWebView *)self.webView;
-    
+    TransparentWKWebView *twv = (TransparentWKWebView *)self.webView;        
 
-    NSLog(@"resizeWebview  %f, %f, %f, %f", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+    // NSLog(@"resizeWebview  %f, %f, %f, %f", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
     CGFloat adjustedX = floor(frame.origin.x);
     CGFloat adjustedWidth = ceilf(frame.size.width);
     CGFloat adjustedHeight = ceilf(frame.size.height);
@@ -687,12 +691,21 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
         twv.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
     }
 
+    if (!masksJson || strlen(masksJson) == 0) {
+        twv.layer.mask = nil;
+        return;
+    }
+
     NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
     NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
-    if (!jsonData) return;
+    if (!jsonData) {
+        twv.layer.mask = nil;
+        return;
+    }
     NSError *error = nil;
     NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
     if (!rectsArray || error) {
+        twv.layer.mask = nil;
         return;
     }
     NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray);
@@ -1240,7 +1253,7 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
 }
 @end
 
-extern "C" void runNSApplication() {
+extern "C" void runNSApplication() {    
     if (useCEF) {
         @autoreleasepool {
             if (!initializeCEF()) {
@@ -1292,13 +1305,21 @@ extern "C" void runNSApplication() {
     fullFrame.origin.x = 0;
     fullFrame.origin.y = 0;
 
+    // Note: wkwebview opens devtools attached by default. Nothing we've tried stops that
+    // The compromise for now is to not crash, let users "pop out" devtools and from then on
+    // it'll pop out for them by default.
     for (NSView *subview in contentView.subviews) {
+        if (![subview isKindOfClass:[TransparentWKWebView class]]) {
+            continue;
+        }
+            
         TransparentWKWebView *webView = (TransparentWKWebView *)subview;
         if (webView.fullSize) {
             // extern void resizeWebview(TransparentWKWebView *view, NSRect frame, const char *masksJson);
             // resizeWebview(webView, fullFrame, "");
             [webView.abstractView resize:fullFrame withMasksJSON:""];
         }
+        
     }
     if (self.resizeHandler) {
         NSScreen *primaryScreen = [NSScreen screens][0];
