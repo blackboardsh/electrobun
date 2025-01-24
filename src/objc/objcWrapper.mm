@@ -504,7 +504,9 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
 @property (nonatomic, assign) uint32_t webviewId;
 
 - (instancetype)initWithWebviewId:(uint32_t)webviewId
-                           window:(NSWindow *)window                         
+                           window:(NSWindow *)window   
+                           url:(const char *)url
+                           html:(const char *)html                      
                             frame:(NSRect)frame
                   assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
                        autoResize:(bool)autoResize
@@ -519,7 +521,9 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
 @implementation WKWebViewImpl
 
 - (instancetype)initWithWebviewId:(uint32_t)webviewId
-                           window:(NSWindow *)window                         
+                           window:(NSWindow *)window
+                           url:(const char *)url
+                           html:(const char *)html                         
                             frame:(NSRect)frame
                   assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
                        autoResize:(bool)autoResize
@@ -600,6 +604,18 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
         wv.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
 
         wv.abstractView = self;
+
+        // Force the load to happen on the next runloop iteration after addSubview
+        // otherwise wkwebkit won't load
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (url) {
+                NSLog(@"setting url %s", url);
+                [self loadURL:url];
+            } else if (html) {
+                NSLog(@"setting html %s", html);
+                [self loadHTML:html];
+            }
+        });
 
         _webView = wv;
         
@@ -1052,6 +1068,8 @@ void addCEFWebviewToWindow(uint32_t webviewId, NSWindow *window, const char *ren
 extern "C" AbstractWebView* initWebview(uint32_t webviewId,
                         NSWindow *window,
                         const char *renderer,
+                        const char *url,
+                        const char *html,
                         NSRect frame,
                         zigStartURLSchemeTaskCallback assetFileLoader,
                         bool autoResize,
@@ -1079,7 +1097,9 @@ extern "C" AbstractWebView* initWebview(uint32_t webviewId,
     } else {
         // fallback to WKWebView version
         impl = [[WKWebViewImpl alloc] initWithWebviewId:webviewId
-                                                 window:window                                               
+                                                 window:window
+                                                 url:url
+                                                 html:html                                               
                                                   frame:frame
                                         assetFileLoader:assetFileLoader
                                              autoResize:autoResize

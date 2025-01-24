@@ -94,24 +94,6 @@ const internalSyncRpcHandlers = {
       navigationRules,
     });
 
-    // Note: we have to give it a couple of ticks to fully create the browserview
-    // which has a settimout init() which calls rpc that has a settimeout and all the serialization/deserialization
-
-    // TODO: we really need a better way to handle the whole view creation flow and
-    // maybe an onready event or something.
-    setTimeout(() => {
-      // zigRPC.request.addWebviewToWindow({
-      //   windowId: windowId,
-      //   webviewId: webviewForTag.id,
-      // });
-
-      if (url) {
-        webviewForTag.loadURL(url);
-      } else if (html) {
-        webviewForTag.loadHTML(html);
-      }
-    }, 100);
-
     return webviewForTag.id;
   },
 };

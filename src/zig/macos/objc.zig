@@ -77,17 +77,18 @@ pub extern fn closeNSWindow(window: *anyopaque) callconv(.C) void;
 pub extern fn getWindowBounds(window: *anyopaque) callconv(.C) *anyopaque;
 
 // webview
-// todo: rename to createAndReturnWebview
 pub extern fn initWebview(
-    webviewId: u32, 
-    window: *anyopaque, 
-    renderer: [*:0]const u8, 
-    frame: NSRect, 
-    assetFileLoader: FileLoader, 
-    autoResize: bool, 
-    partition: [*:0]const u8, 
-    decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool, 
-    webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void, 
+    webviewId: u32,
+    window: *anyopaque,
+    renderer: [*:0]const u8,
+    url: ?[*:0]const u8,
+    html: ?[*:0]const u8,
+    frame: NSRect,
+    assetFileLoader: FileLoader,
+    autoResize: bool,
+    partition: [*:0]const u8,
+    decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
+    webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
     bunBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
     webviewTagBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
 ) callconv(.C) *anyopaque;

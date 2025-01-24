@@ -148,13 +148,7 @@ export class BrowserWindow<T> {
       navigationRules: this.navigationRules,
     });
 
-    this.webviewId = webview.id;
-
-    if (this.url) {
-      webview.loadURL(this.url);
-    } else if (this.html) {
-      webview.loadHTML(this.html);
-    }
+    this.webviewId = webview.id;   
 
     BrowserWindowMap[this.id] = this;
   }

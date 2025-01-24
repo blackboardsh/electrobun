@@ -8,7 +8,6 @@ const rpcTypes = @import("../rpc/types.zig");
 const rpcHandlers = @import("../rpc/schema/handlers.zig");
 const utils = @import("../utils.zig");
 
-
 const strEql = utils.strEql;
 
 const O_NONBLOCK = 0x0004; // For Unix-based systems
@@ -22,11 +21,12 @@ pub const NavigationRule = struct {
     pub fn fromString(allocator: std.mem.Allocator, str: []const u8) ?NavigationRule {
         const trimmed = std.mem.trim(u8, str, " ");
         if (trimmed.len == 0) return null;
-        
-        const pattern = if (trimmed[0] == '^') 
+
+        const pattern = if (trimmed[0] == '^')
             allocator.dupe(u8, trimmed[1..]) catch return null
-            else allocator.dupe(u8, trimmed) catch return null;
-            
+        else
+            allocator.dupe(u8, trimmed) catch return null;
+
         return NavigationRule{
             .pattern = pattern,
             .is_deny_rule = trimmed[0] == '^',
@@ -37,7 +37,7 @@ pub const NavigationRule = struct {
         allocator.free(self.pattern);
     }
 };
-// eg: 
+// eg:
 // block everything, except wikipedia.org and subdomains like en.wikipedia.org
 // "^*, *.wikipedia.org, wikipedia.org"
 
@@ -70,12 +70,12 @@ pub const NavigationRuleList = struct {
     // start with a ^ to make it a deny rule
     pub fn fromString(allocator: std.mem.Allocator, rules_str: ?[]const u8) NavigationRuleList {
         var list = NavigationRuleList.init(allocator);
-        
+
         const str = rules_str orelse return list;
         if (str.len == 0) return list;
-        
+
         var rules = std.ArrayList(NavigationRule).init(allocator);
-        
+
         var it = std.mem.split(u8, str, ",");
         while (it.next()) |rule_str| {
             if (NavigationRule.fromString(allocator, rule_str)) |rule| {
@@ -88,13 +88,13 @@ pub const NavigationRuleList = struct {
             rules.deinit();
             return list;
         };
-        
+
         return list;
     }
 
     pub fn isUrlAllowed(self: *const NavigationRuleList, url: []const u8) bool {
-         const uri = std.Uri.parse(url) catch return true;
-        
+        const uri = std.Uri.parse(url) catch return true;
+
         // No scheme? Match against full URL as pattern
         if (uri.scheme.len == 0) {
             for (self.rules) |rule| {
@@ -129,7 +129,7 @@ pub const NavigationRuleList = struct {
     fn matchesDomainPattern(self: *const NavigationRuleList, pattern: []const u8, host: []const u8) bool {
         _ = self;
         if (std.mem.eql(u8, pattern, "*")) return true;
-        
+
         if (pattern[0] == '*' and pattern.len > 1 and pattern[1] == '.') {
             return std.mem.endsWith(u8, host, pattern[2..]);
         }
@@ -137,7 +137,6 @@ pub const NavigationRuleList = struct {
         return std.mem.eql(u8, pattern, host);
     }
 };
-
 
 const WebviewMap = std.AutoHashMap(u32, WebviewType);
 pub var webviewMap: WebviewMap = WebviewMap.init(alloc);
@@ -346,8 +345,11 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         return;
     };
 
+    const urlCString = if (opts.url) |url| utils.toCString(url) else null;
+    const htmlCString = if (opts.html) |html| utils.toCString(html) else null;
+
     // todo: windowId should actually be a pointer to the window
-    const objcWebview = objc.initWebview(opts.id, win.window, utils.toCString(opts.renderer), .{                
+    const objcWebview = objc.initWebview(opts.id, win.window, utils.toCString(opts.renderer), urlCString, htmlCString, .{
         // .frame = .{ //
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
         .size = .{ .width = opts.frame.width, .height = opts.frame.height },
@@ -371,7 +373,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
             };
 
             return webview.navigationRules.isUrlAllowed(utils.fromCString(url));
-            
         }
     }.decideNavigation, struct {
         fn handleWebviewEvent(webviewId: u32, eventName: ?[*:0]const u8, url: ?[*:0]const u8) callconv(.C) void {
@@ -449,78 +450,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         }
     }.WebviewTagBridgeHandler);
 
-
-    // const bunBridgeHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "bunBridge", struct {
-    //     fn BunBridgeHandler(webviewId: u32, message: [*:0]const u8) callconv(.C) void {
-    //         // bun bridge just forwards messages to the bun
-    //         var webview = webviewMap.get(webviewId) orelse {
-    //             std.debug.print("Failed to get webview from hashmap for id {}: bunBridgeHandler\n", .{webviewId});
-    //             return;
-    //         };
-
-    //         webview.sendToBun(utils.fromCString(message)) catch |err| {
-    //             std.debug.print("Failed to send message to bun: {}\n", .{err});
-    //         };
-    //     }
-    // }.BunBridgeHandler);
-    // todo: only set this up if the webview tag is enabled for this webview
-    // todo: rename this to webviewToZigBridgeHandler since it's for webview tags and the webview itself
-    // const webviewTagHandler = objc.addScriptMessageHandler(objcWebview, opts.id, "webviewTagBridge", struct {
-    //     fn HandlePostMessage(webviewId: u32, message: [*:0]const u8) callconv(.C) void {
-    //         const msgString = utils.fromCString(message);
-
-    //         const json = std.json.parseFromSlice(std.json.Value, alloc, msgString, .{ .ignore_unknown_fields = true }) catch |err| {
-    //             std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
-    //             return;
-    //         };
-
-    //         defer json.deinit();
-
-    //         const msgType = blk: {
-    //             const obj = json.value.object.get("type").?;
-    //             break :blk obj.string;
-    //         };
-
-    //         if (std.mem.eql(u8, msgType, "request")) {
-    //             const _request = std.json.parseFromValue(rpcTypes._RPCRequestPacket, alloc, json.value, .{}) catch |err| {
-    //                 std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
-    //                 return;
-    //             };
-
-    //             const result = rpcHandlers.fromBrowserHandleRequest(_request.value);
-
-    //             if (result.errorMsg == null) {
-    //                 const responseSuccess = .{ .id = _request.value.id, .type = "response", .success = true, .payload = result };
-
-    //                 const buffer = std.json.stringifyAlloc(alloc, responseSuccess, .{}) catch {
-    //                     return;
-    //                 };
-    //                 defer alloc.free(buffer);
-
-    //                 // Prepare the JavaScript function call
-    //                 const jsCall = std.fmt.allocPrint(alloc, "window.__electrobun.receiveMessageFromZig({s})\n", .{buffer}) catch {
-    //                     return;
-    //                 };
-    //                 defer alloc.free(jsCall);
-
-    //                 sendLineToWebview(webviewId, jsCall);
-    //             } else {
-    //                 // todo: this doesn't work yet
-    //                 // rpcStdout.sendResponseError(_request.value.id, result.errorMsg.?);
-    //             }
-    //         } else if (std.mem.eql(u8, msgType, "message")) {
-    //             const _message = std.json.parseFromValue(rpcTypes._RPCMessagePacket, alloc, json.value, .{}) catch |err| {
-    //                 std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
-    //                 return;
-    //             };
-
-    //             rpcHandlers.fromBrowserHandleMessage(_message.value);
-    //         } else {
-    //             std.log.info("it's an unhandled meatball", .{});
-    //         }
-    //     }
-    // }.HandlePostMessage);
-
     const _webview = WebviewType{ //
         .id = opts.id,
         .hostWebviewId = opts.hostWebviewId,
@@ -554,7 +483,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     //     \\ window.test44 = 44;
     // ));
     // objc.evaluateJavaScriptWithNoCompletion(_webview.handle, utils.toCString("const test = 567; console.log('test', test);"));
-    
+
     // Note: Keep this in sync with browser api
     const jsScriptSubstitutions = std.fmt.allocPrint(alloc,
         \\ window.__electrobunWebviewId = {};
