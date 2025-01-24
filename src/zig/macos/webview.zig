@@ -229,8 +229,7 @@ const CreateWebviewOpts = struct { //
     rpcPort: u32,
     secretKey: []const u8,
     pipePrefix: []const u8,
-    url: ?[]const u8,
-    html: ?[]const u8,
+    url: []const u8,
     preload: ?[]const u8,
     partition: ?[]const u8,
     frame: struct { //
@@ -345,11 +344,10 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         return;
     };
 
-    const urlCString = if (opts.url) |url| utils.toCString(url) else null;
-    const htmlCString = if (opts.html) |html| utils.toCString(html) else null;
+    const urlCString = utils.toCString(opts.url);
 
     // todo: windowId should actually be a pointer to the window
-    const objcWebview = objc.initWebview(opts.id, win.window, utils.toCString(opts.renderer), urlCString, htmlCString, .{
+    const objcWebview = objc.initWebview(opts.id, win.window, utils.toCString(opts.renderer), urlCString, .{
         // .frame = .{ //
         .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
         .size = .{ .width = opts.frame.width, .height = opts.frame.height },
@@ -698,16 +696,6 @@ pub fn loadURL(opts: rpcSchema.BunSchema.requests.loadURL.params) void {
     // todo: consider updating url. we may not need it stored in zig though.
     // webview.url = need to use webviewMap.getPtr() then webview.*.url = opts.url
     objc.loadURLInWebView(webview.handle, utils.toCString(opts.url));
-}
-
-pub fn loadHTML(opts: rpcSchema.BunSchema.requests.loadHTML.params) void {
-    const webview = webviewMap.get(opts.webviewId) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}: loadHTML\n", .{opts.webviewId});
-        return;
-    };
-
-    // webview.html = opts.html;
-    objc.loadHTMLInWebView(webview.handle, utils.toCString(opts.html));
 }
 
 pub fn goBack(opts: rpcSchema.BrowserSchema.messages.webviewTagGoBack) void {

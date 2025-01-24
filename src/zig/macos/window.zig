@@ -33,7 +33,7 @@ const WindowType = struct {
 // todo: use the types in rpc.zig (or move them to a shared location)
 const CreateWindowOpts = struct {
     id: u32,
-    url: ?[]const u8,
+    url: ?[]const u8, // todo remove
     html: ?[]const u8,
     title: []const u8,
     frame: struct { width: f64, height: f64, x: f64, y: f64 },
@@ -141,7 +141,7 @@ pub fn startWindowMove(opts: rpcSchema.BrowserSchema.messages.startWindowMove) v
 }
 
 pub fn stopWindowMove(opts: rpcSchema.BrowserSchema.messages.stopWindowMove) void {
-     const window = windowMap.get(opts.id) orelse {
+    const window = windowMap.get(opts.id) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
         return;
     };

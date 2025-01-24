@@ -161,8 +161,7 @@ type ZigHandlers = RPCSchema<{
     createWindow: {
       params: {
         id: number;
-        url: string | null;
-        html: string | null;
+        url: string | null;        
         title: string;
         frame: {
           width: number;
@@ -197,8 +196,7 @@ type ZigHandlers = RPCSchema<{
         secretKey: string;
         hostWebviewId: number | null;
         pipePrefix: string;
-        url: string | null;
-        html: string | null;
+        url: string;        
         partition: string | null;
         preload: string | null;
         frame: {
@@ -220,13 +218,7 @@ type ZigHandlers = RPCSchema<{
       };
       response: void;
     };
-    loadHTML: {
-      params: {
-        webviewId: number;
-        html: string;
-      };
-      response: void;
-    };
+    
 
     setTitle: {
       params: {

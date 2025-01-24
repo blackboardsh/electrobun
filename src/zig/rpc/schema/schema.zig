@@ -6,7 +6,7 @@ pub const ZigSchema = struct { //
                 webviewId: u32,
                 url: []const u8,
             };
-             pub const response = struct {
+            pub const response = struct {
                 success: bool,
             };
         };
@@ -113,8 +113,7 @@ pub const BunSchema = struct {
             pub const params = struct {
                 id: u32,
                 title: []const u8,
-                url: ?[]const u8,
-                html: ?[]const u8, //
+                url: []const u8,
                 frame: struct {
                     width: f64,
                     height: f64,
@@ -139,7 +138,7 @@ pub const BunSchema = struct {
             };
             pub const response = void;
         };
-       
+
         pub const setTitle = struct { //
             pub const params = struct {
                 // todo: be consistent about winId vs windowId
@@ -165,8 +164,7 @@ pub const BunSchema = struct {
                 secretKey: []const u8,
                 hostWebviewId: ?u32,
                 pipePrefix: []const u8,
-                url: ?[]const u8,
-                html: ?[]const u8,
+                url: []const u8,
                 preload: ?[]const u8,
                 partition: ?[]const u8,
                 frame: struct { //
@@ -185,14 +183,6 @@ pub const BunSchema = struct {
             pub const params = struct {
                 webviewId: u32,
                 url: []const u8,
-            };
-            pub const response = void;
-        };
-
-        pub const loadHTML = struct {
-            pub const params = struct {
-                webviewId: u32,
-                html: []const u8,
             };
             pub const response = void;
         };
@@ -268,9 +258,8 @@ pub const Handlers = struct {
     createWindow: fn (params: BunSchema.requests.createWindow.params) RequestResult,
     createWebview: fn (params: BunSchema.requests.createWebview.params) RequestResult,
     setTitle: fn (params: BunSchema.requests.setTitle.params) RequestResult,
-    closeWindow: fn (params: BunSchema.requests.closeWindow.params) RequestResult,    
+    closeWindow: fn (params: BunSchema.requests.closeWindow.params) RequestResult,
     loadURL: fn (params: BunSchema.requests.loadURL.params) RequestResult,
-    loadHTML: fn (params: BunSchema.requests.loadHTML.params) RequestResult,
     moveToTrash: fn (params: BunSchema.requests.moveToTrash.params) RequestResult,
     showItemInFolder: fn (params: BunSchema.requests.showItemInFolder.params) RequestResult,
     openFileDialog: fn (params: BunSchema.requests.openFileDialog.params) RequestResult,
@@ -302,9 +291,8 @@ pub const RequestResponseType = union(enum) {
     CreateWindowResponse: BunSchema.requests.createWindow.response,
     CreateWebviewResponse: BunSchema.requests.createWebview.response,
     SetTitleResponse: BunSchema.requests.setTitle.response,
-    closeWindowResponse: BunSchema.requests.closeWindow.response,    
+    closeWindowResponse: BunSchema.requests.closeWindow.response,
     LoadURLResponse: BunSchema.requests.loadURL.response,
-    LoadHTMLResponse: BunSchema.requests.loadHTML.response,
     moveToTrashResponse: BunSchema.requests.moveToTrash.response,
     showItemInFolderResponse: BunSchema.requests.showItemInFolder.response,
     openFileDialogResponse: BunSchema.requests.openFileDialog.response,
@@ -336,7 +324,6 @@ pub const FromBrowserHandlers = struct {
     // messages
     webviewTagResize: fn (params: BrowserSchema.messages.webviewTagResize) RequestResult,
     webviewTagUpdateSrc: fn (params: BrowserSchema.messages.webviewTagUpdateSrc) RequestResult,
-    webviewTagUpdateHtml: fn (params: BrowserSchema.messages.webviewTagUpdateHtml) RequestResult,
     webviewTagUpdatePreload: fn (params: BrowserSchema.messages.webviewTagUpdatePreload) RequestResult,
     webviewTagGoBack: fn (params: BrowserSchema.messages.webviewTagGoBack) RequestResult,
     webviewTagGoForward: fn (params: BrowserSchema.messages.webviewTagGoForward) RequestResult,
@@ -381,10 +368,6 @@ pub const BrowserSchema = struct { //
         pub const webviewTagUpdateSrc = struct {
             id: u32,
             url: []const u8,
-        };
-        pub const webviewTagUpdateHtml = struct {
-            id: u32,
-            html: []const u8,
         };
         pub const webviewTagUpdatePreload = struct {
             id: u32,

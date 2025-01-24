@@ -19,7 +19,6 @@ pub fn createWindow(params: rpcSchema.BunSchema.requests.createWindow.params) Re
         .id = params.id,
         .title = params.title,
         .url = params.url,
-        .html = params.html,
         .frame = .{
             .x = params.frame.x,
             .y = params.frame.y,
@@ -43,7 +42,6 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
         .hostWebviewId = params.hostWebviewId,
         .pipePrefix = params.pipePrefix,
         .url = params.url,
-        .html = params.html,
         .preload = params.preload,
         .partition = params.partition,
         .frame = .{ //
@@ -85,14 +83,6 @@ pub fn loadURL(params: rpcSchema.BunSchema.requests.loadURL.params) RequestResul
     webview.loadURL(.{
         .webviewId = params.webviewId,
         .url = params.url,
-    });
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
-
-pub fn loadHTML(params: rpcSchema.BunSchema.requests.loadHTML.params) RequestResult {
-    webview.loadHTML(.{
-        .webviewId = params.webviewId,
-        .html = params.html,
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
@@ -197,9 +187,8 @@ pub const handlers = rpcSchema.Handlers{ //
     .createWindow = createWindow,
     .createWebview = createWebview,
     .setTitle = setTitle,
-    .closeWindow = closeWindow,    
+    .closeWindow = closeWindow,
     .loadURL = loadURL,
-    .loadHTML = loadHTML,
     .moveToTrash = moveToTrash,
     .showItemInFolder = showItemInFolder,
     .openFileDialog = openFileDialog,
@@ -217,7 +206,6 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagCallAsyncJavaScript = webviewTagCallAsyncJavaScript,
     .webviewTagResize = webviewTagResize,
     .webviewTagUpdateSrc = webviewTagUpdateSrc,
-    .webviewTagUpdateHtml = webviewTagUpdateHtml,
     .webviewTagUpdatePreload = webviewTagUpdatePreload,
     .webviewTagGoBack = webviewTagGoBack,
     .webviewTagGoForward = webviewTagGoForward,
@@ -286,15 +274,6 @@ pub fn webviewTagUpdateSrc(params: rpcSchema.BrowserSchema.messages.webviewTagUp
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
-pub fn webviewTagUpdateHtml(params: rpcSchema.BrowserSchema.messages.webviewTagUpdateHtml) RequestResult {
-    webview.loadHTML(.{
-        .webviewId = params.id,
-        .html = params.html,
-    });
-
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
-
 pub fn webviewTagUpdatePreload(params: rpcSchema.BrowserSchema.messages.webviewTagUpdatePreload) RequestResult {
     webview.updatePreloadScriptToWebview(params.id, "electrobun_custom_preload_script", params.preload, true);
 
@@ -321,8 +300,6 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
         return parseParamsAndCall(handlers.createWebview, BunRequests.createWebview.params, request.params);
     } else if (strEql(method, "loadURL")) {
         return parseParamsAndCall(handlers.loadURL, BunRequests.loadURL.params, request.params);
-    } else if (strEql(method, "loadHTML")) {
-        return parseParamsAndCall(handlers.loadHTML, BunRequests.loadHTML.params, request.params);
     } else if (strEql(method, "moveToTrash")) {
         return parseParamsAndCall(handlers.moveToTrash, BunRequests.moveToTrash.params, request.params);
     } else if (strEql(method, "showItemInFolder")) {
@@ -367,8 +344,6 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagResize, rpcSchema.BrowserSchema.messages.webviewTagResize, message.payload);
     } else if (strEql(method, "webviewTagUpdateSrc")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdateSrc, rpcSchema.BrowserSchema.messages.webviewTagUpdateSrc, message.payload);
-    } else if (strEql(method, "webviewTagUpdateHtml")) {
-        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdateHtml, rpcSchema.BrowserSchema.messages.webviewTagUpdateHtml, message.payload);
     } else if (strEql(method, "webviewTagUpdatePreload")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdatePreload, rpcSchema.BrowserSchema.messages.webviewTagUpdatePreload, message.payload);
     } else if (strEql(method, "webviewTagGoBack")) {

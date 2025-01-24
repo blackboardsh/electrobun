@@ -83,13 +83,16 @@ const ConfigureWebviewTags = (
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
 
+      const _url = this.src || this.getAttribute("src");
+      const _html = this.html || this.getAttribute("html");
+      const url = _url || _html && this.htmlToDataURI(_html) || "about:blank";
+
       const webviewId = await this.syncRpc.request.webviewTagInit({
         method: "webviewTagInit",
         params: {
           hostWebviewId: window.__electrobunWebviewId,
           windowId: window.__electrobunWindowId,
-          url: this.src || this.getAttribute("src") || null,
-          html: this.html || this.getAttribute("html") || null,
+          url: url,          
           preload: this.preload || this.getAttribute("preload") || null,
           partition: this.partition || this.getAttribute("partition") || null,
           frame: {
@@ -397,13 +400,22 @@ const ConfigureWebviewTags = (
       });
     }
 
+    htmlToDataURI(html: string) {
+      const dataUrl = `data:text/html;base64,${btoa(new TextEncoder().encode(html).reduce((str, byte) => str + String.fromCharCode(byte), ''))}`;
+      return dataUrl;
+    }
+    
+
     updateIFrameHtml(html: string) {
       if (!this.webviewId) {
         return;
       }
-      this.zigRpc.send.webviewTagUpdateHtml({
+
+      const dataUrl = this.htmlToDataURI(html);
+
+      this.zigRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
-        html,
+        url: dataUrl,
       });
     }
 

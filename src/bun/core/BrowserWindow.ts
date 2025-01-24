@@ -89,8 +89,7 @@ export class BrowserWindow<T> {
     zigRPC.request.createWindow({
       id: this.id,
       title: this.title,
-      url: this.url,
-      html: this.html,
+      url: this.url || "",      
       frame: {
         width: this.frame.width,
         height: this.frame.height,

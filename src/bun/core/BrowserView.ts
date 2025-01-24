@@ -90,7 +90,7 @@ const internalSyncRpcHandlers = {
       hostWebviewId,
       autoResize: false,
       windowId,
-      renderer: "cef",
+      renderer: "native",//"cef",
       navigationRules,
     });
 
@@ -163,22 +163,20 @@ export class BrowserView<T> {
   init() {
     this.createStreams();
 
+    const url = this.url || this.html && this.htmlToDataURI(this.html) || "about:blank";
+
     // TODO: add a then to this that fires an onReady event
     zigRPC.request.createWebview({
       id: this.id,
       windowId: this.windowId,
-      renderer: "native", //"cef", // todo: make this configurable
+      renderer: "native",//"cef", // todo: make this configurable
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),
       hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
-      partition: this.partition,
-      // TODO: decide whether we want to keep sending url/html
-      // here, if we're manually calling loadURL/loadHTML below
-      // then we can remove it from the api here
-      url: this.url,
-      html: this.html,
+      partition: this.partition,      
+      url: url,      
       preload: this.preload,
       frame: {
         width: this.frame.width,
@@ -263,8 +261,16 @@ export class BrowserView<T> {
 
   loadHTML(html: string) {
     this.html = html;
-    zigRPC.request.loadHTML({ webviewId: this.id, html: this.html });
+    const url = this.htmlToDataURI(html);
+    zigRPC.request.loadURL({ webviewId: this.id, url: url });    
   }
+
+  
+  htmlToDataURI(html: string) {
+    return "data:text/html;base64," + Buffer.from(html, "utf8").toString("base64");
+  }
+
+  
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserView events

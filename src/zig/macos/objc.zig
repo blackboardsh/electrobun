@@ -81,8 +81,7 @@ pub extern fn initWebview(
     webviewId: u32,
     window: *anyopaque,
     renderer: [*:0]const u8,
-    url: ?[*:0]const u8,
-    html: ?[*:0]const u8,
+    url: [*:0]const u8,
     frame: NSRect,
     assetFileLoader: FileLoader,
     autoResize: bool,
@@ -95,7 +94,6 @@ pub extern fn initWebview(
 pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn updatePreloadScriptToWebView(webView: *anyopaque, scriptIdentifier: [*:0]const u8, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;
-pub extern fn loadHTMLInWebView(webView: *anyopaque, html: [*:0]const u8) callconv(.C) void;
 // pub extern fn setNavigationDelegateWithCallback(webView: *anyopaque, webviewId: u32, decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool, webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void) callconv(.C) *anyopaque;
 // pub extern fn addScriptMessageHandler(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) callconv(.C) void) callconv(.C) *anyopaque;
 pub extern fn addScriptMessageHandlerWithReply(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) [*:0]const u8) callconv(.C) *anyopaque;

@@ -93,7 +93,6 @@ void releaseObjCObject(id objcObject) {
 - (void *)nativeView;
 
 - (void)loadURL:(const char *)urlString;
-- (void)loadHTML:(const char *)htmlString;
 - (void)goBack;
 - (void)goForward;
 - (void)reload;
@@ -123,7 +122,6 @@ void releaseObjCObject(id objcObject) {
     return nil;
 }
 - (void)loadURL:(const char *)urlString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)loadHTML:(const char *)htmlString { [self doesNotRecognizeSelector:_cmd]; }
 - (void)goBack { [self doesNotRecognizeSelector:_cmd]; }
 - (void)goForward { [self doesNotRecognizeSelector:_cmd]; }
 - (void)reload { [self doesNotRecognizeSelector:_cmd]; }
@@ -505,8 +503,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
 
 - (instancetype)initWithWebviewId:(uint32_t)webviewId
                            window:(NSWindow *)window   
-                           url:(const char *)url
-                           html:(const char *)html                      
+                           url:(const char *)url                                                
                             frame:(NSRect)frame
                   assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
                        autoResize:(bool)autoResize
@@ -522,8 +519,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
 
 - (instancetype)initWithWebviewId:(uint32_t)webviewId
                            window:(NSWindow *)window
-                           url:(const char *)url
-                           html:(const char *)html                         
+                           url:(const char *)url                                                   
                             frame:(NSRect)frame
                   assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
                        autoResize:(bool)autoResize
@@ -611,10 +607,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
             if (url) {
                 NSLog(@"setting url %s", url);
                 [self loadURL:url];
-            } else if (html) {
-                NSLog(@"setting html %s", html);
-                [self loadHTML:html];
-            }
+            } 
         });
 
         _webView = wv;
@@ -638,12 +631,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
     if (!url) return;
     NSURLRequest *request = [NSURLRequest requestWithURL:url];
     [self.webView loadRequest:request];
-}
-
-- (void)loadHTML:(const char *)htmlString {
-    NSString *htmlNs = (htmlString ? [NSString stringWithUTF8String:htmlString] : @"");
-    NSURL *baseURL = [NSURL URLWithString:@"file://"];
-    [self.webView loadHTMLString:htmlNs baseURL:baseURL];
 }
 
 - (void)goBack {
@@ -1009,6 +996,173 @@ extern "C" bool initializeCEF() {
     return true;
 }
 
+
+//////// CEF Implementation
+
+
+@interface CEFWebViewImpl : AbstractWebView
+@property (nonatomic, strong) WKWebView *webView;
+@property (nonatomic, assign) uint32_t webviewId;
+
+
+- (instancetype)initWithWebviewId:(uint32_t)webviewId
+                           window:(NSWindow *)window   
+                           url:(const char *)url                                                
+                            frame:(NSRect)frame
+                  assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                       autoResize:(bool)autoResize
+              partitionIdentifier:(const char *)partitionIdentifier
+              navigationCallback:(DecideNavigationCallback)navigationCallback
+              webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+              bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
+              webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler;
+
+@end
+@implementation CEFWebViewImpl {
+    // CefRefPtr<CefBrowser> browser;
+    NSView* _browserView;
+    // CefRefPtr<ClientHandler> _clientHandler;
+    // bool _isDestroying;
+}
+
+- (instancetype)initWithWebviewId:(uint32_t)webviewId
+                          window:(NSWindow *)window
+                            url:(const char *)url                           
+                          frame:(NSRect)frame
+                assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                    autoResize:(bool)autoResize
+            partitionIdentifier:(const char *)partitionIdentifier
+            navigationCallback:(DecideNavigationCallback)navigationCallback
+            webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+              bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
+        webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+{
+    self = [super init];
+    if (self) {
+        _webviewId = webviewId;
+
+        void (^createCEFBrowser)(void) = ^{
+            NSLog(@"Creating CEF browser...");
+            CefBrowserSettings browserSettings;
+            CefWindowInfo window_info;
+            NSView *contentView = window.contentView;
+            [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+            [contentView setAutoresizesSubviews:YES];
+            CGFloat adjustedY = contentView.bounds.size.height - frame.origin.y - frame.size.height;
+            CefRect cefBounds((int)frame.origin.x,
+                            (int)adjustedY,
+                            (int)frame.size.width,
+                            (int)frame.size.height);
+            window_info.SetAsChild((__bridge void*)contentView, cefBounds);
+            CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
+
+            CefString initialUrl = CefString("about:blank");
+            if (url && url[0] != '\0') {
+                initialUrl = CefString(url);
+            }
+
+            CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(window_info,
+                client, initialUrl,
+                browserSettings, nullptr, nullptr);
+            
+            
+        };
+
+        NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+        NSArray *notificationNames = @[ NSWindowDidUpdateNotification ];
+        __block BOOL hasCreatedBrowser = NO;
+        for (NSString *notificationName in notificationNames) {
+            [center addObserverForName:notificationName
+                            object:window
+                                queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification *note) {
+                NSLog(@"Received notification: %@", notificationName);
+                if (!hasCreatedBrowser) {
+                    hasCreatedBrowser = YES;
+                    createCEFBrowser();
+                }
+            }];
+        }
+        [window makeKeyAndOrderFront:nil];
+        
+    }
+    return self;
+}
+
+- (void *)nativeView {
+    return (__bridge void *)_browserView;
+}
+
+- (void)loadURL:(const char *)urlString {
+   
+}
+
+
+- (void)goBack {
+   
+}
+
+- (void)goForward {
+    
+}
+
+- (void)reload {
+    
+}
+
+- (void)remove {
+   
+}
+
+- (void)setTransparent:(BOOL)transparent {
+   
+}
+
+- (void)setHidden:(BOOL)hidden {
+   
+}
+
+- (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {
+   
+}
+
+- (BOOL)canGoBack {
+    
+}
+
+- (BOOL)canGoForward {
+    
+}
+
+- (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {
+    
+}
+
+- (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString {
+   
+}
+
+- (void)callAsyncJavascript:(const char*)messageId 
+                  jsString:(const char*)jsString 
+                 webviewId:(uint32_t)webviewId 
+             hostWebviewId:(uint32_t)hostWebviewId 
+         completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
+   
+}
+
+- (void)addPreloadScriptToWebView:(const char*)jsString {
+   
+}
+
+- (void)updatePreloadScriptInWebView:(const char*)jsString {
+   
+}
+
+@end
+
+
+
+
 // ----------------------------------------------------------------------------
 // 7) "VIEWS://" SCHEMA UTILS & MISC
 // ----------------------------------------------------------------------------
@@ -1023,53 +1177,52 @@ extern "C" void* getNilValue() {
 // 8) MAIN FFI: CREATE AND RETURN WKWEBVIEW
 // ----------------------------------------------------------------------------
 
-// Example: you can still add a CEF webview if useCEF is set, etc.
-void addCEFWebviewToWindow(uint32_t webviewId, NSWindow *window, const char *renderer,
-                           NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader,
-                           bool autoResize, const char *partitionIdentifier) {
-    void (^createCEFBrowser)(void) = ^{
-        NSLog(@"Creating CEF browser...");
-        CefBrowserSettings browserSettings;
-        CefWindowInfo window_info;
-        NSView *contentView = window.contentView;
-        [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-        [contentView setAutoresizesSubviews:YES];
-        CGFloat adjustedY = contentView.bounds.size.height - frame.origin.y - frame.size.height;
-        CefRect cefBounds((int)frame.origin.x,
-                          (int)adjustedY,
-                          (int)frame.size.width,
-                          (int)frame.size.height);
-        window_info.SetAsChild((__bridge void*)contentView, cefBounds);
-        CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
-        CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(window_info,
-            client, "https://electrobun.dev",
-            browserSettings, nullptr, nullptr);
-        // optional: store reference in associated object if needed
-    };
 
-    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-    NSArray *notificationNames = @[ NSWindowDidUpdateNotification ];
-    __block BOOL hasCreatedBrowser = NO;
-    for (NSString *notificationName in notificationNames) {
-        [center addObserverForName:notificationName
-                           object:window
-                            queue:[NSOperationQueue mainQueue]
-                       usingBlock:^(NSNotification *note) {
-            NSLog(@"Received notification: %@", notificationName);
-            if (!hasCreatedBrowser) {
-                hasCreatedBrowser = YES;
-                createCEFBrowser();
-            }
-        }];
-    }
-    [window makeKeyAndOrderFront:nil];
-}
+// void addCEFWebviewToWindow(uint32_t webviewId, NSWindow *window, const char *renderer,
+//                            NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader,
+//                            bool autoResize, const char *partitionIdentifier) {
+//     void (^createCEFBrowser)(void) = ^{
+//         NSLog(@"Creating CEF browser...");
+//         CefBrowserSettings browserSettings;
+//         CefWindowInfo window_info;
+//         NSView *contentView = window.contentView;
+//         [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+//         [contentView setAutoresizesSubviews:YES];
+//         CGFloat adjustedY = contentView.bounds.size.height - frame.origin.y - frame.size.height;
+//         CefRect cefBounds((int)frame.origin.x,
+//                           (int)adjustedY,
+//                           (int)frame.size.width,
+//                           (int)frame.size.height);
+//         window_info.SetAsChild((__bridge void*)contentView, cefBounds);
+//         CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
+//         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(window_info,
+//             client, "https://electrobun.dev",
+//             browserSettings, nullptr, nullptr);
+//         // optional: store reference in associated object if needed
+//     };
+
+//     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+//     NSArray *notificationNames = @[ NSWindowDidUpdateNotification ];
+//     __block BOOL hasCreatedBrowser = NO;
+//     for (NSString *notificationName in notificationNames) {
+//         [center addObserverForName:notificationName
+//                            object:window
+//                             queue:[NSOperationQueue mainQueue]
+//                        usingBlock:^(NSNotification *note) {
+//             NSLog(@"Received notification: %@", notificationName);
+//             if (!hasCreatedBrowser) {
+//                 hasCreatedBrowser = YES;
+//                 createCEFBrowser();
+//             }
+//         }];
+//     }
+//     [window makeKeyAndOrderFront:nil];
+// }
 
 extern "C" AbstractWebView* initWebview(uint32_t webviewId,
                         NSWindow *window,
                         const char *renderer,
-                        const char *url,
-                        const char *html,
+                        const char *url,                        
                         NSRect frame,
                         zigStartURLSchemeTaskCallback assetFileLoader,
                         bool autoResize,
@@ -1086,20 +1239,22 @@ extern "C" AbstractWebView* initWebview(uint32_t webviewId,
 
     if (strcmp(renderer, "cef") == 0) {
         // create CEF version
-        // impl = [[CEFWebViewImpl alloc] initWithWebviewId:webviewId
-        //                                           window:window                                                
-        //                                            frame:frame
-        //                                  assetFileLoader:assetFileLoader
-        //                                       autoResize:autoResize
-        //                              partitionIdentifier:partitionIdentifier,
-                                            //    DecideNavigationCallback callback,
-                                            //    WebviewEventHandler eventHandler];
+        impl = [[CEFWebViewImpl alloc] initWithWebviewId:webviewId
+                                                 window:window
+                                                 url:url                                                                                             
+                                                  frame:frame
+                                        assetFileLoader:assetFileLoader
+                                             autoResize:autoResize
+                                    partitionIdentifier:partitionIdentifier
+                                        navigationCallback:navigationCallback
+                                        webviewEventHandler:webviewEventHandler
+                                        bunBridgeHandler:bunBridgeHandler
+                                        webviewTagBridgeHandler:webviewTagBridgeHandler];                                    
     } else {
         // fallback to WKWebView version
         impl = [[WKWebViewImpl alloc] initWithWebviewId:webviewId
                                                  window:window
-                                                 url:url
-                                                 html:html                                               
+                                                 url:url                                                                                              
                                                   frame:frame
                                         assetFileLoader:assetFileLoader
                                              autoResize:autoResize
@@ -1122,10 +1277,6 @@ extern "C" AbstractWebView* initWebview(uint32_t webviewId,
 
 extern "C" void loadURLInWebView(AbstractWebView *webView, const char *urlString) {
     [webView loadURL:urlString];
-}
-
-extern "C" void loadHTMLInWebView(AbstractWebView *webView, const char *htmlString) {
-    [webView loadHTML:htmlString];
 }
 
 extern "C" void webviewTagGoBack(AbstractWebView *webView) {    
