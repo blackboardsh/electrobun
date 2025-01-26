@@ -31,6 +31,7 @@ BOOL useCEF = true;
 // 1) DATA STRUCTS, TYPEDEFS, AND UTILITY
 // ----------------------------------------------------------------------------
 
+
 /** Matches your existing "views:// schema" file response. */
 typedef struct {
     const char *mimeType;
@@ -84,6 +85,148 @@ void retainObjCObject(id objcObject) {
 void releaseObjCObject(id objcObject) {
     CFRelease((__bridge CFTypeRef)objcObject);
 }
+
+// CEF SCHEMA HANDLER
+
+#include <cstdint>
+
+// Match the existing callback type
+typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const char* url, const char* body);
+#include "include/cef_scheme.h"
+#include "include/cef_resource_handler.h"
+#include <string>
+#include <vector>
+
+// Forward declarations
+class ElectrobunSchemeHandler;
+class ElectrobunSchemeHandlerFactory;
+
+// The main scheme handler class
+class ElectrobunSchemeHandler : public CefResourceHandler {
+public:
+     ElectrobunSchemeHandler(zigStartURLSchemeTaskCallback callback, uint32_t webviewId)
+        : fileLoader_(callback)
+        , webviewId_(webviewId)
+        , hasResponse_(false)
+        , offset_(0) {
+        
+    }
+
+     bool Open(CefRefPtr<CefRequest> request,
+             bool& handle_request,
+             CefRefPtr<CefCallback> callback) override {
+        std::string url = request->GetURL().ToString();
+        
+        
+        
+        FileResponse response = fileLoader_(webviewId_, url.c_str(), nullptr);
+        
+        if (response.fileContents && response.len > 0) {            
+            
+            // Print first 32 bytes of content for debugging
+            std::string preview;
+            const char* content = response.fileContents;
+            for (size_t i = 0; i < std::min(response.len, size_t(32)); i++) {
+                if (isprint(content[i])) {
+                    preview += content[i];
+                } else {
+                    char hex[8];
+                    snprintf(hex, sizeof(hex), "\\x%02x", (unsigned char)content[i]);
+                    preview += hex;
+                }
+            }
+            
+            
+            mimeType_ = response.mimeType ? response.mimeType : "text/html";
+            responseData_.assign(response.fileContents, response.fileContents + response.len);
+            hasResponse_ = true;
+            handle_request = true;
+            return true;
+        }
+        
+        
+        handle_request = false;
+        return false;
+    }
+
+    void GetResponseHeaders(CefRefPtr<CefResponse> response,
+                          int64_t& response_length,
+                          CefString& redirectUrl) override {
+        if (!hasResponse_) {
+            response->SetStatus(404);
+            response_length = 0;
+            
+            return;
+        }
+
+        response->SetMimeType(mimeType_);
+        response->SetStatus(200);
+        response_length = responseData_.size();
+
+        CefResponse::HeaderMap headers;
+        headers.insert(std::make_pair("Access-Control-Allow-Origin", "*"));
+        response->SetHeaderMap(headers);
+        
+        
+    }
+
+    bool Read(void* data_out,
+             int bytes_to_read,
+             int& bytes_read,
+             CefRefPtr<CefResourceReadCallback> callback) override {
+        bytes_read = 0;
+        if (!hasResponse_ || offset_ >= responseData_.size()) {
+            
+            return false;
+        }
+
+        size_t remaining = responseData_.size() - offset_;
+        bytes_read = std::min(bytes_to_read, static_cast<int>(remaining));
+        memcpy(data_out, responseData_.data() + offset_, bytes_read);
+        offset_ += bytes_read;
+
+        
+        return true;
+    }
+
+    void Cancel() override {
+        // NSLog(@"[CEF] Scheme Handler: Request cancelled");
+    }
+
+private:
+    zigStartURLSchemeTaskCallback fileLoader_;
+    uint32_t webviewId_;
+    std::string mimeType_;
+    std::vector<char> responseData_;
+    bool hasResponse_;
+    size_t offset_;
+    
+    IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandler);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandler);
+};
+
+
+// The factory class that creates scheme handlers
+class ElectrobunSchemeHandlerFactory : public CefSchemeHandlerFactory {
+public:
+     ElectrobunSchemeHandlerFactory(zigStartURLSchemeTaskCallback callback, uint32_t webviewId)
+        : fileLoader_(callback), webviewId_(webviewId) {}
+
+        CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser,
+                                       CefRefPtr<CefFrame> frame,
+                                       const CefString& scheme_name,
+                                       CefRefPtr<CefRequest> request) override {
+        
+            return new ElectrobunSchemeHandler(fileLoader_, webviewId_);
+        }
+
+private:
+    zigStartURLSchemeTaskCallback fileLoader_;
+    uint32_t webviewId_;
+    
+    IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandlerFactory);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandlerFactory);
+};
 
 // ----------------------------------------------------------------------------
 // 2) ABSTRACT BASE CLASS
@@ -604,8 +747,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
         // Force the load to happen on the next runloop iteration after addSubview
         // otherwise wkwebkit won't load
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (url) {
-                NSLog(@"setting url %s", url);
+            if (url) {                
                 [self loadURL:url];
             } 
         });
@@ -624,8 +766,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
     return (__bridge void *)self.webView;
 }
 
-- (void)loadURL:(const char *)urlString {
-    NSLog(@"Loading URL: %s", urlString);
+- (void)loadURL:(const char *)urlString {    
     NSString *urlNSString = (urlString ? [NSString stringWithUTF8String:urlString] : @"");
     NSURL *url = [NSURL URLWithString:urlNSString];
     if (!url) return;
@@ -906,32 +1047,50 @@ private:
 
 ElectrobunHandler* ElectrobunHandler::g_instance = nullptr;
 
-class ElectrobunApp : public CefApp, public CefBrowserProcessHandler {
+class ElectrobunApp : public CefApp,
+                     public CefBrowserProcessHandler,
+                     public CefRenderProcessHandler {
 public:
-    ElectrobunApp() {}
+    ElectrobunApp() {
+        
+    }
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
         command_line->AppendSwitch("use-mock-keychain");
+        command_line->AppendSwitch("register-scheme-handler");
+        command_line->AppendSwitchWithValue("custom-scheme", "views");
+
+
     }
-    void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
-        NSLog(@"OnRegisterCustomSchemes called");
+    void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {        
+        registrar->AddCustomScheme("views", 
+            CEF_SCHEME_OPTION_STANDARD | 
+            CEF_SCHEME_OPTION_CORS_ENABLED |
+            CEF_SCHEME_OPTION_FETCH_ENABLED);
     }
+    
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
         return this;
     }
-    CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {
-        NSLog(@"GetRenderProcessHandler called");
-        return nullptr;
+    CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {        
+        return this;
     }
-    virtual void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {
-        NSLog(@"OnBeforeChildProcessLaunch - Command line program: %s", command_line->GetProgram().ToString().c_str());
+    virtual void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {        
         std::vector<CefString> args;
         command_line->GetArguments(args);
-        for (const auto& arg : args) {
-            NSLog(@"  Arg: %s", arg.ToString().c_str());
-        }
+        // for (const auto& arg : args) {
+        //     NSLog(@"  Arg: %s", arg.ToString().c_str());
+        // }
     }
     void OnContextInitialized() override {
-        // set up browser creation
+        // Register the scheme handler factory after context is initialized
+        CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
+        // if (command_line.get() && command_line->HasSwitch("type")) {
+        //     // Skip registration in non-browser processes
+        //     return;
+        // }
+        
+        // The actual factory registration will happen in the webview creation
+        CefRegisterSchemeHandlerFactory("views", "", nullptr);
     }
     CefRefPtr<CefClient> GetDefaultClient() override {
         return ElectrobunHandler::GetInstance();
@@ -957,15 +1116,13 @@ private:
 
 // Global CEF reference
 CefRefPtr<ElectrobunApp> g_app;
-
+#include "include/cef_command_line.h"
 extern "C" bool initializeCEF() {
     static bool initialized = false;
     if (initialized) return true;
-
-    NSLog(@"[CEF] Starting initialization");
+    
     [ElectrobunNSApplication sharedApplication];
-    if (![NSApp isKindOfClass:[ElectrobunNSApplication class]]) {
-        NSLog(@"[CEF] Failed to create ElectrobunNSApplication instance");
+    if (![NSApp isKindOfClass:[ElectrobunNSApplication class]]) {        
         return false;
     }
 
@@ -982,16 +1139,37 @@ extern "C" bool initializeCEF() {
     CefSettings settings;
     settings.no_sandbox = true;
     settings.log_severity = LOGSEVERITY_VERBOSE;
+    
+    // Add cache path to prevent warnings and potential issues
+    NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+    NSString* cachePath = [appSupportPath stringByAppendingPathComponent:@"Electrobun/CEF"];
+    CefString(&settings.root_cache_path) = [cachePath UTF8String];
+    
+    // Enable network service
+    // settings.packaged_services = cef_services_t::CEF_SERVICE_ALL;
+    
+    // Set language
+    CefString(&settings.accept_language_list) = "en-US,en";
+
+    // Register custom scheme
+    // CefRegisterSchemeHandlerFactory("views", "", new ElectrobunSchemeHandlerFactory(assetFileLoader, 0));
+    
+    // Make CEF aware of the custom scheme
+    // CefCommandLine::GetGlobalCommandLine()->AppendSwitch("register-scheme-handler");
+    // CefCommandLine::GetGlobalCommandLine()->AppendSwitchWithValue("custom-scheme", "views");
+    
+    // Enable required packaged services
+    // settings.packaged_services = cef_services_t::CEF_SERVICE_ALL;    
+    
     bool result = CefInitialize(main_args, settings, g_app.get(), nullptr);
 
     for (int i = 0; i < argc; i++) free(argv[i]);
     free(argv);
 
-    if (!result) {
-        NSLog(@"[CEF] Initialization failed");
+    if (!result) {        
         return false;
     }
-    NSLog(@"[CEF] Initialization completed successfully");
+        
     initialized = true;
     return true;
 }
@@ -1041,29 +1219,45 @@ extern "C" bool initializeCEF() {
     if (self) {
         _webviewId = webviewId;
 
-        void (^createCEFBrowser)(void) = ^{
-            NSLog(@"Creating CEF browser...");
+        void (^createCEFBrowser)(void) = ^{             
             CefBrowserSettings browserSettings;
             CefWindowInfo window_info;
+            
             NSView *contentView = window.contentView;
             [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
             [contentView setAutoresizesSubviews:YES];
+            
             CGFloat adjustedY = contentView.bounds.size.height - frame.origin.y - frame.size.height;
             CefRect cefBounds((int)frame.origin.x,
                             (int)adjustedY,
                             (int)frame.size.width,
                             (int)frame.size.height);
             window_info.SetAsChild((__bridge void*)contentView, cefBounds);
+            
+            // Register the scheme handler factory for this webview
+            CefRefPtr<ElectrobunSchemeHandlerFactory> factory(
+                new ElectrobunSchemeHandlerFactory(assetFileLoader, webviewId));
+            
+            bool registered = CefRegisterSchemeHandlerFactory("views", "", factory);            
+            
             CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
-
-            CefString initialUrl = CefString("about:blank");
-            if (url && url[0] != '\0') {
-                initialUrl = CefString(url);
+            CefString initialUrl;
+            
+            // Determine if this is an internal or external URL
+            if (url && url[0] != '\0') {              
+                initialUrl = CefString(url);              
+            } else {
+                initialUrl = CefString("about:blank");                
             }
-
-            CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(window_info,
-                client, initialUrl,
-                browserSettings, nullptr, nullptr);
+            
+            CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
+                window_info, client, initialUrl, browserSettings, nullptr, nullptr);
+                
+            // if (!browser) {
+            //     NSLog(@"[CEF] Failed to create browser!");
+            // } else {
+            //     NSLog(@"[CEF] Browser created successfully");
+            // }
             
             
         };
@@ -1076,7 +1270,7 @@ extern "C" bool initializeCEF() {
                             object:window
                                 queue:[NSOperationQueue mainQueue]
                         usingBlock:^(NSNotification *note) {
-                NSLog(@"Received notification: %@", notificationName);
+                
                 if (!hasCreatedBrowser) {
                     hasCreatedBrowser = YES;
                     createCEFBrowser();
@@ -1172,52 +1366,6 @@ CGFloat OFFSCREEN_OFFSET = -20000;
 extern "C" void* getNilValue() {
     return NULL;
 }
-
-// ----------------------------------------------------------------------------
-// 8) MAIN FFI: CREATE AND RETURN WKWEBVIEW
-// ----------------------------------------------------------------------------
-
-
-// void addCEFWebviewToWindow(uint32_t webviewId, NSWindow *window, const char *renderer,
-//                            NSRect frame, zigStartURLSchemeTaskCallback assetFileLoader,
-//                            bool autoResize, const char *partitionIdentifier) {
-//     void (^createCEFBrowser)(void) = ^{
-//         NSLog(@"Creating CEF browser...");
-//         CefBrowserSettings browserSettings;
-//         CefWindowInfo window_info;
-//         NSView *contentView = window.contentView;
-//         [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-//         [contentView setAutoresizesSubviews:YES];
-//         CGFloat adjustedY = contentView.bounds.size.height - frame.origin.y - frame.size.height;
-//         CefRect cefBounds((int)frame.origin.x,
-//                           (int)adjustedY,
-//                           (int)frame.size.width,
-//                           (int)frame.size.height);
-//         window_info.SetAsChild((__bridge void*)contentView, cefBounds);
-//         CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
-//         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(window_info,
-//             client, "https://electrobun.dev",
-//             browserSettings, nullptr, nullptr);
-//         // optional: store reference in associated object if needed
-//     };
-
-//     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-//     NSArray *notificationNames = @[ NSWindowDidUpdateNotification ];
-//     __block BOOL hasCreatedBrowser = NO;
-//     for (NSString *notificationName in notificationNames) {
-//         [center addObserverForName:notificationName
-//                            object:window
-//                             queue:[NSOperationQueue mainQueue]
-//                        usingBlock:^(NSNotification *note) {
-//             NSLog(@"Received notification: %@", notificationName);
-//             if (!hasCreatedBrowser) {
-//                 hasCreatedBrowser = YES;
-//                 createCEFBrowser();
-//             }
-//         }];
-//     }
-//     [window makeKeyAndOrderFront:nil];
-// }
 
 extern "C" AbstractWebView* initWebview(uint32_t webviewId,
                         NSWindow *window,
@@ -1418,8 +1566,7 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
 @end
 
 @implementation AppDelegate
-- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
-    NSLog(@"Intercepting application termination");
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {    
     return NSTerminateNow;
 }
 @end
@@ -1427,8 +1574,7 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
 extern "C" void runNSApplication() {    
     if (useCEF) {
         @autoreleasepool {
-            if (!initializeCEF()) {
-                NSLog(@"Failed to initialize CEF");
+            if (!initializeCEF()) {                
                 return;
             }
             NSApplication *app = [NSApplication sharedApplication];

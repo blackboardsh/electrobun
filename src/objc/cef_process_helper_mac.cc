@@ -12,6 +12,15 @@
 #include "include/cef_sandbox_mac.h"
 #endif
 
+class HelperApp : public CefApp {
+public:
+    virtual void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
+        // If you don't register custom schemes in the helper processes it crashes
+        registrar->AddCustomScheme("views", CEF_SCHEME_OPTION_STANDARD);
+    }
+    IMPLEMENT_REFCOUNTING(HelperApp);
+};
+
 // Entry point function for sub-processes.
 int main(int argc, char *argv[])
 {
@@ -35,6 +44,9 @@ int main(int argc, char *argv[])
     // Provide CEF with command-line arguments.
     CefMainArgs main_args(argc, argv);
 
+    CefRefPtr<CefApp> app(new HelperApp);
+
     // Execute the sub-process.
-    return CefExecuteProcess(main_args, nullptr, nullptr);
+    return CefExecuteProcess(main_args, app, nullptr);
+    
 }

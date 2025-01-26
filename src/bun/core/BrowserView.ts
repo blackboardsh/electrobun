@@ -169,7 +169,7 @@ export class BrowserView<T> {
     zigRPC.request.createWebview({
       id: this.id,
       windowId: this.windowId,
-      renderer: "native",//"cef", // todo: make this configurable
+      renderer: "cef", // todo: make this configurable
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),
