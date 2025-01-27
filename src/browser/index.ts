@@ -215,9 +215,15 @@ class Electroview<T> {
   // TODO: implement proper rpc-anywhere style rpc here
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
   sendToZig(message: {}) {
-    window.webkit.messageHandlers.webviewTagBridge.postMessage(
-      JSON.stringify(message)
-    );
+    if (window.webkit?.messageHandlers?.webviewTagBridge) {
+      window.webkit.messageHandlers.webviewTagBridge.postMessage(
+        JSON.stringify(message)
+      );
+    } else {
+      window.webviewTagBridge.postMessage(
+        JSON.stringify(message)
+      );
+    }
   }
 
   initElectrobunListeners() {
@@ -325,7 +331,11 @@ class Electroview<T> {
     // repro now that other places are chunking messages and laptop restart
 
     if (true || msg.length < 8 * 1024) {
-      window.webkit.messageHandlers.bunBridge.postMessage(msg);
+      if (window.webkit?.messageHandlers?.bunBridge){
+        window.webkit.messageHandlers.bunBridge.postMessage(msg);
+      } else {
+        window.bunBridge.postMessage(msg);
+      }
     } else {
       var xhr = new XMLHttpRequest();
 

@@ -1101,17 +1101,41 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ElectrobunApp);
 };
 
-class ElectrobunClient : public CefClient, public CefLifeSpanHandler {
-public:
-    ElectrobunClient() {}
-    virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
-        return this;
-    }
-    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
-    }
+class ElectrobunClient : public CefClient {
 private:
+    uint32_t webview_id_;
+    HandlePostMessage bun_bridge_handler_;
+    HandlePostMessage webview_tag_handler_;
+
+public:
+    ElectrobunClient(uint32_t webviewId,
+                     HandlePostMessage bunBridgeHandler,
+                     HandlePostMessage webviewTagBridgeHandler)
+        : webview_id_(webviewId)
+        , bun_bridge_handler_(bunBridgeHandler)
+        , webview_tag_handler_(webviewTagBridgeHandler) {}
+
+    virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                        CefRefPtr<CefFrame> frame,
+                                        CefProcessId source_process,
+                                        CefRefPtr<CefProcessMessage> message) override {
+         
+        if (message->GetName() == "BunBridgeMessage") {
+            CefString msg = message->GetArgumentList()->GetString(0);
+            NSLog(@"---------> BunBridgeMessage %i %s", webview_id_, msg.ToString().c_str());
+            bun_bridge_handler_(webview_id_, msg.ToString().c_str());
+            return true;
+        }
+        else if (message->GetName() == "WebviewTagMessage") {
+            CefString msg = message->GetArgumentList()->GetString(0);
+            NSLog(@"---------> WebviewTagMessage %s", msg.ToString().c_str());
+            webview_tag_handler_(webview_id_, msg.ToString().c_str());
+            return true;
+        }
+        return false;
+    }
+
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
-    DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
 };
 
 // Global CEF reference
@@ -1240,7 +1264,13 @@ extern "C" bool initializeCEF() {
             
             bool registered = CefRegisterSchemeHandlerFactory("views", "", factory);            
             
-            CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
+            // CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
+            CefRefPtr<ElectrobunClient> client(new ElectrobunClient(
+                webviewId,  
+                bunBridgeHandler, 
+                webviewTagBridgeHandler  
+            ));
+
             CefString initialUrl;
             
             // Determine if this is an internal or external URL

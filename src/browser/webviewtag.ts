@@ -6,6 +6,8 @@ type WebviewEventTypes =
 
 type Rect = { x: number; y: number; width: number; height: number };
 
+console.log('-----------> webviewtag')
+
 const ConfigureWebviewTags = (
   enableWebviewTags: boolean,
   zigRpc: (params: any) => any,
@@ -63,6 +65,8 @@ const ConfigureWebviewTags = (
       this.zigRpc = zigRpc;
       this.syncRpc = syncRpc;
 
+      console.log('-----------> webviewtag constructor')
+
       // Give it a frame to be added to the dom and render before measuring
       requestAnimationFrame(() => {
         this.initWebview();
@@ -80,6 +84,7 @@ const ConfigureWebviewTags = (
     }
 
     async initWebview() {
+      console.log('-----------> webviewtag initWebview')
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
 
