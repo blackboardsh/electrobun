@@ -90,6 +90,7 @@ pub extern fn initWebview(
     webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
     bunBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
     webviewTagBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+    electrobunPreloadScript: [*:0]const u8,
 ) callconv(.C) *anyopaque;
 pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn updatePreloadScriptToWebView(webView: *anyopaque, scriptIdentifier: [*:0]const u8, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;

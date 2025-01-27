@@ -346,6 +346,138 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
 
     const urlCString = utils.toCString(opts.url);
 
+    // Note: The only way for code in the secure world to communicate with the page world
+    // is via postMessage which requires serialization. So might be useful but not for efficient rpc.
+    // objc.evaluateJavaScriptinSecureContentWorld(_webview.handle, utils.toCString(
+    //     \\ const test = 567;
+    //     \\ console.log('test', test);
+    //     \\ window.test44 = 44;
+    // ));
+    // objc.evaluateJavaScriptWithNoCompletion(_webview.handle, utils.toCString("const test = 567; console.log('test', test);"));
+
+    // Note: Keep this in sync with browser api
+    const jsScriptSubstitutions = std.fmt.allocPrint(alloc,
+        \\ window.__electrobunWebviewId = {};
+        \\ window.__electrobunWindowId = {}
+        \\ window.__electrobunRpcSocketPort = {};
+        \\(async () => {{
+        \\
+        \\ function base64ToUint8Array(base64) {{
+        \\   return new Uint8Array(atob(base64).split('').map(char => char.charCodeAt(0)));
+        \\ }}
+        \\
+        \\function uint8ArrayToBase64(uint8Array) {{
+        \\ let binary = '';
+        \\ for (let i = 0; i < uint8Array.length; i++) {{
+        \\   binary += String.fromCharCode(uint8Array[i]);
+        \\ }}
+        \\ return btoa(binary);
+        \\}}
+        \\ const generateKeyFromText = async (rawKey) => {{
+        // \\   const encoder = new TextEncoder();
+        // \\   const rawKey = encoder.encode(text); // Convert the text to a Uint8Array
+        \\ 
+        \\   return await window.crypto.subtle.importKey(
+        \\     'raw',                  // Key format
+        \\     rawKey,                 // Key data
+        \\     {{ name: 'AES-GCM' }},    // Algorithm details
+        \\     true,                   // Extractable (set to false for better security)
+        \\     ['encrypt', 'decrypt']  // Key usages
+        \\   );
+        \\ }};        
+        \\ const secretKey = await generateKeyFromText(new Uint8Array([{s}]));
+        \\
+        \\ const encryptString = async (plaintext) => {{
+        \\   const encoder = new TextEncoder();
+        \\   const encodedText = encoder.encode(plaintext);
+        \\   const iv = window.crypto.getRandomValues(new Uint8Array(12)); // Initialization vector (12 bytes)
+        \\   const encryptedBuffer = await window.crypto.subtle.encrypt(
+        \\    {{
+        \\     name: "AES-GCM",
+        \\     iv: iv,
+        \\    }},
+        \\    secretKey,
+        \\    encodedText
+        \\   );
+        \\        
+        \\        
+        \\   // Split the tag (last 16 bytes) from the ciphertext
+        \\   const encryptedData = new Uint8Array(encryptedBuffer.slice(0, -16));
+        \\   const tag = new Uint8Array(encryptedBuffer.slice(-16));
+        \\
+        \\   return {{ encryptedData: uint8ArrayToBase64(encryptedData), iv: uint8ArrayToBase64(iv), tag: uint8ArrayToBase64(tag) }};
+        \\ }};
+        \\ 
+        \\ // All args passed in as base64 strings
+        \\ const decryptString = async (encryptedData, iv, tag) => {{
+        \\  encryptedData = base64ToUint8Array(encryptedData);
+        \\  iv = base64ToUint8Array(iv);
+        \\  tag = base64ToUint8Array(tag);
+        \\  // Combine encrypted data and tag to match the format expected by SubtleCrypto
+        \\  const combinedData = new Uint8Array(encryptedData.length + tag.length);
+        \\  combinedData.set(encryptedData);
+        \\  combinedData.set(tag, encryptedData.length);
+        \\  const decryptedBuffer = await window.crypto.subtle.decrypt(
+        \\    {{
+        \\      name: "AES-GCM",
+        \\      iv: iv,
+        \\    }},
+        \\    secretKey,
+        \\    combinedData // Pass the combined data (ciphertext + tag)
+        \\  );
+        \\  const decoder = new TextDecoder();
+        \\  return decoder.decode(decryptedBuffer);
+        \\ }};
+        \\
+        \\ window.__electrobun_encrypt = encryptString;
+        \\ window.__electrobun_decrypt = decryptString;
+        \\}})()
+        \\
+    , .{ opts.id, opts.windowId, opts.rpcPort, opts.secretKey }) catch {
+        // NOTE: key must be at least 32 characters long
+        return;
+    };
+    defer alloc.free(jsScriptSubstitutions);
+
+    // todo: move this to a separate file and embed it in zig so it can be properly
+    // edited as js
+    const electrobunPreloadScript = utils.concatStrings(jsScriptSubstitutions,
+        \\ function emitWebviewEvent (eventName, detail) {
+        \\     window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
+        \\ };                 
+        \\
+        \\ window.addEventListener('load', function(event) {
+        \\   // Check if the current window is the top-level window        
+        \\   if (window === window.top) {        
+        \\    emitWebviewEvent('dom-ready', document.location.href);        
+        \\   }
+        \\ });
+        \\
+        \\ window.addEventListener('popstate', function(event) {
+        \\  emitWebviewEvent('did-navigate-in-page', window.location.href);
+        \\ });
+        \\
+        \\ window.addEventListener('hashchange', function(event) {
+        \\  emitWebviewEvent('did-navigate-in-page', window.location.href);    
+        \\ });
+        \\
+        \\ document.addEventListener('click', function(event) {
+        \\  if ((event.metaKey || event.ctrlKey) && event.target.tagName === 'A') {
+        \\    event.preventDefault();
+        \\    event.stopPropagation();
+        \\
+        \\    // Get the href of the link
+        \\    const url = event.target.href;        
+        \\    
+        \\    // Open the URL in a new window or tab
+        \\    // Note: we already handle new windows in objc
+        \\    window.open(url, '_blank');
+        \\  }
+        \\}, true);
+        \\        
+        \\ 
+    );
+
     // todo: windowId should actually be a pointer to the window
     const objcWebview = objc.initWebview(opts.id, win.window, utils.toCString(opts.renderer), urlCString, .{
         // .frame = .{ //
@@ -446,7 +578,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 std.log.info("it's an unhandled meatball", .{});
             }
         }
-    }.WebviewTagBridgeHandler);
+    }.WebviewTagBridgeHandler, utils.toCString(electrobunPreloadScript));
 
     const _webview = WebviewType{ //
         .id = opts.id,
@@ -472,141 +604,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         std.log.info("Error putting webview into hashmap: ", .{});
         return;
     };
-
-    // Note: The only way for code in the secure world to communicate with the page world
-    // is via postMessage which requires serialization. So might be useful but not for efficient rpc.
-    // objc.evaluateJavaScriptinSecureContentWorld(_webview.handle, utils.toCString(
-    //     \\ const test = 567;
-    //     \\ console.log('test', test);
-    //     \\ window.test44 = 44;
-    // ));
-    // objc.evaluateJavaScriptWithNoCompletion(_webview.handle, utils.toCString("const test = 567; console.log('test', test);"));
-
-    // Note: Keep this in sync with browser api
-    const jsScriptSubstitutions = std.fmt.allocPrint(alloc,
-        \\ window.__electrobunWebviewId = {};
-        \\ window.__electrobunWindowId = {}
-        \\window.__electrobunRpcSocketPort = {};
-        \\(async () => {{
-        \\
-        \\ function base64ToUint8Array(base64) {{
-        \\   return new Uint8Array(atob(base64).split('').map(char => char.charCodeAt(0)));
-        \\ }}
-        \\
-        \\function uint8ArrayToBase64(uint8Array) {{
-        \\ let binary = '';
-        \\ for (let i = 0; i < uint8Array.length; i++) {{
-        \\   binary += String.fromCharCode(uint8Array[i]);
-        \\ }}
-        \\ return btoa(binary);
-        \\}}
-        \\ const generateKeyFromText = async (rawKey) => {{
-        // \\   const encoder = new TextEncoder();
-        // \\   const rawKey = encoder.encode(text); // Convert the text to a Uint8Array
-        \\ 
-        \\   return await window.crypto.subtle.importKey(
-        \\     'raw',                  // Key format
-        \\     rawKey,                 // Key data
-        \\     {{ name: 'AES-GCM' }},    // Algorithm details
-        \\     true,                   // Extractable (set to false for better security)
-        \\     ['encrypt', 'decrypt']  // Key usages
-        \\   );
-        \\ }};        
-        \\ const secretKey = await generateKeyFromText(new Uint8Array([{s}]));
-        \\
-        \\ const encryptString = async (plaintext) => {{
-        \\   const encoder = new TextEncoder();
-        \\   const encodedText = encoder.encode(plaintext);
-        \\   const iv = window.crypto.getRandomValues(new Uint8Array(12)); // Initialization vector (12 bytes)
-        \\   const encryptedBuffer = await window.crypto.subtle.encrypt(
-        \\    {{
-        \\     name: "AES-GCM",
-        \\     iv: iv,
-        \\    }},
-        \\    secretKey,
-        \\    encodedText
-        \\   );
-        \\        
-        \\        
-        \\   // Split the tag (last 16 bytes) from the ciphertext
-        \\   const encryptedData = new Uint8Array(encryptedBuffer.slice(0, -16));
-        \\   const tag = new Uint8Array(encryptedBuffer.slice(-16));
-        \\
-        \\   return {{ encryptedData: uint8ArrayToBase64(encryptedData), iv: uint8ArrayToBase64(iv), tag: uint8ArrayToBase64(tag) }};
-        \\ }};
-        \\ 
-        \\ // All args passed in as base64 strings
-        \\ const decryptString = async (encryptedData, iv, tag) => {{
-        \\  encryptedData = base64ToUint8Array(encryptedData);
-        \\  iv = base64ToUint8Array(iv);
-        \\  tag = base64ToUint8Array(tag);
-        \\  // Combine encrypted data and tag to match the format expected by SubtleCrypto
-        \\  const combinedData = new Uint8Array(encryptedData.length + tag.length);
-        \\  combinedData.set(encryptedData);
-        \\  combinedData.set(tag, encryptedData.length);
-        \\  const decryptedBuffer = await window.crypto.subtle.decrypt(
-        \\    {{
-        \\      name: "AES-GCM",
-        \\      iv: iv,
-        \\    }},
-        \\    secretKey,
-        \\    combinedData // Pass the combined data (ciphertext + tag)
-        \\  );
-        \\  const decoder = new TextDecoder();
-        \\  return decoder.decode(decryptedBuffer);
-        \\ }};
-        \\
-        \\ window.__electrobun_encrypt = encryptString;
-        \\ window.__electrobun_decrypt = decryptString;
-        \\}})()
-        \\
-    , .{ opts.id, opts.windowId, opts.rpcPort, opts.secretKey }) catch {
-        // NOTE: key must be at least 32 characters long
-        return;
-    };
-    defer alloc.free(jsScriptSubstitutions);
-
-    // todo: move this to a separate file and embed it in zig so it can be properly
-    // edited as js
-    const jsScript = utils.concatStrings(jsScriptSubstitutions,
-        \\ function emitWebviewEvent (eventName, detail) {
-        \\     window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
-        \\ };                 
-        \\
-        \\ window.addEventListener('load', function(event) {
-        \\   // Check if the current window is the top-level window        
-        \\   if (window === window.top) {        
-        \\    emitWebviewEvent('dom-ready', document.location.href);        
-        \\   }
-        \\ });
-        \\
-        \\ window.addEventListener('popstate', function(event) {
-        \\  emitWebviewEvent('did-navigate-in-page', window.location.href);
-        \\ });
-        \\
-        \\ window.addEventListener('hashchange', function(event) {
-        \\  emitWebviewEvent('did-navigate-in-page', window.location.href);    
-        \\ });
-        \\
-        \\ document.addEventListener('click', function(event) {
-        \\  if ((event.metaKey || event.ctrlKey) && event.target.tagName === 'A') {
-        \\    event.preventDefault();
-        \\    event.stopPropagation();
-        \\
-        \\    // Get the href of the link
-        \\    const url = event.target.href;        
-        \\    
-        \\    // Open the URL in a new window or tab
-        \\    // Note: we already handle new windows in objc
-        \\    window.open(url, '_blank');
-        \\  }
-        \\}, true);
-        \\
-    );
-
-    // we want to make this a preload script so that it gets re-applied after navigations before any
-    // other code runs.
-    addPreloadScriptToWebview(_webview.handle, jsScript, false);
 
     // Add user's custom preload script if set
     if (opts.preload) |preload| {

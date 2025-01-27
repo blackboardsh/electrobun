@@ -654,7 +654,8 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
               navigationCallback:(DecideNavigationCallback)navigationCallback
               webviewEventHandler:(WebviewEventHandler)webviewEventHandler
               bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-              webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler;
+              webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+              electrobunPreloadScript:(const char *)electrobunPreloadScript;
 
 @end
 
@@ -671,6 +672,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
               webviewEventHandler:(WebviewEventHandler)webviewEventHandler
               bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
               webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+              electrobunPreloadScript:(const char *)electrobunPreloadScript
 {
     self = [super init];
     if (self) {
@@ -753,6 +755,8 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
         });
 
         _webView = wv;
+
+        [self addPreloadScriptToWebView:electrobunPreloadScript];
         
         // associate
         objc_setAssociatedObject(_webView, "WKWebViewImpl", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1100,12 +1104,18 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunApp);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunApp);
 };
-
-class ElectrobunClient : public CefClient {
+class ElectrobunClient : public CefClient,
+                        public CefRenderHandler,
+                        public CefLoadHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
     HandlePostMessage webview_tag_handler_;
+    struct PreloadScript {
+        std::string code;
+        bool mainFrameOnly;
+    };
+    std::vector<PreloadScript> preload_scripts_;    
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -1115,20 +1125,58 @@ public:
         , bun_bridge_handler_(bunBridgeHandler)
         , webview_tag_handler_(webviewTagBridgeHandler) {}
 
+    void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
+        preload_scripts_.push_back({script, mainFrameOnly});
+    }
+
+    virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override { 
+        return this; 
+    }
+
+    virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override {
+        return this;
+    }
+
+    // Required CefRenderHandler methods
+    virtual void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
+        rect.x = 0;
+        rect.y = 0;
+        rect.width = 800;
+        rect.height = 600;
+    }
+
+    virtual void OnPaint(CefRefPtr<CefBrowser> browser,
+                        PaintElementType type,
+                        const RectList& dirtyRects,
+                        const void* buffer,
+                        int width,
+                        int height) override {}
+
+    virtual void OnLoadStart(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefFrame> frame,
+                           TransitionType transition_type) override {
+        for (const auto& script : preload_scripts_) {
+            if (!script.mainFrameOnly || frame->IsMain()) {
+                frame->ExecuteJavaScript(
+                    script.code,
+                    frame->GetURL(),
+                    0  // Execute at start
+                );
+            }
+        }
+    }   
+
     virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                         CefRefPtr<CefFrame> frame,
                                         CefProcessId source_process,
                                         CefRefPtr<CefProcessMessage> message) override {
-         
         if (message->GetName() == "BunBridgeMessage") {
             CefString msg = message->GetArgumentList()->GetString(0);
-            NSLog(@"---------> BunBridgeMessage %i %s", webview_id_, msg.ToString().c_str());
             bun_bridge_handler_(webview_id_, msg.ToString().c_str());
             return true;
         }
         else if (message->GetName() == "WebviewTagMessage") {
             CefString msg = message->GetArgumentList()->GetString(0);
-            NSLog(@"---------> WebviewTagMessage %s", msg.ToString().c_str());
             webview_tag_handler_(webview_id_, msg.ToString().c_str());
             return true;
         }
@@ -1217,13 +1265,14 @@ extern "C" bool initializeCEF() {
               navigationCallback:(DecideNavigationCallback)navigationCallback
               webviewEventHandler:(WebviewEventHandler)webviewEventHandler
               bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-              webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler;
+              webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+              electrobunPreloadScript:(const char *)electrobunPreloadScript;
 
 @end
 @implementation CEFWebViewImpl {
     // CefRefPtr<CefBrowser> browser;
     NSView* _browserView;
-    // CefRefPtr<ClientHandler> _clientHandler;
+    CefRefPtr<ElectrobunClient> _client;
     // bool _isDestroying;
 }
 
@@ -1238,6 +1287,7 @@ extern "C" bool initializeCEF() {
             webviewEventHandler:(WebviewEventHandler)webviewEventHandler
               bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
         webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+        electrobunPreloadScript:(const char *)electrobunPreloadScript
 {
     self = [super init];
     if (self) {
@@ -1265,11 +1315,13 @@ extern "C" bool initializeCEF() {
             bool registered = CefRegisterSchemeHandlerFactory("views", "", factory);            
             
             // CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
-            CefRefPtr<ElectrobunClient> client(new ElectrobunClient(
+            _client = new ElectrobunClient(
                 webviewId,  
                 bunBridgeHandler, 
                 webviewTagBridgeHandler  
-            ));
+            );
+
+            [self addPreloadScriptToWebView:electrobunPreloadScript];
 
             CefString initialUrl;
             
@@ -1279,9 +1331,13 @@ extern "C" bool initializeCEF() {
             } else {
                 initialUrl = CefString("about:blank");                
             }
+
+            
             
             CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
-                window_info, client, initialUrl, browserSettings, nullptr, nullptr);
+                window_info, _client, initialUrl, browserSettings, nullptr, nullptr);
+
+            
                 
             // if (!browser) {
             //     NSLog(@"[CEF] Failed to create browser!");
@@ -1375,7 +1431,12 @@ extern "C" bool initializeCEF() {
 }
 
 - (void)addPreloadScriptToWebView:(const char*)jsString {
-   
+    if (!jsString) return;
+    
+    std::string script(jsString);
+    
+    ElectrobunClient* client = static_cast<ElectrobunClient*>(_client.get());
+    client->AddPreloadScript(script);
 }
 
 - (void)updatePreloadScriptInWebView:(const char*)jsString {
@@ -1408,7 +1469,8 @@ extern "C" AbstractWebView* initWebview(uint32_t webviewId,
                         DecideNavigationCallback navigationCallback,
                         WebviewEventHandler webviewEventHandler,
                         HandlePostMessage bunBridgeHandler,
-                        HandlePostMessage webviewTagBridgeHandler) {
+                        HandlePostMessage webviewTagBridgeHandler,
+                        const char *electrobunPreloadScript ) {
 
 
     
@@ -1427,7 +1489,8 @@ extern "C" AbstractWebView* initWebview(uint32_t webviewId,
                                         navigationCallback:navigationCallback
                                         webviewEventHandler:webviewEventHandler
                                         bunBridgeHandler:bunBridgeHandler
-                                        webviewTagBridgeHandler:webviewTagBridgeHandler];                                    
+                                        webviewTagBridgeHandler:webviewTagBridgeHandler
+                                        electrobunPreloadScript:electrobunPreloadScript];                                    
     } else {
         // fallback to WKWebView version
         impl = [[WKWebViewImpl alloc] initWithWebviewId:webviewId
@@ -1440,7 +1503,8 @@ extern "C" AbstractWebView* initWebview(uint32_t webviewId,
                                         navigationCallback:navigationCallback
                                         webviewEventHandler:webviewEventHandler
                                         bunBridgeHandler:bunBridgeHandler
-                                        webviewTagBridgeHandler:webviewTagBridgeHandler];
+                                        webviewTagBridgeHandler:webviewTagBridgeHandler
+                                        electrobunPreloadScript:electrobunPreloadScript];
 
 
     }
@@ -1507,6 +1571,7 @@ extern "C" void callAsyncJavaScript(const char *messageId,
 }
 
 extern "C" void addPreloadScriptToWebView(AbstractWebView *webView, const char *scriptContent, BOOL forMainFrameOnly) {            
+    NSLog(@"+++++++++ 11111 addPreloadScriptToWebView %s", "hi");
     [webView addPreloadScriptToWebView:scriptContent];    
 }
 
