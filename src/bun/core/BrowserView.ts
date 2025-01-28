@@ -50,7 +50,7 @@ interface ElectrobunWebviewRPCSChema {
 }
 
 const defaultOptions: Partial<BrowserViewOptions> = {
-  url: "https://electrobun.dev",
+  url: null,
   html: null,
   preload: null,
   frame: {
@@ -70,16 +70,22 @@ const internalSyncRpcHandlers = {
     method: string;
     params: BrowserViewOptions & { windowId: number };
   }) => {
+    
     const {
       hostWebviewId,
       windowId,
-      url,
+      
       html,
       preload,
       partition,
       frame,
       navigationRules,
     } = params;
+
+    const url = !params.url && !html ? "https://electrobun.dev" : params.url;
+    
+
+    console.log('------------> webviewTagInit on socket', params)
 
     const webviewForTag = new BrowserView({
       url,
@@ -139,6 +145,8 @@ export class BrowserView<T> {
     //   rpc.
     // }
 
+    console.log('CONSTRUCTOR 1')
+
     this.url = options.url || defaultOptions.url || null;
     this.html = options.html || defaultOptions.html || null;
     this.preload = options.preload || defaultOptions.preload || null;
@@ -163,7 +171,7 @@ export class BrowserView<T> {
   init() {
     this.createStreams();
 
-    const url = this.url || this.html && this.htmlToDataURI(this.html) || "about:blank";
+    
 
     // TODO: add a then to this that fires an onReady event
     zigRPC.request.createWebview({
@@ -176,7 +184,8 @@ export class BrowserView<T> {
       hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
       partition: this.partition,      
-      url: url,      
+      url: this.url,      
+      html: this.html,
       preload: this.preload,
       frame: {
         width: this.frame.width,
@@ -192,21 +201,24 @@ export class BrowserView<T> {
   }
 
   createStreams() {
+    console.log('createStreams 1', this.html)
     const webviewPipeIn = this.pipePrefix + "_in";
     const webviewPipeOut = this.pipePrefix + "_out";
-
+    console.log('createStreams 2', "mkfifo " + webviewPipeOut)
     try {
       execSync("mkfifo " + webviewPipeOut);
     } catch (e) {
       console.log("pipe out already exists");
     }
-
+    console.log('createStreams 3')
     try {
       execSync("mkfifo " + webviewPipeIn);
     } catch (e) {
       console.log("pipe in already exists");
     }
 
+    // setTimeout(() => {
+    console.log('createStreams 4')
     const inStream = fs.createWriteStream(webviewPipeIn, {
       flags: "r+",
     });
@@ -216,17 +228,20 @@ export class BrowserView<T> {
     inStream.write("\n");
 
     this.inStream = inStream;
-
+    console.log('createStreams 5')
     // Open the named pipe for reading
     const outStream = Bun.file(webviewPipeOut).stream();
     this.outStream = outStream;
-
+    console.log('createStreams 6')
     if (!this.rpc) {
       this.rpc = BrowserView.defineRPC({
         handlers: { requests: {}, messages: {} },
       });
     }
+    console.log('createStreams 7')
     this.rpc.setTransport(this.createTransport());
+    console.log('createStreams 8')
+  // }, 5000)
   }
 
   sendMessageToWebviewViaExecute(jsonMessage) {
@@ -261,8 +276,9 @@ export class BrowserView<T> {
 
   loadHTML(html: string) {
     this.html = html;
-    const url = this.htmlToDataURI(html);
-    zigRPC.request.loadURL({ webviewId: this.id, url: url });    
+    // todo: reimplement
+    // const url = this.htmlToDataURI(html);
+    // zigRPC.request.loadHTML({ webviewId: this.id, html: html });    
   }
 
   
@@ -417,6 +433,7 @@ export class BrowserView<T> {
 
     const rpc = createRPC<mixedWebviewSchema, mixedBunSchema>(rpcOptions);
 
+    console.log('messageHandler 6')
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
       // note: this can only be done once there is a transport

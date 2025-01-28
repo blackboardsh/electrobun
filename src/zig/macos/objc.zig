@@ -91,6 +91,7 @@ pub extern fn initWebview(
     bunBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
     webviewTagBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
     electrobunPreloadScript: [*:0]const u8,
+    customPreloadScript: [*:0]const u8,
 ) callconv(.C) *anyopaque;
 pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn updatePreloadScriptToWebView(webView: *anyopaque, scriptIdentifier: [*:0]const u8, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
@@ -135,3 +136,5 @@ pub extern fn setApplicationMenu(menuConfigJson: [*:0]const u8, zigTrayItemHandl
 // context menu
 // pub const ZigContextMenuHandler = fn (action: [*:0]const u8) void;
 pub extern fn showContextMenu(menuConfigJson: [*:0]const u8, zigContextMenuHandler: ?*const TrayItemHandler) callconv(.C) void;
+
+pub extern fn testFFI(ptr: *anyopaque) callconv(.C) void;

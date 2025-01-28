@@ -22,6 +22,7 @@ pub fn stdInListener() void {
     while (true) {
         const bytesRead = stdin.readUntilDelimiterOrEof(&buffer, '\n') catch continue;
         if (bytesRead) |line| {
+            std.debug.print("stdin line: {s}", .{line});
             const messageWithType = std.json.parseFromSlice(rpcTypes._RPCMessage, alloc, line, .{ .ignore_unknown_fields = true }) catch |err| {
                 std.log.info("Error parsing line from stdin - {}: \nreceived: {s}", .{ err, line });
                 continue;
@@ -38,10 +39,10 @@ pub fn stdInListener() void {
                 // _response = payload.allow;
 
                 std.log.info("decide Navigation - {}", .{_response.value.payload.?});
-                
+
                 _ = _response;
                 // rpcStdout.setResponse(messageWithType.value.id, _response.value.payload);
-                
+
                 // Todo: handle response
             } else {
                 // Handle UI events on main thread

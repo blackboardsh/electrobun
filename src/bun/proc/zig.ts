@@ -196,7 +196,8 @@ type ZigHandlers = RPCSchema<{
         secretKey: string;
         hostWebviewId: number | null;
         pipePrefix: string;
-        url: string;        
+        url: string | null;    
+        html: string | null;    
         partition: string | null;
         preload: string | null;
         frame: {

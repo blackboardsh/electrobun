@@ -10,7 +10,12 @@ class HelperApp : public CefApp, public CefRenderProcessHandler {
 public:
     // CefApp methods:
     virtual void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
-        registrar->AddCustomScheme("views", CEF_SCHEME_OPTION_STANDARD);
+        registrar->AddCustomScheme("views", 
+            CEF_SCHEME_OPTION_STANDARD | 
+            CEF_SCHEME_OPTION_CORS_ENABLED |
+            CEF_SCHEME_OPTION_SECURE | // treat it like https
+            CEF_SCHEME_OPTION_CSP_BYPASSING | // allow things like crypto.subtle
+            CEF_SCHEME_OPTION_FETCH_ENABLED);
     }
 
     virtual CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {

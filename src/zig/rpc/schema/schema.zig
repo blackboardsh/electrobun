@@ -164,7 +164,8 @@ pub const BunSchema = struct {
                 secretKey: []const u8,
                 hostWebviewId: ?u32,
                 pipePrefix: []const u8,
-                url: []const u8,
+                url: ?[]const u8,
+                html: ?[]const u8,
                 preload: ?[]const u8,
                 partition: ?[]const u8,
                 frame: struct { //
@@ -183,6 +184,13 @@ pub const BunSchema = struct {
             pub const params = struct {
                 webviewId: u32,
                 url: []const u8,
+            };
+            pub const response = void;
+        };
+        pub const loadHTML = struct {
+            pub const params = struct {
+                webviewId: u32,
+                html: []const u8,
             };
             pub const response = void;
         };
@@ -324,6 +332,7 @@ pub const FromBrowserHandlers = struct {
     // messages
     webviewTagResize: fn (params: BrowserSchema.messages.webviewTagResize) RequestResult,
     webviewTagUpdateSrc: fn (params: BrowserSchema.messages.webviewTagUpdateSrc) RequestResult,
+    webviewTagUpdateHtml: fn (params: BrowserSchema.messages.webviewTagUpdateHtml) RequestResult,
     webviewTagUpdatePreload: fn (params: BrowserSchema.messages.webviewTagUpdatePreload) RequestResult,
     webviewTagGoBack: fn (params: BrowserSchema.messages.webviewTagGoBack) RequestResult,
     webviewTagGoForward: fn (params: BrowserSchema.messages.webviewTagGoForward) RequestResult,
@@ -368,6 +377,10 @@ pub const BrowserSchema = struct { //
         pub const webviewTagUpdateSrc = struct {
             id: u32,
             url: []const u8,
+        };
+        pub const webviewTagUpdateHtml = struct {
+            id: u32,
+            html: []const u8,
         };
         pub const webviewTagUpdatePreload = struct {
             id: u32,

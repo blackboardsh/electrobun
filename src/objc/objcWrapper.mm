@@ -254,7 +254,7 @@ private:
 - (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString;
 - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler;
 - (void)addPreloadScriptToWebView:(const char*)jsString;
-- (void)updatePreloadScriptInWebView:(const char*)jsString;
+- (void)updateCustomPreloadScript:(const char*)jsString;
 
 
 @end
@@ -282,8 +282,9 @@ private:
 - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
 - (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
 - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler { [self doesNotRecognizeSelector:_cmd]; }
+// todo: we don't need this to be public since it's only used to set the internal electrobun preview script
 - (void)addPreloadScriptToWebView:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)updatePreloadScriptInWebView:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
+- (void)updateCustomPreloadScript:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
 @end
 
 
@@ -655,7 +656,8 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
               webviewEventHandler:(WebviewEventHandler)webviewEventHandler
               bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
               webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
-              electrobunPreloadScript:(const char *)electrobunPreloadScript;
+              electrobunPreloadScript:(const char *)electrobunPreloadScript
+              customPreloadScript:(const char *)customPreloadScript;
 
 @end
 
@@ -673,93 +675,102 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
               bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
               webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
               electrobunPreloadScript:(const char *)electrobunPreloadScript
+              customPreloadScript:(const char *)customPreloadScript
 {
     self = [super init];
-    if (self) {
+    if (self) {        
         _webviewId = webviewId;
 
-        // configuration
-        WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-        configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
-        [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
-        [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
-
-        // Add scheme handler
-        MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
-        assetSchemeHandler.fileLoader = assetFileLoader;
-        assetSchemeHandler.webviewId = webviewId;
-        [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
-
-        // create TransparentWKWebView
-        TransparentWKWebView *wv = [[TransparentWKWebView alloc] initWithFrame:frame configuration:configuration];
-        wv.webviewId = webviewId;
-        [wv setValue:@NO forKey:@"drawsBackground"];
-        wv.layer.backgroundColor = [[NSColor clearColor] CGColor];
-        wv.layer.opaque = NO;
-
-        if (autoResize) {
-            wv.autoresizingMask = NSViewNotSizable;
-            wv.fullSize = YES;
-        } else {
-            wv.autoresizingMask = NSViewNotSizable;
-            wv.fullSize = NO;
-        }
-        retainObjCObject(wv);
-
-        // delegates
-        MyNavigationDelegate *navigationDelegate = [[MyNavigationDelegate alloc] init];
-        navigationDelegate.zigCallback = navigationCallback;
-        navigationDelegate.zigEventHandler = webviewEventHandler;
-        navigationDelegate.webviewId = webviewId;
-        wv.navigationDelegate = navigationDelegate;
-        objc_setAssociatedObject(wv, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-        MyWebViewUIDelegate *uiDelegate = [[MyWebViewUIDelegate alloc] init];
-        uiDelegate.zigEventHandler = webviewEventHandler;
-        uiDelegate.webviewId = webviewId;
-        wv.UIDelegate = uiDelegate;
-        objc_setAssociatedObject(wv, "UIDelegate", uiDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);                                    
-
-        // postmessage
-        // bunBridge
-        MyScriptMessageHandler *bunHandler = [[MyScriptMessageHandler alloc] init];
-        bunHandler.zigCallback = bunBridgeHandler;
-        bunHandler.webviewId = webviewId;
-        [wv.configuration.userContentController addScriptMessageHandler:bunHandler
-                                                                        name:[NSString stringWithUTF8String:"bunBridge"]];
-
-        objc_setAssociatedObject(wv, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-        // webviewTagBridge
-        MyScriptMessageHandler *webviewTagHandler = [[MyScriptMessageHandler alloc] init];
-        webviewTagHandler.zigCallback = webviewTagBridgeHandler;
-        webviewTagHandler.webviewId = webviewId;
-        [wv.configuration.userContentController addScriptMessageHandler:webviewTagHandler
-                                                                        name:[NSString stringWithUTF8String:"webviewTagBridge"]];
-
-        objc_setAssociatedObject(wv, "webviewTagHandler", webviewTagHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-        // add subview
-        [window.contentView addSubview:wv positioned:NSWindowAbove relativeTo:nil];
-        CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
-        wv.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
-
-        wv.abstractView = self;
-
-        // Force the load to happen on the next runloop iteration after addSubview
-        // otherwise wkwebkit won't load
+        // TODO: rewrite this so we can return a reference to the AbstractRenderer and then call
+        // init from zig after the handle is added to the webviewMap then we don't need this async stuff
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (url) {                
-                [self loadURL:url];
-            } 
-        });
-
-        _webView = wv;
-
-        [self addPreloadScriptToWebView:electrobunPreloadScript];
         
-        // associate
-        objc_setAssociatedObject(_webView, "WKWebViewImpl", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        
+
+            // configuration
+            WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+            configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
+            [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
+            [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
+
+            // Add scheme handler
+            MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
+            assetSchemeHandler.fileLoader = assetFileLoader;
+            assetSchemeHandler.webviewId = webviewId;
+            [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
+
+            // create TransparentWKWebView
+            TransparentWKWebView *wv = [[TransparentWKWebView alloc] initWithFrame:frame configuration:configuration];
+            wv.webviewId = webviewId;
+            [wv setValue:@NO forKey:@"drawsBackground"];
+            wv.layer.backgroundColor = [[NSColor clearColor] CGColor];
+            wv.layer.opaque = NO;
+
+            if (autoResize) {
+                wv.autoresizingMask = NSViewNotSizable;
+                wv.fullSize = YES;
+            } else {
+                wv.autoresizingMask = NSViewNotSizable;
+                wv.fullSize = NO;
+            }
+            retainObjCObject(wv);
+
+            // delegates
+            MyNavigationDelegate *navigationDelegate = [[MyNavigationDelegate alloc] init];
+            navigationDelegate.zigCallback = navigationCallback;
+            navigationDelegate.zigEventHandler = webviewEventHandler;
+            navigationDelegate.webviewId = webviewId;
+            wv.navigationDelegate = navigationDelegate;
+            objc_setAssociatedObject(wv, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+            MyWebViewUIDelegate *uiDelegate = [[MyWebViewUIDelegate alloc] init];
+            uiDelegate.zigEventHandler = webviewEventHandler;
+            uiDelegate.webviewId = webviewId;
+            wv.UIDelegate = uiDelegate;
+            objc_setAssociatedObject(wv, "UIDelegate", uiDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);                                    
+
+            // postmessage
+            // bunBridge
+            MyScriptMessageHandler *bunHandler = [[MyScriptMessageHandler alloc] init];
+            bunHandler.zigCallback = bunBridgeHandler;
+            bunHandler.webviewId = webviewId;
+            [wv.configuration.userContentController addScriptMessageHandler:bunHandler
+                                                                            name:[NSString stringWithUTF8String:"bunBridge"]];
+
+            objc_setAssociatedObject(wv, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+            // webviewTagBridge
+            MyScriptMessageHandler *webviewTagHandler = [[MyScriptMessageHandler alloc] init];
+            webviewTagHandler.zigCallback = webviewTagBridgeHandler;
+            webviewTagHandler.webviewId = webviewId;
+            [wv.configuration.userContentController addScriptMessageHandler:webviewTagHandler
+                                                                            name:[NSString stringWithUTF8String:"webviewTagBridge"]];
+
+            objc_setAssociatedObject(wv, "webviewTagHandler", webviewTagHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+            // add subview
+            [window.contentView addSubview:wv positioned:NSWindowAbove relativeTo:nil];
+            CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
+            wv.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+
+            wv.abstractView = self;
+
+            // Force the load to happen on the next runloop iteration after addSubview
+            // otherwise wkwebkit won't load
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (url) {                
+                    [self loadURL:url];
+                } 
+            });
+
+            _webView = wv;
+
+            [self addPreloadScriptToWebView:electrobunPreloadScript];
+            [self updateCustomPreloadScript:customPreloadScript];
+            
+            // associate
+            objc_setAssociatedObject(_webView, "WKWebViewImpl", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        });
     }
     return self;
 }
@@ -941,6 +952,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
     }];
 }
 
+
 - (void)addPreloadScriptToWebView:(const char*)jsString {
     NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
     WKUserScript *script = [[WKUserScript alloc] initWithSource:code
@@ -949,7 +961,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
     [self.webView.configuration.userContentController addUserScript:script];    
 }
 
-- (void)updatePreloadScriptInWebView:(const char*)jsString {    
+- (void)updateCustomPreloadScript:(const char*)jsString {    
     WKUserContentController *contentController = self.webView.configuration.userContentController;
     NSString *identifierComment = [NSString stringWithFormat:@"// %@\n", [NSString stringWithUTF8String:"electrobun_custom_preload_script"]];
     NSString *newScriptSource = [identifierComment stringByAppendingString:[NSString stringWithUTF8String:jsString ?: ""]];
@@ -1061,15 +1073,21 @@ public:
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
         command_line->AppendSwitch("use-mock-keychain");
         command_line->AppendSwitch("register-scheme-handler");
-        command_line->AppendSwitchWithValue("custom-scheme", "views");
-
-
+        // command_line->AppendSwitch("disable-power-save-blocker");
+        // // note: without this webviews will be inactive until you mouse over them
+        // command_line->AppendSwitch("disable-renderer-backgrounding");
+        // command_line->AppendSwitch("disable-background-timer-throttling");
+        
+        command_line->AppendSwitchWithValue("custom-scheme", "views");        
     }
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {        
         registrar->AddCustomScheme("views", 
             CEF_SCHEME_OPTION_STANDARD | 
             CEF_SCHEME_OPTION_CORS_ENABLED |
+            CEF_SCHEME_OPTION_SECURE | // treat it like https
+            CEF_SCHEME_OPTION_CSP_BYPASSING | // allow things like crypto.subtle
             CEF_SCHEME_OPTION_FETCH_ENABLED);
+            
     }
     
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
@@ -1104,6 +1122,28 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunApp);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunApp);
 };
+
+
+std::string GetScriptExecutionUrl(const std::string& frameUrl) {
+    // List of URL schemes that should use about:blank for script execution
+    static const std::vector<std::string> specialSchemes = {
+        "data:",
+        "blob:",
+        "file:"
+        // Add other schemes as needed
+    };
+    
+    for (const auto& scheme : specialSchemes) {
+        if (frameUrl.substr(0, scheme.length()) == scheme) {
+            return "data://___preload.js";
+        }
+    }
+    
+    return frameUrl;
+}
+
+
+
 class ElectrobunClient : public CefClient,
                         public CefRenderHandler,
                         public CefLoadHandler {
@@ -1115,7 +1155,9 @@ private:
         std::string code;
         bool mainFrameOnly;
     };
-    std::vector<PreloadScript> preload_scripts_;    
+    
+    PreloadScript electrobun_script_;
+    PreloadScript custom_script_;  
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -1126,7 +1168,11 @@ public:
         , webview_tag_handler_(webviewTagBridgeHandler) {}
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
-        preload_scripts_.push_back({script, mainFrameOnly});
+        electrobun_script_ = {script, false};
+    }
+
+    void UpdateCustomPreloadScript(const std::string& script) {
+        custom_script_ = {script, true};
     }
 
     virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override { 
@@ -1155,14 +1201,18 @@ public:
     virtual void OnLoadStart(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefFrame> frame,
                            TransitionType transition_type) override {
-        for (const auto& script : preload_scripts_) {
-            if (!script.mainFrameOnly || frame->IsMain()) {
-                frame->ExecuteJavaScript(
-                    script.code,
-                    frame->GetURL(),
-                    0  // Execute at start
-                );
-            }
+
+        std::string frameUrl = frame->GetURL().ToString();
+        std::string scriptUrl = GetScriptExecutionUrl(frameUrl);
+
+        if (!electrobun_script_.code.empty() && 
+            (!electrobun_script_.mainFrameOnly || frame->IsMain())) {
+            frame->ExecuteJavaScript(electrobun_script_.code, scriptUrl, 0);
+        }
+        
+        if (!custom_script_.code.empty() && 
+            (!custom_script_.mainFrameOnly || frame->IsMain())) {
+            frame->ExecuteJavaScript(custom_script_.code, scriptUrl, 0);
         }
     }   
 
@@ -1251,7 +1301,7 @@ extern "C" bool initializeCEF() {
 
 
 @interface CEFWebViewImpl : AbstractWebView
-@property (nonatomic, strong) WKWebView *webView;
+// @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, assign) uint32_t webviewId;
 
 
@@ -1266,13 +1316,14 @@ extern "C" bool initializeCEF() {
               webviewEventHandler:(WebviewEventHandler)webviewEventHandler
               bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
               webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
-              electrobunPreloadScript:(const char *)electrobunPreloadScript;
+              electrobunPreloadScript:(const char *)electrobunPreloadScript
+              customPreloadScript:(const char *)customPreloadScript;
 
 @end
 @implementation CEFWebViewImpl {
-    // CefRefPtr<CefBrowser> browser;
-    NSView* _browserView;
+    CefRefPtr<CefBrowser> _browser;
     CefRefPtr<ElectrobunClient> _client;
+    NSView* _browserView;
     // bool _isDestroying;
 }
 
@@ -1288,12 +1339,16 @@ extern "C" bool initializeCEF() {
               bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
         webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
         electrobunPreloadScript:(const char *)electrobunPreloadScript
+        customPreloadScript:(const char *)customPreloadScript
 {
     self = [super init];
     if (self) {
+        NSLog(@"CEFWebViewImpl init - self pointer: %p", self);
         _webviewId = webviewId;
 
-        void (^createCEFBrowser)(void) = ^{             
+        void (^createCEFBrowser)(void) = ^{   
+             NSLog(@"Creating CEF browser - self pointer: %p", self); 
+             [window makeKeyAndOrderFront:nil];
             CefBrowserSettings browserSettings;
             CefWindowInfo window_info;
             
@@ -1313,6 +1368,7 @@ extern "C" bool initializeCEF() {
                 new ElectrobunSchemeHandlerFactory(assetFileLoader, webviewId));
             
             bool registered = CefRegisterSchemeHandlerFactory("views", "", factory);            
+            CefRegisterSchemeHandlerFactory("data", "", factory);            
             
             // CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
             _client = new ElectrobunClient(
@@ -1321,7 +1377,11 @@ extern "C" bool initializeCEF() {
                 webviewTagBridgeHandler  
             );
 
+            
+
             [self addPreloadScriptToWebView:electrobunPreloadScript];
+            // NSLog(@"custom preload script %s", customPreloadScript);
+            [self updateCustomPreloadScript:customPreloadScript];
 
             CefString initialUrl;
             
@@ -1334,9 +1394,10 @@ extern "C" bool initializeCEF() {
 
             
             
-            CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
+            _browser = CefBrowserHost::CreateBrowserSync(
                 window_info, _client, initialUrl, browserSettings, nullptr, nullptr);
 
+            
             
                 
             // if (!browser) {
@@ -1347,7 +1408,9 @@ extern "C" bool initializeCEF() {
             
             
         };
-
+        
+        // TODO: revisit bug with 3 windows where 2nd windows' oopifs don't get created
+        // until moving the mouse and where createCEFBrowser() after async causes a crash
         NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
         NSArray *notificationNames = @[ NSWindowDidUpdateNotification ];
         __block BOOL hasCreatedBrowser = NO;
@@ -1359,11 +1422,26 @@ extern "C" bool initializeCEF() {
                 
                 if (!hasCreatedBrowser) {
                     hasCreatedBrowser = YES;
+                    NSLog(@"-----------------> DISPATCH 2");
                     createCEFBrowser();
+                    
                 }
             }];
         }
         [window makeKeyAndOrderFront:nil];
+        dispatch_async(dispatch_get_main_queue(), ^{               
+            // createCEFBrowser();
+            NSLog(@"-----------------> DISPATCH 1");
+        });
+
+  
+        // dispatch_async(dispatch_get_main_queue(), ^{               
+            // dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            //     createCEFBrowser();
+            //     NSLog(@"-----------------> DISPATCH 1");
+            // });
+        // });
+
         
     }
     return self;
@@ -1407,19 +1485,56 @@ extern "C" bool initializeCEF() {
 }
 
 - (BOOL)canGoBack {
-    
+    // TODO: actually implement
+    return true;
 }
 
 - (BOOL)canGoForward {
-    
+    // TODO: actually implement
+    return true;
 }
 
 - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {
+    NSLog(@"in CEF IMpl evaluateJavaScriptWithNoCompletion\n");
+    if (!jsString) return;
     
+    CefRefPtr<CefFrame> mainFrame = _browser->GetMainFrame();
+    if (!mainFrame) {
+        NSLog(@"[CEF] Failed to get main frame for JavaScript evaluation");
+        return;
+    }
+
+    // Execute in the main context
+    mainFrame->ExecuteJavaScript(
+        CefString(jsString),
+        mainFrame->GetURL(),
+        0  // Line number for debugging
+    );
 }
 
 - (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString {
-   
+    if (!jsString) return;
+    
+    CefRefPtr<CefFrame> mainFrame = _browser->GetMainFrame();
+    if (!mainFrame) {
+        NSLog(@"[CEF] Failed to get main frame for secure JavaScript evaluation");
+        return;
+    }
+
+    // Create an isolated context by wrapping the code in an IIFE with a unique scope
+    std::string isolatedCode = "(function() { \
+        'use strict'; \
+        const electrobunSecureWorld = {}; \
+        (function(exports) { \
+            " + std::string(jsString) + " \
+        })(electrobunSecureWorld); \
+    })();";
+
+    mainFrame->ExecuteJavaScript(
+        CefString(isolatedCode),
+        mainFrame->GetURL(),
+        0  // Line number for debugging
+    );
 }
 
 - (void)callAsyncJavascript:(const char*)messageId 
@@ -1439,8 +1554,13 @@ extern "C" bool initializeCEF() {
     client->AddPreloadScript(script);
 }
 
-- (void)updatePreloadScriptInWebView:(const char*)jsString {
-   
+- (void)updateCustomPreloadScript:(const char*)jsString {   
+   if (!jsString) return;
+    
+    std::string script(jsString);
+    
+    ElectrobunClient* client = static_cast<ElectrobunClient*>(_client.get());
+    client->UpdateCustomPreloadScript(script);
 }
 
 @end
@@ -1470,45 +1590,33 @@ extern "C" AbstractWebView* initWebview(uint32_t webviewId,
                         WebviewEventHandler webviewEventHandler,
                         HandlePostMessage bunBridgeHandler,
                         HandlePostMessage webviewTagBridgeHandler,
-                        const char *electrobunPreloadScript ) {
+                        const char *electrobunPreloadScript,
+                        const char *customPreloadScript ) {
 
 
     
 
     AbstractWebView *impl = nil;
+    
+    Class ImplClass = (strcmp(renderer, "cef") == 0) ? [CEFWebViewImpl class] : [WKWebViewImpl class];
 
-    if (strcmp(renderer, "cef") == 0) {
-        // create CEF version
-        impl = [[CEFWebViewImpl alloc] initWithWebviewId:webviewId
-                                                 window:window
-                                                 url:url                                                                                             
-                                                  frame:frame
-                                        assetFileLoader:assetFileLoader
-                                             autoResize:autoResize
+     NSLog(@"Creating webview with renderer: %s", renderer);
+
+    impl = [[ImplClass alloc] initWithWebviewId:webviewId
+                                    window:window
+                                    url:url
+                                    frame:frame
+                                    assetFileLoader:assetFileLoader
+                                    autoResize:autoResize
                                     partitionIdentifier:partitionIdentifier
-                                        navigationCallback:navigationCallback
-                                        webviewEventHandler:webviewEventHandler
-                                        bunBridgeHandler:bunBridgeHandler
-                                        webviewTagBridgeHandler:webviewTagBridgeHandler
-                                        electrobunPreloadScript:electrobunPreloadScript];                                    
-    } else {
-        // fallback to WKWebView version
-        impl = [[WKWebViewImpl alloc] initWithWebviewId:webviewId
-                                                 window:window
-                                                 url:url                                                                                              
-                                                  frame:frame
-                                        assetFileLoader:assetFileLoader
-                                             autoResize:autoResize
-                                    partitionIdentifier:partitionIdentifier
-                                        navigationCallback:navigationCallback
-                                        webviewEventHandler:webviewEventHandler
-                                        bunBridgeHandler:bunBridgeHandler
-                                        webviewTagBridgeHandler:webviewTagBridgeHandler
-                                        electrobunPreloadScript:electrobunPreloadScript];
+                                    navigationCallback:navigationCallback
+                                    webviewEventHandler:webviewEventHandler
+                                    bunBridgeHandler:bunBridgeHandler
+                                    webviewTagBridgeHandler:webviewTagBridgeHandler
+                                    electrobunPreloadScript:electrobunPreloadScript
+                                    customPreloadScript:customPreloadScript];
 
-
-    }
-
+    NSLog(@"Created webview impl pointer: %p", impl);
     return impl;
     
 }
@@ -1542,11 +1650,50 @@ extern "C" BOOL webviewCanGoBack(AbstractWebView *webView) {
 }
 
 extern "C" BOOL webviewCanGoForward(AbstractWebView *webView) {    
-    return [webView canGoForward] ;
+    return [webView canGoForward];
 }
 
-extern "C" void evaluateJavaScriptWithNoCompletion(AbstractWebView *webView, const char *jsString) {    
-    [webView evaluateJavaScriptWithNoCompletion:jsString];    
+extern "C" void evaluateJavaScriptWithNoCompletion(AbstractWebView *webView, const char *script) {    
+    NSLog(@"evaluateJavaScriptWithNoCompletion in objc \n");
+    [webView evaluateJavaScriptWithNoCompletion:script];    
+}
+
+// wkWebkit
+// Memory contents - first 4 words:
+// bun:  2025-01-28 16:53:20.926 webview[1421:5734524]   Offset 0: 10000010250b0a9
+// bun:  2025-01-28 16:53:20.926 webview[1421:5734524]   Offset 8: 3
+// bun:  2025-01-28 16:53:20.926 webview[1421:5734524]   Offset 16: 10400621180
+// bun:  2025-01-28 16:53:20.926 webview[1421:5734524]   Offset 24: 0
+// bun:  2025-01-28 16:53:20.926 webview[1421:5734524] Object appears to be of class: WKWebViewImpl
+
+// CEF
+// Memory contents - first 4 words:
+// bun:  2025-01-28 16:54:29.507 webview[1714:5737358]   Offset 0: 1000001044fb149
+// bun:  2025-01-28 16:54:29.507 webview[1714:5737358]   Offset 8: 0
+// bun:  2025-01-28 16:54:29.507 webview[1714:5737358]   Offset 16: 0
+// bun:  2025-01-28 16:54:29.507 webview[1714:5737358]   Offset 24: 11401449d80
+// bun:  2025-01-28 16:54:29.507 webview[1714:5737358] Object appears to be of class: CEFWebViewImpl
+extern "C" void testFFI(void *ptr) {              
+    NSLog(@"ObjC side - raw ptr: %p", ptr);
+    
+    // Dump memory contents
+    uintptr_t *memory = (uintptr_t *)ptr;
+    NSLog(@"Memory contents - first 4 words:");
+    for(int i = 0; i < 4; i++) {
+        NSLog(@"  Offset %d: %lx", i * 8, memory[i]);
+    }
+    
+    // Try to get object type information
+    Class cls = object_getClass((__bridge id)ptr);
+    if (cls) {
+        NSLog(@"Object appears to be of class: %@", cls);
+    } else {
+        NSLog(@"Not a valid Objective-C class pointer");
+    }
+    
+    // Try to check vtable if it's a C++ object
+    void **vtable = *(void***)ptr;
+    NSLog(@"Possible vtable pointer: %p", vtable);
 }
 
 extern "C" void evaluateJavaScriptinSecureContentWorld(AbstractWebView *webView, const char *jsString) {    
@@ -1575,11 +1722,12 @@ extern "C" void addPreloadScriptToWebView(AbstractWebView *webView, const char *
     [webView addPreloadScriptToWebView:scriptContent];    
 }
 
+// todo: remove identifier and add option forMainFrameOnly
 extern "C" void updatePreloadScriptToWebView(AbstractWebView *webView,
                                              const char *scriptIdentifier,
                                              const char *scriptContent,
                                              BOOL forMainFrameOnly) {
-    [webView updatePreloadScriptInWebView:scriptContent];    
+    [webView updateCustomPreloadScript:scriptContent];    
 }
 
 

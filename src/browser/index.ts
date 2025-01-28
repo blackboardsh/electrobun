@@ -53,6 +53,10 @@ type WebviewTagHandlers = RPCSchema<{
       id: number;
       url: string;
     };
+    webviewTagUpdateHtml: {
+      id: number;
+      html: string;
+    }
     webviewTagGoBack: {
       id: number;
     };
@@ -215,6 +219,7 @@ class Electroview<T> {
   // TODO: implement proper rpc-anywhere style rpc here
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
   sendToZig(message: {}) {
+    console.log('messageHandler 1')
     if (window.webkit?.messageHandlers?.webviewTagBridge) {
       window.webkit.messageHandlers.webviewTagBridge.postMessage(
         JSON.stringify(message)
@@ -246,7 +251,7 @@ class Electroview<T> {
       send(message) {
         try {
           const messageString = JSON.stringify(message);
-          console.log("sending message bunbridge", messageString);
+          // console.log("sending message bunbridge", messageString);
           that.bunBridge(messageString);
         } catch (error) {
           console.error("bun: failed to serialize message to webview", error);
@@ -258,13 +263,21 @@ class Electroview<T> {
     };
   }
 
+  // todo: just use with sendToZig();
   createZigTransport(): RPCTransport {
     const that = this;
     return {
-      send(message) {
-        window.webkit.messageHandlers.webviewTagBridge.postMessage(
-          JSON.stringify(message)
-        );
+      send(message) {    
+        console.log('messageHandler 2')   
+        if (window.webkit?.messageHandlers?.webviewTagBridge) {
+          window.webkit.messageHandlers.webviewTagBridge.postMessage(
+            JSON.stringify(message)
+          );
+        } else {
+          window.webviewTagBridge.postMessage(
+            JSON.stringify(message)
+          );
+        }
       },
       registerHandler(handler) {
         that.zigRpcHandler = handler;
@@ -331,6 +344,7 @@ class Electroview<T> {
     // repro now that other places are chunking messages and laptop restart
 
     if (true || msg.length < 8 * 1024) {
+      console.log('messageHandler 3')
       if (window.webkit?.messageHandlers?.bunBridge){
         window.webkit.messageHandlers.bunBridge.postMessage(msg);
       } else {
@@ -452,6 +466,7 @@ class Electroview<T> {
 
     const rpc = createRPC<mixedBunSchema, mixedWebviewSchema>(rpcOptions);
 
+    console.log('messageHandler 5')
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
       // note: this can only be done once there is a transport

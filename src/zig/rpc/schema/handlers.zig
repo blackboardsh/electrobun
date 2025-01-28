@@ -42,6 +42,7 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
         .hostWebviewId = params.hostWebviewId,
         .pipePrefix = params.pipePrefix,
         .url = params.url,
+        .html = params.html,
         .preload = params.preload,
         .partition = params.partition,
         .frame = .{ //
@@ -206,6 +207,7 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .webviewTagCallAsyncJavaScript = webviewTagCallAsyncJavaScript,
     .webviewTagResize = webviewTagResize,
     .webviewTagUpdateSrc = webviewTagUpdateSrc,
+    .webviewTagUpdateHtml = webviewTagUpdateHtml,
     .webviewTagUpdatePreload = webviewTagUpdatePreload,
     .webviewTagGoBack = webviewTagGoBack,
     .webviewTagGoForward = webviewTagGoForward,
@@ -269,6 +271,15 @@ pub fn webviewTagUpdateSrc(params: rpcSchema.BrowserSchema.messages.webviewTagUp
     webview.loadURL(.{
         .webviewId = params.id,
         .url = params.url,
+    });
+
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+
+pub fn webviewTagUpdateHtml(params: rpcSchema.BrowserSchema.messages.webviewTagUpdateHtml) RequestResult {
+    webview.loadHTML(.{
+        .webviewId = params.id,
+        .html = params.html,
     });
 
     return RequestResult{ .errorMsg = null, .payload = null };
@@ -339,11 +350,13 @@ pub fn fromBrowserHandleRequest(request: rpcTypes._RPCRequestPacket) RequestResu
 
 pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
     const method = message.id;
-
+    std.debug.print("fromBrowserHandleMessage method {s}\n", .{method});
     if (strEql(method, "webviewTagResize")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagResize, rpcSchema.BrowserSchema.messages.webviewTagResize, message.payload);
     } else if (strEql(method, "webviewTagUpdateSrc")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdateSrc, rpcSchema.BrowserSchema.messages.webviewTagUpdateSrc, message.payload);
+    } else if (strEql(method, "webviewTagUpdateHtml")) {
+        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdateHtml, rpcSchema.BrowserSchema.messages.webviewTagUpdateHtml, message.payload);
     } else if (strEql(method, "webviewTagUpdatePreload")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagUpdatePreload, rpcSchema.BrowserSchema.messages.webviewTagUpdatePreload, message.payload);
     } else if (strEql(method, "webviewTagGoBack")) {

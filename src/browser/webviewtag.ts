@@ -88,16 +88,17 @@ const ConfigureWebviewTags = (
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
 
-      const _url = this.src || this.getAttribute("src");
-      const _html = this.html || this.getAttribute("html");
-      const url = _url || _html && this.htmlToDataURI(_html) || "about:blank";
+      const url = this.src || this.getAttribute("src");
+      const html = this.html || this.getAttribute("html");
+      
 
       const webviewId = await this.syncRpc.request.webviewTagInit({
         method: "webviewTagInit",
         params: {
           hostWebviewId: window.__electrobunWebviewId,
           windowId: window.__electrobunWindowId,
-          url: url,          
+          url: url, 
+          html: html,         
           preload: this.preload || this.getAttribute("preload") || null,
           partition: this.partition || this.getAttribute("partition") || null,
           frame: {
@@ -405,22 +406,14 @@ const ConfigureWebviewTags = (
       });
     }
 
-    htmlToDataURI(html: string) {
-      const dataUrl = `data:text/html;base64,${btoa(new TextEncoder().encode(html).reduce((str, byte) => str + String.fromCharCode(byte), ''))}`;
-      return dataUrl;
-    }
-    
-
     updateIFrameHtml(html: string) {
       if (!this.webviewId) {
         return;
       }
-
-      const dataUrl = this.htmlToDataURI(html);
-
-      this.zigRpc.send.webviewTagUpdateSrc({
+      
+      this.zigRpc.send.webviewTagUpdateHtml({
         id: this.webviewId,
-        url: dataUrl,
+        html: html,
       });
     }
 
@@ -451,6 +444,13 @@ const ConfigureWebviewTags = (
         id: this.webviewId,
         url,
       });
+    }
+    loadHTML(html: string) {
+      this.setAttribute("html", html);
+      this.zigRpc.send.webviewTagUpdateHtml({
+        id: this.webviewId,
+        html,
+      })
     }
     // Note: you can set an interval and do this 60 times a second and it's pretty smooth
     // but it uses quite a bit of cpu
