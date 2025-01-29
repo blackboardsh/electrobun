@@ -41,7 +41,7 @@ type BrowserViewOptions<T = undefined> = {
 
   windowId: number;
   navigationRules: string | null;
-  // renderer: "native" | "cef";
+  // renderer: 
 };
 
 interface ElectrobunWebviewRPCSChema {
@@ -177,7 +177,7 @@ export class BrowserView<T> {
     zigRPC.request.createWebview({
       id: this.id,
       windowId: this.windowId,
-      renderer: "cef",//"cef", // todo: make this configurable
+      renderer: "cef", // todo: make this configurable
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),

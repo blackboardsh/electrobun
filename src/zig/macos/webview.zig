@@ -204,14 +204,7 @@ const WebviewType = struct {
     }
 
     pub fn sendToWebview(self: *WebviewType, message: []const u8) void {
-        std.debug.print("about to testFFI with {s}\n", .{message});
-        const first_bytes = @as(*const usize, @ptrCast(@alignCast(self.handle))).*;
-
-        std.debug.print("Zig side - handle pointer: {*}, first 8 bytes: 0x{x}\n", .{ self.handle, first_bytes });
-        objc.testFFI(self.handle);
-        std.debug.print("sendToWebview about to call objc.evaluateJavaScriptWithNoCompletion() with {} {s}\n", .{ self.handle, message });
-        const debugMessage = "console.log('><>>M><M><M><M><M><M><M')";
-        objc.evaluateJavaScriptWithNoCompletion(self.handle, utils.toCString(debugMessage));
+        objc.evaluateJavaScriptWithNoCompletion(self.handle, utils.toCString(message));
         std.debug.print("called objc.evaluateJavaScriptWithNoCompletion() with {s}\n", .{message});
     }
 
