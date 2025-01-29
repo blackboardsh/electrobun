@@ -273,8 +273,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 @property (nonatomic, assign) BOOL mirrorModeEnabled;
 @property (nonatomic, assign) BOOL fullSize;
 
-- (NSView *)nativeView;
-
 - (void)loadURL:(const char *)urlString;
 - (void)goBack;
 - (void)goForward;
@@ -343,7 +341,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
     for (AbstractWebView * abstractView in self.abstractViews) {           
         
-        NSView *subview = [abstractView nativeView];
+        NSView *subview = abstractView.nsView;
 
         if (stillSearching) {
             NSRect subviewRenderLayerFrame = subview.layer.frame;
@@ -398,10 +396,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
 
 @implementation AbstractWebView
-- (NSView *)nativeView {
-    [self doesNotRecognizeSelector:_cmd];
-    return nil;
-}
+
 - (void)loadURL:(const char *)urlString { [self doesNotRecognizeSelector:_cmd]; }
 - (void)goBack { [self doesNotRecognizeSelector:_cmd]; }
 - (void)goForward { [self doesNotRecognizeSelector:_cmd]; }
@@ -425,7 +420,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
 - (void)toggleMirrorMode:(BOOL)enable {
     // NSLog(@"toggleMirrorMode %i %i", self.webviewId, enable);
-    NSView *subview = [self nativeView];
+    NSView *subview = self.nsView;
 
     if (self.mirrorModeEnabled == enable) {
         return;
@@ -780,13 +775,13 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
             [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
 
             // create WKWebView 
-            WKWebView *wv = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
+            self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
             
-            [wv setValue:@NO forKey:@"drawsBackground"];
-            wv.layer.backgroundColor = [[NSColor clearColor] CGColor];
-            wv.layer.opaque = NO;
+            [self.webView setValue:@NO forKey:@"drawsBackground"];
+            self.webView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+            self.webView.layer.opaque = NO;
 
-            wv.autoresizingMask = NSViewNotSizable;
+            self.webView.autoresizingMask = NSViewNotSizable;
 
             if (autoResize) {
                 self.fullSize = YES;
@@ -794,49 +789,49 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
                 self.fullSize = NO;
             }
 
-            retainObjCObject(wv);
+            // retainObjCObject(self.webView);
 
             // delegates
             MyNavigationDelegate *navigationDelegate = [[MyNavigationDelegate alloc] init];
             navigationDelegate.zigCallback = navigationCallback;
             navigationDelegate.zigEventHandler = webviewEventHandler;
             navigationDelegate.webviewId = webviewId;
-            wv.navigationDelegate = navigationDelegate;
-            objc_setAssociatedObject(wv, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            self.webView.navigationDelegate = navigationDelegate;
+            objc_setAssociatedObject(self.webView, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
             MyWebViewUIDelegate *uiDelegate = [[MyWebViewUIDelegate alloc] init];
             uiDelegate.zigEventHandler = webviewEventHandler;
             uiDelegate.webviewId = webviewId;
-            wv.UIDelegate = uiDelegate;
-            objc_setAssociatedObject(wv, "UIDelegate", uiDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);                                    
+            self.webView.UIDelegate = uiDelegate;
+            objc_setAssociatedObject(self.webView, "UIDelegate", uiDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);                                    
 
             // postmessage
             // bunBridge
             MyScriptMessageHandler *bunHandler = [[MyScriptMessageHandler alloc] init];
             bunHandler.zigCallback = bunBridgeHandler;
             bunHandler.webviewId = webviewId;
-            [wv.configuration.userContentController addScriptMessageHandler:bunHandler
+            [self.webView.configuration.userContentController addScriptMessageHandler:bunHandler
                                                                             name:[NSString stringWithUTF8String:"bunBridge"]];
 
-            objc_setAssociatedObject(wv, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self.webView, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
             // webviewTagBridge
             MyScriptMessageHandler *webviewTagHandler = [[MyScriptMessageHandler alloc] init];
             webviewTagHandler.zigCallback = webviewTagBridgeHandler;
             webviewTagHandler.webviewId = webviewId;
-            [wv.configuration.userContentController addScriptMessageHandler:webviewTagHandler
+            [self.webView.configuration.userContentController addScriptMessageHandler:webviewTagHandler
                                                                             name:[NSString stringWithUTF8String:"webviewTagBridge"]];
 
-            objc_setAssociatedObject(wv, "webviewTagHandler", webviewTagHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self.webView, "webviewTagHandler", webviewTagHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
             // add subview
-            [window.contentView addSubview:wv positioned:NSWindowAbove relativeTo:nil];
+            [window.contentView addSubview:self.webView positioned:NSWindowAbove relativeTo:nil];
             CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
-            wv.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+            self.webView.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
 
             ContainerView *containerView = (ContainerView *)window.contentView;
             [containerView addAbstractWebView:self];
-            // wv.abstractView = self;
+            // self.webView.abstractView = self;
 
             // Force the load to happen on the next runloop iteration after addSubview
             // otherwise wkwebkit won't load
@@ -846,23 +841,17 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
                 } 
             });
 
-            _webView = wv;
-            self.nsView = wv;
+            // Note: in WkWebkit the webview is an NSView
+            self.nsView = self.webView;            
 
             [self addPreloadScriptToWebView:electrobunPreloadScript];
             [self updateCustomPreloadScript:customPreloadScript];
             
             // associate
-            objc_setAssociatedObject(_webView, "WKWebViewImpl", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self.webView, "WKWebViewImpl", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         });
     }
     return self;
-}
-
-
-
-- (NSView *)nativeView {
-    return self.webView;
 }
 
 - (void)loadURL:(const char *)urlString {    
@@ -895,9 +884,9 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
 
 - (void)setTransparent:(BOOL)transparent {
     if (transparent) {
-        self.webView.layer.opacity = 0;
+        self.nsView.layer.opacity = 0;
     } else {
-        self.webView.layer.opacity = 1;
+        self.nsView.layer.opacity = 1;
     }
 }
 
@@ -910,7 +899,7 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
 }
 
 - (void)setHidden:(BOOL)hidden {
-    [self.webView setHidden:hidden];
+    [self.nsView setHidden:hidden];
 }
 
 - (BOOL)canGoBack {
@@ -1325,6 +1314,8 @@ extern "C" bool initializeCEF() {
 @interface CEFWebViewImpl : AbstractWebView
 // @property (nonatomic, strong) WKWebView *webView;
 
+@property (nonatomic, assign) CefRefPtr<CefBrowser> browser;
+@property (nonatomic, assign) CefRefPtr<ElectrobunClient> client;
 
 
 - (instancetype)initWithWebviewId:(uint32_t)webviewId
@@ -1342,10 +1333,8 @@ extern "C" bool initializeCEF() {
               customPreloadScript:(const char *)customPreloadScript;
 
 @end
-@implementation CEFWebViewImpl {
-    CefRefPtr<CefBrowser> _browser;
-    CefRefPtr<ElectrobunClient> _client;
-    NSView* _browserView;
+@implementation CEFWebViewImpl {    
+    
     // bool _isDestroying;
 }
 
@@ -1397,8 +1386,8 @@ extern "C" bool initializeCEF() {
             bool registered = CefRegisterSchemeHandlerFactory("views", "", factory);            
             CefRegisterSchemeHandlerFactory("data", "", factory);            
             
-            // CefRefPtr<ElectrobunClient> client(new ElectrobunClient());
-            _client = new ElectrobunClient(
+            
+            self.client = new ElectrobunClient(
                 webviewId,  
                 bunBridgeHandler, 
                 webviewTagBridgeHandler  
@@ -1421,20 +1410,17 @@ extern "C" bool initializeCEF() {
 
             
             
-            _browser = CefBrowserHost::CreateBrowserSync(
-                window_info, _client, initialUrl, browserSettings, nullptr, nullptr);
+            self.browser = CefBrowserHost::CreateBrowserSync(
+                window_info, self.client, initialUrl, browserSettings, nullptr, nullptr);
 
-            if (_browser) {
-                CefWindowHandle handle = _browser->GetHost()->GetWindowHandle();
-                _browserView = (__bridge NSView *)handle;                
-                _browserView.autoresizingMask = NSViewNotSizable;
+            if (self.browser) {
+                CefWindowHandle handle = self.browser->GetHost()->GetWindowHandle();
+                self.nsView = (__bridge NSView *)handle;                
+                self.nsView.autoresizingMask = NSViewNotSizable;
                 
                 
-                _browserView.layer.backgroundColor = [[NSColor clearColor] CGColor];
-                _browserView.layer.opaque = NO;
-
-                self.nsView = _browserView;
-                
+                self.nsView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+                self.nsView.layer.opaque = NO;                                
             }
 
 
@@ -1482,80 +1468,70 @@ extern "C" bool initializeCEF() {
     return self;
 }
 
-- (NSView *)nativeView {   
-    // todo: rename browserView to NSView 
-    return _browserView;
-}
 
 - (void)loadURL:(const char *)urlString {
-    if (!_browser)
+    if (!self.browser)
         return;
 
     CefString cefUrl = urlString ? urlString : "";
-    _browser->GetMainFrame()->LoadURL(cefUrl);
+    self.browser->GetMainFrame()->LoadURL(cefUrl);
 }
 
 - (void)goBack {
-    if (_browser)
-        _browser->GoBack();
+    if (self.browser)
+        self.browser->GoBack();
 }
 
 - (void)goForward {
-    if (_browser)
-        _browser->GoForward();
+    if (self.browser)
+        self.browser->GoForward();
 }
 
 - (void)reload {
-    if (_browser)
-        _browser->Reload();
+    if (self.browser)
+        self.browser->Reload();
 }
 
 - (void)remove {
     NSLog(@"REMOVE >>>>>>>>>>>>>>");
     // Stop loading, close the browser, remove from superview, etc.
-    if (_browser) {
+    if (self.browser) {
         // Tells CEF to close the browser window
-        _browser->GetHost()->CloseBrowser(false);
-        _browser = nullptr;
+        self.browser->GetHost()->CloseBrowser(false);
+        self.browser = nullptr;
     }
-    if (_browserView) {
-        [_browserView removeFromSuperview];
-        _browserView = nil;
+    if (self.nsView) {
+        [self.nsView removeFromSuperview];
+        self.nsView = nil;
     }
 }
 
 - (void)setTransparent:(BOOL)transparent {
-    // True transparency in a *windowed* CEF browser on macOS is non-trivial.
-    // Stub it out or consider OSR for real transparency.
-    NSLog(@"[CEF] setTransparent(%d) - Not fully implemented in windowed mode", (int)transparent);
+    if (transparent) {
+        self.nsView.layer.opacity = 0;
+    } else {
+        self.nsView.layer.opacity = 1;
+    }
 }
 
 - (void)setHidden:(BOOL)hidden {
-    // Mark the local flag
-    // _isHidden = hidden;
-    // if (!_browser)
-    //     return;
-    // if (_browserView) {
-    //     [_browserView setHidden:hidden];
-    // }
-    // // Advise CEF about window hidden state:
-    // _browser->GetHost()->WasHidden(hidden);
+    [self.nsView setHidden:hidden];
 }
 
 - (BOOL)canGoBack {
-    if (!_browser) return NO;
-    return _browser->CanGoBack() ? YES : NO;
+    if (!self.browser) return NO;
+    return self.browser->CanGoBack() ? YES : NO;
 }
 
 - (BOOL)canGoForward {
-    if (!_browser) return NO;
-    return _browser->CanGoForward() ? YES : NO;
+    if (!self.browser) return NO;
+    return self.browser->CanGoForward() ? YES : NO;
 }
 
 - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {    
     if (!jsString) return;
     
-    CefRefPtr<CefFrame> mainFrame = _browser->GetMainFrame();
+    CefRefPtr<CefFrame> mainFrame = self.browser->GetMainFrame();
     if (!mainFrame) {
         NSLog(@"[CEF] Failed to get main frame for JavaScript evaluation");
         return;
@@ -1572,7 +1548,7 @@ extern "C" bool initializeCEF() {
 - (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString {
     if (!jsString) return;
     
-    CefRefPtr<CefFrame> mainFrame = _browser->GetMainFrame();
+    CefRefPtr<CefFrame> mainFrame = self.browser->GetMainFrame();
     if (!mainFrame) {
         NSLog(@"[CEF] Failed to get main frame for secure JavaScript evaluation");
         return;
@@ -1602,24 +1578,21 @@ extern "C" bool initializeCEF() {
     
    // TODO: CEF deprecate execute functionality with a callback.
    // Need to re-implement with a custom round trip messaging likely with a custom bridge
+   // likely direct from bun -> webview via built-in rpc
 }
 
 - (void)addPreloadScriptToWebView:(const char*)jsString {
     if (!jsString) return;
     
     std::string script(jsString);
-    
-    ElectrobunClient* client = static_cast<ElectrobunClient*>(_client.get());
-    client->AddPreloadScript(script);
+    self.client->AddPreloadScript(script);
 }
 
 - (void)updateCustomPreloadScript:(const char*)jsString {   
    if (!jsString) return;
     
-    std::string script(jsString);
-    
-    ElectrobunClient* client = static_cast<ElectrobunClient*>(_client.get());
-    client->UpdateCustomPreloadScript(script);
+    std::string script(jsString);        
+    self.client->UpdateCustomPreloadScript(script);
 }
 
 @end
