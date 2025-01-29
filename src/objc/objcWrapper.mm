@@ -610,13 +610,20 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
 // 14) RESIZEWEBVIEW IMPLEMENTATION
 // ----------------------------------------------------------------------------
 
-NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
+NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat containerHeight) {
     NSMutableArray<NSValue *> *resultingRects = [NSMutableArray array];
     for (NSDictionary *rectDict in rectsArray) {
         CGFloat x = [rectDict[@"x"] floatValue];
         CGFloat y = [rectDict[@"y"] floatValue];
         CGFloat w = [rectDict[@"width"] floatValue];
         CGFloat h = [rectDict[@"height"] floatValue];
+               
+        // TODO: can we do this better? wkwebkit anchors y position from the bottom
+        // cef anchors it from the top.
+        if (containerHeight > 0) {
+            y = containerHeight - h - y;
+        }
+
         NSRect newRect = NSMakeRect(x, y, w, h);
 
         NSMutableArray<NSValue *> *overlapRects = [NSMutableArray array];
@@ -867,7 +874,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray) {
         twv.layer.mask = nil;
         return;
     }
-    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray);
+    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray, 0);
 
     CAShapeLayer *maskLayer = [CAShapeLayer layer];
     maskLayer.frame = twv.layer.bounds;
@@ -1397,7 +1404,10 @@ extern "C" bool initializeCEF() {
             _browser = CefBrowserHost::CreateBrowserSync(
                 window_info, _client, initialUrl, browserSettings, nullptr, nullptr);
 
-            
+            if (_browser) {
+                CefWindowHandle handle = _browser->GetHost()->GetWindowHandle();
+                _browserView = (__bridge NSView *)handle;
+            }
             
                 
             // if (!browser) {
@@ -1452,46 +1462,142 @@ extern "C" bool initializeCEF() {
 }
 
 - (void)loadURL:(const char *)urlString {
-   
+    if (!_browser)
+        return;
+
+    CefString cefUrl = urlString ? urlString : "";
+    _browser->GetMainFrame()->LoadURL(cefUrl);
 }
 
-
 - (void)goBack {
-   
+    if (_browser)
+        _browser->GoBack();
 }
 
 - (void)goForward {
-    
+    if (_browser)
+        _browser->GoForward();
 }
 
 - (void)reload {
-    
+    if (_browser)
+        _browser->Reload();
 }
 
 - (void)remove {
-   
+    NSLog(@"REMOVE >>>>>>>>>>>>>>");
+    // Stop loading, close the browser, remove from superview, etc.
+    if (_browser) {
+        // Tells CEF to close the browser window
+        _browser->GetHost()->CloseBrowser(false);
+        _browser = nullptr;
+    }
+    if (_browserView) {
+        [_browserView removeFromSuperview];
+        _browserView = nil;
+    }
 }
 
 - (void)setTransparent:(BOOL)transparent {
-   
+    // True transparency in a *windowed* CEF browser on macOS is non-trivial.
+    // Stub it out or consider OSR for real transparency.
+    NSLog(@"[CEF] setTransparent(%d) - Not fully implemented in windowed mode", (int)transparent);
 }
 
 - (void)setHidden:(BOOL)hidden {
-   
+    // Mark the local flag
+    // _isHidden = hidden;
+    // if (!_browser)
+    //     return;
+    // if (_browserView) {
+    //     [_browserView setHidden:hidden];
+    // }
+    // // Advise CEF about window hidden state:
+    // _browser->GetHost()->WasHidden(hidden);
 }
 
 - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {
-   
+    
+    if (!_browserView)
+        return;
+    
+    // // Move/resize the NSView
+    // NSView *parent = _browserView.superview;
+    // if (!parent)
+    //     return;
+    
+    // CGFloat adjustedY = parent.bounds.size.height - frame.origin.y - frame.size.height;
+    // NSRect adjustedFrame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+    // [_browserView setFrame:adjustedFrame];
+
+    // // Also tell CEF that the browser was resized (so it can repaint)
+    // if (_browser) {
+    //     _browser->GetHost()->WasResized();
+    // }
+
+    CGFloat adjustedX = floor(frame.origin.x);
+    CGFloat adjustedWidth = ceilf(frame.size.width);
+    CGFloat adjustedHeight = ceilf(frame.size.height);
+    CGFloat adjustedY = floor(_browserView.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
+
+    // TODO: move mirrorModeEnabled to abstractView
+    // if (_browserView.mirrorModeEnabled) {
+        _browserView.frame = NSMakeRect(-20000, -20000, adjustedWidth, adjustedHeight);
+        _browserView.layer.position = CGPointMake(adjustedX, adjustedY);
+    // } else {
+    //     _browserView.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
+    // }
+
+    if (!masksJson || strlen(masksJson) == 0) {
+        _browserView.layer.mask = nil;
+        return;
+    }
+
+    NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
+    NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
+    if (!jsonData) {
+        _browserView.layer.mask = nil;
+        return;
+    }
+    NSError *error = nil;
+    NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+    if (!rectsArray || error) {
+        _browserView.layer.mask = nil;
+        return;
+    }
+    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray, adjustedHeight);
+
+    CAShapeLayer *maskLayer = [CAShapeLayer layer];
+    maskLayer.frame = _browserView.layer.bounds;
+    CGMutablePathRef path = CGPathCreateMutable();
+    CGPathAddRect(path, NULL, maskLayer.bounds);
+
+    for (NSValue *rectValue in processedRects) {
+        NSRect rect = [rectValue rectValue];
+        CGPathAddRect(path, NULL, rect);
+    }
+    maskLayer.fillRule = kCAFillRuleEvenOdd;
+    maskLayer.path = path;
+    _browserView.layer.mask = maskLayer;
+
+    NSPoint currentMousePosition = [_browserView.window mouseLocationOutsideOfEventStream];
+    ContainerView *containerView = (ContainerView *)_browserView.superview;
+    [containerView updateActiveWebviewForMousePosition:currentMousePosition];
+    CGPathRelease(path);
+    
+
+    // You could also handle masksJson, etc., if you need custom shapes
+    // or partial transparency. For now, just ignore.
 }
 
 - (BOOL)canGoBack {
-    // TODO: actually implement
-    return true;
+    if (!_browser) return NO;
+    return _browser->CanGoBack() ? YES : NO;
 }
 
 - (BOOL)canGoForward {
-    // TODO: actually implement
-    return true;
+    if (!_browser) return NO;
+    return _browser->CanGoForward() ? YES : NO;
 }
 
 - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {
@@ -1542,7 +1648,10 @@ extern "C" bool initializeCEF() {
                  webviewId:(uint32_t)webviewId 
              hostWebviewId:(uint32_t)hostWebviewId 
          completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
-   
+
+    NSLog(@"----------------------->>>>>LLLL callAsyncJavascript");
+   // TODO: CEF deprecate execute functionality with a callback.
+   // Need to re-implement with a custom round trip messaging likely with a custom bridge
 }
 
 - (void)addPreloadScriptToWebView:(const char*)jsString {
