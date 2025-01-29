@@ -228,11 +228,47 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandlerFactory);
 };
 
+// Todo: incorporate into AbstractView
+NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat containerHeight) {
+    NSMutableArray<NSValue *> *resultingRects = [NSMutableArray array];
+    for (NSDictionary *rectDict in rectsArray) {
+        CGFloat x = [rectDict[@"x"] floatValue];
+        CGFloat y = [rectDict[@"y"] floatValue];
+        CGFloat w = [rectDict[@"width"] floatValue];
+        CGFloat h = [rectDict[@"height"] floatValue];
+                
+        // Note: CEF does not flip the view geometry so the measured y from the dom (origin top)
+        // needs to be inverted to work with MacOs default (y origin bottom) 
+        if (containerHeight > 0) {
+            y = containerHeight - h - y;
+        }
+
+        NSRect newRect = NSMakeRect(x, y, w, h);
+
+        NSMutableArray<NSValue *> *overlapRects = [NSMutableArray array];
+        for (NSValue *existingRectValue in resultingRects) {
+            NSRect existingRect = [existingRectValue rectValue];
+            if (NSIntersectsRect(existingRect, newRect)) {
+                NSRect overlapRect = NSIntersectionRect(existingRect, newRect);
+                if (!NSIsEmptyRect(overlapRect)) {
+                    [overlapRects addObject:[NSValue valueWithRect:overlapRect]];
+                }
+            }
+        }
+        [resultingRects addObject:[NSValue valueWithRect:newRect]];
+        [resultingRects addObjectsFromArray:overlapRects];
+    }
+    return resultingRects;
+}
+
+
+
 // ----------------------------------------------------------------------------
 // 2) ABSTRACT BASE CLASS
 // ----------------------------------------------------------------------------
 @interface AbstractWebView : NSObject
 @property (nonatomic, assign) uint32_t webviewId;
+@property (nonatomic, assign) NSView * nsView;
 @property (nonatomic, assign) BOOL isMousePassthroughEnabled;
 @property (nonatomic, assign) BOOL mirrorModeEnabled;
 @property (nonatomic, assign) BOOL fullSize;
@@ -249,7 +285,6 @@ private:
 - (void)toggleMirroring:(BOOL)enable;
 - (void)setPassthrough:(BOOL)enable;
 - (void)setHidden:(BOOL)hidden;
-- (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson;
 
 - (BOOL)canGoBack;
 - (BOOL)canGoForward;
@@ -261,147 +296,7 @@ private:
 - (void)updateCustomPreloadScript:(const char*)jsString;
 
 - (void)toggleMirrorMode:(BOOL)enabled;
-@end
-
-@implementation AbstractWebView
-- (NSView *)nativeView {
-    [self doesNotRecognizeSelector:_cmd];
-    return nil;
-}
-- (void)loadURL:(const char *)urlString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)goBack { [self doesNotRecognizeSelector:_cmd]; }
-- (void)goForward { [self doesNotRecognizeSelector:_cmd]; }
-- (void)reload { [self doesNotRecognizeSelector:_cmd]; }
-- (void)remove { [self doesNotRecognizeSelector:_cmd]; }
-
-- (void)setTransparent:(BOOL)transparent { [self doesNotRecognizeSelector:_cmd]; }
-- (void)toggleMirroring:(BOOL)enable { [self doesNotRecognizeSelector:_cmd]; }
-- (void)setPassthrough:(BOOL)enable { [self doesNotRecognizeSelector:_cmd]; }
-- (void)setHidden:(BOOL)hidden { [self doesNotRecognizeSelector:_cmd]; }
-- (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson { [self doesNotRecognizeSelector:_cmd]; }
-
-- (BOOL)canGoBack { [self doesNotRecognizeSelector:_cmd]; return NO; }
-- (BOOL)canGoForward { [self doesNotRecognizeSelector:_cmd]; return NO; }
-
-- (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler { [self doesNotRecognizeSelector:_cmd]; }
-// todo: we don't need this to be public since it's only used to set the internal electrobun preview script
-- (void)addPreloadScriptToWebView:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)updateCustomPreloadScript:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
-
-- (void)toggleMirrorMode:(BOOL)enable {
-    // NSLog(@"toggleMirrorMode %i %i", self.webviewId, enable);
-    NSView *subview = [self nativeView];
-
-    if (self.mirrorModeEnabled == enable) {
-        return;
-    }
-    BOOL isLeftMouseButtonDown = ([NSEvent pressedMouseButtons] & (1 << 0)) != 0;
-    if (isLeftMouseButtonDown) {
-        return;
-    }
-    self.mirrorModeEnabled = enable;
-
-    if (enable) {        
-        CGFloat positionX = subview.frame.origin.x;
-        CGFloat positionY = subview.frame.origin.y;
-        CGFloat OFFSCREEN_OFFSET = -20000;
-        subview.frame = CGRectOffset(subview.frame, OFFSCREEN_OFFSET, OFFSCREEN_OFFSET);
-        subview.layer.position = CGPointMake(positionX, positionY);
-    } else {
-        subview.frame = CGRectMake(subview.layer.position.x,
-                                subview.layer.position.y,
-                                subview.frame.size.width,
-                                subview.frame.size.height);
-    }
-}
-@end
-
-
-// ----------------------------------------------------------------------------
-// 4) CREATE DATA STORE + URL SCHEME HANDLER
-// ----------------------------------------------------------------------------
-
-WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier);
-
-NSUUID *UUIDFromString(NSString *string) {
-    unsigned char hash[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(string.UTF8String, (CC_LONG)string.length, hash);
-    uuid_t uuid;
-    memcpy(uuid, hash, sizeof(uuid));
-    return [[NSUUID alloc] initWithUUIDBytes:uuid];
-}
-
-WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier) {
-    NSString *identifier = [NSString stringWithUTF8String:partitionIdentifier];
-    if ([identifier hasPrefix:@"persist:"]) {
-        // persistent
-        identifier = [identifier substringFromIndex:8];
-        NSUUID *uuid = UUIDFromString(identifier);
-        if (uuid) {
-            return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
-        } else {
-            NSLog(@"Invalid UUID for identifier: %@", identifier);
-            return [WKWebsiteDataStore defaultDataStore];
-        }
-    } else {
-        // ephemeral
-        return [WKWebsiteDataStore nonPersistentDataStore];
-    }
-}
-
-@interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>
-@property (nonatomic, assign) zigStartURLSchemeTaskCallback fileLoader;
-@property (nonatomic, assign) uint32_t webviewId;
-@end
-
-@implementation MyURLSchemeHandler
-- (void)webView:(WKWebView *)webView
-startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
-    NSURL *url = urlSchemeTask.request.URL;
-    NSData *bodyData = urlSchemeTask.request.HTTPBody;
-    NSString *bodyString = bodyData ? [[NSString alloc] initWithData:bodyData encoding:NSUTF8StringEncoding] : @"";
-    if (self.fileLoader) {
-        FileResponse fileResponse = self.fileLoader(self.webviewId, url.absoluteString.UTF8String, bodyString.UTF8String);
-
-        NSString *mimeType = fileResponse.mimeType ? [NSString stringWithUTF8String:fileResponse.mimeType] : @"application/octet-stream";
-        if ([mimeType isEqualToString:@"screenshot"]) {
-            // special case
-            WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];
-            WKWebView *targetWebview = (__bridge WKWebView *)fileResponse.opaquePointer;
-            [targetWebview takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {
-                if (error) {
-                    NSLog(@"Error capturing snapshot: %@", error);
-                    return;
-                }
-                NSBitmapImageRep *imgRepbmp = [[NSBitmapImageRep alloc] initWithData:[snapshotImage TIFFRepresentation]];
-                NSData *imgData = [imgRepbmp representationUsingType:NSBitmapImageFileTypeBMP properties:@{NSImageCompressionFactor: @1.0}];
-
-                NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
-                                                                    MIMEType:@"image/bmp"
-                                                       expectedContentLength:imgData.length
-                                                            textEncodingName:nil];
-                [urlSchemeTask didReceiveResponse:response];
-                [urlSchemeTask didReceiveData:imgData];
-                [urlSchemeTask didFinish];
-            }];
-        } else {
-            // normal resource
-            NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:fileResponse.len];
-            NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
-                                                                MIMEType:mimeType
-                                                   expectedContentLength:data.length
-                                                        textEncodingName:nil];
-            [urlSchemeTask didReceiveResponse:response];
-            [urlSchemeTask didReceiveData:data];
-            [urlSchemeTask didFinish];
-        }
-    }
-}
-- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
-    NSLog(@"Stopping URL scheme task for URL: %@", urlSchemeTask.request.URL);
-}
+- (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson;
 @end
 
 
@@ -500,6 +395,217 @@ startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
     }   
 }
 @end
+
+
+@implementation AbstractWebView
+- (NSView *)nativeView {
+    [self doesNotRecognizeSelector:_cmd];
+    return nil;
+}
+- (void)loadURL:(const char *)urlString { [self doesNotRecognizeSelector:_cmd]; }
+- (void)goBack { [self doesNotRecognizeSelector:_cmd]; }
+- (void)goForward { [self doesNotRecognizeSelector:_cmd]; }
+- (void)reload { [self doesNotRecognizeSelector:_cmd]; }
+- (void)remove { [self doesNotRecognizeSelector:_cmd]; }
+
+- (void)setTransparent:(BOOL)transparent { [self doesNotRecognizeSelector:_cmd]; }
+- (void)toggleMirroring:(BOOL)enable { [self doesNotRecognizeSelector:_cmd]; }
+- (void)setPassthrough:(BOOL)enable { [self doesNotRecognizeSelector:_cmd]; }
+- (void)setHidden:(BOOL)hidden { [self doesNotRecognizeSelector:_cmd]; }
+
+- (BOOL)canGoBack { [self doesNotRecognizeSelector:_cmd]; return NO; }
+- (BOOL)canGoForward { [self doesNotRecognizeSelector:_cmd]; return NO; }
+
+- (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
+- (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
+- (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler { [self doesNotRecognizeSelector:_cmd]; }
+// todo: we don't need this to be public since it's only used to set the internal electrobun preview script
+- (void)addPreloadScriptToWebView:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
+- (void)updateCustomPreloadScript:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
+
+- (void)toggleMirrorMode:(BOOL)enable {
+    // NSLog(@"toggleMirrorMode %i %i", self.webviewId, enable);
+    NSView *subview = [self nativeView];
+
+    if (self.mirrorModeEnabled == enable) {
+        return;
+    }
+    BOOL isLeftMouseButtonDown = ([NSEvent pressedMouseButtons] & (1 << 0)) != 0;
+    if (isLeftMouseButtonDown) {
+        return;
+    }
+    self.mirrorModeEnabled = enable;
+
+    if (enable) {        
+        CGFloat positionX = subview.frame.origin.x;
+        CGFloat positionY = subview.frame.origin.y;
+        CGFloat OFFSCREEN_OFFSET = -20000;
+        subview.frame = CGRectOffset(subview.frame, OFFSCREEN_OFFSET, OFFSCREEN_OFFSET);
+        subview.layer.position = CGPointMake(positionX, positionY);
+    } else {
+        subview.frame = CGRectMake(subview.layer.position.x,
+                                subview.layer.position.y,
+                                subview.frame.size.width,
+                                subview.frame.size.height);
+    }
+}
+
+
+- (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {    
+    if (!self.nsView)
+        return;    
+    
+    CGFloat adjustedX = floor(frame.origin.x);
+    CGFloat adjustedWidth = ceilf(frame.size.width);
+    CGFloat adjustedHeight = ceilf(frame.size.height);
+    CGFloat adjustedY = floor(self.nsView.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
+    
+
+    // TODO: move mirrorModeEnabled to abstractView
+    if (self.mirrorModeEnabled) {
+        self.nsView.frame = NSMakeRect(-20000, -20000, adjustedWidth, adjustedHeight);
+        self.nsView.layer.position = CGPointMake(adjustedX, adjustedY);
+    } else {
+        self.nsView.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
+    }
+    
+    CAShapeLayer* (^createMaskLayer)(void) = ^CAShapeLayer* {
+        if (!masksJson || strlen(masksJson) == 0) {
+            return nil;
+        }
+
+        NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
+        NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
+        if (!jsonData) {
+            return nil;
+        }
+        
+        NSError *error = nil;
+        NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        if (!rectsArray || error) {
+            return nil;
+        }
+
+        CGFloat heightToAdjust = self.nsView.layer.geometryFlipped ? 0 : adjustedHeight;
+        
+        NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray, heightToAdjust);
+
+        CAShapeLayer *maskLayer = [CAShapeLayer layer];
+        maskLayer.frame = self.nsView.layer.bounds;
+        CGMutablePathRef path = CGPathCreateMutable();
+        CGPathAddRect(path, NULL, maskLayer.bounds);
+
+        for (NSValue *rectValue in processedRects) {
+            NSRect rect = [rectValue rectValue];
+            CGPathAddRect(path, NULL, rect);
+        }
+        maskLayer.fillRule = kCAFillRuleEvenOdd;
+        maskLayer.path = path;
+        CGPathRelease(path);
+        
+        return maskLayer;
+    };
+
+    self.nsView.layer.mask = createMaskLayer();
+    
+    NSPoint currentMousePosition = [self.nsView.window mouseLocationOutsideOfEventStream];
+    ContainerView *containerView = (ContainerView *)self.nsView.superview;    
+    [containerView updateActiveWebviewForMousePosition:currentMousePosition];
+        
+}
+
+ 
+@end
+
+
+// ----------------------------------------------------------------------------
+// 4) CREATE DATA STORE + URL SCHEME HANDLER
+// ----------------------------------------------------------------------------
+
+WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier);
+
+NSUUID *UUIDFromString(NSString *string) {
+    unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(string.UTF8String, (CC_LONG)string.length, hash);
+    uuid_t uuid;
+    memcpy(uuid, hash, sizeof(uuid));
+    return [[NSUUID alloc] initWithUUIDBytes:uuid];
+}
+
+WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier) {
+    NSString *identifier = [NSString stringWithUTF8String:partitionIdentifier];
+    if ([identifier hasPrefix:@"persist:"]) {
+        // persistent
+        identifier = [identifier substringFromIndex:8];
+        NSUUID *uuid = UUIDFromString(identifier);
+        if (uuid) {
+            return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
+        } else {
+            NSLog(@"Invalid UUID for identifier: %@", identifier);
+            return [WKWebsiteDataStore defaultDataStore];
+        }
+    } else {
+        // ephemeral
+        return [WKWebsiteDataStore nonPersistentDataStore];
+    }
+}
+
+@interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>
+@property (nonatomic, assign) zigStartURLSchemeTaskCallback fileLoader;
+@property (nonatomic, assign) uint32_t webviewId;
+@end
+
+@implementation MyURLSchemeHandler
+- (void)webView:(WKWebView *)webView
+startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+    NSURL *url = urlSchemeTask.request.URL;
+    NSData *bodyData = urlSchemeTask.request.HTTPBody;
+    NSString *bodyString = bodyData ? [[NSString alloc] initWithData:bodyData encoding:NSUTF8StringEncoding] : @"";
+    if (self.fileLoader) {
+        FileResponse fileResponse = self.fileLoader(self.webviewId, url.absoluteString.UTF8String, bodyString.UTF8String);
+
+        NSString *mimeType = fileResponse.mimeType ? [NSString stringWithUTF8String:fileResponse.mimeType] : @"application/octet-stream";
+        if ([mimeType isEqualToString:@"screenshot"]) {
+            // special case
+            WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];
+            WKWebView *targetWebview = (__bridge WKWebView *)fileResponse.opaquePointer;
+            [targetWebview takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {
+                if (error) {
+                    NSLog(@"Error capturing snapshot: %@", error);
+                    return;
+                }
+                NSBitmapImageRep *imgRepbmp = [[NSBitmapImageRep alloc] initWithData:[snapshotImage TIFFRepresentation]];
+                NSData *imgData = [imgRepbmp representationUsingType:NSBitmapImageFileTypeBMP properties:@{NSImageCompressionFactor: @1.0}];
+
+                NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
+                                                                    MIMEType:@"image/bmp"
+                                                       expectedContentLength:imgData.length
+                                                            textEncodingName:nil];
+                [urlSchemeTask didReceiveResponse:response];
+                [urlSchemeTask didReceiveData:imgData];
+                [urlSchemeTask didFinish];
+            }];
+        } else {
+            // normal resource
+            NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:fileResponse.len];
+            NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
+                                                                MIMEType:mimeType
+                                                   expectedContentLength:data.length
+                                                        textEncodingName:nil];
+            [urlSchemeTask didReceiveResponse:response];
+            [urlSchemeTask didReceiveData:data];
+            [urlSchemeTask didFinish];
+        }
+    }
+}
+- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+    NSLog(@"Stopping URL scheme task for URL: %@", urlSchemeTask.request.URL);
+}
+@end
+
+
+
+
 // ----------------------------------------------------------------------------
 // 18) NAVIGATION & UI DELEGATES
 // ----------------------------------------------------------------------------
@@ -611,37 +717,7 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
 // 14) RESIZEWEBVIEW IMPLEMENTATION
 // ----------------------------------------------------------------------------
 
-NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat containerHeight) {
-    NSMutableArray<NSValue *> *resultingRects = [NSMutableArray array];
-    for (NSDictionary *rectDict in rectsArray) {
-        CGFloat x = [rectDict[@"x"] floatValue];
-        CGFloat y = [rectDict[@"y"] floatValue];
-        CGFloat w = [rectDict[@"width"] floatValue];
-        CGFloat h = [rectDict[@"height"] floatValue];
-                
-        // Note: CEF does not flip the view geometry so the measured y from the dom (origin top)
-        // needs to be inverted to work with MacOs default (y origin bottom) 
-        if (containerHeight > 0) {
-            y = containerHeight - h - y;
-        }
 
-        NSRect newRect = NSMakeRect(x, y, w, h);
-
-        NSMutableArray<NSValue *> *overlapRects = [NSMutableArray array];
-        for (NSValue *existingRectValue in resultingRects) {
-            NSRect existingRect = [existingRectValue rectValue];
-            if (NSIntersectsRect(existingRect, newRect)) {
-                NSRect overlapRect = NSIntersectionRect(existingRect, newRect);
-                if (!NSIsEmptyRect(overlapRect)) {
-                    [overlapRects addObject:[NSValue valueWithRect:overlapRect]];
-                }
-            }
-        }
-        [resultingRects addObject:[NSValue valueWithRect:newRect]];
-        [resultingRects addObjectsFromArray:overlapRects];
-    }
-    return resultingRects;
-}
 
 // ----------------------------------------------------------------------------
 // 5) WKWEBVIEWIMPL SUBCLASS
@@ -691,9 +767,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         // TODO: rewrite this so we can return a reference to the AbstractRenderer and then call
         // init from zig after the handle is added to the webviewMap then we don't need this async stuff
         dispatch_async(dispatch_get_main_queue(), ^{
-        
-        
-
             // configuration
             WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
             configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
@@ -720,7 +793,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             } else {                
                 self.fullSize = NO;
             }
-            
+
             retainObjCObject(wv);
 
             // delegates
@@ -774,6 +847,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             });
 
             _webView = wv;
+            self.nsView = wv;
 
             [self addPreloadScriptToWebView:electrobunPreloadScript];
             [self updateCustomPreloadScript:customPreloadScript];
@@ -837,59 +911,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
 - (void)setHidden:(BOOL)hidden {
     [self.webView setHidden:hidden];
-}
-
-- (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {
-    if (!self.webView) return;    
-    
-    CGFloat adjustedX = floor(frame.origin.x);
-    CGFloat adjustedWidth = ceilf(frame.size.width);
-    CGFloat adjustedHeight = ceilf(frame.size.height);
-    CGFloat adjustedY = floor(self.webView.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
-    
-    if (self.mirrorModeEnabled) {
-        self.webView.frame = NSMakeRect(-20000, -20000, adjustedWidth, adjustedHeight);
-        self.webView.layer.position = CGPointMake(adjustedX, adjustedY);
-    } else {
-        self.webView.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
-    }
-
-    if (!masksJson || strlen(masksJson) == 0) {
-        self.webView.layer.mask = nil;
-        return;
-    }
-
-    NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
-    NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
-    if (!jsonData) {
-        self.webView.layer.mask = nil;
-        return;
-    }
-    NSError *error = nil;
-    NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-    if (!rectsArray || error) {
-        self.webView.layer.mask = nil;
-        return;
-    }
-    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray, 0);
-
-    CAShapeLayer *maskLayer = [CAShapeLayer layer];
-    maskLayer.frame = self.webView.layer.bounds;
-    CGMutablePathRef path = CGPathCreateMutable();
-    CGPathAddRect(path, NULL, maskLayer.bounds);
-
-    for (NSValue *rectValue in processedRects) {
-        NSRect rect = [rectValue rectValue];
-        CGPathAddRect(path, NULL, rect);
-    }
-    maskLayer.fillRule = kCAFillRuleEvenOdd;
-    maskLayer.path = path;
-    self.webView.layer.mask = maskLayer;
-
-    NSPoint currentMousePosition = [self.webView.window mouseLocationOutsideOfEventStream];
-    ContainerView *containerView = (ContainerView *)self.webView.superview;
-    [containerView updateActiveWebviewForMousePosition:currentMousePosition];
-    CGPathRelease(path);
 }
 
 - (BOOL)canGoBack {
@@ -1355,6 +1376,9 @@ extern "C" bool initializeCEF() {
         void (^createCEFBrowser)(void) = ^{                
              [window makeKeyAndOrderFront:nil];
             CefBrowserSettings browserSettings;
+
+            
+
             CefWindowInfo window_info;
             
             NSView *contentView = window.contentView;            
@@ -1405,6 +1429,11 @@ extern "C" bool initializeCEF() {
                 _browserView = (__bridge NSView *)handle;                
                 _browserView.autoresizingMask = NSViewNotSizable;
                 
+                
+                _browserView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+                _browserView.layer.opaque = NO;
+
+                self.nsView = _browserView;
                 
             }
 
@@ -1511,66 +1540,6 @@ extern "C" bool initializeCEF() {
     // }
     // // Advise CEF about window hidden state:
     // _browser->GetHost()->WasHidden(hidden);
-}
-
-- (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {
-    
-    if (!_browserView)
-        return;    
-
-    CGFloat adjustedX = floor(frame.origin.x);
-    CGFloat adjustedWidth = ceilf(frame.size.width);
-    CGFloat adjustedHeight = ceilf(frame.size.height);
-    CGFloat adjustedY = floor(_browserView.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
-
-    // TODO: move mirrorModeEnabled to abstractView
-    if (self.mirrorModeEnabled) {
-        _browserView.frame = NSMakeRect(-20000, -20000, adjustedWidth, adjustedHeight);
-        _browserView.layer.position = CGPointMake(adjustedX, adjustedY);
-    } else {
-        _browserView.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
-    }
-
-    if (!masksJson || strlen(masksJson) == 0) {
-        _browserView.layer.mask = nil;
-        return;
-    }
-
-    NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
-    NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
-    if (!jsonData) {
-        _browserView.layer.mask = nil;
-        return;
-    }
-    NSError *error = nil;
-    NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-    if (!rectsArray || error) {
-        _browserView.layer.mask = nil;
-        return;
-    }
-    NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray, adjustedHeight);
-
-    CAShapeLayer *maskLayer = [CAShapeLayer layer];
-    maskLayer.frame = _browserView.layer.bounds;
-    CGMutablePathRef path = CGPathCreateMutable();
-    CGPathAddRect(path, NULL, maskLayer.bounds);
-
-    for (NSValue *rectValue in processedRects) {
-        NSRect rect = [rectValue rectValue];
-        CGPathAddRect(path, NULL, rect);
-    }
-    maskLayer.fillRule = kCAFillRuleEvenOdd;
-    maskLayer.path = path;
-    _browserView.layer.mask = maskLayer;
-
-    NSPoint currentMousePosition = [_browserView.window mouseLocationOutsideOfEventStream];
-    ContainerView *containerView = (ContainerView *)_browserView.superview;
-    [containerView updateActiveWebviewForMousePosition:currentMousePosition];
-    CGPathRelease(path);
-    
-
-    // You could also handle masksJson, etc., if you need custom shapes
-    // or partial transparency. For now, just ignore.
 }
 
 - (BOOL)canGoBack {

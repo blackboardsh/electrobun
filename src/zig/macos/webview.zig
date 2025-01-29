@@ -384,10 +384,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         \\ }}
         \\ return btoa(binary);
         \\}}
-        \\ const generateKeyFromText = async (rawKey) => {{
-        // \\   const encoder = new TextEncoder();
-        // \\   const rawKey = encoder.encode(text); // Convert the text to a Uint8Array
-        \\   console.log('*********importKey', window.crypto?.subtle?.importKey)
+        \\ const generateKeyFromText = async (rawKey) => {{        
         \\   return await window.crypto.subtle.importKey(
         \\     'raw',                  // Key format
         \\     rawKey,                 // Key data
@@ -489,6 +486,14 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         \\    window.open(url, '_blank');
         \\  }
         \\}, true);
+        \\
+        \\ // prevent overscroll
+        \\ document.addEventListener('DOMContentLoaded', () => {        
+        \\  var style = document.createElement('style');
+        \\  style.type = 'text/css';
+        \\  style.appendChild(document.createTextNode('html, body { overscroll-behavior: none; }'));
+        \\  document.head.appendChild(style);
+        \\ });
         \\        
         \\ 
     );
@@ -547,14 +552,10 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         fn WebviewTagBridgeHandler(webviewId: u32, message: [*:0]const u8) callconv(.C) void {
             const msgString = utils.fromCString(message);
 
-            std.debug.print("WebviewTagBridgeHandler msgString {s}", .{msgString});
-
             const json = std.json.parseFromSlice(std.json.Value, alloc, msgString, .{ .ignore_unknown_fields = true }) catch |err| {
                 std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}\n", .{ err, msgString });
                 return;
             };
-
-            std.debug.print("WebviewTagBridgeHandler msgString (after json) {s}\n", .{msgString});
 
             defer json.deinit();
 
@@ -584,7 +585,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                         return;
                     };
                     defer alloc.free(jsCall);
-                    std.debug.print("WebviewTagBridgeHandler sendLineToWebview {s}\n", .{msgString});
+
                     sendLineToWebview(webviewId, jsCall);
                 } else {
                     // todo: this doesn't work yet
@@ -595,7 +596,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                     std.log.info("Error parsing line from webview-zig-bridge - {}: \nreceived: {s}", .{ err, msgString });
                     return;
                 };
-                std.debug.print("fromBrowserHandleMessage sendLineToWebview {s}\n", .{msgString});
+
                 rpcHandlers.fromBrowserHandleMessage(_message.value);
             } else {
                 std.log.info("it's an unhandled meatball", .{});
@@ -668,8 +669,6 @@ pub fn resizeWebview(opts: rpcSchema.BrowserSchema.messages.webviewTagResize) vo
         std.debug.print("Failed to get webview from hashmap for id {}: resizeWebview\n", .{opts.id});
         return;
     };
-
-    std.debug.print("===========-------- resizeWebview:: {}", .{opts.id});
 
     // todo: update webview frame in the webviewMap.
     // not doing this yet to see when we run into issues. it's possible
