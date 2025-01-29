@@ -706,20 +706,21 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             assetSchemeHandler.webviewId = webviewId;
             [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
 
-            // create WKWebView
+            // create WKWebView 
             WKWebView *wv = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
             
             [wv setValue:@NO forKey:@"drawsBackground"];
             wv.layer.backgroundColor = [[NSColor clearColor] CGColor];
             wv.layer.opaque = NO;
 
+            wv.autoresizingMask = NSViewNotSizable;
+
             if (autoResize) {
-                wv.autoresizingMask = NSViewNotSizable;
                 self.fullSize = YES;
-            } else {
-                wv.autoresizingMask = NSViewNotSizable;
+            } else {                
                 self.fullSize = NO;
             }
+            
             retainObjCObject(wv);
 
             // delegates
@@ -1345,14 +1346,18 @@ extern "C" bool initializeCEF() {
     if (self) {        
         self.webviewId = webviewId;
 
+        if (autoResize) {
+            self.fullSize = YES;
+        } else {
+            self.fullSize = NO;
+        }
+
         void (^createCEFBrowser)(void) = ^{                
              [window makeKeyAndOrderFront:nil];
             CefBrowserSettings browserSettings;
             CefWindowInfo window_info;
             
-            NSView *contentView = window.contentView;
-            [contentView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-            [contentView setAutoresizesSubviews:YES];
+            NSView *contentView = window.contentView;            
             
             CGFloat adjustedY = contentView.bounds.size.height - frame.origin.y - frame.size.height;
             CefRect cefBounds((int)frame.origin.x,
@@ -1398,6 +1403,9 @@ extern "C" bool initializeCEF() {
             if (_browser) {
                 CefWindowHandle handle = _browser->GetHost()->GetWindowHandle();
                 _browserView = (__bridge NSView *)handle;                
+                _browserView.autoresizingMask = NSViewNotSizable;
+                
+                
             }
 
 
@@ -1508,21 +1516,7 @@ extern "C" bool initializeCEF() {
 - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {
     
     if (!_browserView)
-        return;
-    
-    // // Move/resize the NSView
-    // NSView *parent = _browserView.superview;
-    // if (!parent)
-    //     return;
-    
-    // CGFloat adjustedY = parent.bounds.size.height - frame.origin.y - frame.size.height;
-    // NSRect adjustedFrame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
-    // [_browserView setFrame:adjustedFrame];
-
-    // // Also tell CEF that the browser was resized (so it can repaint)
-    // if (_browser) {
-    //     _browser->GetHost()->WasResized();
-    // }
+        return;    
 
     CGFloat adjustedX = floor(frame.origin.x);
     CGFloat adjustedWidth = ceilf(frame.size.width);
