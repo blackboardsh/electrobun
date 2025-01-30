@@ -24,8 +24,15 @@ class CefClient;
 class CefLifeSpanHandler;
 class CefBrowser;
 
-// temp: make this useCEF and make it configurable
-BOOL useCEF = true;
+
+BOOL useCEF = false;
+extern "C" bool isCEFAvailable() {
+    NSBundle *mainBundle = [NSBundle mainBundle];
+    NSString *frameworkPath = [mainBundle.privateFrameworksPath 
+                              stringByAppendingPathComponent:@"Chromium Embedded Framework.framework/Chromium Embedded Framework"];
+    return [[NSFileManager defaultManager] fileExistsAtPath:frameworkPath];
+}
+
 
 // ----------------------------------------------------------------------------
 // 1) DATA STRUCTS, TYPEDEFS, AND UTILITY
@@ -266,7 +273,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 // ----------------------------------------------------------------------------
 // 2) ABSTRACT BASE CLASS
 // ----------------------------------------------------------------------------
-@interface AbstractWebView : NSObject
+@interface AbstractView : NSObject
 @property (nonatomic, assign) uint32_t webviewId;
 @property (nonatomic, assign) NSView * nsView;
 @property (nonatomic, assign) BOOL isMousePassthroughEnabled;
@@ -301,101 +308,17 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
 @interface ContainerView : NSView
 /// An reverse ordered array of abstractViews (newest first)
-@property (nonatomic, strong) NSMutableArray<AbstractWebView *> *abstractViews;
+@property (nonatomic, strong) NSMutableArray<AbstractView *> *abstractViews;
 
 
-- (void)addAbstractWebView:(AbstractWebView *)webview;
-- (void)removeAbstractWebViewWithId:(uint32_t)webviewId;
-@end
-
-@implementation ContainerView
-- (instancetype)initWithFrame:(NSRect)frameRect {
-    self = [super initWithFrame:frameRect];
-    if (self) {
-        self.abstractViews = [NSMutableArray array]; 
-        [self updateTrackingAreas];
-    }
-    return self;
-}
-
-- (void)updateTrackingAreas {    
-    for (NSTrackingArea *area in self.trackingAreas) {
-        [self removeTrackingArea:area];
-    }
-    NSTrackingArea *mouseTrackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
-        options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow
-        owner:self
-        userInfo:nil];
-    [self addTrackingArea:mouseTrackingArea];
-}
-
-- (void)mouseMoved:(NSEvent *)event {    
-    NSPoint mouseLocation = [self convertPoint:[event locationInWindow] fromView:nil];
-    [self updateActiveWebviewForMousePosition:mouseLocation];
-}
-
-// This function tries to figure out which "abstractView" should be interactive
-// vs mirrored, based on mouse position and layering.
-- (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation {    
-    BOOL stillSearching = YES;    
-
-    for (AbstractWebView * abstractView in self.abstractViews) {           
-        
-        NSView *subview = abstractView.nsView;
-
-        if (stillSearching) {
-            NSRect subviewRenderLayerFrame = subview.layer.frame;
-            if (NSPointInRect(mouseLocation, subviewRenderLayerFrame)){// && !subview.hidden) {
-                CAShapeLayer *maskLayer = (CAShapeLayer *)subview.layer.mask;
-                CGPathRef maskPath = maskLayer ? maskLayer.path : NULL;
-                if (maskPath) {                    
-                    CGFloat mouseXInWebview = mouseLocation.x - subviewRenderLayerFrame.origin.x;
-                    CGFloat mouseYInWebview = mouseLocation.y - subviewRenderLayerFrame.origin.y;
-                    
-                    // Note: WKWebkit uses geometryFlipped so the y coordinate is from the top not the bottom
-                    // (the default on osx is from the bottom). The mouse y coordinate is from the bottom
-                    // so we need to invert it to match the layer geometry
-                    if (subview.layer.geometryFlipped) {                                                
-                        mouseYInWebview = subviewRenderLayerFrame.size.height - (mouseLocation.y - subviewRenderLayerFrame.origin.y);                        
-                    }
-
-                    CGPoint mousePositionInMaskPath = CGPointMake(mouseXInWebview, mouseYInWebview);
-
-                    if (!CGPathContainsPoint(maskPath, NULL, mousePositionInMaskPath, true)) {                        
-                        [abstractView toggleMirrorMode:YES];                                                
-                        continue;
-                    }
-                }
-                
-                [abstractView toggleMirrorMode:NO];
-                stillSearching = NO;
-                continue;
-            }
-        }        
-        [abstractView toggleMirrorMode:YES];
-    }    
-}
-
-
-- (void)addAbstractWebView:(AbstractWebView *)abstractView {
-    // Add to front of array so it's top-most first
-    [self.abstractViews insertObject:abstractView atIndex:0];
-}
-
-- (void)removeAbstractWebViewWithId:(uint32_t)webviewId {
-    NSInteger indexToRemove = -1;
-    for (NSInteger i = 0; i < self.abstractViews.count; i++) {
-        AbstractWebView * candidate = self.abstractViews[i];
-        if (candidate.webviewId == webviewId) {
-            [self.abstractViews removeObjectAtIndex:i];
-            break;
-        }
-    }   
-}
+- (void)addAbstractView:(AbstractView *)webview;
+- (void)removeAbstractViewWithId:(uint32_t)webviewId;
+- (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation;
 @end
 
 
-@implementation AbstractWebView
+
+@implementation AbstractView
 
 - (void)loadURL:(const char *)urlString { [self doesNotRecognizeSelector:_cmd]; }
 - (void)goBack { [self doesNotRecognizeSelector:_cmd]; }
@@ -510,6 +433,93 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 }
 
  
+@end
+
+
+@implementation ContainerView
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        self.abstractViews = [NSMutableArray array]; 
+        [self updateTrackingAreas];
+    }
+    return self;
+}
+
+- (void)updateTrackingAreas {    
+    for (NSTrackingArea *area in self.trackingAreas) {
+        [self removeTrackingArea:area];
+    }
+    NSTrackingArea *mouseTrackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
+        options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow
+        owner:self
+        userInfo:nil];
+    [self addTrackingArea:mouseTrackingArea];
+}
+
+- (void)mouseMoved:(NSEvent *)event {    
+    NSPoint mouseLocation = [self convertPoint:[event locationInWindow] fromView:nil];
+    [self updateActiveWebviewForMousePosition:mouseLocation];
+}
+
+// This function tries to figure out which "abstractView" should be interactive
+// vs mirrored, based on mouse position and layering.
+- (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation {    
+    BOOL stillSearching = YES;    
+
+    for (AbstractView * abstractView in self.abstractViews) {           
+        
+        NSView *subview = abstractView.nsView;
+
+        if (stillSearching) {
+            NSRect subviewRenderLayerFrame = subview.layer.frame;
+            if (NSPointInRect(mouseLocation, subviewRenderLayerFrame)){// && !subview.hidden) {
+                CAShapeLayer *maskLayer = (CAShapeLayer *)subview.layer.mask;
+                CGPathRef maskPath = maskLayer ? maskLayer.path : NULL;
+                if (maskPath) {                    
+                    CGFloat mouseXInWebview = mouseLocation.x - subviewRenderLayerFrame.origin.x;
+                    CGFloat mouseYInWebview = mouseLocation.y - subviewRenderLayerFrame.origin.y;
+                    
+                    // Note: WKWebkit uses geometryFlipped so the y coordinate is from the top not the bottom
+                    // (the default on osx is from the bottom). The mouse y coordinate is from the bottom
+                    // so we need to invert it to match the layer geometry
+                    if (subview.layer.geometryFlipped) {                                                
+                        mouseYInWebview = subviewRenderLayerFrame.size.height - (mouseLocation.y - subviewRenderLayerFrame.origin.y);                        
+                    }
+
+                    CGPoint mousePositionInMaskPath = CGPointMake(mouseXInWebview, mouseYInWebview);
+
+                    if (!CGPathContainsPoint(maskPath, NULL, mousePositionInMaskPath, true)) {                        
+                        [abstractView toggleMirrorMode:YES];                                                
+                        continue;
+                    }
+                }
+                
+                [abstractView toggleMirrorMode:NO];
+                stillSearching = NO;
+                continue;
+            }
+        }        
+        [abstractView toggleMirrorMode:YES];
+    }    
+}
+
+
+- (void)addAbstractView:(AbstractView *)abstractView {
+    // Add to front of array so it's top-most first
+    [self.abstractViews insertObject:abstractView atIndex:0];
+}
+
+- (void)removeAbstractViewWithId:(uint32_t)webviewId {
+    NSInteger indexToRemove = -1;
+    for (NSInteger i = 0; i < self.abstractViews.count; i++) {
+        AbstractView * candidate = self.abstractViews[i];
+        if (candidate.webviewId == webviewId) {
+            [self.abstractViews removeObjectAtIndex:i];
+            break;
+        }
+    }   
+}
 @end
 
 
@@ -720,7 +730,7 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
 
 
 
-@interface WKWebViewImpl : AbstractWebView
+@interface WKWebViewImpl : AbstractView
 @property (nonatomic, strong) WKWebView *webView;
 
 - (instancetype)initWithWebviewId:(uint32_t)webviewId
@@ -830,7 +840,7 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
             self.webView.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
 
             ContainerView *containerView = (ContainerView *)window.contentView;
-            [containerView addAbstractWebView:self];
+            [containerView addAbstractView:self];
             // self.webView.abstractView = self;
 
             // Force the load to happen on the next runloop iteration after addSubview
@@ -1311,7 +1321,7 @@ extern "C" bool initializeCEF() {
 //////// CEF Implementation
 
 
-@interface CEFWebViewImpl : AbstractWebView
+@interface CEFWebViewImpl : AbstractView
 // @property (nonatomic, strong) WKWebView *webView;
 
 @property (nonatomic, assign) CefRefPtr<CefBrowser> browser;
@@ -1425,7 +1435,7 @@ extern "C" bool initializeCEF() {
 
 
             ContainerView *containerView = (ContainerView *)window.contentView;
-            [containerView addAbstractWebView:self];
+            [containerView addAbstractView:self];
                                         
             
             
@@ -1610,7 +1620,7 @@ extern "C" void* getNilValue() {
     return NULL;
 }
 
-extern "C" AbstractWebView* initWebview(uint32_t webviewId,
+extern "C" AbstractView* initWebview(uint32_t webviewId,
                         NSWindow *window,
                         const char *renderer,
                         const char *url,                        
@@ -1628,9 +1638,9 @@ extern "C" AbstractWebView* initWebview(uint32_t webviewId,
 
     
 
-    AbstractWebView *impl = nil;
+    AbstractView *impl = nil;
     
-    Class ImplClass = (strcmp(renderer, "cef") == 0) ? [CEFWebViewImpl class] : [WKWebViewImpl class];    
+    Class ImplClass = (strcmp(renderer, "cef") == 0 && useCEF) ? [CEFWebViewImpl class] : [WKWebViewImpl class];    
 
     impl = [[ImplClass alloc] initWithWebviewId:webviewId
                                     window:window
@@ -1655,36 +1665,36 @@ extern "C" AbstractWebView* initWebview(uint32_t webviewId,
 // 9) OTHER WKWEBVIEW BRIDGING CALLS
 // ----------------------------------------------------------------------------
 
-extern "C" void loadURLInWebView(AbstractWebView *webView, const char *urlString) {
-    [webView loadURL:urlString];
+extern "C" void loadURLInWebView(AbstractView *abstractView, const char *urlString) {
+    [abstractView loadURL:urlString];
 }
 
-extern "C" void webviewTagGoBack(AbstractWebView *webView) {    
-    [webView goBack];
+extern "C" void webviewTagGoBack(AbstractView *abstractView) {    
+    [abstractView goBack];
 }
 
-extern "C" void webviewTagGoForward(AbstractWebView *webView) {
-    [webView goForward];
+extern "C" void webviewTagGoForward(AbstractView *abstractView) {
+    [abstractView goForward];
 }
 
-extern "C" void webviewTagReload(AbstractWebView *webView) {
-    [webView reload];
+extern "C" void webviewTagReload(AbstractView *abstractView) {
+    [abstractView reload];
 }
 
-extern "C" void webviewRemove(AbstractWebView *webView) {    
-    [webView remove];
+extern "C" void webviewRemove(AbstractView *abstractView) {    
+    [abstractView remove];
 }
 
-extern "C" BOOL webviewCanGoBack(AbstractWebView *webView) {    
-    return [webView canGoBack];
+extern "C" BOOL webviewCanGoBack(AbstractView *abstractView) {    
+    return [abstractView canGoBack];
 }
 
-extern "C" BOOL webviewCanGoForward(AbstractWebView *webView) {    
-    return [webView canGoForward];
+extern "C" BOOL webviewCanGoForward(AbstractView *abstractView) {    
+    return [abstractView canGoForward];
 }
 
-extern "C" void evaluateJavaScriptWithNoCompletion(AbstractWebView *webView, const char *script) {        
-    [webView evaluateJavaScriptWithNoCompletion:script];    
+extern "C" void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {        
+    [abstractView evaluateJavaScriptWithNoCompletion:script];    
 }
 
 extern "C" void testFFI(void *ptr) {              
@@ -1710,14 +1720,14 @@ extern "C" void testFFI(void *ptr) {
     NSLog(@"Possible vtable pointer: %p", vtable);
 }
 
-extern "C" void evaluateJavaScriptinSecureContentWorld(AbstractWebView *webView, const char *jsString) {    
-    [webView evaluateJavaScriptInSecureContentWorld:jsString];    
+extern "C" void evaluateJavaScriptinSecureContentWorld(AbstractView *abstractView, const char *jsString) {    
+    [abstractView evaluateJavaScriptInSecureContentWorld:jsString];    
 }
 
 // typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
 
 extern "C" void callAsyncJavaScript(const char *messageId,
-                                    AbstractWebView *abstractView,
+                                    AbstractView *abstractView,
                                     const char *jsString,
                                     uint32_t webviewId,
                                     uint32_t hostWebviewId,
@@ -1731,16 +1741,16 @@ extern "C" void callAsyncJavaScript(const char *messageId,
                completionHandler:completionHandler];
 }
 
-extern "C" void addPreloadScriptToWebView(AbstractWebView *webView, const char *scriptContent, BOOL forMainFrameOnly) {                
-    [webView addPreloadScriptToWebView:scriptContent];    
+extern "C" void addPreloadScriptToWebView(AbstractView *abstractView, const char *scriptContent, BOOL forMainFrameOnly) {                
+    [abstractView addPreloadScriptToWebView:scriptContent];    
 }
 
 // todo: remove identifier and add option forMainFrameOnly
-extern "C" void updatePreloadScriptToWebView(AbstractWebView *webView,
+extern "C" void updatePreloadScriptToWebView(AbstractView *abstractView,
                                              const char *scriptIdentifier,
                                              const char *scriptContent,
                                              BOOL forMainFrameOnly) {
-    [webView updateCustomPreloadScript:scriptContent];    
+    [abstractView updateCustomPreloadScript:scriptContent];    
 }
 
 
@@ -1769,27 +1779,27 @@ extern "C" const char* getBodyFromScriptMessage(WKScriptMessage *message) {
 // 12) TRANSPARENT WEBVIEW VISIBILITY UTILS
 // ----------------------------------------------------------------------------
 
-extern "C" void webviewTagSetTransparent(AbstractWebView *webview, BOOL transparent) {
+extern "C" void webviewTagSetTransparent(AbstractView *abstractView, BOOL transparent) {
     
-        [webview setTransparent:transparent];
+        [abstractView setTransparent:transparent];
     
 }
 
-extern "C" void webviewTagToggleMirroring(AbstractWebView *webview, BOOL enable) {
+extern "C" void webviewTagToggleMirroring(AbstractView *abstractView, BOOL enable) {
    
-        [webview toggleMirroring:enable];
+        [abstractView toggleMirroring:enable];
     
 }
 
-extern "C" void webviewTagSetPassthrough(AbstractWebView *webview, BOOL enablePassthrough) {
+extern "C" void webviewTagSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
     
-        [webview setPassthrough:enablePassthrough];
+        [abstractView setPassthrough:enablePassthrough];
     
 }
 
-extern "C" void webviewSetHidden(AbstractWebView *webview, BOOL hidden) {
+extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
    
-        [webview setHidden:hidden];
+        [abstractView setHidden:hidden];
     
 }
 
@@ -1827,7 +1837,11 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
 }
 @end
 
-extern "C" void runNSApplication() {    
+extern "C" void runNSApplication() {  
+    NSLog(@"checking if cef is available");  
+    useCEF = isCEFAvailable();
+    NSLog(@"checking if cef is available %i", useCEF);  
+
     if (useCEF) {
         @autoreleasepool {
             if (!initializeCEF()) {                
@@ -1878,7 +1892,7 @@ extern "C" void runNSApplication() {
     fullFrame.origin.x = 0;
     fullFrame.origin.y = 0;
             
-    for (AbstractWebView *abstractView in containerView.abstractViews) {                       
+    for (AbstractView *abstractView in containerView.abstractViews) {                       
         if (abstractView.fullSize) {            
             [abstractView resize:fullFrame withMasksJSON:""];
         }
@@ -1959,8 +1973,8 @@ extern "C" void closeNSWindow(NSWindow *window) {
 }
 
 
-extern "C" void resizeWebview(AbstractWebView *webView, NSRect frame, const char *masksJson) {
-    [webView resize:frame withMasksJSON:masksJson];
+extern "C" void resizeWebview(AbstractView *abstractView, NSRect frame, const char *masksJson) {
+    [abstractView resize:frame withMasksJSON:masksJson];
     
 }
 
@@ -2086,6 +2100,7 @@ extern "C" const char *openFileDialog(const char *startingFolder,
 // 17) SNAPSHOT
 // ----------------------------------------------------------------------------
 
+// TODO: move getSnapshot into AbstractWebviewImpls
 extern "C" void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
                                    WKWebView *webView,
                                    zigSnapshotCallback callback) {

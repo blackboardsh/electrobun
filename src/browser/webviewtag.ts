@@ -89,14 +89,14 @@ const ConfigureWebviewTags = (
       this.lastRect = rect;
 
       const url = this.src || this.getAttribute("src");
-      const html = this.html || this.getAttribute("html");
-      
+      const html = this.html || this.getAttribute("html");      
 
       const webviewId = await this.syncRpc.request.webviewTagInit({
         method: "webviewTagInit",
         params: {
           hostWebviewId: window.__electrobunWebviewId,
           windowId: window.__electrobunWindowId,
+          renderer: this.renderer,
           url: url, 
           html: html,         
           preload: this.preload || this.getAttribute("preload") || null,
@@ -203,6 +203,16 @@ const ConfigureWebviewTags = (
 
     set preload(value) {
       this.updateAttr("preload", value);
+    }
+
+    get renderer() {
+      const _renderer = this.getAttribute("renderer") === "cef" ? "cef" : "native";
+      return _renderer;
+    }
+
+    set renderer(value: 'cef' | 'native') {
+      const _renderer = value === "cef" ? "cef" : "native";
+      this.updateAttr("renderer", _renderer);
     }
 
     // Note: since <electrobun-webview> is an anchor for a native webview

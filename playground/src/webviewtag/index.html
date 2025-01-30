@@ -32,7 +32,7 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
     <div class="element-to-mask" style="position:absolute; top: 130px; left:720px; width:200px; height: 200px; background: black; color: white;">Layered above webview</div>
     <div class="element-to-mask" style="position:absolute; top: 130px; left:590px; width:200px; height: 200px; background: green; color: white;">Layered above webview</div>
 
-    <electrobun-webview  style="width:50%; height: 50%; " src="https://electrobun.dev" preload="" ></electrobun-webview>    
+    <electrobun-webview  style="width:50%; height: 50%; " src="https://electrobun.dev" preload="" renderer="cef" ></electrobun-webview>    
     <div draggable="true" style="padding: 10px; width:100px;height:100px;border:5px solid black; cursor:move;">drag me into the webview when delegate mode is enabled</div>
     <span id="draginfo"></span>
     <electrobun-webview preload="window.onload = () => {document.body.innerHTML += 'hello from preload';}"  html="<html><body><h1>webview tag with html</h1></body></html>" ></electrobun-webview>    

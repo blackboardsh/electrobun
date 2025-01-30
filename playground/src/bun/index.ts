@@ -312,6 +312,7 @@ wikiWindow.on("move", (event) => {
 const webviewTagWindow = new BrowserWindow({
   title: "webview tag test",
   url: "views://webviewtag/index.html",
+  renderer: "cef",
   frame: {
     width: 1800,
     height: 1200,

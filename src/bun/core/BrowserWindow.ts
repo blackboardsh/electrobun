@@ -18,6 +18,7 @@ type WindowOptionsType<T = undefined> = {
   url: string | null;
   html: string | null;
   preload: string | null;
+  renderer: 'native' | 'cef';
   rpc?: T;
   syncRpc?: { [method: string]: (params: any) => any };
   styleMask?: {};
@@ -27,7 +28,7 @@ type WindowOptionsType<T = undefined> = {
 };
 
 const defaultOptions: WindowOptionsType = {
-  title: "Electrobun",
+  title: "Electrobun",  
   frame: {
     x: 0,
     y: 0,
@@ -37,6 +38,7 @@ const defaultOptions: WindowOptionsType = {
   url: "https://electrobun.dev",
   html: null,
   preload: null,
+  renderer: 'native',
   titleBarStyle: "default",
   navigationRules: null,
 };
@@ -53,6 +55,7 @@ export class BrowserWindow<T> {
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
+  renderer:  'native' | 'cef';
   frame: {
     x: number;
     y: number;
@@ -75,6 +78,7 @@ export class BrowserWindow<T> {
     this.url = options.url || null;
     this.html = options.html || null;
     this.preload = options.preload || null;
+    this.renderer = options.renderer === 'cef' ? 'cef' : 'native';
     this.navigationRules = options.navigationRules || null;
 
     this.init(options);
@@ -130,6 +134,7 @@ export class BrowserWindow<T> {
       html: this.html,
       preload: this.preload,
       // frame: this.frame,
+      renderer: this.renderer, 
       frame: {
         x: 0,
         y: 0,
@@ -143,7 +148,6 @@ export class BrowserWindow<T> {
       // or on screen views depending on if windowId is null
       // does this mean browserView needs to track the windowId or handle it ephemerally?
       windowId: this.id,
-      renderer: "cef", // or native(default) // passed on from opt
       navigationRules: this.navigationRules,
     });
 

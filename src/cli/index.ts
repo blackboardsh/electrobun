@@ -87,6 +87,7 @@ const defaultConfig = {
     mac: {
       codesign: false,
       notarize: false,
+      bundleCEF: false,
       entitlements: {
         // This entitlement is required for Electrobun apps with a hardened runtime (required for notarization) to run on macos
         "com.apple.security.cs.allow-jit": true,
@@ -361,46 +362,51 @@ if (commandArg === "init") {
   cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
     dereference: true,
   });
-
-  const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
-  const cefFrameworkDestination = join(
-    appBundleFolderFrameworksPath,
-    "Chromium Embedded Framework.framework"
-  );
-
-  cpSync(cefFrameworkSource, cefFrameworkDestination, {
-    recursive: true,
-    dereference: true,
-  });
-
-  // cef helpers
-  const cefHelperNames = [
-    "webview Helper",
-    "webview Helper (Alerts)",
-    "webview Helper (GPU)",
-    "webview Helper (Plugin)",
-    "webview Helper (Renderer)",
-  ];
-
-  const helperSourcePath = PATHS.CEF_HELPER_MACOS;
-  cefHelperNames.forEach((helperName) => {
-    const destinationPath = join(
+  
+  // TODO: Should download binaries for arch, and then copy them in
+  // for developing Electrobun itself we can assume current arch is already
+  // in dist as it would have just been built from local source
+  if (config.build.mac.bundleCEF) {    
+    const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
+    const cefFrameworkDestination = join(
       appBundleFolderFrameworksPath,
-      `${helperName}.app`,
-      `Contents`,
-      `MacOS`,
-      `${helperName}`
+      "Chromium Embedded Framework.framework"
     );
-    const destFolder4 = basename(destinationPath);
-    if (!existsSync(destFolder4)) {
-      // console.info('creating folder: ', destFolder4);
-      mkdirSync(destFolder4, { recursive: true });
-    }
-    cpSync(helperSourcePath, destinationPath, {
+
+    cpSync(cefFrameworkSource, cefFrameworkDestination, {
       recursive: true,
       dereference: true,
     });
-  });
+
+    // cef helpers
+    const cefHelperNames = [
+      "webview Helper",
+      "webview Helper (Alerts)",
+      "webview Helper (GPU)",
+      "webview Helper (Plugin)",
+      "webview Helper (Renderer)",
+    ];
+
+    const helperSourcePath = PATHS.CEF_HELPER_MACOS;
+    cefHelperNames.forEach((helperName) => {
+      const destinationPath = join(
+        appBundleFolderFrameworksPath,
+        `${helperName}.app`,
+        `Contents`,
+        `MacOS`,
+        `${helperName}`
+      );
+      const destFolder4 = basename(destinationPath);
+      if (!existsSync(destFolder4)) {
+        // console.info('creating folder: ', destFolder4);
+        mkdirSync(destFolder4, { recursive: true });
+      }
+      cpSync(helperSourcePath, destinationPath, {
+        recursive: true,
+        dereference: true,
+      });
+    });
+  }
 
   // copy native bindings
   const bsPatchSource = PATHS.BSPATCH;

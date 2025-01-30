@@ -26,6 +26,7 @@ type BrowserViewOptions<T = undefined> = {
   url: string | null;
   html: string | null;
   preload: string | null;
+  renderer: 'native' | 'cef';
   partition: string | null;
   frame: {
     x: number;
@@ -53,6 +54,7 @@ const defaultOptions: Partial<BrowserViewOptions> = {
   url: null,
   html: null,
   preload: null,
+  renderer: 'native',
   frame: {
     x: 0,
     y: 0,
@@ -74,7 +76,7 @@ const internalSyncRpcHandlers = {
     const {
       hostWebviewId,
       windowId,
-      
+      renderer,
       html,
       preload,
       partition,
@@ -82,10 +84,7 @@ const internalSyncRpcHandlers = {
       navigationRules,
     } = params;
 
-    const url = !params.url && !html ? "https://electrobun.dev" : params.url;
-    
-
-    console.log('------------> webviewTagInit on socket', params)
+    const url = !params.url && !html ? "https://electrobun.dev" : params.url;    
 
     const webviewForTag = new BrowserView({
       url,
@@ -96,7 +95,7 @@ const internalSyncRpcHandlers = {
       hostWebviewId,
       autoResize: false,
       windowId,
-      renderer: "cef",
+      renderer,//: "cef",
       navigationRules,
     });
 
@@ -113,6 +112,7 @@ export class BrowserView<T> {
   id: number = nextWebviewId++;
   hostWebviewId?: number;
   windowId: number;
+  renderer: 'cef' | 'native';
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
@@ -164,6 +164,7 @@ export class BrowserView<T> {
     this.windowId = options.windowId;
     this.autoResize = options.autoResize === false ? false : true;
     this.navigationRules = options.navigationRules || null;
+    this.renderer = options.renderer || defaultOptions.renderer;
 
     this.init();
   }
@@ -177,7 +178,7 @@ export class BrowserView<T> {
     zigRPC.request.createWebview({
       id: this.id,
       windowId: this.windowId,
-      renderer: "cef", // todo: make this configurable
+      renderer: this.renderer, 
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),
