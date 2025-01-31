@@ -123,34 +123,17 @@ public:
              bool& handle_request,
              CefRefPtr<CefCallback> callback) override {
         std::string url = request->GetURL().ToString();
-        
-        
-        
+                
         FileResponse response = fileLoader_(webviewId_, url.c_str(), nullptr);
         
-        if (response.fileContents && response.len > 0) {            
-            
-            // Print first 32 bytes of content for debugging
-            std::string preview;
-            const char* content = response.fileContents;
-            for (size_t i = 0; i < std::min(response.len, size_t(32)); i++) {
-                if (isprint(content[i])) {
-                    preview += content[i];
-                } else {
-                    char hex[8];
-                    snprintf(hex, sizeof(hex), "\\x%02x", (unsigned char)content[i]);
-                    preview += hex;
-                }
-            }
-            
-            
+        if (response.fileContents && response.len > 0) {                                                
+            const char* content = response.fileContents;                        
             mimeType_ = response.mimeType ? response.mimeType : "text/html";
             responseData_.assign(response.fileContents, response.fileContents + response.len);
             hasResponse_ = true;
             handle_request = true;
             return true;
-        }
-        
+        }        
         
         handle_request = false;
         return false;
@@ -161,8 +144,7 @@ public:
                           CefString& redirectUrl) override {
         if (!hasResponse_) {
             response->SetStatus(404);
-            response_length = 0;
-            
+            response_length = 0;            
             return;
         }
 
@@ -172,9 +154,7 @@ public:
 
         CefResponse::HeaderMap headers;
         headers.insert(std::make_pair("Access-Control-Allow-Origin", "*"));
-        response->SetHeaderMap(headers);
-        
-        
+        response->SetHeaderMap(headers);                
     }
 
     bool Read(void* data_out,
@@ -309,14 +289,10 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 @interface ContainerView : NSView
 /// An reverse ordered array of abstractViews (newest first)
 @property (nonatomic, strong) NSMutableArray<AbstractView *> *abstractViews;
-
-
 - (void)addAbstractView:(AbstractView *)webview;
 - (void)removeAbstractViewWithId:(uint32_t)webviewId;
 - (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation;
 @end
-
-
 
 @implementation AbstractView
 
@@ -1095,14 +1071,12 @@ public:
         
     }
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
-        command_line->AppendSwitch("use-mock-keychain");
-        command_line->AppendSwitch("register-scheme-handler");
-        // command_line->AppendSwitch("disable-power-save-blocker");
-        // // note: without this webviews will be inactive until you mouse over them
-        // command_line->AppendSwitch("disable-renderer-backgrounding");
-        // command_line->AppendSwitch("disable-background-timer-throttling");
+        command_line->AppendSwitchWithValue("custom-scheme", "views"); 
+        // Note: This stops CEF (Chromium) trying to access Chromium's storage for system-level things
+        // like credential management. Using a mock keychain just means it doesn't use keychain
+        // for credential storage. Other security features like cookies, https, etc. are unaffected.                
+        command_line->AppendSwitch("use-mock-keychain");        
         
-        command_line->AppendSwitchWithValue("custom-scheme", "views");        
     }
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {        
         registrar->AddCustomScheme("views", 
@@ -1167,7 +1141,9 @@ std::string GetScriptExecutionUrl(const std::string& frameUrl) {
 
 class ElectrobunClient : public CefClient,
                         public CefRenderHandler,
-                        public CefLoadHandler {
+                        public CefLoadHandler,
+                        public CefContextMenuHandler,
+                        public CefKeyboardHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -1178,7 +1154,8 @@ private:
     };
     
     PreloadScript electrobun_script_;
-    PreloadScript custom_script_;  
+    PreloadScript custom_script_; 
+    static const int MENU_ID_DEV_TOOLS = 1; 
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -1253,6 +1230,91 @@ public:
         }
         return false;
     }
+
+    // Context Menu
+    CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override {
+        return this;
+    }
+
+    // Implement context menu callback
+    void OnBeforeContextMenu(CefRefPtr<CefBrowser> browser,
+                            CefRefPtr<CefFrame> frame,
+                            CefRefPtr<CefContextMenuParams> params,
+                            CefRefPtr<CefMenuModel> model) override {
+        // Add "Inspect Element" to context menu
+        if (model->GetCount() > 0) {
+            model->AddSeparator();
+        }
+        model->AddItem(MENU_ID_DEV_TOOLS, "Inspect Element");
+    }
+
+    bool OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
+                        CefRefPtr<CefFrame> frame,
+                        CefRefPtr<CefContextMenuParams> params,
+                        int command_id,
+                        EventFlags event_flags) override {
+        if (command_id == MENU_ID_DEV_TOOLS) {
+            CefWindowInfo windowInfo;
+            CefBrowserSettings settings;
+            
+            // Create rect for devtools window
+            CefRect devtools_rect(100, 100, 800, 600);
+            // Set as child of the parent window
+            windowInfo.SetAsChild(nullptr, devtools_rect);
+            
+            // Create point for inspect element
+            CefPoint inspect_at(0, 0);
+            
+            browser->GetHost()->ShowDevTools(windowInfo, 
+                                        browser->GetHost()->GetClient(), 
+                                        settings, 
+                                        inspect_at);
+            return true;
+        }
+        return false;
+    }
+
+    // Keyboard Shortcut
+    CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override {
+        return this;
+    }
+
+    bool OnKeyEvent(CefRefPtr<CefBrowser> browser,
+               const CefKeyEvent& event,
+               CefEventHandle os_event) override {
+       
+
+        bool hasCommand = (event.modifiers & EVENTFLAG_COMMAND_DOWN) != 0;
+        bool hasOption = (event.modifiers & EVENTFLAG_ALT_DOWN) != 0;                
+
+                
+        if (event.type == KEYEVENT_RAWKEYDOWN) {
+            // Note: option changes the character for i, so we use the native_key_code
+            // for the i key instead. cmd+option+i
+            if (event.native_key_code == 34 &&
+                (event.modifiers & EVENTFLAG_COMMAND_DOWN) &&
+                (event.modifiers & EVENTFLAG_ALT_DOWN)) {
+                CefWindowInfo windowInfo;
+                CefBrowserSettings settings;
+                
+                
+                // Create rect for devtools window
+                CefRect devtools_rect(100, 100, 800, 600);
+                // Set as child of the parent window
+                windowInfo.SetAsChild(nullptr, devtools_rect);
+                
+                CefPoint inspect_at(0, 0);
+                
+                browser->GetHost()->ShowDevTools(windowInfo, 
+                                            browser->GetHost()->GetClient(), 
+                                            settings, 
+                                            inspect_at);
+                return true;
+            }
+        }
+        return false;
+    }
+
 
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
 };
@@ -1374,9 +1436,7 @@ extern "C" bool initializeCEF() {
 
         void (^createCEFBrowser)(void) = ^{                
              [window makeKeyAndOrderFront:nil];
-            CefBrowserSettings browserSettings;
-
-            
+            CefBrowserSettings browserSettings;                        
 
             CefWindowInfo window_info;
             
