@@ -1381,7 +1381,55 @@ extern "C" bool initializeCEF() {
 
 
 //////// CEF Implementation
+CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier, 
+                                                            zigStartURLSchemeTaskCallback assetFileLoader,
+                                                            uint32_t webviewId) {
+    CefRequestContextSettings settings;
+    
+    if (!partitionIdentifier || !partitionIdentifier[0]) {
+        // Empty or null = use incognito/in-memory
+        settings.persist_session_cookies = false;
+        settings.persist_user_preferences = false;
+    } else {
+        std::string identifier(partitionIdentifier);
+        bool isPersistent = identifier.substr(0, 8) == "persist:";
+        
+        if (isPersistent) {
+            // Extract partition name after "persist:"
+            std::string partitionName = identifier.substr(8);
+            
+            NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(
+                NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+            NSString* cachePath = [[appSupportPath 
+                stringByAppendingPathComponent:@"Electrobun/CEF/Partitions"]
+                stringByAppendingPathComponent:[NSString stringWithUTF8String:partitionName.c_str()]];
+            
+            NSFileManager *fileManager = [NSFileManager defaultManager];
+            if (![fileManager fileExistsAtPath:cachePath]) {
+                [fileManager createDirectoryAtPath:cachePath 
+                    withIntermediateDirectories:YES 
+                    attributes:nil 
+                    error:nil];
+            }
 
+            settings.persist_session_cookies = true;
+            settings.persist_user_preferences = true;
+            CefString(&settings.cache_path).FromString([cachePath UTF8String]);
+        } else {
+            settings.persist_session_cookies = false;
+            settings.persist_user_preferences = false;
+        }
+    }
+    
+    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
+    
+    CefRefPtr<ElectrobunSchemeHandlerFactory> factory(
+        new ElectrobunSchemeHandlerFactory(assetFileLoader, webviewId));
+    
+    context->RegisterSchemeHandlerFactory("views", "", factory);    
+
+    return context;
+}
 
 @interface CEFWebViewImpl : AbstractView
 // @property (nonatomic, strong) WKWebView *webView;
@@ -1435,8 +1483,11 @@ extern "C" bool initializeCEF() {
         }
 
         void (^createCEFBrowser)(void) = ^{                
-             [window makeKeyAndOrderFront:nil];
-            CefBrowserSettings browserSettings;                        
+            [window makeKeyAndOrderFront:nil];
+            CefBrowserSettings browserSettings;   
+
+            
+                     
 
             CefWindowInfo window_info;
             
@@ -1448,14 +1499,18 @@ extern "C" bool initializeCEF() {
                             (int)frame.size.width,
                             (int)frame.size.height);
             window_info.SetAsChild((__bridge void*)contentView, cefBounds);
+
+            CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(
+                partitionIdentifier,
+                assetFileLoader,
+                webviewId
+            );
+
             
             // Register the scheme handler factory for this webview
             CefRefPtr<ElectrobunSchemeHandlerFactory> factory(
                 new ElectrobunSchemeHandlerFactory(assetFileLoader, webviewId));
-            
-            bool registered = CefRegisterSchemeHandlerFactory("views", "", factory);            
-            CefRegisterSchemeHandlerFactory("data", "", factory);            
-            
+                                    
             
             self.client = new ElectrobunClient(
                 webviewId,  
@@ -1481,7 +1536,7 @@ extern "C" bool initializeCEF() {
             
             
             self.browser = CefBrowserHost::CreateBrowserSync(
-                window_info, self.client, initialUrl, browserSettings, nullptr, nullptr);
+                window_info, self.client, initialUrl, browserSettings, nullptr, requestContext);
 
             if (self.browser) {
                 CefWindowHandle handle = self.browser->GetHost()->GetWindowHandle();
