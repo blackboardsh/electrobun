@@ -1646,9 +1646,9 @@ extern "C" bool initializeCEF() {
              hostWebviewId:(uint32_t)hostWebviewId 
          completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
     
-   // TODO: CEF deprecate execute functionality with a callback.
-   // Need to re-implement with a custom round trip messaging likely with a custom bridge
-   // likely direct from bun -> webview via built-in rpc
+
+    NSLog(@"TODO: Implement callAsyncJavascript for CEF when refactoring the entire RPC system");
+    completionHandler(messageId, webviewId, hostWebviewId, "\"\"");   
 }
 
 - (void)addPreloadScriptToWebView:(const char*)jsString {
