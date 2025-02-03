@@ -16,6 +16,7 @@
 #include "include/cef_application_mac.h"
 #include "include/wrapper/cef_library_loader.h"
 #include "include/wrapper/cef_helpers.h"
+#include "include/cef_request_handler.h" 
 #include <list>
 
 // Forward declare the CEF classes
@@ -1142,12 +1143,15 @@ std::string GetScriptExecutionUrl(const std::string& frameUrl) {
 class ElectrobunClient : public CefClient,
                         public CefRenderHandler,
                         public CefLoadHandler,
+                        public CefRequestHandler,
                         public CefContextMenuHandler,
                         public CefKeyboardHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
     HandlePostMessage webview_tag_handler_;
+    WebviewEventHandler webview_event_handler_;
+    DecideNavigationCallback navigation_callback_; 
     struct PreloadScript {
         std::string code;
         bool mainFrameOnly;
@@ -1160,10 +1164,14 @@ private:
 public:
     ElectrobunClient(uint32_t webviewId,
                      HandlePostMessage bunBridgeHandler,
-                     HandlePostMessage webviewTagBridgeHandler)
+                     HandlePostMessage webviewTagBridgeHandler,
+                     WebviewEventHandler webviewEventHandler,
+                     DecideNavigationCallback navigationCallback)
         : webview_id_(webviewId)
         , bun_bridge_handler_(bunBridgeHandler)
-        , webview_tag_handler_(webviewTagBridgeHandler) {}
+        , webview_tag_handler_(webviewTagBridgeHandler) 
+        , webview_event_handler_(webviewEventHandler)
+        , navigation_callback_(navigationCallback) {}    
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
         electrobun_script_ = {script, false};
@@ -1181,6 +1189,10 @@ public:
         return this;
     }
 
+    virtual CefRefPtr<CefRequestHandler> GetRequestHandler() override { 
+        return this; 
+    }
+
     // Required CefRenderHandler methods
     virtual void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
         rect.x = 0;
@@ -1195,6 +1207,24 @@ public:
                         const void* buffer,
                         int width,
                         int height) override {}
+
+ 
+    
+    
+
+    // Handle all navigation requests
+    bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                       CefRefPtr<CefFrame> frame,
+                       CefRefPtr<CefRequest> request,
+                       bool user_gesture,
+                       bool is_redirect) override {
+        std::string url = request->GetURL().ToString();
+        bool shouldAllow = navigation_callback_(webview_id_, url.c_str());
+        if (webview_event_handler_) {        
+            webview_event_handler_(webview_id_, "will-navigate", url.c_str());
+        }
+        return !shouldAllow;  // Return true to cancel the navigation
+    }
 
     virtual void OnLoadStart(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefFrame> frame,
@@ -1213,6 +1243,14 @@ public:
             frame->ExecuteJavaScript(custom_script_.code, scriptUrl, 0);
         }
     }   
+
+    void OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                  CefRefPtr<CefFrame> frame,
+                  int httpStatusCode) override {
+        if (frame->IsMain() && webview_event_handler_) {                                   
+            webview_event_handler_(webview_id_,"did-navigate", frame->GetURL().ToString().c_str());            
+        }
+    }
 
     virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                         CefRefPtr<CefFrame> frame,
@@ -1315,8 +1353,10 @@ public:
         return false;
     }
 
+    
 
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
 };
 
 // Global CEF reference
@@ -1515,8 +1555,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             self.client = new ElectrobunClient(
                 webviewId,  
                 bunBridgeHandler, 
-                webviewTagBridgeHandler  
-            );
+                webviewTagBridgeHandler,
+                webviewEventHandler,
+                navigationCallback 
+            );                
+
 
             
 

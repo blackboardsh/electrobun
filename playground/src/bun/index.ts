@@ -272,6 +272,7 @@ const wikiWindow = new BrowserWindow({
   title: "my url window",
   url: "https://en.wikipedia.org/wiki/Special:Random",
   preload: "views://myextension/preload.js",
+  renderer: 'cef',
   frame: {
     width: 600,
     height: 600,
@@ -354,12 +355,12 @@ const webviewTagWindow = new BrowserWindow({
 
 // todo (yoav): typescript types should resolve for e and e.setResponse
 Electrobun.events.on("will-navigate", (e) => {
-  console.log("example global will navigate handler", e.data.detail);
+  console.log("example global will navigate handler", e.data.detail, e.data.id);
   e.response = { allow: true };
 });
 
 wikiWindow.webview.on("will-navigate", (e) => {
-  console.log("example webview will navigate handler", e.data.detail);
+  console.log("example webview will navigate handler", e.data.detail, e.data.id);
   if (e.responseWasSet && e.response.allow === false) {
     e.response.allow = true;
     // e.clearResponse();

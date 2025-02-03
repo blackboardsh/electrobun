@@ -604,8 +604,7 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
 
       let result;
       // global event
-      result = electrobunEventEmitter.emitEvent(event);
-
+      result = electrobunEventEmitter.emitEvent(event);      
       result = electrobunEventEmitter.emitEvent(event, id);
       // Note: we don't care about the result right now
       return { success: true };
