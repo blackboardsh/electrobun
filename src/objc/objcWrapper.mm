@@ -1,3 +1,9 @@
+/*
+ * =============================================================================
+ * 1. IMPORTS
+ * =============================================================================
+ */
+
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 #import <Cocoa/Cocoa.h>
@@ -5,7 +11,7 @@
 #import <CommonCrypto/CommonCrypto.h>
 #import <QuartzCore/QuartzCore.h>
 
-// CEF
+// CEF includes
 #include "include/base/cef_ref_counted.h"
 #include "include/base/cef_logging.h"
 #include "include/cef_base.h"
@@ -25,6 +31,23 @@
 #include <list>
 #include <cstdint>
 
+/*
+ * =============================================================================
+ * 2. CONSTANTS, GLOBAL VARIABLES, FORWARD DECLARATIONS & TYPE DEFINITIONS
+ * =============================================================================
+ */
+
+CGFloat OFFSCREEN_OFFSET = -20000;
+BOOL useCEF = false;
+
+static BOOL isMovingWindow = NO;
+static NSWindow *targetWindow = nil;
+static CGFloat offsetX = 0.0;
+static CGFloat offsetY = 0.0;
+static id mouseDraggedMonitor = nil;
+static id mouseUpMonitor = nil;
+
+
 // Forward declare the CEF classes
 class CefApp;
 class CefClient;
@@ -33,17 +56,9 @@ class CefBrowser;
 class ElectrobunSchemeHandler;
 class ElectrobunSchemeHandlerFactory;
 
-CGFloat OFFSCREEN_OFFSET = -20000;
+// Type definitions
 
-BOOL useCEF = false;
-bool isCEFAvailable() {
-    NSBundle *mainBundle = [NSBundle mainBundle];
-    NSString *frameworkPath = [mainBundle.privateFrameworksPath 
-                              stringByAppendingPathComponent:@"Chromium Embedded Framework.framework/Chromium Embedded Framework"];
-    return [[NSFileManager defaultManager] fileExistsAtPath:frameworkPath];
-}
-
-/** Matches your existing "views:// schema" file response. */
+/** Matches existing "views:// schema" file response. */
 typedef struct {
     const char *mimeType;
     const char *fileContents;
@@ -77,6 +92,12 @@ typedef struct {
     BOOL HUDWindow;
 } WindowStyleMaskOptions;
 
+typedef struct {
+    NSRect frame;
+    WindowStyleMaskOptions styleMask;
+    const char *titleBarStyle;
+} createNSWindowWithFrameAndStyleParams;
+
 /** Window event callbacks. */
 typedef void (*WindowCloseHandler)(uint32_t windowId);
 typedef void (*WindowMoveHandler)(uint32_t windowId, CGFloat x, CGFloat y);
@@ -89,7 +110,87 @@ typedef void (*MenuHandler)(const char *menuItemId);
 /** Snapshot callback. */
 typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
 
-// A convenience function for manual memory management (if you're not using ARC).
+typedef struct {    
+} MenuItemConfig;
+
+
+/*
+ * =============================================================================
+ * 3. UTILITY FUNCTIONS
+ * =============================================================================
+ */
+
+
+bool isCEFAvailable() {
+    NSBundle *mainBundle = [NSBundle mainBundle];
+    NSString *frameworkPath = [mainBundle.privateFrameworksPath 
+                              stringByAppendingPathComponent:@"Chromium Embedded Framework.framework/Chromium Embedded Framework"];
+    return [[NSFileManager defaultManager] fileExistsAtPath:frameworkPath];
+}
+
+NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
+    NSUInteger mask = 0;
+    if (options.Borderless) mask |= NSWindowStyleMaskBorderless;
+    if (options.Titled) mask |= NSWindowStyleMaskTitled;
+    if (options.Closable) mask |= NSWindowStyleMaskClosable;
+    if (options.Miniaturizable) mask |= NSWindowStyleMaskMiniaturizable;
+    if (options.Resizable) mask |= NSWindowStyleMaskResizable;
+    if (options.UnifiedTitleAndToolbar) mask |= NSWindowStyleMaskUnifiedTitleAndToolbar;
+    if (options.FullScreen) mask |= NSWindowStyleMaskFullScreen;
+    if (options.FullSizeContentView) mask |= NSWindowStyleMaskFullSizeContentView;
+    if (options.UtilityWindow) mask |= NSWindowStyleMaskUtilityWindow;
+    if (options.DocModalWindow) mask |= NSWindowStyleMaskDocModalWindow;
+    if (options.NonactivatingPanel) mask |= NSWindowStyleMaskNonactivatingPanel;
+    if (options.HUDWindow) mask |= NSWindowStyleMaskHUDWindow;
+    return mask;
+}
+
+std::string GetScriptExecutionUrl(const std::string& frameUrl) {
+    // List of URL schemes that should use about:blank for script execution
+    static const std::vector<std::string> specialSchemes = {
+        "data:",
+        "blob:",
+        "file:"
+        // Add other schemes as needed
+    };
+    
+    for (const auto& scheme : specialSchemes) {
+        if (frameUrl.substr(0, scheme.length()) == scheme) {
+            return "data://___preload.js";
+        }
+    }
+    
+    return frameUrl;
+}
+
+NSUUID *UUIDFromString(NSString *string) {
+    unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(string.UTF8String, (CC_LONG)string.length, hash);
+    uuid_t uuid;
+    memcpy(uuid, hash, sizeof(uuid));
+    return [[NSUUID alloc] initWithUUIDBytes:uuid];
+}
+
+WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier) {
+    NSString *identifier = [NSString stringWithUTF8String:partitionIdentifier];
+    if ([identifier hasPrefix:@"persist:"]) {
+        // persistent
+        identifier = [identifier substringFromIndex:8];
+        NSUUID *uuid = UUIDFromString(identifier);
+        if (uuid) {
+            return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
+        } else {
+            NSLog(@"Invalid UUID for identifier: %@", identifier);
+            return [WKWebsiteDataStore defaultDataStore];
+        }
+    } else {
+        // ephemeral
+        return [WKWebsiteDataStore nonPersistentDataStore];
+    }
+}
+
+
+// Convenience functions for manual memory management
 void retainObjCObject(id objcObject) {
     CFRetain((__bridge CFTypeRef)objcObject);
 }
@@ -97,117 +198,264 @@ void releaseObjCObject(id objcObject) {
     CFRelease((__bridge CFTypeRef)objcObject);
 }
 
-// Match the existing callback type
-typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const char* url, const char* body);
+/*
+ * =============================================================================
+ * 4. OBJECTIVE-C @INTERFACES
+ * =============================================================================
+ */
+
+// ----------------------- Abstract Base Classes -----------------------
+
+@interface AbstractView : NSObject
+    @property (nonatomic, assign) uint32_t webviewId;
+    @property (nonatomic, assign) NSView * nsView;
+    @property (nonatomic, assign) BOOL isMousePassthroughEnabled;
+    @property (nonatomic, assign) BOOL mirrorModeEnabled;
+    @property (nonatomic, assign) BOOL fullSize;
+
+    - (void)loadURL:(const char *)urlString;
+    - (void)goBack;
+    - (void)goForward;
+    - (void)reload;
+    - (void)remove;
+
+    - (void)setTransparent:(BOOL)transparent;
+    - (void)setPassthrough:(BOOL)enable;
+    - (void)setHidden:(BOOL)hidden;
+
+    - (BOOL)canGoBack;
+    - (BOOL)canGoForward;
+
+    - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString;
+    - (void)callAsyncJavascript:(const char*)messageId 
+                       jsString:(const char*)jsString 
+                      webviewId:(uint32_t)webviewId 
+                  hostWebviewId:(uint32_t)hostWebviewId 
+              completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler;
+    - (void)addPreloadScriptToWebView:(const char*)jsString;
+    - (void)updateCustomPreloadScript:(const char*)jsString;
+
+    - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson;
+@end
+
+@interface ContainerView : NSView
+    /// An reverse ordered array of abstractViews (newest first)
+    @property (nonatomic, strong) NSMutableArray<AbstractView *> *abstractViews;
+    - (void)addAbstractView:(AbstractView *)webview;
+    - (void)removeAbstractViewWithId:(uint32_t)webviewId;
+    - (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation;
+@end
+
+// ----------------------- URL Scheme & Navigation -----------------------
+
+@interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>
+    @property (nonatomic, assign) zigStartURLSchemeTaskCallback fileLoader;
+    @property (nonatomic, assign) uint32_t webviewId;
+@end
+
+@interface MyNavigationDelegate : NSObject <WKNavigationDelegate>
+    @property (nonatomic, assign) DecideNavigationCallback zigCallback;
+    @property (nonatomic, assign) WebviewEventHandler zigEventHandler;
+    @property (nonatomic, assign) uint32_t webviewId;
+@end
+
+@interface MyWebViewUIDelegate : NSObject <WKUIDelegate>
+    @property (nonatomic, assign) WebviewEventHandler zigEventHandler;
+    @property (nonatomic, assign) uint32_t webviewId;
+@end
+
+@interface MyScriptMessageHandler : NSObject <WKScriptMessageHandler>
+    @property (nonatomic, assign) HandlePostMessage zigCallback;
+    @property (nonatomic, assign) uint32_t webviewId;
+@end
+
+@interface MyScriptMessageHandlerWithReply : NSObject <WKScriptMessageHandlerWithReply>
+    @property (nonatomic, assign) HandlePostMessageWithReply zigCallback;
+    @property (nonatomic, assign) uint32_t webviewId;
+@end
+
+// ----------------------- Webview Implementations -----------------------
+@interface WKWebViewImpl : AbstractView
+    @property (nonatomic, strong) WKWebView *webView;
+
+    - (instancetype)initWithWebviewId:(uint32_t)webviewId
+                            window:(NSWindow *)window   
+                            url:(const char *)url                                                
+                                frame:(NSRect)frame
+                    assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                        autoResize:(bool)autoResize
+                partitionIdentifier:(const char *)partitionIdentifier
+                navigationCallback:(DecideNavigationCallback)navigationCallback
+                webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+                bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
+                webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+                electrobunPreloadScript:(const char *)electrobunPreloadScript
+                customPreloadScript:(const char *)customPreloadScript;
+@end
 
 
-// The main scheme handler class
-class ElectrobunSchemeHandler : public CefResourceHandler {
-public:
-     ElectrobunSchemeHandler(zigStartURLSchemeTaskCallback callback, uint32_t webviewId)
-        : fileLoader_(callback)
-        , webviewId_(webviewId)
-        , hasResponse_(false)
-        , offset_(0) {
-        
+
+// ----------------------- Application & Window Delegates -----------------------
+
+@interface ElectrobunNSApplication : NSApplication <CefAppProtocol> {
+    @private
+    BOOL handlingSendEvent_;
     }
+@end
 
-     bool Open(CefRefPtr<CefRequest> request,
-             bool& handle_request,
-             CefRefPtr<CefCallback> callback) override {
-        std::string url = request->GetURL().ToString();
-                
-        FileResponse response = fileLoader_(webviewId_, url.c_str(), nullptr);
-        
-        if (response.fileContents && response.len > 0) {                                                
-            const char* content = response.fileContents;                        
-            mimeType_ = response.mimeType ? response.mimeType : "text/html";
-            responseData_.assign(response.fileContents, response.fileContents + response.len);
-            hasResponse_ = true;
-            handle_request = true;
-            return true;
-        }        
-        
-        handle_request = false;
-        return false;
-    }
+@interface AppDelegate : NSObject <NSApplicationDelegate>
+@end
 
-    void GetResponseHeaders(CefRefPtr<CefResponse> response,
-                          int64_t& response_length,
-                          CefString& redirectUrl) override {
-        if (!hasResponse_) {
-            response->SetStatus(404);
-            response_length = 0;            
-            return;
+@interface WindowDelegate : NSObject <NSWindowDelegate>
+    @property (nonatomic, assign) WindowCloseHandler closeHandler;
+    @property (nonatomic, assign) WindowMoveHandler moveHandler;
+    @property (nonatomic, assign) WindowResizeHandler resizeHandler;
+    @property (nonatomic, assign) uint32_t windowId;
+    @property (nonatomic, strong) NSWindow *window;
+@end
+
+@interface StatusItemTarget : NSObject
+    @property (nonatomic, assign) NSStatusItem *statusItem;
+    @property (nonatomic, assign) ZigStatusItemHandler zigHandler;
+    @property (nonatomic, assign) uint32_t trayId;
+    - (void)statusItemClicked:(id)sender;
+    - (void)menuItemClicked:(id)sender;
+@end
+
+
+NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
+    NSMenu *menu = [[NSMenu alloc] init];
+    [menu setAutoenablesItems:NO];
+
+    for (NSDictionary *itemData in menuConfig) {
+        NSString *type = itemData[@"type"];
+        NSString *label = itemData[@"label"];
+        NSString *action = itemData[@"action"];
+        NSArray *submenuConfig = itemData[@"submenu"];
+        NSString *role = itemData[@"role"];
+        NSString *accelerator = itemData[@"accelerator"];
+        NSNumber *modifierMask = itemData[@"modifierMask"];
+
+        BOOL enabled = [itemData[@"enabled"] boolValue];
+        BOOL checked = [itemData[@"checked"] boolValue];
+        BOOL hidden = [itemData[@"hidden"] boolValue];
+        NSString *tooltip = itemData[@"tooltip"];
+
+        NSMenuItem *menuItem;
+        if ([type isEqualToString:@"divider"]) {
+            menuItem = [NSMenuItem separatorItem];
+        } else {
+            menuItem = [[NSMenuItem alloc] initWithTitle:label ?: @""
+                                                  action:@selector(menuItemClicked:)
+                                           keyEquivalent:@""];
+            menuItem.representedObject = action;
+            if (role) {
+                if ([role isEqualToString:@"quit"]) {
+                    menuItem.action = @selector(terminate:);
+                } else if ([role isEqualToString:@"hide"]) {
+                    menuItem.action = @selector(hide:);
+                } else if ([role isEqualToString:@"hideOthers"]) {
+                    menuItem.action = @selector(hideOtherApplications:);
+                } else if ([role isEqualToString:@"showAll"]) {
+                    menuItem.action = @selector(unhideAllApplications:);
+                } else if ([role isEqualToString:@"undo"]) {
+                    menuItem.action = @selector(undo:);
+                } else if ([role isEqualToString:@"redo"]) {
+                    menuItem.action = @selector(redo:);
+                } else if ([role isEqualToString:@"cut"]) {
+                    menuItem.action = @selector(cut:);
+                } else if ([role isEqualToString:@"copy"]) {
+                    menuItem.action = @selector(copy:);
+                } else if ([role isEqualToString:@"paste"]) {
+                    menuItem.action = @selector(paste:);
+                } else if ([role isEqualToString:@"pasteAndMatchStyle"]) {
+                    menuItem.action = @selector(pasteAsPlainText:);
+                } else if ([role isEqualToString:@"delete"]) {
+                    menuItem.action = @selector(delete:);
+                } else if ([role isEqualToString:@"selectAll"]) {
+                    menuItem.action = @selector(selectAll:);
+                } else if ([role isEqualToString:@"startSpeaking"]) {
+                    menuItem.action = @selector(startSpeaking:);
+                } else if ([role isEqualToString:@"stopSpeaking"]) {
+                    menuItem.action = @selector(stopSpeaking:);
+                } else if ([role isEqualToString:@"enterFullScreen"]) {
+                    menuItem.action = @selector(enterFullScreen:);
+                } else if ([role isEqualToString:@"exitFullScreen"]) {
+                    menuItem.action = @selector(exitFullScreen:);
+                } else if ([role isEqualToString:@"toggleFullScreen"]) {
+                    menuItem.action = @selector(toggleFullScreen:);
+                } else if ([role isEqualToString:@"minimize"]) {
+                    menuItem.action = @selector(performMiniaturize:);
+                } else if ([role isEqualToString:@"zoom"]) {
+                    menuItem.action = @selector(performZoom:);
+                } else if ([role isEqualToString:@"bringAllToFront"]) {
+                    menuItem.action = @selector(arrangeInFront:);
+                } else if ([role isEqualToString:@"close"]) {
+                    menuItem.action = @selector(performClose:);
+                } else if ([role isEqualToString:@"cycleThroughWindows"]) {
+                    menuItem.action = @selector(selectNextKeyView:);
+                } else if ([role isEqualToString:@"showHelp"]) {
+                    menuItem.action = @selector(showHelp:);
+                }
+                if (!accelerator) {
+                    if ([role isEqualToString:@"undo"]) {
+                        menuItem.keyEquivalent = @"z";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"redo"]) {
+                        menuItem.keyEquivalent = @"Z";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+                    } else if ([role isEqualToString:@"cut"]) {
+                        menuItem.keyEquivalent = @"x";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"copy"]) {
+                        menuItem.keyEquivalent = @"c";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"paste"]) {
+                        menuItem.keyEquivalent = @"v";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"pasteAndMatchStyle"]) {
+                        menuItem.keyEquivalent = @"V";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+                    } else if ([role isEqualToString:@"delete"]) {
+                        menuItem.keyEquivalent = [NSString stringWithFormat:@"%c",(char)NSDeleteCharacter];
+                        menuItem.keyEquivalentModifierMask = 0;
+                    } else if ([role isEqualToString:@"selectAll"]) {
+                        menuItem.keyEquivalent = @"a";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    }
+                }
+            } else {
+                menuItem.target = target;
+            }
+            if (accelerator) {
+                menuItem.keyEquivalent = accelerator;
+                if (modifierMask) {
+                    menuItem.keyEquivalentModifierMask = [modifierMask unsignedIntegerValue];
+                } else {
+                    menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                }
+            }
+            menuItem.enabled = enabled;
+            menuItem.state = checked ? NSControlStateValueOn : NSControlStateValueOff;
+            menuItem.hidden = hidden;
+            menuItem.toolTip = tooltip;
+            if (submenuConfig) {
+                NSMenu *submenu = createMenuFromConfig(submenuConfig, target);
+                [menu setSubmenu:submenu forItem:menuItem];
+            }
         }
-
-        response->SetMimeType(mimeType_);
-        response->SetStatus(200);
-        response_length = responseData_.size();
-
-        CefResponse::HeaderMap headers;
-        headers.insert(std::make_pair("Access-Control-Allow-Origin", "*"));
-        response->SetHeaderMap(headers);                
+        [menu addItem:menuItem];
     }
+    return menu;
+}
 
-    bool Read(void* data_out,
-             int bytes_to_read,
-             int& bytes_read,
-             CefRefPtr<CefResourceReadCallback> callback) override {
-        bytes_read = 0;
-        if (!hasResponse_ || offset_ >= responseData_.size()) {
-            
-            return false;
-        }
+/*
+ * =============================================================================
+ * 5. OBJECTIVE-C @IMPLEMENTATIONS
+ * =============================================================================
+ */
 
-        size_t remaining = responseData_.size() - offset_;
-        bytes_read = std::min(bytes_to_read, static_cast<int>(remaining));
-        memcpy(data_out, responseData_.data() + offset_, bytes_read);
-        offset_ += bytes_read;
-
-        
-        return true;
-    }
-
-    void Cancel() override {
-        // NSLog(@"[CEF] Scheme Handler: Request cancelled");
-    }
-
-private:
-    zigStartURLSchemeTaskCallback fileLoader_;
-    uint32_t webviewId_;
-    std::string mimeType_;
-    std::vector<char> responseData_;
-    bool hasResponse_;
-    size_t offset_;
-    
-    IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandler);
-    DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandler);
-};
-
-
-// The factory class that creates scheme handlers
-class ElectrobunSchemeHandlerFactory : public CefSchemeHandlerFactory {
-public:
-     ElectrobunSchemeHandlerFactory(zigStartURLSchemeTaskCallback callback, uint32_t webviewId)
-        : fileLoader_(callback), webviewId_(webviewId) {}
-
-        CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser,
-                                       CefRefPtr<CefFrame> frame,
-                                       const CefString& scheme_name,
-                                       CefRefPtr<CefRequest> request) override {
-        
-            return new ElectrobunSchemeHandler(fileLoader_, webviewId_);
-        }
-
-private:
-    zigStartURLSchemeTaskCallback fileLoader_;
-    uint32_t webviewId_;
-    
-    IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandlerFactory);
-    DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandlerFactory);
-};
-
+// ----------------------- AbstractView & ContainerView -----------------------
 // Todo: incorporate into AbstractView
 NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat containerHeight) {
     NSMutableArray<NSValue *> *resultingRects = [NSMutableArray array];
@@ -240,47 +488,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
     return resultingRects;
 }
-
-
-
-// ----------------------------------------------------------------------------
-// 2) ABSTRACT BASE CLASS
-// ----------------------------------------------------------------------------
-@interface AbstractView : NSObject
-    @property (nonatomic, assign) uint32_t webviewId;
-    @property (nonatomic, assign) NSView * nsView;
-    @property (nonatomic, assign) BOOL isMousePassthroughEnabled;
-    @property (nonatomic, assign) BOOL mirrorModeEnabled;
-    @property (nonatomic, assign) BOOL fullSize;
-
-    - (void)loadURL:(const char *)urlString;
-    - (void)goBack;
-    - (void)goForward;
-    - (void)reload;
-    - (void)remove;
-
-    - (void)setTransparent:(BOOL)transparent;
-    - (void)setPassthrough:(BOOL)enable;
-    - (void)setHidden:(BOOL)hidden;
-
-    - (BOOL)canGoBack;
-    - (BOOL)canGoForward;
-
-    - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString;
-    - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler;
-    - (void)addPreloadScriptToWebView:(const char*)jsString;
-    - (void)updateCustomPreloadScript:(const char*)jsString;
-
-    - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson;
-@end
-
-@interface ContainerView : NSView
-    /// An reverse ordered array of abstractViews (newest first)
-    @property (nonatomic, strong) NSMutableArray<AbstractView *> *abstractViews;
-    - (void)addAbstractView:(AbstractView *)webview;
-    - (void)removeAbstractViewWithId:(uint32_t)webviewId;
-    - (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation;
-@end
 
 @implementation AbstractView
 
@@ -503,43 +710,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 @end
 
-
-// ----------------------------------------------------------------------------
-// 4) CREATE DATA STORE + URL SCHEME HANDLER
-// ----------------------------------------------------------------------------
-
-WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier);
-
-NSUUID *UUIDFromString(NSString *string) {
-    unsigned char hash[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(string.UTF8String, (CC_LONG)string.length, hash);
-    uuid_t uuid;
-    memcpy(uuid, hash, sizeof(uuid));
-    return [[NSUUID alloc] initWithUUIDBytes:uuid];
-}
-
-WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier) {
-    NSString *identifier = [NSString stringWithUTF8String:partitionIdentifier];
-    if ([identifier hasPrefix:@"persist:"]) {
-        // persistent
-        identifier = [identifier substringFromIndex:8];
-        NSUUID *uuid = UUIDFromString(identifier);
-        if (uuid) {
-            return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
-        } else {
-            NSLog(@"Invalid UUID for identifier: %@", identifier);
-            return [WKWebsiteDataStore defaultDataStore];
-        }
-    } else {
-        // ephemeral
-        return [WKWebsiteDataStore nonPersistentDataStore];
-    }
-}
-
-@interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>
-    @property (nonatomic, assign) zigStartURLSchemeTaskCallback fileLoader;
-    @property (nonatomic, assign) uint32_t webviewId;
-@end
+// ----------------------- URL Scheme & Navigation Delegates -----------------------
 
 @implementation MyURLSchemeHandler
     - (void)webView:(WKWebView *)webView
@@ -589,19 +760,6 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
     }
 @end
 
-
-
-
-// ----------------------------------------------------------------------------
-// 18) NAVIGATION & UI DELEGATES
-// ----------------------------------------------------------------------------
-
-@interface MyNavigationDelegate : NSObject <WKNavigationDelegate>
-    @property (nonatomic, assign) DecideNavigationCallback zigCallback;
-    @property (nonatomic, assign) WebviewEventHandler zigEventHandler;
-    @property (nonatomic, assign) uint32_t webviewId;
-@end
-
 @implementation MyNavigationDelegate
     - (void)webView:(WKWebView *)webView
     decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
@@ -619,11 +777,6 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
     }
 @end
 
-@interface MyWebViewUIDelegate : NSObject <WKUIDelegate>
-    @property (nonatomic, assign) WebviewEventHandler zigEventHandler;
-    @property (nonatomic, assign) uint32_t webviewId;
-@end
-
 @implementation MyWebViewUIDelegate
     - (WKWebView *)webView:(WKWebView *)webView
     createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
@@ -634,28 +787,6 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
         }
         return nil;
     }
-@end
-
-// ----------------------------------------------------------------------------
-// 19) POSTMESSAGE HANDLERS
-// ----------------------------------------------------------------------------
-
-@interface MyScriptMessageHandler : NSObject <WKScriptMessageHandler>
-    @property (nonatomic, assign) HandlePostMessage zigCallback;
-    @property (nonatomic, assign) uint32_t webviewId;
-    @end
-
-    @implementation MyScriptMessageHandler
-    - (void)userContentController:(WKUserContentController *)userContentController
-        didReceiveScriptMessage:(WKScriptMessage *)message {
-        NSString *body = message.body;
-        self.zigCallback(self.webviewId, body.UTF8String);
-    }
-@end
-
-@interface MyScriptMessageHandlerWithReply : NSObject <WKScriptMessageHandlerWithReply>
-    @property (nonatomic, assign) HandlePostMessageWithReply zigCallback;
-    @property (nonatomic, assign) uint32_t webviewId;
 @end
 
 @implementation MyScriptMessageHandlerWithReply
@@ -669,34 +800,16 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
     }
 @end
 
-
-
-
-
-// ----------------------------------------------------------------------------
-// 5) WKWEBVIEWIMPL SUBCLASS
-// ----------------------------------------------------------------------------
-
-
-
-@interface WKWebViewImpl : AbstractView
-@property (nonatomic, strong) WKWebView *webView;
-
-- (instancetype)initWithWebviewId:(uint32_t)webviewId
-                           window:(NSWindow *)window   
-                           url:(const char *)url                                                
-                            frame:(NSRect)frame
-                  assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
-                       autoResize:(bool)autoResize
-              partitionIdentifier:(const char *)partitionIdentifier
-              navigationCallback:(DecideNavigationCallback)navigationCallback
-              webviewEventHandler:(WebviewEventHandler)webviewEventHandler
-              bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-              webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
-              electrobunPreloadScript:(const char *)electrobunPreloadScript
-              customPreloadScript:(const char *)customPreloadScript;
-
+@implementation MyScriptMessageHandler
+    - (void)userContentController:(WKUserContentController *)userContentController
+        didReceiveScriptMessage:(WKScriptMessage *)message {
+        NSString *body = message.body;
+        self.zigCallback(self.webviewId, body.UTF8String);
+    }
 @end
+
+// ----------------------- WKWebViewImpl -----------------------
+
 
 @implementation WKWebViewImpl
 
@@ -929,29 +1042,47 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
 
 @end
 
-// ----------------------------------------------------------------------------
-// 6) CEF AND NSAPPLICATION SETUP
-// ----------------------------------------------------------------------------
-
-// Provide the CefAppProtocol implementation
-@interface ElectrobunNSApplication : NSApplication <CefAppProtocol> {
-    @private
-    BOOL handlingSendEvent_;
-    }
-@end
+// ----------------------- CEF and NSApplication Setup (C++ and ObjC) -----------------------
 
 @implementation ElectrobunNSApplication
     - (BOOL)isHandlingSendEvent {
-    return handlingSendEvent_;
+        return handlingSendEvent_;
     }
     - (void)setHandlingSendEvent:(BOOL)handlingSendEvent {
-    handlingSendEvent_ = handlingSendEvent;
+        handlingSendEvent_ = handlingSendEvent;
     }
     - (void)sendEvent:(NSEvent*)event {
-    CefScopedSendingEvent sendingEventScoper;
-    [super sendEvent:event];
+        CefScopedSendingEvent sendingEventScoper;
+        [super sendEvent:event];
     }
 @end
+
+
+
+@implementation StatusItemTarget
+    - (void)statusItemClicked:(id)sender {
+        if (self.zigHandler) {
+            self.zigHandler(self.trayId, "");
+        }
+    }
+    - (void)menuItemClicked:(id)sender {
+        NSMenuItem *menuItem = (NSMenuItem *)sender;
+        NSString *action = menuItem.representedObject;
+        if (!action) {
+            NSLog(@"No action found for menu item");
+            return;
+        }
+        if (!self.zigHandler) {
+            NSLog(@"No zig handler found for menu item");
+            return;
+        }
+        self.zigHandler(self.trayId, [action UTF8String]);
+    }
+@end
+
+
+// C++ classes for CEF:
+
 
 class ElectrobunHandler : public CefClient,
                          public CefDisplayHandler,
@@ -1065,25 +1196,7 @@ private:
 };
 
 
-std::string GetScriptExecutionUrl(const std::string& frameUrl) {
-    // List of URL schemes that should use about:blank for script execution
-    static const std::vector<std::string> specialSchemes = {
-        "data:",
-        "blob:",
-        "file:"
-        // Add other schemes as needed
-    };
-    
-    for (const auto& scheme : specialSchemes) {
-        if (frameUrl.substr(0, scheme.length()) == scheme) {
-            return "data://___preload.js";
-        }
-    }
-    
-    return frameUrl;
-}
-
-
+CefRefPtr<ElectrobunApp> g_app;
 
 class ElectrobunClient : public CefClient,
                         public CefRenderHandler,
@@ -1304,8 +1417,29 @@ public:
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
 };
 
-// Global CEF reference
-CefRefPtr<ElectrobunApp> g_app;
+
+@interface CEFWebViewImpl : AbstractView
+    // @property (nonatomic, strong) WKWebView *webView;
+
+    @property (nonatomic, assign) CefRefPtr<CefBrowser> browser;
+    @property (nonatomic, assign) CefRefPtr<ElectrobunClient> client;
+
+
+    - (instancetype)initWithWebviewId:(uint32_t)webviewId
+                            window:(NSWindow *)window   
+                            url:(const char *)url                                                
+                                frame:(NSRect)frame
+                    assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                        autoResize:(bool)autoResize
+                partitionIdentifier:(const char *)partitionIdentifier
+                navigationCallback:(DecideNavigationCallback)navigationCallback
+                webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+                bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
+                webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+                electrobunPreloadScript:(const char *)electrobunPreloadScript
+                customPreloadScript:(const char *)customPreloadScript;
+
+@end
 
 bool initializeCEF() {
     static bool initialized = false;
@@ -1365,7 +1499,121 @@ bool initializeCEF() {
 }
 
 
-//////// CEF Implementation
+// The main scheme handler class
+class ElectrobunSchemeHandler : public CefResourceHandler {
+public:
+     ElectrobunSchemeHandler(zigStartURLSchemeTaskCallback callback, uint32_t webviewId)
+        : fileLoader_(callback)
+        , webviewId_(webviewId)
+        , hasResponse_(false)
+        , offset_(0) {
+        
+    }
+
+     bool Open(CefRefPtr<CefRequest> request,
+             bool& handle_request,
+             CefRefPtr<CefCallback> callback) override {
+        std::string url = request->GetURL().ToString();
+                
+        FileResponse response = fileLoader_(webviewId_, url.c_str(), nullptr);
+        
+        if (response.fileContents && response.len > 0) {                                                
+            const char* content = response.fileContents;                        
+            mimeType_ = response.mimeType ? response.mimeType : "text/html";
+            responseData_.assign(response.fileContents, response.fileContents + response.len);
+            hasResponse_ = true;
+            handle_request = true;
+            return true;
+        }        
+        
+        handle_request = false;
+        return false;
+    }
+
+    void GetResponseHeaders(CefRefPtr<CefResponse> response,
+                          int64_t& response_length,
+                          CefString& redirectUrl) override {
+        if (!hasResponse_) {
+            response->SetStatus(404);
+            response_length = 0;            
+            return;
+        }
+
+        response->SetMimeType(mimeType_);
+        response->SetStatus(200);
+        response_length = responseData_.size();
+
+        CefResponse::HeaderMap headers;
+        headers.insert(std::make_pair("Access-Control-Allow-Origin", "*"));
+        response->SetHeaderMap(headers);                
+    }
+
+    bool Read(void* data_out,
+             int bytes_to_read,
+             int& bytes_read,
+             CefRefPtr<CefResourceReadCallback> callback) override {
+        bytes_read = 0;
+        if (!hasResponse_ || offset_ >= responseData_.size()) {
+            
+            return false;
+        }
+
+        size_t remaining = responseData_.size() - offset_;
+        bytes_read = std::min(bytes_to_read, static_cast<int>(remaining));
+        memcpy(data_out, responseData_.data() + offset_, bytes_read);
+        offset_ += bytes_read;
+
+        
+        return true;
+    }
+
+    void Cancel() override {
+        // NSLog(@"[CEF] Scheme Handler: Request cancelled");
+    }
+
+private:
+    zigStartURLSchemeTaskCallback fileLoader_;
+    uint32_t webviewId_;
+    std::string mimeType_;
+    std::vector<char> responseData_;
+    bool hasResponse_;
+    size_t offset_;
+    
+    IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandler);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandler);
+};
+
+
+// The factory class that creates scheme handlers
+class ElectrobunSchemeHandlerFactory : public CefSchemeHandlerFactory {
+public:
+     ElectrobunSchemeHandlerFactory(zigStartURLSchemeTaskCallback callback, uint32_t webviewId)
+        : fileLoader_(callback), webviewId_(webviewId) {}
+
+        CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser,
+                                       CefRefPtr<CefFrame> frame,
+                                       const CefString& scheme_name,
+                                       CefRefPtr<CefRequest> request) override {
+        
+            return new ElectrobunSchemeHandler(fileLoader_, webviewId_);
+        }
+
+private:
+    zigStartURLSchemeTaskCallback fileLoader_;
+    uint32_t webviewId_;
+    
+    IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandlerFactory);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandlerFactory);
+};
+
+
+
+
+
+// Utility function for WKWebsiteDataStore creation:
+
+
+
 CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier, 
                                                             zigStartURLSchemeTaskCallback assetFileLoader,
                                                             uint32_t webviewId) {
@@ -1416,263 +1664,330 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     return context;
 }
 
-@interface CEFWebViewImpl : AbstractView
-// @property (nonatomic, strong) WKWebView *webView;
-
-@property (nonatomic, assign) CefRefPtr<CefBrowser> browser;
-@property (nonatomic, assign) CefRefPtr<ElectrobunClient> client;
+// ----------------------- CEFWebViewImpl -----------------------
 
 
-- (instancetype)initWithWebviewId:(uint32_t)webviewId
-                           window:(NSWindow *)window   
-                           url:(const char *)url                                                
+@implementation CEFWebViewImpl {}
+
+    - (instancetype)initWithWebviewId:(uint32_t)webviewId
+                            window:(NSWindow *)window
+                                url:(const char *)url                           
                             frame:(NSRect)frame
-                  assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
-                       autoResize:(bool)autoResize
-              partitionIdentifier:(const char *)partitionIdentifier
-              navigationCallback:(DecideNavigationCallback)navigationCallback
-              webviewEventHandler:(WebviewEventHandler)webviewEventHandler
-              bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-              webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
-              electrobunPreloadScript:(const char *)electrobunPreloadScript
-              customPreloadScript:(const char *)customPreloadScript;
+                    assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                        autoResize:(bool)autoResize
+                partitionIdentifier:(const char *)partitionIdentifier
+                navigationCallback:(DecideNavigationCallback)navigationCallback
+                webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+                bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
+            webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+            electrobunPreloadScript:(const char *)electrobunPreloadScript
+            customPreloadScript:(const char *)customPreloadScript
+    {
+        self = [super init];
+        if (self) {        
+            self.webviewId = webviewId;
 
-@end
-@implementation CEFWebViewImpl {    
-    
-    // bool _isDestroying;
-}
-
-- (instancetype)initWithWebviewId:(uint32_t)webviewId
-                          window:(NSWindow *)window
-                            url:(const char *)url                           
-                          frame:(NSRect)frame
-                assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
-                    autoResize:(bool)autoResize
-            partitionIdentifier:(const char *)partitionIdentifier
-            navigationCallback:(DecideNavigationCallback)navigationCallback
-            webviewEventHandler:(WebviewEventHandler)webviewEventHandler
-              bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-        webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
-        electrobunPreloadScript:(const char *)electrobunPreloadScript
-        customPreloadScript:(const char *)customPreloadScript
-{
-    self = [super init];
-    if (self) {        
-        self.webviewId = webviewId;
-
-        if (autoResize) {
-            self.fullSize = YES;
-        } else {
-            self.fullSize = NO;
-        }
-
-        void (^createCEFBrowser)(void) = ^{                
-            [window makeKeyAndOrderFront:nil];
-            CefBrowserSettings browserSettings;   
-
-            
-                     
-
-            CefWindowInfo window_info;
-            
-            NSView *contentView = window.contentView;            
-            
-            CGFloat adjustedY = contentView.bounds.size.height - frame.origin.y - frame.size.height;
-            CefRect cefBounds((int)frame.origin.x,
-                            (int)adjustedY,
-                            (int)frame.size.width,
-                            (int)frame.size.height);
-            window_info.SetAsChild((__bridge void*)contentView, cefBounds);
-
-            CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(
-                partitionIdentifier,
-                assetFileLoader,
-                webviewId
-            );
-
-            
-            // Register the scheme handler factory for this webview
-            CefRefPtr<ElectrobunSchemeHandlerFactory> factory(
-                new ElectrobunSchemeHandlerFactory(assetFileLoader, webviewId));
-                                    
-            
-            self.client = new ElectrobunClient(
-                webviewId,  
-                bunBridgeHandler, 
-                webviewTagBridgeHandler,
-                webviewEventHandler,
-                navigationCallback 
-            );                
-
-
-            
-
-            [self addPreloadScriptToWebView:electrobunPreloadScript];
-            
-            [self updateCustomPreloadScript:customPreloadScript];
-
-            CefString initialUrl;
-            
-            // Determine if this is an internal or external URL
-            if (url && url[0] != '\0') {              
-                initialUrl = CefString(url);              
+            if (autoResize) {
+                self.fullSize = YES;
             } else {
-                initialUrl = CefString("about:blank");                
+                self.fullSize = NO;
             }
 
-            
-            
-            self.browser = CefBrowserHost::CreateBrowserSync(
-                window_info, self.client, initialUrl, browserSettings, nullptr, requestContext);
+            void (^createCEFBrowser)(void) = ^{                
+                [window makeKeyAndOrderFront:nil];
+                CefBrowserSettings browserSettings;   
 
-            if (self.browser) {
-                CefWindowHandle handle = self.browser->GetHost()->GetWindowHandle();
-                self.nsView = (__bridge NSView *)handle;                
-                self.nsView.autoresizingMask = NSViewNotSizable;
                 
+                        
+
+                CefWindowInfo window_info;
                 
-                self.nsView.layer.backgroundColor = [[NSColor clearColor] CGColor];
-                self.nsView.layer.opaque = NO;                                
-            }
+                NSView *contentView = window.contentView;            
+                
+                CGFloat adjustedY = contentView.bounds.size.height - frame.origin.y - frame.size.height;
+                CefRect cefBounds((int)frame.origin.x,
+                                (int)adjustedY,
+                                (int)frame.size.width,
+                                (int)frame.size.height);
+                window_info.SetAsChild((__bridge void*)contentView, cefBounds);
 
+                CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(
+                    partitionIdentifier,
+                    assetFileLoader,
+                    webviewId
+                );
 
-            ContainerView *containerView = (ContainerView *)window.contentView;
-            [containerView addAbstractView:self];
+                
+                // Register the scheme handler factory for this webview
+                CefRefPtr<ElectrobunSchemeHandlerFactory> factory(
+                    new ElectrobunSchemeHandlerFactory(assetFileLoader, webviewId));
                                         
-            
-            
-        };
-        
-        // TODO: revisit bug with 3 windows where 2nd windows' oopifs don't get created
-        // until moving the mouse and where createCEFBrowser() after async causes a crash
-        NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-        NSArray *notificationNames = @[ NSWindowDidUpdateNotification ];
-        __block BOOL hasCreatedBrowser = NO;
-        for (NSString *notificationName in notificationNames) {
-            [center addObserverForName:notificationName
-                            object:window
-                                queue:[NSOperationQueue mainQueue]
-                        usingBlock:^(NSNotification *note) {
                 
-                if (!hasCreatedBrowser) {
-                    hasCreatedBrowser = YES;                    
-                    createCEFBrowser();
-                    
+                self.client = new ElectrobunClient(
+                    webviewId,  
+                    bunBridgeHandler, 
+                    webviewTagBridgeHandler,
+                    webviewEventHandler,
+                    navigationCallback 
+                );                
+
+
+                
+
+                [self addPreloadScriptToWebView:electrobunPreloadScript];
+                
+                [self updateCustomPreloadScript:customPreloadScript];
+
+                CefString initialUrl;
+                
+                // Determine if this is an internal or external URL
+                if (url && url[0] != '\0') {              
+                    initialUrl = CefString(url);              
+                } else {
+                    initialUrl = CefString("about:blank");                
                 }
-            }];
-        }
-        [window makeKeyAndOrderFront:nil];
-        dispatch_async(dispatch_get_main_queue(), ^{               
-            // createCEFBrowser();
-            // NSLog(@"-----------------> DISPATCH 1");
-        });
 
-  
-        // dispatch_async(dispatch_get_main_queue(), ^{               
-            // dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            //     createCEFBrowser();
-            //     NSLog(@"-----------------> DISPATCH 1");
+                
+                
+                self.browser = CefBrowserHost::CreateBrowserSync(
+                    window_info, self.client, initialUrl, browserSettings, nullptr, requestContext);
+
+                if (self.browser) {
+                    CefWindowHandle handle = self.browser->GetHost()->GetWindowHandle();
+                    self.nsView = (__bridge NSView *)handle;                
+                    self.nsView.autoresizingMask = NSViewNotSizable;
+                    
+                    
+                    self.nsView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+                    self.nsView.layer.opaque = NO;                                
+                }
+
+
+                ContainerView *containerView = (ContainerView *)window.contentView;
+                [containerView addAbstractView:self];
+                                            
+                
+                
+            };
+            
+            // TODO: revisit bug with 3 windows where 2nd windows' oopifs don't get created
+            // until moving the mouse and where createCEFBrowser() after async causes a crash
+            NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+            NSArray *notificationNames = @[ NSWindowDidUpdateNotification ];
+            __block BOOL hasCreatedBrowser = NO;
+            for (NSString *notificationName in notificationNames) {
+                [center addObserverForName:notificationName
+                                object:window
+                                    queue:[NSOperationQueue mainQueue]
+                            usingBlock:^(NSNotification *note) {
+                    
+                    if (!hasCreatedBrowser) {
+                        hasCreatedBrowser = YES;                    
+                        createCEFBrowser();
+                        
+                    }
+                }];
+            }
+            [window makeKeyAndOrderFront:nil];
+            dispatch_async(dispatch_get_main_queue(), ^{               
+                // createCEFBrowser();
+                // NSLog(@"-----------------> DISPATCH 1");
+            });
+
+    
+            // dispatch_async(dispatch_get_main_queue(), ^{               
+                // dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                //     createCEFBrowser();
+                //     NSLog(@"-----------------> DISPATCH 1");
+                // });
             // });
-        // });
 
+            
+        }
+        return self;
+    }
+
+
+    - (void)loadURL:(const char *)urlString {
+        if (!self.browser)
+            return;
+
+        CefString cefUrl = urlString ? urlString : "";
+        self.browser->GetMainFrame()->LoadURL(cefUrl);
+    }
+
+    - (void)goBack {
+        if (self.browser)
+            self.browser->GoBack();
+    }
+
+    - (void)goForward {
+        if (self.browser)
+            self.browser->GoForward();
+    }
+
+    - (void)reload {
+        if (self.browser)
+            self.browser->Reload();
+    }
+
+    - (void)remove {
+        NSLog(@"REMOVE >>>>>>>>>>>>>>");
+        // Stop loading, close the browser, remove from superview, etc.
+        if (self.browser) {
+            // Tells CEF to close the browser window
+            self.browser->GetHost()->CloseBrowser(false);
+            self.browser = nullptr;
+        }
+        if (self.nsView) {
+            [self.nsView removeFromSuperview];
+            self.nsView = nil;
+        }
+    }
+
+
+    - (BOOL)canGoBack {
+        if (!self.browser) return NO;
+        return self.browser->CanGoBack() ? YES : NO;
+    }
+
+    - (BOOL)canGoForward {
+        if (!self.browser) return NO;
+        return self.browser->CanGoForward() ? YES : NO;
+    }
+
+    - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {    
+        if (!jsString) return;
         
+        CefRefPtr<CefFrame> mainFrame = self.browser->GetMainFrame();
+        if (!mainFrame) {
+            NSLog(@"[CEF] Failed to get main frame for JavaScript evaluation");
+            return;
+        }
+
+        // Execute in the main context
+        mainFrame->ExecuteJavaScript(
+            CefString(jsString),
+            mainFrame->GetURL(),
+            0  // Line number for debugging
+        );
     }
-    return self;
-}
 
+    - (void)callAsyncJavascript:(const char*)messageId 
+                    jsString:(const char*)jsString 
+                    webviewId:(uint32_t)webviewId 
+                hostWebviewId:(uint32_t)hostWebviewId 
+            completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
+        
 
-- (void)loadURL:(const char *)urlString {
-    if (!self.browser)
-        return;
-
-    CefString cefUrl = urlString ? urlString : "";
-    self.browser->GetMainFrame()->LoadURL(cefUrl);
-}
-
-- (void)goBack {
-    if (self.browser)
-        self.browser->GoBack();
-}
-
-- (void)goForward {
-    if (self.browser)
-        self.browser->GoForward();
-}
-
-- (void)reload {
-    if (self.browser)
-        self.browser->Reload();
-}
-
-- (void)remove {
-    NSLog(@"REMOVE >>>>>>>>>>>>>>");
-    // Stop loading, close the browser, remove from superview, etc.
-    if (self.browser) {
-        // Tells CEF to close the browser window
-        self.browser->GetHost()->CloseBrowser(false);
-        self.browser = nullptr;
+        NSLog(@"TODO: Implement callAsyncJavascript for CEF when refactoring the entire RPC system");
+        completionHandler(messageId, webviewId, hostWebviewId, "\"\"");   
     }
-    if (self.nsView) {
-        [self.nsView removeFromSuperview];
-        self.nsView = nil;
+
+    - (void)addPreloadScriptToWebView:(const char*)jsString {
+        if (!jsString) return;
+        
+        std::string script(jsString);
+        self.client->AddPreloadScript(script);
     }
-}
 
-
-- (BOOL)canGoBack {
-    if (!self.browser) return NO;
-    return self.browser->CanGoBack() ? YES : NO;
-}
-
-- (BOOL)canGoForward {
-    if (!self.browser) return NO;
-    return self.browser->CanGoForward() ? YES : NO;
-}
-
-- (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {    
+    - (void)updateCustomPreloadScript:(const char*)jsString {   
     if (!jsString) return;
-    
-    CefRefPtr<CefFrame> mainFrame = self.browser->GetMainFrame();
-    if (!mainFrame) {
-        NSLog(@"[CEF] Failed to get main frame for JavaScript evaluation");
-        return;
+        
+        std::string script(jsString);        
+        self.client->UpdateCustomPreloadScript(script);
     }
-
-    // Execute in the main context
-    mainFrame->ExecuteJavaScript(
-        CefString(jsString),
-        mainFrame->GetURL(),
-        0  // Line number for debugging
-    );
-}
-
-- (void)callAsyncJavascript:(const char*)messageId 
-                  jsString:(const char*)jsString 
-                 webviewId:(uint32_t)webviewId 
-             hostWebviewId:(uint32_t)hostWebviewId 
-         completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
-    
-
-    NSLog(@"TODO: Implement callAsyncJavascript for CEF when refactoring the entire RPC system");
-    completionHandler(messageId, webviewId, hostWebviewId, "\"\"");   
-}
-
-- (void)addPreloadScriptToWebView:(const char*)jsString {
-    if (!jsString) return;
-    
-    std::string script(jsString);
-    self.client->AddPreloadScript(script);
-}
-
-- (void)updateCustomPreloadScript:(const char*)jsString {   
-   if (!jsString) return;
-    
-    std::string script(jsString);        
-    self.client->UpdateCustomPreloadScript(script);
-}
 
 @end
+
+
+// ----------------------- AppDelegate & WindowDelegate -----------------------
+
+@implementation AppDelegate
+    - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {    
+        return NSTerminateNow;
+    }
+@end
+
+@implementation WindowDelegate
+    - (BOOL)windowShouldClose:(NSWindow *)sender {
+    return YES;
+    }
+    - (void)windowWillClose:(NSNotification *)notification {
+        NSWindow *window = [notification object];
+        if (self.closeHandler) {
+            self.closeHandler(self.windowId);
+        }
+    }
+    - (void)windowDidResize:(NSNotification *)notification {
+        NSWindow *window = [notification object];
+        NSRect windowFrame = [window frame];
+        ContainerView *containerView = [window contentView];
+        NSRect fullFrame = [window frame];
+        fullFrame.origin.x = 0;
+        fullFrame.origin.y = 0;
+                
+        for (AbstractView *abstractView in containerView.abstractViews) {                       
+            if (abstractView.fullSize) {            
+                [abstractView resize:fullFrame withMasksJSON:""];
+            }
+            
+        }
+        if (self.resizeHandler) {
+            NSScreen *primaryScreen = [NSScreen screens][0];
+            NSRect screenFrame = [primaryScreen frame];
+            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
+            self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
+                            windowFrame.size.width, windowFrame.size.height);
+        }
+    }
+    - (void)windowDidMove:(NSNotification *)notification {
+        if (self.moveHandler) {
+            NSWindow *window = [notification object];
+            NSRect windowFrame = [window frame];
+            NSScreen *primaryScreen = [NSScreen screens][0];
+            NSRect screenFrame = [primaryScreen frame];
+            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
+            self.moveHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y);
+        }
+    }
+@end
+
+/*
+ * =============================================================================
+ * 6. EXTERN "C" BRIDGING FUNCTIONS
+ * =============================================================================
+ */
+
+extern "C" void runNSApplication() {      
+    useCEF = isCEFAvailable();    
+
+    if (useCEF) {
+        @autoreleasepool {
+            if (!initializeCEF()) {                
+                return;
+            }
+            NSApplication *app = [NSApplication sharedApplication];
+            AppDelegate *delegate = [[AppDelegate alloc] init];
+            [app setDelegate:delegate];
+            retainObjCObject(delegate);
+
+            [NSApp finishLaunching];
+            CefRunMessageLoop();
+            CefShutdown();
+        }
+    } else {
+        NSApplication *app = [NSApplication sharedApplication];
+        AppDelegate *delegate = [[AppDelegate alloc] init];
+        [app setDelegate:delegate];
+        retainObjCObject(delegate);
+        [app run];
+    }
+}
+
+extern "C" void shutdownApplication() {
+    CefShutdown();
+}
 
 extern "C" AbstractView* initWebview(uint32_t webviewId,
                         NSWindow *window,
@@ -1786,8 +2101,6 @@ extern "C" void testFFI(void *ptr) {
     NSLog(@"Possible vtable pointer: %p", vtable);
 }
 
-// typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
-
 extern "C" void callAsyncJavaScript(const char *messageId,
                                     AbstractView *abstractView,
                                     const char *jsString,
@@ -1815,11 +2128,6 @@ extern "C" void updatePreloadScriptToWebView(AbstractView *abstractView,
     [abstractView updateCustomPreloadScript:scriptContent];    
 }
 
-
-// ----------------------------------------------------------------------------
-// 11) GET NAVIGATION ACTION / MESSAGE BODIES
-// ----------------------------------------------------------------------------
-
 extern "C" void invokeDecisionHandler(void (^decisionHandler)(WKNavigationActionPolicy), WKNavigationActionPolicy policy) {
     if (decisionHandler) {
         decisionHandler(policy);
@@ -1837,148 +2145,22 @@ extern "C" const char* getBodyFromScriptMessage(WKScriptMessage *message) {
     return body.UTF8String;
 }
 
-// ----------------------------------------------------------------------------
-// 12) TRANSPARENT WEBVIEW VISIBILITY UTILS
-// ----------------------------------------------------------------------------
-
-extern "C" void webviewTagSetTransparent(AbstractView *abstractView, BOOL transparent) {
-    
-        [abstractView setTransparent:transparent];
-    
+extern "C" void webviewTagSetTransparent(AbstractView *abstractView, BOOL transparent) {    
+        [abstractView setTransparent:transparent];    
 }
 
-extern "C" void webviewTagSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
-    
-        [abstractView setPassthrough:enablePassthrough];
-    
+extern "C" void webviewTagSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
+        [abstractView setPassthrough:enablePassthrough];    
 }
 
-extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
-   
-        [abstractView setHidden:hidden];
-    
-}
-
-// ----------------------------------------------------------------------------
-// 13) WINDOW & CONTAINER LOGIC
-// ----------------------------------------------------------------------------
-
-NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
-    NSUInteger mask = 0;
-    if (options.Borderless) mask |= NSWindowStyleMaskBorderless;
-    if (options.Titled) mask |= NSWindowStyleMaskTitled;
-    if (options.Closable) mask |= NSWindowStyleMaskClosable;
-    if (options.Miniaturizable) mask |= NSWindowStyleMaskMiniaturizable;
-    if (options.Resizable) mask |= NSWindowStyleMaskResizable;
-    if (options.UnifiedTitleAndToolbar) mask |= NSWindowStyleMaskUnifiedTitleAndToolbar;
-    if (options.FullScreen) mask |= NSWindowStyleMaskFullScreen;
-    if (options.FullSizeContentView) mask |= NSWindowStyleMaskFullSizeContentView;
-    if (options.UtilityWindow) mask |= NSWindowStyleMaskUtilityWindow;
-    if (options.DocModalWindow) mask |= NSWindowStyleMaskDocModalWindow;
-    if (options.NonactivatingPanel) mask |= NSWindowStyleMaskNonactivatingPanel;
-    if (options.HUDWindow) mask |= NSWindowStyleMaskHUDWindow;
-    return mask;
+extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {   
+        [abstractView setHidden:hidden];    
 }
 
 extern "C" NSRect createNSRectWrapper(double x, double y, double width, double height) {
     return NSMakeRect(x, y, width, height);
 }
 
-@interface AppDelegate : NSObject <NSApplicationDelegate>
-@end
-
-@implementation AppDelegate
-- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {    
-    return NSTerminateNow;
-}
-@end
-
-extern "C" void runNSApplication() {  
-    NSLog(@"checking if cef is available");  
-    useCEF = isCEFAvailable();
-    NSLog(@"checking if cef is available %i", useCEF);  
-
-    if (useCEF) {
-        @autoreleasepool {
-            if (!initializeCEF()) {                
-                return;
-            }
-            NSApplication *app = [NSApplication sharedApplication];
-            AppDelegate *delegate = [[AppDelegate alloc] init];
-            [app setDelegate:delegate];
-            retainObjCObject(delegate);
-
-            [NSApp finishLaunching];
-            CefRunMessageLoop();
-            CefShutdown();
-        }
-    } else {
-        NSApplication *app = [NSApplication sharedApplication];
-        AppDelegate *delegate = [[AppDelegate alloc] init];
-        [app setDelegate:delegate];
-        retainObjCObject(delegate);
-        [app run];
-    }
-}
-
-
-@interface WindowDelegate : NSObject <NSWindowDelegate>
-@property (nonatomic, assign) WindowCloseHandler closeHandler;
-@property (nonatomic, assign) WindowMoveHandler moveHandler;
-@property (nonatomic, assign) WindowResizeHandler resizeHandler;
-@property (nonatomic, assign) uint32_t windowId;
-@property (nonatomic, strong) NSWindow *window;
-@end
-
-@implementation WindowDelegate
-- (BOOL)windowShouldClose:(NSWindow *)sender {
-   return YES;
-}
-- (void)windowWillClose:(NSNotification *)notification {
-    NSWindow *window = [notification object];
-    if (self.closeHandler) {
-        self.closeHandler(self.windowId);
-    }
-}
-- (void)windowDidResize:(NSNotification *)notification {
-    NSWindow *window = [notification object];
-    NSRect windowFrame = [window frame];
-    ContainerView *containerView = [window contentView];
-    NSRect fullFrame = [window frame];
-    fullFrame.origin.x = 0;
-    fullFrame.origin.y = 0;
-            
-    for (AbstractView *abstractView in containerView.abstractViews) {                       
-        if (abstractView.fullSize) {            
-            [abstractView resize:fullFrame withMasksJSON:""];
-        }
-        
-    }
-    if (self.resizeHandler) {
-        NSScreen *primaryScreen = [NSScreen screens][0];
-        NSRect screenFrame = [primaryScreen frame];
-        windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
-        self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
-                           windowFrame.size.width, windowFrame.size.height);
-    }
-}
-- (void)windowDidMove:(NSNotification *)notification {
-    if (self.moveHandler) {
-        NSWindow *window = [notification object];
-        NSRect windowFrame = [window frame];
-        NSScreen *primaryScreen = [NSScreen screens][0];
-        NSRect screenFrame = [primaryScreen frame];
-        windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
-        self.moveHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y);
-    }
-}
-@end
-
-typedef struct {
-    NSRect frame;
-    WindowStyleMaskOptions styleMask;
-    const char *titleBarStyle;
-} createNSWindowWithFrameAndStyleParams;
 
 extern "C" NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      createNSWindowWithFrameAndStyleParams config,
@@ -2034,16 +2216,6 @@ extern "C" void resizeWebview(AbstractView *abstractView, NSRect frame, const ch
     
 }
 
-// ----------------------------------------------------------------------------
-// 15) WINDOW DRAGGING
-// ----------------------------------------------------------------------------
-
-static BOOL isMovingWindow = NO;
-static NSWindow *targetWindow = nil;
-static CGFloat offsetX = 0.0;
-static CGFloat offsetY = 0.0;
-static id mouseDraggedMonitor = nil;
-static id mouseUpMonitor = nil;
 
 extern "C" void stopWindowMove() {
     isMovingWindow = NO;
@@ -2093,9 +2265,6 @@ extern "C" void startWindowMove(NSWindow *window) {
     }];
 }
 
-// ----------------------------------------------------------------------------
-// 16) FILESYSTEM UTILS
-// ----------------------------------------------------------------------------
 
 extern "C" BOOL moveToTrash(char *pathString) {
     NSString *path = [NSString stringWithUTF8String:pathString ?: ""];
@@ -2152,74 +2321,6 @@ extern "C" const char *openFileDialog(const char *startingFolder,
     return NULL;
 }
 
-// ----------------------------------------------------------------------------
-// 17) SNAPSHOT
-// ----------------------------------------------------------------------------
-
-// TODO: move getSnapshot into AbstractWebviewImpls
-extern "C" void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
-                                   WKWebView *webView,
-                                   zigSnapshotCallback callback) {
-    WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];
-    [webView takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {
-        if (error) {
-            NSLog(@"Error capturing snapshot: %@", error);
-            return;
-        }
-        NSBitmapImageRep *imgRep = [[NSBitmapImageRep alloc] initWithData:[snapshotImage TIFFRepresentation]];
-        NSData *pngData = [imgRep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-        NSString *base64String = [pngData base64EncodedStringWithOptions:0];
-        NSString *dataUrl = [NSString stringWithFormat:@"data:image/png;base64,%@", base64String];
-        if (callback) {
-            callback(hostId, webviewId, [dataUrl UTF8String]);
-        }
-    }];
-}
-
-
-
-
-
-// ----------------------------------------------------------------------------
-// 20) APP AND CONTEXT MENUS
-// ----------------------------------------------------------------------------
-
-extern "C" void shutdownApplication() {
-    CefShutdown();
-}
-
-typedef struct {
-    // Could add fields if needed
-} MenuItemConfig;
-
-@interface StatusItemTarget : NSObject
-@property (nonatomic, assign) NSStatusItem *statusItem;
-@property (nonatomic, assign) ZigStatusItemHandler zigHandler;
-@property (nonatomic, assign) uint32_t trayId;
-- (void)statusItemClicked:(id)sender;
-- (void)menuItemClicked:(id)sender;
-@end
-
-@implementation StatusItemTarget
-- (void)statusItemClicked:(id)sender {
-    if (self.zigHandler) {
-        self.zigHandler(self.trayId, "");
-    }
-}
-- (void)menuItemClicked:(id)sender {
-    NSMenuItem *menuItem = (NSMenuItem *)sender;
-    NSString *action = menuItem.representedObject;
-    if (!action) {
-        NSLog(@"No action found for menu item");
-        return;
-    }
-    if (!self.zigHandler) {
-        NSLog(@"No zig handler found for menu item");
-        return;
-    }
-    self.zigHandler(self.trayId, [action UTF8String]);
-}
-@end
 
 extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,
                                     uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
@@ -2263,131 +2364,6 @@ extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
     }
 }
 
-NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
-    NSMenu *menu = [[NSMenu alloc] init];
-    [menu setAutoenablesItems:NO];
-
-    for (NSDictionary *itemData in menuConfig) {
-        NSString *type = itemData[@"type"];
-        NSString *label = itemData[@"label"];
-        NSString *action = itemData[@"action"];
-        NSArray *submenuConfig = itemData[@"submenu"];
-        NSString *role = itemData[@"role"];
-        NSString *accelerator = itemData[@"accelerator"];
-        NSNumber *modifierMask = itemData[@"modifierMask"];
-
-        BOOL enabled = [itemData[@"enabled"] boolValue];
-        BOOL checked = [itemData[@"checked"] boolValue];
-        BOOL hidden = [itemData[@"hidden"] boolValue];
-        NSString *tooltip = itemData[@"tooltip"];
-
-        NSMenuItem *menuItem;
-        if ([type isEqualToString:@"divider"]) {
-            menuItem = [NSMenuItem separatorItem];
-        } else {
-            menuItem = [[NSMenuItem alloc] initWithTitle:label ?: @""
-                                                  action:@selector(menuItemClicked:)
-                                           keyEquivalent:@""];
-            menuItem.representedObject = action;
-            if (role) {
-                if ([role isEqualToString:@"quit"]) {
-                    menuItem.action = @selector(terminate:);
-                } else if ([role isEqualToString:@"hide"]) {
-                    menuItem.action = @selector(hide:);
-                } else if ([role isEqualToString:@"hideOthers"]) {
-                    menuItem.action = @selector(hideOtherApplications:);
-                } else if ([role isEqualToString:@"showAll"]) {
-                    menuItem.action = @selector(unhideAllApplications:);
-                } else if ([role isEqualToString:@"undo"]) {
-                    menuItem.action = @selector(undo:);
-                } else if ([role isEqualToString:@"redo"]) {
-                    menuItem.action = @selector(redo:);
-                } else if ([role isEqualToString:@"cut"]) {
-                    menuItem.action = @selector(cut:);
-                } else if ([role isEqualToString:@"copy"]) {
-                    menuItem.action = @selector(copy:);
-                } else if ([role isEqualToString:@"paste"]) {
-                    menuItem.action = @selector(paste:);
-                } else if ([role isEqualToString:@"pasteAndMatchStyle"]) {
-                    menuItem.action = @selector(pasteAsPlainText:);
-                } else if ([role isEqualToString:@"delete"]) {
-                    menuItem.action = @selector(delete:);
-                } else if ([role isEqualToString:@"selectAll"]) {
-                    menuItem.action = @selector(selectAll:);
-                } else if ([role isEqualToString:@"startSpeaking"]) {
-                    menuItem.action = @selector(startSpeaking:);
-                } else if ([role isEqualToString:@"stopSpeaking"]) {
-                    menuItem.action = @selector(stopSpeaking:);
-                } else if ([role isEqualToString:@"enterFullScreen"]) {
-                    menuItem.action = @selector(enterFullScreen:);
-                } else if ([role isEqualToString:@"exitFullScreen"]) {
-                    menuItem.action = @selector(exitFullScreen:);
-                } else if ([role isEqualToString:@"toggleFullScreen"]) {
-                    menuItem.action = @selector(toggleFullScreen:);
-                } else if ([role isEqualToString:@"minimize"]) {
-                    menuItem.action = @selector(performMiniaturize:);
-                } else if ([role isEqualToString:@"zoom"]) {
-                    menuItem.action = @selector(performZoom:);
-                } else if ([role isEqualToString:@"bringAllToFront"]) {
-                    menuItem.action = @selector(arrangeInFront:);
-                } else if ([role isEqualToString:@"close"]) {
-                    menuItem.action = @selector(performClose:);
-                } else if ([role isEqualToString:@"cycleThroughWindows"]) {
-                    menuItem.action = @selector(selectNextKeyView:);
-                } else if ([role isEqualToString:@"showHelp"]) {
-                    menuItem.action = @selector(showHelp:);
-                }
-                if (!accelerator) {
-                    if ([role isEqualToString:@"undo"]) {
-                        menuItem.keyEquivalent = @"z";
-                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-                    } else if ([role isEqualToString:@"redo"]) {
-                        menuItem.keyEquivalent = @"Z";
-                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
-                    } else if ([role isEqualToString:@"cut"]) {
-                        menuItem.keyEquivalent = @"x";
-                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-                    } else if ([role isEqualToString:@"copy"]) {
-                        menuItem.keyEquivalent = @"c";
-                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-                    } else if ([role isEqualToString:@"paste"]) {
-                        menuItem.keyEquivalent = @"v";
-                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-                    } else if ([role isEqualToString:@"pasteAndMatchStyle"]) {
-                        menuItem.keyEquivalent = @"V";
-                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
-                    } else if ([role isEqualToString:@"delete"]) {
-                        menuItem.keyEquivalent = [NSString stringWithFormat:@"%c",(char)NSDeleteCharacter];
-                        menuItem.keyEquivalentModifierMask = 0;
-                    } else if ([role isEqualToString:@"selectAll"]) {
-                        menuItem.keyEquivalent = @"a";
-                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-                    }
-                }
-            } else {
-                menuItem.target = target;
-            }
-            if (accelerator) {
-                menuItem.keyEquivalent = accelerator;
-                if (modifierMask) {
-                    menuItem.keyEquivalentModifierMask = [modifierMask unsignedIntegerValue];
-                } else {
-                    menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-                }
-            }
-            menuItem.enabled = enabled;
-            menuItem.state = checked ? NSControlStateValueOn : NSControlStateValueOff;
-            menuItem.hidden = hidden;
-            menuItem.toolTip = tooltip;
-            if (submenuConfig) {
-                NSMenu *submenu = createMenuFromConfig(submenuConfig, target);
-                [menu setSubmenu:submenu forItem:menuItem];
-            }
-        }
-        [menu addItem:menuItem];
-    }
-    return menu;
-}
 
 extern "C" void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {
     if (statusItem) {
@@ -2454,4 +2430,35 @@ extern "C" void showContextMenu(const char *jsonString, ZigStatusItemHandler con
     [menu popUpMenuPositioningItem:nil atLocation:mouseLocation inView:nil];
     objc_setAssociatedObject(NSApp, "ContextMenu", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
+
+extern "C" void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
+                                   WKWebView *webView,
+                                   zigSnapshotCallback callback) {
+    WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];
+    [webView takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {
+        if (error) {
+            NSLog(@"Error capturing snapshot: %@", error);
+            return;
+        }
+        NSBitmapImageRep *imgRep = [[NSBitmapImageRep alloc] initWithData:[snapshotImage TIFFRepresentation]];
+        NSData *pngData = [imgRep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        NSString *base64String = [pngData base64EncodedStringWithOptions:0];
+        NSString *dataUrl = [NSString stringWithFormat:@"data:image/png;base64,%@", base64String];
+        if (callback) {
+            callback(hostId, webviewId, [dataUrl UTF8String]);
+        }
+    }];
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
