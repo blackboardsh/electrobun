@@ -305,7 +305,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
                 const bodyString = utils.fromCString(body);
 
                 var webview = webviewMap.get(webviewId) orelse {
-                    std.debug.print("Failed to get webview from hashmap for id {}: screenshot api\n", .{webviewId});
+                    std.debug.print("Failed to get webview from hashmap for id {}: rpc api\n", .{webviewId});
                     return assetFileLoader(url);
                 };
 
@@ -317,6 +317,9 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
 
                 return objc.FileResponse{ .mimeType = utils.toCString("text/plaintext"), .fileContents = responseString.ptr, .len = responseString.len, .opaquePointer = null };
             } else if (std.mem.startsWith(u8, relPath, "screenshot/")) {
+                // TODO: We should lock this down so only the host and bun can get a screenshot of a webview
+                // ie: and other restrictions to match exec privelege
+
                 // the relPath is screenshot/<webviewId>?<cachebuster>
                 // get the target webview info for objc, the screenshoting and resolving is done
                 // in objc
@@ -750,15 +753,6 @@ pub fn webviewTagSetTransparent(opts: rpcSchema.BrowserSchema.messages.webviewTa
     };
 
     objc.webviewTagSetTransparent(webview.handle, opts.transparent);
-}
-
-pub fn webviewTagToggleMirroring(opts: rpcSchema.BrowserSchema.messages.webviewTagToggleMirroring) void {
-    const webview = webviewMap.get(opts.id) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
-        return;
-    };
-
-    objc.webviewTagToggleMirroring(webview.handle, opts.enable);
 }
 
 pub fn webviewTagSetPassthrough(opts: rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough) void {

@@ -50,8 +50,7 @@ const ConfigureWebviewTags = (
 
     transparent: boolean = false;
     passthroughEnabled: boolean = false;
-    hidden: boolean = false;
-    delegateMode: boolean = false;
+    hidden: boolean = false;    
     hiddenMirrorMode: boolean = false;
     wasZeroRect: boolean = false;
     isMirroring: boolean = false;
@@ -457,85 +456,7 @@ const ConfigureWebviewTags = (
         html,
       })
     }
-    // Note: you can set an interval and do this 60 times a second and it's pretty smooth
-    // but it uses quite a bit of cpu
-    // todo: change this to "mirror to dom" or something
-    syncScreenshot(callback?: () => void) {
-      const cacheBustString = `?${Date.now()}`;
-      const url = `views://screenshot/${this.webviewId}${cacheBustString}`;
-      const img = new Image();
-      img.src = url;
-      img.onload = () => {
-        this.style.backgroundImage = `url(${url})`;
-        if (callback) {
-          // We've preloaded the image, but we still want to give it a chance to render
-          // after setting the background style. give it quite a bit longer than a rafr
-          setTimeout(callback, 100);
-        }
-      };
-    }
 
-    DEFAULT_FRAME_RATE = Math.round(1000 / 30); // 30fps
-    streamScreenInterval?: Timer;
-
-    // NOTE: This is very cpu intensive, Prefer startMirroring where possible
-    startMirroringToDom(frameRate: number = this.DEFAULT_FRAME_RATE) {
-      if (this.streamScreenInterval) {
-        clearInterval(this.streamScreenInterval);
-      }
-
-      this.streamScreenInterval = setInterval(() => {
-        this.syncScreenshot();
-      }, frameRate);
-    }
-
-    stopMirroringToDom() {
-      if (this.streamScreenInterval) {
-        clearInterval(this.streamScreenInterval);
-        this.streamScreenInterval = undefined;
-      }
-    }
-
-    startMirroring() {
-      // TEMP: mirroring now happens automatically in objc
-      // when the mouse moves. I'm leaving this here for now
-      // because I suspect there may still be use cases to
-      // toggle it from the dom outside of the mouse moving.
-      return;
-      if (this.isMirroring === false) {
-        this.isMirroring = true;
-        this.zigRpc.send.webviewTagToggleMirroring({
-          id: this.webviewId,
-          enable: true,
-        });
-      }
-    }
-
-    stopMirroring() {
-      return;
-      if (this.isMirroring === true) {
-        this.isMirroring = false;
-        this.zigRpc.send.webviewTagToggleMirroring({
-          id: this.webviewId,
-          enable: false,
-        });
-      }
-    }
-
-    clearScreenImage() {
-      this.style.backgroundImage = "";
-    }
-
-    tryClearScreenImage() {
-      if (
-        !this.transparent &&
-        !this.hiddenMirrorMode &&
-        !this.delegateMode &&
-        !this.hidden
-      ) {
-        this.clearScreenImage();
-      }
-    }
     // This sets the native webview hovering over the dom to be transparent
     toggleTransparent(transparent?: boolean, bypassState?: boolean) {
       if (!bypassState) {
@@ -544,10 +465,6 @@ const ConfigureWebviewTags = (
         } else {
           this.transparent = transparent;
         }
-      }
-
-      if (!this.transparent && !transparent) {
-        this.tryClearScreenImage();
       }
 
       this.zigRpc.send.webviewTagSetTransparent({
@@ -584,55 +501,7 @@ const ConfigureWebviewTags = (
         id: this.webviewId,
         hidden: this.hidden || Boolean(hidden),
       });
-    }
-
-    // note: delegateMode and hiddenMirrorMode are experimental
-    // ideally delegate mode would move the webview off screen
-    // and delegate mouse and keyboard events to the webview while
-    // streaming the screen so it can be fully layered in the dom
-    // and fully interactive.
-    toggleDelegateMode(delegateMode?: boolean) {
-      const _newDelegateMode =
-        typeof delegateMode === "undefined" ? !this.delegateMode : delegateMode;
-
-      if (_newDelegateMode) {
-        this.syncScreenshot(() => {
-          this.delegateMode = true;
-          this.toggleTransparent(true, true);
-          this.startMirroringToDom();
-        });
-      } else {
-        this.delegateMode = false;
-        this.stopMirroringToDom();
-        this.toggleTransparent(this.transparent);
-        this.tryClearScreenImage();
-      }
-    }
-
-    // While hiddenMirroMode would be similar to delegate mode but non-interactive
-    // This is used while scrolling or resizing the <electrobun-webviewtag> to
-    // make it smoother (scrolls with the dom) but disables interaction so that
-    // during the scroll we don't need to worry about the webview being misaligned
-    // with the mirror and accidentlly clicking on the wrong thing.
-    toggleHiddenMirrorMode(force: boolean) {
-      const enable =
-        typeof force === "undefined" ? !this.hiddenMirrorMode : force;
-
-      if (enable === true) {
-        this.syncScreenshot(() => {
-          this.hiddenMirrorMode = true;
-          this.toggleHidden(true, true);
-          this.togglePassthrough(true, true);
-          this.startMirroringToDom();
-        });
-      } else {
-        this.stopMirroringToDom();
-        this.toggleHidden(this.hidden);
-        this.togglePassthrough(this.passthroughEnabled);
-        this.tryClearScreenImage();
-        this.hiddenMirrorMode = false;
-      }
-    }
+    }   
   }
 
   customElements.define("electrobun-webview", WebviewTag);

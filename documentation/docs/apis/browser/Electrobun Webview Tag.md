@@ -157,15 +157,6 @@ Because Electrobun's webview tag implementation uses a div anchor and then posit
 **Parameters**: `callback?: () => void`  
 **Description**: Captures and synchronizes a screenshot of the webview's contents, useful for visual mirroring.
 
-### startMirroring
-
-**Parameters**: `frameRate: number = DEFAULT_FRAME_RATE`  
-**Description**: Starts mirroring the webview's contents at a specified frame rate, optimizing for performance versus visual fidelity.
-
-### stopMirroring
-
-**Description**: Stops mirroring the webview's contents.
-
 ### clearScreenImage
 
 **Description**: Clears any images set as the webview anchor's background, typically used in conjunction with transparency and mirroring modes.

@@ -84,10 +84,6 @@ type WebviewTagHandlers = RPCSchema<{
       id: number;
       transparent: boolean;
     };
-    webviewTagToggleMirroring: {
-      id: number;
-      enable: boolean;
-    };
     webviewTagSetPassthrough: {
       id: number;
       enablePassthrough: boolean;

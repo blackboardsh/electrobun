@@ -268,7 +268,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 - (void)remove;
 
 - (void)setTransparent:(BOOL)transparent;
-- (void)toggleMirroring:(BOOL)enable;
 - (void)setPassthrough:(BOOL)enable;
 - (void)setHidden:(BOOL)hidden;
 
@@ -303,10 +302,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 - (void)reload { [self doesNotRecognizeSelector:_cmd]; }
 - (void)remove { [self doesNotRecognizeSelector:_cmd]; }
 
-- (void)setTransparent:(BOOL)transparent { [self doesNotRecognizeSelector:_cmd]; }
-- (void)toggleMirroring:(BOOL)enable { [self doesNotRecognizeSelector:_cmd]; }
-- (void)setPassthrough:(BOOL)enable { [self doesNotRecognizeSelector:_cmd]; }
-- (void)setHidden:(BOOL)hidden { [self doesNotRecognizeSelector:_cmd]; }
 
 - (BOOL)canGoBack { [self doesNotRecognizeSelector:_cmd]; return NO; }
 - (BOOL)canGoForward { [self doesNotRecognizeSelector:_cmd]; return NO; }
@@ -318,10 +313,30 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 - (void)addPreloadScriptToWebView:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
 - (void)updateCustomPreloadScript:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
 
-- (void)toggleMirrorMode:(BOOL)enable {
-    // NSLog(@"toggleMirrorMode %i %i", self.webviewId, enable);
-    NSView *subview = self.nsView;
+// todo: rename to toggleOffscreen / isOffscreen
+// then create isInteractive that returns !isOffscreen && isPassthrough
 
+
+- (void)setHidden:(BOOL)hidden {
+    [self.nsView setHidden:hidden];
+}
+
+- (void)setPassthrough:(BOOL)enable {    
+    self.isMousePassthroughEnabled = enable;
+}
+
+- (void)setTransparent:(BOOL)transparent {
+    if (transparent) {
+        self.nsView.layer.opacity = 0;
+    } else {
+        self.nsView.layer.opacity = 1;
+    }
+}
+
+
+- (void)toggleMirrorMode:(BOOL)enable {        
+    NSView *subview = self.nsView;
+    
     if (self.mirrorModeEnabled == enable) {
         return;
     }
@@ -445,6 +460,11 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     BOOL stillSearching = YES;    
 
     for (AbstractView * abstractView in self.abstractViews) {           
+
+        if (abstractView.isMousePassthroughEnabled) {
+            [abstractView toggleMirrorMode:YES];
+            continue;
+        }
         
         NSView *subview = abstractView.nsView;
 
@@ -869,25 +889,7 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
     self.webView = nil;
 }
 
-- (void)setTransparent:(BOOL)transparent {
-    if (transparent) {
-        self.nsView.layer.opacity = 0;
-    } else {
-        self.nsView.layer.opacity = 1;
-    }
-}
 
-- (void)toggleMirroring:(BOOL)enable {    
-    [self toggleMirrorMode:enable];
-}
-
-- (void)setPassthrough:(BOOL)enable {    
-    self.isMousePassthroughEnabled = enable;
-}
-
-- (void)setHidden:(BOOL)hidden {
-    [self.nsView setHidden:hidden];
-}
 
 - (BOOL)canGoBack {
     return [self.webView canGoBack];
@@ -1674,17 +1676,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     }
 }
 
-- (void)setTransparent:(BOOL)transparent {
-    if (transparent) {
-        self.nsView.layer.opacity = 0;
-    } else {
-        self.nsView.layer.opacity = 1;
-    }
-}
-
-- (void)setHidden:(BOOL)hidden {
-    [self.nsView setHidden:hidden];
-}
 
 - (BOOL)canGoBack {
     if (!self.browser) return NO;
@@ -1940,12 +1931,6 @@ extern "C" const char* getBodyFromScriptMessage(WKScriptMessage *message) {
 extern "C" void webviewTagSetTransparent(AbstractView *abstractView, BOOL transparent) {
     
         [abstractView setTransparent:transparent];
-    
-}
-
-extern "C" void webviewTagToggleMirroring(AbstractView *abstractView, BOOL enable) {
-   
-        [abstractView toggleMirroring:enable];
     
 }
 
