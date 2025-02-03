@@ -25,7 +25,6 @@ pub extern fn invokeDecisionHandler(decisionHandler: *anyopaque, policy: WKNavig
 pub extern fn getUrlFromNavigationAction(navigationAction: *anyopaque) callconv(.C) [*:0]const u8;
 pub extern fn getBodyFromScriptMessage(scriptMessage: *anyopaque) callconv(.C) [*:0]const u8;
 
-pub extern fn getNilValue() callconv(.C) *anyopaque;
 pub extern fn createNSRectWrapper(x: f64, y: f64, width: f64, height: f64) callconv(.C) *anyopaque;
 
 // pub extern fn createNSWindowWithFrameAndStyle(frame: *anyopaque, styleMask: WindowStyleMaskOptions) callconv(.C) *anyopaque;
@@ -100,7 +99,6 @@ pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv
 // pub extern fn addScriptMessageHandler(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) callconv(.C) void) callconv(.C) *anyopaque;
 pub extern fn addScriptMessageHandlerWithReply(webView: *anyopaque, webviewId: u32, name: [*:0]const u8, handler: *const fn (u32, [*:0]const u8) [*:0]const u8) callconv(.C) *anyopaque;
 pub extern fn evaluateJavaScriptWithNoCompletion(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
-pub extern fn evaluateJavaScriptinSecureContentWorld(webView: *anyopaque, script: [*:0]const u8) callconv(.C) void;
 pub extern fn callAsyncJavaScript(messageId: [*:0]const u8, webView: *anyopaque, script: [*:0]const u8, webviewId: u32, hostWebviewId: u32, handler: callAsyncJavascriptCompletionHandler) callconv(.C) void;
 pub extern fn resizeWebview(webView: *anyopaque, frame: NSRect, masks: [*:0]const u8) callconv(.C) void;
 pub extern fn webviewTagGoBack(webView: *anyopaque) callconv(.C) void;

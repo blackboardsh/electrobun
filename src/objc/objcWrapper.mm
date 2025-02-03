@@ -17,28 +17,31 @@
 #include "include/wrapper/cef_library_loader.h"
 #include "include/wrapper/cef_helpers.h"
 #include "include/cef_request_handler.h" 
+#include "include/cef_scheme.h"
+#include "include/cef_resource_handler.h"
+#include "include/cef_command_line.h"
+#include <string>
+#include <vector>
 #include <list>
+#include <cstdint>
 
 // Forward declare the CEF classes
 class CefApp;
 class CefClient;
 class CefLifeSpanHandler;
 class CefBrowser;
+class ElectrobunSchemeHandler;
+class ElectrobunSchemeHandlerFactory;
 
+CGFloat OFFSCREEN_OFFSET = -20000;
 
 BOOL useCEF = false;
-extern "C" bool isCEFAvailable() {
+bool isCEFAvailable() {
     NSBundle *mainBundle = [NSBundle mainBundle];
     NSString *frameworkPath = [mainBundle.privateFrameworksPath 
                               stringByAppendingPathComponent:@"Chromium Embedded Framework.framework/Chromium Embedded Framework"];
     return [[NSFileManager defaultManager] fileExistsAtPath:frameworkPath];
 }
-
-
-// ----------------------------------------------------------------------------
-// 1) DATA STRUCTS, TYPEDEFS, AND UTILITY
-// ----------------------------------------------------------------------------
-
 
 /** Matches your existing "views:// schema" file response. */
 typedef struct {
@@ -94,20 +97,9 @@ void releaseObjCObject(id objcObject) {
     CFRelease((__bridge CFTypeRef)objcObject);
 }
 
-// CEF SCHEMA HANDLER
-
-#include <cstdint>
-
 // Match the existing callback type
 typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const char* url, const char* body);
-#include "include/cef_scheme.h"
-#include "include/cef_resource_handler.h"
-#include <string>
-#include <vector>
 
-// Forward declarations
-class ElectrobunSchemeHandler;
-class ElectrobunSchemeHandlerFactory;
 
 // The main scheme handler class
 class ElectrobunSchemeHandler : public CefResourceHandler {
@@ -255,268 +247,260 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 // 2) ABSTRACT BASE CLASS
 // ----------------------------------------------------------------------------
 @interface AbstractView : NSObject
-@property (nonatomic, assign) uint32_t webviewId;
-@property (nonatomic, assign) NSView * nsView;
-@property (nonatomic, assign) BOOL isMousePassthroughEnabled;
-@property (nonatomic, assign) BOOL mirrorModeEnabled;
-@property (nonatomic, assign) BOOL fullSize;
+    @property (nonatomic, assign) uint32_t webviewId;
+    @property (nonatomic, assign) NSView * nsView;
+    @property (nonatomic, assign) BOOL isMousePassthroughEnabled;
+    @property (nonatomic, assign) BOOL mirrorModeEnabled;
+    @property (nonatomic, assign) BOOL fullSize;
 
-- (void)loadURL:(const char *)urlString;
-- (void)goBack;
-- (void)goForward;
-- (void)reload;
-- (void)remove;
+    - (void)loadURL:(const char *)urlString;
+    - (void)goBack;
+    - (void)goForward;
+    - (void)reload;
+    - (void)remove;
 
-- (void)setTransparent:(BOOL)transparent;
-- (void)setPassthrough:(BOOL)enable;
-- (void)setHidden:(BOOL)hidden;
+    - (void)setTransparent:(BOOL)transparent;
+    - (void)setPassthrough:(BOOL)enable;
+    - (void)setHidden:(BOOL)hidden;
 
-- (BOOL)canGoBack;
-- (BOOL)canGoForward;
+    - (BOOL)canGoBack;
+    - (BOOL)canGoForward;
 
-- (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString;
-- (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString;
-- (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler;
-- (void)addPreloadScriptToWebView:(const char*)jsString;
-- (void)updateCustomPreloadScript:(const char*)jsString;
+    - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString;
+    - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler;
+    - (void)addPreloadScriptToWebView:(const char*)jsString;
+    - (void)updateCustomPreloadScript:(const char*)jsString;
 
-- (void)toggleMirrorMode:(BOOL)enabled;
-- (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson;
+    - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson;
 @end
 
-
-
 @interface ContainerView : NSView
-/// An reverse ordered array of abstractViews (newest first)
-@property (nonatomic, strong) NSMutableArray<AbstractView *> *abstractViews;
-- (void)addAbstractView:(AbstractView *)webview;
-- (void)removeAbstractViewWithId:(uint32_t)webviewId;
-- (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation;
+    /// An reverse ordered array of abstractViews (newest first)
+    @property (nonatomic, strong) NSMutableArray<AbstractView *> *abstractViews;
+    - (void)addAbstractView:(AbstractView *)webview;
+    - (void)removeAbstractViewWithId:(uint32_t)webviewId;
+    - (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation;
 @end
 
 @implementation AbstractView
 
-- (void)loadURL:(const char *)urlString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)goBack { [self doesNotRecognizeSelector:_cmd]; }
-- (void)goForward { [self doesNotRecognizeSelector:_cmd]; }
-- (void)reload { [self doesNotRecognizeSelector:_cmd]; }
-- (void)remove { [self doesNotRecognizeSelector:_cmd]; }
+    - (void)loadURL:(const char *)urlString { [self doesNotRecognizeSelector:_cmd]; }
+    - (void)goBack { [self doesNotRecognizeSelector:_cmd]; }
+    - (void)goForward { [self doesNotRecognizeSelector:_cmd]; }
+    - (void)reload { [self doesNotRecognizeSelector:_cmd]; }
+    - (void)remove { [self doesNotRecognizeSelector:_cmd]; }
 
 
-- (BOOL)canGoBack { [self doesNotRecognizeSelector:_cmd]; return NO; }
-- (BOOL)canGoForward { [self doesNotRecognizeSelector:_cmd]; return NO; }
+    - (BOOL)canGoBack { [self doesNotRecognizeSelector:_cmd]; return NO; }
+    - (BOOL)canGoForward { [self doesNotRecognizeSelector:_cmd]; return NO; }
 
-- (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler { [self doesNotRecognizeSelector:_cmd]; }
-// todo: we don't need this to be public since it's only used to set the internal electrobun preview script
-- (void)addPreloadScriptToWebView:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
-- (void)updateCustomPreloadScript:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
+    - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
+    - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler { [self doesNotRecognizeSelector:_cmd]; }
+    // todo: we don't need this to be public since it's only used to set the internal electrobun preview script
+    - (void)addPreloadScriptToWebView:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
+    - (void)updateCustomPreloadScript:(const char*)jsString { [self doesNotRecognizeSelector:_cmd]; }
 
-// todo: rename to toggleOffscreen / isOffscreen
-// then create isInteractive that returns !isOffscreen && isPassthrough
+    // todo: rename to toggleOffscreen / isOffscreen
+    // then create isInteractive that returns !isOffscreen && isPassthrough
 
 
-- (void)setHidden:(BOOL)hidden {
-    [self.nsView setHidden:hidden];
-}
-
-- (void)setPassthrough:(BOOL)enable {    
-    self.isMousePassthroughEnabled = enable;
-}
-
-- (void)setTransparent:(BOOL)transparent {
-    if (transparent) {
-        self.nsView.layer.opacity = 0;
-    } else {
-        self.nsView.layer.opacity = 1;
+    - (void)setHidden:(BOOL)hidden {
+        [self.nsView setHidden:hidden];
     }
-}
 
-
-- (void)toggleMirrorMode:(BOOL)enable {        
-    NSView *subview = self.nsView;
-    
-    if (self.mirrorModeEnabled == enable) {
-        return;
+    - (void)setPassthrough:(BOOL)enable {    
+        self.isMousePassthroughEnabled = enable;
     }
-    BOOL isLeftMouseButtonDown = ([NSEvent pressedMouseButtons] & (1 << 0)) != 0;
-    if (isLeftMouseButtonDown) {
-        return;
-    }
-    self.mirrorModeEnabled = enable;
 
-    if (enable) {        
-        CGFloat positionX = subview.frame.origin.x;
-        CGFloat positionY = subview.frame.origin.y;
-        CGFloat OFFSCREEN_OFFSET = -20000;
-        subview.frame = CGRectOffset(subview.frame, OFFSCREEN_OFFSET, OFFSCREEN_OFFSET);
-        subview.layer.position = CGPointMake(positionX, positionY);
-    } else {
-        subview.frame = CGRectMake(subview.layer.position.x,
-                                subview.layer.position.y,
-                                subview.frame.size.width,
-                                subview.frame.size.height);
-    }
-}
-
-
-- (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {    
-    if (!self.nsView)
-        return;    
-    
-    CGFloat adjustedX = floor(frame.origin.x);
-    CGFloat adjustedWidth = ceilf(frame.size.width);
-    CGFloat adjustedHeight = ceilf(frame.size.height);
-    CGFloat adjustedY = floor(self.nsView.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
-    
-
-    // TODO: move mirrorModeEnabled to abstractView
-    if (self.mirrorModeEnabled) {
-        self.nsView.frame = NSMakeRect(-20000, -20000, adjustedWidth, adjustedHeight);
-        self.nsView.layer.position = CGPointMake(adjustedX, adjustedY);
-    } else {
-        self.nsView.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
-    }
-    
-    CAShapeLayer* (^createMaskLayer)(void) = ^CAShapeLayer* {
-        if (!masksJson || strlen(masksJson) == 0) {
-            return nil;
+    - (void)setTransparent:(BOOL)transparent {
+        if (transparent) {
+            self.nsView.layer.opacity = 0;
+        } else {
+            self.nsView.layer.opacity = 1;
         }
+    }
 
-        NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
-        NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
-        if (!jsonData) {
-            return nil;
+
+    - (void)toggleMirrorMode:(BOOL)enable {        
+        NSView *subview = self.nsView;
+        
+        if (self.mirrorModeEnabled == enable) {
+            return;
+        }
+        BOOL isLeftMouseButtonDown = ([NSEvent pressedMouseButtons] & (1 << 0)) != 0;
+        if (isLeftMouseButtonDown) {
+            return;
+        }
+        self.mirrorModeEnabled = enable;
+
+        if (enable) {        
+            CGFloat positionX = subview.frame.origin.x;
+            CGFloat positionY = subview.frame.origin.y;            
+            subview.frame = CGRectOffset(subview.frame, OFFSCREEN_OFFSET, OFFSCREEN_OFFSET);
+            subview.layer.position = CGPointMake(positionX, positionY);
+        } else {
+            subview.frame = CGRectMake(subview.layer.position.x,
+                                    subview.layer.position.y,
+                                    subview.frame.size.width,
+                                    subview.frame.size.height);
+        }
+    }
+
+
+    - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {    
+        if (!self.nsView)
+            return;    
+        
+        CGFloat adjustedX = floor(frame.origin.x);
+        CGFloat adjustedWidth = ceilf(frame.size.width);
+        CGFloat adjustedHeight = ceilf(frame.size.height);
+        CGFloat adjustedY = floor(self.nsView.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
+        
+
+        // TODO: move mirrorModeEnabled to abstractView
+        if (self.mirrorModeEnabled) {
+            self.nsView.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);
+            self.nsView.layer.position = CGPointMake(adjustedX, adjustedY);
+        } else {
+            self.nsView.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
         }
         
-        NSError *error = nil;
-        NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-        if (!rectsArray || error) {
-            return nil;
-        }
+        CAShapeLayer* (^createMaskLayer)(void) = ^CAShapeLayer* {
+            if (!masksJson || strlen(masksJson) == 0) {
+                return nil;
+            }
 
-        CGFloat heightToAdjust = self.nsView.layer.geometryFlipped ? 0 : adjustedHeight;
+            NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
+            NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
+            if (!jsonData) {
+                return nil;
+            }
+            
+            NSError *error = nil;
+            NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+            if (!rectsArray || error) {
+                return nil;
+            }
+
+            CGFloat heightToAdjust = self.nsView.layer.geometryFlipped ? 0 : adjustedHeight;
+            
+            NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray, heightToAdjust);
+
+            CAShapeLayer *maskLayer = [CAShapeLayer layer];
+            maskLayer.frame = self.nsView.layer.bounds;
+            CGMutablePathRef path = CGPathCreateMutable();
+            CGPathAddRect(path, NULL, maskLayer.bounds);
+
+            for (NSValue *rectValue in processedRects) {
+                NSRect rect = [rectValue rectValue];
+                CGPathAddRect(path, NULL, rect);
+            }
+            maskLayer.fillRule = kCAFillRuleEvenOdd;
+            maskLayer.path = path;
+            CGPathRelease(path);
+            
+            return maskLayer;
+        };
+
+        self.nsView.layer.mask = createMaskLayer();
         
-        NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray, heightToAdjust);
-
-        CAShapeLayer *maskLayer = [CAShapeLayer layer];
-        maskLayer.frame = self.nsView.layer.bounds;
-        CGMutablePathRef path = CGPathCreateMutable();
-        CGPathAddRect(path, NULL, maskLayer.bounds);
-
-        for (NSValue *rectValue in processedRects) {
-            NSRect rect = [rectValue rectValue];
-            CGPathAddRect(path, NULL, rect);
-        }
-        maskLayer.fillRule = kCAFillRuleEvenOdd;
-        maskLayer.path = path;
-        CGPathRelease(path);
-        
-        return maskLayer;
-    };
-
-    self.nsView.layer.mask = createMaskLayer();
-    
-    NSPoint currentMousePosition = [self.nsView.window mouseLocationOutsideOfEventStream];
-    ContainerView *containerView = (ContainerView *)self.nsView.superview;    
-    [containerView updateActiveWebviewForMousePosition:currentMousePosition];
-        
-}
-
- 
+        NSPoint currentMousePosition = [self.nsView.window mouseLocationOutsideOfEventStream];
+        ContainerView *containerView = (ContainerView *)self.nsView.superview;    
+        [containerView updateActiveWebviewForMousePosition:currentMousePosition];
+            
+    }
 @end
 
 
 @implementation ContainerView
-- (instancetype)initWithFrame:(NSRect)frameRect {
-    self = [super initWithFrame:frameRect];
-    if (self) {
-        self.abstractViews = [NSMutableArray array]; 
-        [self updateTrackingAreas];
-    }
-    return self;
-}
-
-- (void)updateTrackingAreas {    
-    for (NSTrackingArea *area in self.trackingAreas) {
-        [self removeTrackingArea:area];
-    }
-    NSTrackingArea *mouseTrackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
-        options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow
-        owner:self
-        userInfo:nil];
-    [self addTrackingArea:mouseTrackingArea];
-}
-
-- (void)mouseMoved:(NSEvent *)event {    
-    NSPoint mouseLocation = [self convertPoint:[event locationInWindow] fromView:nil];
-    [self updateActiveWebviewForMousePosition:mouseLocation];
-}
-
-// This function tries to figure out which "abstractView" should be interactive
-// vs mirrored, based on mouse position and layering.
-- (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation {    
-    BOOL stillSearching = YES;    
-
-    for (AbstractView * abstractView in self.abstractViews) {           
-
-        if (abstractView.isMousePassthroughEnabled) {
-            [abstractView toggleMirrorMode:YES];
-            continue;
+    - (instancetype)initWithFrame:(NSRect)frameRect {
+        self = [super initWithFrame:frameRect];
+        if (self) {
+            self.abstractViews = [NSMutableArray array]; 
+            [self updateTrackingAreas];
         }
-        
-        NSView *subview = abstractView.nsView;
+        return self;
+    }
 
-        if (stillSearching) {
-            NSRect subviewRenderLayerFrame = subview.layer.frame;
-            if (NSPointInRect(mouseLocation, subviewRenderLayerFrame)){// && !subview.hidden) {
-                CAShapeLayer *maskLayer = (CAShapeLayer *)subview.layer.mask;
-                CGPathRef maskPath = maskLayer ? maskLayer.path : NULL;
-                if (maskPath) {                    
-                    CGFloat mouseXInWebview = mouseLocation.x - subviewRenderLayerFrame.origin.x;
-                    CGFloat mouseYInWebview = mouseLocation.y - subviewRenderLayerFrame.origin.y;
-                    
-                    // Note: WKWebkit uses geometryFlipped so the y coordinate is from the top not the bottom
-                    // (the default on osx is from the bottom). The mouse y coordinate is from the bottom
-                    // so we need to invert it to match the layer geometry
-                    if (subview.layer.geometryFlipped) {                                                
-                        mouseYInWebview = subviewRenderLayerFrame.size.height - (mouseLocation.y - subviewRenderLayerFrame.origin.y);                        
-                    }
+    - (void)updateTrackingAreas {    
+        for (NSTrackingArea *area in self.trackingAreas) {
+            [self removeTrackingArea:area];
+        }
+        NSTrackingArea *mouseTrackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
+            options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow
+            owner:self
+            userInfo:nil];
+        [self addTrackingArea:mouseTrackingArea];
+    }
 
-                    CGPoint mousePositionInMaskPath = CGPointMake(mouseXInWebview, mouseYInWebview);
+    - (void)mouseMoved:(NSEvent *)event {    
+        NSPoint mouseLocation = [self convertPoint:[event locationInWindow] fromView:nil];
+        [self updateActiveWebviewForMousePosition:mouseLocation];
+    }
 
-                    if (!CGPathContainsPoint(maskPath, NULL, mousePositionInMaskPath, true)) {                        
-                        [abstractView toggleMirrorMode:YES];                                                
-                        continue;
-                    }
-                }
-                
-                [abstractView toggleMirrorMode:NO];
-                stillSearching = NO;
+    // This function tries to figure out which "abstractView" should be interactive
+    // vs mirrored, based on mouse position and layering.
+    - (void)updateActiveWebviewForMousePosition:(NSPoint)mouseLocation {    
+        BOOL stillSearching = YES;    
+
+        for (AbstractView * abstractView in self.abstractViews) {           
+
+            if (abstractView.isMousePassthroughEnabled) {
+                [abstractView toggleMirrorMode:YES];
                 continue;
             }
-        }        
-        [abstractView toggleMirrorMode:YES];
-    }    
-}
+            
+            NSView *subview = abstractView.nsView;
+
+            if (stillSearching) {
+                NSRect subviewRenderLayerFrame = subview.layer.frame;
+                if (NSPointInRect(mouseLocation, subviewRenderLayerFrame)){// && !subview.hidden) {
+                    CAShapeLayer *maskLayer = (CAShapeLayer *)subview.layer.mask;
+                    CGPathRef maskPath = maskLayer ? maskLayer.path : NULL;
+                    if (maskPath) {                    
+                        CGFloat mouseXInWebview = mouseLocation.x - subviewRenderLayerFrame.origin.x;
+                        CGFloat mouseYInWebview = mouseLocation.y - subviewRenderLayerFrame.origin.y;
+                        
+                        // Note: WKWebkit uses geometryFlipped so the y coordinate is from the top not the bottom
+                        // (the default on osx is from the bottom). The mouse y coordinate is from the bottom
+                        // so we need to invert it to match the layer geometry
+                        if (subview.layer.geometryFlipped) {                                                
+                            mouseYInWebview = subviewRenderLayerFrame.size.height - (mouseLocation.y - subviewRenderLayerFrame.origin.y);                        
+                        }
+
+                        CGPoint mousePositionInMaskPath = CGPointMake(mouseXInWebview, mouseYInWebview);
+
+                        if (!CGPathContainsPoint(maskPath, NULL, mousePositionInMaskPath, true)) {                        
+                            [abstractView toggleMirrorMode:YES];                                                
+                            continue;
+                        }
+                    }
+                    
+                    [abstractView toggleMirrorMode:NO];
+                    stillSearching = NO;
+                    continue;
+                }
+            }        
+            [abstractView toggleMirrorMode:YES];
+        }    
+    }
 
 
-- (void)addAbstractView:(AbstractView *)abstractView {
-    // Add to front of array so it's top-most first
-    [self.abstractViews insertObject:abstractView atIndex:0];
-}
+    - (void)addAbstractView:(AbstractView *)abstractView {
+        // Add to front of array so it's top-most first
+        [self.abstractViews insertObject:abstractView atIndex:0];
+    }
 
-- (void)removeAbstractViewWithId:(uint32_t)webviewId {
-    NSInteger indexToRemove = -1;
-    for (NSInteger i = 0; i < self.abstractViews.count; i++) {
-        AbstractView * candidate = self.abstractViews[i];
-        if (candidate.webviewId == webviewId) {
-            [self.abstractViews removeObjectAtIndex:i];
-            break;
-        }
-    }   
-}
+    - (void)removeAbstractViewWithId:(uint32_t)webviewId {
+        NSInteger indexToRemove = -1;
+        for (NSInteger i = 0; i < self.abstractViews.count; i++) {
+            AbstractView * candidate = self.abstractViews[i];
+            if (candidate.webviewId == webviewId) {
+                [self.abstractViews removeObjectAtIndex:i];
+                break;
+            }
+        }   
+    }
 @end
 
 
@@ -553,56 +537,56 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
 }
 
 @interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>
-@property (nonatomic, assign) zigStartURLSchemeTaskCallback fileLoader;
-@property (nonatomic, assign) uint32_t webviewId;
+    @property (nonatomic, assign) zigStartURLSchemeTaskCallback fileLoader;
+    @property (nonatomic, assign) uint32_t webviewId;
 @end
 
 @implementation MyURLSchemeHandler
-- (void)webView:(WKWebView *)webView
-startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
-    NSURL *url = urlSchemeTask.request.URL;
-    NSData *bodyData = urlSchemeTask.request.HTTPBody;
-    NSString *bodyString = bodyData ? [[NSString alloc] initWithData:bodyData encoding:NSUTF8StringEncoding] : @"";
-    if (self.fileLoader) {
-        FileResponse fileResponse = self.fileLoader(self.webviewId, url.absoluteString.UTF8String, bodyString.UTF8String);
+    - (void)webView:(WKWebView *)webView
+    startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+        NSURL *url = urlSchemeTask.request.URL;
+        NSData *bodyData = urlSchemeTask.request.HTTPBody;
+        NSString *bodyString = bodyData ? [[NSString alloc] initWithData:bodyData encoding:NSUTF8StringEncoding] : @"";
+        if (self.fileLoader) {
+            FileResponse fileResponse = self.fileLoader(self.webviewId, url.absoluteString.UTF8String, bodyString.UTF8String);
 
-        NSString *mimeType = fileResponse.mimeType ? [NSString stringWithUTF8String:fileResponse.mimeType] : @"application/octet-stream";
-        if ([mimeType isEqualToString:@"screenshot"]) {
-            // special case
-            WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];
-            WKWebView *targetWebview = (__bridge WKWebView *)fileResponse.opaquePointer;
-            [targetWebview takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {
-                if (error) {
-                    NSLog(@"Error capturing snapshot: %@", error);
-                    return;
-                }
-                NSBitmapImageRep *imgRepbmp = [[NSBitmapImageRep alloc] initWithData:[snapshotImage TIFFRepresentation]];
-                NSData *imgData = [imgRepbmp representationUsingType:NSBitmapImageFileTypeBMP properties:@{NSImageCompressionFactor: @1.0}];
+            NSString *mimeType = fileResponse.mimeType ? [NSString stringWithUTF8String:fileResponse.mimeType] : @"application/octet-stream";
+            if ([mimeType isEqualToString:@"screenshot"]) {
+                // special case
+                WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];
+                WKWebView *targetWebview = (__bridge WKWebView *)fileResponse.opaquePointer;
+                [targetWebview takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {
+                    if (error) {
+                        NSLog(@"Error capturing snapshot: %@", error);
+                        return;
+                    }
+                    NSBitmapImageRep *imgRepbmp = [[NSBitmapImageRep alloc] initWithData:[snapshotImage TIFFRepresentation]];
+                    NSData *imgData = [imgRepbmp representationUsingType:NSBitmapImageFileTypeBMP properties:@{NSImageCompressionFactor: @1.0}];
 
+                    NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
+                                                                        MIMEType:@"image/bmp"
+                                                        expectedContentLength:imgData.length
+                                                                textEncodingName:nil];
+                    [urlSchemeTask didReceiveResponse:response];
+                    [urlSchemeTask didReceiveData:imgData];
+                    [urlSchemeTask didFinish];
+                }];
+            } else {
+                // normal resource
+                NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:fileResponse.len];
                 NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
-                                                                    MIMEType:@"image/bmp"
-                                                       expectedContentLength:imgData.length
+                                                                    MIMEType:mimeType
+                                                    expectedContentLength:data.length
                                                             textEncodingName:nil];
                 [urlSchemeTask didReceiveResponse:response];
-                [urlSchemeTask didReceiveData:imgData];
+                [urlSchemeTask didReceiveData:data];
                 [urlSchemeTask didFinish];
-            }];
-        } else {
-            // normal resource
-            NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:fileResponse.len];
-            NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
-                                                                MIMEType:mimeType
-                                                   expectedContentLength:data.length
-                                                        textEncodingName:nil];
-            [urlSchemeTask didReceiveResponse:response];
-            [urlSchemeTask didReceiveData:data];
-            [urlSchemeTask didFinish];
+            }
         }
     }
-}
-- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
-    NSLog(@"Stopping URL scheme task for URL: %@", urlSchemeTask.request.URL);
-}
+    - (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+        NSLog(@"Stopping URL scheme task for URL: %@", urlSchemeTask.request.URL);
+    }
 @end
 
 
@@ -613,43 +597,43 @@ startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
 // ----------------------------------------------------------------------------
 
 @interface MyNavigationDelegate : NSObject <WKNavigationDelegate>
-@property (nonatomic, assign) DecideNavigationCallback zigCallback;
-@property (nonatomic, assign) WebviewEventHandler zigEventHandler;
-@property (nonatomic, assign) uint32_t webviewId;
+    @property (nonatomic, assign) DecideNavigationCallback zigCallback;
+    @property (nonatomic, assign) WebviewEventHandler zigEventHandler;
+    @property (nonatomic, assign) uint32_t webviewId;
 @end
 
 @implementation MyNavigationDelegate
-- (void)webView:(WKWebView *)webView
-decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
-decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
-    NSURL *newURL = navigationAction.request.URL;
-    BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
-    self.zigEventHandler(self.webviewId, "will-navigate", webView.URL.absoluteString.UTF8String);
-    decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
-}
-- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    self.zigEventHandler(self.webviewId, "did-navigate", webView.URL.absoluteString.UTF8String);
-}
-- (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
-    self.zigEventHandler(self.webviewId, "did-commit-navigation", webView.URL.absoluteString.UTF8String);
-}
+    - (void)webView:(WKWebView *)webView
+    decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
+    decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+        NSURL *newURL = navigationAction.request.URL;
+        BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
+        self.zigEventHandler(self.webviewId, "will-navigate", webView.URL.absoluteString.UTF8String);
+        decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
+    }
+    - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+        self.zigEventHandler(self.webviewId, "did-navigate", webView.URL.absoluteString.UTF8String);
+    }
+    - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
+        self.zigEventHandler(self.webviewId, "did-commit-navigation", webView.URL.absoluteString.UTF8String);
+    }
 @end
 
 @interface MyWebViewUIDelegate : NSObject <WKUIDelegate>
-@property (nonatomic, assign) WebviewEventHandler zigEventHandler;
-@property (nonatomic, assign) uint32_t webviewId;
+    @property (nonatomic, assign) WebviewEventHandler zigEventHandler;
+    @property (nonatomic, assign) uint32_t webviewId;
 @end
 
 @implementation MyWebViewUIDelegate
-- (WKWebView *)webView:(WKWebView *)webView
-createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
-     forNavigationAction:(WKNavigationAction *)navigationAction
-          windowFeatures:(WKWindowFeatures *)windowFeatures {
-    if (!navigationAction.targetFrame.isMainFrame) {
-        self.zigEventHandler(self.webviewId, "new-window-open", navigationAction.request.URL.absoluteString.UTF8String);
+    - (WKWebView *)webView:(WKWebView *)webView
+    createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
+        forNavigationAction:(WKNavigationAction *)navigationAction
+            windowFeatures:(WKWindowFeatures *)windowFeatures {
+        if (!navigationAction.targetFrame.isMainFrame) {
+            self.zigEventHandler(self.webviewId, "new-window-open", navigationAction.request.URL.absoluteString.UTF8String);
+        }
+        return nil;
     }
-    return nil;
-}
 @end
 
 // ----------------------------------------------------------------------------
@@ -657,67 +641,35 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
 // ----------------------------------------------------------------------------
 
 @interface MyScriptMessageHandler : NSObject <WKScriptMessageHandler>
-@property (nonatomic, assign) HandlePostMessage zigCallback;
-@property (nonatomic, assign) uint32_t webviewId;
-@end
+    @property (nonatomic, assign) HandlePostMessage zigCallback;
+    @property (nonatomic, assign) uint32_t webviewId;
+    @end
 
-@implementation MyScriptMessageHandler
-- (void)userContentController:(WKUserContentController *)userContentController
-      didReceiveScriptMessage:(WKScriptMessage *)message {
-    NSString *body = message.body;
-    self.zigCallback(self.webviewId, body.UTF8String);
-}
+    @implementation MyScriptMessageHandler
+    - (void)userContentController:(WKUserContentController *)userContentController
+        didReceiveScriptMessage:(WKScriptMessage *)message {
+        NSString *body = message.body;
+        self.zigCallback(self.webviewId, body.UTF8String);
+    }
 @end
-
-// extern "C" MyScriptMessageHandler* addScriptMessageHandler(WKWebView *webView,
-//                                                            uint32_t webviewId,
-//                                                            const char *name,
-//                                                            HandlePostMessage callback) {
-//     MyScriptMessageHandler *handler = [[MyScriptMessageHandler alloc] init];
-//     handler.zigCallback = callback;
-//     handler.webviewId = webviewId;
-//     [webView.configuration.userContentController addScriptMessageHandler:handler
-//                                                                     name:[NSString stringWithUTF8String:name ?: ""]];
-//     NSString *key = [NSString stringWithFormat:@"PostMessageHandler{%s}", name];
-//     objc_setAssociatedObject(webView, key.UTF8String, handler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-//     return handler;
-// }
 
 @interface MyScriptMessageHandlerWithReply : NSObject <WKScriptMessageHandlerWithReply>
-@property (nonatomic, assign) HandlePostMessageWithReply zigCallback;
-@property (nonatomic, assign) uint32_t webviewId;
+    @property (nonatomic, assign) HandlePostMessageWithReply zigCallback;
+    @property (nonatomic, assign) uint32_t webviewId;
 @end
 
 @implementation MyScriptMessageHandlerWithReply
-- (void)userContentController:(WKUserContentController *)userContentController
-      didReceiveScriptMessage:(WKScriptMessage *)message
-                  replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
-    NSString *body = message.body;
-    const char *response = self.zigCallback(self.webviewId, body.UTF8String);
-    NSString *responseNSString = [NSString stringWithUTF8String:response ?: ""];
-    replyHandler(responseNSString, nil);
-}
+    - (void)userContentController:(WKUserContentController *)userContentController
+        didReceiveScriptMessage:(WKScriptMessage *)message
+                    replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
+        NSString *body = message.body;
+        const char *response = self.zigCallback(self.webviewId, body.UTF8String);
+        NSString *responseNSString = [NSString stringWithUTF8String:response ?: ""];
+        replyHandler(responseNSString, nil);
+    }
 @end
 
-extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView,
-                                                                             uint32_t webviewId,
-                                                                             const char *name,
-                                                                             HandlePostMessageWithReply callback) {
-    MyScriptMessageHandlerWithReply *handler = [[MyScriptMessageHandlerWithReply alloc] init];
-    handler.zigCallback = callback;
-    handler.webviewId = webviewId;
-    [webView.configuration.userContentController addScriptMessageHandlerWithReply:handler
-                                                                     contentWorld:WKContentWorld.pageWorld
-                                                                             name:[NSString stringWithUTF8String:name ?: ""]];
-    NSString *key = [NSString stringWithFormat:@"PostMessageHandlerWithReply{%s}", name];
-    objc_setAssociatedObject(webView, key.UTF8String, handler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    return handler;
-}
 
-
-// ----------------------------------------------------------------------------
-// 14) RESIZEWEBVIEW IMPLEMENTATION
-// ----------------------------------------------------------------------------
 
 
 
@@ -748,241 +700,232 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
 
 @implementation WKWebViewImpl
 
-- (instancetype)initWithWebviewId:(uint32_t)webviewId
-                           window:(NSWindow *)window
-                           url:(const char *)url                                                   
-                            frame:(NSRect)frame
-                  assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
-                       autoResize:(bool)autoResize
-              partitionIdentifier:(const char *)partitionIdentifier
-              navigationCallback:(DecideNavigationCallback)navigationCallback
-              webviewEventHandler:(WebviewEventHandler)webviewEventHandler
-              bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-              webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
-              electrobunPreloadScript:(const char *)electrobunPreloadScript
-              customPreloadScript:(const char *)customPreloadScript
-{
-    self = [super init];
-    if (self) {        
-        self.webviewId = webviewId;
+    - (instancetype)initWithWebviewId:(uint32_t)webviewId
+                            window:(NSWindow *)window
+                            url:(const char *)url                                                   
+                                frame:(NSRect)frame
+                    assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                        autoResize:(bool)autoResize
+                partitionIdentifier:(const char *)partitionIdentifier
+                navigationCallback:(DecideNavigationCallback)navigationCallback
+                webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+                bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
+                webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+                electrobunPreloadScript:(const char *)electrobunPreloadScript
+                customPreloadScript:(const char *)customPreloadScript
+    {
+        self = [super init];
+        if (self) {        
+            self.webviewId = webviewId;
 
-        // TODO: rewrite this so we can return a reference to the AbstractRenderer and then call
-        // init from zig after the handle is added to the webviewMap then we don't need this async stuff
-        dispatch_async(dispatch_get_main_queue(), ^{
-            // configuration
-            WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-            configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
-            [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
-            [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
-
-            // Add scheme handler
-            MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
-            assetSchemeHandler.fileLoader = assetFileLoader;
-            assetSchemeHandler.webviewId = webviewId;
-            [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
-
-            // create WKWebView 
-            self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
-            
-            [self.webView setValue:@NO forKey:@"drawsBackground"];
-            self.webView.layer.backgroundColor = [[NSColor clearColor] CGColor];
-            self.webView.layer.opaque = NO;
-
-            self.webView.autoresizingMask = NSViewNotSizable;
-
-            if (autoResize) {
-                self.fullSize = YES;
-            } else {                
-                self.fullSize = NO;
-            }
-
-            // retainObjCObject(self.webView);
-
-            // delegates
-            MyNavigationDelegate *navigationDelegate = [[MyNavigationDelegate alloc] init];
-            navigationDelegate.zigCallback = navigationCallback;
-            navigationDelegate.zigEventHandler = webviewEventHandler;
-            navigationDelegate.webviewId = webviewId;
-            self.webView.navigationDelegate = navigationDelegate;
-            objc_setAssociatedObject(self.webView, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-            MyWebViewUIDelegate *uiDelegate = [[MyWebViewUIDelegate alloc] init];
-            uiDelegate.zigEventHandler = webviewEventHandler;
-            uiDelegate.webviewId = webviewId;
-            self.webView.UIDelegate = uiDelegate;
-            objc_setAssociatedObject(self.webView, "UIDelegate", uiDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);                                    
-
-            // postmessage
-            // bunBridge
-            MyScriptMessageHandler *bunHandler = [[MyScriptMessageHandler alloc] init];
-            bunHandler.zigCallback = bunBridgeHandler;
-            bunHandler.webviewId = webviewId;
-            [self.webView.configuration.userContentController addScriptMessageHandler:bunHandler
-                                                                            name:[NSString stringWithUTF8String:"bunBridge"]];
-
-            objc_setAssociatedObject(self.webView, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-            // webviewTagBridge
-            MyScriptMessageHandler *webviewTagHandler = [[MyScriptMessageHandler alloc] init];
-            webviewTagHandler.zigCallback = webviewTagBridgeHandler;
-            webviewTagHandler.webviewId = webviewId;
-            [self.webView.configuration.userContentController addScriptMessageHandler:webviewTagHandler
-                                                                            name:[NSString stringWithUTF8String:"webviewTagBridge"]];
-
-            objc_setAssociatedObject(self.webView, "webviewTagHandler", webviewTagHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-            // add subview
-            [window.contentView addSubview:self.webView positioned:NSWindowAbove relativeTo:nil];
-            CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
-            self.webView.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
-
-            ContainerView *containerView = (ContainerView *)window.contentView;
-            [containerView addAbstractView:self];
-            // self.webView.abstractView = self;
-
-            // Force the load to happen on the next runloop iteration after addSubview
-            // otherwise wkwebkit won't load
+            // TODO: rewrite this so we can return a reference to the AbstractRenderer and then call
+            // init from zig after the handle is added to the webviewMap then we don't need this async stuff
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (url) {                
-                    [self loadURL:url];
-                } 
+                // configuration
+                WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+                configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
+                [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
+                [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
+
+                // Add scheme handler
+                MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
+                assetSchemeHandler.fileLoader = assetFileLoader;
+                assetSchemeHandler.webviewId = webviewId;
+                [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
+
+                // create WKWebView 
+                self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
+                
+                [self.webView setValue:@NO forKey:@"drawsBackground"];
+                self.webView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+                self.webView.layer.opaque = NO;
+
+                self.webView.autoresizingMask = NSViewNotSizable;
+
+                if (autoResize) {
+                    self.fullSize = YES;
+                } else {                
+                    self.fullSize = NO;
+                }
+
+                // retainObjCObject(self.webView);
+
+                // delegates
+                MyNavigationDelegate *navigationDelegate = [[MyNavigationDelegate alloc] init];
+                navigationDelegate.zigCallback = navigationCallback;
+                navigationDelegate.zigEventHandler = webviewEventHandler;
+                navigationDelegate.webviewId = webviewId;
+                self.webView.navigationDelegate = navigationDelegate;
+                objc_setAssociatedObject(self.webView, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+                MyWebViewUIDelegate *uiDelegate = [[MyWebViewUIDelegate alloc] init];
+                uiDelegate.zigEventHandler = webviewEventHandler;
+                uiDelegate.webviewId = webviewId;
+                self.webView.UIDelegate = uiDelegate;
+                objc_setAssociatedObject(self.webView, "UIDelegate", uiDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);                                    
+
+                // postmessage
+                // bunBridge
+                MyScriptMessageHandler *bunHandler = [[MyScriptMessageHandler alloc] init];
+                bunHandler.zigCallback = bunBridgeHandler;
+                bunHandler.webviewId = webviewId;
+                [self.webView.configuration.userContentController addScriptMessageHandler:bunHandler
+                                                                                name:[NSString stringWithUTF8String:"bunBridge"]];
+
+                objc_setAssociatedObject(self.webView, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+                // webviewTagBridge
+                MyScriptMessageHandler *webviewTagHandler = [[MyScriptMessageHandler alloc] init];
+                webviewTagHandler.zigCallback = webviewTagBridgeHandler;
+                webviewTagHandler.webviewId = webviewId;
+                [self.webView.configuration.userContentController addScriptMessageHandler:webviewTagHandler
+                                                                                name:[NSString stringWithUTF8String:"webviewTagBridge"]];
+
+                objc_setAssociatedObject(self.webView, "webviewTagHandler", webviewTagHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+                // add subview
+                [window.contentView addSubview:self.webView positioned:NSWindowAbove relativeTo:nil];
+                CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
+                self.webView.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+
+                ContainerView *containerView = (ContainerView *)window.contentView;
+                [containerView addAbstractView:self];
+                // self.webView.abstractView = self;
+
+                // Force the load to happen on the next runloop iteration after addSubview
+                // otherwise wkwebkit won't load
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (url) {                
+                        [self loadURL:url];
+                    } 
+                });
+
+                // Note: in WkWebkit the webview is an NSView
+                self.nsView = self.webView;            
+
+                [self addPreloadScriptToWebView:electrobunPreloadScript];
+                [self updateCustomPreloadScript:customPreloadScript];
+                
+                // associate
+                objc_setAssociatedObject(self.webView, "WKWebViewImpl", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             });
-
-            // Note: in WkWebkit the webview is an NSView
-            self.nsView = self.webView;            
-
-            [self addPreloadScriptToWebView:electrobunPreloadScript];
-            [self updateCustomPreloadScript:customPreloadScript];
-            
-            // associate
-            objc_setAssociatedObject(self.webView, "WKWebViewImpl", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        });
+        }
+        return self;
     }
-    return self;
-}
 
-- (void)loadURL:(const char *)urlString {    
-    NSString *urlNSString = (urlString ? [NSString stringWithUTF8String:urlString] : @"");
-    NSURL *url = [NSURL URLWithString:urlNSString];
-    if (!url) return;
-    NSURLRequest *request = [NSURLRequest requestWithURL:url];
-    [self.webView loadRequest:request];
-}
+    - (void)loadURL:(const char *)urlString {    
+        NSString *urlNSString = (urlString ? [NSString stringWithUTF8String:urlString] : @"");
+        NSURL *url = [NSURL URLWithString:urlNSString];
+        if (!url) return;
+        NSURLRequest *request = [NSURLRequest requestWithURL:url];
+        [self.webView loadRequest:request];
+    }
 
-- (void)goBack {
-    [self.webView goBack];
-}
-- (void)goForward {
-    [self.webView goForward];
-}
-- (void)reload {
-    [self.webView reload];
-}
+    - (void)goBack {
+        [self.webView goBack];
+    }
+    - (void)goForward {
+        [self.webView goForward];
+    }
+    - (void)reload {
+        [self.webView reload];
+    }
 
-- (void)remove {
-    [self.webView stopLoading];
-    [self.webView removeFromSuperview];
-    self.webView.navigationDelegate = nil;
-    self.webView.UIDelegate = nil;
-    [self.webView evaluateJavaScript:@"document.body.innerHTML='';" completionHandler:nil];
-    releaseObjCObject(self.webView);
-    self.webView = nil;
-}
+    - (void)remove {
+        [self.webView stopLoading];
+        [self.webView removeFromSuperview];
+        self.webView.navigationDelegate = nil;
+        self.webView.UIDelegate = nil;
+        [self.webView evaluateJavaScript:@"document.body.innerHTML='';" completionHandler:nil];
+        releaseObjCObject(self.webView);
+        self.webView = nil;
+    }
 
 
 
-- (BOOL)canGoBack {
-    return [self.webView canGoBack];
-}
-- (BOOL)canGoForward {
-    return [self.webView canGoForward];
-}
+    - (BOOL)canGoBack {
+        return [self.webView canGoBack];
+    }
+    - (BOOL)canGoForward {
+        return [self.webView canGoForward];
+    }
 
-- (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {
-    WKContentWorld *isolatedWorld = [WKContentWorld pageWorld];
-    NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
-    [self.webView evaluateJavaScript:code
-                             inFrame:nil
-                     inContentWorld:isolatedWorld
-                   completionHandler:nil];
-}
+    - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {
+        WKContentWorld *isolatedWorld = [WKContentWorld pageWorld];
+        NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
+        [self.webView evaluateJavaScript:code
+                                inFrame:nil
+                        inContentWorld:isolatedWorld
+                    completionHandler:nil];
+    }
 
-- (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString {
-    WKContentWorld *secureWorld = [WKContentWorld worldWithName:@"ElectrobunSecureWorld"];
-    NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
-    [self.webView evaluateJavaScript:code
-                             inFrame:nil
-                     inContentWorld:secureWorld
-                   completionHandler:nil];
-}
-
-- (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
-    NSString *javaScript = [NSString stringWithUTF8String:jsString ?: ""];
-    NSDictionary *arguments = @{};
-    [self.webView callAsyncJavaScript:javaScript
-                       arguments:arguments
-                         inFrame:nil
-                 inContentWorld:WKContentWorld.pageWorld
-              completionHandler:^(id result, NSError *error) {
-        NSError *jsonError;
-        NSData *jsonData;
-        if (error) {
-            jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": error.localizedDescription}
-                                                       options:0
-                                                         error:&jsonError];
-        } else {
-            if (result == nil) {
-                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [NSNull null]}
-                                                           options:0
-                                                             error:&jsonError];
-            } else if ([NSJSONSerialization isValidJSONObject:result]) {
-                jsonData = [NSJSONSerialization dataWithJSONObject:result
-                                                           options:0
-                                                             error:&jsonError];
+    - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
+        NSString *javaScript = [NSString stringWithUTF8String:jsString ?: ""];
+        NSDictionary *arguments = @{};
+        [self.webView callAsyncJavaScript:javaScript
+                        arguments:arguments
+                            inFrame:nil
+                    inContentWorld:WKContentWorld.pageWorld
+                completionHandler:^(id result, NSError *error) {
+            NSError *jsonError;
+            NSData *jsonData;
+            if (error) {
+                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": error.localizedDescription}
+                                                        options:0
+                                                            error:&jsonError];
             } else {
-                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [result description]}
-                                                           options:0
-                                                             error:&jsonError];
+                if (result == nil) {
+                    jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [NSNull null]}
+                                                            options:0
+                                                                error:&jsonError];
+                } else if ([NSJSONSerialization isValidJSONObject:result]) {
+                    jsonData = [NSJSONSerialization dataWithJSONObject:result
+                                                            options:0
+                                                                error:&jsonError];
+                } else {
+                    jsonData = [NSJSONSerialization dataWithJSONObject:@{@"result": [result description]}
+                                                            options:0
+                                                                error:&jsonError];
+                }
+                if (jsonError) {
+                    jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": jsonError.localizedDescription}
+                                                            options:0
+                                                                error:&jsonError];
+                }
             }
-            if (jsonError) {
-                jsonData = [NSJSONSerialization dataWithJSONObject:@{@"error": jsonError.localizedDescription}
-                                                           options:0
-                                                             error:&jsonError];
+            NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+            completionHandler(messageId, webviewId, hostWebviewId, jsonString.UTF8String);
+        }];
+    }
+
+
+    - (void)addPreloadScriptToWebView:(const char*)jsString {
+        NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
+        WKUserScript *script = [[WKUserScript alloc] initWithSource:code
+                                                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                forMainFrameOnly:false];
+        [self.webView.configuration.userContentController addUserScript:script];    
+    }
+
+    - (void)updateCustomPreloadScript:(const char*)jsString {    
+        WKUserContentController *contentController = self.webView.configuration.userContentController;
+        NSString *identifierComment = [NSString stringWithFormat:@"// %@\n", [NSString stringWithUTF8String:"electrobun_custom_preload_script"]];
+        NSString *newScriptSource = [identifierComment stringByAppendingString:[NSString stringWithUTF8String:jsString ?: ""]];
+        NSMutableArray *newScripts = [NSMutableArray array];
+        for (WKUserScript *userScript in contentController.userScripts) {
+            if (![userScript.source containsString:identifierComment]) {
+                [newScripts addObject:userScript];
             }
         }
-        NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-        completionHandler(messageId, webviewId, hostWebviewId, jsonString.UTF8String);
-    }];
-}
-
-
-- (void)addPreloadScriptToWebView:(const char*)jsString {
-    NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
-    WKUserScript *script = [[WKUserScript alloc] initWithSource:code
-                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                               forMainFrameOnly:false];
-    [self.webView.configuration.userContentController addUserScript:script];    
-}
-
-- (void)updateCustomPreloadScript:(const char*)jsString {    
-    WKUserContentController *contentController = self.webView.configuration.userContentController;
-    NSString *identifierComment = [NSString stringWithFormat:@"// %@\n", [NSString stringWithUTF8String:"electrobun_custom_preload_script"]];
-    NSString *newScriptSource = [identifierComment stringByAppendingString:[NSString stringWithUTF8String:jsString ?: ""]];
-    NSMutableArray *newScripts = [NSMutableArray array];
-    for (WKUserScript *userScript in contentController.userScripts) {
-        if (![userScript.source containsString:identifierComment]) {
-            [newScripts addObject:userScript];
+        [contentController removeAllUserScripts];
+        for (WKUserScript *userScript in newScripts) {
+            [contentController addUserScript:userScript];
         }
+        WKUserScript *newUserScript = [[WKUserScript alloc] initWithSource:newScriptSource
+                                                            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                        forMainFrameOnly:true];
+        [contentController addUserScript:newUserScript];
     }
-    [contentController removeAllUserScripts];
-    for (WKUserScript *userScript in newScripts) {
-        [contentController addUserScript:userScript];
-    }
-    WKUserScript *newUserScript = [[WKUserScript alloc] initWithSource:newScriptSource
-                                                          injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                       forMainFrameOnly:true];
-    [contentController addUserScript:newUserScript];
-}
 
 @end
 
@@ -992,22 +935,22 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
 
 // Provide the CefAppProtocol implementation
 @interface ElectrobunNSApplication : NSApplication <CefAppProtocol> {
-@private
-  BOOL handlingSendEvent_;
-}
+    @private
+    BOOL handlingSendEvent_;
+    }
 @end
 
 @implementation ElectrobunNSApplication
-- (BOOL)isHandlingSendEvent {
-  return handlingSendEvent_;
-}
-- (void)setHandlingSendEvent:(BOOL)handlingSendEvent {
-  handlingSendEvent_ = handlingSendEvent;
-}
-- (void)sendEvent:(NSEvent*)event {
-  CefScopedSendingEvent sendingEventScoper;
-  [super sendEvent:event];
-}
+    - (BOOL)isHandlingSendEvent {
+    return handlingSendEvent_;
+    }
+    - (void)setHandlingSendEvent:(BOOL)handlingSendEvent {
+    handlingSendEvent_ = handlingSendEvent;
+    }
+    - (void)sendEvent:(NSEvent*)event {
+    CefScopedSendingEvent sendingEventScoper;
+    [super sendEvent:event];
+    }
 @end
 
 class ElectrobunHandler : public CefClient,
@@ -1363,8 +1306,8 @@ public:
 
 // Global CEF reference
 CefRefPtr<ElectrobunApp> g_app;
-#include "include/cef_command_line.h"
-extern "C" bool initializeCEF() {
+
+bool initializeCEF() {
     static bool initialized = false;
     if (initialized) return true;
     
@@ -1704,31 +1647,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     );
 }
 
-- (void)evaluateJavaScriptInSecureContentWorld:(const char*)jsString {
-    if (!jsString) return;
-    
-    CefRefPtr<CefFrame> mainFrame = self.browser->GetMainFrame();
-    if (!mainFrame) {
-        NSLog(@"[CEF] Failed to get main frame for secure JavaScript evaluation");
-        return;
-    }
-
-    // Create an isolated context by wrapping the code in an IIFE with a unique scope
-    std::string isolatedCode = "(function() { \
-        'use strict'; \
-        const electrobunSecureWorld = {}; \
-        (function(exports) { \
-            " + std::string(jsString) + " \
-        })(electrobunSecureWorld); \
-    })();";
-
-    mainFrame->ExecuteJavaScript(
-        CefString(isolatedCode),
-        mainFrame->GetURL(),
-        0  // Line number for debugging
-    );
-}
-
 - (void)callAsyncJavascript:(const char*)messageId 
                   jsString:(const char*)jsString 
                  webviewId:(uint32_t)webviewId 
@@ -1755,19 +1673,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 }
 
 @end
-
-
-
-
-// ----------------------------------------------------------------------------
-// 7) "VIEWS://" SCHEMA UTILS & MISC
-// ----------------------------------------------------------------------------
-
-CGFloat OFFSCREEN_OFFSET = -20000;
-
-extern "C" void* getNilValue() {
-    return NULL;
-}
 
 extern "C" AbstractView* initWebview(uint32_t webviewId,
                         NSWindow *window,
@@ -1810,9 +1715,21 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
     
 }
 
-// ----------------------------------------------------------------------------
-// 9) OTHER WKWEBVIEW BRIDGING CALLS
-// ----------------------------------------------------------------------------
+extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView,
+                                                                             uint32_t webviewId,
+                                                                             const char *name,
+                                                                             HandlePostMessageWithReply callback) {
+
+    MyScriptMessageHandlerWithReply *handler = [[MyScriptMessageHandlerWithReply alloc] init];
+    handler.zigCallback = callback;
+    handler.webviewId = webviewId;
+    [webView.configuration.userContentController addScriptMessageHandlerWithReply:handler
+                                                                     contentWorld:WKContentWorld.pageWorld
+                                                                             name:[NSString stringWithUTF8String:name ?: ""]];
+    NSString *key = [NSString stringWithFormat:@"PostMessageHandlerWithReply{%s}", name];
+    objc_setAssociatedObject(webView, key.UTF8String, handler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return handler;
+}
 
 extern "C" void loadURLInWebView(AbstractView *abstractView, const char *urlString) {
     [abstractView loadURL:urlString];
@@ -1867,10 +1784,6 @@ extern "C" void testFFI(void *ptr) {
     // Try to check vtable if it's a C++ object
     void **vtable = *(void***)ptr;
     NSLog(@"Possible vtable pointer: %p", vtable);
-}
-
-extern "C" void evaluateJavaScriptinSecureContentWorld(AbstractView *abstractView, const char *jsString) {    
-    [abstractView evaluateJavaScriptInSecureContentWorld:jsString];    
 }
 
 // typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);

@@ -207,10 +207,6 @@ const WebviewType = struct {
         objc.evaluateJavaScriptWithNoCompletion(self.handle, utils.toCString(message));
     }
 
-    pub fn sendToWebviewSecureWorld(self: *WebviewType, message: []const u8) void {
-        objc.evaluateJavaScriptinSecureContentWorld(self.handle, utils.toCString(message));
-    }
-
     pub fn deinit(self: *WebviewType) void {
         // todo: implement the rest of this including objc stuff
         if (self.bun_out_pipe) |file| {
@@ -358,13 +354,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         break :blk opts.url;
     });
 
-    // Note: The only way for code in the secure world to communicate with the page world
-    // is via postMessage which requires serialization. So might be useful but not for efficient rpc.
-    // objc.evaluateJavaScriptinSecureContentWorld(_webview.handle, utils.toCString(
-    //     \\ const test = 567;
-    //     \\ console.log('test', test);
-    //     \\ window.test44 = 44;
-    // ));
     // objc.evaluateJavaScriptWithNoCompletion(_webview.handle, utils.toCString("const test = 567; console.log('test', test);"));
 
     // Note: Keep this in sync with browser api
