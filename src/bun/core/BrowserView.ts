@@ -139,13 +139,7 @@ export class BrowserView<T> {
   navigationRules: string | null;
 
   constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
-    // const rpc = options.rpc;
-
-    // if (rpc) {
-    //   rpc.
-    // }
-
-    console.log('CONSTRUCTOR 1')
+    // const rpc = options.rpc;        
 
     this.url = options.url || defaultOptions.url || null;
     this.html = options.html || defaultOptions.html || null;
@@ -201,17 +195,16 @@ export class BrowserView<T> {
     BrowserViewMap[this.id] = this;
   }
 
-  createStreams() {
-    console.log('createStreams 1', this.html)
+  createStreams() {    
     const webviewPipeIn = this.pipePrefix + "_in";
     const webviewPipeOut = this.pipePrefix + "_out";
-    console.log('createStreams 2', "mkfifo " + webviewPipeOut)
+    
     try {
       execSync("mkfifo " + webviewPipeOut);
     } catch (e) {
       console.log("pipe out already exists");
     }
-    console.log('createStreams 3')
+    
     try {
       execSync("mkfifo " + webviewPipeIn);
     } catch (e) {
@@ -219,7 +212,7 @@ export class BrowserView<T> {
     }
 
     // setTimeout(() => {
-    console.log('createStreams 4')
+    
     const inStream = fs.createWriteStream(webviewPipeIn, {
       flags: "r+",
     });
@@ -229,19 +222,19 @@ export class BrowserView<T> {
     inStream.write("\n");
 
     this.inStream = inStream;
-    console.log('createStreams 5')
+    
     // Open the named pipe for reading
     const outStream = Bun.file(webviewPipeOut).stream();
     this.outStream = outStream;
-    console.log('createStreams 6')
+    
     if (!this.rpc) {
       this.rpc = BrowserView.defineRPC({
         handlers: { requests: {}, messages: {} },
       });
     }
-    console.log('createStreams 7')
+    
     this.rpc.setTransport(this.createTransport());
-    console.log('createStreams 8')
+    
   // }, 5000)
   }
 
@@ -433,8 +426,7 @@ export class BrowserView<T> {
     } as RPCOptions<mixedWebviewSchema, mixedBunSchema>;
 
     const rpc = createRPC<mixedWebviewSchema, mixedBunSchema>(rpcOptions);
-
-    console.log('messageHandler 6')
+    
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
       // note: this can only be done once there is a transport

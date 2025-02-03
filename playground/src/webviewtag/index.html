@@ -7,7 +7,7 @@
     <script src="views://webviewtag/index.js"></script>
 </head>
 <body style="height: 100vh; padding-top: 20px; background: #fff"
-ondragover="console.log(event);document.getElementById('draginfo').innerHTML = 'clientX: '+event.clientX+' | clientY: '+event.clientY;">    
+ondragover="document.getElementById('draginfo').innerHTML = 'clientX: '+event.clientX+' | clientY: '+event.clientY;">    
     <div class="electrobun-webkit-app-region-drag" style=" cursor:move; -webkit-user-select: none; position:absolute; top: 0; right: 0; left: 80px; background: #222; padding: 3px 10px; color: #eee;">draggable area: move the window by adding .electrobun-webkit-app-region-drag class to any html element</div>
     <h1>Webview Tag Test</h1>
     <button onclick="document.querySelector('electrobun-webview').goBack()">Go Back</button>
@@ -42,14 +42,14 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
     <img src="views://webviewtag/electrobun.png" />
 
     <h2>parition test</h2>
-    <electrobun-webview  src="http://wikipedia.org" partition="" ></electrobun-webview>    
-    <electrobun-webview  src="http://wikipedia.org" partition="" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="" ></electrobun-webview>    
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="" ></electrobun-webview>
     
-    <electrobun-webview  src="http://wikipedia.org" partition="persist:test1" ></electrobun-webview>
-    <electrobun-webview  src="http://wikipedia.org" partition="persist:test1" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="persist:test1" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="persist:test1" ></electrobun-webview>
 
-    <electrobun-webview  src="http://wikipedia.org" partition="persist:test2" ></electrobun-webview>
-    <electrobun-webview  src="http://wikipedia.org" partition="temp:2" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="persist:test2" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="temp:2" ></electrobun-webview>
 
     
     
@@ -76,6 +76,7 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
         });
 
         setTimeout(() => {
+            
             document.querySelector('electrobun-webview').callAsyncJavaScript({
                 // script: `document.body.innerHTML = 'hello from host browser context'`,
                 // script: `document.body.textContent`,

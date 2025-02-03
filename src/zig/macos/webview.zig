@@ -205,7 +205,6 @@ const WebviewType = struct {
 
     pub fn sendToWebview(self: *WebviewType, message: []const u8) void {
         objc.evaluateJavaScriptWithNoCompletion(self.handle, utils.toCString(message));
-        std.debug.print("called objc.evaluateJavaScriptWithNoCompletion() with {s}\n", .{message});
     }
 
     pub fn sendToWebviewSecureWorld(self: *WebviewType, message: []const u8) void {
@@ -245,7 +244,6 @@ const CreateWebviewOpts = struct { //
     navigationRules: ?[]const u8,
 };
 pub fn createWebview(opts: CreateWebviewOpts) void {
-    std.debug.print("creating webview zig webviewId: {}", .{opts.id});
     const bunPipeIn = blk: {
         const bunPipeInPath = utils.concatStrings(opts.pipePrefix, "_in");
         const bunPipeInFileResult = std.fs.cwd().openFile(bunPipeInPath, .{ .mode = .read_only });
@@ -528,7 +526,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         }
     }.decideNavigation, struct {
         fn handleWebviewEvent(webviewId: u32, eventName: ?[*:0]const u8, url: ?[*:0]const u8) callconv(.C) void {
-            std.debug.print("handleWebviewEvent in zig", .{});
             webviewEvent(.{
                 .id = webviewId,
                 .eventName = utils.fromCString(eventName),
@@ -604,8 +601,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         }
     }.WebviewTagBridgeHandler, utils.toCString(electrobunPreloadScript), utils.toCString(customPreloadScript));
 
-    std.debug.print("Setting webview handle in Zig: {*}\n", .{objcWebview});
-
     const _webview = WebviewType{ //
         .id = opts.id,
         .hostWebviewId = opts.hostWebviewId,
@@ -631,7 +626,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         std.log.info("Error putting webview into hashmap: ", .{});
         return;
     };
-    std.debug.print("done creating webview zig", .{});
 }
 
 // todo: move everything to cStrings or non-CStrings. just pick one.
@@ -786,12 +780,10 @@ pub fn webviewSetHidden(opts: rpcSchema.BrowserSchema.messages.webviewTagSetHidd
 }
 
 pub fn webviewEvent(opts: rpcSchema.BrowserSchema.messages.webviewEvent) void {
-    std.debug.print("webviewEvent 1 \n", .{});
     const webview = webviewMap.get(opts.id) orelse {
         std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
         return;
     };
-    std.debug.print("webviewEvent 2 \n", .{});
 
     // todo: we need these to timeout
     rpc.request.webviewEvent(.{
@@ -799,8 +791,6 @@ pub fn webviewEvent(opts: rpcSchema.BrowserSchema.messages.webviewEvent) void {
         .eventName = opts.eventName,
         .detail = opts.detail,
     });
-
-    std.debug.print("webviewEvent 3 \n", .{});
 
     // If this is a webview tag, we need to forward the event to the host webview so any in-browser listeners
     // can be notified.
@@ -812,7 +802,6 @@ pub fn webviewEvent(opts: rpcSchema.BrowserSchema.messages.webviewEvent) void {
             return;
         };
         defer alloc.free(jsCall);
-        std.debug.print("webviewEvent 4 \n", .{});
         sendLineToWebview(hostId, jsCall);
     }
 }
@@ -836,8 +825,6 @@ pub fn sendLineToWebview(webviewId: u32, line: []const u8) void {
         std.debug.print("Failed to get webview from hashmap for id {}: sendLineToWebview, line: {s}\n", .{ webviewId, line });
         return;
     };
-
-    std.debug.print("sendLineToWebview!!!! {s}\n", .{line});
 
     webview.sendToWebview(line);
 }

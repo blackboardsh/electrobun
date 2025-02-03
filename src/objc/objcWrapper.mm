@@ -1383,7 +1383,7 @@ extern "C" bool initializeCEF() {
 
     CefSettings settings;
     settings.no_sandbox = true;
-    settings.log_severity = LOGSEVERITY_VERBOSE;
+    // settings.log_severity = LOGSEVERITY_VERBOSE;
     
     // Add cache path to prevent warnings and potential issues
     NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
@@ -1620,7 +1620,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         [window makeKeyAndOrderFront:nil];
         dispatch_async(dispatch_get_main_queue(), ^{               
             // createCEFBrowser();
-            NSLog(@"-----------------> DISPATCH 1");
+            // NSLog(@"-----------------> DISPATCH 1");
         });
 
   

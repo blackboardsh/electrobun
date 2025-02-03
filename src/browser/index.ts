@@ -218,8 +218,7 @@ class Electroview<T> {
 
   // TODO: implement proper rpc-anywhere style rpc here
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
-  sendToZig(message: {}) {
-    console.log('messageHandler 1')
+  sendToZig(message: {}) {    
     if (window.webkit?.messageHandlers?.webviewTagBridge) {
       window.webkit.messageHandlers.webviewTagBridge.postMessage(
         JSON.stringify(message)
@@ -267,8 +266,7 @@ class Electroview<T> {
   createZigTransport(): RPCTransport {
     const that = this;
     return {
-      send(message) {    
-        console.log('messageHandler 2')   
+      send(message) {             
         if (window.webkit?.messageHandlers?.webviewTagBridge) {
           window.webkit.messageHandlers.webviewTagBridge.postMessage(
             JSON.stringify(message)
@@ -343,8 +341,7 @@ class Electroview<T> {
     // TEMP: disable the fallback for now. for some reason suddenly can't
     // repro now that other places are chunking messages and laptop restart
 
-    if (true || msg.length < 8 * 1024) {
-      console.log('messageHandler 3')
+    if (true || msg.length < 8 * 1024) {      
       if (window.webkit?.messageHandlers?.bunBridge){
         window.webkit.messageHandlers.bunBridge.postMessage(msg);
       } else {
@@ -465,8 +462,7 @@ class Electroview<T> {
     } as RPCOptions<mixedBunSchema, mixedWebviewSchema>;
 
     const rpc = createRPC<mixedBunSchema, mixedWebviewSchema>(rpcOptions);
-
-    console.log('messageHandler 5')
+    
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
       // note: this can only be done once there is a transport

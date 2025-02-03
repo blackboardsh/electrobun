@@ -350,7 +350,6 @@ pub fn fromBrowserHandleRequest(request: rpcTypes._RPCRequestPacket) RequestResu
 
 pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
     const method = message.id;
-    std.debug.print("fromBrowserHandleMessage method {s}\n", .{method});
     if (strEql(method, "webviewTagResize")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagResize, rpcSchema.BrowserSchema.messages.webviewTagResize, message.payload);
     } else if (strEql(method, "webviewTagUpdateSrc")) {

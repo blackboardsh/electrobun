@@ -66,7 +66,7 @@ pub fn pipesInEventListener() !void {
                 const bytesRead = readLineFromPipe(&buffer, ev.ident);
 
                 if (bytesRead) |line| {
-                    std.debug.print("pipesin line: {s}", .{line});
+                    // std.debug.print("pipesin line: {s}", .{line});
                     if (mainPipeIn != null and mainPipeIn.?.handle == ev.ident) {
                         // todo: do we need both this and stdin.zig
                         handleLineFromMainPipe(line);
