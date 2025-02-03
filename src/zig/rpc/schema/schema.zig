@@ -280,8 +280,6 @@ pub const Handlers = struct {
 };
 
 pub const Requests = struct {
-    // decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) void,
-    // sendSyncRequest: fn (params: ZigSchema.requests.sendSyncRequest.params) void,
     log: fn (params: ZigSchema.requests.log.params) void,
     trayEvent: fn (params: ZigSchema.requests.trayEvent.params) void,
     applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) void,

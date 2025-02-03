@@ -34,9 +34,7 @@ type BrowserViewOptions<T = undefined> = {
     width: number;
     height: number;
   };
-  rpc: T;
-  // todo: remove syncrpc and internal syncrpc
-  syncRpc: { [method: string]: (params: any) => any };
+  rpc: T;  
   hostWebviewId: number;
   autoResize: boolean;
 
@@ -63,7 +61,7 @@ const defaultOptions: Partial<BrowserViewOptions> = {
   },
 };
 
-const internalSyncRpcHandlers = {
+const internalRpcHandlers = {
   // todo: this shouldn't be getting method, just params.
   webviewTagInit: ({
     method,
@@ -133,8 +131,7 @@ export class BrowserView<T> {
   inStream: fs.WriteStream;
   outStream: ReadableStream<Uint8Array>;
   secretKey: Uint8Array;
-  rpc?: T;
-  syncRpc?: { [method: string]: (params: any) => any };
+  rpc?: T;  
   rpcHandler?: (msg: any) => void;
   navigationRules: string | null;
 
@@ -148,8 +145,7 @@ export class BrowserView<T> {
       ? { ...defaultOptions.frame, ...options.frame }
       : { ...defaultOptions.frame };
     this.rpc = options.rpc;
-    this.secretKey = new Uint8Array(randomBytes(32));
-    this.syncRpc = { ...(options.syncRpc || {}), ...internalSyncRpcHandlers };
+    this.secretKey = new Uint8Array(randomBytes(32));    
     this.partition = options.partition || null;
     // todo (yoav): since collisions can crash the app add a function that checks if the
     // file exists first
@@ -210,8 +206,6 @@ export class BrowserView<T> {
     } catch (e) {
       console.log("pipe in already exists");
     }
-
-    // setTimeout(() => {
     
     const inStream = fs.createWriteStream(webviewPipeIn, {
       flags: "r+",
@@ -235,7 +229,6 @@ export class BrowserView<T> {
     
     this.rpc.setTransport(this.createTransport());
     
-  // }, 5000)
   }
 
   sendMessageToWebviewViaExecute(jsonMessage) {
@@ -417,7 +410,7 @@ export class BrowserView<T> {
       maxRequestTime: config.maxRequestTime,
       requestHandler: {
         ...config.handlers.requests,
-        ...internalSyncRpcHandlers,
+        ...internalRpcHandlers,
       },
       transport: {
         // Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey

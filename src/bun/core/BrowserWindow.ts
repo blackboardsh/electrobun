@@ -19,8 +19,7 @@ type WindowOptionsType<T = undefined> = {
   html: string | null;
   preload: string | null;
   renderer: 'native' | 'cef';
-  rpc?: T;
-  syncRpc?: { [method: string]: (params: any) => any };
+  rpc?: T;  
   styleMask?: {};
   // TODO: implement all of them
   titleBarStyle: "hiddenInset" | "default";
@@ -85,8 +84,7 @@ export class BrowserWindow<T> {
   }
 
   init({
-    rpc,
-    syncRpc,
+    rpc,    
     styleMask,
     titleBarStyle,
   }: Partial<WindowOptionsType<T>>) {
@@ -141,8 +139,7 @@ export class BrowserWindow<T> {
         width: this.frame.width,
         height: this.frame.height,
       },
-      rpc,
-      syncRpc,
+      rpc,      
       // todo: we need to send the window here and attach it in one go
       // then the view creation code in objc can toggle between offscreen
       // or on screen views depending on if windowId is null

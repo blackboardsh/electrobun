@@ -168,10 +168,6 @@ const WebviewType = struct {
     html: ?[]const u8,
     renderer: []const u8, // native, cef, etc.
     navigationRules: NavigationRuleList,
-    // todo: de-init these using objc.releaseObjCObject() when the webview closes
-    // delegate: *anyopaque,
-    // bunBridgeHandler: *anyopaque,
-    // webviewTagHandler: *anyopaque,
     bun_out_pipe: ?std.fs.File, //?anyerror!std.fs.File,
     bun_in_pipe: ?std.fs.File,
     // Function to send a message to Bun
@@ -498,17 +494,6 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
         // },
     }, viewsHandler, opts.autoResize, utils.toCString(parition), struct {
         fn decideNavigation(webviewId: u32, url: [*:0]const u8) callconv(.C) bool {
-            // _ = webviewId;
-            // _ = url;
-            // todo: right now this reaches a generic rpc request, but it should be attached
-            // to this specific webview's pipe so navigation handlers can be attached to specific webviews
-            // const _response = rpc.request.decideNavigation(.{
-            //     .webviewId = webviewId,
-            //     .url = utils.fromCString(url),
-            // });
-
-            // TODO: Bun should provide this webview a rule list instead of it fireing an event
-
             const webview = webviewMap.get(webviewId) orelse {
                 std.debug.print("Failed to get webview from hashmap for id {}: decideNavigation\n", .{webviewId});
                 return false;

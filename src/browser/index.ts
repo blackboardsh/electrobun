@@ -103,11 +103,7 @@ class Electroview<T> {
   // electrobun rpc browser <-> zig
   zigRpc?: any;
   zigRpcHandler?: (msg: any) => void;
-  // give it a default function
-  syncRpc: (params: any) => any = () => {
-    console.log("syncRpc not initialized");
-  };
-
+  
   constructor(config: { rpc: T }) {
     this.rpc = config.rpc;
     this.init();
@@ -118,24 +114,7 @@ class Electroview<T> {
     // and have a setting that forces it enabled or disabled
     this.initZigRpc();
     this.initSocketToBun();
-    // Note:
-    // syncRPC messages doesn't need to be defined since there's no need for sync 1-way message
-    // just use non-blocking async rpc for that, we just need sync requests
-    // We don't need request ids either since we're not receiving the response on a different pipe
-    if (true) {
-      // TODO: define sync requests on schema (separate from async reqeusts and messages)
-      // this.syncRpc = (msg: { method: string; params: any }) => {
-      //   try {
-      //     const messageString = JSON.stringify(msg);
-      //     return this.bunBridge(messageString);
-      //   } catch (error) {
-      //     console.error(
-      //       "bun: failed to serialize message to webview syncRpc",
-      //       error
-      //     );
-      //   }
-      // };
-    }
+
     ConfigureWebviewTags(true, this.zigRpc, this.rpc);
 
     this.initElectrobunListeners();
@@ -278,29 +257,6 @@ class Electroview<T> {
         // webview tag doesn't handle any messages from zig just yet
       },
     };
-  }
-
-  // call any of your bun syncrpc methods in a way that appears synchronous from the browser context
-  bunBridgeSync(msg: string) {
-    console.warn("DEPRECATED: use async rpc if possible");
-    var xhr = new XMLHttpRequest();
-    // Note: setting false here makes the xhr request blocking. This completely
-    // blocks the main thread which is terrible. You can use this safely from a webworker.
-    // There are also cases where exposing bun sync apis (eg: existsSync) is useful especially
-    // on a first pass when migrating from Electron to Electrobun.
-    // This mechanism is designed to make any rpc call over the bridge into a sync blocking call
-    // from the browser context while bun asynchronously replies. Use it sparingly from the main thread.
-    xhr.open("POST", "views://syncrpc", false); // Synchronous call
-    xhr.send(msg);
-    if (!xhr.responseText) {
-      return xhr.responseText;
-    }
-
-    try {
-      return JSON.parse(xhr.responseText);
-    } catch {
-      return xhr.responseText;
-    }
   }
 
   async bunBridge(msg: string) {

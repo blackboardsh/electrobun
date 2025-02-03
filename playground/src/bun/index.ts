@@ -238,35 +238,27 @@ const win = new BrowserWindow({
     y: 2000,
   },
   rpc: myWebviewRPC,
-  syncRpc: {
-    // TODO: make adding typescript types to syncRpc nicer
-    doSyncMath: ({ a, b }) => {
-      console.log("doing sync math in bun", a, b);
-      return a + b;
-    },
-  },
+  
 });
 
 win.setTitle("url browserwindow");
 
-// TODO: this causes a crash. FIX it
+setTimeout(async () => {
+  const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+    // script: `document.body.textContent`,
+    script: `
+    return new Promise(
+      resolve => {
+        setTimeout(() => {
+          resolve(document.body.textContent + 'hi hi hi')
+        }, 1000)
+      }
+    )
+    `,
+  });
 
-// setTimeout(async () => {
-//   const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
-//     // script: `document.body.textContent`,
-//     script: `
-//     return new Promise(
-//       resolve => {
-//         setTimeout(() => {
-//           resolve(document.body.textContent + 'hi hi hi')
-//         }, 1000)
-//       }
-//     )
-//     `,
-//   });
-
-//   console.log("evaluateJavascriptWithResponse", result);
-// }, 1000);
+  console.log("evaluateJavascriptWithResponse", result);
+}, 1000);
 
 const wikiWindow = new BrowserWindow({
   title: "my url window",

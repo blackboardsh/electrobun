@@ -9,7 +9,7 @@ type Rect = { x: number; y: number; width: number; height: number };
 const ConfigureWebviewTags = (
   enableWebviewTags: boolean,
   zigRpc: (params: any) => any,
-  syncRpc: (params: any) => any
+  bunRpc: (params: any) => any
 ) => {
   if (!enableWebviewTags) {
     return;
@@ -24,7 +24,7 @@ const ConfigureWebviewTags = (
 
     // rpc
     zigRpc: any;
-    syncRpc: any;
+    bunRpc: any;
 
     // querySelectors for elements that you want to appear
     // in front of the webview.
@@ -60,7 +60,7 @@ const ConfigureWebviewTags = (
     constructor() {
       super();
       this.zigRpc = zigRpc;
-      this.syncRpc = syncRpc;      
+      this.bunRpc = bunRpc;      
 
       // Give it a frame to be added to the dom and render before measuring
       requestAnimationFrame(() => {
@@ -85,7 +85,7 @@ const ConfigureWebviewTags = (
       const url = this.src || this.getAttribute("src");
       const html = this.html || this.getAttribute("html");      
 
-      const webviewId = await this.syncRpc.request.webviewTagInit({
+      const webviewId = await this.bunRpc.request.webviewTagInit({
         method: "webviewTagInit",
         params: {
           hostWebviewId: window.__electrobunWebviewId,
