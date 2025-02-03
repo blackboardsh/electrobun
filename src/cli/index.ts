@@ -39,9 +39,20 @@ const PATHS = {
   LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun"),
   LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher"),
   ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview"),
+  NATIVE_WRAPPER_MACOS: join(
+    ELECTROBUN_DEP_PATH,
+    "dist",
+    "libObjcWrapper.dylib"
+  ),
   BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch"),
   EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor"),
   BSDIFF: join(ELECTROBUN_DEP_PATH, "dist", "bsdiff"),
+  CEF_FRAMEWORK_MACOS: join(
+    ELECTROBUN_DEP_PATH,
+    "dist",
+    "Chromium Embedded Framework.framework"
+  ),
+  CEF_HELPER_MACOS: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
 };
 
 const commandDefaults = {
@@ -76,6 +87,7 @@ const defaultConfig = {
     mac: {
       codesign: false,
       notarize: false,
+      bundleCEF: false,
       entitlements: {
         // This entitlement is required for Electrobun apps with a hardened runtime (required for notarization) to run on macos
         "com.apple.security.cs.allow-jit": true,
@@ -220,6 +232,7 @@ if (commandArg === "init") {
     appBundleFolderContentsPath,
     appBundleMacOSPath,
     appBundleFolderResourcesPath,
+    appBundleFolderFrameworksPath,
   } = createAppBundle(appFileName, buildFolder);
 
   const appBundleAppCodePath = join(appBundleFolderResourcesPath, "app");
@@ -328,11 +341,7 @@ if (commandArg === "init") {
   // todo (yoav): build native bindings for target
   // copy native bindings
   const zigNativeBinarySource = PATHS.ZIG_NATIVE_WRAPPER;
-  const zigNativeBinaryDestination = join(
-    appBundleMacOSPath,
-    "native",
-    "webview"
-  );
+  const zigNativeBinaryDestination = join(appBundleMacOSPath, "webview");
   const destFolder = dirname(zigNativeBinaryDestination);
   if (!existsSync(destFolder)) {
     // console.info('creating folder: ', destFolder);
@@ -343,6 +352,61 @@ if (commandArg === "init") {
     recursive: true,
     dereference: true,
   });
+
+  // copy native wrapper dynamic library next to zig native binary
+  const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;
+  const nativeWrapperMacosDestination = join(
+    appBundleMacOSPath,
+    "libObjcWrapper.dylib"
+  );
+  cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
+    dereference: true,
+  });
+  
+  // TODO: Should download binaries for arch, and then copy them in
+  // for developing Electrobun itself we can assume current arch is already
+  // in dist as it would have just been built from local source
+  if (config.build.mac.bundleCEF) {    
+    const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
+    const cefFrameworkDestination = join(
+      appBundleFolderFrameworksPath,
+      "Chromium Embedded Framework.framework"
+    );
+
+    cpSync(cefFrameworkSource, cefFrameworkDestination, {
+      recursive: true,
+      dereference: true,
+    });
+
+    // cef helpers
+    const cefHelperNames = [
+      "webview Helper",
+      "webview Helper (Alerts)",
+      "webview Helper (GPU)",
+      "webview Helper (Plugin)",
+      "webview Helper (Renderer)",
+    ];
+
+    const helperSourcePath = PATHS.CEF_HELPER_MACOS;
+    cefHelperNames.forEach((helperName) => {
+      const destinationPath = join(
+        appBundleFolderFrameworksPath,
+        `${helperName}.app`,
+        `Contents`,
+        `MacOS`,
+        `${helperName}`
+      );
+      const destFolder4 = basename(destinationPath);
+      if (!existsSync(destFolder4)) {
+        // console.info('creating folder: ', destFolder4);
+        mkdirSync(destFolder4, { recursive: true });
+      }
+      cpSync(helperSourcePath, destinationPath, {
+        recursive: true,
+        dereference: true,
+      });
+    });
+  }
 
   // copy native bindings
   const bsPatchSource = PATHS.BSPATCH;
@@ -1184,16 +1248,22 @@ function createAppBundle(bundleName: string, parentFolder: string) {
     appBundleFolderContentsPath,
     "Resources"
   );
+  const appBundleFolderFrameworksPath = join(
+    appBundleFolderContentsPath,
+    "Frameworks"
+  );
 
   // we don't have to make all the folders, just the deepest ones
   // todo (yoav): check if folders exist already before creating them
   mkdirSync(appBundleMacOSPath, { recursive: true });
   mkdirSync(appBundleFolderResourcesPath, { recursive: true });
+  mkdirSync(appBundleFolderFrameworksPath, { recursive: true });
 
   return {
     appBundleFolderPath,
     appBundleFolderContentsPath,
     appBundleMacOSPath,
     appBundleFolderResourcesPath,
+    appBundleFolderFrameworksPath,
   };
 }

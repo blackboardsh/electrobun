@@ -7,32 +7,24 @@
     <script src="views://webviewtag/index.js"></script>
 </head>
 <body style="height: 100vh; padding-top: 20px; background: #fff"
-ondragover="console.log(event);document.getElementById('draginfo').innerHTML = 'clientX: '+event.clientX+' | clientY: '+event.clientY;">    
+ondragover="document.getElementById('draginfo').innerHTML = 'clientX: '+event.clientX+' | clientY: '+event.clientY;">    
     <div class="electrobun-webkit-app-region-drag" style=" cursor:move; -webkit-user-select: none; position:absolute; top: 0; right: 0; left: 80px; background: #222; padding: 3px 10px; color: #eee;">draggable area: move the window by adding .electrobun-webkit-app-region-drag class to any html element</div>
     <h1>Webview Tag Test</h1>
     <button onclick="document.querySelector('electrobun-webview').goBack()">Go Back</button>
     <button onclick="document.querySelector('electrobun-webview').goForward()">Go Forward</button>
     <button onclick="document.querySelector('electrobun-webview').reload()">Reload</button>
     <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
-    <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">github.com/blackboardsh/electrobun</button>
-    <button onclick="document.querySelector('electrobun-webview').syncScreenshot()">Sync Screenshot</button>
-    <button onclick="document.querySelector('electrobun-webview').clearScreenImage()">clearScreenImage</button>
-    <button onclick="document.querySelector('electrobun-webview').startMirroring()">Start Mirroring</button>
-    <button onclick="document.querySelector('electrobun-webview').stopMirroring()">Stop Mirroring</button>
-    <button onclick="document.querySelector('electrobun-webview').startMirroringToDom()">Start Mirroring to DOM</button>
-    <button onclick="document.querySelector('electrobun-webview').stopMirroringToDom()">Stop Mirroring to DOM</button>
+    <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">github.com/blackboardsh/electrobun</button>    
     <button onclick="document.querySelector('electrobun-webview').toggleTransparent()">Toggle Transparent</button>
     <button onclick="document.querySelector('electrobun-webview').togglePassthrough()">Toggle Passthrough</button>
-    <button onclick="document.querySelector('electrobun-webview').toggleHidden()">Toggle Hidden</button>
-    <button onclick="document.querySelector('electrobun-webview').toggleDelegateMode()">Toggle delegate mode</button>
-    <button onclick="document.querySelector('electrobun-webview').toggleHiddenMirrorMode()">Toggle Hidden Mirror mode</button>
+    <button onclick="document.querySelector('electrobun-webview').toggleHidden()">Toggle Hidden</button>    
     <button onclick="document.querySelector('electrobun-webview').addMaskSelector('.element-to-mask')">Add mask selector</button>
     <button onclick="document.querySelector('electrobun-webview').removeMaskSelector('.element-to-mask')">Remove mask selector</button>
 
     <div class="element-to-mask" style="position:absolute; top: 130px; left:720px; width:200px; height: 200px; background: black; color: white;">Layered above webview</div>
     <div class="element-to-mask" style="position:absolute; top: 130px; left:590px; width:200px; height: 200px; background: green; color: white;">Layered above webview</div>
 
-    <electrobun-webview  style="width:50%; height: 50%; " src="https://electrobun.dev" preload="" ></electrobun-webview>    
+    <electrobun-webview  style="width:50%; height: 50%; " src="https://electrobun.dev" preload="" renderer="cef" ></electrobun-webview>    
     <div draggable="true" style="padding: 10px; width:100px;height:100px;border:5px solid black; cursor:move;">drag me into the webview when delegate mode is enabled</div>
     <span id="draginfo"></span>
     <electrobun-webview preload="window.onload = () => {document.body.innerHTML += 'hello from preload';}"  html="<html><body><h1>webview tag with html</h1></body></html>" ></electrobun-webview>    
@@ -42,14 +34,14 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
     <img src="views://webviewtag/electrobun.png" />
 
     <h2>parition test</h2>
-    <electrobun-webview  src="http://wikipedia.org" partition="" ></electrobun-webview>    
-    <electrobun-webview  src="http://wikipedia.org" partition="" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="" ></electrobun-webview>    
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="" ></electrobun-webview>
     
-    <electrobun-webview  src="http://wikipedia.org" partition="persist:test1" ></electrobun-webview>
-    <electrobun-webview  src="http://wikipedia.org" partition="persist:test1" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="persist:test1" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="persist:test1" ></electrobun-webview>
 
-    <electrobun-webview  src="http://wikipedia.org" partition="persist:test2" ></electrobun-webview>
-    <electrobun-webview  src="http://wikipedia.org" partition="temp:2" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="persist:test2" ></electrobun-webview>
+    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="temp:2" ></electrobun-webview>
 
     
     
@@ -76,6 +68,7 @@ ondragover="console.log(event);document.getElementById('draginfo').innerHTML = '
         });
 
         setTimeout(() => {
+            
             document.querySelector('electrobun-webview').callAsyncJavaScript({
                 // script: `document.body.innerHTML = 'hello from host browser context'`,
                 // script: `document.body.textContent`,

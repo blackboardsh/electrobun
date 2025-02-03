@@ -238,13 +238,7 @@ const win = new BrowserWindow({
     y: 2000,
   },
   rpc: myWebviewRPC,
-  syncRpc: {
-    // TODO: make adding typescript types to syncRpc nicer
-    doSyncMath: ({ a, b }) => {
-      console.log("doing sync math in bun", a, b);
-      return a + b;
-    },
-  },
+  
 });
 
 win.setTitle("url browserwindow");
@@ -270,6 +264,7 @@ const wikiWindow = new BrowserWindow({
   title: "my url window",
   url: "https://en.wikipedia.org/wiki/Special:Random",
   preload: "views://myextension/preload.js",
+  renderer: 'cef',
   frame: {
     width: 600,
     height: 600,
@@ -282,6 +277,7 @@ const wikiWindow = new BrowserWindow({
   //     maxRequestTime: 5000,
   //     // requestHandler: {}
   // })         ,
+  // todo: this should be in browserview so we can add internal handlers.
   rpc: BrowserView.defineRPC<MyExtensionSchema>({
     maxRequestTime: 5000,
     handlers: {
@@ -309,6 +305,7 @@ wikiWindow.on("move", (event) => {
 const webviewTagWindow = new BrowserWindow({
   title: "webview tag test",
   url: "views://webviewtag/index.html",
+  renderer: "cef",
   frame: {
     width: 1800,
     height: 1200,
@@ -350,20 +347,12 @@ const webviewTagWindow = new BrowserWindow({
 
 // todo (yoav): typescript types should resolve for e and e.setResponse
 Electrobun.events.on("will-navigate", (e) => {
-  console.log(
-    "example global will navigate handler",
-    e.data.url,
-    e.data.webviewId
-  );
+  console.log("example global will navigate handler", e.data.detail, e.data.id);
   e.response = { allow: true };
 });
 
 wikiWindow.webview.on("will-navigate", (e) => {
-  console.log(
-    "example webview will navigate handler",
-    e.data.url,
-    e.data.webviewId
-  );
+  console.log("example webview will navigate handler", e.data.detail, e.data.id);
   if (e.responseWasSet && e.response.allow === false) {
     e.response.allow = true;
     // e.clearResponse();

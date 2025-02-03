@@ -2,10 +2,7 @@ import ElectrobunEvent from "./event";
 
 export default {
   willNavigate: (data) =>
-    new ElectrobunEvent<{ url: string; windowId: number }, { allow: boolean }>(
-      "will-navigate",
-      data
-    ),
+    new ElectrobunEvent<{ detail: string }, {}>("will-navigate", data),
   didNavigate: (data) =>
     new ElectrobunEvent<{ detail: string }, {}>("did-navigate", data),
   didNavigateInPage: (data) =>

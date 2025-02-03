@@ -231,39 +231,6 @@ webview.rpc.logToBrowser("my message");
 The above code snippet shows defining the bun process rpc handlers and calling the browser process handlers from bun. To see how to handle the Browser context code take a look at the [Browser API](/docs/apis/browser/Electroview%20Class)
 :::
 
-### syncRpc
-
-:::warning
-The `SyncRpc` api is blocking. Calling `syncRpc` methods from the browser will completely block the browser thread and halt javascript while waiting for the bun process to respond.
-:::
-
-:::info
-Really the only time you may want to use the `syncRpc` api instead of the regular async `rpc` api is when you're migrating from Electron to Electrobun and you had a lot of browser code with the node integration enabled. Using the `syncRpc` api can save you lots of time on the initial refactor/migration.
-
-It's strongly advised to later follow up and migrate `syncRpc` methods to async `rpc` later on.
-:::
-
-```typescript title="src/bun/index.ts"
-const win = new BrowserWindow({
-  title: "my url window",
-  url: "views://mainview/index.html",
-  frame: {
-    width: 1800,
-    height: 600,
-    x: 2000,
-    y: 2000,
-  },
-  syncRpc: {
-    someSyncBunMethod: ({ a, b }) => {
-      console.log("doing sync math in bun", a, b);
-      return a + b;
-    },
-  },
-});
-```
-
-To see how to call syncRpc methods from the browser take a look at the [Browser API](/docs/apis/browser/Electroview%20Class)
-
 ## Static Methods
 
 ### BrowserView.getAll

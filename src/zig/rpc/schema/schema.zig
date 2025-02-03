@@ -7,19 +7,19 @@ pub const ZigSchema = struct { //
                 url: []const u8,
             };
             pub const response = struct {
-                allow: bool,
+                success: bool,
             };
         };
 
-        pub const sendSyncRequest = struct { //
-            pub const params = struct {
-                webviewId: u32,
-                request: []const u8,
-            };
-            pub const response = struct {
-                payload: ?[]const u8,
-            };
-        };
+        // pub const sendSyncRequest = struct { //
+        //     pub const params = struct {
+        //         webviewId: u32,
+        //         request: []const u8,
+        //     };
+        //     pub const response = struct {
+        //         payload: ?[]const u8,
+        //     };
+        // };
         // Note: this should be a message not a request
         // because we don't need a response
         pub const log = struct {
@@ -113,8 +113,7 @@ pub const BunSchema = struct {
             pub const params = struct {
                 id: u32,
                 title: []const u8,
-                url: ?[]const u8,
-                html: ?[]const u8, //
+                url: []const u8,
                 frame: struct {
                     width: f64,
                     height: f64,
@@ -140,13 +139,6 @@ pub const BunSchema = struct {
             pub const response = void;
         };
 
-        pub const addWebviewToWindow = struct {
-            pub const params = struct {
-                windowId: u32,
-                webviewId: u32,
-            };
-            pub const response = void;
-        };
         pub const setTitle = struct { //
             pub const params = struct {
                 // todo: be consistent about winId vs windowId
@@ -166,6 +158,8 @@ pub const BunSchema = struct {
         pub const createWebview = struct {
             pub const params = struct {
                 id: u32,
+                windowId: u32,
+                renderer: []const u8,
                 rpcPort: u32,
                 secretKey: []const u8,
                 hostWebviewId: ?u32,
@@ -181,6 +175,7 @@ pub const BunSchema = struct {
                     y: f64,
                 },
                 autoResize: bool,
+                navigationRules: ?[]const u8,
             };
             pub const response = void;
         };
@@ -192,7 +187,6 @@ pub const BunSchema = struct {
             };
             pub const response = void;
         };
-
         pub const loadHTML = struct {
             pub const params = struct {
                 webviewId: u32,
@@ -273,9 +267,7 @@ pub const Handlers = struct {
     createWebview: fn (params: BunSchema.requests.createWebview.params) RequestResult,
     setTitle: fn (params: BunSchema.requests.setTitle.params) RequestResult,
     closeWindow: fn (params: BunSchema.requests.closeWindow.params) RequestResult,
-    addWebviewToWindow: fn (params: BunSchema.requests.addWebviewToWindow.params) RequestResult,
     loadURL: fn (params: BunSchema.requests.loadURL.params) RequestResult,
-    loadHTML: fn (params: BunSchema.requests.loadHTML.params) RequestResult,
     moveToTrash: fn (params: BunSchema.requests.moveToTrash.params) RequestResult,
     showItemInFolder: fn (params: BunSchema.requests.showItemInFolder.params) RequestResult,
     openFileDialog: fn (params: BunSchema.requests.openFileDialog.params) RequestResult,
@@ -288,16 +280,14 @@ pub const Handlers = struct {
 };
 
 pub const Requests = struct {
-    decideNavigation: fn (params: ZigSchema.requests.decideNavigation.params) ZigSchema.requests.decideNavigation.response,
-    sendSyncRequest: fn (params: ZigSchema.requests.sendSyncRequest.params) ZigSchema.requests.sendSyncRequest.response,
-    log: fn (params: ZigSchema.requests.log.params) ZigSchema.requests.log.response,
-    trayEvent: fn (params: ZigSchema.requests.trayEvent.params) ZigSchema.requests.trayEvent.response,
-    applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) ZigSchema.requests.applicationMenuEvent.response,
-    contextMenuEvent: fn (params: ZigSchema.requests.contextMenuEvent.params) ZigSchema.requests.contextMenuEvent.response,
-    webviewEvent: fn (params: ZigSchema.requests.webviewEvent.params) ZigSchema.requests.webviewEvent.response,
-    windowClose: fn (params: ZigSchema.requests.windowClose.params) ZigSchema.requests.windowClose.response,
-    windowMove: fn (params: ZigSchema.requests.windowMove.params) ZigSchema.requests.windowMove.response,
-    windowResize: fn (params: ZigSchema.requests.windowResize.params) ZigSchema.requests.windowResize.response,
+    log: fn (params: ZigSchema.requests.log.params) void,
+    trayEvent: fn (params: ZigSchema.requests.trayEvent.params) void,
+    applicationMenuEvent: fn (params: ZigSchema.requests.applicationMenuEvent.params) void,
+    contextMenuEvent: fn (params: ZigSchema.requests.contextMenuEvent.params) void,
+    webviewEvent: fn (params: ZigSchema.requests.webviewEvent.params) void,
+    windowClose: fn (params: ZigSchema.requests.windowClose.params) void,
+    windowMove: fn (params: ZigSchema.requests.windowMove.params) void,
+    windowResize: fn (params: ZigSchema.requests.windowResize.params) void,
 };
 
 // todo: currently the the keys will be a key of the payload struct because of how unions work in zig.
@@ -308,9 +298,7 @@ pub const RequestResponseType = union(enum) {
     CreateWebviewResponse: BunSchema.requests.createWebview.response,
     SetTitleResponse: BunSchema.requests.setTitle.response,
     closeWindowResponse: BunSchema.requests.closeWindow.response,
-    addWebviewToWindowResponse: BunSchema.requests.addWebviewToWindow.response,
     LoadURLResponse: BunSchema.requests.loadURL.response,
-    LoadHTMLResponse: BunSchema.requests.loadHTML.response,
     moveToTrashResponse: BunSchema.requests.moveToTrash.response,
     showItemInFolderResponse: BunSchema.requests.showItemInFolder.response,
     openFileDialogResponse: BunSchema.requests.openFileDialog.response,
@@ -323,16 +311,13 @@ pub const RequestResponseType = union(enum) {
     setApplicationMenu: BunSchema.requests.setApplicationMenu.response,
     showContextMenu: BunSchema.requests.showContextMenu.response,
 
-    DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
-    SendSyncRequestResponse: ZigSchema.requests.sendSyncRequest.response,
-
     webviewTagCanGoBackResponse: BrowserSchema.requests.webviewTagCanGoBack.response,
     webviewTagCanGoForwardResponse: BrowserSchema.requests.webviewTagCanGoForward.response,
 };
 
 // todo: is this still used anywhere
 pub const ResponsePayloadType = union(enum) {
-    DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
+    // DecideNavigationResponse: ZigSchema.requests.decideNavigation.response,
     // SomeOtherMethodResponse: ZigSchema.requests.someOtherMethod.response,
 };
 
@@ -354,7 +339,6 @@ pub const FromBrowserHandlers = struct {
     startWindowMove: fn (params: BrowserSchema.messages.startWindowMove) RequestResult,
     stopWindowMove: fn (params: BrowserSchema.messages.stopWindowMove) RequestResult,
     webviewTagSetTransparent: fn (params: BrowserSchema.messages.webviewTagSetTransparent) RequestResult,
-    webviewTagToggleMirroring: fn (params: BrowserSchema.messages.webviewTagToggleMirroring) RequestResult,
     webviewTagSetPassthrough: fn (params: BrowserSchema.messages.webviewTagSetPassthrough) RequestResult,
     webviewTagSetHidden: fn (params: BrowserSchema.messages.webviewTagSetHidden) RequestResult,
     webviewEvent: fn (params: BrowserSchema.messages.webviewEvent) RequestResult,
@@ -406,7 +390,6 @@ pub const BrowserSchema = struct { //
         pub const startWindowMove = struct { id: u32 };
         pub const stopWindowMove = struct { id: u32 };
         pub const webviewTagSetTransparent = struct { id: u32, transparent: bool };
-        pub const webviewTagToggleMirroring = struct { id: u32, enable: bool };
         pub const webviewTagSetPassthrough = struct { id: u32, enablePassthrough: bool };
         pub const webviewTagSetHidden = struct { id: u32, hidden: bool };
         pub const webviewEvent = struct {

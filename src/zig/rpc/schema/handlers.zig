@@ -10,7 +10,7 @@ const utils = @import("../../utils.zig");
 
 const strEql = utils.strEql;
 
-const rpc = @import("./request.zig");
+// const rpc = @import("./request.zig");
 
 const alloc = std.heap.page_allocator;
 
@@ -19,7 +19,6 @@ pub fn createWindow(params: rpcSchema.BunSchema.requests.createWindow.params) Re
         .id = params.id,
         .title = params.title,
         .url = params.url,
-        .html = params.html,
         .frame = .{
             .x = params.frame.x,
             .y = params.frame.y,
@@ -36,6 +35,8 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
     // std.log.info("createWebview handler preload {s}", .{params.preload});
     webview.createWebview(.{
         .id = params.id,
+        .windowId = params.windowId,
+        .renderer = params.renderer,
         .rpcPort = params.rpcPort,
         .secretKey = params.secretKey,
         .hostWebviewId = params.hostWebviewId,
@@ -51,16 +52,9 @@ pub fn createWebview(params: rpcSchema.BunSchema.requests.createWebview.params) 
             .height = params.frame.height,
         },
         .autoResize = params.autoResize,
+        .navigationRules = params.navigationRules,
     });
 
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
-
-pub fn addWebviewToWindow(params: rpcSchema.BunSchema.requests.addWebviewToWindow.params) RequestResult {
-    window.addWebviewToWindow(.{
-        .webviewId = params.webviewId,
-        .windowId = params.windowId,
-    });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 
@@ -69,6 +63,14 @@ pub fn setTitle(params: rpcSchema.BunSchema.requests.setTitle.params) RequestRes
         .winId = params.winId,
         .title = params.title,
     });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn startWindowMove(params: rpcSchema.BrowserSchema.messages.startWindowMove) RequestResult {
+    window.startWindowMove(.{ .id = params.id });
+    return RequestResult{ .errorMsg = null, .payload = null };
+}
+pub fn stopWindowMove(params: rpcSchema.BrowserSchema.messages.stopWindowMove) RequestResult {
+    window.stopWindowMove(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
 pub fn closeWindow(params: rpcSchema.BunSchema.requests.closeWindow.params) RequestResult {
@@ -82,14 +84,6 @@ pub fn loadURL(params: rpcSchema.BunSchema.requests.loadURL.params) RequestResul
     webview.loadURL(.{
         .webviewId = params.webviewId,
         .url = params.url,
-    });
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
-
-pub fn loadHTML(params: rpcSchema.BunSchema.requests.loadHTML.params) RequestResult {
-    webview.loadHTML(.{
-        .webviewId = params.webviewId,
-        .html = params.html,
     });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
@@ -125,22 +119,12 @@ pub fn webviewTagRemove(params: rpcSchema.BrowserSchema.messages.webviewTagRemov
     webview.remove(.{ .id = params.id });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
-pub fn startWindowMove(params: rpcSchema.BrowserSchema.messages.startWindowMove) RequestResult {
-    webview.startWindowMove(.{ .id = params.id });
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
-pub fn stopWindowMove(params: rpcSchema.BrowserSchema.messages.stopWindowMove) RequestResult {
-    webview.stopWindowMove(.{ .id = params.id });
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
+
 pub fn webviewTagSetTransparent(params: rpcSchema.BrowserSchema.messages.webviewTagSetTransparent) RequestResult {
     webview.webviewTagSetTransparent(.{ .id = params.id, .transparent = params.transparent });
     return RequestResult{ .errorMsg = null, .payload = null };
 }
-pub fn webviewTagToggleMirroring(params: rpcSchema.BrowserSchema.messages.webviewTagToggleMirroring) RequestResult {
-    webview.webviewTagToggleMirroring(.{ .id = params.id, .enable = params.enable });
-    return RequestResult{ .errorMsg = null, .payload = null };
-}
+
 pub fn webviewTagSetPassthrough(params: rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough) RequestResult {
     webview.webviewTagSetPassthrough(.{ .id = params.id, .enablePassthrough = params.enablePassthrough });
     return RequestResult{ .errorMsg = null, .payload = null };
@@ -202,9 +186,7 @@ pub const handlers = rpcSchema.Handlers{ //
     .createWebview = createWebview,
     .setTitle = setTitle,
     .closeWindow = closeWindow,
-    .addWebviewToWindow = addWebviewToWindow,
     .loadURL = loadURL,
-    .loadHTML = loadHTML,
     .moveToTrash = moveToTrash,
     .showItemInFolder = showItemInFolder,
     .openFileDialog = openFileDialog,
@@ -231,7 +213,6 @@ pub const fromBrowserHandlers = rpcSchema.FromBrowserHandlers{
     .startWindowMove = startWindowMove,
     .stopWindowMove = stopWindowMove,
     .webviewTagSetTransparent = webviewTagSetTransparent,
-    .webviewTagToggleMirroring = webviewTagToggleMirroring,
     .webviewTagSetPassthrough = webviewTagSetPassthrough,
     .webviewTagSetHidden = webviewTagSetHidden,
     .webviewEvent = webviewEvent,
@@ -322,14 +303,10 @@ pub fn handleRequest(request: rpcTypes._RPCRequestPacket) RequestResult {
         return parseParamsAndCall(handlers.setTitle, BunRequests.setTitle.params, request.params);
     } else if (strEql(method, "closeWindow")) {
         return parseParamsAndCall(handlers.closeWindow, BunRequests.closeWindow.params, request.params);
-    } else if (strEql(method, "addWebviewToWindow")) {
-        return parseParamsAndCall(handlers.addWebviewToWindow, BunRequests.addWebviewToWindow.params, request.params);
     } else if (strEql(method, "createWebview")) {
         return parseParamsAndCall(handlers.createWebview, BunRequests.createWebview.params, request.params);
     } else if (strEql(method, "loadURL")) {
         return parseParamsAndCall(handlers.loadURL, BunRequests.loadURL.params, request.params);
-    } else if (strEql(method, "loadHTML")) {
-        return parseParamsAndCall(handlers.loadHTML, BunRequests.loadHTML.params, request.params);
     } else if (strEql(method, "moveToTrash")) {
         return parseParamsAndCall(handlers.moveToTrash, BunRequests.moveToTrash.params, request.params);
     } else if (strEql(method, "showItemInFolder")) {
@@ -369,7 +346,6 @@ pub fn fromBrowserHandleRequest(request: rpcTypes._RPCRequestPacket) RequestResu
 
 pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
     const method = message.id;
-
     if (strEql(method, "webviewTagResize")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagResize, rpcSchema.BrowserSchema.messages.webviewTagResize, message.payload);
     } else if (strEql(method, "webviewTagUpdateSrc")) {
@@ -392,8 +368,6 @@ pub fn fromBrowserHandleMessage(message: rpcTypes._RPCMessagePacket) void {
         _ = parseParamsAndCall(fromBrowserHandlers.stopWindowMove, rpcSchema.BrowserSchema.messages.stopWindowMove, message.payload);
     } else if (strEql(method, "webviewTagSetTransparent")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetTransparent, rpcSchema.BrowserSchema.messages.webviewTagSetTransparent, message.payload);
-    } else if (strEql(method, "webviewTagToggleMirroring")) {
-        _ = parseParamsAndCall(fromBrowserHandlers.webviewTagToggleMirroring, rpcSchema.BrowserSchema.messages.webviewTagToggleMirroring, message.payload);
     } else if (strEql(method, "webviewTagSetPassthrough")) {
         _ = parseParamsAndCall(fromBrowserHandlers.webviewTagSetPassthrough, rpcSchema.BrowserSchema.messages.webviewTagSetPassthrough, message.payload);
     } else if (strEql(method, "webviewTagSetHidden")) {
