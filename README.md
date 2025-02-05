@@ -45,7 +45,11 @@ Ways to get involved at this early stage:
 
 ## Building
 
-run `bun run install-zig` to install the right version of zig to vendors/zig
+### MacOS
+First make sure you have:
+- xcode tools 
+- cmake (can install via homebrew)
+- run `bun run install-zig` to install the right version of zig to vendors/zig
 
 `bun dev:playground` and `bun dev:playground:canary` will compile everything in electrobun in either dev mode and then compile the playground app in either dev or canary modes and run it.
 

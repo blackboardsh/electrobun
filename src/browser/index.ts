@@ -18,6 +18,7 @@ interface ElectrobunWebviewRPCSChema {
 }
 
 const WEBVIEW_ID = window.__electrobunWebviewId;
+const WINDOW_ID = window.__electrobunWindowId;
 const RPC_SOCKET_PORT = window.__electrobunRpcSocketPort;
 
 // todo (yoav): move this stuff to browser/rpc/webview.ts
@@ -52,6 +53,10 @@ type WebviewTagHandlers = RPCSchema<{
       id: number;
       url: string;
     };
+    webviewTagUpdateHtml: {
+      id: number;
+      html: string;
+    }
     webviewTagGoBack: {
       id: number;
     };
@@ -79,10 +84,6 @@ type WebviewTagHandlers = RPCSchema<{
       id: number;
       transparent: boolean;
     };
-    webviewTagToggleMirroring: {
-      id: number;
-      enable: boolean;
-    };
     webviewTagSetPassthrough: {
       id: number;
       enablePassthrough: boolean;
@@ -102,11 +103,7 @@ class Electroview<T> {
   // electrobun rpc browser <-> zig
   zigRpc?: any;
   zigRpcHandler?: (msg: any) => void;
-  // give it a default function
-  syncRpc: (params: any) => any = () => {
-    console.log("syncRpc not initialized");
-  };
-
+  
   constructor(config: { rpc: T }) {
     this.rpc = config.rpc;
     this.init();
@@ -117,25 +114,8 @@ class Electroview<T> {
     // and have a setting that forces it enabled or disabled
     this.initZigRpc();
     this.initSocketToBun();
-    // Note:
-    // syncRPC messages doesn't need to be defined since there's no need for sync 1-way message
-    // just use non-blocking async rpc for that, we just need sync requests
-    // We don't need request ids either since we're not receiving the response on a different pipe
-    if (true) {
-      // TODO: define sync requests on schema (separate from async reqeusts and messages)
-      this.syncRpc = (msg: { method: string; params: any }) => {
-        try {
-          const messageString = JSON.stringify(msg);
-          return this.bunBridgeSync(messageString);
-        } catch (error) {
-          console.error(
-            "bun: failed to serialize message to webview syncRpc",
-            error
-          );
-        }
-      };
-    }
-    ConfigureWebviewTags(true, this.zigRpc, this.syncRpc);
+
+    ConfigureWebviewTags(true, this.zigRpc, this.rpc);
 
     this.initElectrobunListeners();
 
@@ -213,22 +193,28 @@ class Electroview<T> {
 
   // TODO: implement proper rpc-anywhere style rpc here
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
-  sendToZig(message: {}) {
-    window.webkit.messageHandlers.webviewTagBridge.postMessage(
-      JSON.stringify(message)
-    );
+  sendToZig(message: {}) {    
+    if (window.webkit?.messageHandlers?.webviewTagBridge) {
+      window.webkit.messageHandlers.webviewTagBridge.postMessage(
+        JSON.stringify(message)
+      );
+    } else {
+      window.webviewTagBridge.postMessage(
+        JSON.stringify(message)
+      );
+    }
   }
 
   initElectrobunListeners() {
     document.addEventListener("mousedown", (e) => {
       if (isAppRegionDrag(e)) {
-        this.zigRpc?.send.startWindowMove({ id: WEBVIEW_ID });
+        this.zigRpc?.send.startWindowMove({ id: WINDOW_ID });
       }
     });
 
     document.addEventListener("mouseup", (e) => {
       if (isAppRegionDrag(e)) {
-        this.zigRpc?.send.stopWindowMove({ id: WEBVIEW_ID });
+        this.zigRpc?.send.stopWindowMove({ id: WINDOW_ID });
       }
     });
   }
@@ -239,6 +225,7 @@ class Electroview<T> {
       send(message) {
         try {
           const messageString = JSON.stringify(message);
+          // console.log("sending message bunbridge", messageString);
           that.bunBridge(messageString);
         } catch (error) {
           console.error("bun: failed to serialize message to webview", error);
@@ -250,42 +237,26 @@ class Electroview<T> {
     };
   }
 
+  // todo: just use with sendToZig();
   createZigTransport(): RPCTransport {
     const that = this;
     return {
-      send(message) {
-        window.webkit.messageHandlers.webviewTagBridge.postMessage(
-          JSON.stringify(message)
-        );
+      send(message) {             
+        if (window.webkit?.messageHandlers?.webviewTagBridge) {
+          window.webkit.messageHandlers.webviewTagBridge.postMessage(
+            JSON.stringify(message)
+          );
+        } else {
+          window.webviewTagBridge.postMessage(
+            JSON.stringify(message)
+          );
+        }
       },
       registerHandler(handler) {
         that.zigRpcHandler = handler;
         // webview tag doesn't handle any messages from zig just yet
       },
     };
-  }
-
-  // call any of your bun syncrpc methods in a way that appears synchronous from the browser context
-  bunBridgeSync(msg: string) {
-    console.warn("DEPRECATED: use async rpc if possible");
-    var xhr = new XMLHttpRequest();
-    // Note: setting false here makes the xhr request blocking. This completely
-    // blocks the main thread which is terrible. You can use this safely from a webworker.
-    // There are also cases where exposing bun sync apis (eg: existsSync) is useful especially
-    // on a first pass when migrating from Electron to Electrobun.
-    // This mechanism is designed to make any rpc call over the bridge into a sync blocking call
-    // from the browser context while bun asynchronously replies. Use it sparingly from the main thread.
-    xhr.open("POST", "views://syncrpc", false); // Synchronous call
-    xhr.send(msg);
-    if (!xhr.responseText) {
-      return xhr.responseText;
-    }
-
-    try {
-      return JSON.parse(xhr.responseText);
-    } catch {
-      return xhr.responseText;
-    }
   }
 
   async bunBridge(msg: string) {
@@ -322,8 +293,12 @@ class Electroview<T> {
     // TEMP: disable the fallback for now. for some reason suddenly can't
     // repro now that other places are chunking messages and laptop restart
 
-    if (true || msg.length < 8 * 1024) {
-      window.webkit.messageHandlers.bunBridge.postMessage(msg);
+    if (true || msg.length < 8 * 1024) {      
+      if (window.webkit?.messageHandlers?.bunBridge){
+        window.webkit.messageHandlers.bunBridge.postMessage(msg);
+      } else {
+        window.bunBridge.postMessage(msg);
+      }
     } else {
       var xhr = new XMLHttpRequest();
 
@@ -439,7 +414,7 @@ class Electroview<T> {
     } as RPCOptions<mixedBunSchema, mixedWebviewSchema>;
 
     const rpc = createRPC<mixedBunSchema, mixedWebviewSchema>(rpcOptions);
-
+    
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
       // note: this can only be done once there is a transport
@@ -472,3 +447,5 @@ const Electrobun = {
 };
 
 export default Electrobun;
+
+

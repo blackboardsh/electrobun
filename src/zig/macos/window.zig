@@ -33,7 +33,7 @@ const WindowType = struct {
 // todo: use the types in rpc.zig (or move them to a shared location)
 const CreateWindowOpts = struct {
     id: u32,
-    url: ?[]const u8,
+    url: ?[]const u8, // todo remove
     html: ?[]const u8,
     title: []const u8,
     frame: struct { width: f64, height: f64, x: f64, y: f64 },
@@ -61,12 +61,12 @@ const WindowMap = std.AutoHashMap(u32, WindowType);
 pub var windowMap: WindowMap = WindowMap.init(alloc);
 
 pub fn windowCloseHandler(windowId: u32) callconv(.C) void {
-    _ = rpc.request.windowClose(.{ .id = windowId });
+    rpc.request.windowClose(.{ .id = windowId });
     windowCleanup(windowId);
 }
 
 pub fn windowMoveHandler(windowId: u32, x: f64, y: f64) callconv(.C) void {
-    _ = rpc.request.windowMove(.{ .id = windowId, .x = x, .y = y });
+    rpc.request.windowMove(.{ .id = windowId, .x = x, .y = y });
 }
 
 pub fn windowResizeHandler(windowId: u32, x: f64, y: f64, width: f64, height: f64) callconv(.C) void {
@@ -131,6 +131,23 @@ pub fn setTitle(opts: SetTitleOpts) void {
     objc.setNSWindowTitle(win.window, utils.toCString(opts.title));
 }
 
+pub fn startWindowMove(opts: rpcSchema.BrowserSchema.messages.startWindowMove) void {
+    const window = windowMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+    std.debug.print("calling objc.startWindowMove: \n", .{});
+    objc.startWindowMove(window.window);
+}
+
+pub fn stopWindowMove(opts: rpcSchema.BrowserSchema.messages.stopWindowMove) void {
+    const window = windowMap.get(opts.id) orelse {
+        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.id});
+        return;
+    };
+    objc.stopWindowMove(window.window);
+}
+
 pub fn windowCleanup(winId: u32) void {
     var win = windowMap.get(winId) orelse {
         std.debug.print("Failed to get window from hashmap for id {}\n", .{winId});
@@ -150,40 +167,4 @@ pub fn closeWindow(opts: rpcSchema.BunSchema.requests.closeWindow.params) void {
     objc.closeNSWindow(
         win.window,
     );
-}
-
-pub fn addWebviewToWindow(opts: struct { webviewId: u32, windowId: u32 }) void {
-    var win = windowMap.get(opts.windowId) orelse {
-        std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.windowId});
-        return;
-    };
-
-    const view = webview.webviewMap.get(opts.webviewId) orelse {
-        std.debug.print("Failed to get webview from hashmap for id {}\n", .{opts.webviewId});
-        return;
-    };
-
-    // Note: Keep this in sync with browser api
-    const jsScript = std.fmt.allocPrint(alloc, "window.__electrobunWindowId = {}\n", .{opts.windowId}) catch {
-        return;
-    };
-    defer alloc.free(jsScript);
-
-    // we want to make this a preload script so that it gets re-applied after navigations before any
-    // other code runs.
-    webview.addPreloadScriptToWebview(view.handle, jsScript, true);
-
-    win.webviews.append(opts.webviewId) catch {
-        std.debug.print("Failed to append webview id to window\n", .{});
-        return;
-    };
-
-    // at least in 0.11.0 get() returns a copy so you have to put it back to persist
-    // any changes
-    windowMap.put(opts.windowId, win) catch {
-        std.debug.print("Failed to put window back into hashmap {}\n", .{opts.windowId});
-        return;
-    };
-
-    objc.addWebviewToWindow(win.window, view.handle);
 }

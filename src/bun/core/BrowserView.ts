@@ -26,6 +26,7 @@ type BrowserViewOptions<T = undefined> = {
   url: string | null;
   html: string | null;
   preload: string | null;
+  renderer: 'native' | 'cef';
   partition: string | null;
   frame: {
     x: number;
@@ -33,10 +34,13 @@ type BrowserViewOptions<T = undefined> = {
     width: number;
     height: number;
   };
-  rpc: T;
-  syncRpc: { [method: string]: (params: any) => any };
+  rpc: T;  
   hostWebviewId: number;
   autoResize: boolean;
+
+  windowId: number;
+  navigationRules: string | null;
+  // renderer: 
 };
 
 interface ElectrobunWebviewRPCSChema {
@@ -45,9 +49,10 @@ interface ElectrobunWebviewRPCSChema {
 }
 
 const defaultOptions: Partial<BrowserViewOptions> = {
-  url: "https://electrobun.dev",
+  url: null,
   html: null,
   preload: null,
+  renderer: 'native',
   frame: {
     x: 0,
     y: 0,
@@ -56,16 +61,29 @@ const defaultOptions: Partial<BrowserViewOptions> = {
   },
 };
 
-const internalSyncRpcHandlers = {
+const internalRpcHandlers = {
+  // todo: this shouldn't be getting method, just params.
   webviewTagInit: ({
-    hostWebviewId,
-    windowId,
-    url,
-    html,
-    preload,
-    partition,
-    frame,
-  }: BrowserViewOptions & { windowId: number }) => {
+    method,
+    params,
+  }: {
+    method: string;
+    params: BrowserViewOptions & { windowId: number };
+  }) => {
+    
+    const {
+      hostWebviewId,
+      windowId,
+      renderer,
+      html,
+      preload,
+      partition,
+      frame,
+      navigationRules,
+    } = params;
+
+    const url = !params.url && !html ? "https://electrobun.dev" : params.url;    
+
     const webviewForTag = new BrowserView({
       url,
       html,
@@ -74,25 +92,10 @@ const internalSyncRpcHandlers = {
       frame,
       hostWebviewId,
       autoResize: false,
+      windowId,
+      renderer,//: "cef",
+      navigationRules,
     });
-
-    // Note: we have to give it a couple of ticks to fully create the browserview
-    // which has a settimout init() which calls rpc that has a settimeout and all the serialization/deserialization
-
-    // TODO: we really need a better way to handle the whole view creation flow and
-    // maybe an onready event or something.
-    setTimeout(() => {
-      zigRPC.request.addWebviewToWindow({
-        windowId: windowId,
-        webviewId: webviewForTag.id,
-      });
-
-      if (url) {
-        webviewForTag.loadURL(url);
-      } else if (html) {
-        webviewForTag.loadHTML(html);
-      }
-    }, 100);
 
     return webviewForTag.id;
   },
@@ -106,6 +109,8 @@ const randomId = Math.random().toString(36).substring(7);
 export class BrowserView<T> {
   id: number = nextWebviewId++;
   hostWebviewId?: number;
+  windowId: number;
+  renderer: 'cef' | 'native';
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
@@ -126,11 +131,13 @@ export class BrowserView<T> {
   inStream: fs.WriteStream;
   outStream: ReadableStream<Uint8Array>;
   secretKey: Uint8Array;
-  rpc?: T;
-  syncRpc?: { [method: string]: (params: any) => any };
+  rpc?: T;  
   rpcHandler?: (msg: any) => void;
+  navigationRules: string | null;
 
   constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
+    // const rpc = options.rpc;        
+
     this.url = options.url || defaultOptions.url || null;
     this.html = options.html || defaultOptions.html || null;
     this.preload = options.preload || defaultOptions.preload || null;
@@ -138,32 +145,37 @@ export class BrowserView<T> {
       ? { ...defaultOptions.frame, ...options.frame }
       : { ...defaultOptions.frame };
     this.rpc = options.rpc;
-    this.secretKey = new Uint8Array(randomBytes(32));
-    this.syncRpc = { ...(options.syncRpc || {}), ...internalSyncRpcHandlers };
+    this.secretKey = new Uint8Array(randomBytes(32));    
     this.partition = options.partition || null;
     // todo (yoav): since collisions can crash the app add a function that checks if the
     // file exists first
     this.pipePrefix = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_${this.id}`;
     this.hostWebviewId = options.hostWebviewId;
+    this.windowId = options.windowId;
     this.autoResize = options.autoResize === false ? false : true;
+    this.navigationRules = options.navigationRules || null;
+    this.renderer = options.renderer || defaultOptions.renderer;
 
     this.init();
   }
 
   init() {
+    this.createStreams();
+
+    
+
     // TODO: add a then to this that fires an onReady event
     zigRPC.request.createWebview({
       id: this.id,
+      windowId: this.windowId,
+      renderer: this.renderer, 
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),
       hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
-      partition: this.partition,
-      // TODO: decide whether we want to keep sending url/html
-      // here, if we're manually calling loadURL/loadHTML below
-      // then we can remove it from the api here
-      url: this.url,
+      partition: this.partition,      
+      url: this.url,      
       html: this.html,
       preload: this.preload,
       frame: {
@@ -173,29 +185,28 @@ export class BrowserView<T> {
         y: this.frame.y,
       },
       autoResize: this.autoResize,
+      navigationRules: this.navigationRules,
     });
-
-    this.createStreams();
 
     BrowserViewMap[this.id] = this;
   }
 
-  createStreams() {
+  createStreams() {    
     const webviewPipeIn = this.pipePrefix + "_in";
     const webviewPipeOut = this.pipePrefix + "_out";
-
+    
     try {
       execSync("mkfifo " + webviewPipeOut);
     } catch (e) {
       console.log("pipe out already exists");
     }
-
+    
     try {
       execSync("mkfifo " + webviewPipeIn);
     } catch (e) {
       console.log("pipe in already exists");
     }
-
+    
     const inStream = fs.createWriteStream(webviewPipeIn, {
       flags: "r+",
     });
@@ -205,14 +216,19 @@ export class BrowserView<T> {
     inStream.write("\n");
 
     this.inStream = inStream;
-
+    
     // Open the named pipe for reading
     const outStream = Bun.file(webviewPipeOut).stream();
     this.outStream = outStream;
-
-    if (this.rpc) {
-      this.rpc.setTransport(this.createTransport());
+    
+    if (!this.rpc) {
+      this.rpc = BrowserView.defineRPC({
+        handlers: { requests: {}, messages: {} },
+      });
     }
+    
+    this.rpc.setTransport(this.createTransport());
+    
   }
 
   sendMessageToWebviewViaExecute(jsonMessage) {
@@ -247,8 +263,17 @@ export class BrowserView<T> {
 
   loadHTML(html: string) {
     this.html = html;
-    zigRPC.request.loadHTML({ webviewId: this.id, html: this.html });
+    // todo: reimplement
+    // const url = this.htmlToDataURI(html);
+    // zigRPC.request.loadHTML({ webviewId: this.id, html: html });    
   }
+
+  
+  htmlToDataURI(html: string) {
+    return "data:text/html;base64," + Buffer.from(html, "utf8").toString("base64");
+  }
+
+  
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserView events
@@ -303,6 +328,7 @@ export class BrowserView<T> {
               if (line) {
                 try {
                   const event = JSON.parse(line);
+
                   handler(event);
                 } catch (error) {
                   console.error("webview: ", line);
@@ -382,7 +408,10 @@ export class BrowserView<T> {
 
     const rpcOptions = {
       maxRequestTime: config.maxRequestTime,
-      requestHandler: config.handlers.requests,
+      requestHandler: {
+        ...config.handlers.requests,
+        ...internalRpcHandlers,
+      },
       transport: {
         // Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey
         registerHandler: () => {},
@@ -390,7 +419,7 @@ export class BrowserView<T> {
     } as RPCOptions<mixedWebviewSchema, mixedBunSchema>;
 
     const rpc = createRPC<mixedWebviewSchema, mixedBunSchema>(rpcOptions);
-
+    
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
       // note: this can only be done once there is a transport

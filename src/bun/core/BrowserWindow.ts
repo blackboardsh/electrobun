@@ -18,15 +18,16 @@ type WindowOptionsType<T = undefined> = {
   url: string | null;
   html: string | null;
   preload: string | null;
-  rpc?: T;
-  syncRpc?: { [method: string]: (params: any) => any };
+  renderer: 'native' | 'cef';
+  rpc?: T;  
   styleMask?: {};
   // TODO: implement all of them
   titleBarStyle: "hiddenInset" | "default";
+  navigationRules: string | null;
 };
 
 const defaultOptions: WindowOptionsType = {
-  title: "Electrobun",
+  title: "Electrobun",  
   frame: {
     x: 0,
     y: 0,
@@ -36,7 +37,9 @@ const defaultOptions: WindowOptionsType = {
   url: "https://electrobun.dev",
   html: null,
   preload: null,
+  renderer: 'native',
   titleBarStyle: "default",
+  navigationRules: null,
 };
 
 const BrowserWindowMap = {};
@@ -51,6 +54,7 @@ export class BrowserWindow<T> {
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
+  renderer:  'native' | 'cef';
   frame: {
     x: number;
     y: number;
@@ -73,21 +77,21 @@ export class BrowserWindow<T> {
     this.url = options.url || null;
     this.html = options.html || null;
     this.preload = options.preload || null;
+    this.renderer = options.renderer === 'cef' ? 'cef' : 'native';
+    this.navigationRules = options.navigationRules || null;
 
     this.init(options);
   }
 
   init({
-    rpc,
-    syncRpc,
+    rpc,    
     styleMask,
     titleBarStyle,
   }: Partial<WindowOptionsType<T>>) {
     zigRPC.request.createWindow({
       id: this.id,
       title: this.title,
-      url: this.url,
-      html: this.html,
+      url: this.url || "",      
       frame: {
         width: this.frame.width,
         height: this.frame.height,
@@ -128,28 +132,23 @@ export class BrowserWindow<T> {
       html: this.html,
       preload: this.preload,
       // frame: this.frame,
+      renderer: this.renderer, 
       frame: {
         x: 0,
         y: 0,
         width: this.frame.width,
         height: this.frame.height,
       },
-      rpc,
-      syncRpc,
-    });
-
-    this.webviewId = webview.id;
-
-    zigRPC.request.addWebviewToWindow({
+      rpc,      
+      // todo: we need to send the window here and attach it in one go
+      // then the view creation code in objc can toggle between offscreen
+      // or on screen views depending on if windowId is null
+      // does this mean browserView needs to track the windowId or handle it ephemerally?
       windowId: this.id,
-      webviewId: webview.id,
+      navigationRules: this.navigationRules,
     });
 
-    if (this.url) {
-      webview.loadURL(this.url);
-    } else if (this.html) {
-      webview.loadHTML(this.html);
-    }
+    this.webviewId = webview.id;   
 
     BrowserWindowMap[this.id] = this;
   }

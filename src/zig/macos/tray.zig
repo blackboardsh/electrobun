@@ -17,7 +17,7 @@ pub var trayMap: TrayMap = TrayMap.init(alloc);
 fn trayItemHandler(trayId: u32, action: [*:0]const u8) void {
     // Note: the action will be an empty string if there is no menu and the tray is clicked
     // it'll also be an empty string if there is a menu and the menu item has no action defined.
-    _ = rpc.request.trayEvent(.{
+    rpc.request.trayEvent(.{
         .id = trayId,
         .action = utils.fromCString(action),
     });
@@ -74,7 +74,7 @@ fn applicationMenuHandler(id: u32, action: [*:0]const u8) void {
     _ = id;
     // Note: the action will be an empty string if there is no menu and the tray is clicked
     // it'll also be an empty string if there is a menu and the menu item has no action defined.
-    _ = rpc.request.applicationMenuEvent(.{
+    rpc.request.applicationMenuEvent(.{
         .action = utils.fromCString(action),
     });
 }
@@ -90,7 +90,7 @@ fn contextMenuHandler(id: u32, action: [*:0]const u8) void {
     _ = id;
     // Note: the action will be an empty string if there is no menu and the tray is clicked
     // it'll also be an empty string if there is a menu and the menu item has no action defined.
-    _ = rpc.request.contextMenuEvent(.{
+    rpc.request.contextMenuEvent(.{
         .action = utils.fromCString(action),
     });
 }

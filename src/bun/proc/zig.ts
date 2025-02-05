@@ -9,7 +9,8 @@ import { Tray } from "../core/Tray";
 const CHUNK_SIZE = 1024 * 4; // 4KB
 // todo (yoav): webviewBinaryPath and ELECTROBUN_VIEWS_FOLDER should be passed in as cli/env args by the launcher binary
 // will likely be different on different platforms. Right now these are hardcoded for relative paths inside the mac app bundle.
-const webviewBinaryPath = join("native", "webview");
+const webviewBinaryPath = "./webview";
+// const webviewBinaryPath = "../Frameworks/Electrobun.app/Contents/MacOS/webview";
 
 const hash = await Updater.localInfo.hash();
 // Note: we use the build's hash to separate from different apps and different builds
@@ -160,8 +161,7 @@ type ZigHandlers = RPCSchema<{
     createWindow: {
       params: {
         id: number;
-        url: string | null;
-        html: string | null;
+        url: string | null;        
         title: string;
         frame: {
           width: number;
@@ -190,12 +190,14 @@ type ZigHandlers = RPCSchema<{
     createWebview: {
       params: {
         id: number;
+        windowId: number;
+        renderer: "cef" | "native";
         rpcPort: number;
         secretKey: string;
         hostWebviewId: number | null;
         pipePrefix: string;
-        url: string | null;
-        html: string | null;
+        url: string | null;    
+        html: string | null;    
         partition: string | null;
         preload: string | null;
         frame: {
@@ -205,14 +207,7 @@ type ZigHandlers = RPCSchema<{
           height: number;
         };
         autoResize: boolean;
-      };
-      response: void;
-    };
-
-    addWebviewToWindow: {
-      params: {
-        windowId: number;
-        webviewId: number;
+        navigationRules: string | null;
       };
       response: void;
     };
@@ -224,13 +219,7 @@ type ZigHandlers = RPCSchema<{
       };
       response: void;
     };
-    loadHTML: {
-      params: {
-        webviewId: number;
-        html: string;
-      };
-      response: void;
-    };
+    
 
     setTitle: {
       params: {
@@ -323,25 +312,7 @@ type ZigHandlers = RPCSchema<{
 }>;
 
 type BunHandlers = RPCSchema<{
-  requests: {
-    decideNavigation: {
-      params: {
-        webviewId: number;
-        url: string;
-      };
-      response: {
-        allow: boolean;
-      };
-    };
-    syncRequest: {
-      params: {
-        webviewId: number;
-        request: string;
-      };
-      response: {
-        payload: string;
-      };
-    };
+  requests: {  
     // todo: make these messages instead of requests
     log: {
       params: {
@@ -423,66 +394,6 @@ type BunHandlers = RPCSchema<{
 const zigRPC = createRPC<BunHandlers, ZigHandlers>({
   transport: createStdioTransport(zigProc),
   requestHandler: {
-    decideNavigation: ({ webviewId, url }) => {
-      const willNavigate = electrobunEventEmitter.events.webview.willNavigate({
-        url,
-        webviewId,
-      });
-
-      let result;
-      // global will-navigate event
-      result = electrobunEventEmitter.emitEvent(willNavigate);
-
-      result = electrobunEventEmitter.emitEvent(willNavigate, webviewId);
-
-      if (willNavigate.responseWasSet) {
-        return willNavigate.response || { allow: true };
-      } else {
-        return { allow: true };
-      }
-    },
-    syncRequest: ({ webviewId, request: requestStr }) => {
-      const webview = BrowserView.getById(webviewId);
-      const { method, params } = JSON.parse(requestStr);
-
-      if (!webview) {
-        const err = `error: could not find webview with id ${webviewId}`;
-        console.log(err);
-        return { payload: err };
-      }
-
-      if (!method) {
-        const err = `error: request missing a method`;
-        console.log(err);
-        return { payload: err };
-      }
-
-      if (!webview.syncRpc || !webview.syncRpc[method]) {
-        const err = `error: webview does not have a handler for method ${method}`;
-        console.log(err);
-        return { payload: err };
-      }
-      console.warn("DEPRECATED: use async rpc if possible", method);
-      const handler = webview.syncRpc[method];
-      var response;
-      try {
-        response = handler(params);
-        // Note: Stringify(undefined) returns undefined,
-        // if we send undefined as the payload it'll crash
-        // so send an empty string which is a better analog for
-        // undefined json string
-        if (response === undefined) {
-          response = "";
-        }
-      } catch (err) {
-        console.log(err);
-        console.log("syncRPC failed with", { method, params });
-        return { payload: String(err) };
-      }
-
-      const payload = JSON.stringify(response);
-      return { payload };
-    },
     log: ({ msg }) => {
       console.log("zig: ", msg);
       return { success: true };
@@ -532,6 +443,7 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
     },
     webviewEvent: ({ id, eventName, detail }) => {
       const eventMap = {
+        "will-navigate": "willNavigate",
         "did-navigate": "didNavigate",
         "did-navigate-in-page": "didNavigateInPage",
         "did-commit-navigation": "didCommitNavigation",
@@ -555,8 +467,7 @@ const zigRPC = createRPC<BunHandlers, ZigHandlers>({
 
       let result;
       // global event
-      result = electrobunEventEmitter.emitEvent(event);
-
+      result = electrobunEventEmitter.emitEvent(event);      
       result = electrobunEventEmitter.emitEvent(event, id);
       // Note: we don't care about the result right now
       return { success: true };

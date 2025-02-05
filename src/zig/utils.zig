@@ -28,19 +28,26 @@ pub fn concatStrings(a: []const u8, b: []const u8) []u8 {
     return result;
 }
 
-pub fn toCString(input: []const u8) [*:0]const u8 {
-    // Attempt to allocate memory, handle error without bubbling it up
-    const allocResult = alloc.alloc(u8, input.len + 1) catch {
-        return "console.error('failed to allocate string');";
-    };
+pub fn toCString(input: ?[]const u8) [*:0]const u8 {
+    if (input) |str| {
+        // Attempt to allocate memory, handle error without bubbling it up
+        const allocResult = alloc.alloc(u8, str.len + 1) catch {
+            return "console.error('failed to allocate string');";
+        };
 
-    std.mem.copyForwards(u8, allocResult, input);
-    allocResult[input.len] = 0; // Null-terminate
-    return allocResult[0..input.len :0]; // Correctly typed slice with null terminator
+        std.mem.copyForwards(u8, allocResult, str);
+        allocResult[str.len] = 0; // Null-terminate
+        return allocResult[0..str.len :0]; // Correctly typed slice with null terminator
+    }
+
+    return "";
 }
 
-pub fn fromCString(input: [*:0]const u8) []const u8 {
-    return input[0..std.mem.len(input)];
+pub fn fromCString(input: ?[*:0]const u8) []const u8 {
+    if (input) |ptr| {
+        return ptr[0..std.mem.len(ptr)];
+    }
+    return "";
 }
 
 // todo: move to string util (duplicated in handlers.zig)

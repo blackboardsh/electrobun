@@ -2,14 +2,9 @@ const std = @import("std");
 const rpcTypes = @import("types.zig");
 const rpcSchema = @import("schema/schema.zig");
 
-var _waitingForResponse = false;
-var _response: ?[]u8 = null;
-var m = std.Thread.Mutex{};
-var c = std.Thread.Condition{};
 
-const alloc = std.heap.page_allocator;
-
-pub fn sendRequest(method: []const u8, params: anytype, PayloadType: anytype) PayloadType {
+// todo: refactor when zig supports async/await
+pub fn sendRequest(method: []const u8, params: anytype) void {
     const id = idGen.nextId();
     send(.{
         .id = id,
@@ -17,39 +12,6 @@ pub fn sendRequest(method: []const u8, params: anytype, PayloadType: anytype) Pa
         .method = method,
         .params = params,
     });
-
-    m.lock();
-    defer m.unlock();
-    _waitingForResponse = true;
-    _response = null;
-
-    while (_waitingForResponse) {
-        c.wait(&m);
-    }
-
-    const responseWrapper = std.json.parseFromSlice(rpcTypes._RPCResponsePacketSuccess, alloc, _response.?, .{}) catch {
-        unreachable;
-    };
-
-    const rawPayload = responseWrapper.value.payload;
-    const parsedPayload = std.json.parseFromValue(PayloadType, alloc, rawPayload.?, .{}) catch {
-        unreachable;
-    };
-    return parsedPayload.value;
-}
-
-pub fn setResponse(id: u32, response: anytype) void {
-    // todo: consider using a hashmap instead of a single variable
-    // note: technically since main thread gets blocked and all
-    // requests currently originate from the main thread, we don't need
-    // this yet
-    _ = id;
-
-    m.lock();
-    defer m.unlock();
-    _response = response;
-    _waitingForResponse = false;
-    c.signal();
 }
 
 pub fn sendResponseSuccess(id: u32, payload: ?rpcSchema.RequestResponseType) void {
@@ -72,6 +34,8 @@ pub fn sendResponseError(id: u32, errorMsg: []const u8) void {
 
 pub fn sendMessage(payload: anytype) void {
     send(.{
+        // todo: the message id might need to be the eventName (different api to requests)
+        // revisit when refactoring event system
         .id = idGen.nextId(),
         .type = "message",
         .payload = payload,
