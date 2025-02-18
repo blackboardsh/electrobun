@@ -10,10 +10,10 @@
 // needed to access grand central dispatch to dispatch things from
 // other threads to the main thread
 const std = @import("std");
-const pipesin = @import("pipesin.zig");
+const pipesin = @import("pipereader.zig");
 
 pub fn init() !void {
-    _ = try std.Thread.spawn(.{}, pipesin.pipesInEventListener, .{});
+    _ = try std.Thread.spawn(.{}, pipesin.initPipeReader, .{});
     // Note: don't defer ipcThread.join() here, doing so will cause init() to wait for the thread to complete
     // which never happens, which will in turn block the calling functino (probably main()) blocking that execution path
 }

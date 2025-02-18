@@ -16,9 +16,9 @@ pub fn build(b: *std.Build) void {
 
     // Embed our static objc wrapping library in the zig binary
     exe.addLibraryPath(b.path("build"));
-    // Note: zig will add the lib prefix and .a suffix in the library Path above
+    // Note: zig will add the lib prefix and .a suffix in the library Path above on macos or .dll on windows
     // so src/zig/build/libObjcWrapperLib.a will be linked in
-    exe.linkSystemLibrary("ObjcWrapper");
+    exe.linkSystemLibrary("NativeWrapper");
 
     b.installArtifact(exe);
 }

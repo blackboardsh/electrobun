@@ -2,7 +2,7 @@ const std = @import("std");
 const rpc = @import("../rpc/schema/request.zig");
 const rpcSchema = @import("../rpc/schema/schema.zig");
 const objc = @import("./objc.zig");
-const pipesin = @import("../rpc/pipesin.zig");
+const pipesin = @import("../rpc/pipereader.zig");
 const window = @import("./window.zig");
 const rpcTypes = @import("../rpc/types.zig");
 const rpcHandlers = @import("../rpc/schema/handlers.zig");
@@ -250,7 +250,7 @@ pub fn createWebview(opts: CreateWebviewOpts) void {
     };
 
     if (bunPipeIn) |pipeInFile| {
-        pipesin.addPipe(pipeInFile.handle, opts.id);
+        pipesin.addPipe(pipeInFile, opts.id);
     }
 
     const bunPipeOut = blk: {
@@ -832,7 +832,7 @@ pub fn openFileDialog(startingFolder: []const u8, allowedFileTypes: []const u8, 
 }
 
 pub fn readFileContentsFromDisk(filePath: []const u8) ![]const u8 {
-    const ELECTROBUN_VIEWS_FOLDER = std.posix.getenv("ELECTROBUN_VIEWS_FOLDER") orelse {
+    const ELECTROBUN_VIEWS_FOLDER = std.process.getEnvVarOwned(alloc, "ELECTROBUN_VIEWS_FOLDER") catch {
         // todo: return an error here
         return error.ELECTROBUN_VIEWS_FOLDER_NOT_SET;
     };
