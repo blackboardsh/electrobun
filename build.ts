@@ -7,9 +7,20 @@ import { $ } from "bun";
 import { platform, arch } from "os";
 import { join } from 'path';
 import { existsSync } from "fs";
+import {parseArgs} from 'util';
+
+const {values: args} = parseArgs({
+    args: Bun.argv,
+    options: {
+        release: {
+            type: 'boolean' 
+        }
+    },
+    allowPositionals: true,
+})
 
 // TODO: set via cl arg
-const CHANNEL: 'debug' | 'release' = 'debug';
+const CHANNEL: 'debug' | 'release' = args.release ? 'release' : 'debug';
 const OS: 'win' | 'linux' | 'macos' = getPlatform();
 const ARCH: 'arm64' | 'x64' = getArch();
 
@@ -17,11 +28,14 @@ const isWindows = platform() === "win32";
 const bunBin = isWindows ? "bun.exe" : "bun";
 const zigBinary = OS === 'win' ? 'zig.exe' : 'zig';
 
+// Note: We want all binaries in /dist to be extensionless to simplify our cross platform code
+// (no .exe on windows)
+
 // PATHS
 const PATH = {
     bun: {
         RUNTIME: join(process.cwd(), "vendors", "bun", bunBin),
-        DIST: join(process.cwd(), "dist", bunBin)
+        DIST: join(process.cwd(), "dist", 'bun')
     },
     zig: {
         BIN: join(process.cwd(),'vendors','zig', zigBinary )
@@ -70,13 +84,13 @@ async function copyToDist() {
     await $`cp ${PATH.bun.RUNTIME} ${PATH.bun.DIST}`;
     // Zig
     const binExt = OS === 'win' ? '.exe' : '';
-    await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
-    await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
-    await $`cp src/bsdiff/zig-out/bin/bsdiff${binExt} dist/bsdiff${binExt}`;
-    await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;
-    await $`cp src/zig/zig-out/bin/webview${binExt} dist/webview${binExt}`;
+    await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher`;
+    await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor`;
+    await $`cp src/bsdiff/zig-out/bin/bsdiff${binExt} dist/bsdiff`;
+    await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch`;
+    await $`cp src/zig/zig-out/bin/webview${binExt} dist/webview`;
     // Electrobun cli
-    await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;
+    await $`cp src/cli/build/electrobun${binExt} dist/electrobun`;
     // Electrobun's Typescript bun and browser apis
     await $`cp -R src/bun/ dist/api/bun/`;
     await $`cp -R src/browser/ dist/api/browser/`;
