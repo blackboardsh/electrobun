@@ -89,7 +89,8 @@ async function copyToDist() {
     await $`cp src/bsdiff/zig-out/bin/bsdiff${binExt} dist/bsdiff`;
     await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch`;
     await $`cp src/zig/zig-out/bin/webview${binExt} dist/webview`;
-    // Electrobun cli
+    // Electrobun cli and npm launcher
+    await $`cp src/npmbin/index.js dist/npmbin.js`;
     await $`cp src/cli/build/electrobun${binExt} dist/electrobun`;
     // Electrobun's Typescript bun and browser apis
     await $`cp -R src/bun/ dist/api/bun/`;

@@ -10,8 +10,9 @@
     "./bun": "./dist/api/bun/index.ts",
     "./view": "./dist/api/browser/index.ts"
   },
+  "type": "module",
   "bin": {
-    "electrobun": "dist/electrobun"
+    "electrobun": "dist/npmbin.js"
   },
   "homepage": "https://electrobun.dev",
   "repository": {
