@@ -134,23 +134,19 @@ pub const PipeReader = struct {
     }
 
     fn openMainPipe(self: *PipeReader) !std.fs.File {
-        _ = self;
-
-        // Use a global allocator; you may also pass an allocator as a parameter if needed.
-        const allocator = std.heap.page_allocator;
-        const pipe_path = std.process.getEnvVarOwned(allocator, "MAIN_PIPE_IN") catch {
+        const pipe_path = std.process.getEnvVarOwned(self.allocator, "MAIN_PIPE_IN") catch {
             return Error.MainPipeNotSet;
         };
 
         // Attempt to open the file.
         const file = std.fs.cwd().openFile(pipe_path, .{ .mode = .read_only }) catch |err| {
             std.log.err("Failed to open main pipe: {}", .{err});
-            allocator.free(pipe_path);
+            self.allocator.free(pipe_path);
             return err;
         };
 
         // Free the allocated environment string.
-        allocator.free(pipe_path);
+        self.allocator.free(pipe_path);
         return file;
     }
 
@@ -277,7 +273,7 @@ pub const PipeReader = struct {
 
     // Existing macOS implementations remain the same...
     fn macOSEventLoop(self: *PipeReader) !void {
-        comptime if (builtin.target.os.tag == .macos) {
+        if (builtin.target.os.tag == .macos) {
             const kqueue_fd = self.platform_data.macos.kqueue_fd orelse return Error.PipeCreationFailed;
             var events: [10]std.posix.Kevent = undefined;
             const changelist = &[_]std.posix.Kevent{};
@@ -296,7 +292,7 @@ pub const PipeReader = struct {
                         if (try self.readLine(&buffer, ev.ident)) |line| {
                             const source_id: WebviewId = @intCast(ev.udata);
                             if (source_id == 0) {
-                                try PipeReader.handleMainPipeMessage(line);
+                                try PipeReader.handleMainPipeMessage(self.allocator, line);
                             } else {
                                 webview.sendLineToWebview(source_id, line);
                             }
@@ -304,11 +300,11 @@ pub const PipeReader = struct {
                     }
                 }
             }
-        };
+        }
     }
 
     fn macOSAddPipe(self: *PipeReader, fd: std.posix.fd_t, id: WebviewId) !void {
-        comptime if (builtin.target.os.tag == .macos) {
+        if (builtin.target.os.tag == .macos) {
             const kqueue_fd = self.platform_data.macos.kqueue_fd orelse return Error.PipeCreationFailed;
 
             var events: [10]std.posix.Kevent = undefined;
@@ -333,7 +329,7 @@ pub const PipeReader = struct {
             if (result == -1) {
                 return Error.PipeCreationFailed;
             }
-        };
+        }
     }
 
     fn readLine(self: *PipeReader, buffer: []u8, fd: usize) !?[]const u8 {
@@ -369,12 +365,11 @@ pub const PipeReader = struct {
 
             if (global_reader) |*reader| {
                 try reader.message_queue.append(line_copy);
-
                 switch (builtin.target.os.tag) {
                     .macos => {
                         MacOS.dispatch.dispatch_async_f(
                             MacOS.dispatch.dispatch_get_main_queue(),
-                            @ptrCast(&reader),
+                            null,
                             processMessageQueue,
                         );
                     },
@@ -391,41 +386,44 @@ pub const PipeReader = struct {
 };
 
 fn processMessageQueue(context: ?*anyopaque) callconv(.C) void {
-    const self = @as(*PipeReader, @ptrCast(@alignCast(context orelse return)));
+    _ = context;
 
-    const line = self.message_queue.orderedRemove(0);
-    defer self.allocator.free(line);
+    if (global_reader) |*reader| {
+        const line = reader.message_queue.orderedRemove(0);
 
-    const json = std.json.parseFromSlice(
-        std.json.Value,
-        self.allocator,
-        line,
-        .{ .ignore_unknown_fields = true },
-    ) catch |err| {
-        std.log.err("Error parsing message: {s}", .{@errorName(err)});
-        return;
-    };
-    defer json.deinit();
+        defer reader.allocator.free(line);
 
-    const msg_type = if (json.value.object.get("type")) |t| t.string else return;
-
-    if (std.mem.eql(u8, msg_type, "request")) {
-        const request = std.json.parseFromValue(
-            rpcTypes._RPCRequestPacket,
-            self.allocator,
-            json.value,
-            .{},
+        const json = std.json.parseFromSlice(
+            std.json.Value,
+            reader.allocator,
+            line,
+            .{ .ignore_unknown_fields = true },
         ) catch |err| {
-            std.log.err("Error parsing request: {s}", .{@errorName(err)});
+            std.log.err("Error parsing message: {s}", .{@errorName(err)});
             return;
         };
+        defer json.deinit();
 
-        const result = rpcHandlers.handleRequest(request.value);
+        const msg_type = if (json.value.object.get("type")) |t| t.string else return;
 
-        if (result.errorMsg == null) {
-            rpcStdout.sendResponseSuccess(request.value.id, result.payload);
-        } else {
-            rpcStdout.sendResponseError(request.value.id, result.errorMsg.?);
+        if (std.mem.eql(u8, msg_type, "request")) {
+            const request = std.json.parseFromValue(
+                rpcTypes._RPCRequestPacket,
+                reader.allocator,
+                json.value,
+                .{},
+            ) catch |err| {
+                std.log.err("Error parsing request: {s}", .{@errorName(err)});
+                return;
+            };
+
+            const result = rpcHandlers.handleRequest(request.value);
+
+            if (result.errorMsg == null) {
+                rpcStdout.sendResponseSuccess(request.value.id, result.payload);
+            } else {
+                rpcStdout.sendResponseError(request.value.id, result.errorMsg.?);
+            }
         }
     }
 }
@@ -437,8 +435,9 @@ pub fn initPipeReader() !void {
     if (global_reader != null) return;
 
     var reader = try PipeReader.init(std.heap.page_allocator);
-    try reader.start();
     global_reader = reader;
+
+    try reader.start();
 }
 
 pub fn addPipe(fd: std.fs.File, id: PipeReader.WebviewId) void {

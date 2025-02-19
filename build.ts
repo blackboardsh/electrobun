@@ -95,6 +95,7 @@ async function copyToDist() {
     // Electrobun's Typescript bun and browser apis
     await $`cp -R src/bun/ dist/api/bun/`;
     await $`cp -R src/browser/ dist/api/browser/`;
+    await $`cp vendors/bun/${bunBin} dist/${bunBin}`;
     // Native code and frameworks
     if (OS === 'macos') {
         await $`cp -R src/zig/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;
@@ -154,8 +155,31 @@ async function vendorBun() {
         return;
     }
 
-    const bunUrlSegment = isWindows && 'bun-windows-x64.exe' || 'bun-darwin-aarch64'
-    await $`mkdir -p ${join("vendors", "bun")} && curl -L -o ${PATH.bun.RUNTIME} https://github.com/oven-sh/bun/releases/download/bun-v1.1.29/${bunUrlSegment}`;
+    const bunUrlSegment = isWindows ? 'bun-windows-x64.zip' : 'bun-darwin-aarch64.zip';
+    const tempZipPath = join("vendors", "bun", "temp.zip");
+    
+    // Download zip file
+    await $`mkdir -p ${join("vendors", "bun")} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.1.29/${bunUrlSegment}`;
+    
+    // Extract zip file
+    await $`unzip -o ${tempZipPath} -d ${join("vendors", "bun")}`;
+    
+    // Move the bun binary to the correct location
+    // The path inside the zip might be different depending on the platform
+    if (isWindows) {
+        await $`mv ${join("vendors", "bun", "bun-windows-x64", "bun.exe")} ${PATH.bun.RUNTIME}`;
+    } else {
+        await $`mv ${join("vendors", "bun", "bun-darwin-aarch64", "bun")} ${PATH.bun.RUNTIME}`;
+    }
+    
+    // Add execute permissions on non-Windows platforms
+    if (!isWindows) {
+        await $`chmod +x ${PATH.bun.RUNTIME}`;
+    }
+    
+    // Clean up
+    await $`rm ${tempZipPath}`;
+    await $`rm -rf ${join("vendors", "bun", isWindows ? "bun-windows-x64" : "bun-darwin-aarch64")}`;
 }
 
 async function vendorZig() {
@@ -224,8 +248,8 @@ async function buildTRDiff() {
 
 async function buildNative() {
     if (OS === 'macos') {
-        await $`mkdir -p src/native/macos/build && clang++ -c src/native/macos/objcWrapper.mm -o src/native/macos/build/objcWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef -std=c++17`;
-        await $`mkdir -p src/zig/build && clang++ -o src/zig/build/libObjcWrapper.dylib src/native/macos/build/objcWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libObjcWrapper.dylib`;
+        await $`mkdir -p src/native/macos/build && clang++ -c src/native/macos/nativeWrapper.mm -o src/native/macos/build/nativeWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef -std=c++17`;
+        await $`mkdir -p src/zig/build && clang++ -o src/zig/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib`;
     } else if (OS === 'win') {
         await $`mkdir -p src/native/win/build && cl /c /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
         await $`link /DLL /OUT:src/zig/build/nativeWrapper.dll /IMPLIB:src/zig/build/nativeWrapper.lib src/native/win/build/nativeWrapper.obj`;

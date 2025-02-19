@@ -42,7 +42,7 @@ const PATHS = {
   NATIVE_WRAPPER_MACOS: join(
     ELECTROBUN_DEP_PATH,
     "dist",
-    "libObjcWrapper.dylib"
+    "libNativeWrapper.dylib"
   ),
   BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch"),
   EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor"),
@@ -207,13 +207,11 @@ if (commandArg === "init") {
   // todo (yoav): init a repo folder structure
   console.log("initializing electrobun project");
 } else if (commandArg === "build") {
-  // refresh build folder
+  // refresh build folder  
   if (existsSync(buildFolder)) {
     rmdirSync(buildFolder, { recursive: true });
-  }
-
-  mkdirSync(buildFolder, { recursive: true });
-
+  }  
+  mkdirSync(buildFolder, { recursive: true });  
   // bundle bun to build/bun
   const bunConfig = config.build.bun;
   const bunSource = join(projectRoot, bunConfig.entrypoint);
@@ -270,8 +268,7 @@ if (commandArg === "init") {
   await Bun.write(
     join(appBundleFolderContentsPath, "Info.plist"),
     InfoPlistContents
-  );
-
+  );  
   // in dev builds the log file is a named pipe so we can stream it back to the terminal
   // in canary/stable builds it'll be a regular log file
   //     const LauncherContents = `#!/bin/bash
@@ -357,8 +354,8 @@ if (commandArg === "init") {
   const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;
   const nativeWrapperMacosDestination = join(
     appBundleMacOSPath,
-    "libObjcWrapper.dylib"
-  );
+    "libNativeWrapper.dylib"
+  );  
   cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
     dereference: true,
   });
