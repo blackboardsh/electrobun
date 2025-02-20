@@ -11,8 +11,9 @@ import {
 import { execSync } from "child_process";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
+import {platform} from 'os';
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
-
+console.log('cli')
 // MacOS named pipes hang at around 4KB
 const MAX_CHUNK_SIZE = 1024 * 2;
 
@@ -28,6 +29,7 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
 const commandArg = process.argv[indexOfElectrobun + 1] || "launcher";
 
 const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
+
 // const SRC_PATH = join(ELECTROBUN_DEP_PATH, "src");
 // const ZIGOUT_BIN = join("zig-out", "bin");
 
@@ -36,7 +38,7 @@ const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
 // This lets us not have to commit src build folders to git and provide pre-built binaries
 const PATHS = {
   BUN_BINARY: join(ELECTROBUN_DEP_PATH, "dist", "bun"),
-  LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun"),
+  LAUNCHER_DEV: platform() === 'win32' ? join(ELECTROBUN_DEP_PATH, "dist", "electrobun.exe") : join(ELECTROBUN_DEP_PATH, "dist", "electrobun"),
   LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher"),
   ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview"),
   NATIVE_WRAPPER_MACOS: join(

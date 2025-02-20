@@ -10,24 +10,22 @@ import { fileURLToPath } from 'url';
 // electrobun's playground package.json script by the root electrobun repo's package.json script
 // we need to get the path to this file
 
-// Get the directory name of the current script the .bin folder
-const scriptDir = dirname(process.argv[1]);
-// Go up one level from the bin directory to the node_modules folder and add the electrobun folder
-const electrobunDir = join(dirname(scriptDir), 'electrobun');
+// Get the nearest node_modules folder
+// process.argv[1]:
+/// macos: /Users/yoav/code/electrobun/playground/node_modules/.bin/electrobun
+/// win: C:\Users\Yoav\code\electrobun\playground\node_modules\electrobun\dist\npmbin.js
+const nodeModules = process.argv[1].split('node_modules')[0] + 'node_modules';
+const electrobunDir = join(nodeModules, 'electrobun');
 
-const DEV_CLI_PATH = join(electrobunDir, 'dist', platform === 'win32' ? 'electrobun.exe' : 'electrobun');
-
-console.log('npm bin!', DEV_CLI_PATH)
+const DEV_CLI_PATH = join(electrobunDir, 'dist', platform() === 'win32' ? 'electrobun.exe' : 'electrobun');
 
 async function main() {
     // For electrobun development, use local binary
     if (existsSync(DEV_CLI_PATH)) {
-      console.log('exits')
+      console.log('exists: ', DEV_CLI_PATH)
       spawnSync(DEV_CLI_PATH, process.argv.slice(2), { stdio: 'inherit' });
       return;
     }
-
-    console.log('does not exit')
 
 };
 

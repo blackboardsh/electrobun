@@ -25,6 +25,7 @@ const OS: 'win' | 'linux' | 'macos' = getPlatform();
 const ARCH: 'arm64' | 'x64' = getArch();
 
 const isWindows = platform() === "win32";
+const binExt = OS === 'win' ? '.exe' : '';
 const bunBin = isWindows ? "bun.exe" : "bun";
 const zigBinary = OS === 'win' ? 'zig.exe' : 'zig';
 
@@ -35,7 +36,7 @@ const zigBinary = OS === 'win' ? 'zig.exe' : 'zig';
 const PATH = {
     bun: {
         RUNTIME: join(process.cwd(), "vendors", "bun", bunBin),
-        DIST: join(process.cwd(), "dist", 'bun')
+        DIST: join(process.cwd(), "dist", bunBin)
     },
     zig: {
         BIN: join(process.cwd(),'vendors','zig', zigBinary )
@@ -83,19 +84,17 @@ async function copyToDist() {
     // Bun runtime
     await $`cp ${PATH.bun.RUNTIME} ${PATH.bun.DIST}`;
     // Zig
-    const binExt = OS === 'win' ? '.exe' : '';
-    await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher`;
-    await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor`;
-    await $`cp src/bsdiff/zig-out/bin/bsdiff${binExt} dist/bsdiff`;
-    await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch`;
-    await $`cp src/zig/zig-out/bin/webview${binExt} dist/webview`;
+    await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
+    await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
+    await $`cp src/bsdiff/zig-out/bin/bsdiff${binExt} dist/bsdiff${binExt}`;
+    await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;
+    await $`cp src/zig/zig-out/bin/webview${binExt} dist/webview${binExt}`;
     // Electrobun cli and npm launcher
     await $`cp src/npmbin/index.js dist/npmbin.js`;
-    await $`cp src/cli/build/electrobun${binExt} dist/electrobun`;
+    await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;
     // Electrobun's Typescript bun and browser apis
     await $`cp -R src/bun/ dist/api/bun/`;
     await $`cp -R src/browser/ dist/api/browser/`;
-    await $`cp vendors/bun/${bunBin} dist/${bunBin}`;
     // Native code and frameworks
     if (OS === 'macos') {
         await $`cp -R src/zig/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;
