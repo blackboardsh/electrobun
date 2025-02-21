@@ -93,8 +93,15 @@ async function copyToDist() {
     await $`cp src/npmbin/index.js dist/npmbin.js`;
     await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;
     // Electrobun's Typescript bun and browser apis
-    await $`cp -R src/bun/ dist/api/bun/`;
-    await $`cp -R src/browser/ dist/api/browser/`;
+    if (OS === 'win') {
+        // on windows the folder gets copied "into" the detination folder
+        await $`cp -R src/bun/ dist/api`;
+        await $`cp -R src/browser/ dist/api`;
+    } else {
+        // on unix cp is more like a rename
+        await $`cp -R src/bun/ dist/api/bun`;
+        await $`cp -R src/browser/ dist/api/browser`; 
+    }
     // Native code and frameworks
     if (OS === 'macos') {
         await $`cp -R src/zig/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;
