@@ -22,7 +22,6 @@ const DEV_CLI_PATH = join(electrobunDir, 'dist', platform() === 'win32' ? 'elect
 async function main() {
     // For electrobun development, use local binary
     if (existsSync(DEV_CLI_PATH)) {
-      console.log('exists: ', DEV_CLI_PATH)
       spawnSync(DEV_CLI_PATH, process.argv.slice(2), { stdio: 'inherit' });
       return;
     }

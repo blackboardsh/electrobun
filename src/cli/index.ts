@@ -167,7 +167,7 @@ const artifactFolder = join(
 );
 
 const buildIcons = (appBundleFolderResourcesPath: string) => {
-  if (config.build.mac.icons) {
+  if (OS === 'macos' && config.build.mac.icons) {
     const iconSourceFolder = join(projectRoot, config.build.mac.icons);
     const iconDestPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
     if (existsSync(iconSourceFolder)) {
@@ -1166,7 +1166,7 @@ function codesignAppBundle(
   entitlementsFilePath?: string
 ) {
   console.log("code signing...");
-  if (!config.build.mac.codesign) {
+  if (OS !== 'macos' || !config.build.mac.codesign) {
     return;
   }
 
@@ -1204,7 +1204,7 @@ function codesignAppBundle(
 }
 
 function notarizeAndStaple(appOrDmgPath: string) {
-  if (!config.build.mac.notarize) {
+  if (OS !== 'macos' || !config.build.mac.notarize) {
     return;
   }
 
