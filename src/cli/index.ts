@@ -931,7 +931,7 @@ if (commandArg === "init") {
   // This is critical to fully test the app (including plist configuration, etc.)
   // but also to get proper cmd+tab and dock behaviour and not run the windowed app
   // as a child of the terminal process which steels keyboard focus from any descendant nswindows.
-  Bun.spawn(["open", mainPath, "--verbose"], {
+  Bun.spawn(["open", mainPath], {
     env: {},
   });
 
