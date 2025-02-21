@@ -11,11 +11,42 @@ import {
 import { execSync } from "child_process";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
-import {platform} from 'os';
+import {platform, arch} from 'os';
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
 console.log('cli')
 // MacOS named pipes hang at around 4KB
 const MAX_CHUNK_SIZE = 1024 * 2;
+
+// TODO: dedup with built.ts
+const OS: 'win' | 'linux' | 'macos' = getPlatform();
+const ARCH: 'arm64' | 'x64' = getArch();
+
+function getPlatform() {
+  switch (platform()) {
+      case "win32":
+          return 'win';
+      case "darwin":
+          return 'macos';
+      case 'linux':
+          return 'linux';
+      default:
+          throw 'unsupported platform';
+  }
+}
+
+function getArch() {
+  switch (arch()) {
+      case "arm64":
+          return 'arm64';
+      case "x64":
+          return 'x64';
+      default:
+          throw 'unsupported arch'
+  }
+}
+
+
+const binExt = OS === 'win' ? '.exe' : '';
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -37,18 +68,19 @@ const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
 // For developers using electrobun cli via npm use the release versions in /dist
 // This lets us not have to commit src build folders to git and provide pre-built binaries
 const PATHS = {
-  BUN_BINARY: join(ELECTROBUN_DEP_PATH, "dist", "bun"),
-  LAUNCHER_DEV: platform() === 'win32' ? join(ELECTROBUN_DEP_PATH, "dist", "electrobun.exe") : join(ELECTROBUN_DEP_PATH, "dist", "electrobun"),
-  LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher"),
-  ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview"),
+  BUN_BINARY: join(ELECTROBUN_DEP_PATH, "dist", "bun") + binExt,
+  LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun") + binExt,
+  LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher") + binExt,
+  ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview") + binExt,
   NATIVE_WRAPPER_MACOS: join(
     ELECTROBUN_DEP_PATH,
     "dist",
     "libNativeWrapper.dylib"
   ),
-  BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch"),
-  EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor"),
-  BSDIFF: join(ELECTROBUN_DEP_PATH, "dist", "bsdiff"),
+  NATIVE_WRAPPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "nativeWrapper.dll"),
+  BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch") + binExt,
+  EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor") + binExt,
+  BSDIFF: join(ELECTROBUN_DEP_PATH, "dist", "bsdiff") + binExt,
   CEF_FRAMEWORK_MACOS: join(
     ELECTROBUN_DEP_PATH,
     "dist",
@@ -310,7 +342,7 @@ if (commandArg === "init") {
         PATHS.LAUNCHER_DEV
       : // Note: for release use the zig launcher optimized for smol size
         PATHS.LAUNCHER_RELEASE;
-  const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher");
+  const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + binExt;
   const destLauncherFolder = dirname(bunCliLauncherDestination);
   if (!existsSync(destLauncherFolder)) {
     // console.info('creating folder: ', destFolder);
@@ -327,7 +359,7 @@ if (commandArg === "init") {
   const bunBinarySourcePath = PATHS.BUN_BINARY;
   // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
   // in node_modules, so we have to dereference here to get the actual binary in the bundle.
-  const bunBinaryDestInBundlePath = join(appBundleMacOSPath, "bun");
+  const bunBinaryDestInBundlePath = join(appBundleMacOSPath, "bun") + binExt;
   const destFolder2 = dirname(bunBinaryDestInBundlePath);
   if (!existsSync(destFolder2)) {
     // console.info('creating folder: ', destFolder);
@@ -340,7 +372,7 @@ if (commandArg === "init") {
   // todo (yoav): build native bindings for target
   // copy native bindings
   const zigNativeBinarySource = PATHS.ZIG_NATIVE_WRAPPER;
-  const zigNativeBinaryDestination = join(appBundleMacOSPath, "webview");
+  const zigNativeBinaryDestination = join(appBundleMacOSPath, "webview") + binExt;
   const destFolder = dirname(zigNativeBinaryDestination);
   if (!existsSync(destFolder)) {
     // console.info('creating folder: ', destFolder);
@@ -353,6 +385,7 @@ if (commandArg === "init") {
   });
 
   // copy native wrapper dynamic library next to zig native binary
+  if (OS === 'macos') {
   const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;
   const nativeWrapperMacosDestination = join(
     appBundleMacOSPath,
@@ -361,55 +394,69 @@ if (commandArg === "init") {
   cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
     dereference: true,
   });
+} else if (OS === 'win') {
+  const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_WIN;
+  const nativeWrapperMacosDestination = join(
+    appBundleMacOSPath,
+    "nativeWrapper.dll"
+  );  
+  cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
+    dereference: true,
+  });
+  
+}
   
   // TODO: Should download binaries for arch, and then copy them in
   // for developing Electrobun itself we can assume current arch is already
   // in dist as it would have just been built from local source
   if (config.build.mac.bundleCEF) {    
-    const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
-    const cefFrameworkDestination = join(
-      appBundleFolderFrameworksPath,
-      "Chromium Embedded Framework.framework"
-    );
-
-    cpSync(cefFrameworkSource, cefFrameworkDestination, {
-      recursive: true,
-      dereference: true,
-    });
-
-    // cef helpers
-    const cefHelperNames = [
-      "webview Helper",
-      "webview Helper (Alerts)",
-      "webview Helper (GPU)",
-      "webview Helper (Plugin)",
-      "webview Helper (Renderer)",
-    ];
-
-    const helperSourcePath = PATHS.CEF_HELPER_MACOS;
-    cefHelperNames.forEach((helperName) => {
-      const destinationPath = join(
+    if (OS === 'macos') {
+      const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
+      const cefFrameworkDestination = join(
         appBundleFolderFrameworksPath,
-        `${helperName}.app`,
-        `Contents`,
-        `MacOS`,
-        `${helperName}`
+        "Chromium Embedded Framework.framework"
       );
-      const destFolder4 = basename(destinationPath);
-      if (!existsSync(destFolder4)) {
-        // console.info('creating folder: ', destFolder4);
-        mkdirSync(destFolder4, { recursive: true });
-      }
-      cpSync(helperSourcePath, destinationPath, {
+
+      cpSync(cefFrameworkSource, cefFrameworkDestination, {
         recursive: true,
         dereference: true,
       });
-    });
+    
+
+      // cef helpers
+      const cefHelperNames = [
+        "webview Helper",
+        "webview Helper (Alerts)",
+        "webview Helper (GPU)",
+        "webview Helper (Plugin)",
+        "webview Helper (Renderer)",
+      ];
+
+      const helperSourcePath = PATHS.CEF_HELPER_MACOS;
+      cefHelperNames.forEach((helperName) => {
+        const destinationPath = join(
+          appBundleFolderFrameworksPath,
+          `${helperName}.app`,
+          `Contents`,
+          `MacOS`,
+          `${helperName}`
+        );
+        const destFolder4 = basename(destinationPath);
+        if (!existsSync(destFolder4)) {
+          // console.info('creating folder: ', destFolder4);
+          mkdirSync(destFolder4, { recursive: true });
+        }
+        cpSync(helperSourcePath, destinationPath, {
+          recursive: true,
+          dereference: true,
+        });
+      });
+    }
   }
 
   // copy native bindings
   const bsPatchSource = PATHS.BSPATCH;
-  const bsPatchDestination = join(appBundleMacOSPath, "bspatch");
+  const bsPatchDestination = join(appBundleMacOSPath, "bspatch") + binExt;
   const bsPatchDestFolder = dirname(bsPatchDestination);
   if (!existsSync(bsPatchDestFolder)) {
     mkdirSync(bsPatchDestFolder, { recursive: true });
@@ -420,6 +467,7 @@ if (commandArg === "init") {
     dereference: true,
   });
 
+  // transpile developer's bun code
   const bunDestFolder = join(appBundleAppCodePath, "bun");
   // Build bun-javascript ts files
   const buildResult = await Bun.build({
@@ -435,6 +483,7 @@ if (commandArg === "init") {
     process.exit(1);
   }
 
+  // transpile developer's view code
   // Build webview-javascript ts files
   // bundle all the bundles
   for (const viewName in config.build.views) {
@@ -882,7 +931,7 @@ if (commandArg === "init") {
   // This is critical to fully test the app (including plist configuration, etc.)
   // but also to get proper cmd+tab and dock behaviour and not run the windowed app
   // as a child of the terminal process which steels keyboard focus from any descendant nswindows.
-  Bun.spawn(["open", mainPath], {
+  Bun.spawn(["open", mainPath, "--verbose"], {
     env: {},
   });
 
