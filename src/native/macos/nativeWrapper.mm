@@ -70,38 +70,31 @@ typedef struct {
 typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const char* url, const char* body);
 
 /** Generic bridging callback types. */
-typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
+// typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
+// NOTE: Bun's FFIType.true doesn't play well with objective C's YES/NO char booleans
+// so when sending booleans from JSCallbacks we have to use u32 for now
+typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
 typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
 typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);
 typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
 
-/** Window style mask config. */
-typedef struct {
-    BOOL Borderless;
-    BOOL Titled;
-    BOOL Closable;
-    BOOL Miniaturizable;
-    BOOL Resizable;
-    BOOL UnifiedTitleAndToolbar;
-    BOOL FullScreen;
-    BOOL FullSizeContentView;
-    BOOL UtilityWindow;
-    BOOL DocModalWindow;
-    BOOL NonactivatingPanel;
-    BOOL HUDWindow;
-} WindowStyleMaskOptions;
+
 
 typedef struct {
     NSRect frame;
-    WindowStyleMaskOptions styleMask;
+    uint32_t styleMask;
     const char *titleBarStyle;
 } createNSWindowWithFrameAndStyleParams;
 
 /** Window event callbacks. */
+// typedef void (*WindowCloseHandler)(uint32_t windowId);
+// typedef void (*WindowMoveHandler)(uint32_t windowId, CGFloat x, CGFloat y);
+// typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGFloat width, CGFloat height);
 typedef void (*WindowCloseHandler)(uint32_t windowId);
-typedef void (*WindowMoveHandler)(uint32_t windowId, CGFloat x, CGFloat y);
-typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGFloat width, CGFloat height);
+typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
+typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
+
 
 /** Tray and menu bridging. */
 typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
@@ -128,20 +121,50 @@ bool isCEFAvailable() {
     return [[NSFileManager defaultManager] fileExistsAtPath:frameworkPath];
 }
 
-NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
-    NSUInteger mask = 0;
-    if (options.Borderless) mask |= NSWindowStyleMaskBorderless;
-    if (options.Titled) mask |= NSWindowStyleMaskTitled;
-    if (options.Closable) mask |= NSWindowStyleMaskClosable;
-    if (options.Miniaturizable) mask |= NSWindowStyleMaskMiniaturizable;
-    if (options.Resizable) mask |= NSWindowStyleMaskResizable;
-    if (options.UnifiedTitleAndToolbar) mask |= NSWindowStyleMaskUnifiedTitleAndToolbar;
-    if (options.FullScreen) mask |= NSWindowStyleMaskFullScreen;
-    if (options.FullSizeContentView) mask |= NSWindowStyleMaskFullSizeContentView;
-    if (options.UtilityWindow) mask |= NSWindowStyleMaskUtilityWindow;
-    if (options.DocModalWindow) mask |= NSWindowStyleMaskDocModalWindow;
-    if (options.NonactivatingPanel) mask |= NSWindowStyleMaskNonactivatingPanel;
-    if (options.HUDWindow) mask |= NSWindowStyleMaskHUDWindow;
+// NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
+//     NSUInteger mask = 0;
+//     if (options.Borderless) mask |= NSWindowStyleMaskBorderless;
+//     if (options.Titled) mask |= NSWindowStyleMaskTitled;
+//     if (options.Closable) mask |= NSWindowStyleMaskClosable;
+//     if (options.Miniaturizable) mask |= NSWindowStyleMaskMiniaturizable;
+//     if (options.Resizable) mask |= NSWindowStyleMaskResizable;
+//     if (options.UnifiedTitleAndToolbar) mask |= NSWindowStyleMaskUnifiedTitleAndToolbar;
+//     if (options.FullScreen) mask |= NSWindowStyleMaskFullScreen;
+//     if (options.FullSizeContentView) mask |= NSWindowStyleMaskFullSizeContentView;
+//     if (options.UtilityWindow) mask |= NSWindowStyleMaskUtilityWindow;
+//     if (options.DocModalWindow) mask |= NSWindowStyleMaskDocModalWindow;
+//     if (options.NonactivatingPanel) mask |= NSWindowStyleMaskNonactivatingPanel;
+//     if (options.HUDWindow) mask |= NSWindowStyleMaskHUDWindow;
+//     return mask;
+// }
+
+extern "C" uint32_t getNSWindowStyleMask(
+    bool Borderless,
+    bool Titled,
+    bool Closable,
+    bool Miniaturizable,
+    bool Resizable,
+    bool UnifiedTitleAndToolbar,
+    bool FullScreen,
+    bool FullSizeContentView,
+    bool UtilityWindow,
+    bool DocModalWindow,
+    bool NonactivatingPanel,
+    bool HUDWindow
+) {
+    uint32_t mask = 0;
+    if (Borderless) mask |= NSWindowStyleMaskBorderless;
+    if (Titled) mask |= NSWindowStyleMaskTitled;
+    if (Closable) mask |= NSWindowStyleMaskClosable;
+    if (Miniaturizable) mask |= NSWindowStyleMaskMiniaturizable;
+    if (Resizable) mask |= NSWindowStyleMaskResizable;
+    if (UnifiedTitleAndToolbar) mask |= NSWindowStyleMaskUnifiedTitleAndToolbar;
+    if (FullScreen) mask |= NSWindowStyleMaskFullScreen;
+    if (FullSizeContentView) mask |= NSWindowStyleMaskFullSizeContentView;
+    if (UtilityWindow) mask |= NSWindowStyleMaskUtilityWindow;
+    if (DocModalWindow) mask |= NSWindowStyleMaskDocModalWindow;
+    if (NonactivatingPanel) mask |= NSWindowStyleMaskNonactivatingPanel;
+    if (HUDWindow) mask |= NSWindowStyleMaskHUDWindow;
     return mask;
 }
 
@@ -765,7 +788,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         NSURL *newURL = navigationAction.request.URL;
-        BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
+        BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);        
         self.zigEventHandler(self.webviewId, "will-navigate", webView.URL.absoluteString.UTF8String);
         decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
     }
@@ -830,22 +853,25 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         self = [super init];
         if (self) {        
             self.webviewId = webviewId;
-
+            
             // TODO: rewrite this so we can return a reference to the AbstractRenderer and then call
             // init from zig after the handle is added to the webviewMap then we don't need this async stuff
             dispatch_async(dispatch_get_main_queue(), ^{
+                
                 // configuration
                 WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+                
                 configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
+                
                 [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
                 [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
-
+                
                 // Add scheme handler
                 MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
                 assetSchemeHandler.fileLoader = assetFileLoader;
                 assetSchemeHandler.webviewId = webviewId;
                 [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
-
+                
                 // create WKWebView 
                 self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
                 
@@ -860,7 +886,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 } else {                
                     self.fullSize = NO;
                 }
-
+                
                 // retainObjCObject(self.webView);
 
                 // delegates
@@ -904,20 +930,18 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 ContainerView *containerView = (ContainerView *)window.contentView;
                 [containerView addAbstractView:self];
                 // self.webView.abstractView = self;
-
-                // Force the load to happen on the next runloop iteration after addSubview
-                // otherwise wkwebkit won't load
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (url) {                
-                        [self loadURL:url];
-                    } 
-                });
-
+                
+                
+                
                 // Note: in WkWebkit the webview is an NSView
                 self.nsView = self.webView;            
 
                 [self addPreloadScriptToWebView:electrobunPreloadScript];
                 [self updateCustomPreloadScript:customPreloadScript];
+
+                if (url) {                                   
+                    [self loadURL:url];
+                } 
                 
                 // associate
                 objc_setAssociatedObject(self.webView, "WKWebViewImpl", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1278,6 +1302,8 @@ public:
                        bool is_redirect) override {
         std::string url = request->GetURL().ToString();
         bool shouldAllow = navigation_callback_(webview_id_, url.c_str());
+
+        
         if (webview_event_handler_) {        
             webview_event_handler_(webview_id_, "will-navigate", url.c_str());
         }
@@ -1936,7 +1962,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         if (self.resizeHandler) {
             NSScreen *primaryScreen = [NSScreen screens][0];
             NSRect screenFrame = [primaryScreen frame];
-            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
+            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;            
             self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
                             windowFrame.size.width, windowFrame.size.height);
         }
@@ -1947,7 +1973,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             NSRect windowFrame = [window frame];
             NSScreen *primaryScreen = [NSScreen screens][0];
             NSRect screenFrame = [primaryScreen frame];
-            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
+            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;            
             self.moveHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y);
         }
     }
@@ -1960,7 +1986,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
  */
 
 extern "C" void runNSApplication() {      
-    useCEF = isCEFAvailable();    
+    useCEF = false;//isCEFAvailable();    
 
     if (useCEF) {
         @autoreleasepool {
@@ -1985,15 +2011,26 @@ extern "C" void runNSApplication() {
     }
 }
 
+extern "C" void killApp() {
+    // Execute on main thread
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // This will terminate the entire process, including Bun and all its threads
+        exit(1); 
+    });
+}
+
 extern "C" void shutdownApplication() {
     CefShutdown();
 }
 
+
+
 extern "C" AbstractView* initWebview(uint32_t webviewId,
                         NSWindow *window,
                         const char *renderer,
-                        const char *url,                        
-                        NSRect frame,
+                        const char *url,                                                
+                        double x, double y,
+                        double width, double height,
                         zigStartURLSchemeTaskCallback assetFileLoader,
                         bool autoResize,
                         const char *partitionIdentifier,
@@ -2004,28 +2041,33 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         const char *electrobunPreloadScript,
                         const char *customPreloadScript ) {
 
-
     
+    NSRect frame = NSMakeRect(x, y, width, height);        
 
-    AbstractView *impl = nil;
-    
-    Class ImplClass = (strcmp(renderer, "cef") == 0 && useCEF) ? [CEFWebViewImpl class] : [WKWebViewImpl class];    
+    __block AbstractView *impl = nil;
 
-    impl = [[ImplClass alloc] initWithWebviewId:webviewId
-                                    window:window
-                                    url:url
-                                    frame:frame
-                                    assetFileLoader:assetFileLoader
-                                    autoResize:autoResize
-                                    partitionIdentifier:partitionIdentifier
-                                    navigationCallback:navigationCallback
-                                    webviewEventHandler:webviewEventHandler
-                                    bunBridgeHandler:bunBridgeHandler
-                                    webviewTagBridgeHandler:webviewTagBridgeHandler
-                                    electrobunPreloadScript:electrobunPreloadScript
-                                    customPreloadScript:customPreloadScript];
+    dispatch_sync(dispatch_get_main_queue(), ^{
 
-    
+        
+
+        Class ImplClass = (strcmp(renderer, "cef") == 0 && useCEF) ? [CEFWebViewImpl class] : [WKWebViewImpl class];    
+
+        impl = [[ImplClass alloc] initWithWebviewId:webviewId
+                                        window:window
+                                        url:strdup(url)
+                                        frame:frame
+                                        assetFileLoader:assetFileLoader
+                                        autoResize:autoResize
+                                        partitionIdentifier:strdup(partitionIdentifier)
+                                        navigationCallback:navigationCallback
+                                        webviewEventHandler:webviewEventHandler
+                                        bunBridgeHandler:bunBridgeHandler
+                                        webviewTagBridgeHandler:webviewTagBridgeHandler
+                                        electrobunPreloadScript:strdup(electrobunPreloadScript)
+                                        customPreloadScript:strdup(customPreloadScript)];
+
+    });
+
     return impl;
     
 }
@@ -2162,20 +2204,22 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
 }
 
 
-extern "C" NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
+NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      createNSWindowWithFrameAndStyleParams config,
                                                      WindowCloseHandler zigCloseHandler,
                                                      WindowMoveHandler zigMoveHandler,
                                                      WindowResizeHandler zigResizeHandler) {
+    
     NSScreen *primaryScreen = [NSScreen screens][0];
     NSRect screenFrame = [primaryScreen frame];
     config.frame.origin.y = screenFrame.size.height - config.frame.origin.y;
-
+    
     NSWindow *window = [[NSWindow alloc] initWithContentRect:config.frame
-                                                   styleMask:getNSWindowStyleMask(config.styleMask)
+                                                   styleMask:config.styleMask
                                                      backing:NSBackingStoreBuffered
                                                        defer:YES
                                                       screen:primaryScreen];
+    
     [window setFrameTopLeftPoint:config.frame.origin];
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
         window.titlebarAppearsTransparent = YES;
@@ -2195,15 +2239,69 @@ extern "C" NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     contentView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [window setContentView:contentView];
     return window;
+
+    // return (void*)window;
+    
 }
 
+extern "C" void testFFI2(void (*completionHandler)()) {
+    NSLog(@"C++  TEST FFI 2 0");
+    completionHandler();
+    NSLog(@"C++  TEST FFI 2 1");
+}
+
+extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
+  uint32_t windowId,
+  double x, double y,
+  double width, double height,
+  uint32_t styleMask,   
+  const char* titleBarStyle,
+  WindowCloseHandler zigCloseHandler,
+  WindowMoveHandler zigMoveHandler,
+  WindowResizeHandler zigResizeHandler
+  ) {
+
+     NSRect frame = NSMakeRect(x, y, width, height);
+  
+  // Create the params struct
+  createNSWindowWithFrameAndStyleParams config = {
+    .frame = frame,
+    .styleMask = styleMask,
+    .titleBarStyle = titleBarStyle
+  };
+
+  // Use a dispatch semaphore to wait for the window creation to complete
+  
+  
+  __block NSWindow* window = nil;
+  dispatch_sync(dispatch_get_main_queue(), ^{
+    window = createNSWindowWithFrameAndStyle(
+      windowId,
+      config,
+      zigCloseHandler,
+      zigMoveHandler,
+      zigResizeHandler
+    );
+    
+    
+  });
+  
+  return window;        
+}
+
+
 extern "C" void makeNSWindowKeyAndOrderFront(NSWindow *window) {
-    [window makeKeyAndOrderFront:nil];
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [window makeKeyAndOrderFront:nil];
+    });
 }
 
 extern "C" void setNSWindowTitle(NSWindow *window, const char *title) {
     NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
-    [window setTitle:titleString];
+    
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [window setTitle:titleString];
+    });
 }
 
 extern "C" void closeNSWindow(NSWindow *window) {

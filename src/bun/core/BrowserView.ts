@@ -14,6 +14,7 @@ import { Updater } from "./Updater";
 import type { BuiltinBunToWebviewSchema } from "../../browser/builtinrpcSchema";
 import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
 import { randomBytes } from "crypto";
+import {FFIType}  from 'bun:ffi';
 
 const BrowserViewMap: {
   [id: number]: BrowserView<any>;
@@ -108,6 +109,7 @@ const randomId = Math.random().toString(36).substring(7);
 
 export class BrowserView<T> {
   id: number = nextWebviewId++;
+  ptr: FFIType.ptr;
   hostWebviewId?: number;
   windowId: number;
   renderer: 'cef' | 'native';
@@ -137,7 +139,7 @@ export class BrowserView<T> {
 
   constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
     // const rpc = options.rpc;        
-
+    
     this.url = options.url || defaultOptions.url || null;
     this.html = options.html || defaultOptions.html || null;
     this.preload = options.preload || defaultOptions.preload || null;
@@ -160,12 +162,12 @@ export class BrowserView<T> {
   }
 
   init() {
-    this.createStreams();
+    // this.createStreams();
 
     
 
     // TODO: add a then to this that fires an onReady event
-    zigRPC.request.createWebview({
+    this.ptr = zigRPC.request.createWebview({
       id: this.id,
       windowId: this.windowId,
       renderer: this.renderer, 
@@ -191,45 +193,45 @@ export class BrowserView<T> {
     BrowserViewMap[this.id] = this;
   }
 
-  createStreams() {    
-    const webviewPipeIn = this.pipePrefix + "_in";
-    const webviewPipeOut = this.pipePrefix + "_out";
+  // createStreams() {    
+  //   const webviewPipeIn = this.pipePrefix + "_in";
+  //   const webviewPipeOut = this.pipePrefix + "_out";
     
-    try {
-      execSync("mkfifo " + webviewPipeOut);
-    } catch (e) {
-      console.log("pipe out already exists");
-    }
+  //   try {
+  //     execSync("mkfifo " + webviewPipeOut);
+  //   } catch (e) {
+  //     console.log("pipe out already exists");
+  //   }
     
-    try {
-      execSync("mkfifo " + webviewPipeIn);
-    } catch (e) {
-      console.log("pipe in already exists");
-    }
+  //   try {
+  //     execSync("mkfifo " + webviewPipeIn);
+  //   } catch (e) {
+  //     console.log("pipe in already exists");
+  //   }
     
-    const inStream = fs.createWriteStream(webviewPipeIn, {
-      flags: "r+",
-    });
+  //   const inStream = fs.createWriteStream(webviewPipeIn, {
+  //     flags: "r+",
+  //   });
 
-    // todo: something has to be written to it to open it
-    // look into this
-    inStream.write("\n");
+  //   // todo: something has to be written to it to open it
+  //   // look into this
+  //   inStream.write("\n");
 
-    this.inStream = inStream;
+  //   this.inStream = inStream;
     
-    // Open the named pipe for reading
-    const outStream = Bun.file(webviewPipeOut).stream();
-    this.outStream = outStream;
+  //   // Open the named pipe for reading
+  //   const outStream = Bun.file(webviewPipeOut).stream();
+  //   this.outStream = outStream;
     
-    if (!this.rpc) {
-      this.rpc = BrowserView.defineRPC({
-        handlers: { requests: {}, messages: {} },
-      });
-    }
+  //   if (!this.rpc) {
+  //     this.rpc = BrowserView.defineRPC({
+  //       handlers: { requests: {}, messages: {} },
+  //     });
+  //   }
     
-    this.rpc.setTransport(this.createTransport());
+  //   this.rpc.setTransport(this.createTransport());
     
-  }
+  // }
 
   sendMessageToWebviewViaExecute(jsonMessage) {
     const stringifiedMessage =

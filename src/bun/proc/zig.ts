@@ -6,115 +6,736 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "../core/BrowserView";
 import { Updater } from "../core/Updater";
 import { Tray } from "../core/Tray";
-const CHUNK_SIZE = 1024 * 4; // 4KB
+
+
+
+// todo: set up FFI, this is already in the webworker.
+
+import {  dirname } from "path";
+import { dlopen, suffix, JSCallback, CString, ptr, FFIType } from "bun:ffi";
+import { BrowserWindow, BrowserWindowMap } from "../core/BrowserWindow";
+
+
+const native = (() => {
+  try {
+    return dlopen(`./libNativeWrapper.${suffix}`, {  
+      // window
+      createWindowWithFrameAndStyleFromWorker: {
+        // Pass each parameter individually
+        args: [
+          FFIType.u32,                 // windowId
+          FFIType.f64, FFIType.f64,    // x, y
+          FFIType.f64, FFIType.f64,    // width, height    
+          FFIType.u32,           // styleMask 
+          FFIType.cstring,       // titleBarStyle
+          FFIType.function,      // closeHandler
+          FFIType.function,      // moveHandler
+          FFIType.function      // resizeHandler
+          
+        ],
+        returns: FFIType.ptr
+      },
+      setNSWindowTitle: {
+        args: [
+          FFIType.ptr, // window ptr
+          FFIType.cstring, // title
+        ],
+        returns: FFIType.void,
+      },
+      makeNSWindowKeyAndOrderFront: {
+        args: [
+          FFIType.ptr, // window ptr      
+        ],
+        returns: FFIType.void,
+      },
+      // webview
+      initWebview: {
+        args: [
+          FFIType.u32, // webviewId
+          FFIType.ptr, // windowPtr
+          FFIType.cstring, // renderer          
+          FFIType.cstring, // url                              
+          FFIType.f64, FFIType.f64,    // x, y
+          FFIType.f64, FFIType.f64,    // width, height    
+          FFIType.function, // views handler / assetFileLoader (FileLoader)
+          FFIType.bool, // autoResize
+          FFIType.cstring, // partition                    
+          FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
+          FFIType.function, // webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
+          FFIType.function, //  bunBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+          FFIType.function, //  webviewTagBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+          FFIType.cstring, // electrobunPreloadScript
+          FFIType.cstring, // customPreloadScript
+        ],
+        returns: FFIType.ptr
+      },
+      // MacOS specific native utils
+      getNSWindowStyleMask: {
+        args: [
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+          FFIType.bool,
+        ],
+        returns: FFIType.u32
+      }, 
+      killApp: {
+        args: [],
+        returns: FFIType.void
+      },
+      testFFI2: {
+        args: [FFIType.function],
+        returns: FFIType.void
+      }
+    });
+  } catch (err) {
+    console.log('FATAL Error opening native FFI', err)
+    process.exit();
+  }
+})();
+
+const callbacks = [];
+// TODO XX: rename this file and export and everything to something ffi like
+// TODO XX: get it all working without CEF then resolve the path issues for CEF
+// NOTE: Bun seems to hit limits on args or arg types. eg: trying to send 12 bools results 
+// in only about 8 going through then params after that. I think it may be similar to 
+// a zig bug I ran into last year. So check number of args in a signature when alignment issues occur.
+export const zigRPC = {
+  request: {
+    createWindow: (params: {
+        id: number,
+        url: string | null,        
+        title: string,
+        frame: {
+          width: number,
+          height: number,
+          x: number,
+          y: number,
+        },
+        styleMask: {
+          Borderless: boolean,
+          Titled: boolean,
+          Closable: boolean,
+          Miniaturizable: boolean,
+          Resizable: boolean,
+          UnifiedTitleAndToolbar: boolean,
+          FullScreen: boolean,
+          FullSizeContentView: boolean,
+          UtilityWindow: boolean,
+          DocModalWindow: boolean,
+          NonactivatingPanel: boolean,
+          HUDWindow: boolean,
+        },
+        titleBarStyle: string,
+      }): FFIType.ptr => {
+        const {id, url, title, frame: {x, y, width, height}, styleMask: {
+            Borderless,
+            Titled,
+            Closable,
+            Miniaturizable,
+            Resizable,
+            UnifiedTitleAndToolbar,
+            FullScreen,
+            FullSizeContentView,
+            UtilityWindow,
+            DocModalWindow,
+            NonactivatingPanel,
+            HUDWindow
+          }, 
+          titleBarStyle} = params
+          
+          const styleMask = native.symbols.getNSWindowStyleMask(
+            Borderless,
+            Titled,
+            Closable,
+            Miniaturizable,
+            Resizable,
+            UnifiedTitleAndToolbar,
+            FullScreen,
+            FullSizeContentView,
+            UtilityWindow,
+            DocModalWindow,
+            NonactivatingPanel,
+            HUDWindow
+          )          
+     
+        const windowPtr = native.symbols.createWindowWithFrameAndStyleFromWorker(
+          id, 
+          // frame
+          x, y, width, height, 
+          styleMask,
+          // style
+          toCString(titleBarStyle),
+          // callbacks
+          windowCloseCallback,
+          windowMoveCallback,
+          windowResizeCallback,       
+        );
+        
+        
+        if (!windowPtr) {
+          throw "Failed to create window"
+        }
+        
+        native.symbols.setNSWindowTitle(windowPtr, toCString(title));        
+        native.symbols.makeNSWindowKeyAndOrderFront(windowPtr);
+
+        return windowPtr;
+      },
+      createWebview: (params: {
+        id: number;
+        windowId: number;
+        renderer: "cef" | "native";
+        rpcPort: number;
+        secretKey: string;
+        hostWebviewId: number | null;
+        pipePrefix: string;
+        url: string | null;    
+        html: string | null;    
+        partition: string | null;
+        preload: string | null;
+        frame: {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+        };
+        autoResize: boolean;
+        navigationRules: string | null;
+      }): FFIType.ptr => {
+
+        const { id,
+          windowId,
+          renderer,
+          rpcPort,
+          secretKey,
+          // hostWebviewId: number | null;
+          // pipePrefix: string;
+          url,
+          // html: string | null;    
+          partition,
+          preload,
+          frame: {
+            x,
+            y,
+            width,
+            height,
+          },
+          autoResize} = params
+
+          const windowPtr = BrowserWindow.getById(windowId)?.ptr;
+          console.log('windowId', windowId, windowPtr)
+
+        if (!windowPtr) {          
+          throw `Can't add webview to window. window no longer exists`;
+        }
+
+        const electrobunPreload = `
+         window.__electrobunWebviewId = ${id};
+         window.__electrobunWindowId = ${windowId};
+         window.__electrobunRpcSocketPort = ${rpcPort};
+        (async () => {
+        
+         function base64ToUint8Array(base64) {
+           return new Uint8Array(atob(base64).split('').map(char => char.charCodeAt(0)));
+         }
+        
+        function uint8ArrayToBase64(uint8Array) {
+         let binary = '';
+         for (let i = 0; i < uint8Array.length; i++) {
+           binary += String.fromCharCode(uint8Array[i]);
+         }
+         return btoa(binary);
+        }
+         const generateKeyFromText = async (rawKey) => {        
+           return await window.crypto.subtle.importKey(
+             'raw',                  // Key format
+             rawKey,                 // Key data
+             { name: 'AES-GCM' },    // Algorithm details
+             true,                   // Extractable (set to false for better security)
+             ['encrypt', 'decrypt']  // Key usages
+           );
+         };        
+         const secretKey = await generateKeyFromText(new Uint8Array([${secretKey}]));
+        
+         const encryptString = async (plaintext) => {
+           const encoder = new TextEncoder();
+           const encodedText = encoder.encode(plaintext);
+           const iv = window.crypto.getRandomValues(new Uint8Array(12)); // Initialization vector (12 bytes)
+           const encryptedBuffer = await window.crypto.subtle.encrypt(
+            {
+             name: "AES-GCM",
+             iv: iv,
+            },
+            secretKey,
+            encodedText
+           );
+                
+                
+           // Split the tag (last 16 bytes) from the ciphertext
+           const encryptedData = new Uint8Array(encryptedBuffer.slice(0, -16));
+           const tag = new Uint8Array(encryptedBuffer.slice(-16));
+        
+           return { encryptedData: uint8ArrayToBase64(encryptedData), iv: uint8ArrayToBase64(iv), tag: uint8ArrayToBase64(tag) };
+         };
+         
+         // All args passed in as base64 strings
+         const decryptString = async (encryptedData, iv, tag) => {
+          encryptedData = base64ToUint8Array(encryptedData);
+          iv = base64ToUint8Array(iv);
+          tag = base64ToUint8Array(tag);
+          // Combine encrypted data and tag to match the format expected by SubtleCrypto
+          const combinedData = new Uint8Array(encryptedData.length + tag.length);
+          combinedData.set(encryptedData);
+          combinedData.set(tag, encryptedData.length);
+          const decryptedBuffer = await window.crypto.subtle.decrypt(
+            {
+              name: "AES-GCM",
+              iv: iv,
+            },
+            secretKey,
+            combinedData // Pass the combined data (ciphertext + tag)
+          );
+          const decoder = new TextDecoder();
+          return decoder.decode(decryptedBuffer);
+         };
+        
+         window.__electrobun_encrypt = encryptString;
+         window.__electrobun_decrypt = decryptString;
+        })()
+        ` + `
+         function emitWebviewEvent (eventName, detail) {
+             if (window.webkit?.messageHandlers?.webviewTagBridge) {
+                 window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
+             } else {
+                 window.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
+             }
+         };                 
+        
+         window.addEventListener('load', function(event) {
+           // Check if the current window is the top-level window        
+           if (window === window.top) {        
+            emitWebviewEvent('dom-ready', document.location.href);
+           }
+         });
+        
+         window.addEventListener('popstate', function(event) {
+          emitWebviewEvent('did-navigate-in-page', window.location.href);
+         });
+        
+         window.addEventListener('hashchange', function(event) {
+          emitWebviewEvent('did-navigate-in-page', window.location.href);    
+         });
+        
+         document.addEventListener('click', function(event) {
+          if ((event.metaKey || event.ctrlKey) && event.target.tagName === 'A') {
+            event.preventDefault();
+            event.stopPropagation();
+        
+            // Get the href of the link
+            const url = event.target.href;        
+            
+            // Open the URL in a new window or tab
+            // Note: we already handle new windows in objc
+            window.open(url, '_blank');
+          }
+        }, true);
+        
+         // prevent overscroll
+         document.addEventListener('DOMContentLoaded', () => {        
+          var style = document.createElement('style');
+          style.type = 'text/css';
+          style.appendChild(document.createTextNode('html, body { overscroll-behavior: none; }'));
+          document.head.appendChild(style);
+         });
+                
+        `
+        const customPreload = preload;
+       
+        console.log('url', url)
+
+        const webviewPtr = native.symbols.initWebview(
+          id,
+          windowPtr,
+          toCString(renderer),
+          toCString(url || ''),                          
+          x, y,  
+          width, height,   
+          webviewViewsHandler,
+          autoResize,
+          toCString(partition || 'persist:default'),
+          webviewDecideNativation,
+          webviewEventHandler,
+          bunBridgeHandler,
+          webviewTagBridgeHandler,
+          toCString(electrobunPreload),
+          toCString(customPreload || ''),
+          
+
+          
+        )
+
+        if (!webviewPtr) {
+           throw "Failed to create webview"
+        }
+
+        return webviewPtr;
+      },
+    
+  }
+}
+
+// Worker management. Move to a different file
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception in worker:', err); 
+  // Since the main js event loop is blocked by the native event loop
+  // we use FFI to dispatch a kill command to main
+  native.symbols.killApp(); 
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled rejection in worker:', reason);
+});
+
+
+
+
+// const testCallback = new JSCallback(
+//   (windowId, x, y) => {
+//     console.log(`TEST FFI Callback reffed GLOBALLY in js`);
+//     // Your window move handler implementation
+//   },
+//   {
+//     args: [],
+//     returns: "void",
+//     threadsafe: true,
+    
+//   }
+// );
+
+
+const windowCloseCallback = new JSCallback(
+  (id) => {
+    const handler = electrobunEventEmitter.events.window.close;
+      const event = handler({
+        id,
+      });
+
+      let result;
+      // global event
+      result = electrobunEventEmitter.emitEvent(event);
+
+      result = electrobunEventEmitter.emitEvent(event, id);
+  },
+  {
+    args: ["u32"],
+    returns: "void",
+    threadsafe: true,
+  }
+);
+
+const windowMoveCallback = new JSCallback(
+  (id, x, y) => {
+    const handler = electrobunEventEmitter.events.window.move;
+    const event = handler({
+      id,
+      x,
+      y,
+    });
+
+    let result;
+    // global event
+    result = electrobunEventEmitter.emitEvent(event);
+
+    result = electrobunEventEmitter.emitEvent(event, id);
+  },
+  {
+    args: ["u32", "f64", "f64"],
+    returns: "void",
+    threadsafe: true,
+  }
+);
+
+const windowResizeCallback = new JSCallback(
+  (id, x, y, width, height) => {
+    const handler = electrobunEventEmitter.events.window.resize;
+    const event = handler({
+      id,
+      x,
+      y,
+      width,
+      height,
+    });
+
+    let result;
+    // global event
+    result = electrobunEventEmitter.emitEvent(event);
+
+    result = electrobunEventEmitter.emitEvent(event, id);
+  },
+  {
+    args: ["u32", "f64", "f64", "f64", "f64"],
+    returns: "void",
+    threadsafe: true,
+  }
+);
+
+const webviewViewsHandler = new JSCallback((webviewId, url, body) => {
+  console.log('views handler. url: ', url, 'body: ', body)
+
+  
+// fn assetFileLoader(url: [*:0]const u8) callconv(.C) objc.FileResponse {
+//   const relPath = url[ViewsScheme.len..std.mem.len(url)];
+//   const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
+//   const mimeType = getMimeType(relPath); // or dynamically determine MIME type
+//   return objc.FileResponse{ .mimeType = utils.toCString(mimeType), .fileContents = fileContents.ptr, .len = fileContents.len, .opaquePointer = null };
+// }
+
+// fn readAssetFromDisk(url: [*:0]const u8) []const u8 {
+//   const relPath = url[ViewsScheme.len..std.mem.len(url)];
+//   const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
+//   return fileContents;
+// }
+
+// zig body
+  // const relPath = url[ViewsScheme.len..std.mem.len(url)];
+
+  // std.debug.print("loading internal html0 {s}", .{relPath});
+
+  // if (std.mem.eql(u8, relPath, "internal/html.html")) {
+  //     const webview = webviewMap.get(webviewId) orelse {
+  //         std.debug.print("Failed to get webview from hashmap for id {}: internal html api\n", .{webviewId});
+  //         return assetFileLoader(url);
+  //     };
+  //     std.debug.print("loading internal html1 ", .{});
+  //     if (webview.html) |html| {
+  //         std.debug.print("loading internal html2 {s}", .{html});
+  //         return objc.FileResponse{ .mimeType = utils.toCString("text/html"), .fileContents = html.ptr, .len = html.len, .opaquePointer = null };
+  //     }
+  // } else if (std.mem.eql(u8, relPath, "rpc")) {
+  //     const bodyString = utils.fromCString(body);
+
+  //     var webview = webviewMap.get(webviewId) orelse {
+  //         std.debug.print("Failed to get webview from hashmap for id {}: rpc api\n", .{webviewId});
+  //         return assetFileLoader(url);
+  //     };
+
+  //     webview.sendToBun(bodyString) catch |err| {
+  //         std.debug.print("Failed to send message to bun: {}\n", .{err});
+  //     };
+
+  //     const responseString = "";
+
+  //     return objc.FileResponse{ .mimeType = utils.toCString("text/plaintext"), .fileContents = responseString.ptr, .len = responseString.len, .opaquePointer = null };
+  // } else if (std.mem.startsWith(u8, relPath, "screenshot/")) {
+  //     // TODO: We should lock this down so only the host and bun can get a screenshot of a webview
+  //     // ie: and other restrictions to match exec privelege
+
+  //     // the relPath is screenshot/<webviewId>?<cachebuster>
+  //     // get the target webview info for objc, the screenshoting and resolving is done
+  //     // in objc
+  //     const start = "screenshot/".len;
+  //     const end = std.mem.indexOf(u8, relPath, "?") orelse relPath.len;
+  //     const numStr = relPath[start..end];
+  //     const targetWebviewId = std.fmt.parseInt(u32, numStr, 10) catch 0;
+
+  //     const targetWebview = webviewMap.get(targetWebviewId) orelse {
+  //         std.debug.print("Failed to get webview from hashmap for id {}: screenshot api\n", .{targetWebviewId});
+  //         return assetFileLoader(url);
+  //     };
+
+  //     // const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
+  //     // const mimeType = getMimeType(relPath); // or dynamically determine MIME type
+  //     return objc.FileResponse{ .opaquePointer = targetWebview.handle, .mimeType = utils.toCString("screenshot"), .fileContents = utils.toCString(""), .len = 0 };
+  // }
+
+  // return assetFileLoader(url);
+}, {
+  args: [FFIType.u32, FFIType.cstring, FFIType.cstring],
+  returns: FFIType.void,
+  threadsafe: true,
+})
+
+// TODO XX: revisit this as integrated into the will-navigate handler
+const webviewDecideNativation = new JSCallback((webviewId, url) => {
+  console.log('webviewDecideNativation', webviewId, new CString(url))
+  return true;
+}, {
+  args: [FFIType.u32, FFIType.cstring],
+  // NOTE: In Objc true is YES which is so dumb, but that doesn't work with Bun's FFIType.bool
+  // in JSCallbacks right now (it always infers false) so to make this cross platform we have to use 
+  // FFIType.u32 and uint32_t and then just treat it as a boolean in code.
+  returns: FFIType.u32,
+  threadsafe: true
+});
+
+
+const webviewEventHandler = new JSCallback((webviewId, str) => {
+  console.log('webviewEventHandler', webviewId, new CString(str))
+}, {
+  args: [FFIType.u32, FFIType.cstring],
+  returns: FFIType.void,
+  threadsafe: true
+});
+
+const bunBridgeHandler = new JSCallback(() => {
+  console.log('bunBridgeHandler')
+}, {
+  args: [FFIType.u32, FFIType.cstring],
+  returns: FFIType.void,
+  threadsafe: true
+});
+
+const webviewTagBridgeHandler = new JSCallback(() => {
+  console.log('webviewTagBridgeHandler')
+}, {
+  args: [FFIType.u32, FFIType.cstring],
+  returns: FFIType.void,
+  threadsafe: true
+});
+
+
+// Note: When passed over FFI JS will GC the buffer/pointer. Make sure to use strdup() or something
+// on the c side to duplicate the string so objc/c++ gc can own it
+function toCString(jsString: string, addNullTerminator: boolean = true): CString {      
+  let appendWith = '';
+  
+  if (addNullTerminator && !jsString.endsWith('\0')) {
+    appendWith = '\0';
+  }
+    const buff = Buffer.from(jsString + appendWith, 'utf8');
+    
+  // @ts-ignore - This is valid in Bun
+  return ptr(buff);
+}
+
+
+
+
+
+// const CHUNK_SIZE = 1024 * 4; // 4KB
 // todo (yoav): webviewBinaryPath and ELECTROBUN_VIEWS_FOLDER should be passed in as cli/env args by the launcher binary
 // will likely be different on different platforms. Right now these are hardcoded for relative paths inside the mac app bundle.
-const webviewBinaryPath = "./webview";
+// const webviewBinaryPath = "./webview";
 // const webviewBinaryPath = "../Frameworks/Electrobun.app/Contents/MacOS/webview";
 
-const hash = await Updater.localInfo.hash();
-// Note: we use the build's hash to separate from different apps and different builds
-// but we also want a randomId to separate different instances of the same app
-// todo (yoav): since collisions can crash the app add a function that checks if the
-// file exists first
-const randomId = Math.random().toString(36).substring(7);
-const mainPipe = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_main_in`;
+// const hash = await Updater.localInfo.hash();
 
-try {
-  execSync("mkfifo " + mainPipe);
-} catch (e) {
-  console.log("pipe out already exists");
-}
 
-const zigProc = Bun.spawn([webviewBinaryPath], {
-  stdin: "pipe",
-  stdout: "pipe",
-  env: {
-    ...process.env,
-    ELECTROBUN_VIEWS_FOLDER: resolve("../Resources/app/views"),
-    MAIN_PIPE_IN: mainPipe,
-  },
-  onExit: (_zigProc) => {
-    // right now just exit the whole app if the webview process dies.
-    // in the future we probably want to try spin it back up aagain
-    process.exit(0);
-  },
-});
 
-process.on("SIGINT", (code) => {
-  // todo (yoav): maybe send a friendly signal to the webviews to let them know
-  // we're shutting down
-  // clean up the webview process when the bun process dies.
-  zigProc.kill();
-  // fs.unlinkSync(mainPipe);
-  process.exit();
-});
 
-process.on("exit", (code) => {
-  // Note: this can happen when the bun process crashes
-  // make sure that zigProc is killed so it doesn't linger around
-  zigProc.kill();
-});
 
-const inStream = fs.createWriteStream(mainPipe, {
-  flags: "r+",
-});
 
-function createStdioTransport(proc): RPCTransport {
-  return {
-    send(message) {
-      try {
-        // TODO: this is the same chunking code as browserview pipes,
-        // should dedupe
-        const messageString = JSON.stringify(message) + "\n";
+// // Note: we use the build's hash to separate from different apps and different builds
+// // but we also want a randomId to separate different instances of the same app
+// // todo (yoav): since collisions can crash the app add a function that checks if the
+// // file exists first
+// const randomId = Math.random().toString(36).substring(7);
+// const mainPipe = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_main_in`;
 
-        let offset = 0;
-        while (offset < messageString.length) {
-          const chunk = messageString.slice(offset, offset + CHUNK_SIZE);
-          inStream.write(chunk);
-          offset += CHUNK_SIZE;
-        }
-      } catch (error) {
-        console.error("bun: failed to serialize message to zig", error);
-      }
-    },
-    registerHandler(handler) {
-      async function readStream(stream) {
-        const reader = stream.getReader();
-        let buffer = "";
+// try {
+//   execSync("mkfifo " + mainPipe);
+// } catch (e) {
+//   console.log("pipe out already exists");
+// }
 
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += new TextDecoder().decode(value);
-            let eolIndex;
-            // Process each line contained in the buffer
-            while ((eolIndex = buffer.indexOf("\n")) >= 0) {
-              const line = buffer.slice(0, eolIndex).trim();
-              buffer = buffer.slice(eolIndex + 1);
-              if (line) {
-                try {
-                  const event = JSON.parse(line);
-                  handler(event);
-                } catch (error) {
-                  // Non-json things are just bubbled up to the console.
-                  console.error("zig: ", line);
-                }
-              }
-            }
-          }
-        } catch (error) {
-          console.error("Error reading from stream:", error);
-        } finally {
-          reader.releaseLock();
-        }
-      }
+// const zigProc = Bun.spawn([webviewBinaryPath], {
+//   stdin: "pipe",
+//   stdout: "pipe",
+//   env: {
+//     ...process.env,
+//     ELECTROBUN_VIEWS_FOLDER: resolve("../Resources/app/views"),
+//     MAIN_PIPE_IN: mainPipe,
+//   },
+//   onExit: (_zigProc) => {
+//     // right now just exit the whole app if the webview process dies.
+//     // in the future we probably want to try spin it back up aagain
+//     process.exit(0);
+//   },
+// });
 
-      readStream(proc.stdout);
-    },
-  };
-}
+// process.on("SIGINT", (code) => {
+//   // todo (yoav): maybe send a friendly signal to the webviews to let them know
+//   // we're shutting down
+//   // clean up the webview process when the bun process dies.
+//   zigProc.kill();
+//   // fs.unlinkSync(mainPipe);
+//   process.exit();
+// });
+
+// process.on("exit", (code) => {
+//   // Note: this can happen when the bun process crashes
+//   // make sure that zigProc is killed so it doesn't linger around
+//   zigProc.kill();
+// });
+
+// const inStream = fs.createWriteStream(mainPipe, {
+//   flags: "r+",
+// });
+
+// function createStdioTransport(proc): RPCTransport {
+//   return {
+//     send(message) {
+//       try {
+//         // TODO: this is the same chunking code as browserview pipes,
+//         // should dedupe
+//         const messageString = JSON.stringify(message) + "\n";
+
+//         let offset = 0;
+//         while (offset < messageString.length) {
+//           const chunk = messageString.slice(offset, offset + CHUNK_SIZE);
+//           inStream.write(chunk);
+//           offset += CHUNK_SIZE;
+//         }
+//       } catch (error) {
+//         console.error("bun: failed to serialize message to zig", error);
+//       }
+//     },
+//     registerHandler(handler) {
+//       async function readStream(stream) {
+//         const reader = stream.getReader();
+//         let buffer = "";
+
+//         try {
+//           while (true) {
+//             const { done, value } = await reader.read();
+//             if (done) break;
+//             buffer += new TextDecoder().decode(value);
+//             let eolIndex;
+//             // Process each line contained in the buffer
+//             while ((eolIndex = buffer.indexOf("\n")) >= 0) {
+//               const line = buffer.slice(0, eolIndex).trim();
+//               buffer = buffer.slice(eolIndex + 1);
+//               if (line) {
+//                 try {
+//                   const event = JSON.parse(line);
+//                   handler(event);
+//                 } catch (error) {
+//                   // Non-json things are just bubbled up to the console.
+//                   console.error("zig: ", line);
+//                 }
+//               }
+//             }
+//           }
+//         } catch (error) {
+//           console.error("Error reading from stream:", error);
+//         } finally {
+//           reader.releaseLock();
+//         }
+//       }
+
+//       readStream(proc.stdout);
+//     },
+//   };
+// }
 
 // todo: consider renaming to TrayMenuItemConfig
 export type MenuItemConfig =
@@ -391,143 +1012,92 @@ type BunHandlers = RPCSchema<{
   };
 }>;
 
-const zigRPC = createRPC<BunHandlers, ZigHandlers>({
-  transport: createStdioTransport(zigProc),
-  requestHandler: {
-    log: ({ msg }) => {
-      console.log("zig: ", msg);
-      return { success: true };
-    },
-    trayEvent: ({ id, action }) => {
-      const tray = Tray.getById(id);
-      if (!tray) {
-        return { success: true };
-      }
+// const zigRPC = createRPC<BunHandlers, ZigHandlers>({
+//   transport: createStdioTransport(zigProc),
+//   requestHandler: {
+//     log: ({ msg }) => {
+//       console.log("zig: ", msg);
+//       return { success: true };
+//     },
+//     trayEvent: ({ id, action }) => {
+//       const tray = Tray.getById(id);
+//       if (!tray) {
+//         return { success: true };
+//       }
 
-      const event = electrobunEventEmitter.events.tray.trayClicked({
-        id,
-        action,
-      });
+//       const event = electrobunEventEmitter.events.tray.trayClicked({
+//         id,
+//         action,
+//       });
 
-      let result;
-      // global event
-      result = electrobunEventEmitter.emitEvent(event);
+//       let result;
+//       // global event
+//       result = electrobunEventEmitter.emitEvent(event);
 
-      result = electrobunEventEmitter.emitEvent(event, id);
-      // Note: we don't care about the result right now
+//       result = electrobunEventEmitter.emitEvent(event, id);
+//       // Note: we don't care about the result right now
 
-      return { success: true };
-    },
-    applicationMenuEvent: ({ id, action }) => {
-      const event = electrobunEventEmitter.events.app.applicationMenuClicked({
-        id,
-        action,
-      });
+//       return { success: true };
+//     },
+//     applicationMenuEvent: ({ id, action }) => {
+//       const event = electrobunEventEmitter.events.app.applicationMenuClicked({
+//         id,
+//         action,
+//       });
 
-      let result;
-      // global event
-      result = electrobunEventEmitter.emitEvent(event);
+//       let result;
+//       // global event
+//       result = electrobunEventEmitter.emitEvent(event);
 
-      return { success: true };
-    },
-    contextMenuEvent: ({ action }) => {
-      const event = electrobunEventEmitter.events.app.contextMenuClicked({
-        action,
-      });
+//       return { success: true };
+//     },
+//     contextMenuEvent: ({ action }) => {
+//       const event = electrobunEventEmitter.events.app.contextMenuClicked({
+//         action,
+//       });
 
-      let result;
-      // global event
-      result = electrobunEventEmitter.emitEvent(event);
+//       let result;
+//       // global event
+//       result = electrobunEventEmitter.emitEvent(event);
 
-      return { success: true };
-    },
-    webviewEvent: ({ id, eventName, detail }) => {
-      const eventMap = {
-        "will-navigate": "willNavigate",
-        "did-navigate": "didNavigate",
-        "did-navigate-in-page": "didNavigateInPage",
-        "did-commit-navigation": "didCommitNavigation",
-        "dom-ready": "domReady",
-        "new-window-open": "newWindowOpen",
-      };
+//       return { success: true };
+//     },
+//     webviewEvent: ({ id, eventName, detail }) => {
+//       const eventMap = {
+//         "will-navigate": "willNavigate",
+//         "did-navigate": "didNavigate",
+//         "did-navigate-in-page": "didNavigateInPage",
+//         "did-commit-navigation": "didCommitNavigation",
+//         "dom-ready": "domReady",
+//         "new-window-open": "newWindowOpen",
+//       };
 
-      // todo: the events map should use the same hyphenated names instead of camelCase
-      const handler =
-        electrobunEventEmitter.events.webview[eventMap[eventName]];
+//       // todo: the events map should use the same hyphenated names instead of camelCase
+//       const handler =
+//         electrobunEventEmitter.events.webview[eventMap[eventName]];
 
-      if (!handler) {
-        console.log(`!!!no handler for webview event ${eventName}`);
-        return { success: false };
-      }
+//       if (!handler) {
+//         console.log(`!!!no handler for webview event ${eventName}`);
+//         return { success: false };
+//       }
 
-      const event = handler({
-        id,
-        detail,
-      });
+//       const event = handler({
+//         id,
+//         detail,
+//       });
 
-      let result;
-      // global event
-      result = electrobunEventEmitter.emitEvent(event);      
-      result = electrobunEventEmitter.emitEvent(event, id);
-      // Note: we don't care about the result right now
-      return { success: true };
-    },
-    windowClose: ({ id }) => {
-      const handler = electrobunEventEmitter.events.window.close;
+//       let result;
+//       // global event
+//       result = electrobunEventEmitter.emitEvent(event);      
+//       result = electrobunEventEmitter.emitEvent(event, id);
+//       // Note: we don't care about the result right now
+//       return { success: true };
+//     },
 
-      const event = handler({
-        id,
-      });
 
-      let result;
-      // global event
-      result = electrobunEventEmitter.emitEvent(event);
 
-      result = electrobunEventEmitter.emitEvent(event, id);
-      // Note: we don't care about the result right now
+//   },
+//   maxRequestTime: 25000,
+// });
 
-      return { success: false };
-    },
-    windowMove: ({ id, x, y }) => {
-      const handler = electrobunEventEmitter.events.window.move;
-
-      const event = handler({
-        id,
-        x,
-        y,
-      });
-
-      let result;
-      // global event
-      result = electrobunEventEmitter.emitEvent(event);
-
-      result = electrobunEventEmitter.emitEvent(event, id);
-      // Note: we don't care about the result right now
-
-      return { success: false };
-    },
-    windowResize: ({ id, x, y, width, height }) => {
-      const handler = electrobunEventEmitter.events.window.resize;
-
-      const event = handler({
-        id,
-        x,
-        y,
-        width,
-        height,
-      });
-
-      let result;
-      // global event
-      result = electrobunEventEmitter.emitEvent(event);
-
-      result = electrobunEventEmitter.emitEvent(event, id);
-      // Note: we don't care about the result right now
-
-      return { success: false };
-    },
-  },
-  maxRequestTime: 25000,
-});
-
-export { zigRPC, zigProc };
+// export { zigRPC, zigProc };

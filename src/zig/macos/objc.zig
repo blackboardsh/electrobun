@@ -29,29 +29,29 @@ pub extern fn createNSRectWrapper(x: f64, y: f64, width: f64, height: f64) callc
 
 // pub extern fn createNSWindowWithFrameAndStyle(frame: *anyopaque, styleMask: WindowStyleMaskOptions) callconv(.C) *anyopaque;
 // application
-pub extern fn runNSApplication() callconv(.C) void;
+// pub extern fn runNSApplication() callconv(.C) void;
 
 // window
-pub const WindowStyleMaskOptions = extern struct {
-    Borderless: bool = false,
-    Titled: bool = false,
-    Closable: bool = false,
-    Miniaturizable: bool = false,
-    Resizable: bool = false,
-    UnifiedTitleAndToolbar: bool = false,
-    FullScreen: bool = false,
-    FullSizeContentView: bool = false,
-    UtilityWindow: bool = false,
-    DocModalWindow: bool = false,
-    NonactivatingPanel: bool = false,
-    HUDWindow: bool = false,
-};
+// pub const WindowStyleMaskOptions = extern struct {
+//     Borderless: bool = false,
+//     Titled: bool = false,
+//     Closable: bool = false,
+//     Miniaturizable: bool = false,
+//     Resizable: bool = false,
+//     UnifiedTitleAndToolbar: bool = false,
+//     FullScreen: bool = false,
+//     FullSizeContentView: bool = false,
+//     UtilityWindow: bool = false,
+//     DocModalWindow: bool = false,
+//     NonactivatingPanel: bool = false,
+//     HUDWindow: bool = false,
+// };
 
-const createNSWindowWithFrameAndStyleParams = extern struct {
-    frame: NSRect,
-    styleMask: WindowStyleMaskOptions,
-    titleBarStyle: [*:0]const u8,
-};
+// const createNSWindowWithFrameAndStyleParams = extern struct {
+//     frame: NSRect,
+//     styleMask: WindowStyleMaskOptions,
+//     titleBarStyle: [*:0]const u8,
+// };
 
 // Note: this struct is mirrored in objective-c, it's returned by a zig function that is called by objc function
 // so extern (c-compatible) struct is not enough
@@ -69,29 +69,29 @@ pub const windowMoveHandler = *const fn (winId: u32, x: f64, y: f64) callconv(.C
 pub const windowResizeHandler = *const fn (winId: u32, x: f64, y: f64, width: f64, height: f64) callconv(.C) void;
 pub const callAsyncJavascriptCompletionHandler = *const fn (messageId: [*:0]const u8, webviewId: u32, hostWebviewId: u32, responseJSON: [*:0]const u8) callconv(.C) void;
 
-pub extern fn createNSWindowWithFrameAndStyle(windowId: u32, createNSWindowWithFrameAndStyleParams, zigCloseHandler: windowCloseHandler, zigMoveHandler: windowMoveHandler, zigResizeHandler: windowResizeHandler) callconv(.C) *anyopaque;
-pub extern fn makeNSWindowKeyAndOrderFront(window: *anyopaque) callconv(.C) void;
-pub extern fn setNSWindowTitle(window: *anyopaque, title: [*:0]const u8) callconv(.C) void;
+// pub extern fn createNSWindowWithFrameAndStyle(windowId: u32, createNSWindowWithFrameAndStyleParams, zigCloseHandler: windowCloseHandler, zigMoveHandler: windowMoveHandler, zigResizeHandler: windowResizeHandler) callconv(.C) *anyopaque;
+// pub extern fn makeNSWindowKeyAndOrderFront(window: *anyopaque) callconv(.C) void;
+// pub extern fn setNSWindowTitle(window: *anyopaque, title: [*:0]const u8) callconv(.C) void;
 pub extern fn closeNSWindow(window: *anyopaque) callconv(.C) void;
 pub extern fn getWindowBounds(window: *anyopaque) callconv(.C) *anyopaque;
 
 // webview
-pub extern fn initWebview(
-    webviewId: u32,
-    window: *anyopaque,
-    renderer: [*:0]const u8,
-    url: [*:0]const u8,
-    frame: NSRect,
-    assetFileLoader: FileLoader,
-    autoResize: bool,
-    partition: [*:0]const u8,
-    decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
-    webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
-    bunBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
-    webviewTagBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
-    electrobunPreloadScript: [*:0]const u8,
-    customPreloadScript: [*:0]const u8,
-) callconv(.C) *anyopaque;
+// pub extern fn initWebview(
+//     webviewId: u32,
+//     window: *anyopaque,
+//     renderer: [*:0]const u8,
+//     url: [*:0]const u8,
+//     frame: NSRect,
+//     assetFileLoader: FileLoader,
+//     autoResize: bool,
+//     partition: [*:0]const u8,
+//     decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
+//     webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
+//     bunBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+//     webviewTagBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+//     electrobunPreloadScript: [*:0]const u8,
+//     customPreloadScript: [*:0]const u8,
+// ) callconv(.C) *anyopaque;
 pub extern fn addPreloadScriptToWebView(webView: *anyopaque, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn updatePreloadScriptToWebView(webView: *anyopaque, scriptIdentifier: [*:0]const u8, script: [*:0]const u8, forMainFrameOnly: bool) callconv(.C) void;
 pub extern fn loadURLInWebView(webView: *anyopaque, url: [*:0]const u8) callconv(.C) void;

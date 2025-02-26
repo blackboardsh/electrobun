@@ -70,14 +70,16 @@ async function build() {
 
     await buildNative(); // zig depends on this for linking symbols
     await Promise.all([
-        buildZig(),
+        // buildZig(),
         buildTRDiff(),
         buildSelfExtractor(),
         buildLauncher(),
         buildCli(),
+        buildMainJs(),
       
     ]);
 }
+
 
 
 async function copyToDist() {
@@ -91,14 +93,14 @@ async function copyToDist() {
     await $`cp src/zig/zig-out/bin/webview${binExt} dist/webview${binExt}`;
     // Electrobun cli and npm launcher
     await $`cp src/npmbin/index.js dist/npmbin.js`;
-    await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;
+    await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;    
     // Electrobun's Typescript bun and browser apis
     if (OS === 'win') {
         // on windows the folder gets copied "into" the detination folder
         await $`cp -R src/bun/ dist/api`;
         await $`cp -R src/browser/ dist/api`;
     } else {
-        // on unix cp is more like a rename
+        // on unix cp is more like a rename        
         await $`cp -R src/bun/ dist/api/bun`;
         await $`cp -R src/browser/ dist/api/browser`; 
     }
@@ -165,7 +167,7 @@ async function vendorBun() {
     const tempZipPath = join("vendors", "bun", "temp.zip");
     
     // Download zip file
-    await $`mkdir -p ${join("vendors", "bun")} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.1.29/${bunUrlSegment}`;
+    await $`mkdir -p ${join("vendors", "bun")} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.2.3/${bunUrlSegment}`;
     
     // Extract zip file
     await $`unzip -o ${tempZipPath} -d ${join("vendors", "bun")}`;
@@ -280,6 +282,17 @@ async function buildLauncher() {
         await $`cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall`;
     }
 }
+
+async function buildMainJs() {
+    return await Bun.build({
+        entrypoints: [join('src', 'launcher', 'main.ts')],
+        outdir: join('dist'),
+        external: [],
+        // minify: true, // todo (yoav): add minify in canary and prod builds
+        target: "bun",
+      });
+}
+
 
 async function buildSelfExtractor() {
     if (CHANNEL === 'debug') {

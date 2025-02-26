@@ -73,63 +73,63 @@ pub fn windowResizeHandler(windowId: u32, x: f64, y: f64, width: f64, height: f6
     _ = rpc.request.windowResize(.{ .id = windowId, .x = x, .y = y, .width = width, .height = height });
 }
 
-pub fn createWindow(opts: rpcSchema.BunSchema.requests.createWindow.params) WindowType {
-    const objcWin = objc.createNSWindowWithFrameAndStyle(opts.id, .{ //
-        .styleMask = .{
-            .Borderless = opts.styleMask.Borderless,
-            .Titled = opts.styleMask.Titled,
-            .Closable = opts.styleMask.Closable,
-            .Miniaturizable = opts.styleMask.Miniaturizable,
-            .Resizable = opts.styleMask.Resizable,
-            .UnifiedTitleAndToolbar = opts.styleMask.UnifiedTitleAndToolbar,
-            .FullScreen = opts.styleMask.FullScreen,
-            .FullSizeContentView = opts.styleMask.FullSizeContentView,
-            .UtilityWindow = opts.styleMask.UtilityWindow,
-            .DocModalWindow = opts.styleMask.DocModalWindow,
-            .NonactivatingPanel = opts.styleMask.NonactivatingPanel,
-            .HUDWindow = opts.styleMask.HUDWindow,
-        },
-        .frame = .{ //
-            .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
-            .size = .{ .width = opts.frame.width, .height = opts.frame.height },
-        },
-        .titleBarStyle = utils.toCString(opts.titleBarStyle),
-    }, windowCloseHandler, windowMoveHandler, windowResizeHandler);
+// pub fn createWindow(opts: rpcSchema.BunSchema.requests.createWindow.params) WindowType {
+//     const objcWin = objc.createNSWindowWithFrameAndStyle(opts.id, .{ //
+//         .styleMask = .{
+//             .Borderless = opts.styleMask.Borderless,
+//             .Titled = opts.styleMask.Titled,
+//             .Closable = opts.styleMask.Closable,
+//             .Miniaturizable = opts.styleMask.Miniaturizable,
+//             .Resizable = opts.styleMask.Resizable,
+//             .UnifiedTitleAndToolbar = opts.styleMask.UnifiedTitleAndToolbar,
+//             .FullScreen = opts.styleMask.FullScreen,
+//             .FullSizeContentView = opts.styleMask.FullSizeContentView,
+//             .UtilityWindow = opts.styleMask.UtilityWindow,
+//             .DocModalWindow = opts.styleMask.DocModalWindow,
+//             .NonactivatingPanel = opts.styleMask.NonactivatingPanel,
+//             .HUDWindow = opts.styleMask.HUDWindow,
+//         },
+//         .frame = .{ //
+//             .origin = .{ .x = opts.frame.x, .y = opts.frame.y },
+//             .size = .{ .width = opts.frame.width, .height = opts.frame.height },
+//         },
+//         .titleBarStyle = utils.toCString(opts.titleBarStyle),
+//     }, windowCloseHandler, windowMoveHandler, windowResizeHandler);
 
-    objc.setNSWindowTitle(objcWin, utils.toCString(opts.title));
+//     objc.setNSWindowTitle(objcWin, utils.toCString(opts.title));
 
-    const _window = WindowType{ //
-        .id = opts.id,
-        .title = opts.title,
-        .frame = .{
-            .width = opts.frame.width,
-            .height = opts.frame.height,
-            .x = opts.frame.x,
-            .y = opts.frame.y,
-        },
-        .window = objcWin,
-        .webviews = std.ArrayList(u32).init(alloc),
-    };
+//     const _window = WindowType{ //
+//         .id = opts.id,
+//         .title = opts.title,
+//         .frame = .{
+//             .width = opts.frame.width,
+//             .height = opts.frame.height,
+//             .x = opts.frame.x,
+//             .y = opts.frame.y,
+//         },
+//         .window = objcWin,
+//         .webviews = std.ArrayList(u32).init(alloc),
+//     };
 
-    windowMap.put(opts.id, _window) catch {
-        std.log.info("Error putting window into hashmap: ", .{});
-        return _window;
-    };
+//     windowMap.put(opts.id, _window) catch {
+//         std.log.info("Error putting window into hashmap: ", .{});
+//         return _window;
+//     };
 
-    objc.makeNSWindowKeyAndOrderFront(objcWin);
+//     objc.makeNSWindowKeyAndOrderFront(objcWin);
 
-    // todo: no need to return anything here
-    return _window;
-}
+//     // todo: no need to return anything here
+//     return _window;
+// }
 
-pub fn setTitle(opts: SetTitleOpts) void {
-    const win = windowMap.get(opts.winId) orelse {
-        std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.winId});
-        return;
-    };
+// pub fn setTitle(opts: SetTitleOpts) void {
+//     const win = windowMap.get(opts.winId) orelse {
+//         std.debug.print("Failed to get window from hashmap for id {}\n", .{opts.winId});
+//         return;
+//     };
 
-    objc.setNSWindowTitle(win.window, utils.toCString(opts.title));
-}
+//     objc.setNSWindowTitle(win.window, utils.toCString(opts.title));
+// }
 
 pub fn startWindowMove(opts: rpcSchema.BrowserSchema.messages.startWindowMove) void {
     const window = windowMap.get(opts.id) orelse {

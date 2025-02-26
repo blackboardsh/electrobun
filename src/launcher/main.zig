@@ -6,8 +6,9 @@ pub fn main() !void {
     var exePathBuffer: [1024]u8 = undefined;
     const APPBUNDLE_MACOS_PATH = try std.fs.selfExeDirPath(exePathBuffer[0..]);
 
+    // TODO XX: you probably need to set the cwd since now we're forking and piping instead of spawning
     // Create an instance of ChildProcess
-    const argv = &[_][]const u8{ "./bun", "../Resources/app/bun/index.js" };
+    const argv = &[_][]const u8{ "./bun", "./main.js" };
     var child_process = std.process.Child.init(argv, alloc);
 
     child_process.cwd = APPBUNDLE_MACOS_PATH;
