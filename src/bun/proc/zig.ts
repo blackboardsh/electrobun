@@ -12,8 +12,9 @@ import { Tray } from "../core/Tray";
 // todo: set up FFI, this is already in the webworker.
 
 import {  dirname } from "path";
-import { dlopen, suffix, JSCallback, CString, ptr, FFIType } from "bun:ffi";
+import { dlopen, suffix, JSCallback, CString, ptr, FFIType, toArrayBuffer } from "bun:ffi";
 import { BrowserWindow, BrowserWindowMap } from "../core/BrowserWindow";
+
 
 
 const native = (() => {
@@ -56,8 +57,7 @@ const native = (() => {
           FFIType.cstring, // renderer          
           FFIType.cstring, // url                              
           FFIType.f64, FFIType.f64,    // x, y
-          FFIType.f64, FFIType.f64,    // width, height    
-          FFIType.function, // views handler / assetFileLoader (FileLoader)
+          FFIType.f64, FFIType.f64,    // width, height              
           FFIType.bool, // autoResize
           FFIType.cstring, // partition                    
           FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
@@ -87,6 +87,14 @@ const native = (() => {
         ],
         returns: FFIType.u32
       }, 
+      // JSCallback utils for native code to use
+      setJSUtils: {
+        args: [
+          FFIType.function, // get Mimetype from url/filename
+          FFIType.function, // get html property from webview
+        ],
+        returns: FFIType.void
+      },   
       killApp: {
         args: [],
         returns: FFIType.void
@@ -190,6 +198,18 @@ export const zigRPC = {
 
         return windowPtr;
       },
+      setTitle: (params: {winId: number, title: string}) => {
+        const {winId, title} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+          
+
+        if (!windowPtr) {          
+          throw `Can't add webview to window. window no longer exists`;
+        }
+        
+        native.symbols.setNSWindowTitle(windowPtr, toCString(title));        
+      },
+
       createWebview: (params: {
         id: number;
         windowId: number;
@@ -232,7 +252,7 @@ export const zigRPC = {
           autoResize} = params
 
           const windowPtr = BrowserWindow.getById(windowId)?.ptr;
-          console.log('windowId', windowId, windowPtr)
+          
 
         if (!windowPtr) {          
           throw `Can't add webview to window. window no longer exists`;
@@ -368,20 +388,17 @@ export const zigRPC = {
           toCString(renderer),
           toCString(url || ''),                          
           x, y,  
-          width, height,   
-          webviewViewsHandler,
+          width, height,             
           autoResize,
           toCString(partition || 'persist:default'),
-          webviewDecideNativation,
+          webviewDecideNavigation,
           webviewEventHandler,
           bunBridgeHandler,
           webviewTagBridgeHandler,
           toCString(electrobunPreload),
-          toCString(customPreload || ''),
-          
-
-          
+          toCString(customPreload || ''),        
         )
+        console.log('after after')
 
         if (!webviewPtr) {
            throw "Failed to create webview"
@@ -488,85 +505,50 @@ const windowResizeCallback = new JSCallback(
   }
 );
 
-const webviewViewsHandler = new JSCallback((webviewId, url, body) => {
-  console.log('views handler. url: ', url, 'body: ', body)
+let responses = {};
+// globalThis.nextResponseId = 0;
 
-  
-// fn assetFileLoader(url: [*:0]const u8) callconv(.C) objc.FileResponse {
-//   const relPath = url[ViewsScheme.len..std.mem.len(url)];
-//   const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
-//   const mimeType = getMimeType(relPath); // or dynamically determine MIME type
-//   return objc.FileResponse{ .mimeType = utils.toCString(mimeType), .fileContents = fileContents.ptr, .len = fileContents.len, .opaquePointer = null };
-// }
-
-// fn readAssetFromDisk(url: [*:0]const u8) []const u8 {
-//   const relPath = url[ViewsScheme.len..std.mem.len(url)];
-//   const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
-//   return fileContents;
-// }
-
-// zig body
-  // const relPath = url[ViewsScheme.len..std.mem.len(url)];
-
-  // std.debug.print("loading internal html0 {s}", .{relPath});
-
-  // if (std.mem.eql(u8, relPath, "internal/html.html")) {
-  //     const webview = webviewMap.get(webviewId) orelse {
-  //         std.debug.print("Failed to get webview from hashmap for id {}: internal html api\n", .{webviewId});
-  //         return assetFileLoader(url);
-  //     };
-  //     std.debug.print("loading internal html1 ", .{});
-  //     if (webview.html) |html| {
-  //         std.debug.print("loading internal html2 {s}", .{html});
-  //         return objc.FileResponse{ .mimeType = utils.toCString("text/html"), .fileContents = html.ptr, .len = html.len, .opaquePointer = null };
-  //     }
-  // } else if (std.mem.eql(u8, relPath, "rpc")) {
-  //     const bodyString = utils.fromCString(body);
-
-  //     var webview = webviewMap.get(webviewId) orelse {
-  //         std.debug.print("Failed to get webview from hashmap for id {}: rpc api\n", .{webviewId});
-  //         return assetFileLoader(url);
-  //     };
-
-  //     webview.sendToBun(bodyString) catch |err| {
-  //         std.debug.print("Failed to send message to bun: {}\n", .{err});
-  //     };
-
-  //     const responseString = "";
-
-  //     return objc.FileResponse{ .mimeType = utils.toCString("text/plaintext"), .fileContents = responseString.ptr, .len = responseString.len, .opaquePointer = null };
-  // } else if (std.mem.startsWith(u8, relPath, "screenshot/")) {
-  //     // TODO: We should lock this down so only the host and bun can get a screenshot of a webview
-  //     // ie: and other restrictions to match exec privelege
-
-  //     // the relPath is screenshot/<webviewId>?<cachebuster>
-  //     // get the target webview info for objc, the screenshoting and resolving is done
-  //     // in objc
-  //     const start = "screenshot/".len;
-  //     const end = std.mem.indexOf(u8, relPath, "?") orelse relPath.len;
-  //     const numStr = relPath[start..end];
-  //     const targetWebviewId = std.fmt.parseInt(u32, numStr, 10) catch 0;
-
-  //     const targetWebview = webviewMap.get(targetWebviewId) orelse {
-  //         std.debug.print("Failed to get webview from hashmap for id {}: screenshot api\n", .{targetWebviewId});
-  //         return assetFileLoader(url);
-  //     };
-
-  //     // const fileContents = readFileContentsFromDisk(relPath) catch "failed to load contents";
-  //     // const mimeType = getMimeType(relPath); // or dynamically determine MIME type
-  //     return objc.FileResponse{ .opaquePointer = targetWebview.handle, .mimeType = utils.toCString("screenshot"), .fileContents = utils.toCString(""), .len = 0 };
-  // }
-
-  // return assetFileLoader(url);
+const getResponseData = new JSCallback((responseId) => {
+  return responses[responseId].buffer;
 }, {
-  args: [FFIType.u32, FFIType.cstring, FFIType.cstring],
-  returns: FFIType.void,
-  threadsafe: true,
+  args: [FFIType.u32],
+  returns: FFIType.ptr
 })
 
+const getResponseLength = new JSCallback((responseId) => {
+  return responses[responseId].byteLength;
+}, {
+  args: [FFIType.u32],
+  returns: FFIType.ptr
+})
+
+const getMimeType = new JSCallback((filePath) => {
+  const _filePath = new CString(filePath).toString();
+  const mimeType = Bun.file(_filePath).type;// || "application/octet-stream";
+  console.log('found mimetype: ', mimeType);
+  return toCString(mimeType);
+}, {
+  args: [FFIType.cstring],  
+  returns: FFIType.cstring,
+  // threadsafe: true
+});
+
+const getHTMLForWebviewSync = new JSCallback((webviewId) => {
+  const webview = BrowserView.getById(webviewId);
+  
+  return toCString(webview?.html || '');
+}, {
+  args: [FFIType.cstring],  
+  returns: FFIType.cstring,
+  // threadsafe: true
+});
+
+
+native.symbols.setJSUtils(getMimeType, getHTMLForWebviewSync);
+
 // TODO XX: revisit this as integrated into the will-navigate handler
-const webviewDecideNativation = new JSCallback((webviewId, url) => {
-  console.log('webviewDecideNativation', webviewId, new CString(url))
+const webviewDecideNavigation = new JSCallback((webviewId, url) => {
+  console.log('webviewDecideNavigation', webviewId, new CString(url))
   return true;
 }, {
   args: [FFIType.u32, FFIType.cstring],
@@ -578,24 +560,60 @@ const webviewDecideNativation = new JSCallback((webviewId, url) => {
 });
 
 
-const webviewEventHandler = new JSCallback((webviewId, str) => {
-  console.log('webviewEventHandler', webviewId, new CString(str))
+const webviewEventHandler = new JSCallback((id, _eventName, _detail) => {
+  const eventName = new CString(_eventName);
+  const detail = new CString(_detail);
+  
+  console.log('webviewEventHandler', id, eventName)
+  const eventMap = {
+      "will-navigate": "willNavigate",
+      "did-navigate": "didNavigate",
+      "did-navigate-in-page": "didNavigateInPage",
+      "did-commit-navigation": "didCommitNavigation",
+      "dom-ready": "domReady",
+      "new-window-open": "newWindowOpen",
+    };
+
+    // todo: the events map should use the same hyphenated names instead of camelCase
+    const handler =
+      electrobunEventEmitter.events.webview[eventMap[eventName]];
+
+    if (!handler) {
+      console.log(`!!!no handler for webview event ${eventName}`);
+      return { success: false };
+    }
+
+    const event = handler({
+      id,
+      detail,
+    });
+
+    let result;
+    // global event
+    result = electrobunEventEmitter.emitEvent(event);      
+    result = electrobunEventEmitter.emitEvent(event, id);
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,
   threadsafe: true
 });
 
-const bunBridgeHandler = new JSCallback(() => {
-  console.log('bunBridgeHandler')
+const bunBridgeHandler = new JSCallback((id, msg) => {
+  // const webview = BrowserView.getById(id);
+  // console.log('bunBridgeHandler', id, new CString(msg));
+  a('bunBridgeHandler');
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,
   threadsafe: true
 });
-
-const webviewTagBridgeHandler = new JSCallback(() => {
-  console.log('webviewTagBridgeHandler')
+const a = (str) => {console.log('==========hi', str)}
+const webviewTagBridgeHandler = new JSCallback((id, msg) => {
+  const x = 'hi';
+  const y = x + x;
+  a();
+  // console.log('hi')
+  // console.log('webviewTagBridgeHandler', id, new CString(msg))
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,
@@ -611,7 +629,7 @@ function toCString(jsString: string, addNullTerminator: boolean = true): CString
   if (addNullTerminator && !jsString.endsWith('\0')) {
     appendWith = '\0';
   }
-    const buff = Buffer.from(jsString + appendWith, 'utf8');
+    const buff = Buffer.from(jsString + appendWith, 'utf8');    
     
   // @ts-ignore - This is valid in Bun
   return ptr(buff);
@@ -1062,37 +1080,7 @@ type BunHandlers = RPCSchema<{
 
 //       return { success: true };
 //     },
-//     webviewEvent: ({ id, eventName, detail }) => {
-//       const eventMap = {
-//         "will-navigate": "willNavigate",
-//         "did-navigate": "didNavigate",
-//         "did-navigate-in-page": "didNavigateInPage",
-//         "did-commit-navigation": "didCommitNavigation",
-//         "dom-ready": "domReady",
-//         "new-window-open": "newWindowOpen",
-//       };
 
-//       // todo: the events map should use the same hyphenated names instead of camelCase
-//       const handler =
-//         electrobunEventEmitter.events.webview[eventMap[eventName]];
-
-//       if (!handler) {
-//         console.log(`!!!no handler for webview event ${eventName}`);
-//         return { success: false };
-//       }
-
-//       const event = handler({
-//         id,
-//         detail,
-//       });
-
-//       let result;
-//       // global event
-//       result = electrobunEventEmitter.emitEvent(event);      
-//       result = electrobunEventEmitter.emitEvent(event, id);
-//       // Note: we don't care about the result right now
-//       return { success: true };
-//     },
 
 
 

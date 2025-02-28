@@ -16,7 +16,7 @@ import { resolve, resolveSync } from "bun";
 import { homedir } from "os";
 import { join } from "path";
 
-// console.log('running developer code!!!', BrowserWindow)
+
 
 const testWin = new BrowserWindow({
   title: "my url window",
@@ -31,41 +31,41 @@ const testWin = new BrowserWindow({
   // rpc: myWebviewRPC,
   
 });
-// console.log('opened window!', testWin)
 
-// // Electrobun.Updater.getLocalVersion();
 
-// // Note: the Canary Playground app will always try update to the latest version
-// // We should make this a button in the playground UI
-// setTimeout(async () => {
-//   const updateInfo = await Electrobun.Updater.checkForUpdate();
+// Electrobun.Updater.getLocalVersion();
 
-//   if (updateInfo.updateAvailable) {
-//     console.log("update available", updateInfo);
-//     // todo (yoav): add a button to the UI to trigger this
-//     await Electrobun.Updater.downloadUpdate();
-//   }
+// Note: the Canary Playground app will always try update to the latest version
+// We should make this a button in the playground UI
+setTimeout(async () => {
+  const updateInfo = await Electrobun.Updater.checkForUpdate();
 
-//   if (Electrobun.Updater.updateInfo()?.updateReady) {
-//     console.log("update app");
-//     await Electrobun.Updater.applyUpdate();
-//   }
-// }, 5000);
+  if (updateInfo.updateAvailable) {
+    console.log("update available", updateInfo);
+    // todo (yoav): add a button to the UI to trigger this
+    await Electrobun.Updater.downloadUpdate();
+  }
 
-// // const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
-// //     maxRequestTime: 5000,
-// //     requestHandler: {
-// //         doMoreMath: ({a, b}) => {
-// //             console.log('\n\n\n\n')
-// //             console.log(`win1 webview asked me to do more math with: ${a} and ${b}`)
-// //             return a + b;
-// //         },
-// //         // todo (yoav): messages currently require subscripting
-// //         // logToBun: ({msg}) => {
-// //         //     console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
-// //         // }
-// //     }
-// // });
+  if (Electrobun.Updater.updateInfo()?.updateReady) {
+    console.log("update app");
+    await Electrobun.Updater.applyUpdate();
+  }
+}, 5000);
+
+// const myWebviewRPC = createRPC<MyWebviewRPC["bun"], MyWebviewRPC["webview"]>({
+//     maxRequestTime: 5000,
+//     requestHandler: {
+//         doMoreMath: ({a, b}) => {
+//             console.log('\n\n\n\n')
+//             console.log(`win1 webview asked me to do more math with: ${a} and ${b}`)
+//             return a + b;
+//         },
+//         // todo (yoav): messages currently require subscripting
+//         // logToBun: ({msg}) => {
+//         //     console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
+//         // }
+//     }
+// });
 
 // const tray = new Tray({
 //   title: "Example Tray Item (click to create menu)",
@@ -215,50 +215,50 @@ const testWin = new BrowserWindow({
 //   console.log("context event", e.data.action);
 // });
 
-// const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
-//   maxRequestTime: 5000,
-//   handlers: {
-//     requests: {
-//       doMoreMath: ({ a, b }) => {
-//         console.log("\n\n\n\n");
-//         console.log(
-//           `win1 webview asked me to do more math with: ${a} and ${b}`
-//         );
-//         return a + b;
-//       },
-//       bigRequest: (input: string) => {
-//         console.log("big request received", input.length);
-//         return "y".repeat(1024 * 1024 * 2) + "y";
-//       },
-//     },
-//     messages: {
-//       "*": (messageName, payload) => {
-//         console.log("----------.,.,.,.", messageName, payload);
-//       },
-//       logToBun: ({ msg }) => {
-//         console.log(
-//           "^^^^^^^^^^^^^^^^^^^^^^^^^------------............ received message",
-//           msg
-//         );
-//         // console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
-//       },
-//     },
-//   },
-// });
+const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
+  maxRequestTime: 5000,
+  handlers: {
+    requests: {
+      doMoreMath: ({ a, b }) => {
+        console.log("\n\n\n\n");
+        console.log(
+          `win1 webview asked me to do more math with: ${a} and ${b}`
+        );
+        return a + b;
+      },
+      bigRequest: (input: string) => {
+        console.log("big request received", input.length);
+        return "y".repeat(1024 * 1024 * 2) + "y";
+      },
+    },
+    messages: {
+      "*": (messageName, payload) => {
+        console.log("----------.,.,.,.", messageName, payload);
+      },
+      logToBun: ({ msg }) => {
+        console.log(
+          "^^^^^^^^^^^^^^^^^^^^^^^^^------------............ received message",
+          msg
+        );
+        // console.log('\n\nWebview asked to logToBun: ', msg, '\n\n')
+      },
+    },
+  },
+});
 
 // console.log('creating browser window')
-// const win = new BrowserWindow({
-//   title: "my url window",
-//   url: "views://mainview/index.html",
-//   frame: {
-//     width: 1800,
-//     height: 600,
-//     x: 2000,
-//     y: 2000,
-//   },
-//   rpc: myWebviewRPC,
+const win = new BrowserWindow({
+  title: "my url window",
+  url: "views://mainview/index.html",
+  frame: {
+    width: 1800,
+    height: 600,
+    x: 2000,
+    y: 2000,
+  },
+  rpc: myWebviewRPC,
   
-// });
+});
 
 // console.log('browsre window created')
 

@@ -58,17 +58,6 @@ class ElectrobunSchemeHandlerFactory;
 
 // Type definitions
 
-/** Matches existing "views:// schema" file response. */
-typedef struct {
-    const char *mimeType;
-    const char *fileContents;
-    size_t len;
-    void *opaquePointer;
-} FileResponse;
-
-/** The callback type you use for "views://" resource loading. */
-typedef FileResponse (*zigStartURLSchemeTaskCallback)(uint32_t webviewId, const char* url, const char* body);
-
 /** Generic bridging callback types. */
 // typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
 // NOTE: Bun's FFIType.true doesn't play well with objective C's YES/NO char booleans
@@ -79,7 +68,50 @@ typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);
 typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
 
+// JS Utils
+typedef const char* (*GetMimeType)(const char* filePath);
+typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);
+// typedef uint32_t (*GetResponseLength)(uint32_t responseId);
 
+typedef struct {    
+    GetMimeType getMimeType;
+    GetHTMLForWebviewSync getHTMLForWebviewSync;    
+} JSUtils;
+
+static dispatch_queue_t jsWorkerQueue = NULL;
+
+// Global instance of the struct
+static JSUtils jsUtils = {NULL, NULL};
+
+// this lets you call JSCallbacks on the worker thread from the main thread
+// and wait for the response. 
+// use it like:
+// callJsCallbackFromMain(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
+static const char* callJsCallbackFromMain(const char* (^callback)(void)) {
+    if (!jsWorkerQueue) {
+        NSLog(@"Error: JS worker queue not initialized");
+        return NULL;
+    }
+    
+    __block const char* result = NULL;
+    __block char* resultCopy = NULL;
+    
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    dispatch_async(jsWorkerQueue, ^{
+        // Call the provided block (which executes the JS callback)
+        result = callback();
+        
+        // Duplicate the result so it won’t be garbage collected.
+        if (result != NULL) {
+            resultCopy = strdup(result);
+        }
+        
+        dispatch_semaphore_signal(semaphore);
+    });
+    
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+    return resultCopy; // Caller is responsible for freeing this memory.
+}
 
 typedef struct {
     NSRect frame;
@@ -271,8 +303,7 @@ void releaseObjCObject(id objcObject) {
 
 // ----------------------- URL Scheme & Navigation -----------------------
 
-@interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>
-    @property (nonatomic, assign) zigStartURLSchemeTaskCallback fileLoader;
+@interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>    
     @property (nonatomic, assign) uint32_t webviewId;
 @end
 
@@ -304,8 +335,7 @@ void releaseObjCObject(id objcObject) {
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window   
                             url:(const char *)url                                                
-                                frame:(NSRect)frame
-                    assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                                frame:(NSRect)frame                    
                         autoResize:(bool)autoResize
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
@@ -741,42 +771,72 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         NSURL *url = urlSchemeTask.request.URL;
         NSData *bodyData = urlSchemeTask.request.HTTPBody;
         NSString *bodyString = bodyData ? [[NSString alloc] initWithData:bodyData encoding:NSUTF8StringEncoding] : @"";
-        if (self.fileLoader) {
-            FileResponse fileResponse = self.fileLoader(self.webviewId, url.absoluteString.UTF8String, bodyString.UTF8String);
-
-            NSString *mimeType = fileResponse.mimeType ? [NSString stringWithUTF8String:fileResponse.mimeType] : @"application/octet-stream";
-            if ([mimeType isEqualToString:@"screenshot"]) {
-                // special case
-                WKSnapshotConfiguration *snapshotConfig = [[WKSnapshotConfiguration alloc] init];
-                WKWebView *targetWebview = (__bridge WKWebView *)fileResponse.opaquePointer;
-                [targetWebview takeSnapshotWithConfiguration:snapshotConfig completionHandler:^(NSImage *snapshotImage, NSError *error) {
-                    if (error) {
-                        NSLog(@"Error capturing snapshot: %@", error);
-                        return;
-                    }
-                    NSBitmapImageRep *imgRepbmp = [[NSBitmapImageRep alloc] initWithData:[snapshotImage TIFFRepresentation]];
-                    NSData *imgData = [imgRepbmp representationUsingType:NSBitmapImageFileTypeBMP properties:@{NSImageCompressionFactor: @1.0}];
-
-                    NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
-                                                                        MIMEType:@"image/bmp"
-                                                        expectedContentLength:imgData.length
-                                                                textEncodingName:nil];
-                    [urlSchemeTask didReceiveResponse:response];
-                    [urlSchemeTask didReceiveData:imgData];
-                    [urlSchemeTask didFinish];
-                }];
-            } else {
-                // normal resource
-                NSData *data = [NSData dataWithBytes:fileResponse.fileContents length:fileResponse.len];
-                NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
-                                                                    MIMEType:mimeType
-                                                    expectedContentLength:data.length
-                                                            textEncodingName:nil];
-                [urlSchemeTask didReceiveResponse:response];
-                [urlSchemeTask didReceiveData:data];
-                [urlSchemeTask didFinish];
+        
+        NSData *data = nil;
+        size_t contentLength = 0;
+        const char *contentPtr = NULL;
+        
+        NSString *urlString = url.absoluteString;
+        
+        if ([urlString isEqualToString:@"internal/index.html"]) {
+            // For internal content, call the native HTML resolver.
+            // Assume getHTMLForWebviewSync returns a null-terminated C string.
+            // contentPtr = getHTMLForWebviewSync(self.webviewId);
+            contentPtr = callJsCallbackFromMain(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
+            if (contentPtr) {
+                contentLength = strlen(contentPtr);
+                data = [NSData dataWithBytes:contentPtr length:contentLength];
             }
+        } else if ([urlString hasPrefix:@"views://"]) {
+            // Remove the "views://" prefix.
+            NSString *relativePath = [urlString substringFromIndex:7];
+            // Map to the file system:
+            // current working directory + "../Resources/app/views" + relativePath
+            NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];
+            NSString *viewsDir = [cwd stringByAppendingPathComponent:@"../Resources/app/views"];
+            NSString *filePath = [viewsDir stringByAppendingPathComponent:relativePath];
+            
+            data = [NSData dataWithContentsOfFile:filePath];
+            if (data) {
+                contentPtr = (const char *)data.bytes;
+                contentLength = data.length;
+            } else {
+                NSLog(@"File not found at path: %@", filePath);
+            }
+        } else {
+            NSLog(@"Unknown URL format: %@", urlString);
         }
+        
+        if (contentPtr && contentLength > 0) {
+            // Determine MIME type using your getMimeTypeSync function.
+            // const char *mimeTypePtr = getMimeTypeSync(url.absoluteString.UTF8String);
+            const char *mimeTypePtr = callJsCallbackFromMain(^{return jsUtils.getMimeType(url.absoluteString.UTF8String);});
+            NSString *rawMimeType = [NSString stringWithUTF8String:mimeTypePtr];
+
+            NSString *mimeType;
+            NSString *encodingName = nil;
+            if ([rawMimeType hasPrefix:@"text/html"]) {
+                mimeType = @"text/html";
+                encodingName = @"UTF-8";  // Set encoding explicitly
+            } else {
+                // For non-text content or text content that doesn’t need explicit encoding
+                mimeType = rawMimeType;
+            }
+            
+            NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
+                                                    MIMEType:mimeType
+                                        expectedContentLength:contentLength
+                                            textEncodingName:encodingName];
+            [urlSchemeTask didReceiveResponse:response];
+            [urlSchemeTask didReceiveData:data];
+            [urlSchemeTask didFinish];
+        } else {
+            NSLog(@"============== ERROR ========== empty response");
+            // Optionally, you might notify failure:
+            // NSError *error = [NSError errorWithDomain:@"MyURLSchemeHandler" code:404 userInfo:nil];
+            // [urlSchemeTask didFailWithError:error];
+        }
+       
     }
     - (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
         NSLog(@"Stopping URL scheme task for URL: %@", urlSchemeTask.request.URL);
@@ -839,8 +899,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window
                             url:(const char *)url                                                   
-                                frame:(NSRect)frame
-                    assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                                frame:(NSRect)frame                    
                         autoResize:(bool)autoResize
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
@@ -868,7 +927,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 
                 // Add scheme handler
                 MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
-                assetSchemeHandler.fileLoader = assetFileLoader;
+                // TODO: Consider storing views handler globally and not on each AbstractView                
                 assetSchemeHandler.webviewId = webviewId;
                 [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
                 
@@ -891,7 +950,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
                 // delegates
                 MyNavigationDelegate *navigationDelegate = [[MyNavigationDelegate alloc] init];
-                navigationDelegate.zigCallback = navigationCallback;
+                navigationDelegate.zigCallback = navigationCallback;                
                 navigationDelegate.zigEventHandler = webviewEventHandler;
                 navigationDelegate.webviewId = webviewId;
                 self.webView.navigationDelegate = navigationDelegate;
@@ -1454,8 +1513,7 @@ public:
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window   
                             url:(const char *)url                                                
-                                frame:(NSRect)frame
-                    assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                                frame:(NSRect)frame                    
                         autoResize:(bool)autoResize
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
@@ -1528,41 +1586,76 @@ bool initializeCEF() {
 // The main scheme handler class
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
-     ElectrobunSchemeHandler(zigStartURLSchemeTaskCallback callback, uint32_t webviewId)
-        : fileLoader_(callback)
-        , webviewId_(webviewId)
-        , hasResponse_(false)
-        , offset_(0) {
-        
-    }
+     ElectrobunSchemeHandler(uint32_t webviewId)
+    : webviewId_(webviewId), hasResponse_(false), offset_(0) {}
 
-     bool Open(CefRefPtr<CefRequest> request,
-             bool& handle_request,
-             CefRefPtr<CefCallback> callback) override {
-        std::string url = request->GetURL().ToString();
-                
-        FileResponse response = fileLoader_(webviewId_, url.c_str(), nullptr);
-        
-        if (response.fileContents && response.len > 0) {                                                
-            const char* content = response.fileContents;                        
-            mimeType_ = response.mimeType ? response.mimeType : "text/html";
-            responseData_.assign(response.fileContents, response.fileContents + response.len);
+  bool Open(CefRefPtr<CefRequest> request,
+            bool& handle_request,
+            CefRefPtr<CefCallback> callback) override {
+        std::string urlStr = request->GetURL().ToString();
+        handle_request = true;
+        responseData_.clear();
+        hasResponse_ = false;
+        offset_ = 0;
+
+        // Check if this is the internal HTML request.
+        if (urlStr == "internal/index.html") {
+        // Call into the JS utility to get HTML (using our bridging helper)
+        // const char* htmlContent = callJsCallbackFromMain(^const char*(){
+        //     return jsUtils.getHTMLForWebviewSync(webviewId_);
+        // });
+        const char* htmlContent = callJsCallbackFromMain(^{return jsUtils.getHTMLForWebviewSync(webviewId_);});
+        if (htmlContent) {
+            size_t len = strlen(htmlContent);
+            mimeType_ = "text/html";
+            responseData_.assign(htmlContent, htmlContent + len);
             hasResponse_ = true;
-            handle_request = true;
-            return true;
-        }        
-        
-        handle_request = false;
-        return false;
+        }
+        }
+        // Else if the URL starts with "views://"
+        else if (urlStr.find("views://") == 0) {
+        // Remove the prefix (7 characters)
+        std::string relativePath = urlStr.substr(7);
+
+        // Build the file path using Objective-C APIs.
+        NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];
+        NSString *viewsDir = [cwd stringByAppendingPathComponent:@"../Resources/app/views"];
+        NSString *filePath = [viewsDir stringByAppendingPathComponent:
+                                [NSString stringWithUTF8String:relativePath.c_str()]];
+
+        NSData *data = [NSData dataWithContentsOfFile:filePath];
+        if (data) {
+            // Use jsUtils.getMimeType to get the MIME type for this file.
+            // const char* mimeTypePtr = callJsCallbackFromMain(^const char*(){
+            //     return jsUtils.getMimeType(filePath.UTF8String);
+            // });
+            const char* mimeTypePtr = callJsCallbackFromMain(^{return jsUtils.getMimeType(filePath.UTF8String);});
+            if (mimeTypePtr) {
+            mimeType_ = std::string(mimeTypePtr);
+            } else {
+            mimeType_ = "text/html"; // Fallback
+            }
+            responseData_.assign((const char*)data.bytes,
+                                (const char*)data.bytes + data.length);
+            hasResponse_ = true;
+        } else {
+            NSLog(@"File not found at path: %@", filePath);
+        }
+        }
+        else {
+        NSLog(@"Unknown URL format: %s", urlStr.c_str());
+        }
+
+        return hasResponse_;
     }
 
     void GetResponseHeaders(CefRefPtr<CefResponse> response,
                           int64_t& response_length,
                           CefString& redirectUrl) override {
         if (!hasResponse_) {
-            response->SetStatus(404);
-            response_length = 0;            
-            return;
+        response->SetStatus(404);
+        response_length = 0;
+        return;
         }
 
         response->SetMimeType(mimeType_);
@@ -1571,40 +1664,35 @@ public:
 
         CefResponse::HeaderMap headers;
         headers.insert(std::make_pair("Access-Control-Allow-Origin", "*"));
-        response->SetHeaderMap(headers);                
+        response->SetHeaderMap(headers);
     }
 
     bool Read(void* data_out,
-             int bytes_to_read,
-             int& bytes_read,
-             CefRefPtr<CefResourceReadCallback> callback) override {
+                int bytes_to_read,
+                int& bytes_read,
+                CefRefPtr<CefResourceReadCallback> callback) override {
         bytes_read = 0;
         if (!hasResponse_ || offset_ >= responseData_.size()) {
-            
-            return false;
+        return false;
         }
-
         size_t remaining = responseData_.size() - offset_;
         bytes_read = std::min(bytes_to_read, static_cast<int>(remaining));
         memcpy(data_out, responseData_.data() + offset_, bytes_read);
         offset_ += bytes_read;
-
-        
         return true;
     }
 
     void Cancel() override {
-        // NSLog(@"[CEF] Scheme Handler: Request cancelled");
+        // Optionally log cancellation.
     }
 
-private:
-    zigStartURLSchemeTaskCallback fileLoader_;
+    private:
     uint32_t webviewId_;
     std::string mimeType_;
     std::vector<char> responseData_;
     bool hasResponse_;
     size_t offset_;
-    
+
     IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandler);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandler);
 };
@@ -1613,23 +1701,21 @@ private:
 // The factory class that creates scheme handlers
 class ElectrobunSchemeHandlerFactory : public CefSchemeHandlerFactory {
 public:
-     ElectrobunSchemeHandlerFactory(zigStartURLSchemeTaskCallback callback, uint32_t webviewId)
-        : fileLoader_(callback), webviewId_(webviewId) {}
+  ElectrobunSchemeHandlerFactory(uint32_t webviewId)
+    : webviewId_(webviewId) {}
 
-        CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser,
-                                       CefRefPtr<CefFrame> frame,
-                                       const CefString& scheme_name,
-                                       CefRefPtr<CefRequest> request) override {
-        
-            return new ElectrobunSchemeHandler(fileLoader_, webviewId_);
-        }
+  CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser,
+                                         CefRefPtr<CefFrame> frame,
+                                         const CefString& scheme_name,
+                                         CefRefPtr<CefRequest> request) override {
+    return new ElectrobunSchemeHandler(webviewId_);
+  }
 
 private:
-    zigStartURLSchemeTaskCallback fileLoader_;
-    uint32_t webviewId_;
-    
-    IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandlerFactory);
-    DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandlerFactory);
+  uint32_t webviewId_;
+  
+  IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandlerFactory);
+  DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandlerFactory);
 };
 
 
@@ -1640,54 +1726,41 @@ private:
 
 
 
-CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier, 
-                                                            zigStartURLSchemeTaskCallback assetFileLoader,
-                                                            uint32_t webviewId) {
-    CefRequestContextSettings settings;
-    
-    if (!partitionIdentifier || !partitionIdentifier[0]) {
-        // Empty or null = use incognito/in-memory
-        settings.persist_session_cookies = false;
-        settings.persist_user_preferences = false;
+CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
+                                                               uint32_t webviewId) {
+  CefRequestContextSettings settings;
+  if (!partitionIdentifier || !partitionIdentifier[0]) {
+    settings.persist_session_cookies = false;
+    settings.persist_user_preferences = false;
+  } else {
+    std::string identifier(partitionIdentifier);
+    bool isPersistent = identifier.substr(0, 8) == "persist:";
+
+    if (isPersistent) {
+      std::string partitionName = identifier.substr(8);
+      NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+      NSString* cachePath = [[appSupportPath stringByAppendingPathComponent:@"Electrobun/CEF/Partitions"]
+                              stringByAppendingPathComponent:[NSString stringWithUTF8String:partitionName.c_str()]];
+      NSFileManager *fileManager = [NSFileManager defaultManager];
+      if (![fileManager fileExistsAtPath:cachePath]) {
+        [fileManager createDirectoryAtPath:cachePath withIntermediateDirectories:YES attributes:nil error:nil];
+      }
+      settings.persist_session_cookies = true;
+      settings.persist_user_preferences = true;
+      CefString(&settings.cache_path).FromString([cachePath UTF8String]);
     } else {
-        std::string identifier(partitionIdentifier);
-        bool isPersistent = identifier.substr(0, 8) == "persist:";
-        
-        if (isPersistent) {
-            // Extract partition name after "persist:"
-            std::string partitionName = identifier.substr(8);
-            
-            NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(
-                NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
-            NSString* cachePath = [[appSupportPath 
-                stringByAppendingPathComponent:@"Electrobun/CEF/Partitions"]
-                stringByAppendingPathComponent:[NSString stringWithUTF8String:partitionName.c_str()]];
-            
-            NSFileManager *fileManager = [NSFileManager defaultManager];
-            if (![fileManager fileExistsAtPath:cachePath]) {
-                [fileManager createDirectoryAtPath:cachePath 
-                    withIntermediateDirectories:YES 
-                    attributes:nil 
-                    error:nil];
-            }
-
-            settings.persist_session_cookies = true;
-            settings.persist_user_preferences = true;
-            CefString(&settings.cache_path).FromString([cachePath UTF8String]);
-        } else {
-            settings.persist_session_cookies = false;
-            settings.persist_user_preferences = false;
-        }
+      settings.persist_session_cookies = false;
+      settings.persist_user_preferences = false;
     }
-    
-    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
-    
-    CefRefPtr<ElectrobunSchemeHandlerFactory> factory(
-        new ElectrobunSchemeHandlerFactory(assetFileLoader, webviewId));
-    
-    context->RegisterSchemeHandlerFactory("views", "", factory);    
+  }
 
-    return context;
+  CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
+
+  // Register the new scheme handler factory.
+  CefRefPtr<ElectrobunSchemeHandlerFactory> factory(new ElectrobunSchemeHandlerFactory(webviewId));
+  context->RegisterSchemeHandlerFactory("views", "", factory);
+
+  return context;
 }
 
 // ----------------------- CEFWebViewImpl -----------------------
@@ -1698,8 +1771,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window
                                 url:(const char *)url                           
-                            frame:(NSRect)frame
-                    assetFileLoader:(zigStartURLSchemeTaskCallback)assetFileLoader
+                            frame:(NSRect)frame                    
                         autoResize:(bool)autoResize
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
@@ -1738,15 +1810,14 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 window_info.SetAsChild((__bridge void*)contentView, cefBounds);
 
                 CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(
-                    partitionIdentifier,
-                    assetFileLoader,
+                    partitionIdentifier,                    
                     webviewId
                 );
 
                 
                 // Register the scheme handler factory for this webview
                 CefRefPtr<ElectrobunSchemeHandlerFactory> factory(
-                    new ElectrobunSchemeHandlerFactory(assetFileLoader, webviewId));
+                    new ElectrobunSchemeHandlerFactory(webviewId));
                                         
                 
                 self.client = new ElectrobunClient(
@@ -2030,8 +2101,7 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         const char *renderer,
                         const char *url,                                                
                         double x, double y,
-                        double width, double height,
-                        zigStartURLSchemeTaskCallback assetFileLoader,
+                        double width, double height,                        
                         bool autoResize,
                         const char *partitionIdentifier,
                         DecideNavigationCallback navigationCallback,
@@ -2042,11 +2112,13 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         const char *customPreloadScript ) {
 
     
-    NSRect frame = NSMakeRect(x, y, width, height);        
-
+    NSRect frame = NSMakeRect(x, y, width, height);     
+ 
     __block AbstractView *impl = nil;
 
     dispatch_sync(dispatch_get_main_queue(), ^{
+
+        
 
         
 
@@ -2055,8 +2127,7 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
         impl = [[ImplClass alloc] initWithWebviewId:webviewId
                                         window:window
                                         url:strdup(url)
-                                        frame:frame
-                                        assetFileLoader:assetFileLoader
+                                        frame:frame                                        
                                         autoResize:autoResize
                                         partitionIdentifier:strdup(partitionIdentifier)
                                         navigationCallback:navigationCallback
@@ -2549,9 +2620,25 @@ extern "C" void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
 }
 
 
+extern "C" void setJSUtils(GetMimeType getMimeType, GetHTMLForWebviewSync getHTMLForWebviewSync) {    
+    jsUtils.getMimeType = getMimeType;
+    jsUtils.getHTMLForWebviewSync = getHTMLForWebviewSync;
+    
+    // create a dispatch queue on the current thread (worker thread) that
+    // can later be called from main
+    dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_DEFAULT, 0);
+    jsWorkerQueue = dispatch_queue_create("com.electrobun.jsworker", attr);    
 
 
+    // size_t contentLength = 0;
+    // jsUtils.viewsHandler(0, "hi", "ho", &contentLength);
 
+    NSLog(@"got mimetype: %s", jsUtils.getMimeType("test.jpg"));
+    // NSLog(@"got mimetype: %s", getMimeTypeSync("test.png"));
+
+  
+    
+}
 
 
 
