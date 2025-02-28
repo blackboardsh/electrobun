@@ -83,11 +83,11 @@ static dispatch_queue_t jsWorkerQueue = NULL;
 // Global instance of the struct
 static JSUtils jsUtils = {NULL, NULL};
 
-// this lets you call JSCallbacks on the worker thread from the main thread
+// this lets you call non-threadsafe JSCallbacks on the bun worker thread, from the main thread
 // and wait for the response. 
 // use it like:
-// callJsCallbackFromMain(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
-static const char* callJsCallbackFromMain(const char* (^callback)(void)) {
+// myCStringVal = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
+static const char* callJsCallbackFromMainSync(const char* (^callback)(void)) {
     if (!jsWorkerQueue) {
         NSLog(@"Error: JS worker queue not initialized");
         return NULL;
@@ -782,7 +782,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             // For internal content, call the native HTML resolver.
             // Assume getHTMLForWebviewSync returns a null-terminated C string.
             // contentPtr = getHTMLForWebviewSync(self.webviewId);
-            contentPtr = callJsCallbackFromMain(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
+            contentPtr = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
             if (contentPtr) {
                 contentLength = strlen(contentPtr);
                 data = [NSData dataWithBytes:contentPtr length:contentLength];
@@ -810,7 +810,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         if (contentPtr && contentLength > 0) {
             // Determine MIME type using your getMimeTypeSync function.
             // const char *mimeTypePtr = getMimeTypeSync(url.absoluteString.UTF8String);
-            const char *mimeTypePtr = callJsCallbackFromMain(^{return jsUtils.getMimeType(url.absoluteString.UTF8String);});
+            const char *mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(url.absoluteString.UTF8String);});
             NSString *rawMimeType = [NSString stringWithUTF8String:mimeTypePtr];
 
             NSString *mimeType;
@@ -1144,8 +1144,8 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
 @implementation StatusItemTarget
     - (void)statusItemClicked:(id)sender {
-        if (self.zigHandler) {
-            self.zigHandler(self.trayId, "");
+        if (self.zigHandler) {                    
+            self.zigHandler(self.trayId, "");                        
         }
     }
     - (void)menuItemClicked:(id)sender {
@@ -1601,10 +1601,10 @@ public:
         // Check if this is the internal HTML request.
         if (urlStr == "internal/index.html") {
         // Call into the JS utility to get HTML (using our bridging helper)
-        // const char* htmlContent = callJsCallbackFromMain(^const char*(){
+        // const char* htmlContent = callJsCallbackFromMainSync(^const char*(){
         //     return jsUtils.getHTMLForWebviewSync(webviewId_);
         // });
-        const char* htmlContent = callJsCallbackFromMain(^{return jsUtils.getHTMLForWebviewSync(webviewId_);});
+        const char* htmlContent = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(webviewId_);});
         if (htmlContent) {
             size_t len = strlen(htmlContent);
             mimeType_ = "text/html";
@@ -1626,10 +1626,10 @@ public:
         NSData *data = [NSData dataWithContentsOfFile:filePath];
         if (data) {
             // Use jsUtils.getMimeType to get the MIME type for this file.
-            // const char* mimeTypePtr = callJsCallbackFromMain(^const char*(){
+            // const char* mimeTypePtr = callJsCallbackFromMainSync(^const char*(){
             //     return jsUtils.getMimeType(filePath.UTF8String);
             // });
-            const char* mimeTypePtr = callJsCallbackFromMain(^{return jsUtils.getMimeType(filePath.UTF8String);});
+            const char* mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(filePath.UTF8String);});
             if (mimeTypePtr) {
             mimeType_ = std::string(mimeTypePtr);
             } else {
@@ -2493,31 +2493,41 @@ extern "C" const char *openFileDialog(const char *startingFolder,
 
 extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,
                                     uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
-    NSString *pathToImageString = [NSString stringWithUTF8String:pathToImage ?: ""];
-    NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
-    NSStatusItem *statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+    
+    __block NSStatusItem* trayPtr;
+    
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSString *pathToImageString = [NSString stringWithUTF8String:pathToImage ?: ""];    
+        NSString *titleString = [NSString stringWithUTF8String:title ?: ""];    
+        NSStatusItem *statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+        if (pathToImageString.length > 0) {
+            statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:pathToImageString];
+            [statusItem.button.image setTemplate:isTemplate];
+            statusItem.button.image.size = NSMakeSize(width, height);
+        }    
 
-    if (pathToImageString.length > 0) {
-        statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:pathToImageString];
-        [statusItem.button.image setTemplate:isTemplate];
-        statusItem.button.image.size = NSMakeSize(width, height);
-    }
-    if (titleString.length > 0) {
-        statusItem.button.title = titleString;
-    }
-    if (zigTrayItemHandler) {
-        StatusItemTarget *target = [[StatusItemTarget alloc] init];
-        target.statusItem = statusItem;
-        target.zigHandler = zigTrayItemHandler;
-        target.trayId = trayId;
+        if (titleString.length > 0) {
+            statusItem.button.title = titleString;
+        }    
 
-        objc_setAssociatedObject(statusItem.button, "statusItemTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [statusItem.button setTarget:target];
-        [statusItem.button setAction:@selector(statusItemClicked:)];
-        [statusItem.button sendActionOn:(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)];
-    }
-    retainObjCObject(statusItem);
-    return statusItem;
+        if (zigTrayItemHandler) {
+            StatusItemTarget *target = [[StatusItemTarget alloc] init];
+            target.statusItem = statusItem;
+            target.zigHandler = zigTrayItemHandler;
+            target.trayId = trayId;        
+            objc_setAssociatedObject(statusItem.button, "statusItemTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [statusItem.button setTarget:target];
+            [statusItem.button setAction:@selector(statusItemClicked:)];
+            [statusItem.button sendActionOn:(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)];
+        }
+
+        retainObjCObject(statusItem);    
+
+        trayPtr = statusItem;
+    });
+
+    return trayPtr;
+    
 }
 
 extern "C" void setTrayTitle(NSStatusItem *statusItem, const char *title) {
@@ -2535,18 +2545,20 @@ extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
 
 
 extern "C" void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {
-    if (statusItem) {
-        StatusItemTarget *target = objc_getAssociatedObject(statusItem.button, "statusItemTarget");
-        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
-        NSError *error;
-        NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-        if (error) {
-            NSLog(@"Failed to parse JSON: %@", error);
-            return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (statusItem) {
+            StatusItemTarget *target = objc_getAssociatedObject(statusItem.button, "statusItemTarget");
+            NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+            NSError *error;
+            NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+            if (error) {
+                NSLog(@"Failed to parse JSON: %@", error);
+                return;
+            }
+            NSMenu *menu = createMenuFromConfig(menuArray, target);
+            [statusItem setMenu:menu];
         }
-        NSMenu *menu = createMenuFromConfig(menuArray, target);
-        [statusItem setMenu:menu];
-    }
+    });
 }
 
 extern "C" void setTrayMenu(NSStatusItem *statusItem, const char *menuConfig) {
@@ -2557,47 +2569,51 @@ extern "C" void setTrayMenu(NSStatusItem *statusItem, const char *menuConfig) {
 
 extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
     NSLog(@"Setting application menu from JSON in objc");
-    NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
-    NSError *error;
-    NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-    if (error) {
-        NSLog(@"Failed to parse JSON: %@", error);
-        return;
-    }
-    StatusItemTarget *target = [[StatusItemTarget alloc] init];
-    target.zigHandler = zigTrayItemHandler;
-    target.trayId = 0;
-    NSMenu *menu = createMenuFromConfig(menuArray, target);
-    objc_setAssociatedObject(NSApp, "AppMenuTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [NSApp setMainMenu:menu];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSError *error;
+        NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        if (error) {
+            NSLog(@"Failed to parse JSON: %@", error);
+            return;
+        }
+        StatusItemTarget *target = [[StatusItemTarget alloc] init];
+        target.zigHandler = zigTrayItemHandler;
+        target.trayId = 0;
+        NSMenu *menu = createMenuFromConfig(menuArray, target);
+        objc_setAssociatedObject(NSApp, "AppMenuTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [NSApp setMainMenu:menu];
+    });
 }
 
 extern "C" void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
-    NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
-    NSError *error;
-    NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-    if (error) {
-        NSLog(@"Failed to parse JSON: %@", error);
-        return;
-    }
-    StatusItemTarget *target = [[StatusItemTarget alloc] init];
-    target.zigHandler = contextMenuHandler;
-    target.trayId = 0;
-    NSMenu *menu = createMenuFromConfig(menuArray, target);
-    objc_setAssociatedObject(menu, "ContextMenuTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSError *error;
+        NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        if (error) {
+            NSLog(@"Failed to parse JSON: %@", error);
+            return;
+        }
+        StatusItemTarget *target = [[StatusItemTarget alloc] init];
+        target.zigHandler = contextMenuHandler;
+        target.trayId = 0;
+        NSMenu *menu = createMenuFromConfig(menuArray, target);
+        objc_setAssociatedObject(menu, "ContextMenuTarget", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    NSPoint mouseLocation = [NSEvent mouseLocation];
-    NSEvent *event = [NSEvent mouseEventWithType:NSEventTypeRightMouseUp
-                                        location:mouseLocation
-                                   modifierFlags:0
-                                       timestamp:0
-                                    windowNumber:0
-                                         context:nil
-                                     eventNumber:0
-                                      clickCount:1
-                                        pressure:1];
-    [menu popUpMenuPositioningItem:nil atLocation:mouseLocation inView:nil];
-    objc_setAssociatedObject(NSApp, "ContextMenu", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        NSPoint mouseLocation = [NSEvent mouseLocation];
+        NSEvent *event = [NSEvent mouseEventWithType:NSEventTypeRightMouseUp
+                                            location:mouseLocation
+                                    modifierFlags:0
+                                        timestamp:0
+                                        windowNumber:0
+                                            context:nil
+                                        eventNumber:0
+                                        clickCount:1
+                                            pressure:1];
+        [menu popUpMenuPositioningItem:nil atLocation:mouseLocation inView:nil];
+        objc_setAssociatedObject(NSApp, "ContextMenu", target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    });
 }
 
 extern "C" void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,

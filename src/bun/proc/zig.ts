@@ -69,6 +69,40 @@ const native = (() => {
         ],
         returns: FFIType.ptr
       },
+      // Tray
+      createTray: {
+        args: [
+          FFIType.u32, // id
+          FFIType.cstring, // title
+          FFIType.cstring, // pathToImage
+          FFIType.bool, // isTemplate
+          FFIType.u32, // width
+          FFIType.u32, //height
+          FFIType.function, // trayItemHandler
+         ],
+        returns: FFIType.ptr
+      },
+      setTrayTitle: {
+        args: [FFIType.ptr, FFIType.cstring],
+        returns: FFIType.void
+      },
+      setTrayImage: {
+        args: [FFIType.ptr, FFIType.cstring],
+        returns: FFIType.void
+      },
+      setTrayMenu: {
+        args: [FFIType.ptr, FFIType.cstring],
+        returns: FFIType.void
+      },
+      setApplicationMenu: {
+        args: [FFIType.cstring, FFIType.function],
+        returns: FFIType.void
+      },
+      showContextMenu: {
+        args: [FFIType.cstring, FFIType.function],
+        returns: FFIType.void
+      },      
+      
       // MacOS specific native utils
       getNSWindowStyleMask: {
         args: [
@@ -102,7 +136,11 @@ const native = (() => {
       testFFI2: {
         args: [FFIType.function],
         returns: FFIType.void
-      }
+      },
+      // FFIFn: {
+      //   args: [],
+      //   returns: FFIType.void
+      // },
     });
   } catch (err) {
     console.log('FATAL Error opening native FFI', err)
@@ -406,6 +444,126 @@ export const zigRPC = {
 
         return webviewPtr;
       },
+
+      createTray: (params: {
+        id: number;
+        title: string;
+        image: string;
+        template: boolean;
+        width: number;
+        height: number;
+      }): FFIType.ptr => {
+        const {
+          id,
+          title,
+          image,
+          template,
+          width,
+          height
+        } = params;
+
+        console.log('calling createTray', {
+          id,
+          title,
+          image,
+          template,
+          width,
+          height
+        })
+        const trayPtr =  native.symbols.createTray(
+          id,
+          toCString(title),
+          toCString(image),
+          template,
+          width,
+          height,
+          trayItemHandler,
+        );
+
+        if (!trayPtr) {
+          throw 'Failed to create tray';
+        }
+
+        return trayPtr;
+      },
+      setTrayTitle: (params: {
+        id: number,
+        title: string,
+      }): void => {
+        const {
+          id,
+          title
+        } = params;
+
+        const tray = Tray.getById(id);
+
+        native.symbols.setTrayTitle(
+          tray.ptr,
+          toCString(title)
+        );
+      },
+      setTrayImage: (params: {
+        id: number,
+        image: string,
+      }): void => {
+        const {
+          id,
+          image
+        } = params;
+
+        const tray = Tray.getById(id);
+
+        native.symbols.setTrayImage(
+          tray.ptr,
+          toCString(image)
+        );
+      },
+      setTrayMenu: (params: {        
+          id: number,
+          // json string of config
+          menuConfig: string,
+        }): void => {
+        const {
+          id,
+          menuConfig
+        } = params;
+
+        const tray = Tray.getById(id);
+
+        native.symbols.setTrayMenu(
+          tray.ptr,
+          toCString(menuConfig)
+        );
+      },
+      setApplicationMenu: (params: {menuConfig: string}): void => {
+        const {
+          menuConfig
+        } = params;
+
+        native.symbols.setApplicationMenu(
+          toCString(menuConfig),
+          applicationMenuHandler
+        );
+      },
+      showContextMenu: (params: {menuConfig: string}): void => {
+        const {
+          menuConfig
+        } = params;
+
+        native.symbols.showContextMenu(
+          toCString(menuConfig),
+          contextMenuHandler
+        );
+      },
+      // ffifunc: (params: {}): void => {
+      //   const {
+          
+      //   } = params;
+
+      //   native.symbols.ffifunc(
+
+      //   );
+      // },
     
   }
 }
@@ -620,6 +778,50 @@ const webviewTagBridgeHandler = new JSCallback((id, msg) => {
   threadsafe: true
 });
 
+const trayItemHandler = new JSCallback((id, action) => {      
+  const event = electrobunEventEmitter.events.tray.trayClicked({
+    id,
+    action: new CString(action),
+  });
+
+  let result;
+  // global event
+  result = electrobunEventEmitter.emitEvent(event);    
+  result = electrobunEventEmitter.emitEvent(event, id);    
+}, {
+  args: [FFIType.u32, FFIType.cstring],
+  returns: FFIType.void,
+  threadsafe: true,
+})
+
+
+const applicationMenuHandler = new JSCallback((id, action) => {
+  console.log('applicationMenuHandler')
+  const event = electrobunEventEmitter.events.app.applicationMenuClicked({
+    id,
+    action: new CString(action),
+  });
+  
+  // global event
+  electrobunEventEmitter.emitEvent(event);  
+}, {
+  args: [FFIType.u32, FFIType.cstring],
+  returns: FFIType.void,
+  threadsafe: true
+})
+
+const contextMenuHandler = new JSCallback((id, action) => {
+  console.log('contextMenuHandler')
+  const event = electrobunEventEmitter.events.app.contextMenuClicked({
+    action: new CString(action),
+  });
+
+  electrobunEventEmitter.emitEvent(event);
+}, {
+  args: [FFIType.u32, FFIType.cstring],
+  returns: FFIType.void,
+  threadsafe: true
+})
 
 // Note: When passed over FFI JS will GC the buffer/pointer. Make sure to use strdup() or something
 // on the c side to duplicate the string so objc/c++ gc can own it
@@ -634,6 +836,8 @@ function toCString(jsString: string, addNullTerminator: boolean = true): CString
   // @ts-ignore - This is valid in Bun
   return ptr(buff);
 }
+
+
 
 
 
@@ -1030,62 +1234,4 @@ type BunHandlers = RPCSchema<{
   };
 }>;
 
-// const zigRPC = createRPC<BunHandlers, ZigHandlers>({
-//   transport: createStdioTransport(zigProc),
-//   requestHandler: {
-//     log: ({ msg }) => {
-//       console.log("zig: ", msg);
-//       return { success: true };
-//     },
-//     trayEvent: ({ id, action }) => {
-//       const tray = Tray.getById(id);
-//       if (!tray) {
-//         return { success: true };
-//       }
 
-//       const event = electrobunEventEmitter.events.tray.trayClicked({
-//         id,
-//         action,
-//       });
-
-//       let result;
-//       // global event
-//       result = electrobunEventEmitter.emitEvent(event);
-
-//       result = electrobunEventEmitter.emitEvent(event, id);
-//       // Note: we don't care about the result right now
-
-//       return { success: true };
-//     },
-//     applicationMenuEvent: ({ id, action }) => {
-//       const event = electrobunEventEmitter.events.app.applicationMenuClicked({
-//         id,
-//         action,
-//       });
-
-//       let result;
-//       // global event
-//       result = electrobunEventEmitter.emitEvent(event);
-
-//       return { success: true };
-//     },
-//     contextMenuEvent: ({ action }) => {
-//       const event = electrobunEventEmitter.events.app.contextMenuClicked({
-//         action,
-//       });
-
-//       let result;
-//       // global event
-//       result = electrobunEventEmitter.emitEvent(event);
-
-//       return { success: true };
-//     },
-
-
-
-
-//   },
-//   maxRequestTime: 25000,
-// });
-
-// export { zigRPC, zigProc };

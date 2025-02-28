@@ -122,16 +122,16 @@ pub extern fn openFileDialog(startingFolder: [*:0]const u8, allowedFileTypes: [*
 // system tray and menu
 pub const TrayItemHandler = fn (trayId: u32, action: [*:0]const u8) void;
 
-pub extern fn createTray(id: u32, title: [*:0]const u8, pathToImage: [*:0]const u8, template: bool, width: u32, height: u32, trayItemHandler: ?*const TrayItemHandler) *anyopaque;
-pub extern fn setTrayTitle(trayItem: *anyopaque, title: [*:0]const u8) callconv(.C) void;
-pub extern fn setTrayImage(trayItem: *anyopaque, image: [*:0]const u8) callconv(.C) void;
-pub extern fn setTrayMenu(trayItem: *anyopaque, menuConfigJson: [*:0]const u8) callconv(.C) void;
+// pub extern fn createTray(id: u32, title: [*:0]const u8, pathToImage: [*:0]const u8, template: bool, width: u32, height: u32, trayItemHandler: ?*const TrayItemHandler) *anyopaque;
+// pub extern fn setTrayTitle(trayItem: *anyopaque, title: [*:0]const u8) callconv(.C) void;
+// pub extern fn setTrayImage(trayItem: *anyopaque, image: [*:0]const u8) callconv(.C) void;
+// pub extern fn setTrayMenu(trayItem: *anyopaque, menuConfigJson: [*:0]const u8) callconv(.C) void;
 
 // application menu
-pub extern fn setApplicationMenu(menuConfigJson: [*:0]const u8, zigTrayItemHandler: ?*const TrayItemHandler) callconv(.C) void;
+// pub extern fn setApplicationMenu(menuConfigJson: [*:0]const u8, zigTrayItemHandler: ?*const TrayItemHandler) callconv(.C) void;
 
 // context menu
 // pub const ZigContextMenuHandler = fn (action: [*:0]const u8) void;
-pub extern fn showContextMenu(menuConfigJson: [*:0]const u8, zigContextMenuHandler: ?*const TrayItemHandler) callconv(.C) void;
+// pub extern fn showContextMenu(menuConfigJson: [*:0]const u8, zigContextMenuHandler: ?*const TrayItemHandler) callconv(.C) void;
 
 pub extern fn testFFI(ptr: *anyopaque) callconv(.C) void;

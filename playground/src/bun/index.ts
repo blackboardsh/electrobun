@@ -67,153 +67,157 @@ setTimeout(async () => {
 //     }
 // });
 
-// const tray = new Tray({
-//   title: "Example Tray Item (click to create menu)",
-//   // Note: __dirname here will evaulate to src/bun when running in dev mode
-//   // todo: we should include it as an asset and use that url
-//   // This can be a views url or an absolute file path
-//   image: `views://assets/electrobun-logo-32-template.png`,
-//   template: true,
-//   width: 32,
-//   height: 32,
-// });
+const tray = new Tray({
+  title: "Example Tray Item (click to create menu)",
+  // Note: __dirname here will evaulate to src/bun when running in dev mode
+  // todo: we should include it as an asset and use that url
+  // This can be a views url or an absolute file path
+  image: `views://assets/electrobun-logo-32-template.png`,
+  template: true,
+  width: 32,
+  height: 32,
+});
 
-// // map action names to clicked state
-// const menuState = {
-//   "item-1": false,
-//   "sub-item-1": false,
-//   "sub-item-2": true,
-// };
+// map action names to clicked state
+const menuState = {
+  "item-1": false,
+  "sub-item-1": false,
+  "sub-item-2": true,
+};
 
-// const updateTrayMenu = () => {
-//   tray.setMenu([
-//     {
-//       type: "normal",
-//       label: `Toggle me`,
-//       action: "item-1",
-//       checked: menuState["item-1"],
-//       tooltip: `I'm a tooltip`,
-//       submenu: [
-//         {
-//           type: "normal",
-//           label: "Click me to toggle sub-item 2",
-//           tooltip: "i will also unhide sub-item-3",
-//           action: "sub-item-1",
-//         },
-//         {
-//           type: "divider",
-//         },
-//         {
-//           type: "normal",
-//           label: "Toggle sub-item-3's visibility",
-//           action: "sub-item-2",
-//           enabled: menuState["sub-item-1"],
-//         },
-//         {
-//           type: "normal",
-//           label: "I was hidden",
-//           action: "sub-item-3",
-//           hidden: menuState["sub-item-2"],
-//         },
-//       ],
-//     },
-//   ]);
-// };
+const updateTrayMenu = () => {
+  tray.setMenu([
+    {
+      type: "normal",
+      label: `Toggle me`,
+      action: "item-1",
+      checked: menuState["item-1"],
+      tooltip: `I'm a tooltip`,
+      submenu: [
+        {
+          type: "normal",
+          label: "Click me to toggle sub-item 2",
+          tooltip: "i will also unhide sub-item-3",
+          action: "sub-item-1",
+        },
+        {
+          type: "divider",
+        },
+        {
+          type: "normal",
+          label: "Toggle sub-item-3's visibility",
+          action: "sub-item-2",
+          enabled: menuState["sub-item-1"],
+        },
+        {
+          type: "normal",
+          label: "I was hidden",
+          action: "sub-item-3",
+          hidden: menuState["sub-item-2"],
+        },
+      ],
+    },
+  ]);
+};
 
-// // TODO: events should be typed
-// tray.on("tray-clicked", (e) => {
-//   const { id, action } = e.data as { id: number; action: string };
+// TODO: events should be typed
+tray.on("tray-clicked", (e) => {
+  console.log(5)
+  const { id, action } = e.data as { id: number; action: string };
+  console.log(6)
+  if (action === "") {
+    console.log(7)
+    // main menu was clicked before we create a system tray menu for it.
+    updateTrayMenu();
+    console.log(8)
+    tray.setTitle("Example Tray Item (click to open menu)");
+  } else {
+    // once there's a menu, we can toggle the state of the menu items
+    menuState[action] = !menuState[action];
+    console.log(9)
+    updateTrayMenu();
+  }  
+  // respond to left and right clicks on the tray icon/name
+  console.log("event listener for tray clicked", e.data.action);
+});
 
-//   if (action === "") {
-//     // main menu was clicked before we create a system tray menu for it.
-//     updateTrayMenu();
-//     tray.setTitle("Example Tray Item (click to open menu)");
-//   } else {
-//     // once there's a menu, we can toggle the state of the menu items
-//     menuState[action] = !menuState[action];
-//     updateTrayMenu();
-//   }
-//   // respond to left and right clicks on the tray icon/name
-//   console.log("event listener for tray clicked", e.data.action);
-// });
+ApplicationMenu.setApplicationMenu([
+  {
+    submenu: [{ label: "Quit", role: "quit", accelerator: "q" }],
+  },
+  {
+    label: "Edit",
+    submenu: [
+      { role: "undo" },
+      { role: "redo" },
+      { type: "separator" },
+      {
+        label: "Custom Menu Item  🚀",
+        action: "custom-action-1",
+        tooltip: "I'm a tooltip",
+      },
+      {
+        label: "Custom menu disabled",
+        enabled: false,
+        action: "custom-action-2",
+      },
+      { type: "separator" },
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      { role: "pasteAndMatchStyle" },
+      { role: "delete" },
+      { role: "selectAll" },
+    ],
+  },
+]);
 
-// ApplicationMenu.setApplicationMenu([
-//   {
-//     submenu: [{ label: "Quit", role: "quit", accelerator: "q" }],
-//   },
-//   {
-//     label: "Edit",
-//     submenu: [
-//       { role: "undo" },
-//       { role: "redo" },
-//       { type: "separator" },
-//       {
-//         label: "Custom Menu Item  🚀",
-//         action: "custom-action-1",
-//         tooltip: "I'm a tooltip",
-//       },
-//       {
-//         label: "Custom menu disabled",
-//         enabled: false,
-//         action: "custom-action-2",
-//       },
-//       { type: "separator" },
-//       { role: "cut" },
-//       { role: "copy" },
-//       { role: "paste" },
-//       { role: "pasteAndMatchStyle" },
-//       { role: "delete" },
-//       { role: "selectAll" },
-//     ],
-//   },
-// ]);
+Electrobun.events.on("application-menu-clicked", (e) => {
+  console.log("application menu clicked", e.data.action); // custom-actino
+});
 
-// Electrobun.events.on("application-menu-clicked", (e) => {
-//   console.log("application menu clicked", e.data.action); // custom-actino
-// });
+// typically you'd wire up a frontend rightclick event, preventDefault, rpc to bun, then fire this.
+// but you can also fire and handle context menus entirely from bun globally positioned on screen
+// even if you have no windows open and another app is focused
+setTimeout(() => {
+  ContextMenu.showContextMenu([
+    { role: "undo" },
+    { role: "redo" },
+    { type: "separator" },
+    {
+      label: "Custom Menu Item  🚀",
+      action: "custom-action-1",
+      tooltip: "I'm a tooltip",
+    },
+    {
+      label: "Custom menu disabled",
+      enabled: false,
+      action: "custom-action-2",
+    },
+    {
+      label: "Custom menu disabled",
+      enabled: false,
+      action: "custom-action-2",
+      // todo: support a data property on all menus (app, tray, context)
+      data: {
+        some: "data",
+        that: "is serialized",
+        nested: { thing: 23 },
+      },
+    },
+    { type: "separator" },
+    { role: "cut" },
+    { role: "copy" },
+    { role: "paste" },
+    { role: "pasteAndMatchStyle" },
+    { role: "delete" },
+    { role: "selectAll" },
+  ]);
+}, 3000);
 
-// // typically you'd wire up a frontend rightclick event, preventDefault, rpc to bun, then fire this.
-// // but you can also fire and handle context menus entirely from bun globally positioned on screen
-// // even if you have no windows open and another app is focused
-// setTimeout(() => {
-//   ContextMenu.showContextMenu([
-//     { role: "undo" },
-//     { role: "redo" },
-//     { type: "separator" },
-//     {
-//       label: "Custom Menu Item  🚀",
-//       action: "custom-action-1",
-//       tooltip: "I'm a tooltip",
-//     },
-//     {
-//       label: "Custom menu disabled",
-//       enabled: false,
-//       action: "custom-action-2",
-//     },
-//     {
-//       label: "Custom menu disabled",
-//       enabled: false,
-//       action: "custom-action-2",
-//       // todo: support a data property on all menus (app, tray, context)
-//       data: {
-//         some: "data",
-//         that: "is serialized",
-//         nested: { thing: 23 },
-//       },
-//     },
-//     { type: "separator" },
-//     { role: "cut" },
-//     { role: "copy" },
-//     { role: "paste" },
-//     { role: "pasteAndMatchStyle" },
-//     { role: "delete" },
-//     { role: "selectAll" },
-//   ]);
-// }, 30000);
-
-// Electrobun.events.on("context-menu-clicked", (e) => {
-//   console.log("context event", e.data.action);
-// });
+Electrobun.events.on("context-menu-clicked", (e) => {
+  console.log("context event", e.data.action);
+});
 
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
   maxRequestTime: 5000,

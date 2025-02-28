@@ -2,6 +2,7 @@ import { zigRPC, type MenuItemConfig } from "../proc/zig";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { VIEWS_FOLDER } from "./Paths";
 import { join } from "path";
+import {FFIType} from 'bun:ffi';
 
 let nextTrayId = 1;
 const TrayMap = {};
@@ -16,6 +17,7 @@ type ConstructorOptions = {
 
 export class Tray {
   id: number = nextTrayId++;
+  ptr: FFIType.ptr;
 
   constructor({
     title = "",
@@ -26,7 +28,7 @@ export class Tray {
   }: ConstructorOptions = {}) {
     console.log("img", image);
     console.log("img", this.resolveImagePath(image));
-    zigRPC.request.createTray({
+    this.ptr = zigRPC.request.createTray({
       id: this.id,
       title,
       image: this.resolveImagePath(image),
