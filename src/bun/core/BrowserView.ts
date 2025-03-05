@@ -1,4 +1,4 @@
-import { zigRPC } from "../proc/zig";
+import {  native, toCString, zigRPC } from "../proc/zig";
 import * as fs from "fs";
 import { execSync } from "child_process";
 import electrobunEventEmitter from "../events/eventEmitter";
@@ -11,10 +11,10 @@ import {
   createRPC,
 } from "rpc-anywhere";
 import { Updater } from "./Updater";
-import type { BuiltinBunToWebviewSchema } from "../../browser/builtinrpcSchema";
+import type { BuiltinBunToWebviewSchema,BuiltinWebviewToBunSchema } from "../../browser/builtinrpcSchema";
 import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
 import { randomBytes } from "crypto";
-import {FFIType}  from 'bun:ffi';
+import {FFIType, type Pointer}  from 'bun:ffi';
 
 const BrowserViewMap: {
   [id: number]: BrowserView<any>;
@@ -62,45 +62,7 @@ const defaultOptions: Partial<BrowserViewOptions> = {
   },
 };
 
-const internalRpcHandlers = {
-  // todo: this shouldn't be getting method, just params.
-  webviewTagInit: ({
-    method,
-    params,
-  }: {
-    method: string;
-    params: BrowserViewOptions & { windowId: number };
-  }) => {
-    
-    const {
-      hostWebviewId,
-      windowId,
-      renderer,
-      html,
-      preload,
-      partition,
-      frame,
-      navigationRules,
-    } = params;
 
-    const url = !params.url && !html ? "https://electrobun.dev" : params.url;    
-
-    const webviewForTag = new BrowserView({
-      url,
-      html,
-      preload,
-      partition,
-      frame,
-      hostWebviewId,
-      autoResize: false,
-      windowId,
-      renderer,//: "cef",
-      navigationRules,
-    });
-
-    return webviewForTag.id;
-  },
-};
 
 const hash = await Updater.localInfo.hash();
 // Note: we use the build's hash to separate from different apps and different builds
@@ -109,7 +71,7 @@ const randomId = Math.random().toString(36).substring(7);
 
 export class BrowserView<T> {
   id: number = nextWebviewId++;
-  ptr: FFIType.ptr;
+  ptr: Pointer;
   hostWebviewId?: number;
   windowId: number;
   renderer: 'cef' | 'native';
@@ -158,16 +120,17 @@ export class BrowserView<T> {
     this.navigationRules = options.navigationRules || null;
     this.renderer = options.renderer || defaultOptions.renderer;
 
-    this.init();
+    BrowserViewMap[this.id] = this;
+    this.ptr = this.init();
   }
 
   init() {
-    // this.createStreams();
+    this.createStreams();
 
     
 
     // TODO: add a then to this that fires an onReady event
-    this.ptr = zigRPC.request.createWebview({
+    return zigRPC.request.createWebview({
       id: this.id,
       windowId: this.windowId,
       renderer: this.renderer, 
@@ -190,48 +153,48 @@ export class BrowserView<T> {
       navigationRules: this.navigationRules,
     });
 
-    BrowserViewMap[this.id] = this;
+    
   }
 
-  // createStreams() {    
-  //   const webviewPipeIn = this.pipePrefix + "_in";
-  //   const webviewPipeOut = this.pipePrefix + "_out";
+  createStreams() {    
+    // const webviewPipeIn = this.pipePrefix + "_in";
+    // const webviewPipeOut = this.pipePrefix + "_out";
     
-  //   try {
-  //     execSync("mkfifo " + webviewPipeOut);
-  //   } catch (e) {
-  //     console.log("pipe out already exists");
-  //   }
+    // try {
+    //   execSync("mkfifo " + webviewPipeOut);
+    // } catch (e) {
+    //   console.log("pipe out already exists");
+    // }
     
-  //   try {
-  //     execSync("mkfifo " + webviewPipeIn);
-  //   } catch (e) {
-  //     console.log("pipe in already exists");
-  //   }
+    // try {
+    //   execSync("mkfifo " + webviewPipeIn);
+    // } catch (e) {
+    //   console.log("pipe in already exists");
+    // }
     
-  //   const inStream = fs.createWriteStream(webviewPipeIn, {
-  //     flags: "r+",
-  //   });
+    // const inStream = fs.createWriteStream(webviewPipeIn, {
+    //   flags: "r+",
+    // });
 
-  //   // todo: something has to be written to it to open it
-  //   // look into this
-  //   inStream.write("\n");
+    // // todo: something has to be written to it to open it
+    // // look into this
+    // inStream.write("\n");
 
-  //   this.inStream = inStream;
+    // this.inStream = inStream;
     
-  //   // Open the named pipe for reading
-  //   const outStream = Bun.file(webviewPipeOut).stream();
-  //   this.outStream = outStream;
+    // // Open the named pipe for reading
+    // const outStream = Bun.file(webviewPipeOut).stream();
+    // this.outStream = outStream;
     
-  //   if (!this.rpc) {
-  //     this.rpc = BrowserView.defineRPC({
-  //       handlers: { requests: {}, messages: {} },
-  //     });
-  //   }
+    if (!this.rpc) {
+      this.rpc = BrowserView.defineRPC({
+        handlers: { requests: {}, messages: {} },
+      });
+    }
     
-  //   this.rpc.setTransport(this.createTransport());
+    this.rpc.setTransport(this.createTransport());
     
-  // }
+  }
 
   sendMessageToWebviewViaExecute(jsonMessage) {
     const stringifiedMessage =
@@ -243,39 +206,46 @@ export class BrowserView<T> {
     this.executeJavascript(wrappedMessage);
   }
 
+  // TODO XX: rename from zig to 'internal'
+  sendMessageFromZigViaExecute(jsonMessage) {
+    const stringifiedMessage =
+      typeof jsonMessage === "string"
+        ? jsonMessage
+        : JSON.stringify(jsonMessage);
+    // todo (yoav): make this a shared const with the browser api
+    const wrappedMessage = `window.__electrobun.receiveMessageFromZig(${stringifiedMessage})`;
+    this.executeJavascript(wrappedMessage);
+  }
+
   // Note: the OS has a buffer limit on named pipes. If we overflow it
   // it won't trigger the kevent for zig to read the pipe and we'll be stuck.
   // so we have to chunk it
   executeJavascript(js: string) {
-    let offset = 0;
-    while (offset < js.length) {
-      const chunk = js.slice(offset, offset + CHUNK_SIZE);
-      this.inStream.write(chunk);
-      offset += CHUNK_SIZE;
-    }
+    zigRPC.request.evaluateJavascriptWithNoCompletion({id: this.id, js});
+    // let offset = 0;
+    // while (offset < js.length) {
+    //   const chunk = js.slice(offset, offset + CHUNK_SIZE);
+    //   this.inStream.write(chunk);
+    //   offset += CHUNK_SIZE;
+    // }
 
-    // Ensure the newline is written after all chunks
-    this.inStream.write("\n");
+    // // Ensure the newline is written after all chunks
+    // this.inStream.write("\n");
   }
 
   loadURL(url: string) {
-    this.url = url;
-    zigRPC.request.loadURL({ webviewId: this.id, url: this.url });
+    this.url = url;    
+    native.symbols.loadURLInWebView(this.ptr, toCString(this.url))      
   }
 
   loadHTML(html: string) {
+    // Note: CEF doesn't natively support "setting html" so we just return
+    // this BrowserView's html when a special views:// url is hit.
+    // So we can update that content and ask the webview to load that url
     this.html = html;
-    // todo: reimplement
-    // const url = this.htmlToDataURI(html);
-    // zigRPC.request.loadHTML({ webviewId: this.id, html: html });    
+    this.loadURL('views://internal/index.html');
   }
 
-  
-  htmlToDataURI(html: string) {
-    return "data:text/html;base64," + Buffer.from(html, "utf8").toString("base64");
-  }
-
-  
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserView events
@@ -313,35 +283,35 @@ export class BrowserView<T> {
       registerHandler(handler) {
         that.rpcHandler = handler;
 
-        async function readFromPipe(
-          reader: ReadableStreamDefaultReader<Uint8Array>
-        ) {
-          let buffer = "";
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        // async function readFromPipe(
+        //   reader: ReadableStreamDefaultReader<Uint8Array>
+        // ) {
+        //   let buffer = "";
+        //   while (true) {
+        //     const { done, value } = await reader.read();
+        //     if (done) break;
 
-            buffer += new TextDecoder().decode(value);
-            let eolIndex;
+        //     buffer += new TextDecoder().decode(value);
+        //     let eolIndex;
 
-            while ((eolIndex = buffer.indexOf("\n")) >= 0) {
-              const line = buffer.slice(0, eolIndex).trim();
-              buffer = buffer.slice(eolIndex + 1);
-              if (line) {
-                try {
-                  const event = JSON.parse(line);
+        //     while ((eolIndex = buffer.indexOf("\n")) >= 0) {
+        //       const line = buffer.slice(0, eolIndex).trim();
+        //       buffer = buffer.slice(eolIndex + 1);
+        //       if (line) {
+        //         try {
+        //           const event = JSON.parse(line);
 
-                  handler(event);
-                } catch (error) {
-                  console.error("webview: ", line);
-                }
-              }
-            }
-          }
-        }
+        //           handler(event);
+        //         } catch (error) {
+        //           console.error("webview: ", line);
+        //         }
+        //       }
+        //     }
+        //   }
+        // }
 
-        const reader = that.outStream.getReader();
-        readFromPipe(reader);
+        // const reader = that.outStream.getReader();
+        // readFromPipe(reader);
       },
     };
   };
@@ -398,13 +368,13 @@ export class BrowserView<T> {
     // handlers for them alongside request handlers.
 
     type mixedWebviewSchema = {
-      requests: BunSchema["requests"];
+      requests: BunSchema["requests"]// & BuiltinWebviewToBunSchema["requests"];
       messages: WebviewSchema["messages"];
     };
 
     type mixedBunSchema = {
-      requests: WebviewSchema["requests"] &
-        BuiltinBunToWebviewSchema["requests"];
+      // requests: WebviewSchema["requests"] &
+        // BuiltinBunToWebviewSchema["requests"];
       messages: BunSchema["messages"];
     };
 
@@ -412,7 +382,7 @@ export class BrowserView<T> {
       maxRequestTime: config.maxRequestTime,
       requestHandler: {
         ...config.handlers.requests,
-        ...internalRpcHandlers,
+        // ...internalRpcHandlers,
       },
       transport: {
         // Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey

@@ -578,6 +578,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         } else {
             self.nsView.layer.opacity = 1;
         }
+        
     }
 
 
@@ -1053,6 +1054,18 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                                 inFrame:nil
                         inContentWorld:isolatedWorld
                     completionHandler:nil];
+
+        // DEBUG
+        // [self.webView evaluateJavaScript:code
+        //                   inFrame:nil
+        //           inContentWorld:isolatedWorld
+        //       completionHandler:^(id result, NSError *error) {
+        //     if (error) {
+        //         NSLog(@"JavaScript evaluation error: %@", error);
+        //     } else {
+        //         NSLog(@"JavaScript evaluation result: %@", result);
+        //     }
+        // }];
     }
 
     - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
@@ -2163,15 +2176,15 @@ extern "C" void loadURLInWebView(AbstractView *abstractView, const char *urlStri
     [abstractView loadURL:urlString];
 }
 
-extern "C" void webviewTagGoBack(AbstractView *abstractView) {    
+extern "C" void webviewGoBack(AbstractView *abstractView) {    
     [abstractView goBack];
 }
 
-extern "C" void webviewTagGoForward(AbstractView *abstractView) {
+extern "C" void webviewGoForward(AbstractView *abstractView) {
     [abstractView goForward];
 }
 
-extern "C" void webviewTagReload(AbstractView *abstractView) {
+extern "C" void webviewReload(AbstractView *abstractView) {
     [abstractView reload];
 }
 
@@ -2179,7 +2192,7 @@ extern "C" void webviewRemove(AbstractView *abstractView) {
     [abstractView remove];
 }
 
-extern "C" BOOL webviewCanGoBack(AbstractView *abstractView) {    
+extern "C" BOOL webviewCanGoBack(AbstractView *abstractView) {        
     return [abstractView canGoBack];
 }
 
@@ -2187,8 +2200,8 @@ extern "C" BOOL webviewCanGoForward(AbstractView *abstractView) {
     return [abstractView canGoForward];
 }
 
-extern "C" void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {        
-    [abstractView evaluateJavaScriptWithNoCompletion:script];    
+extern "C" void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {                    
+    [abstractView evaluateJavaScriptWithNoCompletion:script];        
 }
 
 extern "C" void testFFI(void *ptr) {              
@@ -2258,11 +2271,11 @@ extern "C" const char* getBodyFromScriptMessage(WKScriptMessage *message) {
     return body.UTF8String;
 }
 
-extern "C" void webviewTagSetTransparent(AbstractView *abstractView, BOOL transparent) {    
+extern "C" void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {    
         [abstractView setTransparent:transparent];    
 }
 
-extern "C" void webviewTagSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
+extern "C" void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
         [abstractView setPassthrough:enablePassthrough];    
 }
 
@@ -2380,11 +2393,11 @@ extern "C" void closeNSWindow(NSWindow *window) {
 }
 
 
-extern "C" void resizeWebview(AbstractView *abstractView, NSRect frame, const char *masksJson) {
-    [abstractView resize:frame withMasksJSON:masksJson];
-    
+extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {    
+    NSRect frame = NSMakeRect(x, y, width, height);    
+    // TODO XX: is strdup needed here? still can crash
+    [abstractView resize:frame withMasksJSON:strdup(masksJson)];
 }
-
 
 extern "C" void stopWindowMove() {
     isMovingWindow = NO;

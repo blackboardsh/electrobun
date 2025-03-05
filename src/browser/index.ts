@@ -10,7 +10,7 @@ import {
 import { ConfigureWebviewTags } from "./webviewtag";
 // todo: should this just be injected as a preload script?
 import { isAppRegionDrag } from "./stylesAndElements";
-import type { BuiltinBunToWebviewSchema } from "./builtinrpcSchema";
+import type { BuiltinBunToWebviewSchema, BuiltinWebviewToBunSchema } from "./builtinrpcSchema";
 
 interface ElectrobunWebviewRPCSChema {
   bun: RPCSchema;
@@ -186,14 +186,17 @@ class Electroview<T> {
   // This will be attached to the global object, zig can rpc reply by executingJavascript
   // of that global reference to the function
   receiveMessageFromZig(msg: any) {
+    console.log('receiveMessageFromZig!!: ', msg, this.zigRpcHandler)
     if (this.zigRpcHandler) {
+      
       this.zigRpcHandler(msg);
     }
   }
 
   // TODO: implement proper rpc-anywhere style rpc here
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
-  sendToZig(message: {}) {    
+  sendToZig(message: {}) {   
+    console.log('sendToZig: ', message) 
     if (window.webkit?.messageHandlers?.webviewTagBridge) {
       window.webkit.messageHandlers.webviewTagBridge.postMessage(
         JSON.stringify(message)
@@ -241,7 +244,8 @@ class Electroview<T> {
   createZigTransport(): RPCTransport {
     const that = this;
     return {
-      send(message) {             
+      send(message) {     
+        message.hostWebviewId = WEBVIEW_ID;        
         if (window.webkit?.messageHandlers?.webviewTagBridge) {
           window.webkit.messageHandlers.webviewTagBridge.postMessage(
             JSON.stringify(message)
@@ -253,6 +257,7 @@ class Electroview<T> {
         }
       },
       registerHandler(handler) {
+        // TODO XX: rename zig to electrobun or internal or something. consider merging with bunbridge rpc
         that.zigRpcHandler = handler;
         // webview tag doesn't handle any messages from zig just yet
       },
@@ -260,6 +265,7 @@ class Electroview<T> {
   }
 
   async bunBridge(msg: string) {
+    console.log('message: ', msg)
     if (this.bunSocket?.readyState === WebSocket.OPEN) {
       try {
         const { encryptedData, iv, tag } = await window.__electrobun_encrypt(
@@ -391,7 +397,7 @@ class Electroview<T> {
     };
 
     type mixedWebviewSchema = {
-      requests: BunSchema["requests"];
+      requests: BunSchema["requests"] & BuiltinWebviewToBunSchema["requests"];
       messages: WebviewSchema["messages"];
     };
 

@@ -17,7 +17,7 @@ import { BrowserWindow, BrowserWindowMap } from "../core/BrowserWindow";
 
 
 
-const native = (() => {
+export const native = (() => {
   try {
     return dlopen(`./libNativeWrapper.${suffix}`, {  
       // window
@@ -62,12 +62,98 @@ const native = (() => {
           FFIType.cstring, // partition                    
           FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
           FFIType.function, // webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
-          FFIType.function, //  bunBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+          FFIType.function, //  bunBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
           FFIType.function, //  webviewTagBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
           FFIType.cstring, // electrobunPreloadScript
           FFIType.cstring, // customPreloadScript
         ],
         returns: FFIType.ptr
+      },
+
+      // webviewtag
+      webviewCanGoBack: {
+        args: [FFIType.ptr],
+        returns: FFIType.bool
+      },
+
+      webviewCanGoForward: {
+        args: [FFIType.ptr],
+        returns: FFIType.bool
+      },
+      // TODO: Curently CEF doesn't support this directly
+      // revisit after refactor
+      // callAsyncJavaScript: {
+      //   args: [
+      //     FFIType.
+      //   ],
+      //   returns: FFIType.void
+      // },
+      resizeWebview: {
+        args: [
+          FFIType.ptr, // webview handle
+          FFIType.f64, // x
+          FFIType.f64, // y
+          FFIType.f64, // width
+          FFIType.f64, // height
+          FFIType.cstring // maskJson
+        ],
+        returns: FFIType.void
+      },
+
+      loadURLInWebView: {
+        args: [FFIType.ptr, FFIType.cstring],
+        returns: FFIType.void
+      },
+     
+      updatePreloadScriptToWebView: {
+        args: [
+          FFIType.ptr, // webview handle
+          FFIType.cstring,  // script identifier
+          FFIType.cstring,  // script
+          FFIType.bool  // allframes
+        ],
+        returns: FFIType.void
+      },
+      webviewGoBack: {
+        args: [FFIType.ptr],
+        returns: FFIType.void
+      },
+      webviewGoForward: {
+        args: [FFIType.ptr],
+        returns: FFIType.void
+      },
+      webviewReload: {
+        args: [FFIType.ptr],
+        returns: FFIType.void
+      },
+      webviewRemove: {
+        args: [FFIType.ptr],
+        returns: FFIType.void
+      },
+      startWindowMove: {
+        args: [FFIType.ptr],
+        returns: FFIType.void
+      },
+      stopWindowMove: {
+        args: [],
+        returns: FFIType.void
+      },
+      webviewSetTransparent: {
+        // TODO XX: bools or ints?
+        args: [FFIType.ptr, FFIType.bool],
+        returns: FFIType.void
+      },
+      webviewSetPassthrough: {
+        args: [FFIType.ptr, FFIType.bool],
+        returns: FFIType.void
+      },
+      webviewSetHidden: {
+        args: [FFIType.ptr, FFIType.bool],
+        returns: FFIType.void
+      },     
+      evaluateJavaScriptWithNoCompletion: {
+        args: [FFIType.ptr, FFIType.cstring],
+        returns: FFIType.void
       },
       // Tray
       createTray: {
@@ -154,6 +240,8 @@ const callbacks = [];
 // NOTE: Bun seems to hit limits on args or arg types. eg: trying to send 12 bools results 
 // in only about 8 going through then params after that. I think it may be similar to 
 // a zig bug I ran into last year. So check number of args in a signature when alignment issues occur.
+
+// TODO XX: maybe this should actually be inside BrowserWindow and BrowserView as static methods
 export const zigRPC = {
   request: {
     createWindow: (params: {
@@ -368,9 +456,10 @@ export const zigRPC = {
         
          window.__electrobun_encrypt = encryptString;
          window.__electrobun_decrypt = decryptString;
-        })()
+        })();
         ` + `
          function emitWebviewEvent (eventName, detail) {
+              console.log('emitWebviewEvent', eventName, detail)
              if (window.webkit?.messageHandlers?.webviewTagBridge) {
                  window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
              } else {
@@ -416,9 +505,7 @@ export const zigRPC = {
          });
                 
         `
-        const customPreload = preload;
-       
-        console.log('url', url)
+        const customPreload = preload;               
 
         const webviewPtr = native.symbols.initWebview(
           id,
@@ -431,18 +518,28 @@ export const zigRPC = {
           toCString(partition || 'persist:default'),
           webviewDecideNavigation,
           webviewEventHandler,
-          bunBridgeHandler,
+          bunBridgePostmessageHandler,
           webviewTagBridgeHandler,
           toCString(electrobunPreload),
           toCString(customPreload || ''),        
-        )
-        console.log('after after')
+        )        
 
         if (!webviewPtr) {
            throw "Failed to create webview"
         }
 
         return webviewPtr;
+      },
+
+      evaluateJavascriptWithNoCompletion: (params: {id: number; js: string}) => {
+        const {id, js} = params;
+        const webview = BrowserView.getById(id);
+        
+        if (!webview?.ptr) {
+          return;
+        }
+        
+        native.symbols.evaluateJavaScriptWithNoCompletion(webview.ptr, toCString(js))        
       },
 
       createTray: (params: {
@@ -462,14 +559,6 @@ export const zigRPC = {
           height
         } = params;
 
-        console.log('calling createTray', {
-          id,
-          title,
-          image,
-          template,
-          width,
-          height
-        })
         const trayPtr =  native.symbols.createTray(
           id,
           toCString(title),
@@ -683,7 +772,7 @@ const getResponseLength = new JSCallback((responseId) => {
 const getMimeType = new JSCallback((filePath) => {
   const _filePath = new CString(filePath).toString();
   const mimeType = Bun.file(_filePath).type;// || "application/octet-stream";
-  console.log('found mimetype: ', mimeType);
+  
   return toCString(mimeType);
 }, {
   args: [FFIType.cstring],  
@@ -718,11 +807,18 @@ const webviewDecideNavigation = new JSCallback((webviewId, url) => {
 });
 
 
-const webviewEventHandler = new JSCallback((id, _eventName, _detail) => {
+const webviewEventHandler = new JSCallback((id, _eventName, _detail) => {  
   const eventName = new CString(_eventName);
   const detail = new CString(_detail);
-  
-  console.log('webviewEventHandler', id, eventName)
+
+  const webview = BrowserView.getById(id);
+  if (webview.hostWebviewId) {
+    // This is a webviewtag so we should send the event into the parent as well
+    // TODO XX: escape event name and detail to remove `
+    const js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, \`${detail}\`);`
+    native.symbols.evaluateJavaScriptWithNoCompletion(webview.ptr, toCString(js))        
+  }
+    
   const eventMap = {
       "will-navigate": "willNavigate",
       "did-navigate": "didNavigate",
@@ -732,46 +828,189 @@ const webviewEventHandler = new JSCallback((id, _eventName, _detail) => {
       "new-window-open": "newWindowOpen",
     };
 
-    // todo: the events map should use the same hyphenated names instead of camelCase
-    const handler =
-      electrobunEventEmitter.events.webview[eventMap[eventName]];
+  // todo: the events map should use the same hyphenated names instead of camelCase
+  const handler =
+    electrobunEventEmitter.events.webview[eventMap[eventName]];
 
-    if (!handler) {
-      console.log(`!!!no handler for webview event ${eventName}`);
-      return { success: false };
+  if (!handler) {
+    
+    return { success: false };
+  }
+
+  const event = handler({
+    id,
+    detail,
+  });
+
+  let result;
+  // global event
+  result = electrobunEventEmitter.emitEvent(event);      
+  result = electrobunEventEmitter.emitEvent(event, id);
+
+    
+}, {
+  args: [FFIType.u32, FFIType.cstring],
+  returns: FFIType.void,
+  threadsafe: true
+});
+
+const bunBridgePostmessageHandler = new JSCallback((id, msg) => {    
+  try {
+    const msgStr = new CString(msg);
+    
+    if (!msgStr.length) {
+      return;
     }
-
-    const event = handler({
-      id,
-      detail,
-    });
-
-    let result;
-    // global event
-    result = electrobunEventEmitter.emitEvent(event);      
-    result = electrobunEventEmitter.emitEvent(event, id);
+    const msgJson = JSON.parse(msgStr);
+    
+    const webview = BrowserView.getById(id);
+    
+    webview.rpcHandler?.(msgJson).then(result => {      
+    }).catch(err => console.log('error in rpchandler', err))
+    
+  } catch (err) {
+    console.error('error sending message to bun: ', err)
+    console.error('msgString: ', new CString(msg));
+  }
+    
+  
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,
   threadsafe: true
 });
 
-const bunBridgeHandler = new JSCallback((id, msg) => {
-  // const webview = BrowserView.getById(id);
-  // console.log('bunBridgeHandler', id, new CString(msg));
-  a('bunBridgeHandler');
-}, {
-  args: [FFIType.u32, FFIType.cstring],
-  returns: FFIType.void,
-  threadsafe: true
-});
-const a = (str) => {console.log('==========hi', str)}
+// internalRPC (bun <-> browser internal stuff)
+// BrowserView.rpc (user defined bun <-> browser rpc unique to each webview)
+// nativeRPC (internal bun <-> native rpc)
+
+// TODO XX: dedupe with src/browser/index.ts
+type ZigWebviewHandlers = RPCSchema<{
+  requests: {
+    webviewTagCallAsyncJavaScript: {
+      params: {
+        messageId: string;
+        webviewId: number;
+        hostWebviewId: number;
+        script: string;
+      };
+      response: void;
+    };
+  };
+}>;
+
+type WebviewTagHandlers = RPCSchema<{
+  requests: {};
+  messages: {
+    webviewTagResize: {
+      id: number;
+      frame: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      };
+      masks: string;
+    };
+    webviewTagUpdateSrc: {
+      id: number;
+      url: string;
+    };
+    webviewTagUpdateHtml: {
+      id: number;
+      html: string;
+    }
+    webviewTagGoBack: {
+      id: number;
+    };
+    webviewTagGoForward: {
+      id: number;
+    };
+    webviewTagReload: {
+      id: number;
+    };
+    webviewTagRemove: {
+      id: number;
+    };
+    startWindowMove: {
+      id: number;
+    };
+    stopWindowMove: {
+      id: number;
+    };
+    moveWindowBy: {
+      id: number;
+      x: number;
+      y: number;
+    };
+    webviewTagSetTransparent: {
+      id: number;
+      transparent: boolean;
+    };
+    webviewTagSetPassthrough: {
+      id: number;
+      enablePassthrough: boolean;
+    };
+    webviewTagSetHidden: {
+      id: number;
+      hidden: boolean;
+    };
+  };
+}>;
+
+// let internalRPCHandler;
+// export const internalRPC = BrowserView.defineRPC<WebviewTagHandlers, ZigWebviewHandlers>({
+//   transport: {
+//     send(message) {
+
+//     },
+//     registerHandler(handler) {
+//       internalRPCHandler = handler;
+//     }
+//   }
+// })
+
 const webviewTagBridgeHandler = new JSCallback((id, msg) => {
-  const x = 'hi';
-  const y = x + x;
-  a();
-  // console.log('hi')
-  // console.log('webviewTagBridgeHandler', id, new CString(msg))
+  try {
+    const msgStr = new CString(msg);
+    
+    console.log('MSG LENGTH: ', msgStr.length)
+    if (!msgStr.length) {
+      return;
+    }
+    const msgJson = JSON.parse(msgStr);    
+    
+    if (msgJson.type === 'message') {      
+      const handler = internalRpcHandlers.message[msgJson.id];
+      handler(msgJson.payload);
+    } else if(msgJson.type === 'request') {      
+      const hostWebview = BrowserView.getById(msgJson.hostWebviewId);
+      // const targetWebview = BrowserView.getById(msgJson.params.params.hostWebviewId);
+      const handler = internalRpcHandlers.request[msgJson.method];
+      
+      
+      const payload = handler(msgJson.params);
+      
+
+      const resultObj = {
+        type: 'response',
+        id: msgJson.id,
+        success: true,
+        payload,
+      }
+      
+
+      if (!hostWebview) {        
+        return 
+      }
+            
+      hostWebview.sendMessageFromZigViaExecute(resultObj);          
+    }
+        
+  } catch (err) {
+    console.error('error sending message to sendMessageFromZigViaExecute: ', err)
+    console.log('msgStr: ', id, new CString(msg));
+  }
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,
@@ -795,8 +1034,7 @@ const trayItemHandler = new JSCallback((id, action) => {
 })
 
 
-const applicationMenuHandler = new JSCallback((id, action) => {
-  console.log('applicationMenuHandler')
+const applicationMenuHandler = new JSCallback((id, action) => {  
   const event = electrobunEventEmitter.events.app.applicationMenuClicked({
     id,
     action: new CString(action),
@@ -810,8 +1048,7 @@ const applicationMenuHandler = new JSCallback((id, action) => {
   threadsafe: true
 })
 
-const contextMenuHandler = new JSCallback((id, action) => {
-  console.log('contextMenuHandler')
+const contextMenuHandler = new JSCallback((id, action) => {  
   const event = electrobunEventEmitter.events.app.contextMenuClicked({
     action: new CString(action),
   });
@@ -825,7 +1062,7 @@ const contextMenuHandler = new JSCallback((id, action) => {
 
 // Note: When passed over FFI JS will GC the buffer/pointer. Make sure to use strdup() or something
 // on the c side to duplicate the string so objc/c++ gc can own it
-function toCString(jsString: string, addNullTerminator: boolean = true): CString {      
+export function toCString(jsString: string, addNullTerminator: boolean = true): CString {      
   let appendWith = '';
   
   if (addNullTerminator && !jsString.endsWith('\0')) {
@@ -839,7 +1076,124 @@ function toCString(jsString: string, addNullTerminator: boolean = true): CString
 
 
 
+export const internalRpcHandlers = {
+  request: {
+  // todo: this shouldn't be getting method, just params.
+    webviewTagInit: (params:
+     BrowserViewOptions & { windowId: number }
+    ) => {      
+      const {
+        hostWebviewId,
+        windowId,
+        renderer,
+        html,
+        preload,
+        partition,
+        frame,
+        navigationRules,
+      } = params;
 
+      const url = !params.url && !html ? "https://electrobun.dev" : params.url;    
+
+      const webviewForTag = new BrowserView({
+        url,
+        html,
+        preload,
+        partition,
+        frame,
+        hostWebviewId,
+        autoResize: false,
+        windowId,
+        renderer,//: "cef",
+        navigationRules,
+      });      
+      return webviewForTag.id;
+    },  
+    webviewTagCanGoBack: (params) => {      
+      const {id} = params;
+      const webviewPtr = BrowserView.getById(id)?.ptr;
+      if (!webviewPtr) {
+        console.error('no webview ptr')
+        return false;
+      }
+      
+      return native.symbols.webviewCanGoBack(webviewPtr);            
+    },  
+    webviewTagCanGoForward: (params) => {
+      const {id} = params;
+      const webviewPtr = BrowserView.getById(id)?.ptr;
+      if (!webviewPtr) {
+        console.error('no webview ptr')
+        return false;
+      }
+      
+      return native.symbols.webviewCanGoForward(webviewPtr);  
+    },  
+    webviewTagCallAsyncJavaScript: (params) => {
+      console.log('-----------+ request: ', 'webviewTagCallAsyncJavaScript', params)
+    }
+  },
+  message: {
+    webviewTagResize: (params) => {
+      // console.log('------------------webviewTagResize', params)
+      const webviewPtr = BrowserView.getById(params.id)?.ptr;
+      const {x, y, width, height} = params.frame;      
+      native.symbols.resizeWebview(webviewPtr, x, y, width, height, toCString(params.masks))
+    },      
+    webviewTagUpdateSrc: (params) => {
+      const webviewPtr = BrowserView.getById(params.id)?.ptr;
+      native.symbols.loadURLInWebView(webviewPtr, toCString(params.url))      
+    },
+    webviewTagUpdateHtml: (params) => {      
+      const webview = BrowserView.getById(params.id);   
+      webview.loadHTML(params.html) 
+      webview.html = params.html;
+      
+    },
+    webviewTagUpdatePreload: (params) => {
+      const webview = BrowserView.getById(params.id);
+      native.symbols.updatePreloadScriptToWebView(webview.ptr, toCString('electrobun_custom_preload_script'), toCString(params.preload), true);
+    },
+    webviewTagGoBack: (params) => {
+      const webview = BrowserView.getById(params.id);
+      native.symbols.webviewGoBack(webview.ptr);
+    },
+    webviewTagGoForward: (params) => {
+      const webview = BrowserView.getById(params.id);
+      native.symbols.webviewGoForward(webview.ptr);
+    },
+    webviewTagReload: (params) => {
+      const webview = BrowserView.getById(params.id);
+      native.symbols.webviewReload(webview.ptr);
+    },
+    webviewTagRemove: (params) => {
+      const webview = BrowserView.getById(params.id);
+      native.symbols.webviewRemove(webview.ptr);
+    },
+    startWindowMove: (params) => {
+      const window = BrowserWindow.getById(params.id);
+      native.symbols.startWindowMove(window.ptr);
+    },
+    stopWindowMove: (params) => {
+      native.symbols.stopWindowMove();
+    },
+    webviewTagSetTransparent: (params) => {
+      const webview = BrowserView.getById(params.id);
+      native.symbols.webviewSetTransparent(webview.ptr, params.transparent);
+    },
+    webviewTagSetPassthrough: (params) => {
+      const webview = BrowserView.getById(params.id);
+      native.symbols.webviewSetPassthrough(webview.ptr, params.enablePassthrough);
+    },
+    webviewTagSetHidden: (params) => {
+      const webview = BrowserView.getById(params.id);
+      native.symbols.webviewSetHidden(webview.ptr, params.hidden);
+    },
+    webviewEvent: (params) => {
+      console.log('-----------------+webviewEvent', params)
+    },
+  }
+};
 
 
 

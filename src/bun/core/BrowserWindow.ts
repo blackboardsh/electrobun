@@ -156,12 +156,15 @@ export class BrowserWindow<T> {
       navigationRules: this.navigationRules,
     });
 
+    console.log('setting webviewId: ', webview.id)
+
     this.webviewId = webview.id;   
 
     
   }
 
   get webview() {
+    console.log('getting webview for window: ', this.webviewId)
     // todo (yoav): we don't want this to be undefined, so maybe we should just
     // link directly to the browserview object instead of a getter
     return BrowserView.getById(this.webviewId) as BrowserView<T>;

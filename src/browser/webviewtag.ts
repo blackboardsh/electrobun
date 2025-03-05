@@ -85,25 +85,22 @@ const ConfigureWebviewTags = (
       const url = this.src || this.getAttribute("src");
       const html = this.html || this.getAttribute("html");      
 
-      const webviewId = await this.bunRpc.request.webviewTagInit({
-        method: "webviewTagInit",
-        params: {
-          hostWebviewId: window.__electrobunWebviewId,
-          windowId: window.__electrobunWindowId,
-          renderer: this.renderer,
-          url: url, 
-          html: html,         
-          preload: this.preload || this.getAttribute("preload") || null,
-          partition: this.partition || this.getAttribute("partition") || null,
-          frame: {
-            width: rect.width,
-            height: rect.height,
-            x: rect.x,
-            y: rect.y,
-          },
-          // todo: wire up to a param and a method to update them
-          navigationRules: null,
+      const webviewId = await this.zigRpc.request.webviewTagInit({        
+        hostWebviewId: window.__electrobunWebviewId,
+        windowId: window.__electrobunWindowId,
+        renderer: this.renderer,
+        url: url, 
+        html: html,         
+        preload: this.preload || this.getAttribute("preload") || null,
+        partition: this.partition || this.getAttribute("partition") || null,
+        frame: {
+          width: rect.width,
+          height: rect.height,
+          x: rect.x,
+          y: rect.y,
         },
+        // todo: wire up to a param and a method to update them
+        navigationRules: null,        
       });
 
       this.webviewId = webviewId;
@@ -151,19 +148,13 @@ const ConfigureWebviewTags = (
     }
 
     async canGoBack() {
-      const {
-        payload: { webviewTagCanGoBackResponse },
-      } = await this.zigRpc.request.webviewTagCanGoBack({ id: this.webviewId });
-      return webviewTagCanGoBackResponse;
+      return this.zigRpc.request.webviewTagCanGoBack({ id: this.webviewId });      
     }
 
     async canGoForward() {
-      const {
-        payload: { webviewTagCanGoForwardResponse },
-      } = await this.zigRpc.request.webviewTagCanGoForward({
+      return this.zigRpc.request.webviewTagCanGoForward({
         id: this.webviewId,
-      });
-      return webviewTagCanGoForwardResponse;
+      });      
     }
 
     // propertie setters/getters. keeps them in sync with dom attributes

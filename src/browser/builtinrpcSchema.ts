@@ -8,3 +8,12 @@ export type BuiltinBunToWebviewSchema = {
     };
   };
 };
+
+export type BuiltinWebviewToBunSchema = {
+  requests: {
+    webviewTagInit: {
+      params: {};
+      response: any;
+    }
+  }
+}

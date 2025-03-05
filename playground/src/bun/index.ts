@@ -266,160 +266,160 @@ const win = new BrowserWindow({
 
 // console.log('browsre window created')
 
-// win.setTitle("url browserwindow");
+win.setTitle("url browserwindow");
 
-// setTimeout(async () => {
-//   const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
-//     // script: `document.body.textContent`,
-//     script: `
-//     return new Promise(
-//       resolve => {
-//         setTimeout(() => {
-//           resolve(document.body.textContent + 'hi hi hi')
-//         }, 1000)
-//       }
-//     )
-//     `,
-//   });
+setTimeout(async () => {
+  const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+    // script: `document.body.textContent`,
+    script: `
+    return new Promise(
+      resolve => {
+        setTimeout(() => {
+          resolve(document.body.textContent + 'hi hi hi')
+        }, 1000)
+      }
+    )
+    `,
+  });
 
-//   console.log("evaluateJavascriptWithResponse", result);
-// }, 1000);
+  console.log("evaluateJavascriptWithResponse", result);
+}, 1000);
 
-// const wikiWindow = new BrowserWindow({
-//   title: "my url window",
-//   url: "https://en.wikipedia.org/wiki/Special:Random",
-//   preload: "views://myextension/preload.js",
-//   renderer: 'cef',
-//   frame: {
-//     width: 600,
-//     height: 600,
-//     x: 0,
-//     y: 0,
-//   },
-//   // todo (yoav): can we pass this to the webview's preload code so it doesn't have to be included
-//   // in the user's webview bundle?
-//   // rpc: createRPC<MyExtensionSchema["bun"], MyExtensionSchema["webview"]>({
-//   //     maxRequestTime: 5000,
-//   //     // requestHandler: {}
-//   // })         ,
-//   // todo: this should be in browserview so we can add internal handlers.
-//   rpc: BrowserView.defineRPC<MyExtensionSchema>({
-//     maxRequestTime: 5000,
-//     handlers: {
-//       requests: {},
-//       messages: {},
-//     },
-//   }),
-// });
+const wikiWindow = new BrowserWindow({
+  title: "my url window",
+  url: "https://en.wikipedia.org/wiki/Special:Random",
+  preload: "views://myextension/preload.js",
+  renderer: 'cef',
+  frame: {
+    width: 600,
+    height: 600,
+    x: 0,
+    y: 0,
+  },
+  // todo (yoav): can we pass this to the webview's preload code so it doesn't have to be included
+  // in the user's webview bundle?
+  // rpc: createRPC<MyExtensionSchema["bun"], MyExtensionSchema["webview"]>({
+  //     maxRequestTime: 5000,
+  //     // requestHandler: {}
+  // })         ,
+  // todo: this should be in browserview so we can add internal handlers.
+  rpc: BrowserView.defineRPC<MyExtensionSchema>({
+    maxRequestTime: 5000,
+    handlers: {
+      requests: {},
+      messages: {},
+    },
+  }),
+});
 
-// wikiWindow.on("close", (event) => {
-//   const { id } = event.data;
-//   console.log("wiki window closed", id);
-// });
+wikiWindow.on("close", (event) => {
+  const { id } = event.data;
+  console.log("wiki window closed", id);
+});
 
-// wikiWindow.on("resize", (event) => {
-//   const { id, x, y, width, height } = event.data;
-//   console.log("wiki window resized", id, x, y, width, height);
-// });
+wikiWindow.on("resize", (event) => {
+  const { id, x, y, width, height } = event.data;
+  console.log("wiki window resized", id, x, y, width, height);
+});
 
-// wikiWindow.on("move", (event) => {
-//   const { id, x, y } = event.data;
-//   console.log("wiki window moved", id, x, y);
-// });
+wikiWindow.on("move", (event) => {
+  const { id, x, y } = event.data;
+  console.log("wiki window moved", id, x, y);
+});
 
-// const webviewTagWindow = new BrowserWindow({
-//   title: "webview tag test",
-//   url: "views://webviewtag/index.html",
-//   renderer: "cef",
-//   frame: {
-//     width: 1800,
-//     height: 1200,
-//     x: 1300,
-//     y: 100,
-//   },
-//   titleBarStyle: "hiddenInset",
-// });
+const webviewTagWindow = new BrowserWindow({
+  title: "webview tag test",
+  url: "views://webviewtag/index.html",
+  renderer: "cef",
+  frame: {
+    width: 1800,
+    height: 1200,
+    x: 1300,
+    y: 100,
+  },
+  titleBarStyle: "hiddenInset",
+});
 
-// // TODO: make this a unit test
-// // setTimeout(() => {
-// //   console.log("trashing item");
-// //   Utils.moveToTrash("/Users/yoav/Desktop/600x200_copy.jpg");
-// // }, 2000);
-
-// // TODO: make this a unit test
-// // setTimeout(() => {
-// //   console.log("open in finder");
-// //   Utils.showItemInFolder("/Users/yoav/Desktop/600x200_copy.jpg");
-// // }, 2000);
-
-// // TODO: make this a unit test
-// // will always return an array whether multiple selection is enabled or not
-// // if no file is chosen the array will be [""] ie: index 0 will have an empty string
-// // setTimeout(async () => {
-// //   console.log("open file dialogue");
-// //   const chosenPaths = await Utils.openFileDialog({
-// //     startingFolder: join(homedir(), "Desktop"),
-// //     allowedFileTypes: "*",
-// //     // allowedFileTypes: "png,jpg",
-// //     canChooseFiles: true,
-// //     canChooseDirectory: false,
-// //     allowsMultipleSelection: true,
-// //   });
-// //   console.log("chosen paths", chosenPaths);
-// // }, 2000);
-
-// // wikiWindow.setRPC()
-
-// // todo (yoav): typescript types should resolve for e and e.setResponse
-// Electrobun.events.on("will-navigate", (e) => {
-//   console.log("example global will navigate handler", e.data.detail, e.data.id);
-//   e.response = { allow: true };
-// });
-
-// wikiWindow.webview.on("will-navigate", (e) => {
-//   console.log("example webview will navigate handler", e.data.detail, e.data.id);
-//   if (e.responseWasSet && e.response.allow === false) {
-//     e.response.allow = true;
-//     // e.clearResponse();
-//   }
-// });
-
-// wikiWindow.webview.on("did-navigate", (e) => {
-//   console.log(
-//     "did-navigate event handler in bun for wikiWindow",
-//     e.data.detail
-//   );
-// });
-
-// wikiWindow.setTitle("New title from bun");
-
+// TODO: make this a unit test
 // setTimeout(() => {
-//   win.webview.executeJavascript(
-//     'document.body.innerHTML = "executing random js in win2 webview";'
-//   );
+//   console.log("trashing item");
+//   Utils.moveToTrash("/Users/yoav/Desktop/600x200_copy.jpg");
+// }, 2000);
 
-//   setTimeout(() => {
-//     // asking wikipedia for the title of the article
-//     wikiWindow.webview.rpc?.request
-//       .getTitle()
-//       .then((result) => {
-//         console.log("\n\n\n\n");
-//         console.log(`visiting wikipedia article for: ${result}`);
-//         console.log("\n\n\n\n");
-//       })
-//       .catch((err) => {
-//         console.log("getTitle error", err);
-//       });
+// TODO: make this a unit test
+// setTimeout(() => {
+//   console.log("open in finder");
+//   Utils.showItemInFolder("/Users/yoav/Desktop/600x200_copy.jpg");
+// }, 2000);
 
-//     win.webview.rpc?.request
-//       .doMath({ a: 3, b: 4 })
-//       .then((result) => {
-//         console.log("\n\n\n\n");
-//         console.log(`I asked win1 webview to do math and it said: ${result}`);
-//         console.log("\n\n\n\n");
-//       })
-//       .catch(() => {});
+// TODO: make this a unit test
+// will always return an array whether multiple selection is enabled or not
+// if no file is chosen the array will be [""] ie: index 0 will have an empty string
+// setTimeout(async () => {
+//   console.log("open file dialogue");
+//   const chosenPaths = await Utils.openFileDialog({
+//     startingFolder: join(homedir(), "Desktop"),
+//     allowedFileTypes: "*",
+//     // allowedFileTypes: "png,jpg",
+//     canChooseFiles: true,
+//     canChooseDirectory: false,
+//     allowsMultipleSelection: true,
+//   });
+//   console.log("chosen paths", chosenPaths);
+// }, 2000);
 
-//     win.webview.rpc?.send.logToWebview({ msg: "hi from bun!" });
-//   }, 1000);
-// }, 3000);
+// wikiWindow.setRPC()
+
+// todo (yoav): typescript types should resolve for e and e.setResponse
+Electrobun.events.on("will-navigate", (e) => {
+  console.log("example global will navigate handler", e.data.detail, e.data.id);
+  e.response = { allow: true };
+});
+
+wikiWindow.webview.on("will-navigate", (e) => {
+  console.log("example webview will navigate handler", e.data.detail, e.data.id);
+  if (e.responseWasSet && e.response.allow === false) {
+    e.response.allow = true;
+    // e.clearResponse();
+  }
+});
+
+wikiWindow.webview.on("did-navigate", (e) => {
+  console.log(
+    "did-navigate event handler in bun for wikiWindow",
+    e.data.detail
+  );
+});
+
+wikiWindow.setTitle("New title from bun");
+
+setTimeout(() => {
+  win.webview.executeJavascript(
+    'document.body.innerHTML = "executing random js in win2 webview";'
+  );
+
+  setTimeout(() => {
+    // asking wikipedia for the title of the article
+    wikiWindow.webview.rpc?.request
+      .getTitle()
+      .then((result) => {
+        console.log("\n\n\n\n");
+        console.log(`visiting wikipedia article for: ${result}`);
+        console.log("\n\n\n\n");
+      })
+      .catch((err) => {
+        console.log("getTitle error", err);
+      });
+
+    win.webview.rpc?.request
+      .doMath({ a: 3, b: 4 })
+      .then((result) => {
+        console.log("\n\n\n\n");
+        console.log(`I asked win1 webview to do math and it said: ${result}`);
+        console.log("\n\n\n\n");
+      })
+      .catch(() => {});
+
+    win.webview.rpc?.send.logToWebview({ msg: "hi from bun!" });
+  }, 1000);
+}, 3000);
