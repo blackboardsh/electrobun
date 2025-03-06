@@ -463,7 +463,7 @@ export const zigRPC = {
            // init (like views://myview/index.html) so fast while the Bun FFI to load a url is still executing
            // or something where the JSCallback that this postMessage fires is not available or busy or
            // its memory is allocated to something else or something and the handler receives garbage data in Bun.
-           setImmediate(() => {
+           setTimeout(() => {
               console.log('emitWebviewEvent', eventName, detail)
              if (window.webkit?.messageHandlers?.webviewTagBridge) {
                  window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));

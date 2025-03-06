@@ -593,7 +593,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             return;
         }
         self.mirrorModeEnabled = enable;
-
+        
         if (enable) {        
             CGFloat positionX = subview.frame.origin.x;
             CGFloat positionY = subview.frame.origin.y;            
@@ -609,24 +609,25 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
 
     - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {            
-        if (!self.nsView) {
+        NSView *subview = self.nsView;
+        if (!subview) {
             return;    
         }        
         
         CGFloat adjustedX = floor(frame.origin.x);
         CGFloat adjustedWidth = ceilf(frame.size.width);
         CGFloat adjustedHeight = ceilf(frame.size.height);
-        CGFloat adjustedY = floor(self.nsView.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
-                
+        CGFloat adjustedY = floor(subview.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
+        CGFloat adjustedYZ = floor(frame.origin.y);
+        
         // TODO: move mirrorModeEnabled to abstractView
-        if (self.mirrorModeEnabled) {
-            self.nsView.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);
-            self.nsView.layer.position = CGPointMake(adjustedX, adjustedY);
+        if (self.mirrorModeEnabled) {   
+            subview.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);            
+            subview.layer.position = CGPointMake(adjustedX, adjustedY);            
         } else {
-            self.nsView.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
+            subview.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
         }
 
-        
         CAShapeLayer* (^createMaskLayer)(void) = ^CAShapeLayer* {
             if (!masksJson || strlen(masksJson) == 0) {
                 return nil;
@@ -2408,7 +2409,9 @@ extern "C" void closeNSWindow(NSWindow *window) {
 
 extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {    
     NSRect frame = NSMakeRect(x, y, width, height);
-    [abstractView resize:frame withMasksJSON:masksJson];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView resize:frame withMasksJSON:masksJson];
+    });
 }
 
 extern "C" void stopWindowMove() {

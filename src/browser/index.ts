@@ -185,8 +185,7 @@ class Electroview<T> {
 
   // This will be attached to the global object, zig can rpc reply by executingJavascript
   // of that global reference to the function
-  receiveMessageFromZig(msg: any) {
-    console.log('receiveMessageFromZig!!: ', msg, this.zigRpcHandler)
+  receiveMessageFromZig(msg: any) {    
     if (this.zigRpcHandler) {
       
       this.zigRpcHandler(msg);
