@@ -773,18 +773,21 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         
         NSString *urlString = url.absoluteString;
         
-        if ([urlString isEqualToString:@"internal/index.html"]) {
-            // For internal content, call the native HTML resolver.
-            // Assume getHTMLForWebviewSync returns a null-terminated C string.
-            // contentPtr = getHTMLForWebviewSync(self.webviewId);
-            contentPtr = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
-            if (contentPtr) {
-                contentLength = strlen(contentPtr);
-                data = [NSData dataWithBytes:contentPtr length:contentLength];
-            }
-        } else if ([urlString hasPrefix:@"views://"]) {
+        if ([urlString hasPrefix:@"views://"]) {
             // Remove the "views://" prefix.
             NSString *relativePath = [urlString substringFromIndex:7];
+
+            if ([relativePath isEqualToString:@"internal/index.html"]) {
+                // For internal content, call the native HTML resolver.
+                // Assume getHTMLForWebviewSync returns a null-terminated C string.
+                // contentPtr = getHTMLForWebviewSync(self.webviewId);
+                contentPtr = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
+                if (contentPtr) {
+                    contentLength = strlen(contentPtr);
+                    data = [NSData dataWithBytes:contentPtr length:contentLength];
+                }
+                return;
+            } 
             // Map to the file system:
             // current working directory + "../Resources/app/views" + relativePath
             NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];
@@ -882,7 +885,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     - (void)userContentController:(WKUserContentController *)userContentController
         didReceiveScriptMessage:(WKScriptMessage *)message {
         NSString *body = message.body;
-        self.zigCallback(self.webviewId, body.UTF8String);
+        self.zigCallback(self.webviewId, body.UTF8String);        
     }
 @end
 
@@ -1605,24 +1608,29 @@ public:
         hasResponse_ = false;
         offset_ = 0;
 
-        // Check if this is the internal HTML request.
-        if (urlStr == "internal/index.html") {
-        // Call into the JS utility to get HTML (using our bridging helper)
-        // const char* htmlContent = callJsCallbackFromMainSync(^const char*(){
-        //     return jsUtils.getHTMLForWebviewSync(webviewId_);
-        // });
-        const char* htmlContent = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(webviewId_);});
-        if (htmlContent) {
-            size_t len = strlen(htmlContent);
-            mimeType_ = "text/html";
-            responseData_.assign(htmlContent, htmlContent + len);
-            hasResponse_ = true;
-        }
-        }
-        // Else if the URL starts with "views://"
-        else if (urlStr.find("views://") == 0) {
-        // Remove the prefix (7 characters)
-        std::string relativePath = urlStr.substr(7);
+        
+        // If the URL starts with "views://"
+        if (urlStr.find("views://") == 0) {
+            // Remove the prefix (7 characters)
+            std::string relativePath = urlStr.substr(7);
+
+            // Check if this is the internal HTML request.
+            if (relativePath == "internal/index.html") {
+                // Call into the JS utility to get HTML (using our bridging helper)
+                // const char* htmlContent = callJsCallbackFromMainSync(^const char*(){
+                //     return jsUtils.getHTMLForWebviewSync(webviewId_);
+                // });
+                const char* htmlContent = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(webviewId_);});
+                if (htmlContent) {
+                    size_t len = strlen(htmlContent);
+                    mimeType_ = "text/html";
+                    responseData_.assign(htmlContent, htmlContent + len);
+                    hasResponse_ = true;
+
+                }
+                
+                return hasResponse_;
+            }
 
         // Build the file path using Objective-C APIs.
         NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];

@@ -459,12 +459,18 @@ export const zigRPC = {
         })();
         ` + `
          function emitWebviewEvent (eventName, detail) {
+           // Note: There appears to be some race bug with Bun FFI where sites can 
+           // init (like views://myview/index.html) so fast while the Bun FFI to load a url is still executing
+           // or something where the JSCallback that this postMessage fires is not available or busy or
+           // its memory is allocated to something else or something and the handler receives garbage data in Bun.
+           setImmediate(() => {
               console.log('emitWebviewEvent', eventName, detail)
              if (window.webkit?.messageHandlers?.webviewTagBridge) {
                  window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
              } else {
                  window.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
              }
+          });
          };                 
         
          window.addEventListener('load', function(event) {
