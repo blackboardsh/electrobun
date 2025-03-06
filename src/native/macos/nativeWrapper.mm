@@ -2118,7 +2118,9 @@ extern "C" void killApp() {
 }
 
 extern "C" void shutdownApplication() {
-    CefShutdown();
+    dispatch_async(dispatch_get_main_queue(), ^{   
+        CefShutdown();
+    });
 }
 
 
@@ -2144,11 +2146,6 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
     __block AbstractView *impl = nil;
 
     dispatch_sync(dispatch_get_main_queue(), ^{
-
-        
-
-        
-
         Class ImplClass = (strcmp(renderer, "cef") == 0 && useCEF) ? [CEFWebViewImpl class] : [WKWebViewImpl class];    
 
         impl = [[ImplClass alloc] initWithWebviewId:webviewId
@@ -2167,7 +2164,6 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
     });
 
     return impl;
-    
 }
 
 extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView,
@@ -2359,37 +2355,34 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   WindowResizeHandler zigResizeHandler
   ) {
 
-     NSRect frame = NSMakeRect(x, y, width, height);
+    NSRect frame = NSMakeRect(x, y, width, height);
   
-  // Create the params struct
-  createNSWindowWithFrameAndStyleParams config = {
-    .frame = frame,
-    .styleMask = styleMask,
-    .titleBarStyle = titleBarStyle
-  };
+    // Create the params struct
+    createNSWindowWithFrameAndStyleParams config = {
+        .frame = frame,
+        .styleMask = styleMask,
+        .titleBarStyle = titleBarStyle
+    };
 
-  // Use a dispatch semaphore to wait for the window creation to complete
-  
-  
-  __block NSWindow* window = nil;
-  dispatch_sync(dispatch_get_main_queue(), ^{
-    window = createNSWindowWithFrameAndStyle(
-      windowId,
-      config,
-      zigCloseHandler,
-      zigMoveHandler,
-      zigResizeHandler
-    );
-    
-    
-  });
-  
-  return window;        
+    // Use a dispatch semaphore to wait for the window creation to complete
+
+
+    __block NSWindow* window = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        window = createNSWindowWithFrameAndStyle(
+            windowId,
+            config,
+            zigCloseHandler,
+            zigMoveHandler,
+            zigResizeHandler
+        );
+    });
+
+    return window;        
 }
 
-
 extern "C" void makeNSWindowKeyAndOrderFront(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
         [window makeKeyAndOrderFront:nil];
     });
 }
@@ -2403,7 +2396,9 @@ extern "C" void setNSWindowTitle(NSWindow *window, const char *title) {
 }
 
 extern "C" void closeNSWindow(NSWindow *window) {
-    [window close];
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [window close];
+    });
 }
 
 
