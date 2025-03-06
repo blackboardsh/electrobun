@@ -608,16 +608,16 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
 
-    - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {    
-        if (!self.nsView)
+    - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {            
+        if (!self.nsView) {
             return;    
+        }        
         
         CGFloat adjustedX = floor(frame.origin.x);
         CGFloat adjustedWidth = ceilf(frame.size.width);
         CGFloat adjustedHeight = ceilf(frame.size.height);
         CGFloat adjustedY = floor(self.nsView.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
-        
-
+                
         // TODO: move mirrorModeEnabled to abstractView
         if (self.mirrorModeEnabled) {
             self.nsView.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);
@@ -625,24 +625,22 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         } else {
             self.nsView.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
         }
+
         
         CAShapeLayer* (^createMaskLayer)(void) = ^CAShapeLayer* {
             if (!masksJson || strlen(masksJson) == 0) {
                 return nil;
             }
-
             NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
             NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
             if (!jsonData) {
                 return nil;
             }
-            
             NSError *error = nil;
             NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
             if (!rectsArray || error) {
                 return nil;
             }
-
             CGFloat heightToAdjust = self.nsView.layer.geometryFlipped ? 0 : adjustedHeight;
             
             NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray, heightToAdjust);
@@ -651,7 +649,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             maskLayer.frame = self.nsView.layer.bounds;
             CGMutablePathRef path = CGPathCreateMutable();
             CGPathAddRect(path, NULL, maskLayer.bounds);
-
             for (NSValue *rectValue in processedRects) {
                 NSRect rect = [rectValue rectValue];
                 CGPathAddRect(path, NULL, rect);
@@ -659,16 +656,13 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             maskLayer.fillRule = kCAFillRuleEvenOdd;
             maskLayer.path = path;
             CGPathRelease(path);
-            
             return maskLayer;
         };
 
         self.nsView.layer.mask = createMaskLayer();
-        
         NSPoint currentMousePosition = [self.nsView.window mouseLocationOutsideOfEventStream];
         ContainerView *containerView = (ContainerView *)self.nsView.superview;    
         [containerView updateActiveWebviewForMousePosition:currentMousePosition];
-            
     }
 @end
 
@@ -2394,9 +2388,8 @@ extern "C" void closeNSWindow(NSWindow *window) {
 
 
 extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {    
-    NSRect frame = NSMakeRect(x, y, width, height);    
-    // TODO XX: is strdup needed here? still can crash
-    [abstractView resize:frame withMasksJSON:strdup(masksJson)];
+    NSRect frame = NSMakeRect(x, y, width, height);
+    [abstractView resize:frame withMasksJSON:masksJson];
 }
 
 extern "C" void stopWindowMove() {

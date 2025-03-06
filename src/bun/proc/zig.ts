@@ -752,23 +752,6 @@ const windowResizeCallback = new JSCallback(
   }
 );
 
-let responses = {};
-// globalThis.nextResponseId = 0;
-
-const getResponseData = new JSCallback((responseId) => {
-  return responses[responseId].buffer;
-}, {
-  args: [FFIType.u32],
-  returns: FFIType.ptr
-})
-
-const getResponseLength = new JSCallback((responseId) => {
-  return responses[responseId].byteLength;
-}, {
-  args: [FFIType.u32],
-  returns: FFIType.ptr
-})
-
 const getMimeType = new JSCallback((filePath) => {
   const _filePath = new CString(filePath).toString();
   const mimeType = Bun.file(_filePath).type;// || "application/octet-stream";
@@ -854,6 +837,8 @@ const webviewEventHandler = new JSCallback((id, _eventName, _detail) => {
   threadsafe: true
 });
 
+
+
 const bunBridgePostmessageHandler = new JSCallback((id, msg) => {    
   try {
     const msgStr = new CString(msg);
@@ -861,7 +846,7 @@ const bunBridgePostmessageHandler = new JSCallback((id, msg) => {
     if (!msgStr.length) {
       return;
     }
-    const msgJson = JSON.parse(msgStr);
+    const msgJson = JSON.parse(msgStr);    
     
     const webview = BrowserView.getById(id);
     
@@ -958,59 +943,60 @@ type WebviewTagHandlers = RPCSchema<{
   };
 }>;
 
-// let internalRPCHandler;
-// export const internalRPC = BrowserView.defineRPC<WebviewTagHandlers, ZigWebviewHandlers>({
-//   transport: {
-//     send(message) {
 
-//     },
-//     registerHandler(handler) {
-//       internalRPCHandler = handler;
-//     }
-//   }
-// })
-
-const webviewTagBridgeHandler = new JSCallback((id, msg) => {
+const webviewTagBridgeHandler = new JSCallback((id, msg) => {  
   try {
-    const msgStr = new CString(msg);
-    
-    console.log('MSG LENGTH: ', msgStr.length)
-    if (!msgStr.length) {
+    const batchMessage = new CString(msg);
+
+    const jsonBatch = JSON.parse(batchMessage);
+
+    if (jsonBatch.id === 'webviewEvent'){
+      // Some WebviewEvents from inside the webview are routed through here
+      console.error('WEBVIEW EVENT SENT TO WEBVIEWTAGBRIDGEHANDLER')
       return;
     }
-    const msgJson = JSON.parse(msgStr);    
     
-    if (msgJson.type === 'message') {      
-      const handler = internalRpcHandlers.message[msgJson.id];
-      handler(msgJson.payload);
-    } else if(msgJson.type === 'request') {      
-      const hostWebview = BrowserView.getById(msgJson.hostWebviewId);
-      // const targetWebview = BrowserView.getById(msgJson.params.params.hostWebviewId);
-      const handler = internalRpcHandlers.request[msgJson.method];
-      
-      
-      const payload = handler(msgJson.params);
-      
 
-      const resultObj = {
-        type: 'response',
-        id: msgJson.id,
-        success: true,
-        payload,
+    jsonBatch.forEach((msgStr) => {      
+      if (!msgStr.length) {
+        console.error('WEBVIEW EVENT SENT TO WEBVIEW TAG BRIDGE HANDLER?', )
+        return;
       }
+      const msgJson = JSON.parse(msgStr);    
       
-
-      if (!hostWebview) {        
-        return 
-      }
-            
-      hostWebview.sendMessageFromZigViaExecute(resultObj);          
-    }
+      if (msgJson.type === 'message') {      
+        const handler = internalRpcHandlers.message[msgJson.id];
+        handler(msgJson.payload);
+      } else if(msgJson.type === 'request') {      
+        const hostWebview = BrowserView.getById(msgJson.hostWebviewId);
+        // const targetWebview = BrowserView.getById(msgJson.params.params.hostWebviewId);
+        const handler = internalRpcHandlers.request[msgJson.method];
         
-  } catch (err) {
-    console.error('error sending message to sendMessageFromZigViaExecute: ', err)
-    console.log('msgStr: ', id, new CString(msg));
-  }
+        
+        const payload = handler(msgJson.params);
+        
+
+        const resultObj = {
+          type: 'response',
+          id: msgJson.id,
+          success: true,
+          payload,
+        }
+        
+
+        if (!hostWebview) {        
+          return 
+        }
+              
+        hostWebview.sendMessageFromZigViaExecute(resultObj);          
+      }
+    });
+          
+    } catch (err) {
+      console.error('error sending message to sendMessageFromZigViaExecute: ', err)
+      // console.log('msgStr: ', id, new CString(msg));
+    }
+    
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,

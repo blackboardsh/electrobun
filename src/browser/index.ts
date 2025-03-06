@@ -195,17 +195,66 @@ class Electroview<T> {
 
   // TODO: implement proper rpc-anywhere style rpc here
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
+  isProcessingQueue = false;
+  sendToZigQueue = [];
   sendToZig(message: {}) {   
-    console.log('sendToZig: ', message) 
+    try {    
+      const strMessage = JSON.stringify(message);    
+      this.sendToZigQueue.push(strMessage);    
+
+      this.processQueue();
+    } catch (err) {
+      console.error('failed to send to zig');
+    }
+  }
+
+  processQueue() {
+    const that = this;
+    if (that.isProcessingQueue) {
+
+      // This timeout is just to schedule a retry "later"
+      setTimeout(() => {
+        that.processQueue();
+      });
+      return;
+    }
+
+    if (that.sendToZigQueue.length === 0) {
+      // that.isProcessingQueue = false;
+      return;  
+    }
+
+    that.isProcessingQueue = true;
+    
+    const batchMessage = JSON.stringify(that.sendToZigQueue);
+    that.sendToZigQueue = [];
+
     if (window.webkit?.messageHandlers?.webviewTagBridge) {
       window.webkit.messageHandlers.webviewTagBridge.postMessage(
-        JSON.stringify(message)
+        batchMessage
       );
     } else {
       window.webviewTagBridge.postMessage(
-        JSON.stringify(message)
+        batchMessage
       );
     }
+
+    // Note: The postmessage handler is routed via native code to a Bun JSCallback.
+    // Currently JSCallbacks are somewhat experimental and were designed for a single invocation
+    // But we have tons of resize events in this webview's thread that are sent, maybe to main thread
+    // and then the JSCallback is invoked on the Bun worker thread. JSCallbacks have a little virtual memory 
+    // or something that can segfault when called from a thread while the worker(bun) thread is still executing
+    // a previous call. The segfaults were really only triggered with multiple <electrobun-webview>s on a page
+    // all trying to resize at the same time.
+    // 
+    // To work around this we batch high frequency postMessage calls here with a timeout. While not deterministic hopefully Bun
+    // fixes the underlying FFI/JSCallback issue before we have to invest time in a more deterministic solution.
+    // 
+    // On my m4 max a 1ms delay is not long enough to let it complete and can segfault, a 2ms delay is long enough
+    // This may be different on slower hardware but not clear if it would need more or less time so leaving this for now
+    setTimeout(() => {
+      that.isProcessingQueue = false;
+    }, 2);
   }
 
   initElectrobunListeners() {
@@ -239,22 +288,13 @@ class Electroview<T> {
       },
     };
   }
-
-  // todo: just use with sendToZig();
+  
   createZigTransport(): RPCTransport {
-    const that = this;
+    const that = this;    
     return {
-      send(message) {     
+      send(message) {                  
         message.hostWebviewId = WEBVIEW_ID;        
-        if (window.webkit?.messageHandlers?.webviewTagBridge) {
-          window.webkit.messageHandlers.webviewTagBridge.postMessage(
-            JSON.stringify(message)
-          );
-        } else {
-          window.webviewTagBridge.postMessage(
-            JSON.stringify(message)
-          );
-        }
+        that.sendToZig(message);      
       },
       registerHandler(handler) {
         // TODO XX: rename zig to electrobun or internal or something. consider merging with bunbridge rpc
@@ -264,8 +304,7 @@ class Electroview<T> {
     };
   }
 
-  async bunBridge(msg: string) {
-    console.log('message: ', msg)
+  async bunBridge(msg: string) {    
     if (this.bunSocket?.readyState === WebSocket.OPEN) {
       try {
         const { encryptedData, iv, tag } = await window.__electrobun_encrypt(

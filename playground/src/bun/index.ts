@@ -213,7 +213,7 @@ setTimeout(() => {
     { role: "delete" },
     { role: "selectAll" },
   ]);
-}, 3000);
+}, 30000);
 
 Electrobun.events.on("context-menu-clicked", (e) => {
   console.log("context event", e.data.action);
