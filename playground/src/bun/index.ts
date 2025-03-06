@@ -17,22 +17,6 @@ import { homedir } from "os";
 import { join } from "path";
 
 
-
-const testWin = new BrowserWindow({
-  title: "my url window",
-  // url: "views://mainview/index.html",
-  url: 'https://wikipedia.org',
-  frame: {
-    width: 1800,
-    height: 600,
-    x: 2000,
-    y: 2000,
-  },
-  // rpc: myWebviewRPC,
-  
-});
-
-
 // Electrobun.Updater.getLocalVersion();
 
 // Note: the Canary Playground app will always try update to the latest version

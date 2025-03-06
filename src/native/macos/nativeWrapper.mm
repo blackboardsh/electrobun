@@ -244,6 +244,28 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
     }
 }
 
+NSData* readViewsFile(const char* viewsUrl) {
+    if (!viewsUrl) return nil;
+    
+    NSString *urlString = [NSString stringWithUTF8String:viewsUrl];
+    
+    // Check if it's a views:// URL
+    if (![urlString hasPrefix:@"views://"]) {
+        return nil;
+    }
+    
+    // Remove the "views://" prefix
+    NSString *relativePath = [urlString substringFromIndex:8]; // "views://" is 8 chars    
+    
+    // Get the views directory
+    NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];
+    NSString *viewsDir = [cwd stringByAppendingPathComponent:@"../Resources/app/views"];
+    NSString *filePath = [viewsDir stringByAppendingPathComponent:relativePath];    
+    
+    // Read the file
+    return [NSData dataWithContentsOfFile:filePath];
+}
+
 
 // Convenience functions for manual memory management
 void retainObjCObject(id objcObject) {
@@ -789,19 +811,13 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 }
                 return;
             } 
-            // Map to the file system:
-            // current working directory + "../Resources/app/views" + relativePath
-            NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];
-            NSString *viewsDir = [cwd stringByAppendingPathComponent:@"../Resources/app/views"];
-            NSString *filePath = [viewsDir stringByAppendingPathComponent:relativePath];
+
+            data = readViewsFile(urlString.UTF8String);
             
-            data = [NSData dataWithContentsOfFile:filePath];
             if (data) {
                 contentPtr = (const char *)data.bytes;
                 contentLength = data.length;
-            } else {
-                NSLog(@"File not found at path: %@", filePath);
-            }
+            } 
         } else {
             NSLog(@"Unknown URL format: %@", urlString);
         }
@@ -1006,7 +1022,19 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 self.nsView = self.webView;            
 
                 [self addPreloadScriptToWebView:electrobunPreloadScript];
-                [self updateCustomPreloadScript:customPreloadScript];
+                
+                // Note: For custom preload scripts we support either inline js or a views:// style
+                // url to a js file in the bundled views folder.
+                if (strncmp(customPreloadScript, "views://", 8) == 0) {                    
+                    NSData *scriptData = readViewsFile(customPreloadScript);
+                    if (scriptData) {                        
+                        NSString *scriptString = [[NSString alloc] initWithData:scriptData encoding:NSUTF8StringEncoding];                        
+                        const char *scriptCString = [scriptString UTF8String];
+                        [self updateCustomPreloadScript:scriptCString];
+                    }
+                } else {
+                    [self updateCustomPreloadScript:customPreloadScript];
+                }
 
                 if (url) {                                   
                     [self loadURL:url];
@@ -1614,6 +1642,7 @@ public:
   bool Open(CefRefPtr<CefRequest> request,
             bool& handle_request,
             CefRefPtr<CefCallback> callback) override {
+
         std::string urlStr = request->GetURL().ToString();
         handle_request = true;
         responseData_.clear();
@@ -1643,34 +1672,22 @@ public:
                 
                 return hasResponse_;
             }
-
-        // Build the file path using Objective-C APIs.
-        NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];
-        NSString *viewsDir = [cwd stringByAppendingPathComponent:@"../Resources/app/views"];
-        NSString *filePath = [viewsDir stringByAppendingPathComponent:
-                                [NSString stringWithUTF8String:relativePath.c_str()]];
-
-        NSData *data = [NSData dataWithContentsOfFile:filePath];
-        if (data) {
-            // Use jsUtils.getMimeType to get the MIME type for this file.
-            // const char* mimeTypePtr = callJsCallbackFromMainSync(^const char*(){
-            //     return jsUtils.getMimeType(filePath.UTF8String);
-            // });
-            const char* mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(filePath.UTF8String);});
-            if (mimeTypePtr) {
-            mimeType_ = std::string(mimeTypePtr);
-            } else {
-            mimeType_ = "text/html"; // Fallback
-            }
-            responseData_.assign((const char*)data.bytes,
-                                (const char*)data.bytes + data.length);
-            hasResponse_ = true;
-        } else {
-            NSLog(@"File not found at path: %@", filePath);
-        }
+      
+            NSData *data = readViewsFile(urlStr.c_str());
+            if (data) {   
+                const char* mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(urlStr.c_str());});
+                if (mimeTypePtr) {
+                mimeType_ = std::string(mimeTypePtr);
+                } else {
+                mimeType_ = "text/html"; // Fallback
+                }
+                responseData_.assign((const char*)data.bytes,
+                                    (const char*)data.bytes + data.length);
+                hasResponse_ = true;
+            } 
         }
         else {
-        NSLog(@"Unknown URL format: %s", urlStr.c_str());
+         NSLog(@"Unknown URL format: %s", urlStr.c_str());
         }
 
         return hasResponse_;
@@ -2400,7 +2417,6 @@ extern "C" void closeNSWindow(NSWindow *window) {
         [window close];
     });
 }
-
 
 extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {    
     NSRect frame = NSMakeRect(x, y, width, height);
