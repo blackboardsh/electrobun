@@ -391,6 +391,13 @@ wikiWindow.webview.on("did-navigate", (e) => {
   );
 });
 
+wikiWindow.webview.on("dom-ready", (e) => {
+  console.log(
+    "dom-ready event handler in bun for wikiWindow",
+    e.data.detail
+  );
+});
+
 wikiWindow.setTitle("New title from bun");
 
 setTimeout(() => {

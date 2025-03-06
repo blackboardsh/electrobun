@@ -517,7 +517,7 @@ export const zigRPC = {
           autoResize,
           toCString(partition || 'persist:default'),
           webviewDecideNavigation,
-          webviewEventHandler,
+          webviewEventJSCallback,
           bunBridgePostmessageHandler,
           webviewTagBridgeHandler,
           toCString(electrobunPreload),
@@ -790,10 +790,7 @@ const webviewDecideNavigation = new JSCallback((webviewId, url) => {
 });
 
 
-const webviewEventHandler = new JSCallback((id, _eventName, _detail) => {  
-  const eventName = new CString(_eventName);
-  const detail = new CString(_detail);
-
+const webviewEventHandler = (id, eventName, detail) => {
   const webview = BrowserView.getById(id);
   if (webview.hostWebviewId) {
     // This is a webviewtag so we should send the event into the parent as well
@@ -829,8 +826,13 @@ const webviewEventHandler = new JSCallback((id, _eventName, _detail) => {
   // global event
   result = electrobunEventEmitter.emitEvent(event);      
   result = electrobunEventEmitter.emitEvent(event, id);
+}
 
-    
+const webviewEventJSCallback = new JSCallback((id, _eventName, _detail) => {  
+  const eventName = new CString(_eventName);
+  const detail = new CString(_detail);
+
+  webviewEventHandler(id, eventName, detail);    
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,
@@ -951,8 +953,10 @@ const webviewTagBridgeHandler = new JSCallback((id, msg) => {
     const jsonBatch = JSON.parse(batchMessage);
 
     if (jsonBatch.id === 'webviewEvent'){
-      // Some WebviewEvents from inside the webview are routed through here
-      console.error('WEBVIEW EVENT SENT TO WEBVIEWTAGBRIDGEHANDLER')
+      // Note: Some WebviewEvents from inside the webview are routed through here      
+      // Others call the JSCallback directly from native code.
+      const {payload} = jsonBatch;
+      webviewEventHandler(payload.id, payload.eventName, payload.detail);
       return;
     }
     
