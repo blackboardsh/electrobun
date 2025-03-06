@@ -952,7 +952,7 @@ type WebviewTagHandlers = RPCSchema<{
 }>;
 
 
-const webviewTagBridgeHandler = new JSCallback((id, msg) => {  
+const webviewTagBridgeHandler = new JSCallback((id, msg) => {    
   try {
     const batchMessage = new CString(msg);
 
@@ -1003,10 +1003,9 @@ const webviewTagBridgeHandler = new JSCallback((id, msg) => {
     });
           
     } catch (err) {
-      console.error('error sending message to sendMessageFromZigViaExecute: ', err)
+      console.error('error in webviewTagBridgeHandler: ', err)
       // console.log('msgStr: ', id, new CString(msg));
-    }
-    
+    }        
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,

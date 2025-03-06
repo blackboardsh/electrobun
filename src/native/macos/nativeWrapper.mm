@@ -885,7 +885,18 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     - (void)userContentController:(WKUserContentController *)userContentController
         didReceiveScriptMessage:(WKScriptMessage *)message {
         NSString *body = message.body;
-        self.zigCallback(self.webviewId, body.UTF8String);        
+        const char *bodyCStr = strdup(body.UTF8String);
+        self.zigCallback(self.webviewId, bodyCStr); 
+
+        // Note: threadsafe JSCallbacks are invoked on the js worker thread, When called frequently they
+        // can build up and take longer. Meanwhile objc GC auto free's the message body and the callback
+        // ends up getting garbage.
+
+        // So we duplicate it and give it plenty of time to execute (1 second delay vs. 0.1ms execution per invocation)
+        // before freeing the memory
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            free((void*)bodyCStr);
+        });              
     }
 @end
 
