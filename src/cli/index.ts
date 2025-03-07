@@ -382,11 +382,6 @@ if (commandArg === "init") {
     mkdirSync(destFolder, { recursive: true });
   }
 
-  cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {
-    recursive: true,
-    dereference: true,
-  });
-
   // copy native wrapper dynamic library next to zig native binary
   if (OS === 'macos') {
   const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;

@@ -69,8 +69,7 @@ async function build() {
     await BunInstall();
 
     await buildNative(); // zig depends on this for linking symbols
-    await Promise.all([
-        // buildZig(),
+    await Promise.all([        
         buildTRDiff(),
         buildSelfExtractor(),
         buildLauncher(),
@@ -89,8 +88,7 @@ async function copyToDist() {
     await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
     await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
     await $`cp src/bsdiff/zig-out/bin/bsdiff${binExt} dist/bsdiff${binExt}`;
-    await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;
-    await $`cp src/zig/zig-out/bin/webview${binExt} dist/webview${binExt}`;
+    await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;    
     // Electrobun cli and npm launcher
     await $`cp src/npmbin/index.js dist/npmbin.js`;
     await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;    
@@ -106,12 +104,12 @@ async function copyToDist() {
     }
     // Native code and frameworks
     if (OS === 'macos') {
-        await $`cp -R src/zig/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;
+        await $`cp -R src/native/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;
         await $`cp -R vendors/cef/Release/Chromium\ Embedded\ Framework.framework dist/Chromium\ Embedded\ Framework.framework`;
         // CEF's helper process binary
-        await $`cp -R src/zig/build/process_helper dist/process_helper`;
+        await $`cp -R src/native/build/process_helper dist/process_helper`;
     } else if (OS === 'win') {
-        await $`cp src/zig/build/nativeWrapper.dll dist/nativeWrapper.dll`;
+        await $`cp src/native/build/nativeWrapper.dll dist/nativeWrapper.dll`;
     } else if (OS === 'linux') {
 
     }
@@ -203,19 +201,26 @@ async function vendorZig() {
 }
 
 async function vendorCEF() {
-    if (existsSync(join(process.cwd(), 'vendors', 'cef'))) {
-        return;
+    // Download minimal cef binaries
+    const CEF_VERSION = `126.2.10+g61241e4`;
+    const CHROMIUM_VERSION = `126.0.6478.127`;
+    if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
+        await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_macosarm64_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;                                                                                                                                        
     }
-
+    
+    // Build process_helper binary
     if (OS === 'macos') {
-        // download
-        await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH=\"arm64\" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
-        // build
-        await $`clang++ -mmacosx-version-min=10.13 -std=c++17 -ObjC++ -fobjc-arc -I./vendors/cef -c src/objc/cef_process_helper_mac.cc -o src/objc/build/process_helper_mac.o`;
-        // link
-        await $`clang++ -mmacosx-version-min=10.13 -std=c++17 src/objc/build/process_helper_mac.o -o src/zig/build/process_helper -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -framework \"Chromium Embedded Framework\" -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++`;
-        // fix internal path
-        await $`install_name_tool -change \"@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework\" \"@executable_path/../../../../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework\" src/zig/build/process_helper`;
+        if (!existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper'))) {                
+            await $`mkdir -p src/native/build`;
+            // build
+            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH="arm64" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
+            // build
+            await $`clang++ -mmacosx-version-min=10.13 -std=c++17 -ObjC++ -fobjc-arc -I./vendors/cef -c src/native/macos/cef_process_helper_mac.cc -o src/native/build/process_helper_mac.o`;
+            // link
+            await $`clang++ -mmacosx-version-min=10.13 -std=c++17 src/native/build/process_helper_mac.o -o src/native/build/process_helper -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -framework "Chromium Embedded Framework" -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++`;
+            // fix internal path
+            await $`install_name_tool -change "@executable_path/../Frameworks/Chromium\ Embedded\ Framework.framework/Chromium\ Embedded\ Framework" "@executable_path/../../../../Frameworks/Chromium\ Embedded\ Framework.framework/Chromium\ Embedded\ Framework" src/native/build/process_helper`;
+        }
     } else if (OS === 'win') {
 
     }
@@ -257,21 +262,12 @@ async function buildTRDiff() {
 async function buildNative() {
     if (OS === 'macos') {
         await $`mkdir -p src/native/macos/build && clang++ -c src/native/macos/nativeWrapper.mm -o src/native/macos/build/nativeWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef -std=c++17`;
-        await $`mkdir -p src/zig/build && clang++ -o src/zig/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib`;
+        await $`mkdir -p src/native/build && clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib`;
     } else if (OS === 'win') {
         await $`mkdir -p src/native/win/build && cl /c /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
-        await $`link /DLL /OUT:src/zig/build/nativeWrapper.dll /IMPLIB:src/zig/build/nativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
+        await $`link /DLL /OUT:src/native/build/nativeWrapper.dll /IMPLIB:src/native/build/nativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
 
-    }
-}
-
-async function buildZig() {
-    
-    if (CHANNEL === 'debug') {
-        await $`cd src/zig && ../../vendors/zig/${zigBinary} build`;
-    } else if (CHANNEL === 'release') {
-        await $`cd src/zig && ../../vendors/zig/${zigBinary} build -Doptimize=ReleaseFast`;
     }
 }
 
