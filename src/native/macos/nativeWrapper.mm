@@ -1285,8 +1285,8 @@ public:
         // Note: This stops CEF (Chromium) trying to access Chromium's storage for system-level things
         // like credential management. Using a mock keychain just means it doesn't use keychain
         // for credential storage. Other security features like cookies, https, etc. are unaffected.                
-        command_line->AppendSwitch("use-mock-keychain");        
-        
+        command_line->AppendSwitch("use-mock-keychain");       
+                
     }
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {        
         registrar->AddCustomScheme("views", 
@@ -1306,7 +1306,10 @@ public:
     }
     virtual void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {        
         std::vector<CefString> args;
-        command_line->GetArguments(args);        
+        command_line->GetArguments(args); 
+
+        // Log the CEF process_helper path
+        // NSLog(@"CEF helper process path: %s", command_line->GetProgram().ToString().c_str());            
     }
     void OnContextInitialized() override {
         // Register the scheme handler factory after context is initialized
@@ -1328,6 +1331,142 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ElectrobunApp);
 };
 
+struct PreloadScript {
+    std::string code;
+    bool mainFrameOnly;
+};
+
+class ElectrobunResponseFilter : public CefResponseFilter {
+private:
+    std::string buffer_;
+    bool has_head_;
+    bool injected_;
+    PreloadScript electrobun_script_;
+    PreloadScript custom_script_;
+
+public:
+    ElectrobunResponseFilter(const PreloadScript& electrobunScript, 
+                           const PreloadScript& customScript)
+        : has_head_(false), 
+          injected_(false),
+          electrobun_script_(electrobunScript),
+          custom_script_(customScript) {}
+    
+    virtual FilterStatus Filter(void* data_in,
+                               size_t data_in_size,
+                               size_t& data_in_read,
+                               void* data_out,
+                               size_t data_out_size,
+                               size_t& data_out_written) override {
+
+        // Check if we have scripts to inject
+        if (electrobun_script_.code.empty() && custom_script_.code.empty()) {
+            // Nothing to inject, just copy the data
+            size_t copy_size = std::min(data_in_size, data_out_size);
+            memcpy(data_out, data_in, copy_size);
+            data_in_read = copy_size;
+            data_out_written = copy_size;
+            return RESPONSE_FILTER_DONE;
+        }
+
+        
+        // Append the new data to our buffer
+        if (data_in_size > 0) {
+            buffer_.append(static_cast<char*>(data_in), data_in_size);
+            data_in_read = data_in_size;
+        } else {
+            data_in_read = 0;
+        }
+        
+        // Check if we've already injected our scripts
+        if (injected_) {
+            // Just copy data from our buffer to the output
+            size_t copy_size = std::min(buffer_.size(), data_out_size);
+            memcpy(data_out, buffer_.c_str(), copy_size);
+            buffer_.erase(0, copy_size);
+            data_out_written = copy_size;
+            
+            return buffer_.empty() ? RESPONSE_FILTER_DONE : RESPONSE_FILTER_NEED_MORE_DATA;
+        }
+        
+        // Look for <head> tag if we haven't found it yet
+        if (!has_head_) {
+            size_t head_pos = buffer_.find("<head>");
+            if (head_pos != std::string::npos) {
+                has_head_ = true;
+                
+                // Inject our scripts after the <head> tag
+                std::string scripts = "<script>\n";
+                scripts += electrobun_script_.code;
+                scripts += "\n</script>\n";
+                
+                if (!custom_script_.code.empty() && !custom_script_.mainFrameOnly) {
+                    scripts += "<script>\n";
+                    scripts += custom_script_.code;
+                    scripts += "\n</script>\n";
+                }
+                
+                buffer_.insert(head_pos + 6, scripts);  // Insert after <head>
+                injected_ = true;
+            }
+        }
+        
+        // If we still haven't found <head> but the buffer is getting large,
+        // we should check for <html> or just inject at the beginning
+        if (!has_head_ && buffer_.size() > 1024) {
+            size_t html_pos = buffer_.find("<html>");
+            if (html_pos != std::string::npos) {
+                // Inject after <html> tag
+                std::string scripts = "<head>\n<script>\n";
+                scripts += electrobun_script_.code;
+                scripts += "\n</script>\n";
+                
+                if (!custom_script_.code.empty() && !custom_script_.mainFrameOnly) {
+                    scripts += "<script>\n";
+                    scripts += custom_script_.code;
+                    scripts += "\n</script>\n";
+                }
+                
+                scripts += "</head>\n";
+                
+                buffer_.insert(html_pos + 6, scripts);  // Insert after <html>
+            } else {
+                // As a last resort, inject at the beginning
+                std::string scripts = "<script>\n";
+                scripts += electrobun_script_.code;
+                scripts += "\n</script>\n";
+                
+                if (!custom_script_.code.empty() && !custom_script_.mainFrameOnly) {
+                    scripts += "<script>\n";
+                    scripts += custom_script_.code;
+                    scripts += "\n</script>\n";
+                }
+                
+                buffer_.insert(0, scripts);
+            }
+            
+            injected_ = true;
+        }
+
+        // Copy data from our buffer to the output
+        size_t copy_size = std::min(buffer_.size(), data_out_size);
+        memcpy(data_out, buffer_.c_str(), copy_size);
+        buffer_.erase(0, copy_size);
+        data_out_written = copy_size;
+        
+        return buffer_.empty() ? RESPONSE_FILTER_DONE : RESPONSE_FILTER_NEED_MORE_DATA;
+    }
+
+    virtual bool InitFilter() override {
+        // Initialize any resources needed for filtering
+        buffer_.clear();
+        has_head_ = false;
+        injected_ = false;
+        return true;
+    }
+    
+    IMPLEMENT_REFCOUNTING(ElectrobunResponseFilter);
+};
 
 CefRefPtr<ElectrobunApp> g_app;
 
@@ -1336,21 +1475,51 @@ class ElectrobunClient : public CefClient,
                         public CefLoadHandler,
                         public CefRequestHandler,
                         public CefContextMenuHandler,
-                        public CefKeyboardHandler {
+                        public CefKeyboardHandler,
+                        public CefResourceRequestHandler  {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
     HandlePostMessage webview_tag_handler_;
     WebviewEventHandler webview_event_handler_;
     DecideNavigationCallback navigation_callback_; 
-    struct PreloadScript {
-        std::string code;
-        bool mainFrameOnly;
-    };
+    
     
     PreloadScript electrobun_script_;
     PreloadScript custom_script_; 
     static const int MENU_ID_DEV_TOOLS = 1; 
+
+     // Helper function to escape JavaScript code for embedding in a string
+    std::string EscapeJavaScriptString(const std::string& input) {
+        std::string result;
+        result.reserve(input.size() * 2);  // Reserve space to avoid multiple allocations
+        
+        for (char c : input) {
+            switch (c) {
+                case '\\': result += "\\\\"; break;
+                case '\'': result += "\\\'"; break;
+                case '\"': result += "\\\""; break;
+                case '\n': result += "\\n"; break;
+                case '\r': result += "\\r"; break;
+                case '\t': result += "\\t"; break;
+                case '\b': result += "\\b"; break;
+                case '\f': result += "\\f"; break;
+                default:
+                    if (c < 32 || c > 126) {
+                        // Convert non-printable characters to Unicode escape sequences
+                        char buf[7];
+                        snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+                        result += buf;
+                    } else {
+                        result += c;
+                    }
+            }
+        }
+        
+        return result;
+    }
+
+    std::vector<std::shared_ptr<const char>> messageStrings_;
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -1419,22 +1588,43 @@ public:
         return !shouldAllow;  // Return true to cancel the navigation
     }
 
+     virtual CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        bool is_navigation,
+        bool is_download,
+        const CefString& request_initiator,
+        bool& disable_default_handling) override {
+        // Return this object as the resource request handler
+        return this;
+    }
+    
+    // Response filter to modify HTML content
+    CefRefPtr<CefResponseFilter> GetResourceResponseFilter(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        CefRefPtr<CefResponse> response) override {
+        
+        // Only filter main frame HTML responses
+        if (frame->IsMain() && 
+            response->GetMimeType().ToString().find("html") != std::string::npos) {
+            NSLog(@"Creating response filter for HTML content");
+            return new ElectrobunResponseFilter(electrobun_script_, custom_script_);
+        }
+        
+        return nullptr;
+    }
+
     virtual void OnLoadStart(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefFrame> frame,
-                           TransitionType transition_type) override {
+                           TransitionType transition_type) override {    
 
         std::string frameUrl = frame->GetURL().ToString();
         std::string scriptUrl = GetScriptExecutionUrl(frameUrl);
 
-        if (!electrobun_script_.code.empty() && 
-            (!electrobun_script_.mainFrameOnly || frame->IsMain())) {
-            frame->ExecuteJavaScript(electrobun_script_.code, scriptUrl, 0);
-        }
-        
-        if (!custom_script_.code.empty() && 
-            (!custom_script_.mainFrameOnly || frame->IsMain())) {
-            frame->ExecuteJavaScript(custom_script_.code, scriptUrl, 0);
-        }
+        // NSLog(@"OnLoadStart %s", frameUrl.c_str());//, electrobun_script_.code.c_str());           
     }   
 
     void OnLoadEnd(CefRefPtr<CefBrowser> browser,
@@ -1445,22 +1635,37 @@ public:
         }
     }
 
-    virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                        CefRefPtr<CefFrame> frame,
-                                        CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) override {
-        if (message->GetName() == "BunBridgeMessage") {
-            CefString msg = message->GetArgumentList()->GetString(0);
-            bun_bridge_handler_(webview_id_, msg.ToString().c_str());
-            return true;
-        }
-        else if (message->GetName() == "WebviewTagMessage") {
-            CefString msg = message->GetArgumentList()->GetString(0);
-            webview_tag_handler_(webview_id_, msg.ToString().c_str());
-            return true;
-        }
-        return false;
+   virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                     CefRefPtr<CefFrame> frame,
+                                     CefProcessId source_process,
+                                     CefRefPtr<CefProcessMessage> message) override {
+    
+    std::string messageName = message->GetName().ToString();
+    std::string messageContent = message->GetArgumentList()->GetString(0).ToString();
+    
+    char* contentCopy = strdup(messageContent.c_str());
+    bool result = false;
+    
+    if (messageName == "BunBridgeMessage") {
+        bun_bridge_handler_(webview_id_, contentCopy);
+        result = true;
+    } else if (messageName == "WebviewTagMessage") {
+        webview_tag_handler_(webview_id_, contentCopy);
+        result = true;
     }
+
+    // Note: threadsafe JSCallbacks are invoked on the js worker thread, When called frequently they
+    // can build up and take longer. Meanwhile objc GC auto free's the message body and the callback
+    // ends up getting garbage.
+
+    // So we duplicate it and give it plenty of time to execute (1 second delay vs. 0.1ms execution per invocation)
+    // before freeing the memory
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        free((void*)contentCopy);
+    });   
+    
+    return result;
+}
 
     // Context Menu
     CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override {
@@ -1591,12 +1796,13 @@ bool initializeCEF() {
     for (int i = 0; i < argc; i++) {
         argv[i] = strdup([[arguments objectAtIndex:i] UTF8String]);
     }
+    
     CefMainArgs main_args(argc, argv);
     g_app = new ElectrobunApp();
 
     CefSettings settings;
     settings.no_sandbox = true;
-    // settings.log_severity = LOGSEVERITY_VERBOSE;
+    settings.log_severity = LOGSEVERITY_VERBOSE;
     
     // Add cache path to prevent warnings and potential issues
     NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
@@ -1608,7 +1814,7 @@ bool initializeCEF() {
     
     // Set language
     CefString(&settings.accept_language_list) = "en-US,en";
-
+    
     // Register custom scheme
     // CefRegisterSchemeHandlerFactory("views", "", new ElectrobunSchemeHandlerFactory(assetFileLoader, 0));
     
@@ -1618,16 +1824,15 @@ bool initializeCEF() {
     
     // Enable required packaged services
     // settings.packaged_services = cef_services_t::CEF_SERVICE_ALL;    
-    
     bool result = CefInitialize(main_args, settings, g_app.get(), nullptr);
 
     for (int i = 0; i < argc; i++) free(argv[i]);
     free(argv);
-
+    
     if (!result) {        
         return false;
     }
-        
+    
     initialized = true;
     return true;
 }
@@ -1654,14 +1859,12 @@ public:
         if (urlStr.find("views://") == 0) {
             // Remove the prefix (7 characters)
             std::string relativePath = urlStr.substr(7);
-
+            
             // Check if this is the internal HTML request.
             if (relativePath == "internal/index.html") {
-                // Call into the JS utility to get HTML (using our bridging helper)
-                // const char* htmlContent = callJsCallbackFromMainSync(^const char*(){
-                //     return jsUtils.getHTMLForWebviewSync(webviewId_);
-                // });
+                // Call into the JS utility to get HTML (using our bridging helper)                
                 const char* htmlContent = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(webviewId_);});
+                
                 if (htmlContent) {
                     size_t len = strlen(htmlContent);
                     mimeType_ = "text/html";
@@ -1676,11 +1879,13 @@ public:
             NSData *data = readViewsFile(urlStr.c_str());
             if (data) {   
                 const char* mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(urlStr.c_str());});
+                
                 if (mimeTypePtr) {
-                mimeType_ = std::string(mimeTypePtr);
+                    mimeType_ = std::string(mimeTypePtr);
                 } else {
-                mimeType_ = "text/html"; // Fallback
+                    mimeType_ = "text/html"; // Fallback
                 }
+
                 responseData_.assign((const char*)data.bytes,
                                     (const char*)data.bytes + data.length);
                 hasResponse_ = true;
@@ -1872,26 +2077,17 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                     navigationCallback 
                 );                
 
-
-                
-
+                // store the script values
                 [self addPreloadScriptToWebView:electrobunPreloadScript];
-                
                 [self updateCustomPreloadScript:customPreloadScript];
 
-                CefString initialUrl;
                 
-                // Determine if this is an internal or external URL
-                if (url && url[0] != '\0') {              
-                    initialUrl = CefString(url);              
-                } else {
-                    initialUrl = CefString("about:blank");                
-                }
-
-                
-                
+                // Note: We must create a browser with about:blank first so that self.browser can be set
+                // Otherwise we get a race condition where OOPIF events hit bun then get passed to the parent
+                // webview which is still in the middle of a CreateBrowserSync and fails to call
+                // self.browser->GetMainFrame()->ExecuteJavascript.
                 self.browser = CefBrowserHost::CreateBrowserSync(
-                    window_info, self.client, initialUrl, browserSettings, nullptr, requestContext);
+                    window_info, self.client, CefString("about:blank"), browserSettings, nullptr, requestContext);
 
                 if (self.browser) {
                     CefWindowHandle handle = self.browser->GetHost()->GetWindowHandle();
@@ -1906,9 +2102,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
                 ContainerView *containerView = (ContainerView *)window.contentView;
                 [containerView addAbstractView:self];
-                                            
-                
-                
+
+                if (url && url[0] != '\0') {    
+                    self.browser->GetMainFrame()->LoadURL(CefString(url));
+                }                                                                                             
             };
             
             // TODO: revisit bug with 3 windows where 2nd windows' oopifs don't get created
@@ -2001,6 +2198,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         if (!jsString) return;
         
         CefRefPtr<CefFrame> mainFrame = self.browser->GetMainFrame();
+        
         if (!mainFrame) {
             NSLog(@"[CEF] Failed to get main frame for JavaScript evaluation");
             return;
@@ -2100,9 +2298,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
  * =============================================================================
  */
 
+// Note: This is executed from the main bun thread
 extern "C" void runNSApplication() {      
-    useCEF = false;//isCEFAvailable();    
-
+    useCEF = isCEFAvailable();    
+    
     if (useCEF) {
         @autoreleasepool {
             if (!initializeCEF()) {                
@@ -2112,16 +2311,15 @@ extern "C" void runNSApplication() {
             AppDelegate *delegate = [[AppDelegate alloc] init];
             [app setDelegate:delegate];
             retainObjCObject(delegate);
-
             [NSApp finishLaunching];
             CefRunMessageLoop();
-            CefShutdown();
+            CefShutdown();            
         }
-    } else {
+    } else {      
         NSApplication *app = [NSApplication sharedApplication];
         AppDelegate *delegate = [[AppDelegate alloc] init];
         [app setDelegate:delegate];
-        retainObjCObject(delegate);
+        retainObjCObject(delegate);  
         [app run];
     }
 }
@@ -2157,7 +2355,6 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         const char *electrobunPreloadScript,
                         const char *customPreloadScript ) {
 
-    
     NSRect frame = NSMakeRect(x, y, width, height);     
  
     __block AbstractView *impl = nil;

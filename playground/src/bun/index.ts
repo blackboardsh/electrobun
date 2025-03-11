@@ -106,19 +106,14 @@ const updateTrayMenu = () => {
 
 // TODO: events should be typed
 tray.on("tray-clicked", (e) => {
-  console.log(5)
   const { id, action } = e.data as { id: number; action: string };
-  console.log(6)
   if (action === "") {
-    console.log(7)
     // main menu was clicked before we create a system tray menu for it.
     updateTrayMenu();
-    console.log(8)
     tray.setTitle("Example Tray Item (click to open menu)");
   } else {
     // once there's a menu, we can toggle the state of the menu items
     menuState[action] = !menuState[action];
-    console.log(9)
     updateTrayMenu();
   }  
   // respond to left and right clicks on the tray icon/name

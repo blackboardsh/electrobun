@@ -219,7 +219,8 @@ async function vendorCEF() {
             // link
             await $`clang++ -mmacosx-version-min=10.13 -std=c++17 src/native/build/process_helper_mac.o -o src/native/build/process_helper -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -framework "Chromium Embedded Framework" -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++`;
             // fix internal path
-            await $`install_name_tool -change "@executable_path/../Frameworks/Chromium\ Embedded\ Framework.framework/Chromium\ Embedded\ Framework" "@executable_path/../../../../Frameworks/Chromium\ Embedded\ Framework.framework/Chromium\ Embedded\ Framework" src/native/build/process_helper`;
+            // Note: Can use `otool -L src/native/build/process_helper` to check the value            
+            await $`install_name_tool -change "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" "@executable_path/../../../../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" src/native/build/process_helper`;            
         }
     } else if (OS === 'win') {
 

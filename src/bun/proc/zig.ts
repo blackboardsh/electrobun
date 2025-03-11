@@ -382,7 +382,7 @@ export const zigRPC = {
 
         if (!windowPtr) {          
           throw `Can't add webview to window. window no longer exists`;
-        }
+        }        
 
         const electrobunPreload = `
          window.__electrobunWebviewId = ${id};
@@ -761,8 +761,12 @@ const windowResizeCallback = new JSCallback(
 const getMimeType = new JSCallback((filePath) => {
   const _filePath = new CString(filePath).toString();
   const mimeType = Bun.file(_filePath).type;// || "application/octet-stream";
+
+  // For this usecase we generally don't want the charset included in the mimetype 
+  // otherwise it can break. eg: for html with text/javascript;charset=utf-8 browsers
+  // will tend to render the code/text instead of interpreting the html.
   
-  return toCString(mimeType);
+  return toCString(mimeType.split(';')[0]);
 }, {
   args: [FFIType.cstring],  
   returns: FFIType.cstring,
@@ -802,6 +806,7 @@ const webviewEventHandler = (id, eventName, detail) => {
     // This is a webviewtag so we should send the event into the parent as well
     // TODO XX: escape event name and detail to remove `
     const js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, \`${detail}\`);`
+    
     native.symbols.evaluateJavaScriptWithNoCompletion(webview.ptr, toCString(js))        
   }
     
@@ -953,8 +958,8 @@ type WebviewTagHandlers = RPCSchema<{
 
 
 const webviewTagBridgeHandler = new JSCallback((id, msg) => {    
-  try {
-    const batchMessage = new CString(msg);
+  try {    
+    const batchMessage = new CString(msg);    
 
     const jsonBatch = JSON.parse(batchMessage);
 
@@ -968,10 +973,10 @@ const webviewTagBridgeHandler = new JSCallback((id, msg) => {
     
 
     jsonBatch.forEach((msgStr) => {      
-      if (!msgStr.length) {
-        console.error('WEBVIEW EVENT SENT TO WEBVIEW TAG BRIDGE HANDLER?', )
-        return;
-      }
+      // if (!msgStr.length) {
+      //   console.error('WEBVIEW EVENT SENT TO WEBVIEW TAG BRIDGE HANDLER?', )
+      //   return;
+      // }
       const msgJson = JSON.parse(msgStr);    
       
       if (msgJson.type === 'message') {      
@@ -1006,6 +1011,8 @@ const webviewTagBridgeHandler = new JSCallback((id, msg) => {
       console.error('error in webviewTagBridgeHandler: ', err)
       // console.log('msgStr: ', id, new CString(msg));
     }        
+
+    
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,

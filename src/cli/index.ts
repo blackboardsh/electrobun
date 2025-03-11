@@ -72,7 +72,7 @@ const PATHS = {
   LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun") + binExt,
   LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher") + binExt,
   MAIN_JS: join(ELECTROBUN_DEP_PATH, "dist", "main.js"),
-  ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview") + binExt,
+  // ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview") + binExt,
   NATIVE_WRAPPER_MACOS: join(
     ELECTROBUN_DEP_PATH,
     "dist",
@@ -374,13 +374,13 @@ if (commandArg === "init") {
   // Zig native wrapper binary
   // todo (yoav): build native bindings for target
   // copy native bindings
-  const zigNativeBinarySource = PATHS.ZIG_NATIVE_WRAPPER;
-  const zigNativeBinaryDestination = join(appBundleMacOSPath, "webview") + binExt;
-  const destFolder = dirname(zigNativeBinaryDestination);
-  if (!existsSync(destFolder)) {
-    // console.info('creating folder: ', destFolder);
-    mkdirSync(destFolder, { recursive: true });
-  }
+  // const zigNativeBinarySource = PATHS.ZIG_NATIVE_WRAPPER;
+  // const zigNativeBinaryDestination = join(appBundleMacOSPath, "webview") + binExt;
+  // const destFolder = dirname(zigNativeBinaryDestination);
+  // if (!existsSync(destFolder)) {
+  //   // console.info('creating folder: ', destFolder);
+  //   mkdirSync(destFolder, { recursive: true });
+  // }
 
   // copy native wrapper dynamic library next to zig native binary
   if (OS === 'macos') {
@@ -423,11 +423,11 @@ if (commandArg === "init") {
 
       // cef helpers
       const cefHelperNames = [
-        "webview Helper",
-        "webview Helper (Alerts)",
-        "webview Helper (GPU)",
-        "webview Helper (Plugin)",
-        "webview Helper (Renderer)",
+        "bun Helper",
+        "bun Helper (Alerts)",
+        "bun Helper (GPU)",
+        "bun Helper (Plugin)",
+        "bun Helper (Renderer)",
       ];
 
       const helperSourcePath = PATHS.CEF_HELPER_MACOS;
@@ -439,7 +439,8 @@ if (commandArg === "init") {
           `MacOS`,
           `${helperName}`
         );
-        const destFolder4 = basename(destinationPath);
+        
+        const destFolder4 = dirname(destinationPath);
         if (!existsSync(destFolder4)) {
           // console.info('creating folder: ', destFolder4);
           mkdirSync(destFolder4, { recursive: true });
@@ -622,29 +623,30 @@ if (commandArg === "init") {
   }
 
   if (buildEnvironment === "dev") {
+    // TODO XX: Do we still need this in another form like bun IPC postmessages?
     // in dev mode add a cupla named pipes for some dev debug rpc magic
-    const debugPipesFolder = join(appBundleFolderResourcesPath, "debug");
-    if (!existsSync(debugPipesFolder)) {
-      // console.info('creating folder: ', debugPipesFolder);
-      mkdirSync(debugPipesFolder, { recursive: true });
-    }
-    const toLauncherPipePath = escapePathForTerminal(
-      join(debugPipesFolder, "toLauncher")
-    );
-    const toCliPipePath = escapePathForTerminal(
-      join(debugPipesFolder, "toCli")
-    );
-    try {
-      execSync("mkfifo " + toLauncherPipePath);
-    } catch (e) {
-      console.log("pipe out already exists", e);
-    }
+    // const debugPipesFolder = join(appBundleFolderResourcesPath, "debug");
+    // if (!existsSync(debugPipesFolder)) {
+    //   // console.info('creating folder: ', debugPipesFolder);
+    //   mkdirSync(debugPipesFolder, { recursive: true });
+    // }
+    // const toLauncherPipePath = escapePathForTerminal(
+    //   join(debugPipesFolder, "toLauncher")
+    // );
+    // const toCliPipePath = escapePathForTerminal(
+    //   join(debugPipesFolder, "toCli")
+    // );
+    // try {
+    //   execSync("mkfifo " + toLauncherPipePath);
+    // } catch (e) {
+    //   console.log("pipe out already exists", e);
+    // }
 
-    try {
-      execSync("mkfifo " + toCliPipePath);
-    } catch (e) {
-      console.log("pipe out already exists", e);
-    }
+    // try {
+    //   execSync("mkfifo " + toCliPipePath);
+    // } catch (e) {
+    //   console.log("pipe out already exists", e);
+    // }
   } else {
     const artifactsToUpload = [];
     // zstd wasm https://github.com/OneIdentity/zstd-js
