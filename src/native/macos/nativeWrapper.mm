@@ -1400,7 +1400,7 @@ public:
                 scripts += electrobun_script_.code;
                 scripts += "\n</script>\n";
                 
-                if (!custom_script_.code.empty() && !custom_script_.mainFrameOnly) {
+                if (!custom_script_.code.empty()) {
                     scripts += "<script>\n";
                     scripts += custom_script_.code;
                     scripts += "\n</script>\n";
@@ -1421,7 +1421,7 @@ public:
                 scripts += electrobun_script_.code;
                 scripts += "\n</script>\n";
                 
-                if (!custom_script_.code.empty() && !custom_script_.mainFrameOnly) {
+                if (!custom_script_.code.empty() ) {
                     scripts += "<script>\n";
                     scripts += custom_script_.code;
                     scripts += "\n</script>\n";
@@ -1436,7 +1436,7 @@ public:
                 scripts += electrobun_script_.code;
                 scripts += "\n</script>\n";
                 
-                if (!custom_script_.code.empty() && !custom_script_.mainFrameOnly) {
+                if (!custom_script_.code.empty() ) {
                     scripts += "<script>\n";
                     scripts += custom_script_.code;
                     scripts += "\n</script>\n";
@@ -1802,7 +1802,7 @@ bool initializeCEF() {
 
     CefSettings settings;
     settings.no_sandbox = true;
-    settings.log_severity = LOGSEVERITY_VERBOSE;
+    // settings.log_severity = LOGSEVERITY_VERBOSE;
     
     // Add cache path to prevent warnings and potential issues
     NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
@@ -2042,10 +2042,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
             void (^createCEFBrowser)(void) = ^{                
                 [window makeKeyAndOrderFront:nil];
-                CefBrowserSettings browserSettings;   
-
-                
-                        
+                CefBrowserSettings browserSettings;               
 
                 CefWindowInfo window_info;
                 
@@ -2079,7 +2076,19 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
                 // store the script values
                 [self addPreloadScriptToWebView:electrobunPreloadScript];
-                [self updateCustomPreloadScript:customPreloadScript];
+                
+                // Note: For custom preload scripts we support either inline js or a views:// style
+                // url to a js file in the bundled views folder.
+                if (strncmp(customPreloadScript, "views://", 8) == 0) {                    
+                    NSData *scriptData = readViewsFile(customPreloadScript);
+                    if (scriptData) {                        
+                        NSString *scriptString = [[NSString alloc] initWithData:scriptData encoding:NSUTF8StringEncoding];                        
+                        const char *scriptCString = [scriptString UTF8String];
+                        [self updateCustomPreloadScript:scriptCString];
+                    }
+                } else {
+                    [self updateCustomPreloadScript:customPreloadScript];
+                }                            
 
                 
                 // Note: We must create a browser with about:blank first so that self.browser can be set
