@@ -157,35 +157,6 @@ export class BrowserView<T> {
   }
 
   createStreams() {    
-    // const webviewPipeIn = this.pipePrefix + "_in";
-    // const webviewPipeOut = this.pipePrefix + "_out";
-    
-    // try {
-    //   execSync("mkfifo " + webviewPipeOut);
-    // } catch (e) {
-    //   console.log("pipe out already exists");
-    // }
-    
-    // try {
-    //   execSync("mkfifo " + webviewPipeIn);
-    // } catch (e) {
-    //   console.log("pipe in already exists");
-    // }
-    
-    // const inStream = fs.createWriteStream(webviewPipeIn, {
-    //   flags: "r+",
-    // });
-
-    // // todo: something has to be written to it to open it
-    // // look into this
-    // inStream.write("\n");
-
-    // this.inStream = inStream;
-    
-    // // Open the named pipe for reading
-    // const outStream = Bun.file(webviewPipeOut).stream();
-    // this.outStream = outStream;
-    
     if (!this.rpc) {
       this.rpc = BrowserView.defineRPC({
         handlers: { requests: {}, messages: {} },
@@ -222,15 +193,6 @@ export class BrowserView<T> {
   // so we have to chunk it
   executeJavascript(js: string) {
     zigRPC.request.evaluateJavascriptWithNoCompletion({id: this.id, js});
-    // let offset = 0;
-    // while (offset < js.length) {
-    //   const chunk = js.slice(offset, offset + CHUNK_SIZE);
-    //   this.inStream.write(chunk);
-    //   offset += CHUNK_SIZE;
-    // }
-
-    // // Ensure the newline is written after all chunks
-    // this.inStream.write("\n");
   }
 
   loadURL(url: string) {
@@ -281,37 +243,7 @@ export class BrowserView<T> {
         }
       },
       registerHandler(handler) {
-        that.rpcHandler = handler;
-
-        // async function readFromPipe(
-        //   reader: ReadableStreamDefaultReader<Uint8Array>
-        // ) {
-        //   let buffer = "";
-        //   while (true) {
-        //     const { done, value } = await reader.read();
-        //     if (done) break;
-
-        //     buffer += new TextDecoder().decode(value);
-        //     let eolIndex;
-
-        //     while ((eolIndex = buffer.indexOf("\n")) >= 0) {
-        //       const line = buffer.slice(0, eolIndex).trim();
-        //       buffer = buffer.slice(eolIndex + 1);
-        //       if (line) {
-        //         try {
-        //           const event = JSON.parse(line);
-
-        //           handler(event);
-        //         } catch (error) {
-        //           console.error("webview: ", line);
-        //         }
-        //       }
-        //     }
-        //   }
-        // }
-
-        // const reader = that.outStream.getReader();
-        // readFromPipe(reader);
+        that.rpcHandler = handler;       
       },
     };
   };
@@ -372,9 +304,7 @@ export class BrowserView<T> {
       messages: WebviewSchema["messages"];
     };
 
-    type mixedBunSchema = {
-      // requests: WebviewSchema["requests"] &
-        // BuiltinBunToWebviewSchema["requests"];
+    type mixedBunSchema = {      
       messages: BunSchema["messages"];
     };
 
