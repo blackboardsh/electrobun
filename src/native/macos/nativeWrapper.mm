@@ -153,23 +153,6 @@ bool isCEFAvailable() {
     return [[NSFileManager defaultManager] fileExistsAtPath:frameworkPath];
 }
 
-// NSUInteger getNSWindowStyleMask(WindowStyleMaskOptions options) {
-//     NSUInteger mask = 0;
-//     if (options.Borderless) mask |= NSWindowStyleMaskBorderless;
-//     if (options.Titled) mask |= NSWindowStyleMaskTitled;
-//     if (options.Closable) mask |= NSWindowStyleMaskClosable;
-//     if (options.Miniaturizable) mask |= NSWindowStyleMaskMiniaturizable;
-//     if (options.Resizable) mask |= NSWindowStyleMaskResizable;
-//     if (options.UnifiedTitleAndToolbar) mask |= NSWindowStyleMaskUnifiedTitleAndToolbar;
-//     if (options.FullScreen) mask |= NSWindowStyleMaskFullScreen;
-//     if (options.FullSizeContentView) mask |= NSWindowStyleMaskFullSizeContentView;
-//     if (options.UtilityWindow) mask |= NSWindowStyleMaskUtilityWindow;
-//     if (options.DocModalWindow) mask |= NSWindowStyleMaskDocModalWindow;
-//     if (options.NonactivatingPanel) mask |= NSWindowStyleMaskNonactivatingPanel;
-//     if (options.HUDWindow) mask |= NSWindowStyleMaskHUDWindow;
-//     return mask;
-// }
-
 extern "C" uint32_t getNSWindowStyleMask(
     bool Borderless,
     bool Titled,

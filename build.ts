@@ -2,7 +2,6 @@
 
 console.log("building...", platform(), arch())
 
-console.log('hi')
 import { $ } from "bun";
 import { platform, arch } from "os";
 import { join } from 'path';

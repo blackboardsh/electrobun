@@ -16,7 +16,6 @@ import { resolve, resolveSync } from "bun";
 import { homedir } from "os";
 import { join } from "path";
 
-
 // Electrobun.Updater.getLocalVersion();
 
 // Note: the Canary Playground app will always try update to the latest version
@@ -242,8 +241,6 @@ const win = new BrowserWindow({
   rpc: myWebviewRPC,
   
 });
-
-// console.log('browsre window created')
 
 win.setTitle("url browserwindow");
 

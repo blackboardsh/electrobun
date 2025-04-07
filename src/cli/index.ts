@@ -622,32 +622,7 @@ if (commandArg === "init") {
     console.log("skipping notarization");
   }
 
-  if (buildEnvironment === "dev") {
-    // TODO XX: Do we still need this in another form like bun IPC postmessages?
-    // in dev mode add a cupla named pipes for some dev debug rpc magic
-    // const debugPipesFolder = join(appBundleFolderResourcesPath, "debug");
-    // if (!existsSync(debugPipesFolder)) {
-    //   // console.info('creating folder: ', debugPipesFolder);
-    //   mkdirSync(debugPipesFolder, { recursive: true });
-    // }
-    // const toLauncherPipePath = escapePathForTerminal(
-    //   join(debugPipesFolder, "toLauncher")
-    // );
-    // const toCliPipePath = escapePathForTerminal(
-    //   join(debugPipesFolder, "toCli")
-    // );
-    // try {
-    //   execSync("mkfifo " + toLauncherPipePath);
-    // } catch (e) {
-    //   console.log("pipe out already exists", e);
-    // }
-
-    // try {
-    //   execSync("mkfifo " + toCliPipePath);
-    // } catch (e) {
-    //   console.log("pipe out already exists", e);
-    // }
-  } else {
+  if (buildEnvironment !== "dev")  {
     const artifactsToUpload = [];
     // zstd wasm https://github.com/OneIdentity/zstd-js
     // tar https://github.com/isaacs/node-tar
@@ -944,170 +919,13 @@ if (commandArg === "init") {
     cwd: bundleExecPath
   })
 
-  // if (buildEnvironment === "dev") {
-  //   const debugPipesFolder = join(
-  //     buildFolder,
-  //     bundleFileName,
-  //     "Contents",
-  //     "Resources",
-  //     "debug"
-  //   );
-  //   const toLauncherPipePath = join(debugPipesFolder, "toLauncher");
-  //   const toCliPipePath = join(debugPipesFolder, "toCli");
+  process.on("SIGINT", () => {
+    // toLauncherPipe.write("exit command\n");      
+    mainProc.kill();
+    process.exit();
+  });
 
-  //   const toCliPipeFile = Bun.file(toCliPipePath);
-  //   const toLauncherPipe = createWriteStream(toLauncherPipePath, {
-  //     flags: "r+",
-  //   });
-  //   toLauncherPipe.write("\n");
-
-    process.on("SIGINT", () => {
-      // toLauncherPipe.write("exit command\n");      
-      mainProc.kill();
-      process.exit();
-    });
-
-  //   const stream = toCliPipeFile.stream();
-
-  //   async function readFromPipe(
-  //     reader: ReadableStreamDefaultReader<Uint8Array>
-  //   ) {
-  //     let buffer = "";
-  //     while (true) {
-  //       const { done, value } = await reader.read();
-  //       if (done) break;
-
-  //       buffer += new TextDecoder().decode(value);
-  //       let eolIndex;
-
-  //       while ((eolIndex = buffer.indexOf("\n")) >= 0) {
-  //         const line = buffer.slice(0, eolIndex).trim();
-  //         buffer = buffer.slice(eolIndex + 1);
-  //         if (line) {
-  //           try {
-  //             if (line === "app exiting command") {
-  //               process.exit();
-  //             } else if (line === "subprocess exited command") {
-  //               // Handle subprocess exit
-  //             }
-
-  //             console.log("bun: ", line);
-  //           } catch (error) {
-  //             console.log("bun: ", line);
-  //           }
-  //         }
-  //       }
-  //     }
-  //   }
-
-  //   // Call the async function to ensure it runs non-blocking
-  //   const reader = stream.getReader();
-  //   readFromPipe(reader);
-  // } else {
-  //   console.log("opening", buildEnvironment, "app bundle");
-  // }
-} else {
-  // // no commands so run as the debug launcher inside the app bundle
-
-  // // todo (yoav): as the debug launcher, get the relative path a different way, so dev builds can be shared and executed
-  // // from different locations
-  // const pathToLauncherBin = process.argv0;
-  // const pathToMacOS = dirname(pathToLauncherBin);
-  // const debugPipesFolder = join(pathToMacOS, "..", "Resources", "debug");
-  // const toLauncherPipePath = join(debugPipesFolder, "toLauncher");
-  // const toCliPipePath = join(debugPipesFolder, "toCli");
-
-  // // If we open the dev app bundle directly without the cli, then no one will be listening to the toCliPipe
-  // // and it'll hang. So we open the pipe for reading to prevent it from blocking but we don't read it here.
-  // const toCliPipe = createWriteStream(toCliPipePath, {
-  //   // Note: open the pipe for reading and writing (r+) so that it doesn't block. If you only open it for writing (w)
-  //   // then it'll block until the cli starts reading. Double clicking on the bundle bypasses the cli so it'll block forever.
-  //   flags: "r+",
-  // });
-  // toCliPipe.write("\n");
-
-  // const bunRuntimePath = join(pathToMacOS, "bun");
-  // const appEntrypointPath = join(
-  //   pathToMacOS,
-  //   "..",
-  //   "Resources",
-  //   "app",
-  //   "bun",
-  //   "index.js"
-  // );
-
-  // try {
-  //   proc = Bun.spawn([bunRuntimePath, appEntrypointPath], {
-  //     cwd: pathToMacOS,
-  //     stderr: "pipe",
-  //     onExit: (code) => {
-  //       // todo: In cases where the bun process crashed, there's a lingering process that needs killing
-  //       toCliPipe.write(`subprocess exited command\n`);
-  //       process.kill(process.pid, "SIGINT");
-  //     },
-  //   });
-  // } catch (e) {
-  //   toCliPipe.write(`error\n ${e}\n`);
-  // }
-
-  // process.on("SIGINT", () => {
-  //   toCliPipe.write("app exiting command\n");
-  //   process.kill(proc.pid, "SIGINT");
-  //   process.exit();
-  // });
-
-  // async function streamPipeToCli(stream) {
-  //   for await (const chunk of stream) {
-  //     let buffer = chunk;
-  //     while (buffer.length > 0) {
-  //       const chunkSize = Math.min(buffer.length, MAX_CHUNK_SIZE);
-  //       const chunkToSend = buffer.slice(0, chunkSize);
-  //       buffer = buffer.slice(chunkSize);
-  //       toCliPipe.write(chunkToSend);
-  //     }
-  //   }
-  // }
-  // streamPipeToCli(proc.stdout);
-  // streamPipeToCli(proc.stderr);
-
-  // const toLauncherPipeFile = Bun.file(toLauncherPipePath);
-
-  // const stream = toLauncherPipeFile.stream();
-  // async function readFromPipe(reader: ReadableStreamDefaultReader<Uint8Array>) {
-  //   let buffer = "";
-  //   while (true) {
-  //     const { done, value } = await reader.read();
-  //     if (done) break;
-
-  //     buffer += new TextDecoder().decode(value);
-  //     let eolIndex;
-
-  //     while ((eolIndex = buffer.indexOf("\n")) >= 0) {
-  //       const line = buffer.slice(0, eolIndex).trim();
-  //       buffer = buffer.slice(eolIndex + 1);
-  //       if (line) {
-  //         try {
-  //           if (line === "exit command") {
-  //             // Receive kill command from cli (likely did cmd+c in terminal running the cli)
-  //             process.kill(process.pid, "SIGINT");
-  //           }
-  //           const event = JSON.parse(line);
-  //           // handler(event)
-  //         } catch (error) {
-  //           // Non-json things are just bubbled up to the console.
-  //           console.error("launcher received line from cli: ", line);
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
-
-  // // Call the async function to ensure it runs non-blocking
-  // const reader = stream.getReader();
-  // readFromPipe(reader);
-  // // streamPipeToCli(process.stdout);
-  // // streamPipeToCli(proc.stderr);
-}
+} 
 
 function getConfig() {
   let loadedConfig = {};
