@@ -38,11 +38,11 @@ public:
         bunBridge->SetValue("postMessage", bunPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
         window->SetValue("bunBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
 
-        // Create webviewTagBridge
-        CefRefPtr<CefV8Value> webviewTagBridge = CefV8Value::CreateObject(nullptr, nullptr);
-        CefRefPtr<CefV8Value> webviewTagPostMessage = CreatePostMessageFunction(browser, "WebviewTagMessage");
-        webviewTagBridge->SetValue("postMessage", webviewTagPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
-        window->SetValue("webviewTagBridge", webviewTagBridge, V8_PROPERTY_ATTRIBUTE_NONE);
+        // Create internalBridge
+        CefRefPtr<CefV8Value> internalBridge = CefV8Value::CreateObject(nullptr, nullptr);
+        CefRefPtr<CefV8Value> internalPostMessage = CreatePostMessageFunction(browser, "internalMessage");
+        internalBridge->SetValue("postMessage", internalPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
+        window->SetValue("internalBridge", internalBridge, V8_PROPERTY_ATTRIBUTE_NONE);
 
         v8Context->Exit();
     }

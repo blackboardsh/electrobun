@@ -63,7 +63,7 @@ export const native = (() => {
           FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
           FFIType.function, // webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
           FFIType.function, //  bunBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
-          FFIType.function, //  webviewTagBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+          FFIType.function, //  internalBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
           FFIType.cstring, // electrobunPreloadScript
           FFIType.cstring, // customPreloadScript
         ],
@@ -235,14 +235,13 @@ export const native = (() => {
 })();
 
 const callbacks = [];
-// TODO XX: rename this file and export and everything to something ffi like
-// TODO XX: get it all working without CEF then resolve the path issues for CEF
+
 // NOTE: Bun seems to hit limits on args or arg types. eg: trying to send 12 bools results 
 // in only about 8 going through then params after that. I think it may be similar to 
 // a zig bug I ran into last year. So check number of args in a signature when alignment issues occur.
 
 // TODO XX: maybe this should actually be inside BrowserWindow and BrowserView as static methods
-export const zigRPC = {
+export const ffi = {
   request: {
     createWindow: (params: {
         id: number,
@@ -465,10 +464,10 @@ export const zigRPC = {
            // its memory is allocated to something else or something and the handler receives garbage data in Bun.
            setTimeout(() => {
               console.log('emitWebviewEvent', eventName, detail)
-             if (window.webkit?.messageHandlers?.webviewTagBridge) {
-                 window.webkit.messageHandlers.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
+             if (window.webkit?.messageHandlers?.internalBridge) {
+                 window.webkit.messageHandlers.internalBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
              } else {
-                 window.webviewTagBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
+                 window.internalBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
              }
           });
          };                 
@@ -525,7 +524,7 @@ export const zigRPC = {
           webviewDecideNavigation,
           webviewEventJSCallback,
           bunBridgePostmessageHandler,
-          webviewTagBridgeHandler,
+          internalBridgeHandler,
           toCString(electrobunPreload),
           toCString(customPreload || ''),        
         )        
@@ -957,7 +956,7 @@ type WebviewTagHandlers = RPCSchema<{
 }>;
 
 
-const webviewTagBridgeHandler = new JSCallback((id, msg) => {    
+const internalBridgeHandler = new JSCallback((id, msg) => {    
   try {    
     const batchMessage = new CString(msg);    
 
@@ -1003,12 +1002,12 @@ const webviewTagBridgeHandler = new JSCallback((id, msg) => {
           return 
         }
               
-        hostWebview.sendMessageFromZigViaExecute(resultObj);          
+        hostWebview.sendInternalMessageViaExecute(resultObj);          
       }
     });
           
     } catch (err) {
-      console.error('error in webviewTagBridgeHandler: ', err)
+      console.error('error in internalBridgeHandler: ', err)
       // console.log('msgStr: ', id, new CString(msg));
     }        
 

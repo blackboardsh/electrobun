@@ -1,10 +1,10 @@
 // TODO: have a context specific menu that excludes role
-import { zigRPC, type ApplicationMenuItemConfig } from "../proc/zig";
+import { ffi, type ApplicationMenuItemConfig } from "../proc/zig";
 import electrobunEventEmitter from "../events/eventEmitter";
 
 export const showContextMenu = (menu: Array<ApplicationMenuItemConfig>) => {
   const menuWithDefaults = menuConfigWithDefaults(menu);
-  zigRPC.request.showContextMenu({
+  ffi.request.showContextMenu({
     menuConfig: JSON.stringify(menuWithDefaults),
   });
 };

@@ -346,7 +346,7 @@ void releaseObjCObject(id objcObject) {
                 navigationCallback:(DecideNavigationCallback)navigationCallback
                 webviewEventHandler:(WebviewEventHandler)webviewEventHandler
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-                webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+                internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript;
 @end
@@ -914,7 +914,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 navigationCallback:(DecideNavigationCallback)navigationCallback
                 webviewEventHandler:(WebviewEventHandler)webviewEventHandler
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-                webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+                internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript
     {
@@ -981,12 +981,12 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
                 objc_setAssociatedObject(self.webView, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-                // webviewTagBridge
+                // internalBridge
                 MyScriptMessageHandler *webviewTagHandler = [[MyScriptMessageHandler alloc] init];
-                webviewTagHandler.zigCallback = webviewTagBridgeHandler;
+                webviewTagHandler.zigCallback = internalBridgeHandler;
                 webviewTagHandler.webviewId = webviewId;
                 [self.webView.configuration.userContentController addScriptMessageHandler:webviewTagHandler
-                                                                                name:[NSString stringWithUTF8String:"webviewTagBridge"]];
+                                                                                name:[NSString stringWithUTF8String:"internalBridge"]];
 
                 objc_setAssociatedObject(self.webView, "webviewTagHandler", webviewTagHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -1507,12 +1507,12 @@ private:
 public:
     ElectrobunClient(uint32_t webviewId,
                      HandlePostMessage bunBridgeHandler,
-                     HandlePostMessage webviewTagBridgeHandler,
+                     HandlePostMessage internalBridgeHandler,
                      WebviewEventHandler webviewEventHandler,
                      DecideNavigationCallback navigationCallback)
         : webview_id_(webviewId)
         , bun_bridge_handler_(bunBridgeHandler)
-        , webview_tag_handler_(webviewTagBridgeHandler) 
+        , webview_tag_handler_(internalBridgeHandler) 
         , webview_event_handler_(webviewEventHandler)
         , navigation_callback_(navigationCallback) {}    
 
@@ -1632,7 +1632,7 @@ public:
     if (messageName == "BunBridgeMessage") {
         bun_bridge_handler_(webview_id_, contentCopy);
         result = true;
-    } else if (messageName == "WebviewTagMessage") {
+    } else if (messageName == "internalMessage") {
         webview_tag_handler_(webview_id_, contentCopy);
         result = true;
     }
@@ -1757,7 +1757,7 @@ public:
                 navigationCallback:(DecideNavigationCallback)navigationCallback
                 webviewEventHandler:(WebviewEventHandler)webviewEventHandler
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-                webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+                internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript;
 
@@ -2009,7 +2009,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 navigationCallback:(DecideNavigationCallback)navigationCallback
                 webviewEventHandler:(WebviewEventHandler)webviewEventHandler
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
-            webviewTagBridgeHandler:(HandlePostMessage)webviewTagBridgeHandler
+            internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
             electrobunPreloadScript:(const char *)electrobunPreloadScript
             customPreloadScript:(const char *)customPreloadScript
     {
@@ -2052,7 +2052,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 self.client = new ElectrobunClient(
                     webviewId,  
                     bunBridgeHandler, 
-                    webviewTagBridgeHandler,
+                    internalBridgeHandler,
                     webviewEventHandler,
                     navigationCallback 
                 );                
@@ -2343,7 +2343,7 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         DecideNavigationCallback navigationCallback,
                         WebviewEventHandler webviewEventHandler,
                         HandlePostMessage bunBridgeHandler,
-                        HandlePostMessage webviewTagBridgeHandler,
+                        HandlePostMessage internalBridgeHandler,
                         const char *electrobunPreloadScript,
                         const char *customPreloadScript ) {
 
@@ -2363,7 +2363,7 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                                         navigationCallback:navigationCallback
                                         webviewEventHandler:webviewEventHandler
                                         bunBridgeHandler:bunBridgeHandler
-                                        webviewTagBridgeHandler:webviewTagBridgeHandler
+                                        internalBridgeHandler:internalBridgeHandler
                                         electrobunPreloadScript:strdup(electrobunPreloadScript)
                                         customPreloadScript:strdup(customPreloadScript)];
 

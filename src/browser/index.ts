@@ -100,9 +100,9 @@ class Electroview<T> {
   // user's custom rpc browser <-> bun
   rpc?: T;
   rpcHandler?: (msg: any) => void;
-  // electrobun rpc browser <-> zig
-  zigRpc?: any;
-  zigRpcHandler?: (msg: any) => void;
+  // electrobun rpc browser <-> bun
+  internalRpc?: any;
+  internalRpcHandler?: (msg: any) => void;
   
   constructor(config: { rpc: T }) {
     this.rpc = config.rpc;
@@ -112,16 +112,16 @@ class Electroview<T> {
   init() {
     // todo (yoav): should init webviewTag by default when src is local
     // and have a setting that forces it enabled or disabled
-    this.initZigRpc();
+    this.initInternalRpc();
     this.initSocketToBun();
 
-    ConfigureWebviewTags(true, this.zigRpc, this.rpc);
+    ConfigureWebviewTags(true, this.internalRpc, this.rpc);
 
     this.initElectrobunListeners();
 
     window.__electrobun = {
       receiveMessageFromBun: this.receiveMessageFromBun.bind(this),
-      receiveMessageFromZig: this.receiveMessageFromZig.bind(this),
+      receiveInternalMessageFromBun: this.receiveInternalMessageFromBun.bind(this),
     };
 
     if (this.rpc) {
@@ -129,9 +129,9 @@ class Electroview<T> {
     }
   }
 
-  initZigRpc() {
-    this.zigRpc = createRPC<WebviewTagHandlers, ZigWebviewHandlers>({
-      transport: this.createZigTransport(),
+  initInternalRpc() {
+    this.internalRpc = createRPC<WebviewTagHandlers, ZigWebviewHandlers>({
+      transport: this.createInternalTransport(),
       // requestHandler: {
 
       // },
@@ -185,25 +185,25 @@ class Electroview<T> {
 
   // This will be attached to the global object, zig can rpc reply by executingJavascript
   // of that global reference to the function
-  receiveMessageFromZig(msg: any) {    
-    if (this.zigRpcHandler) {
+  receiveInternalMessageFromBun(msg: any) {    
+    if (this.internalRpcHandler) {
       
-      this.zigRpcHandler(msg);
+      this.internalRpcHandler(msg);
     }
   }
 
   // TODO: implement proper rpc-anywhere style rpc here
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
   isProcessingQueue = false;
-  sendToZigQueue = [];
-  sendToZig(message: {}) {   
+  sendToInternalQueue = [];
+  sendToBunInternal(message: {}) {   
     try {    
       const strMessage = JSON.stringify(message);    
-      this.sendToZigQueue.push(strMessage);    
+      this.sendToInternalQueue.push(strMessage);    
 
       this.processQueue();
     } catch (err) {
-      console.error('failed to send to zig');
+      console.error('failed to send to zig', err);
     }
   }
 
@@ -218,22 +218,22 @@ class Electroview<T> {
       return;
     }
 
-    if (that.sendToZigQueue.length === 0) {
+    if (that.sendToInternalQueue.length === 0) {
       // that.isProcessingQueue = false;
       return;  
     }
 
     that.isProcessingQueue = true;
     
-    const batchMessage = JSON.stringify(that.sendToZigQueue);
-    that.sendToZigQueue = [];
+    const batchMessage = JSON.stringify(that.sendToInternalQueue);
+    that.sendToInternalQueue = [];
 
-    if (window.webkit?.messageHandlers?.webviewTagBridge) {
-      window.webkit.messageHandlers.webviewTagBridge.postMessage(
+    if (window.webkit?.messageHandlers?.internalBridge) {
+      window.webkit.messageHandlers.internalBridge.postMessage(
         batchMessage
       );
     } else {
-      window.webviewTagBridge.postMessage(
+      window.internalBridge.postMessage(
         batchMessage
       );
     }
@@ -259,13 +259,13 @@ class Electroview<T> {
   initElectrobunListeners() {
     document.addEventListener("mousedown", (e) => {
       if (isAppRegionDrag(e)) {
-        this.zigRpc?.send.startWindowMove({ id: WINDOW_ID });
+        this.internalRpc?.send.startWindowMove({ id: WINDOW_ID });
       }
     });
 
     document.addEventListener("mouseup", (e) => {
       if (isAppRegionDrag(e)) {
-        this.zigRpc?.send.stopWindowMove({ id: WINDOW_ID });
+        this.internalRpc?.send.stopWindowMove({ id: WINDOW_ID });
       }
     });
   }
@@ -288,16 +288,15 @@ class Electroview<T> {
     };
   }
   
-  createZigTransport(): RPCTransport {
+  createInternalTransport(): RPCTransport {
     const that = this;    
     return {
       send(message) {                  
         message.hostWebviewId = WEBVIEW_ID;        
-        that.sendToZig(message);      
+        that.sendToBunInternal(message);      
       },
-      registerHandler(handler) {
-        // TODO XX: rename zig to electrobun or internal or something. consider merging with bunbridge rpc
-        that.zigRpcHandler = handler;
+      registerHandler(handler) {        
+        that.internalRpcHandler = handler;
         // webview tag doesn't handle any messages from zig just yet
       },
     };

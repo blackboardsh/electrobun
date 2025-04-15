@@ -162,7 +162,7 @@ DLL_EXPORT void* initWebview(uint32_t webviewId,
     bool (*decideNavigation)(uint32_t, const char*),
     void (*webviewEventHandler)(uint32_t, const char*, const char*),
     void (*bunBridgeHandler)(uint32_t, const char*),
-    void (*webviewTagBridgeHandler)(uint32_t, const char*),
+    void (*internalBridgeHandler)(uint32_t, const char*),
     const char* electrobunPreloadScript,
     const char* customPreloadScript) {
     printf("initWebview called with webviewId: %u, url: %s\n", webviewId, url);

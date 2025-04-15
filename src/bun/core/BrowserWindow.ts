@@ -1,4 +1,4 @@
-import { zigRPC } from "../proc/zig";
+import { ffi } from "../proc/zig";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type RPC } from "rpc-anywhere";
@@ -92,7 +92,7 @@ export class BrowserWindow<T> {
     titleBarStyle,
   }: Partial<WindowOptionsType<T>>) {
     
-    this.ptr = zigRPC.request.createWindow({
+    this.ptr = ffi.request.createWindow({
       id: this.id,
       title: this.title,
       url: this.url || "",      
@@ -176,11 +176,11 @@ export class BrowserWindow<T> {
 
   setTitle(title: string) {
     this.title = title;
-    return zigRPC.request.setTitle({ winId: this.id, title });
+    return ffi.request.setTitle({ winId: this.id, title });
   }
 
   close() {
-    return zigRPC.request.closeWindow({ winId: this.id });
+    return ffi.request.closeWindow({ winId: this.id });
   }
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.

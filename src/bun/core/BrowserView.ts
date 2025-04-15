@@ -1,4 +1,4 @@
-import {  native, toCString, zigRPC } from "../proc/zig";
+import {  native, toCString, ffi } from "../proc/zig";
 import * as fs from "fs";
 import { execSync } from "child_process";
 import electrobunEventEmitter from "../events/eventEmitter";
@@ -130,7 +130,7 @@ export class BrowserView<T> {
     
 
     // TODO: add a then to this that fires an onReady event
-    return zigRPC.request.createWebview({
+    return ffi.request.createWebview({
       id: this.id,
       windowId: this.windowId,
       renderer: this.renderer, 
@@ -177,14 +177,13 @@ export class BrowserView<T> {
     this.executeJavascript(wrappedMessage);
   }
 
-  // TODO XX: rename from zig to 'internal'
-  sendMessageFromZigViaExecute(jsonMessage) {
+  sendInternalMessageViaExecute(jsonMessage) {
     const stringifiedMessage =
       typeof jsonMessage === "string"
         ? jsonMessage
         : JSON.stringify(jsonMessage);
     // todo (yoav): make this a shared const with the browser api
-    const wrappedMessage = `window.__electrobun.receiveMessageFromZig(${stringifiedMessage})`;
+    const wrappedMessage = `window.__electrobun.receiveInternalMessageFromBun(${stringifiedMessage})`;
     this.executeJavascript(wrappedMessage);
   }
 
@@ -192,7 +191,7 @@ export class BrowserView<T> {
   // it won't trigger the kevent for zig to read the pipe and we'll be stuck.
   // so we have to chunk it
   executeJavascript(js: string) {
-    zigRPC.request.evaluateJavascriptWithNoCompletion({id: this.id, js});
+    ffi.request.evaluateJavascriptWithNoCompletion({id: this.id, js});
   }
 
   loadURL(url: string) {

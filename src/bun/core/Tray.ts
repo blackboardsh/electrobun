@@ -1,4 +1,4 @@
-import { zigRPC, type MenuItemConfig } from "../proc/zig";
+import { ffi, type MenuItemConfig } from "../proc/zig";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { VIEWS_FOLDER } from "./Paths";
 import { join } from "path";
@@ -28,7 +28,7 @@ export class Tray {
   }: ConstructorOptions = {}) {
     console.log("img", image);
     console.log("img", this.resolveImagePath(image));
-    this.ptr = zigRPC.request.createTray({
+    this.ptr = ffi.request.createTray({
       id: this.id,
       title,
       image: this.resolveImagePath(image),
@@ -50,11 +50,11 @@ export class Tray {
   }
 
   setTitle(title: string) {
-    zigRPC.request.setTrayTitle({ id: this.id, title });
+    ffi.request.setTrayTitle({ id: this.id, title });
   }
 
   setImage(imgPath: string) {
-    zigRPC.request.setTrayImage({
+    ffi.request.setTrayImage({
       id: this.id,
       image: this.resolveImagePath(imgPath),
     });
@@ -62,7 +62,7 @@ export class Tray {
 
   setMenu(menu: Array<MenuItemConfig>) {
     const menuWithDefaults = menuConfigWithDefaults(menu);
-    zigRPC.request.setTrayMenu({
+    ffi.request.setTrayMenu({
       id: this.id,
       menuConfig: JSON.stringify(menuWithDefaults),
     });
