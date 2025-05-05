@@ -8,7 +8,7 @@ type Rect = { x: number; y: number; width: number; height: number };
 
 const ConfigureWebviewTags = (
   enableWebviewTags: boolean,
-  zigRpc: (params: any) => any,
+  internalRpc: (params: any) => any,
   bunRpc: (params: any) => any
 ) => {
   if (!enableWebviewTags) {
@@ -23,7 +23,7 @@ const ConfigureWebviewTags = (
     webviewId?: number; // = nextWebviewId++;
 
     // rpc
-    zigRpc: any;
+    internalRpc: any;
     bunRpc: any;
 
     // querySelectors for elements that you want to appear
@@ -59,7 +59,7 @@ const ConfigureWebviewTags = (
 
     constructor() {
       super();
-      this.zigRpc = zigRpc;
+      this.internalRpc = internalRpc;
       this.bunRpc = bunRpc;      
 
       // Give it a frame to be added to the dom and render before measuring
@@ -85,7 +85,7 @@ const ConfigureWebviewTags = (
       const url = this.src || this.getAttribute("src");
       const html = this.html || this.getAttribute("html");      
 
-      const webviewId = await this.zigRpc.request.webviewTagInit({        
+      const webviewId = await this.internalRpc.request.webviewTagInit({        
         hostWebviewId: window.__electrobunWebviewId,
         windowId: window.__electrobunWindowId,
         renderer: this.renderer,
@@ -122,7 +122,7 @@ const ConfigureWebviewTags = (
           reject,
         };
 
-        this.zigRpc.request.webviewTagCallAsyncJavaScript({
+        this.internalRpc.request.webviewTagCallAsyncJavaScript({
           messageId,
           webviewId: this.webviewId,
           hostWebviewId: window.__electrobunWebviewId,
@@ -148,11 +148,11 @@ const ConfigureWebviewTags = (
     }
 
     async canGoBack() {
-      return this.zigRpc.request.webviewTagCanGoBack({ id: this.webviewId });      
+      return this.internalRpc.request.webviewTagCanGoBack({ id: this.webviewId });      
     }
 
     async canGoForward() {
-      return this.zigRpc.request.webviewTagCanGoForward({
+      return this.internalRpc.request.webviewTagCanGoForward({
         id: this.webviewId,
       });      
     }
@@ -289,7 +289,7 @@ const ConfigureWebviewTags = (
         this.lastMasks = masks;
         this.lastMasksJSON = masksJson;
 
-        this.zigRpc.send.webviewTagResize({
+        this.internalRpc.send.webviewTagResize({
           id: this.webviewId,
           frame: {
             width: width,
@@ -371,7 +371,7 @@ const ConfigureWebviewTags = (
       // this.mutationObserver?.disconnect();
       window.removeEventListener("resize", this.boundForceSyncDimensions);
       window.removeEventListener("scroll", this.boundSyncDimensions);
-      this.zigRpc.send.webviewTagRemove({ id: this.webviewId });
+      this.internalRpc.send.webviewTagRemove({ id: this.webviewId });
     }
 
     static get observedAttributes() {
@@ -395,7 +395,7 @@ const ConfigureWebviewTags = (
       if (!this.webviewId) {
         return;
       }
-      this.zigRpc.send.webviewTagUpdateSrc({
+      this.internalRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
         url: src,
       });
@@ -406,7 +406,7 @@ const ConfigureWebviewTags = (
         return;
       }
       
-      this.zigRpc.send.webviewTagUpdateHtml({
+      this.internalRpc.send.webviewTagUpdateHtml({
         id: this.webviewId,
         html: html,
       });
@@ -416,33 +416,33 @@ const ConfigureWebviewTags = (
       if (!this.webviewId) {
         return;
       }
-      this.zigRpc.send.webviewTagUpdatePreload({
+      this.internalRpc.send.webviewTagUpdatePreload({
         id: this.webviewId,
         preload,
       });
     }
 
     goBack() {
-      this.zigRpc.send.webviewTagGoBack({ id: this.webviewId });
+      this.internalRpc.send.webviewTagGoBack({ id: this.webviewId });
     }
 
     goForward() {
-      this.zigRpc.send.webviewTagGoForward({ id: this.webviewId });
+      this.internalRpc.send.webviewTagGoForward({ id: this.webviewId });
     }
 
     reload() {
-      this.zigRpc.send.webviewTagReload({ id: this.webviewId });
+      this.internalRpc.send.webviewTagReload({ id: this.webviewId });
     }
     loadURL(url: string) {
       this.setAttribute("src", url);
-      this.zigRpc.send.webviewTagUpdateSrc({
+      this.internalRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
         url,
       });
     }
     loadHTML(html: string) {
       this.setAttribute("html", html);
-      this.zigRpc.send.webviewTagUpdateHtml({
+      this.internalRpc.send.webviewTagUpdateHtml({
         id: this.webviewId,
         html,
       })
@@ -458,7 +458,7 @@ const ConfigureWebviewTags = (
         }
       }
 
-      this.zigRpc.send.webviewTagSetTransparent({
+      this.internalRpc.send.webviewTagSetTransparent({
         id: this.webviewId,
         transparent: this.transparent || Boolean(transparent),
       });
@@ -472,7 +472,7 @@ const ConfigureWebviewTags = (
         }
       }
 
-      this.zigRpc.send.webviewTagSetPassthrough({
+      this.internalRpc.send.webviewTagSetPassthrough({
         id: this.webviewId,
         enablePassthrough:
           this.passthroughEnabled || Boolean(enablePassthrough),
@@ -488,7 +488,7 @@ const ConfigureWebviewTags = (
         }
       }
 
-      this.zigRpc.send.webviewTagSetHidden({
+      this.internalRpc.send.webviewTagSetHidden({
         id: this.webviewId,
         hidden: this.hidden || Boolean(hidden),
       });
