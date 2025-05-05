@@ -61,9 +61,6 @@ const commandArg = process.argv[indexOfElectrobun + 1] || "launcher";
 
 const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
 
-// const SRC_PATH = join(ELECTROBUN_DEP_PATH, "src");
-// const ZIGOUT_BIN = join("zig-out", "bin");
-
 // When debugging electrobun with the example app use the builds (dev or release) right from the source folder
 // For developers using electrobun cli via npm use the release versions in /dist
 // This lets us not have to commit src build folders to git and provide pre-built binaries
@@ -71,8 +68,7 @@ const PATHS = {
   BUN_BINARY: join(ELECTROBUN_DEP_PATH, "dist", "bun") + binExt,
   LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun") + binExt,
   LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher") + binExt,
-  MAIN_JS: join(ELECTROBUN_DEP_PATH, "dist", "main.js"),
-  // ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview") + binExt,
+  MAIN_JS: join(ELECTROBUN_DEP_PATH, "dist", "main.js"),  
   NATIVE_WRAPPER_MACOS: join(
     ELECTROBUN_DEP_PATH,
     "dist",
@@ -371,18 +367,7 @@ if (commandArg === "init") {
 
   cpSync(bunBinarySourcePath, bunBinaryDestInBundlePath, { dereference: true });
 
-  // Zig native wrapper binary
-  // todo (yoav): build native bindings for target
-  // copy native bindings
-  // const zigNativeBinarySource = PATHS.ZIG_NATIVE_WRAPPER;
-  // const zigNativeBinaryDestination = join(appBundleMacOSPath, "webview") + binExt;
-  // const destFolder = dirname(zigNativeBinaryDestination);
-  // if (!existsSync(destFolder)) {
-  //   // console.info('creating folder: ', destFolder);
-  //   mkdirSync(destFolder, { recursive: true });
-  // }
-
-  // copy native wrapper dynamic library next to zig native binary
+  // copy native wrapper dynamic library
   if (OS === 'macos') {
   const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;
   const nativeWrapperMacosDestination = join(

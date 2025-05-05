@@ -105,7 +105,7 @@ const ConfigureWebviewTags = (
 
       this.webviewId = webviewId;
       this.id = `electrobun-webview-${webviewId}`;
-      // todo: replace zig -> webviewtag communication with a global instead of
+      // todo: replace bun -> webviewtag communication with a global instead of
       // queryselector based on id
       this.setAttribute("id", this.id);
     }
@@ -222,7 +222,7 @@ const ConfigureWebviewTags = (
       this.removeEventListener(event, listener);
     }
 
-    // This is typically called by injected js from zig
+    // This is typically called by injected js from bun
     emit(event: WebviewEventTypes, detail: any) {
       this.dispatchEvent(new CustomEvent(event, { detail }));
     }

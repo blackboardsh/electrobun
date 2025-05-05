@@ -190,6 +190,7 @@ export class BrowserView<T> {
   // Note: the OS has a buffer limit on named pipes. If we overflow it
   // it won't trigger the kevent for zig to read the pipe and we'll be stuck.
   // so we have to chunk it
+  // TODO: is this still needed after switching from named pipes
   executeJavascript(js: string) {
     ffi.request.evaluateJavascriptWithNoCompletion({id: this.id, js});
   }

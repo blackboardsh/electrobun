@@ -11,6 +11,7 @@ import { ConfigureWebviewTags } from "./webviewtag";
 // todo: should this just be injected as a preload script?
 import { isAppRegionDrag } from "./stylesAndElements";
 import type { BuiltinBunToWebviewSchema, BuiltinWebviewToBunSchema } from "./builtinrpcSchema";
+import type { InternalWebviewHandlers, WebviewTagHandlers } from "./rpc/webview";
 
 interface ElectrobunWebviewRPCSChema {
   bun: RPCSchema;
@@ -21,79 +22,6 @@ const WEBVIEW_ID = window.__electrobunWebviewId;
 const WINDOW_ID = window.__electrobunWindowId;
 const RPC_SOCKET_PORT = window.__electrobunRpcSocketPort;
 
-// todo (yoav): move this stuff to browser/rpc/webview.ts
-type ZigWebviewHandlers = RPCSchema<{
-  requests: {
-    webviewTagCallAsyncJavaScript: {
-      params: {
-        messageId: string;
-        webviewId: number;
-        hostWebviewId: number;
-        script: string;
-      };
-      response: void;
-    };
-  };
-}>;
-
-type WebviewTagHandlers = RPCSchema<{
-  requests: {};
-  messages: {
-    webviewTagResize: {
-      id: number;
-      frame: {
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-      };
-      masks: string;
-    };
-    webviewTagUpdateSrc: {
-      id: number;
-      url: string;
-    };
-    webviewTagUpdateHtml: {
-      id: number;
-      html: string;
-    }
-    webviewTagGoBack: {
-      id: number;
-    };
-    webviewTagGoForward: {
-      id: number;
-    };
-    webviewTagReload: {
-      id: number;
-    };
-    webviewTagRemove: {
-      id: number;
-    };
-    startWindowMove: {
-      id: number;
-    };
-    stopWindowMove: {
-      id: number;
-    };
-    moveWindowBy: {
-      id: number;
-      x: number;
-      y: number;
-    };
-    webviewTagSetTransparent: {
-      id: number;
-      transparent: boolean;
-    };
-    webviewTagSetPassthrough: {
-      id: number;
-      enablePassthrough: boolean;
-    };
-    webviewTagSetHidden: {
-      id: number;
-      hidden: boolean;
-    };
-  };
-}>;
 
 class Electroview<T> {
   bunSocket?: WebSocket;
@@ -130,7 +58,7 @@ class Electroview<T> {
   }
 
   initInternalRpc() {
-    this.internalRpc = createRPC<WebviewTagHandlers, ZigWebviewHandlers>({
+    this.internalRpc = createRPC<WebviewTagHandlers, InternalWebviewHandlers>({
       transport: this.createInternalTransport(),
       // requestHandler: {
 
@@ -183,7 +111,7 @@ class Electroview<T> {
     });
   }
 
-  // This will be attached to the global object, zig can rpc reply by executingJavascript
+  // This will be attached to the global object, bun can rpc reply by executingJavascript
   // of that global reference to the function
   receiveInternalMessageFromBun(msg: any) {    
     if (this.internalRpcHandler) {
@@ -203,7 +131,7 @@ class Electroview<T> {
 
       this.processQueue();
     } catch (err) {
-      console.error('failed to send to zig', err);
+      console.error('failed to send to bun internal', err);
     }
   }
 
@@ -297,7 +225,7 @@ class Electroview<T> {
       },
       registerHandler(handler) {        
         that.internalRpcHandler = handler;
-        // webview tag doesn't handle any messages from zig just yet
+        // webview tag doesn't handle any messages from bun just yet
       },
     };
   }
