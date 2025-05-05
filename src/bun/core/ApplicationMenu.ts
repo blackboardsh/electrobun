@@ -1,4 +1,4 @@
-import { ffi, type ApplicationMenuItemConfig } from "../proc/zig";
+import { ffi, type ApplicationMenuItemConfig } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 
 export const setApplicationMenu = (menu: Array<ApplicationMenuItemConfig>) => {

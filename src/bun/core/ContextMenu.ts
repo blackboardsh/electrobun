@@ -1,5 +1,5 @@
 // TODO: have a context specific menu that excludes role
-import { ffi, type ApplicationMenuItemConfig } from "../proc/zig";
+import { ffi, type ApplicationMenuItemConfig } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 
 export const showContextMenu = (menu: Array<ApplicationMenuItemConfig>) => {

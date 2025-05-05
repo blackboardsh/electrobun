@@ -1,4 +1,4 @@
-import { ffi } from "../proc/zig";
+import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type RPC } from "rpc-anywhere";

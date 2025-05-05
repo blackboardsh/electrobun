@@ -1,4 +1,4 @@
-import {  native, toCString, ffi } from "../proc/zig";
+import {  native, toCString, ffi } from "../proc/native";
 import * as fs from "fs";
 import { execSync } from "child_process";
 import electrobunEventEmitter from "../events/eventEmitter";

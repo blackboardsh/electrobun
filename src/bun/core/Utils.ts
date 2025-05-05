@@ -1,4 +1,4 @@
-import { ffi } from "../proc/zig";
+import { ffi } from "../proc/native";
 
 // TODO: move this to a more appropriate namespace
 export const moveToTrash = (path: string) => {

@@ -1,4 +1,4 @@
-import { ffi, type MenuItemConfig } from "../proc/zig";
+import { ffi, type MenuItemConfig } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { VIEWS_FOLDER } from "./Paths";
 import { join } from "path";
