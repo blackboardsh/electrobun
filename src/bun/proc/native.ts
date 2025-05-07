@@ -187,7 +187,25 @@ export const native = (() => {
       showContextMenu: {
         args: [FFIType.cstring, FFIType.function],
         returns: FFIType.void
-      },      
+      },   
+      moveToTrash: {
+        args: [FFIType.cstring],
+        returns: FFIType.bool
+      },  
+      showItemInFolder: {
+        args: [FFIType.cstring],
+        returns: FFIType.void
+      },  
+      openFileDialog: {
+        args: [
+          FFIType.cstring,
+          FFIType.cstring,
+          FFIType.int,
+          FFIType.int,
+          FFIType.int,
+        ],
+        returns: FFIType.cstring
+      },  
       
       // MacOS specific native utils
       getNSWindowStyleMask: {
@@ -649,6 +667,33 @@ export const ffi = {
           contextMenuHandler
         );
       },
+      moveToTrash: (params: {path: string}): boolean => {
+        const {
+          path
+        } = params;
+
+        return native.symbols.moveToTrash(toCString(path));        
+      },
+      showItemInFolder: (params: {path: string}): void => {
+        const {
+          path
+        } = params;
+
+        native.symbols.showItemInFolder(toCString(path));        
+      },
+      openFileDialog: (params: {startingFolder: string, allowedFileTypes: string, canChooseFiles: boolean, canChooseDirectory: boolean, allowsMultipleSelection: boolean}): string => {
+        const {
+          startingFolder,
+          allowedFileTypes,
+          canChooseFiles,
+          canChooseDirectory,
+          allowsMultipleSelection,
+        } = params;        
+        const filePath = native.symbols.openFileDialog(toCString(startingFolder), toCString(allowedFileTypes), canChooseFiles, canChooseDirectory, allowsMultipleSelection);        
+        
+        return filePath.toString();
+      },
+      
       // ffifunc: (params: {}): void => {
       //   const {
           

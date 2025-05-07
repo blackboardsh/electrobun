@@ -41,7 +41,7 @@ export const openFileDialog = async (
     allowsMultipleSelection: optsWithDefault.allowsMultipleSelection,
   });
 
-  const filePaths = result.openFileDialogResponse.split(",");
+  const filePaths = result.split(",");
 
   // todo: it's nested like this due to zig union types. needs a zig refactor and revisit
   return filePaths;

@@ -2690,32 +2690,44 @@ extern "C" const char *openFileDialog(const char *startingFolder,
                                       BOOL canChooseFiles,
                                       BOOL canChooseDirectories,
                                       BOOL allowsMultipleSelection) {
-    NSOpenPanel *panel = [NSOpenPanel openPanel];
-    [panel setCanChooseFiles:canChooseFiles];
-    [panel setCanChooseDirectories:canChooseDirectories];
-    [panel setAllowsMultipleSelection:allowsMultipleSelection];
 
-    NSString *startFolder = [NSString stringWithUTF8String:startingFolder ?: ""];
-    [panel setDirectoryURL:[NSURL fileURLWithPath:startFolder]];
-    if (allowedFileTypes && strcmp(allowedFileTypes, "*") != 0 && strcmp(allowedFileTypes, "") != 0) {
-        NSString *allowedTypesStr = [NSString stringWithUTF8String:allowedFileTypes];
-        NSArray *fileTypesArray = [allowedTypesStr componentsSeparatedByString:@","];
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        [panel setAllowedFileTypes:fileTypesArray];
-#pragma clang diagnostic pop
-    }
-    NSInteger result = [panel runModal];
-    if (result == NSModalResponseOK) {
-        NSArray<NSURL *> *selectedFileURLs = [panel URLs];
-        NSMutableArray<NSString *> *pathStrings = [NSMutableArray array];
-        for (NSURL *u in selectedFileURLs) {
-            [pathStrings addObject:u.path];
+
+    __block NSOpenPanel *panel;
+    __block NSInteger result = NSModalResponseCancel;
+    __block NSString *concatenatedPaths = nil;
+    
+    dispatch_sync(dispatch_get_main_queue(), ^{        
+        panel = [NSOpenPanel openPanel];        
+        [panel setCanChooseFiles:canChooseFiles];        
+        [panel setCanChooseDirectories:canChooseDirectories];        
+        [panel setAllowsMultipleSelection:allowsMultipleSelection];        
+
+        NSString *startFolder = [NSString stringWithUTF8String:startingFolder ?: ""];
+        [panel setDirectoryURL:[NSURL fileURLWithPath:startFolder]];        
+        
+        if (allowedFileTypes && strcmp(allowedFileTypes, "*") != 0 && strcmp(allowedFileTypes, "") != 0) {            
+            NSString *allowedTypesStr = [NSString stringWithUTF8String:allowedFileTypes];
+            NSArray *fileTypesArray = [allowedTypesStr componentsSeparatedByString:@","];
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            [panel setAllowedFileTypes:fileTypesArray];
+            #pragma clang diagnostic pop
         }
-        NSString *concatenatedPaths = [pathStrings componentsJoinedByString:@","];
-        return strdup([concatenatedPaths UTF8String]);
-    }
-    return NULL;
+                
+        result = [panel runModal]; // Run the modal dialog on the main thread        
+        
+        if (result == NSModalResponseOK) {            
+            NSArray<NSURL *> *selectedFileURLs = [panel URLs];
+            NSMutableArray<NSString *> *pathStrings = [NSMutableArray array];
+            for (NSURL *u in selectedFileURLs) {
+                [pathStrings addObject:u.path];
+            }
+            concatenatedPaths = [pathStrings componentsJoinedByString:@","];
+        }        
+    });
+    
+    // Return the result after the dispatch_sync completes
+    return (concatenatedPaths) ? strdup([concatenatedPaths UTF8String]) : NULL;
 }
 
 
