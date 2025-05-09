@@ -13,7 +13,6 @@ import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import {platform, arch} from 'os';
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
-console.log('cli')
 // MacOS named pipes hang at around 4KB
 const MAX_CHUNK_SIZE = 1024 * 2;
 
@@ -255,7 +254,6 @@ if (commandArg === "init") {
   }
 
   // build macos bundle
-
   const {
     appBundleFolderPath,
     appBundleFolderContentsPath,
@@ -332,7 +330,6 @@ if (commandArg === "init") {
   //     mkdirSync(destLauncherFolder, {recursive: true});
   // }
   // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});
-
   const bunCliLauncherBinarySource =
     buildEnvironment === "dev"
       ? // Note: in dev use the cli as the launcher
@@ -364,7 +361,6 @@ if (commandArg === "init") {
     // console.info('creating folder: ', destFolder);
     mkdirSync(destFolder2, { recursive: true });
   }
-
   cpSync(bunBinarySourcePath, bunBinaryDestInBundlePath, { dereference: true });
 
   // copy native wrapper dynamic library
@@ -438,6 +434,7 @@ if (commandArg === "init") {
     }
   }
 
+
   // copy native bindings
   const bsPatchSource = PATHS.BSPATCH;
   const bsPatchDestination = join(appBundleMacOSPath, "bspatch") + binExt;
@@ -506,7 +503,6 @@ if (commandArg === "init") {
       continue;
     }
   }
-
   // Copy assets like html, css, images, and other files
   for (const relSource in config.build.copy) {
     const source = join(projectRoot, relSource);
@@ -530,10 +526,11 @@ if (commandArg === "init") {
     cpSync(source, destination, { recursive: true, dereference: true });
   }
 
-  buildIcons(appBundleFolderResourcesPath);
 
+  buildIcons(appBundleFolderResourcesPath);
   // Run postBuild script
   if (config.scripts.postBuild) {
+    console.log('running build script', bunBinarySourcePath, config.scripts.postBuild)
     Bun.spawnSync([bunBinarySourcePath, config.scripts.postBuild], {
       stdio: ["ignore", "inherit", "inherit"],
       env: {
@@ -542,7 +539,6 @@ if (commandArg === "init") {
       },
     });
   }
-
   // All the unique files are in the bundle now. Create an initial temporary tar file
   // for hashing the contents
   // tar the signed and notarized app bundle
@@ -555,7 +551,6 @@ if (commandArg === "init") {
     },
     [basename(appBundleFolderPath)]
   );
-
   const tmpTarball = Bun.file(tmpTarPath);
   const tmpTarBuffer = await tmpTarball.arrayBuffer();
   // Note: wyhash is the default in Bun.hash but that may change in the future
@@ -563,7 +558,6 @@ if (commandArg === "init") {
   const hash = Bun.hash.wyhash(tmpTarBuffer, 43770n).toString(36);
 
   unlinkSync(tmpTarPath);
-
   // const bunVersion = execSync(`${bunBinarySourcePath} --version`).toString().trim();
 
   // version.json inside the app bundle
@@ -606,7 +600,6 @@ if (commandArg === "init") {
   } else {
     console.log("skipping notarization");
   }
-
   if (buildEnvironment !== "dev")  {
     const artifactsToUpload = [];
     // zstd wasm https://github.com/OneIdentity/zstd-js
@@ -698,7 +691,6 @@ if (commandArg === "init") {
     });
 
     buildIcons(appBundleFolderResourcesPath);
-
     await Bun.write(
       join(selfExtractingBundle.appBundleFolderContentsPath, "Info.plist"),
       InfoPlistContents
@@ -788,6 +780,7 @@ if (commandArg === "init") {
       buildEnvironment,
       `${appFileName}.app.tar.zst`
     );
+
 
     // attempt to get the previous version to create a patch file
     if (updateJsonResponse.ok) {
@@ -884,7 +877,7 @@ if (commandArg === "init") {
   // Note: we want to use the version of bun that's packaged with electrobun
   // const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
   // const mainPath = join(buildFolder, 'bun', 'index.js');
-  const mainPath = join(buildFolder, bundleFileName);
+  // const mainPath = join(buildFolder, bundleFileName);
   // console.log('running ', bunPath, mainPath);
 
   // Note: open will open the app bundle as a completely different process
@@ -894,17 +887,35 @@ if (commandArg === "init") {
   // Bun.spawn(["open", mainPath], {
   //   env: {},
   // });
+
+  let mainProc;
   const bundleExecPath = join(
     buildFolder,
     bundleFileName,
     "Contents",  'MacOS');
 
-  const mainProc = Bun.spawn([join(bundleExecPath,'bun'), join(bundleExecPath, 'main.js')], {
-    stdio: ['inherit', 'inherit', 'inherit'],
-    cwd: bundleExecPath
-  })
+  if (OS === 'macos') {
+
+    mainProc = Bun.spawn([join(bundleExecPath,'bun'), join(bundleExecPath, 'main.js')], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+      cwd: bundleExecPath
+    })
+  } else if (OS === 'win') {
+    // Note: for some reason on windows bun will only execute from within its own folder
+    mainProc =  Bun.spawn(['bun.exe', 'main.js' ], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+      cwd: bundleExecPath
+    })
+  }
+
+  
+
+  
+
+  console.log('mainProc running', bundleExecPath, mainProc.killed)
 
   process.on("SIGINT", () => {
+    console.log('exit command')
     // toLauncherPipe.write("exit command\n");      
     mainProc.kill();
     process.exit();

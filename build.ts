@@ -162,12 +162,20 @@ async function vendorBun() {
 
     const bunUrlSegment = isWindows ? 'bun-windows-x64.zip' : 'bun-darwin-aarch64.zip';
     const tempZipPath = join("vendors", "bun", "temp.zip");
+    const extractDir = join("vendors", "bun");
     
     // Download zip file
-    await $`mkdir -p ${join("vendors", "bun")} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.2.3/${bunUrlSegment}`;
+    await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.2.12/${bunUrlSegment}`;
     
     // Extract zip file
-    await $`unzip -o ${tempZipPath} -d ${join("vendors", "bun")}`;
+    // await $`unzip -o ${tempZipPath} -d ${join("vendors", "bun")}`;
+    if (isWindows) {
+        // Use PowerShell to extract zip on Windows
+        await $`powershell -command "Expand-Archive -Path ${tempZipPath} -DestinationPath ${extractDir} -Force"`;
+      } else {
+        // Use unzip on macOS/Linux
+        await $`unzip -o ${tempZipPath} -d ${extractDir}`;
+      }
     
     // Move the bun binary to the correct location
     // The path inside the zip might be different depending on the platform
