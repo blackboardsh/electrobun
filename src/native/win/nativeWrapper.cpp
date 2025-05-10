@@ -1,20 +1,63 @@
-#include <cstdint>
-#include <stdio.h>
-#include <stdlib.h>
+#include <Windows.h>
+#include <string>
+#include <cstring>
+#include <functional>
+#include <vector>
 
-#define DLL_EXPORT __declspec(dllexport)
+// Forward declarations for classes
+class AbstractView;
+class NSWindow;
+class NSStatusItem;
+class WKWebView;
 
-//---------------------------------------------------
-// Type Declarations
-//---------------------------------------------------
+// Type definitions to match macOS types
+// Note: uint32_t is already defined in <stdint.h>
+#include <stdint.h>
+// BOOL is already defined in Windows.h, so we'll use it directly
+// Define CGFloat as double to match the 64-bit Mac version (or float for 32-bit)
+typedef double CGFloat;
 
-// Dummy types to represent opaque objects.
-struct AbstractView {};
-struct NSWindow {};
-struct WKWebView {};
-struct NSStatusItem {};
+// Function pointer type definitions
+typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
+typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
+typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);
+typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
+typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
+typedef void (*WindowCloseHandler)(uint32_t windowId);
+typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
+typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
+typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
+typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
+typedef const char* (*GetMimeType)(const char* filePath);
+typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);
 
-// A simple rectangle type.
+// Stub classes for macOS types
+class AbstractView {
+public:
+    uint32_t webviewId;
+};
+
+class NSWindow {
+public:
+    void* contentView;
+};
+
+class NSStatusItem {
+public:
+    void* button;
+};
+
+class MyScriptMessageHandlerWithReply {
+public:
+    HandlePostMessageWithReply zigCallback;
+    uint32_t webviewId;
+};
+
+class WKWebView {
+public:
+    void* configuration;
+};
+
 struct NSRect {
     double x;
     double y;
@@ -22,313 +65,302 @@ struct NSRect {
     double height;
 };
 
-// File response type for file-loading callbacks.
-struct FileResponse {
-    const char* mimeType;
-    const char* fileContents;
-    size_t len;
-    void* opaquePointer;
-};
-
-// Callback typedef for file loading.
-typedef FileResponse (*FileLoader)(uint32_t, const char*, const char*);
-
-// Callback for snapshot handling.
-typedef void (*SnapshotHandler)(uint32_t, uint32_t, const char*);
-
-// Window event handler callbacks.
-typedef void (*windowCloseHandler)(uint32_t);
-typedef void (*windowMoveHandler)(uint32_t, double, double);
-typedef void (*windowResizeHandler)(uint32_t, double, double, double, double);
-
-// Tray item handler.
-typedef void (*TrayItemHandler)(uint32_t, const char*);
-
-// Structure for window style options.
-struct WindowStyleMaskOptions {
-    bool Borderless;
-    bool Titled;
-    bool Closable;
-    bool Miniaturizable;
-    bool Resizable;
-    bool UnifiedTitleAndToolbar;
-    bool FullScreen;
-    bool FullSizeContentView;
-    bool UtilityWindow;
-    bool DocModalWindow;
-    bool NonactivatingPanel;
-    bool HUDWindow;
-};
-
-// Parameters for creating a window.
-struct CreateNSWindowWithFrameAndStyleParams {
+struct createNSWindowWithFrameAndStyleParams {
     NSRect frame;
-    WindowStyleMaskOptions styleMask;
-    const char* titleBarStyle;
+    uint32_t styleMask;
+    const char *titleBarStyle;
 };
 
-// Callback for asynchronous JavaScript completion.
-typedef void (*callAsyncJavascriptCompletionHandler)(const char* messageId, uint32_t webviewId, uint32_t hostWebviewId, const char* responseJSON);
+// Implementation of the exported functions
 
-//---------------------------------------------------
-// Extern "C" Stub Implementations
-//---------------------------------------------------
+// Ensure the exported functions have appropriate visibility
+#define ELECTROBUN_EXPORT __declspec(dllexport)
 
 extern "C" {
 
-// 1. Invoke a decision handler with a policy (stub).
-DLL_EXPORT void invokeDecisionHandler(void* decisionHandler, int policy) {
-    printf("invokeDecisionHandler called with policy: %d\n", policy);
+ELECTROBUN_EXPORT void runNSApplication() {
+    // Stub implementation
+    // Would normally run the application loop
 }
 
-// 2. Get URL from a navigation action (stub).
-DLL_EXPORT const char* getUrlFromNavigationAction(void* navigationAction) {
-    printf("getUrlFromNavigationAction called\n");
-    return "http://example.com";
+ELECTROBUN_EXPORT void killApp() {
+    // Stub implementation
+    // Would terminate the process
+    ExitProcess(1);
 }
 
-// 3. Get body from a script message (stub).
-DLL_EXPORT const char* getBodyFromScriptMessage(void* scriptMessage) {
-    printf("getBodyFromScriptMessage called\n");
-    return "body";
+ELECTROBUN_EXPORT void shutdownApplication() {
+    // Stub implementation
+    // Would clean up resources
 }
 
-// 4. Create an NSRect wrapper. Returns a pointer to a heap-allocated NSRect.
-DLL_EXPORT void* createNSRectWrapper(double x, double y, double width, double height) {
-    printf("createNSRectWrapper called with: %f, %f, %f, %f\n", x, y, width, height);
-    NSRect* rect = (NSRect*)malloc(sizeof(NSRect));
-    if (rect) {
-        rect->x = x;
-        rect->y = y;
-        rect->width = width;
-        rect->height = height;
+ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
+                         NSWindow *window,
+                         const char *renderer,
+                         const char *url,
+                         double x, double y,
+                         double width, double height,
+                         bool autoResize,
+                         const char *partitionIdentifier,
+                         DecideNavigationCallback navigationCallback,
+                         WebviewEventHandler webviewEventHandler,
+                         HandlePostMessage bunBridgeHandler,
+                         HandlePostMessage internalBridgeHandler,
+                         const char *electrobunPreloadScript,
+                         const char *customPreloadScript) {
+    // Stub implementation
+    AbstractView* view = new AbstractView();
+    view->webviewId = webviewId;
+    return view;
+}
+
+ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView,
+                                                              uint32_t webviewId,
+                                                              const char *name,
+                                                              HandlePostMessageWithReply callback) {
+    // Stub implementation
+    MyScriptMessageHandlerWithReply* handler = new MyScriptMessageHandlerWithReply();
+    handler->zigCallback = callback;
+    handler->webviewId = webviewId;
+    return handler;
+}
+
+ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *urlString) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
+    // Stub implementation
+    delete abstractView;
+}
+
+ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
+    // Stub implementation
+    return FALSE;
+}
+
+ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
+    // Stub implementation
+    return FALSE;
+}
+
+ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void testFFI(void *ptr) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void callAsyncJavaScript(const char *messageId,
+                        AbstractView *abstractView,
+                        const char *jsString,
+                        uint32_t webviewId,
+                        uint32_t hostWebviewId,
+                        callAsyncJavascriptCompletionHandler completionHandler) {
+    // Stub implementation
+    if (completionHandler) {
+        completionHandler(messageId, webviewId, hostWebviewId, "\"\"");
     }
+}
+
+ELECTROBUN_EXPORT void addPreloadScriptToWebView(AbstractView *abstractView, const char *scriptContent, BOOL forMainFrameOnly) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView *abstractView,
+                                 const char *scriptIdentifier,
+                                 const char *scriptContent,
+                                 BOOL forMainFrameOnly) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void invokeDecisionHandler(void (*decisionHandler)(int), int policy) {
+    // Stub implementation
+    if (decisionHandler) {
+        decisionHandler(policy);
+    }
+}
+
+ELECTROBUN_EXPORT const char* getUrlFromNavigationAction(void *navigationAction) {
+    // Stub implementation
+    static const char* defaultUrl = "about:blank";
+    return defaultUrl;
+}
+
+ELECTROBUN_EXPORT const char* getBodyFromScriptMessage(void *message) {
+    // Stub implementation
+    static const char* emptyString = "";
+    return emptyString;
+}
+
+ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
+    // Stub implementation
+}
+
+ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {
+    // Stub implementation
+    NSRect rect = {x, y, width, height};
     return rect;
 }
 
-// 5. Run the NSApplication (stub).
-DLL_EXPORT void runNSApplication() {
-    printf("runNSApplication called\n");
-}
-
-// 6. Create a window with frame and style.
-DLL_EXPORT void* createNSWindowWithFrameAndStyle(uint32_t windowId,
-    CreateNSWindowWithFrameAndStyleParams params,
-    windowCloseHandler zigCloseHandler,
-    windowMoveHandler zigMoveHandler,
-    windowResizeHandler zigResizeHandler) {
-    printf("createNSWindowWithFrameAndStyle called with windowId: %u\n", windowId);
-    // Stub: return a new NSWindow pointer.
+ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
+                                         createNSWindowWithFrameAndStyleParams config,
+                                         WindowCloseHandler zigCloseHandler,
+                                         WindowMoveHandler zigMoveHandler,
+                                         WindowResizeHandler zigResizeHandler) {
+    // Stub implementation
     return new NSWindow();
 }
 
-// 7. Make the window key and order it to the front.
-DLL_EXPORT void makeNSWindowKeyAndOrderFront(void* window) {
-    printf("makeNSWindowKeyAndOrderFront called\n");
-}
-
-// 8. Set the window title.
-DLL_EXPORT void setNSWindowTitle(void* window, const char* title) {
-    printf("setNSWindowTitle called with title: %s\n", title);
-}
-
-// 9. Close the window.
-DLL_EXPORT void closeNSWindow(void* window) {
-    printf("closeNSWindow called\n");
-}
-
-// 10. Get the window bounds. Returns a pointer to a dummy NSRect.
-DLL_EXPORT void* getWindowBounds(void* window) {
-    printf("getWindowBounds called\n");
-    NSRect* rect = (NSRect*)malloc(sizeof(NSRect));
-    if (rect) {
-        rect->x = 0;
-        rect->y = 0;
-        rect->width = 800;
-        rect->height = 600;
-    }
-    return rect;
-}
-
-// 11. Initialize a webview.
-DLL_EXPORT void* initWebview(uint32_t webviewId,
-    void* window,
-    const char* renderer,
-    const char* url,
-    NSRect frame,
-    FileLoader assetFileLoader,
-    bool autoResize,
-    const char* partition,
-    bool (*decideNavigation)(uint32_t, const char*),
-    void (*webviewEventHandler)(uint32_t, const char*, const char*),
-    void (*bunBridgeHandler)(uint32_t, const char*),
-    void (*internalBridgeHandler)(uint32_t, const char*),
-    const char* electrobunPreloadScript,
-    const char* customPreloadScript) {
-    printf("initWebview called with webviewId: %u, url: %s\n", webviewId, url);
-    // Stub: return a new AbstractView pointer.
-    return new AbstractView();
-}
-
-// 12. Add a preload script to a webview.
-DLL_EXPORT void addPreloadScriptToWebView(void* webView, const char* script, bool forMainFrameOnly) {
-    printf("addPreloadScriptToWebView called with script: %s\n", script);
-}
-
-// 13. Update a preload script.
-DLL_EXPORT void updatePreloadScriptToWebView(void* webView, const char* scriptIdentifier, const char* script, bool forMainFrameOnly) {
-    printf("updatePreloadScriptToWebView called with identifier: %s\n", scriptIdentifier);
-}
-
-// 14. Load a URL in the webview.
-DLL_EXPORT void loadURLInWebView(void* webView, const char* url) {
-    printf("loadURLInWebView called with url: %s\n", url);
-}
-
-// 15. Add a script message handler with reply.
-DLL_EXPORT void* addScriptMessageHandlerWithReply(void* webView, uint32_t webviewId, const char* name, const char* (*handler)(uint32_t, const char*)) {
-    printf("addScriptMessageHandlerWithReply called with webviewId: %u, name: %s\n", webviewId, name);
-    // Stub: return a dummy pointer.
-    return new AbstractView();
-}
-
-// 16. Evaluate JavaScript with no completion callback.
-DLL_EXPORT void evaluateJavaScriptWithNoCompletion(void* webView, const char* script) {
-    printf("evaluateJavaScriptWithNoCompletion called with script: %s\n", script);
-}
-
-// 17. Call asynchronous JavaScript.
-DLL_EXPORT void callAsyncJavaScript(const char* messageId, void* webView, const char* script, uint32_t webviewId, uint32_t hostWebviewId, callAsyncJavascriptCompletionHandler handler) {
-    printf("callAsyncJavaScript called with messageId: %s\n", messageId);
-    // Optionally, invoke the completion handler with a dummy response.
-    if (handler) {
-        handler(messageId, webviewId, hostWebviewId, "dummy response");
+ELECTROBUN_EXPORT void testFFI2(void (*completionHandler)()) {
+    // Stub implementation
+    if (completionHandler) {
+        completionHandler();
     }
 }
 
-// 18. Resize the webview.
-DLL_EXPORT void resizeWebview(void* webView, NSRect frame, const char* masks) {
-    printf("resizeWebview called with frame: (%f, %f, %f, %f) and masks: %s\n", frame.x, frame.y, frame.width, frame.height, masks);
+ELECTROBUN_EXPORT NSWindow* createWindowWithFrameAndStyleFromWorker(
+    uint32_t windowId,
+    double x, double y,
+    double width, double height,
+    uint32_t styleMask,
+    const char* titleBarStyle,
+    WindowCloseHandler zigCloseHandler,
+    WindowMoveHandler zigMoveHandler,
+    WindowResizeHandler zigResizeHandler) {
+    // Stub implementation
+    return new NSWindow();
 }
 
-// 19. Go back in the webview.
-DLL_EXPORT void webviewTagGoBack(void* webView) {
-    printf("webviewTagGoBack called\n");
+ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
+    // Stub implementation
 }
 
-// 20. Go forward in the webview.
-DLL_EXPORT void webviewTagGoForward(void* webView) {
-    printf("webviewTagGoForward called\n");
+ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
+    // Stub implementation
 }
 
-// 21. Reload the webview.
-DLL_EXPORT void webviewTagReload(void* webView) {
-    printf("webviewTagReload called\n");
+ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
+    // Stub implementation
+    delete window;
 }
 
-// 22. Remove the webview.
-DLL_EXPORT void webviewRemove(void* webView) {
-    printf("webviewRemove called\n");
+ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
+    // Stub implementation
 }
 
-// 23. Begin moving the window.
-DLL_EXPORT void startWindowMove(void* window) {
-    printf("startWindowMove called\n");
+ELECTROBUN_EXPORT void stopWindowMove() {
+    // Stub implementation
 }
 
-// 24. End moving the window.
-DLL_EXPORT void stopWindowMove(void* window) {
-    printf("stopWindowMove called\n");
+ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
+    // Stub implementation
 }
 
-// 25. Get a snapshot of the webview.
-DLL_EXPORT void getWebviewSnapshot(uint32_t hostId, uint32_t id, void* webView, SnapshotHandler snapshotHandler) {
-    printf("getWebviewSnapshot called with hostId: %u, id: %u\n", hostId, id);
-    if (snapshotHandler) {
-        snapshotHandler(hostId, id, "snapshot data");
-    }
+ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
+    // Stub implementation
+    return FALSE;
 }
 
-// 26. Set the webview's transparency.
-DLL_EXPORT void webviewTagSetTransparent(void* webView, bool transparent) {
-    printf("webviewTagSetTransparent called with transparent: %d\n", transparent);
+ELECTROBUN_EXPORT void showItemInFolder(char *path) {
+    // Stub implementation
 }
 
-// 27. Set the webview's passthrough.
-DLL_EXPORT void webviewTagSetPassthrough(void* webView, bool enablePassthrough) {
-    printf("webviewTagSetPassthrough called with enablePassthrough: %d\n", enablePassthrough);
-}
-
-// 28. Set the webview's hidden state.
-DLL_EXPORT void webviewSetHidden(void* webView, bool hidden) {
-    printf("webviewSetHidden called with hidden: %d\n", hidden);
-}
-
-// 29. Check if the webview can go back.
-DLL_EXPORT bool webviewCanGoBack(void* webView) {
-    printf("webviewCanGoBack called\n");
-    return false;
-}
-
-// 30. Check if the webview can go forward.
-DLL_EXPORT bool webviewCanGoForward(void* webView) {
-    printf("webviewCanGoForward called\n");
-    return false;
-}
-
-// 31. Move a file to trash.
-DLL_EXPORT bool moveToTrash(const char* path) {
-    printf("moveToTrash called with path: %s\n", path);
-    return true;
-}
-
-// 32. Show an item in its folder.
-DLL_EXPORT bool showItemInFolder(const char* path) {
-    printf("showItemInFolder called with path: %s\n", path);
-    return true;
-}
-
-// 33. Open a file dialog.
-DLL_EXPORT const char* openFileDialog(const char* startingFolder, const char* allowedFileTypes, bool canChooseFiles, bool canChooseDirectory, bool allowsMultipleSelection) {
-    printf("openFileDialog called with startingFolder: %s\n", startingFolder);
+ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
+                          const char *allowedFileTypes,
+                          BOOL canChooseFiles,
+                          BOOL canChooseDirectories,
+                          BOOL allowsMultipleSelection) {
+    // Stub implementation
     return nullptr;
 }
 
-// 34. Create a system tray item.
-DLL_EXPORT void* createTray(uint32_t id, const char* title, const char* pathToImage, bool templated, uint32_t width, uint32_t height, const TrayItemHandler* trayItemHandler) {
-    printf("createTray called with id: %u, title: %s\n", id, title);
-    // Stub: return a dummy tray item.
+ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,
+                        uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
+    // Stub implementation
     return new NSStatusItem();
 }
 
-// 35. Set the tray item's title.
-DLL_EXPORT void setTrayTitle(void* trayItem, const char* title) {
-    printf("setTrayTitle called with title: %s\n", title);
+ELECTROBUN_EXPORT void setTrayTitle(NSStatusItem *statusItem, const char *title) {
+    // Stub implementation
 }
 
-// 36. Set the tray item's image.
-DLL_EXPORT void setTrayImage(void* trayItem, const char* image) {
-    printf("setTrayImage called with image: %s\n", image);
+ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image) {
+    // Stub implementation
 }
 
-// 37. Set the tray item's menu.
-DLL_EXPORT void setTrayMenu(void* trayItem, const char* menuConfigJson) {
-    printf("setTrayMenu called with menuConfigJson: %s\n", menuConfigJson);
+ELECTROBUN_EXPORT void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {
+    // Stub implementation
 }
 
-// 38. Set the application menu.
-DLL_EXPORT void setApplicationMenu(const char* menuConfigJson, const TrayItemHandler* zigTrayItemHandler) {
-    printf("setApplicationMenu called with menuConfigJson: %s\n", menuConfigJson);
+ELECTROBUN_EXPORT void setTrayMenu(NSStatusItem *statusItem, const char *menuConfig) {
+    // Stub implementation
 }
 
-// 39. Show a context menu.
-DLL_EXPORT void showContextMenu(const char* menuConfigJson, const TrayItemHandler* zigContextMenuHandler) {
-    printf("showContextMenu called with menuConfigJson: %s\n", menuConfigJson);
+ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
+    // Stub implementation
 }
 
-// 40. Test FFI by printing the pointer.
-DLL_EXPORT void testFFI(void* ptr) {
-    printf("testFFI called with ptr: %p\n", ptr);
+ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
+    // Stub implementation
 }
 
-} // end extern "C"
+ELECTROBUN_EXPORT void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
+                       WKWebView *webView,
+                       zigSnapshotCallback callback) {
+    // Stub implementation
+    if (callback) {
+        static const char* emptyDataUrl = "data:image/png;base64,";
+        callback(hostId, webviewId, emptyDataUrl);
+    }
+}
+
+ELECTROBUN_EXPORT void setJSUtils(GetMimeType getMimeType, GetHTMLForWebviewSync getHTMLForWebviewSync) {
+    // Stub implementation
+}
+
+// Adding a few Windows-specific functions for interop if needed
+ELECTROBUN_EXPORT uint32_t getNSWindowStyleMask(
+    bool Borderless,
+    bool Titled,
+    bool Closable,
+    bool Miniaturizable,
+    bool Resizable,
+    bool UnifiedTitleAndToolbar,
+    bool FullScreen,
+    bool FullSizeContentView,
+    bool UtilityWindow,
+    bool DocModalWindow,
+    bool NonactivatingPanel,
+    bool HUDWindow) {
+    // Stub implementation that returns a composite style mask
+    uint32_t mask = 0;
+    if (Borderless) mask |= 1;
+    if (Titled) mask |= 2;
+    if (Closable) mask |= 4;
+    if (Resizable) mask |= 8;
+    return mask;
+}
+
+} // extern "C"
