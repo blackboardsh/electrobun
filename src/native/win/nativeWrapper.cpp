@@ -79,8 +79,13 @@ struct createNSWindowWithFrameAndStyleParams {
 extern "C" {
 
 ELECTROBUN_EXPORT void runNSApplication() {
-    // Stub implementation
-    // Would normally run the application loop
+    // printf("runNSApplication in native code");
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    
 }
 
 ELECTROBUN_EXPORT void killApp() {
@@ -240,7 +245,49 @@ ELECTROBUN_EXPORT void testFFI2(void (*completionHandler)()) {
     }
 }
 
-ELECTROBUN_EXPORT NSWindow* createWindowWithFrameAndStyleFromWorker(
+// Define a struct to store window data
+typedef struct {
+    uint32_t windowId;
+    WindowCloseHandler closeHandler;
+    WindowMoveHandler moveHandler;
+    WindowResizeHandler resizeHandler;
+} WindowData;
+
+// Window procedure that will handle events and call your handlers
+LRESULT CALLBACK CustomWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    // Get our custom data
+    WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    
+    if (data) {
+        switch (msg) {
+            case WM_CLOSE:
+                if (data->closeHandler) {
+                    data->closeHandler(data->windowId);
+                }
+                return 0; // Don't close the window yet, let the handler decide
+                
+            case WM_MOVE:
+                if (data->moveHandler) {
+                    int x = LOWORD(lParam);
+                    int y = HIWORD(lParam);
+                    data->moveHandler(data->windowId, x, y);
+                }
+                break;
+                
+            case WM_SIZE:
+                if (data->resizeHandler) {
+                    int width = LOWORD(lParam);
+                    int height = HIWORD(lParam);
+                    data->resizeHandler(data->windowId, 0, 0, width, height);
+                }
+                break;
+        }
+    }
+    
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     uint32_t windowId,
     double x, double y,
     double width, double height,
@@ -249,8 +296,53 @@ ELECTROBUN_EXPORT NSWindow* createWindowWithFrameAndStyleFromWorker(
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler) {
-    // Stub implementation
-    return new NSWindow();
+    
+    // Register window class with our custom procedure
+    static bool classRegistered = false;
+    if (!classRegistered) {
+        WNDCLASS wc = {0};
+        wc.lpfnWndProc = CustomWindowProc;
+        wc.hInstance = GetModuleHandle(NULL);
+        wc.lpszClassName = "BasicWindowClass";
+        RegisterClass(&wc);
+        classRegistered = true;
+    }
+    
+    // Create window data structure to store callbacks
+    WindowData* data = (WindowData*)malloc(sizeof(WindowData));
+    if (!data) return NULL;
+    
+    data->windowId = windowId;
+    data->closeHandler = zigCloseHandler;
+    data->moveHandler = zigMoveHandler;
+    data->resizeHandler = zigResizeHandler;
+    
+    // Map style mask to Windows style
+    DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
+    
+    // Create the window
+    HWND hwnd = CreateWindow(
+        "BasicWindowClass",
+        "",
+        windowStyle,
+        (int)x, (int)y,
+        (int)width, (int)height,
+        NULL, NULL, GetModuleHandle(NULL), NULL
+    );
+    
+    if (hwnd) {
+        // Store our data with the window
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
+        
+        // Show the window
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+    } else {
+        // Clean up if window creation failed
+        free(data);
+    }
+    
+    return hwnd;
 }
 
 ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
