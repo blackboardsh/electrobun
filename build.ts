@@ -5,7 +5,7 @@ console.log("building...", platform(), arch())
 import { $ } from "bun";
 import { platform, arch } from "os";
 import { join } from 'path';
-import { existsSync } from "fs";
+import { existsSync, readdirSync, renameSync } from "fs";
 import {parseArgs} from 'util';
 
 const {values: args} = parseArgs({
@@ -109,6 +109,8 @@ async function copyToDist() {
         await $`cp -R src/native/build/process_helper dist/process_helper`;
     } else if (OS === 'win') {
         await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
+        // native system webview library
+        await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll dist/WebView2Loader.dll`;
     } else if (OS === 'linux') {
 
     }
@@ -255,6 +257,21 @@ async function vendorWebview2() {
 
         // install nuget package manager
         await $`vendors/nuget/nuget.exe install Microsoft.Web.WebView2 -OutputDirectory vendors/webview2`;
+
+        const webview2BasePath = './vendors/webview2';
+        const webview2Dir = readdirSync(webview2BasePath).find(dir => dir.startsWith('Microsoft.Web.WebView2'));
+
+        if (webview2Dir && webview2Dir !== 'Microsoft.Web.WebView2') {
+            const oldPath = join(webview2BasePath, webview2Dir);
+            const newPath = join(webview2BasePath, 'Microsoft.Web.WebView2');
+            
+            try {
+                renameSync(oldPath, newPath);
+                console.log(`Renamed ${webview2Dir} to Microsoft.Web.WebView2`);
+            } catch (error) {
+                console.error('Error renaming folder:', error);
+            }
+        }
     }
 }
 
@@ -272,8 +289,15 @@ async function buildNative() {
         await $`mkdir -p src/native/macos/build && clang++ -c src/native/macos/nativeWrapper.mm -o src/native/macos/build/nativeWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef -std=c++17`;
         await $`mkdir -p src/native/build && clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib`;
     } else if (OS === 'win') {
-        await $`mkdir -p src/native/win/build && cl /c /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
-        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
+        const webview2Include = `./vendors/webview2/Microsoft.Web.WebView2/build/native/include`;
+        const webview2Lib = `./vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2LoaderStatic.lib`;
+
+        // Compile the main wrapper
+        await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /I"${webview2Include}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
+
+        // await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll src/native/win/build/nativeWrapper.obj src/native/win/build/webview2impl.obj "${webview2Lib}" user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib`;
+
+        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib "${webview2Lib}" /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
 
     }

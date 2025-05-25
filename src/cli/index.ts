@@ -74,6 +74,7 @@ const PATHS = {
     "libNativeWrapper.dylib"
   ),
   NATIVE_WRAPPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.dll"),
+  WEBVIEW2LOADER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "WebView2Loader.dll"),
   BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch") + binExt,
   EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor") + binExt,
   BSDIFF: join(ELECTROBUN_DEP_PATH, "dist", "bsdiff") + binExt,
@@ -382,6 +383,14 @@ if (commandArg === "init") {
   cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
     dereference: true,
   });
+
+  const webview2LibSource = PATHS.WEBVIEW2LOADER_WIN;
+  const webview2LibDestination = join(
+    appBundleMacOSPath,
+    "WebView2Loader.dll"
+  );  ;
+  // copy webview2 system webview library
+  cpSync(webview2LibSource, webview2LibDestination);
   
 }
   
