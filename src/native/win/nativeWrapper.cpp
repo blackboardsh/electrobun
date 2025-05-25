@@ -13,6 +13,14 @@
 #include <future>
 #include <memory>
 
+#include <windows.h>
+#include <wrl.h>
+#include <WebView2.h>
+#include <string>
+
+using namespace Microsoft::WRL;
+
+
 #define WM_EXECUTE_SYNC_BLOCK (WM_USER + 1)
 
 void log(const std::string& message) {
@@ -182,7 +190,6 @@ LRESULT CALLBACK MessageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return DefWindowProc(hwnd, msg, wParam, lParam);
     }
 }
-
 ELECTROBUN_EXPORT void runNSApplication() {
     // Create a hidden message-only window for dispatching
     WNDCLASS wc = {0};
@@ -204,9 +211,9 @@ ELECTROBUN_EXPORT void runNSApplication() {
     // Initialize the dispatcher
     MainThreadDispatcher::initialize(messageWindow);
     
-    // Start the message loop
+    // Start the message loop - process messages for ALL windows, not just the message window
     MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) {
+    while (GetMessage(&msg, NULL, 0, 0)) { // NULL means process messages for all windows in this thread
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
@@ -223,8 +230,16 @@ ELECTROBUN_EXPORT void shutdownApplication() {
     // Would clean up resources
 }
 
+
+
+
+// Global static variables to keep WebView2 alive
+static ComPtr<ICoreWebView2Controller> g_controller;
+static ComPtr<ICoreWebView2> g_webview;
+
+
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
-                         NSWindow *window,
+                         NSWindow *window,  // Actually HWND on Windows
                          const char *renderer,
                          const char *url,
                          double x, double y,
@@ -237,12 +252,189 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript) {
-    // Stub implementation
-    log("initWebview native code");
-
-    // return null;
+    
+    log("=== Starting WebView2 Creation ===");
+    
+    // Cast the window pointer to HWND (Windows window handle)
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    
     AbstractView* view = new AbstractView();
     view->webviewId = webviewId;
+    
+    if (!IsWindow(hwnd)) {
+        log("ERROR: Invalid window handle provided");
+        return view;
+    }
+    
+    // Copy parameters that might be destroyed when this function returns
+    std::string urlStr = url ? std::string(url) : "";
+    std::string electrobunScriptStr = electrobunPreloadScript ? std::string(electrobunPreloadScript) : "";
+    std::string customScriptStr = customPreloadScript ? std::string(customPreloadScript) : "";
+    
+    // Dispatch WebView2 creation to main thread
+    MainThreadDispatcher::dispatch_sync([=, urlStr = urlStr, electrobunScriptStr = electrobunScriptStr, customScriptStr = customScriptStr]() {
+        log("Creating WebView2 on main thread");
+        
+        // Initialize COM on main thread
+        CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+        
+        // Create WebView2 environment
+        HRESULT hr = CreateCoreWebView2Environment(
+            Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+                [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                    if (SUCCEEDED(result)) {
+                        log("WebView2 environment created successfully");
+                        
+                        // Create WebView2 controller
+                        env->CreateCoreWebView2Controller(hwnd,
+                            Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                                [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                                    if (SUCCEEDED(result)) {
+                                        log("WebView2 controller created successfully");
+                                        
+                                        // Store in global variables to keep alive
+                                        g_controller = controller;
+                                        
+                                        // Get the WebView2 core
+                                        HRESULT webviewResult = controller->get_CoreWebView2(&g_webview);
+                                        if (FAILED(webviewResult)) {
+                                            log("ERROR: Failed to get CoreWebView2");
+                                            return S_OK;
+                                        }
+                                        
+                                        // Get window client area and set bounds
+                                        RECT clientRect;
+                                        GetClientRect(hwnd, &clientRect);
+                                        RECT bounds = {0, 0, clientRect.right, clientRect.bottom};
+                                        controller->put_Bounds(bounds);
+                                        
+                                        // Make webview visible
+                                        controller->put_IsVisible(TRUE);
+                                        controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+                                        
+                                        // Set up navigation event handler
+                                        if (navigationCallback) {
+                                            EventRegistrationToken navigationToken;
+                                            g_webview->add_NavigationStarting(
+                                                Callback<ICoreWebView2NavigationStartingEventHandler>(
+                                                    [navigationCallback, webviewId](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                                        LPWSTR uri;
+                                                        args->get_Uri(&uri);
+                                                        
+                                                        // Convert to char* and call callback
+                                                        int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, NULL, 0, NULL, NULL);
+                                                        char* url_char = new char[size];
+                                                        WideCharToMultiByte(CP_UTF8, 0, uri, -1, url_char, size, NULL, NULL);
+                                                        
+                                                        bool allow = navigationCallback(webviewId, url_char);
+                                                        args->put_Cancel(!allow);
+                                                        
+                                                        delete[] url_char;
+                                                        CoTaskMemFree(uri);
+                                                        return S_OK;
+                                                    }).Get(), 
+                                                &navigationToken);
+                                        }
+                                        
+                                        // Set up navigation completion handler
+                                        EventRegistrationToken navCompletedToken;
+                                        g_webview->add_NavigationCompleted(
+                                            Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                                [](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                                    BOOL success;
+                                                    args->get_IsSuccess(&success);
+                                                    if (success) {
+                                                        log("Navigation completed successfully");
+                                                    } else {
+                                                        log("Navigation failed");
+                                                        COREWEBVIEW2_WEB_ERROR_STATUS error;
+                                                        args->get_WebErrorStatus(&error);
+                                                        char errorMsg[256];
+                                                        sprintf_s(errorMsg, "Navigation error: %d", error);
+                                                        log(errorMsg);
+                                                    }
+                                                    return S_OK;
+                                                }).Get(),
+                                            &navCompletedToken);
+                                        
+                                        // Set up message handlers
+                                        if (bunBridgeHandler || internalBridgeHandler) {
+                                            EventRegistrationToken messageToken;
+                                            g_webview->add_WebMessageReceived(
+                                                Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                                                    [bunBridgeHandler, internalBridgeHandler, webviewId](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                                                        LPWSTR message;
+                                                        args->TryGetWebMessageAsString(&message);
+                                                        
+                                                        // Convert to char*
+                                                        int size = WideCharToMultiByte(CP_UTF8, 0, message, -1, NULL, 0, NULL, NULL);
+                                                        char* message_char = new char[size];
+                                                        WideCharToMultiByte(CP_UTF8, 0, message, -1, message_char, size, NULL, NULL);
+                                                        
+                                                        // Call appropriate handlers
+                                                        if (bunBridgeHandler) {
+                                                            bunBridgeHandler(webviewId, message_char);
+                                                        }
+                                                        if (internalBridgeHandler) {
+                                                            internalBridgeHandler(webviewId, message_char);
+                                                        }
+                                                        
+                                                        delete[] message_char;
+                                                        CoTaskMemFree(message);
+                                                        return S_OK;
+                                                    }).Get(), 
+                                                &messageToken);
+                                        }
+                                        
+                                        // Add preload scripts
+                                        std::string combinedScript = "";
+                                        if (!electrobunScriptStr.empty()) {
+                                            combinedScript += electrobunScriptStr;
+                                            combinedScript += "\n";
+                                        }
+                                        if (!customScriptStr.empty()) {
+                                            combinedScript += customScriptStr;
+                                        }
+                                        
+                                        if (!combinedScript.empty()) {
+                                            // Convert to wstring
+                                            int size = MultiByteToWideChar(CP_UTF8, 0, combinedScript.c_str(), -1, NULL, 0);
+                                            std::wstring wScript(size - 1, 0);
+                                            MultiByteToWideChar(CP_UTF8, 0, combinedScript.c_str(), -1, &wScript[0], size);
+                                            
+                                            g_webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
+                                        }
+                                        
+                                        // Navigate to URL if provided
+                                        if (!urlStr.empty()) {
+                                            // Convert URL to wstring
+                                            int size = MultiByteToWideChar(CP_UTF8, 0, urlStr.c_str(), -1, NULL, 0);
+                                            std::wstring wUrl(size - 1, 0);
+                                            MultiByteToWideChar(CP_UTF8, 0, urlStr.c_str(), -1, &wUrl[0], size);
+                                            
+                                            log("Navigating to requested URL");
+                                            g_webview->Navigate(wUrl.c_str());
+                                        } else {
+                                            log("No URL provided, loading about:blank");
+                                            g_webview->Navigate(L"about:blank");
+                                        }
+                                        
+                                    } else {
+                                        log("Failed to create WebView2 controller");
+                                    }
+                                    return S_OK;
+                                }).Get());
+                    } else {
+                        log("Failed to create WebView2 environment");
+                    }
+                    return S_OK;
+                }).Get());
+        
+        if (FAILED(hr)) {
+            log("Failed to create WebView2 environment");
+        }
+    });
+    
     return view;
 }
 
@@ -385,30 +577,54 @@ LRESULT CALLBACK CustomWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     // Get our custom data
     WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
-    if (data) {
-        switch (msg) {
-            case WM_CLOSE:
-                if (data->closeHandler) {
-                    data->closeHandler(data->windowId);
-                }
-                return 0; // Don't close the window yet, let the handler decide
-                
-            case WM_MOVE:
-                if (data->moveHandler) {
-                    int x = LOWORD(lParam);
-                    int y = HIWORD(lParam);
-                    data->moveHandler(data->windowId, x, y);
-                }
-                break;
-                
-            case WM_SIZE:
-                if (data->resizeHandler) {
-                    int width = LOWORD(lParam);
-                    int height = HIWORD(lParam);
-                    data->resizeHandler(data->windowId, 0, 0, width, height);
-                }
-                break;
-        }
+    switch (msg) {
+        case WM_CLOSE:
+            if (data && data->closeHandler) {
+                data->closeHandler(data->windowId);
+            }
+            return 0; // Don't close the window yet, let the handler decide
+            
+        case WM_MOVE:
+            if (data && data->moveHandler) {
+                int x = LOWORD(lParam);
+                int y = HIWORD(lParam);
+                data->moveHandler(data->windowId, x, y);
+            }
+            break;
+            
+        case WM_SIZE:
+            if (data && data->resizeHandler) {
+                int width = LOWORD(lParam);
+                int height = HIWORD(lParam);
+                data->resizeHandler(data->windowId, 0, 0, width, height);
+            }
+            break;
+            
+        case WM_PAINT:
+            {
+                PAINTSTRUCT ps;
+                HDC hdc = BeginPaint(hwnd, &ps);
+                // Don't need to do anything here, just validate the paint region
+                EndPaint(hwnd, &ps);
+            }
+            return 0;
+            
+        case WM_TIMER:
+            if (wParam == 1) {
+                KillTimer(hwnd, 1);
+                log("Timer fired - forcing window refresh");
+                InvalidateRect(hwnd, NULL, TRUE);
+                UpdateWindow(hwnd);
+            }
+            return 0;
+            
+        case WM_DESTROY:
+            // Clean up window data
+            if (data) {
+                free(data);
+                SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+            }
+            break;
     }
     
     return DefWindowProc(hwnd, msg, wParam, lParam);
