@@ -4,6 +4,90 @@
 #include <functional>
 #include <vector>
 
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <ctime>
+
+#include <functional>
+#include <future>
+#include <memory>
+
+#define WM_EXECUTE_SYNC_BLOCK (WM_USER + 1)
+
+void log(const std::string& message) {
+    // Get current time
+    std::time_t now = std::time(0);
+    std::string timeStr = std::ctime(&now);
+    timeStr.pop_back(); // Remove newline character
+    
+    // Print to console
+    std::cout << "[" << timeStr << "] " << message << std::endl;
+    
+    // Optionally write to file
+    std::ofstream logFile("app.log", std::ios::app);
+    if (logFile.is_open()) {
+        logFile << "[" << timeStr << "] " << message << std::endl;
+        logFile.close();
+    }
+}
+
+class MainThreadDispatcher {
+private:
+    static HWND g_messageWindow;
+
+public:
+    static void initialize(HWND hwnd) {
+        g_messageWindow = hwnd;
+    }
+    
+    template<typename Func>
+    static auto dispatch_sync(Func&& func) -> decltype(func()) {
+        using ReturnType = decltype(func());
+        
+        if constexpr (std::is_void_v<ReturnType>) {
+            auto promise = std::make_shared<std::promise<void>>();
+            auto future = promise->get_future();
+            
+            auto task = new std::function<void()>([func = std::forward<Func>(func), promise]() {
+                try {
+                    func();
+                    promise->set_value();
+                } catch (...) {
+                    promise->set_exception(std::current_exception());
+                }
+            });
+            
+            PostMessage(g_messageWindow, WM_EXECUTE_SYNC_BLOCK, 0, (LPARAM)task);
+            future.get(); // Will re-throw any exceptions
+        } else {
+            auto promise = std::make_shared<std::promise<ReturnType>>();
+            auto future = promise->get_future();
+            
+            auto task = new std::function<void()>([func = std::forward<Func>(func), promise]() {
+                try {
+                    promise->set_value(func());
+                } catch (...) {
+                    promise->set_exception(std::current_exception());
+                }
+            });
+            
+            PostMessage(g_messageWindow, WM_EXECUTE_SYNC_BLOCK, 0, (LPARAM)task);
+            return future.get();
+        }
+    }
+    
+    static void handleSyncTask(LPARAM lParam) {
+        auto task = (std::function<void()>*)lParam;
+        (*task)();
+        delete task;
+    }
+};
+
+HWND MainThreadDispatcher::g_messageWindow = NULL;
+
+
+
 // Forward declarations for classes
 class AbstractView;
 class NSWindow;
@@ -78,14 +162,54 @@ struct createNSWindowWithFrameAndStyleParams {
 
 extern "C" {
 
+// ELECTROBUN_EXPORT void runNSApplication() {
+//     // printf("runNSApplication in native code");
+//     MSG msg;
+//     while (GetMessage(&msg, NULL, 0, 0)) {
+//         TranslateMessage(&msg);
+//         DispatchMessage(&msg);
+//     }
+    
+// }
+
+// handles window things on Windows
+LRESULT CALLBACK MessageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_EXECUTE_SYNC_BLOCK:
+            MainThreadDispatcher::handleSyncTask(lParam);
+            return 0;
+        default:
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+}
+
 ELECTROBUN_EXPORT void runNSApplication() {
-    // printf("runNSApplication in native code");
+    // Create a hidden message-only window for dispatching
+    WNDCLASS wc = {0};
+    wc.lpfnWndProc = MessageWindowProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "MessageWindowClass";
+    RegisterClass(&wc);
+    
+    HWND messageWindow = CreateWindow(
+        "MessageWindowClass", 
+        "", 
+        0, 0, 0, 0, 0,
+        HWND_MESSAGE, // This makes it a message-only window
+        NULL, 
+        GetModuleHandle(NULL), 
+        NULL
+    );
+    
+    // Initialize the dispatcher
+    MainThreadDispatcher::initialize(messageWindow);
+    
+    // Start the message loop
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
-    
 }
 
 ELECTROBUN_EXPORT void killApp() {
@@ -114,6 +238,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript) {
     // Stub implementation
+    log("initWebview native code");
+
+    // return null;
     AbstractView* view = new AbstractView();
     view->webviewId = webviewId;
     return view;
@@ -287,6 +414,8 @@ LRESULT CALLBACK CustomWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
+
+
 ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     uint32_t windowId,
     double x, double y,
@@ -297,50 +426,56 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler) {
     
-    // Register window class with our custom procedure
-    static bool classRegistered = false;
-    if (!classRegistered) {
-        WNDCLASS wc = {0};
-        wc.lpfnWndProc = CustomWindowProc;
-        wc.hInstance = GetModuleHandle(NULL);
-        wc.lpszClassName = "BasicWindowClass";
-        RegisterClass(&wc);
-        classRegistered = true;
-    }
-    
-    // Create window data structure to store callbacks
-    WindowData* data = (WindowData*)malloc(sizeof(WindowData));
-    if (!data) return NULL;
-    
-    data->windowId = windowId;
-    data->closeHandler = zigCloseHandler;
-    data->moveHandler = zigMoveHandler;
-    data->resizeHandler = zigResizeHandler;
-    
-    // Map style mask to Windows style
-    DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
-    
-    // Create the window
-    HWND hwnd = CreateWindow(
-        "BasicWindowClass",
-        "",
-        windowStyle,
-        (int)x, (int)y,
-        (int)width, (int)height,
-        NULL, NULL, GetModuleHandle(NULL), NULL
-    );
-    
-    if (hwnd) {
-        // Store our data with the window
-        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
+    // Everything GUI-related needs to be dispatched to main thread
+    HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
         
-        // Show the window
-        ShowWindow(hwnd, SW_SHOW);
-        UpdateWindow(hwnd);
-    } else {
-        // Clean up if window creation failed
-        free(data);
-    }
+        // Register window class with our custom procedure
+        static bool classRegistered = false;
+        if (!classRegistered) {
+            WNDCLASS wc = {0};
+            wc.lpfnWndProc = CustomWindowProc;
+            wc.hInstance = GetModuleHandle(NULL);
+            wc.lpszClassName = "BasicWindowClass";
+            RegisterClass(&wc);
+            classRegistered = true;
+        }
+        
+        // Create window data structure to store callbacks
+        WindowData* data = (WindowData*)malloc(sizeof(WindowData));
+        if (!data) return NULL;
+        
+        data->windowId = windowId;
+        data->closeHandler = zigCloseHandler;
+        data->moveHandler = zigMoveHandler;
+        data->resizeHandler = zigResizeHandler;
+        
+        // Map style mask to Windows style
+        DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
+        
+        // Create the window
+        HWND hwnd = CreateWindow(
+            "BasicWindowClass",
+            "",
+            windowStyle,
+            (int)x, (int)y,
+            (int)width, (int)height,
+            NULL, NULL, GetModuleHandle(NULL), NULL
+        );
+        
+        if (hwnd) {
+            // Store our data with the window
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
+            
+            // Show the window
+            ShowWindow(hwnd, SW_SHOW);
+            UpdateWindow(hwnd);
+        } else {
+            // Clean up if window creation failed
+            free(data);
+        }
+        
+        return hwnd;
+    });
     
     return hwnd;
 }
