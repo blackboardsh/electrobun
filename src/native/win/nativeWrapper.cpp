@@ -1,27 +1,63 @@
 #include <Windows.h>
+#include <windowsx.h>  // For GET_X_LPARAM and GET_Y_LPARAM
 #include <string>
 #include <cstring>
 #include <functional>
 #include <vector>
-
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <ctime>
-
 #include <functional>
 #include <future>
 #include <memory>
-
 #include <windows.h>
 #include <wrl.h>
 #include <WebView2.h>
 #include <string>
+#include <map>
+#include <algorithm>
+#include <stdint.h>
+
+// Link required Windows libraries
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
 
 using namespace Microsoft::WRL;
 
-
+// Ensure the exported functions have appropriate visibility
+#define ELECTROBUN_EXPORT __declspec(dllexport)
 #define WM_EXECUTE_SYNC_BLOCK (WM_USER + 1)
+
+// Forward declarations
+class AbstractView;
+class ContainerView;
+class NSWindow;
+class NSStatusItem;
+class WKWebView;
+class MyScriptMessageHandlerWithReply;
+
+// Type definitions to match macOS types
+typedef double CGFloat;
+
+// Function pointer type definitions
+typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
+typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
+typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);
+typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
+typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
+typedef void (*WindowCloseHandler)(uint32_t windowId);
+typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
+typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
+typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
+typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
+typedef const char* (*GetMimeType)(const char* filePath);
+typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);
+
+// Global map to store container views by window handle
+static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 
 void log(const std::string& message) {
     // Get current time
@@ -94,41 +130,300 @@ public:
 
 HWND MainThreadDispatcher::g_messageWindow = NULL;
 
-
-
-// Forward declarations for classes
-class AbstractView;
-class NSWindow;
-class NSStatusItem;
-class WKWebView;
-
-// Type definitions to match macOS types
-// Note: uint32_t is already defined in <stdint.h>
-#include <stdint.h>
-// BOOL is already defined in Windows.h, so we'll use it directly
-// Define CGFloat as double to match the 64-bit Mac version (or float for 32-bit)
-typedef double CGFloat;
-
-// Function pointer type definitions
-typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
-typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
-typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);
-typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
-typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
-typedef void (*WindowCloseHandler)(uint32_t windowId);
-typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
-typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
-typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
-typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
-typedef const char* (*GetMimeType)(const char* filePath);
-typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);
-
-// Stub classes for macOS types
+// AbstractView class definition
 class AbstractView {
 public:
     uint32_t webviewId;
+    bool isMousePassthroughEnabled = false;
+    bool mirrorModeEnabled = false;
+    bool fullSize = false;
+    
+    // WebView2 specific members
+    ComPtr<ICoreWebView2Controller> controller;
+    ComPtr<ICoreWebView2> webview;
+    
+    virtual ~AbstractView() = default;
 };
 
+// ContainerView class definition
+class ContainerView {
+private:
+    HWND m_hwnd;
+    HWND m_parentWindow;
+    std::vector<std::shared_ptr<AbstractView>> m_abstractViews;
+    
+    // Window procedure for the container
+    static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        ContainerView* container = nullptr;
+        
+        if (msg == WM_NCCREATE) {
+            CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
+            container = (ContainerView*)cs->lpCreateParams;
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)container);
+        } else {
+            container = (ContainerView*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        }
+        
+        if (container) {
+            return container->HandleMessage(msg, wParam, lParam);
+        }
+        
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+    
+    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
+        switch (msg) {
+            case WM_SIZE: {
+                // Resize all full-size webviews when container resizes
+                int width = LOWORD(lParam);
+                int height = HIWORD(lParam);
+                
+                for (auto& view : m_abstractViews) {
+                    if (view->fullSize) {
+                        // Resize the webview to match container
+                        if (view->controller) {
+                            RECT bounds = {0, 0, width, height};
+                            view->controller->put_Bounds(bounds);
+                        }
+                    }
+                }
+                break;
+            }
+            
+            case WM_MOUSEMOVE: {
+                // Handle mouse movement for determining active webview
+                POINT mousePos = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                UpdateActiveWebviewForMousePosition(mousePos);
+                break;
+            }
+            
+            case WM_PAINT: {
+                PAINTSTRUCT ps;
+                HDC hdc = BeginPaint(m_hwnd, &ps);
+                // Don't draw anything - let child windows handle their own painting
+                EndPaint(m_hwnd, &ps);
+                return 0;
+            }
+        }
+        
+        return DefWindowProc(m_hwnd, msg, wParam, lParam);
+    }
+    
+    void UpdateActiveWebviewForMousePosition(POINT mousePos) {
+        bool stillSearching = true;
+        
+        // Iterate through webviews in reverse order (top-most first)
+        for (auto it = m_abstractViews.rbegin(); it != m_abstractViews.rend(); ++it) {
+            auto& view = *it;
+            
+            if (view->isMousePassthroughEnabled) {
+                // Set to mirror mode (invisible/non-interactive)
+                SetWebViewMirrorMode(view.get(), true);
+                continue;
+            }
+            
+            if (stillSearching) {
+                // Check if mouse is over this webview's bounds
+                RECT viewBounds;
+                if (view->controller) {
+                    view->controller->get_Bounds(&viewBounds);
+                    
+                    if (PtInRect(&viewBounds, mousePos)) {
+                        // Mouse is over this webview, make it active
+                        SetWebViewMirrorMode(view.get(), false);
+                        stillSearching = false;
+                        continue;
+                    }
+                }
+            }
+            
+            // Set to mirror mode
+            SetWebViewMirrorMode(view.get(), true);
+        }
+    }
+    
+    void SetWebViewMirrorMode(AbstractView* view, bool mirror) {
+        if (!view->controller) return;
+        
+        if (view->mirrorModeEnabled == mirror) return;
+        
+        view->mirrorModeEnabled = mirror;
+        
+        if (mirror) {
+            // Move webview offscreen or make it non-interactive
+            view->controller->put_IsVisible(FALSE);
+        } else {
+            // Make webview visible and interactive
+            view->controller->put_IsVisible(TRUE);
+            view->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        }
+    }
+
+public:
+    ContainerView(HWND parentWindow) : m_parentWindow(parentWindow), m_hwnd(NULL) {
+        // Double-check parent window is valid
+        if (!IsWindow(parentWindow)) {
+            log("ERROR: Parent window handle is invalid in ContainerView constructor");
+            return;
+        }
+        
+        // Get parent window client area
+        RECT clientRect;
+        if (!GetClientRect(parentWindow, &clientRect)) {
+            DWORD error = GetLastError();
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to get parent window client rect, error: %lu", error);
+            log(errorMsg);
+            return;
+        }
+        
+        // Validate that we have a reasonable client area
+        int width = clientRect.right - clientRect.left;
+        int height = clientRect.bottom - clientRect.top;
+        
+        if (width <= 0 || height <= 0) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Parent window has invalid client area: %dx%d", width, height);
+            log(errorMsg);
+            return;
+        }
+        
+        // Register our custom window class for proper event handling
+        static bool classRegistered = false;
+        if (!classRegistered) {
+            WNDCLASSA wc = {0};
+            wc.lpfnWndProc = ContainerWndProc;
+            wc.hInstance = GetModuleHandle(NULL);
+            wc.lpszClassName = "ContainerViewClass";
+            wc.hbrBackground = NULL; // Transparent background
+            wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+            wc.style = CS_HREDRAW | CS_VREDRAW;
+            
+            if (!RegisterClassA(&wc)) {
+                DWORD error = GetLastError();
+                if (error != ERROR_CLASS_ALREADY_EXISTS) {
+                    char errorMsg[256];
+                    sprintf_s(errorMsg, "ERROR: Failed to register ContainerViewClass, error: %lu", error);
+                    log(errorMsg);
+                    // Fall back to STATIC class
+                    goto use_static_class;
+                }
+            }
+            classRegistered = true;
+        }
+        
+        // Try creating with our custom class first
+        log("Creating container window with custom ContainerViewClass");
+        m_hwnd = CreateWindowExA(
+            0,
+            "ContainerViewClass",
+            "",  // No title text
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+            0, 0, width, height,
+            parentWindow,
+            NULL,
+            GetModuleHandle(NULL),
+            this   // Pass this pointer for message handling
+        );
+        
+        if (!m_hwnd) {
+            log("Custom class failed, falling back to STATIC class");
+            
+            use_static_class:
+            // Fallback to STATIC class
+            m_hwnd = CreateWindowExA(
+                0,
+                "STATIC",
+                "",  // No title text  
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                0, 0, width, height,
+                parentWindow,
+                NULL,
+                GetModuleHandle(NULL),
+                NULL
+            );
+            
+            if (!m_hwnd) {
+                DWORD error = GetLastError();
+                char errorMsg[256];
+                sprintf_s(errorMsg, "ERROR: Failed to create container window even with STATIC class, error: %lu", error);
+                log(errorMsg);
+                return;
+            } else {
+                log("Container window created successfully with STATIC class (limited functionality)");
+            }
+        } else {
+            log("Container window created successfully with custom ContainerViewClass");
+        }
+        
+        if (m_hwnd) {
+            // Verify the container window is valid
+            if (!IsWindow(m_hwnd)) {
+                log("ERROR: Container window creation returned handle but window is not valid");
+                m_hwnd = NULL;
+                return;
+            }
+            
+            char successMsg[256];
+            sprintf_s(successMsg, "Container window setup completed: HWND=%p", m_hwnd);
+            log(successMsg);
+        }
+    }
+    
+    ~ContainerView() {
+        if (m_hwnd) {
+            DestroyWindow(m_hwnd);
+        }
+    }
+    
+    HWND GetHwnd() const { return m_hwnd; }
+    
+    void AddAbstractView(std::shared_ptr<AbstractView> view) {
+        // Add to front of vector so it's top-most first
+        m_abstractViews.insert(m_abstractViews.begin(), view);
+    }
+    
+    void RemoveAbstractViewWithId(uint32_t webviewId) {
+        m_abstractViews.erase(
+            std::remove_if(m_abstractViews.begin(), m_abstractViews.end(),
+                [webviewId](const std::shared_ptr<AbstractView>& view) {
+                    return view->webviewId == webviewId;
+                }),
+            m_abstractViews.end());
+    }
+};
+
+// Helper function to get or create container for a window
+ContainerView* GetOrCreateContainer(HWND parentWindow) {
+    // Validate the parent window handle
+    if (!IsWindow(parentWindow)) {
+        log("ERROR: Parent window handle is invalid");
+        return nullptr;
+    }
+    
+    auto it = g_containerViews.find(parentWindow);
+    if (it == g_containerViews.end()) {
+        log("Creating new container for window");
+        
+        auto container = std::make_unique<ContainerView>(parentWindow);
+        ContainerView* containerPtr = container.get();
+        
+        // Only store if creation was successful
+        if (containerPtr->GetHwnd() != NULL) {
+            g_containerViews[parentWindow] = std::move(container);
+            log("Container created and stored successfully");
+            return containerPtr;
+        } else {
+            log("ERROR: Container creation failed, not storing");
+            return nullptr;
+        }
+    }
+    
+    log("Using existing container for window");
+    return it->second.get();
+}
+
+// Stub classes for compatibility
 class NSWindow {
 public:
     void* contentView;
@@ -163,22 +458,88 @@ struct createNSWindowWithFrameAndStyleParams {
     const char *titleBarStyle;
 };
 
-// Implementation of the exported functions
+// Define a struct to store window data
+typedef struct {
+    uint32_t windowId;
+    WindowCloseHandler closeHandler;
+    WindowMoveHandler moveHandler;
+    WindowResizeHandler resizeHandler;
+} WindowData;
 
-// Ensure the exported functions have appropriate visibility
-#define ELECTROBUN_EXPORT __declspec(dllexport)
-
-extern "C" {
-
-// ELECTROBUN_EXPORT void runNSApplication() {
-//     // printf("runNSApplication in native code");
-//     MSG msg;
-//     while (GetMessage(&msg, NULL, 0, 0)) {
-//         TranslateMessage(&msg);
-//         DispatchMessage(&msg);
-//     }
+// Window procedure that will handle events and call your handlers
+LRESULT CALLBACK CustomWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    // Get our custom data
+    WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
-// }
+    switch (msg) {
+        case WM_CLOSE:
+            if (data && data->closeHandler) {
+                data->closeHandler(data->windowId);
+            }
+            return 0; // Don't close the window yet, let the handler decide
+            
+        case WM_MOVE:
+            if (data && data->moveHandler) {
+                int x = LOWORD(lParam);
+                int y = HIWORD(lParam);
+                data->moveHandler(data->windowId, x, y);
+            }
+            break;
+            
+        case WM_SIZE:
+            {
+                // Resize container to match window client area
+                auto containerIt = g_containerViews.find(hwnd);
+                if (containerIt != g_containerViews.end()) {
+                    RECT clientRect;
+                    GetClientRect(hwnd, &clientRect);
+                    SetWindowPos(containerIt->second->GetHwnd(), NULL, 
+                        0, 0, 
+                        clientRect.right - clientRect.left,
+                        clientRect.bottom - clientRect.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                
+                if (data && data->resizeHandler) {
+                    int width = LOWORD(lParam);
+                    int height = HIWORD(lParam);
+                    data->resizeHandler(data->windowId, 0, 0, width, height);
+                }
+            }
+            break;
+            
+        case WM_PAINT:
+            {
+                PAINTSTRUCT ps;
+                HDC hdc = BeginPaint(hwnd, &ps);
+                // Don't need to do anything here, just validate the paint region
+                EndPaint(hwnd, &ps);
+            }
+            return 0;
+            
+        case WM_TIMER:
+            if (wParam == 1) {
+                KillTimer(hwnd, 1);
+                log("Timer fired - forcing window refresh");
+                InvalidateRect(hwnd, NULL, TRUE);
+                UpdateWindow(hwnd);
+            }
+            return 0;
+            
+        case WM_DESTROY:
+            // Clean up container view
+            g_containerViews.erase(hwnd);
+            
+            // Clean up window data
+            if (data) {
+                free(data);
+                SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+            }
+            break;
+    }
+    
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
 
 // handles window things on Windows
 LRESULT CALLBACK MessageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -190,16 +551,19 @@ LRESULT CALLBACK MessageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return DefWindowProc(hwnd, msg, wParam, lParam);
     }
 }
+
+extern "C" {
+
 ELECTROBUN_EXPORT void runNSApplication() {
     // Create a hidden message-only window for dispatching
-    WNDCLASS wc = {0};
+    WNDCLASSA wc = {0};  // Use ANSI version
     wc.lpfnWndProc = MessageWindowProc;
     wc.hInstance = GetModuleHandle(NULL);
-    wc.lpszClassName = "MessageWindowClass";
-    RegisterClass(&wc);
+    wc.lpszClassName = "MessageWindowClass";  // Use ANSI string
+    RegisterClassA(&wc);  // Use ANSI version
     
-    HWND messageWindow = CreateWindow(
-        "MessageWindowClass", 
+    HWND messageWindow = CreateWindowA(  // Use ANSI version
+        "MessageWindowClass",  // Use ANSI string
         "", 
         0, 0, 0, 0, 0,
         HWND_MESSAGE, // This makes it a message-only window
@@ -220,24 +584,14 @@ ELECTROBUN_EXPORT void runNSApplication() {
 }
 
 ELECTROBUN_EXPORT void killApp() {
-    // Stub implementation
-    // Would terminate the process
     ExitProcess(1);
 }
 
 ELECTROBUN_EXPORT void shutdownApplication() {
     // Stub implementation
-    // Would clean up resources
 }
 
-
-
-
-// Global static variables to keep WebView2 alive
-static ComPtr<ICoreWebView2Controller> g_controller;
-static ComPtr<ICoreWebView2> g_webview;
-
-
+// Modified initWebview function with container support
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          NSWindow *window,  // Actually HWND on Windows
                          const char *renderer,
@@ -253,17 +607,18 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript) {
     
-    log("=== Starting WebView2 Creation ===");
+    log("=== Starting WebView2 Creation with Container ===");
     
     // Cast the window pointer to HWND (Windows window handle)
     HWND hwnd = reinterpret_cast<HWND>(window);
     
-    AbstractView* view = new AbstractView();
+    auto view = std::make_shared<AbstractView>();
     view->webviewId = webviewId;
+    view->fullSize = autoResize;
     
     if (!IsWindow(hwnd)) {
         log("ERROR: Invalid window handle provided");
-        return view;
+        return view.get();
     }
     
     // Copy parameters that might be destroyed when this function returns
@@ -273,7 +628,16 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     
     // Dispatch WebView2 creation to main thread
     MainThreadDispatcher::dispatch_sync([=, urlStr = urlStr, electrobunScriptStr = electrobunScriptStr, customScriptStr = customScriptStr]() {
-        log("Creating WebView2 on main thread");
+        log("Creating WebView2 with container on main thread");
+        
+        // Get or create container for this window
+        ContainerView* container = GetOrCreateContainer(hwnd);
+        if (!container) {
+            log("ERROR: Failed to get or create container");
+            return;
+        }
+        
+        HWND containerHwnd = container->GetHwnd();
         
         // Initialize COM on main thread
         CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -285,37 +649,45 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                     if (SUCCEEDED(result)) {
                         log("WebView2 environment created successfully");
                         
-                        // Create WebView2 controller
-                        env->CreateCoreWebView2Controller(hwnd,
+                        // Create WebView2 controller - use container as parent instead of main window
+                        env->CreateCoreWebView2Controller(containerHwnd,
                             Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                                 [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                                     if (SUCCEEDED(result)) {
                                         log("WebView2 controller created successfully");
                                         
-                                        // Store in global variables to keep alive
-                                        g_controller = controller;
+                                        // Store controller in the view
+                                        view->controller = controller;
                                         
                                         // Get the WebView2 core
-                                        HRESULT webviewResult = controller->get_CoreWebView2(&g_webview);
+                                        HRESULT webviewResult = controller->get_CoreWebView2(&view->webview);
                                         if (FAILED(webviewResult)) {
                                             log("ERROR: Failed to get CoreWebView2");
                                             return S_OK;
                                         }
                                         
-                                        // Get window client area and set bounds
-                                        RECT clientRect;
-                                        GetClientRect(hwnd, &clientRect);
-                                        RECT bounds = {0, 0, clientRect.right, clientRect.bottom};
+                                        // Set bounds within container
+                                        RECT bounds;
+                                        if (autoResize) {
+                                            // Fill entire container
+                                            GetClientRect(containerHwnd, &bounds);
+                                        } else {
+                                            // Use specified position and size
+                                            bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+                                        }
                                         controller->put_Bounds(bounds);
                                         
                                         // Make webview visible
                                         controller->put_IsVisible(TRUE);
                                         controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
                                         
+                                        // Add view to container
+                                        container->AddAbstractView(view);
+                                        
                                         // Set up navigation event handler
                                         if (navigationCallback) {
                                             EventRegistrationToken navigationToken;
-                                            g_webview->add_NavigationStarting(
+                                            view->webview->add_NavigationStarting(
                                                 Callback<ICoreWebView2NavigationStartingEventHandler>(
                                                     [navigationCallback, webviewId](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
                                                         LPWSTR uri;
@@ -338,13 +710,27 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                         
                                         // Set up navigation completion handler
                                         EventRegistrationToken navCompletedToken;
-                                        g_webview->add_NavigationCompleted(
+                                        view->webview->add_NavigationCompleted(
                                             Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                                                [](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                                [webviewEventHandler, webviewId](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
                                                     BOOL success;
                                                     args->get_IsSuccess(&success);
                                                     if (success) {
                                                         log("Navigation completed successfully");
+                                                        if (webviewEventHandler) {
+                                                            // Get current URL
+                                                            LPWSTR uri;
+                                                            sender->get_Source(&uri);
+                                                            
+                                                            int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, NULL, 0, NULL, NULL);
+                                                            char* url_char = new char[size];
+                                                            WideCharToMultiByte(CP_UTF8, 0, uri, -1, url_char, size, NULL, NULL);
+                                                            
+                                                            webviewEventHandler(webviewId, "did-navigate", url_char);
+                                                            
+                                                            delete[] url_char;
+                                                            CoTaskMemFree(uri);
+                                                        }
                                                     } else {
                                                         log("Navigation failed");
                                                         COREWEBVIEW2_WEB_ERROR_STATUS error;
@@ -360,7 +746,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                         // Set up message handlers
                                         if (bunBridgeHandler || internalBridgeHandler) {
                                             EventRegistrationToken messageToken;
-                                            g_webview->add_WebMessageReceived(
+                                            view->webview->add_WebMessageReceived(
                                                 Callback<ICoreWebView2WebMessageReceivedEventHandler>(
                                                     [bunBridgeHandler, internalBridgeHandler, webviewId](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
                                                         LPWSTR message;
@@ -402,7 +788,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                             std::wstring wScript(size - 1, 0);
                                             MultiByteToWideChar(CP_UTF8, 0, combinedScript.c_str(), -1, &wScript[0], size);
                                             
-                                            g_webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
+                                            view->webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
                                         }
                                         
                                         // Navigate to URL if provided
@@ -413,10 +799,10 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                             MultiByteToWideChar(CP_UTF8, 0, urlStr.c_str(), -1, &wUrl[0], size);
                                             
                                             log("Navigating to requested URL");
-                                            g_webview->Navigate(wUrl.c_str());
+                                            view->webview->Navigate(wUrl.c_str());
                                         } else {
                                             log("No URL provided, loading about:blank");
-                                            g_webview->Navigate(L"about:blank");
+                                            view->webview->Navigate(L"about:blank");
                                         }
                                         
                                     } else {
@@ -435,7 +821,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         }
     });
     
-    return view;
+    return view.get();
 }
 
 ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView,
@@ -564,74 +950,6 @@ ELECTROBUN_EXPORT void testFFI2(void (*completionHandler)()) {
     }
 }
 
-// Define a struct to store window data
-typedef struct {
-    uint32_t windowId;
-    WindowCloseHandler closeHandler;
-    WindowMoveHandler moveHandler;
-    WindowResizeHandler resizeHandler;
-} WindowData;
-
-// Window procedure that will handle events and call your handlers
-LRESULT CALLBACK CustomWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    // Get our custom data
-    WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
-    
-    switch (msg) {
-        case WM_CLOSE:
-            if (data && data->closeHandler) {
-                data->closeHandler(data->windowId);
-            }
-            return 0; // Don't close the window yet, let the handler decide
-            
-        case WM_MOVE:
-            if (data && data->moveHandler) {
-                int x = LOWORD(lParam);
-                int y = HIWORD(lParam);
-                data->moveHandler(data->windowId, x, y);
-            }
-            break;
-            
-        case WM_SIZE:
-            if (data && data->resizeHandler) {
-                int width = LOWORD(lParam);
-                int height = HIWORD(lParam);
-                data->resizeHandler(data->windowId, 0, 0, width, height);
-            }
-            break;
-            
-        case WM_PAINT:
-            {
-                PAINTSTRUCT ps;
-                HDC hdc = BeginPaint(hwnd, &ps);
-                // Don't need to do anything here, just validate the paint region
-                EndPaint(hwnd, &ps);
-            }
-            return 0;
-            
-        case WM_TIMER:
-            if (wParam == 1) {
-                KillTimer(hwnd, 1);
-                log("Timer fired - forcing window refresh");
-                InvalidateRect(hwnd, NULL, TRUE);
-                UpdateWindow(hwnd);
-            }
-            return 0;
-            
-        case WM_DESTROY:
-            // Clean up window data
-            if (data) {
-                free(data);
-                SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
-            }
-            break;
-    }
-    
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}
-
-
-
 ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     uint32_t windowId,
     double x, double y,
@@ -648,11 +966,11 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         // Register window class with our custom procedure
         static bool classRegistered = false;
         if (!classRegistered) {
-            WNDCLASS wc = {0};
+            WNDCLASSA wc = {0};  // Use ANSI version
             wc.lpfnWndProc = CustomWindowProc;
             wc.hInstance = GetModuleHandle(NULL);
-            wc.lpszClassName = "BasicWindowClass";
-            RegisterClass(&wc);
+            wc.lpszClassName = "BasicWindowClass";  // Use ANSI string
+            RegisterClassA(&wc);  // Use ANSI version
             classRegistered = true;
         }
         
@@ -669,8 +987,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
         
         // Create the window
-        HWND hwnd = CreateWindow(
-            "BasicWindowClass",
+        HWND hwnd = CreateWindowA(  // Use ANSI version
+            "BasicWindowClass",  // Use ANSI string
             "",
             windowStyle,
             (int)x, (int)y,
