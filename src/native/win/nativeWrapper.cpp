@@ -14,6 +14,7 @@
 #include <windows.h>
 #include <wrl.h>
 #include <WebView2.h>
+#include <WebView2EnvironmentOptions.h>
 #include <string>
 #include <map>
 #include <algorithm>
@@ -58,6 +59,23 @@ typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);
 
 // Global map to store container views by window handle
 static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
+static GetMimeType g_getMimeType = nullptr;
+static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
+
+// Global WebView2 instances - moved to global scope
+static ComPtr<ICoreWebView2Controller> g_controller;
+static ComPtr<ICoreWebView2> g_webview;
+static ComPtr<ICoreWebView2Environment> g_environment;  // Add global environment
+static ComPtr<ICoreWebView2CustomSchemeRegistration> g_customScheme;
+static ComPtr<ICoreWebView2EnvironmentOptions> g_envOptions;
+
+// Forward declare helper functions
+void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId);
+void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args, 
+                             const std::wstring& uri, 
+                             uint32_t webviewId);
+std::string loadViewsFile(const std::string& path);
+std::string getMimeTypeForFile(const std::string& path);
 
 void log(const std::string& message) {
     // Get current time
@@ -591,7 +609,7 @@ ELECTROBUN_EXPORT void shutdownApplication() {
     // Stub implementation
 }
 
-// Modified initWebview function with container support
+// Modified initWebview function with proper custom scheme registration
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          NSWindow *window,  // Actually HWND on Windows
                          const char *renderer,
@@ -607,9 +625,8 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript) {
     
-    log("=== Starting WebView2 Creation with Container ===");
+    log("=== Starting WebView2 Creation with views:// Custom Scheme ===");
     
-    // Cast the window pointer to HWND (Windows window handle)
     HWND hwnd = reinterpret_cast<HWND>(window);
     
     auto view = std::make_shared<AbstractView>();
@@ -628,7 +645,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     
     // Dispatch WebView2 creation to main thread
     MainThreadDispatcher::dispatch_sync([=, urlStr = urlStr, electrobunScriptStr = electrobunScriptStr, customScriptStr = customScriptStr]() {
-        log("Creating WebView2 with container on main thread");
+        log("Creating WebView2 with views:// custom scheme on main thread");
         
         // Get or create container for this window
         ContainerView* container = GetOrCreateContainer(hwnd);
@@ -642,14 +659,55 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         // Initialize COM on main thread
         CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         
-        // Create WebView2 environment
-        HRESULT hr = CreateCoreWebView2Environment(
+        // Create environment options with custom scheme registration
+        auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+        
+        // Get the interface that supports custom scheme registration  
+        Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
+        if (SUCCEEDED(options.As(&options4))) {
+            log("Setting up views:// custom scheme registration");
+            
+            // Set allowed origins for the custom scheme
+            const WCHAR* allowedOrigins[1] = {L"*"};
+            
+            // Create custom scheme registration for "views"
+            auto viewsSchemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>(L"views");
+            viewsSchemeRegistration->put_TreatAsSecure(TRUE);
+            viewsSchemeRegistration->put_HasAuthorityComponent(TRUE); // This allows views://host/path format
+            viewsSchemeRegistration->SetAllowedOrigins(1, allowedOrigins);
+            
+            // Set the custom scheme registrations
+            ICoreWebView2CustomSchemeRegistration* registrations[1] = {
+                viewsSchemeRegistration.Get()
+            };
+            
+            HRESULT schemeResult = options4->SetCustomSchemeRegistrations(1, registrations);
+            
+            if (SUCCEEDED(schemeResult)) {
+                log("views:// custom scheme registration set successfully");
+            } else {
+                char errorMsg[256];
+                sprintf_s(errorMsg, "Failed to set views:// custom scheme registration: 0x%lx", schemeResult);
+                log(errorMsg);
+            }
+        } else {
+            log("ERROR: Failed to get ICoreWebView2EnvironmentOptions4 interface for custom scheme registration");
+        }
+        
+        // Create WebView2 environment with custom scheme registration
+        HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
+            nullptr,  // browser folder (use default)
+            nullptr,  // user data folder (use default)
+            options.Get(),  // environment options with custom scheme
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
                 [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                     if (SUCCEEDED(result)) {
-                        log("WebView2 environment created successfully");
+                        log("WebView2 environment created successfully with views:// scheme support");
                         
-                        // Create WebView2 controller - use container as parent instead of main window
+                        // Store environment globally
+                        g_environment = env;
+                        
+                        // Create WebView2 controller
                         env->CreateCoreWebView2Controller(containerHwnd,
                             Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                                 [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
@@ -665,14 +723,18 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                             log("ERROR: Failed to get CoreWebView2");
                                             return S_OK;
                                         }
+
+                                        // Store in global
+                                        g_webview = view->webview;
+
+                                        // Set up resource request handler for views:// scheme
+                                        setupViewsSchemeHandler(view->webview.Get(), webviewId);
                                         
                                         // Set bounds within container
                                         RECT bounds;
                                         if (autoResize) {
-                                            // Fill entire container
                                             GetClientRect(containerHwnd, &bounds);
                                         } else {
-                                            // Use specified position and size
                                             bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                                         }
                                         controller->put_Bounds(bounds);
@@ -684,7 +746,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                         // Add view to container
                                         container->AddAbstractView(view);
                                         
-                                        // Set up navigation event handler
+                                        // Set up navigation event handlers
                                         if (navigationCallback) {
                                             EventRegistrationToken navigationToken;
                                             view->webview->add_NavigationStarting(
@@ -697,6 +759,10 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                                         int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, NULL, 0, NULL, NULL);
                                                         char* url_char = new char[size];
                                                         WideCharToMultiByte(CP_UTF8, 0, uri, -1, url_char, size, NULL, NULL);
+
+                                                        char logMsg[512];
+                                                        sprintf_s(logMsg, "Navigation starting to: %s", url_char);
+                                                        log(logMsg);
                                                         
                                                         bool allow = navigationCallback(webviewId, url_char);
                                                         args->put_Cancel(!allow);
@@ -798,7 +864,10 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                             std::wstring wUrl(size - 1, 0);
                                             MultiByteToWideChar(CP_UTF8, 0, urlStr.c_str(), -1, &wUrl[0], size);
                                             
-                                            log("Navigating to requested URL");
+                                            char logMsg[512];
+                                            sprintf_s(logMsg, "Navigating to: %s", urlStr.c_str());
+                                            log(logMsg);
+                                            
                                             view->webview->Navigate(wUrl.c_str());
                                         } else {
                                             log("No URL provided, loading about:blank");
@@ -811,13 +880,17 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                     return S_OK;
                                 }).Get());
                     } else {
-                        log("Failed to create WebView2 environment");
+                        char errorMsg[256];
+                        sprintf_s(errorMsg, "Failed to create WebView2 environment: 0x%lx", result);
+                        log(errorMsg);
                     }
                     return S_OK;
                 }).Get());
         
         if (FAILED(hr)) {
-            log("Failed to create WebView2 environment");
+            char errorMsg[256];
+            sprintf_s(errorMsg, "Failed to create WebView2 environment with options: 0x%lx", hr);
+            log(errorMsg);
         }
     });
     
@@ -1098,7 +1171,9 @@ ELECTROBUN_EXPORT void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
 }
 
 ELECTROBUN_EXPORT void setJSUtils(GetMimeType getMimeType, GetHTMLForWebviewSync getHTMLForWebviewSync) {
-    // Stub implementation
+    g_getMimeType = getMimeType;
+    g_getHTMLForWebviewSync = getHTMLForWebviewSync;
+    log("JS utility callbacks stored successfully");
 }
 
 // Adding a few Windows-specific functions for interop if needed
@@ -1125,3 +1200,238 @@ ELECTROBUN_EXPORT uint32_t getNSWindowStyleMask(
 }
 
 } // extern "C"
+
+// New function for handling views:// scheme requests
+void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
+    log("Setting up WebView2 resource request handler for views:// scheme");
+    
+    // Add web resource request filter for views:// scheme
+    EventRegistrationToken resourceToken;
+    HRESULT hr = webview->add_WebResourceRequested(
+        Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+            [webviewId](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                ComPtr<ICoreWebView2WebResourceRequest> request;
+                args->get_Request(&request);
+                
+                LPWSTR uri;
+                request->get_Uri(&uri);
+                
+                std::wstring wUri(uri);
+                
+                // Convert to string for logging
+                int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, NULL, 0, NULL, NULL);
+                std::string uriStr(size - 1, 0);
+                WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, NULL, NULL);
+                
+                char logMsg[512];
+                sprintf_s(logMsg, "Resource request intercepted: %s", uriStr.c_str());
+                log(logMsg);
+                
+                // Check if this is a views:// URL
+                if (wUri.find(L"views://") == 0) {
+                    log("Processing views:// request");
+                    handleViewsSchemeRequest(args, wUri, webviewId);
+                }
+                
+                CoTaskMemFree(uri);
+                return S_OK;
+            }).Get(), 
+        &resourceToken);
+    
+    if (FAILED(hr)) {
+        char errorMsg[256];
+        sprintf_s(errorMsg, "Failed to add WebResourceRequested handler: 0x%lx", hr);
+        log(errorMsg);
+        return;
+    }
+    
+    // Add filter for views:// scheme
+    hr = webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+    if (FAILED(hr)) {
+        char errorMsg[256];
+        sprintf_s(errorMsg, "Failed to add resource filter for views://: 0x%lx", hr);
+        log(errorMsg);
+    } else {
+        log("Added resource filter for views:// scheme successfully");
+    }
+}
+
+// Updated function to handle views:// scheme requests
+void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args, 
+                             const std::wstring& uri, 
+                             uint32_t webviewId) {
+    
+    log("=== HANDLING VIEWS:// REQUEST ===");
+    
+    // Convert URI to std::string for processing
+    int size = WideCharToMultiByte(CP_UTF8, 0, uri.c_str(), -1, NULL, 0, NULL, NULL);
+    std::string uriStr(size - 1, 0);
+    WideCharToMultiByte(CP_UTF8, 0, uri.c_str(), -1, &uriStr[0], size, NULL, NULL);
+
+    
+    char logMsg[512];
+    sprintf_s(logMsg, "Processing views:// URL: %s", uriStr.c_str());
+    log(logMsg);
+    
+    // Extract the path after "views://"
+    std::string path;
+    if (uriStr.length() > 8) {
+        path = uriStr.substr(8); // Remove "views://" prefix
+    } else {
+        path = "index.html"; // Default
+    }
+    
+    std::string responseData;
+    std::string mimeType = "text/html";
+    
+    if (path == "internal/index.html") {
+        // Handle internal HTML content using your JS callback
+        if (g_getHTMLForWebviewSync) {
+            log("Calling g_getHTMLForWebviewSync...");
+            const char* htmlContent = g_getHTMLForWebviewSync(webviewId);
+            if (htmlContent && strlen(htmlContent) > 0) {
+                responseData = std::string(htmlContent);
+                sprintf_s(logMsg, "Got HTML content from JS callback: %zu bytes", responseData.length());
+                log(logMsg);
+            } else {
+                responseData = "<html><body><h1>Empty HTML content from callback!</h1></body></html>";
+                log("JS callback returned empty or null content");
+            }
+        } else {
+            responseData = "<html><body><h1>JS callback not available</h1><p>g_getHTMLForWebviewSync is null</p></body></html>";
+            log("JS callback (g_getHTMLForWebviewSync) is not set");
+        }
+        mimeType = "text/html";
+    } else {
+        // Handle other file requests
+        responseData = loadViewsFile(path);
+        mimeType = getMimeTypeForFile(path);
+        
+        if (responseData.empty()) {
+            responseData = "<html><body><h1>404 - Views file not found</h1><p>Path: " + path + "</p></body></html>";
+            mimeType = "text/html";
+            log("Views file not found, returning 404");
+        }
+    }
+    
+    sprintf_s(logMsg, "Response data length: %zu bytes, MIME type: %s", responseData.length(), mimeType.c_str());
+    log(logMsg);
+    
+    // Create the response using the global environment
+    if (!g_environment) {
+        log("ERROR: No global environment available for creating response");
+        return;
+    }
+    
+    try {
+        // Create memory stream first
+        ComPtr<IStream> stream;
+        HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, responseData.length());
+        if (!hGlobal) {
+            log("ERROR: Failed to allocate global memory");
+            return;
+        }
+        
+        void* pData = GlobalLock(hGlobal);
+        if (!pData) {
+            GlobalFree(hGlobal);
+            log("ERROR: Failed to lock global memory");
+            return;
+        }
+        
+        memcpy(pData, responseData.c_str(), responseData.length());
+        GlobalUnlock(hGlobal);
+        
+        HRESULT streamResult = CreateStreamOnHGlobal(hGlobal, TRUE, &stream);
+        if (FAILED(streamResult)) {
+            GlobalFree(hGlobal);
+            sprintf_s(logMsg, "ERROR: Failed to create stream on global: 0x%lx", streamResult);
+            log(logMsg);
+            return;
+        }
+        
+        // Create the response
+        ComPtr<ICoreWebView2WebResourceResponse> response;
+        std::wstring mimeTypeW(mimeType.begin(), mimeType.end());
+        std::wstring headers = L"Content-Type: " + mimeTypeW + L"\r\nAccess-Control-Allow-Origin: *";
+        
+        HRESULT responseResult = g_environment->CreateWebResourceResponse(
+            stream.Get(),               // content stream
+            200,                       // status code
+            L"OK",                     // reason phrase
+            headers.c_str(),           // headers
+            &response);
+        
+        if (FAILED(responseResult)) {
+            sprintf_s(logMsg, "ERROR: Failed to create web resource response: 0x%lx", responseResult);
+            log(logMsg);
+            return;
+        }
+        
+        // Set the response
+        HRESULT setResult = args->put_Response(response.Get());
+        if (FAILED(setResult)) {
+            sprintf_s(logMsg, "ERROR: Failed to set response: 0x%lx", setResult);
+            log(logMsg);
+            return;
+        }
+        
+        log("Successfully created and set views:// response");
+        
+    } catch (...) {
+        log("ERROR: Exception occurred while creating response");
+    }
+}
+
+// Helper functions
+std::string loadViewsFile(const std::string& path) {
+    // Get the current working directory instead of executable directory
+    char currentDir[MAX_PATH];
+    DWORD result = GetCurrentDirectoryA(MAX_PATH, currentDir);
+    
+    if (result == 0 || result > MAX_PATH) {
+        log("ERROR: Failed to get current working directory");
+        return "";
+    }
+    
+    // Build full path to views file from current working directory
+    std::string fullPath = std::string(currentDir) + "\\..\\Resources\\app\\views\\" + path;
+    
+    char logMsg[512];
+    sprintf_s(logMsg, "Attempting to load views file: %s", fullPath.c_str());
+    log(logMsg);
+    
+    // Try to read the file
+    std::ifstream file(fullPath, std::ios::binary);
+    if (!file.is_open()) {
+        sprintf_s(logMsg, "Could not open views file: %s", fullPath.c_str());
+        log(logMsg);
+        return "";
+    }
+    
+    // Read file contents
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
+    
+    sprintf_s(logMsg, "Loaded views file: %s (%zu bytes)", fullPath.c_str(), content.length());
+    log(logMsg);
+    
+    return content;
+}
+
+std::string getMimeTypeForFile(const std::string& path) {
+    // Extract file extension and return appropriate MIME type
+    size_t dotPos = path.find_last_of('.');
+    if (dotPos != std::string::npos) {
+        std::string ext = path.substr(dotPos + 1);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == "html" || ext == "htm") return "text/html";
+        if (ext == "js") return "application/javascript";
+        if (ext == "css") return "text/css";
+        if (ext == "json") return "application/json";
+        if (ext == "png") return "image/png";
+        if (ext == "jpg" || ext == "jpeg") return "image/jpeg";
+        if (ext == "svg") return "image/svg+xml";
+    }
+    return "text/plain";
+}
