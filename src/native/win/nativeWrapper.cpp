@@ -94,6 +94,118 @@ void log(const std::string& message) {
     }
 }
 
+// Bridge Message Handler COM Objects with message type parsing
+class UnifiedBridgeMessageHandler : public ICoreWebView2WebMessageReceivedEventHandler {
+private:
+    long m_refCount;
+    HandlePostMessage m_bunCallback;
+    HandlePostMessage m_internalCallback;
+    uint32_t m_webviewId;
+
+public:
+    UnifiedBridgeMessageHandler(HandlePostMessage bunCallback, HandlePostMessage internalCallback, uint32_t webviewId) 
+        : m_refCount(1), m_bunCallback(bunCallback), m_internalCallback(internalCallback), m_webviewId(webviewId) {}
+
+    // IUnknown implementation
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
+        if (riid == IID_IUnknown || riid == __uuidof(ICoreWebView2WebMessageReceivedEventHandler)) {
+            *ppvObject = static_cast<ICoreWebView2WebMessageReceivedEventHandler*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return InterlockedIncrement(&m_refCount);
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        long refCount = InterlockedDecrement(&m_refCount);
+        if (refCount == 0) {
+            delete this;
+        }
+        return refCount;
+    }
+
+    // ICoreWebView2WebMessageReceivedEventHandler implementation
+    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) override {
+        LPWSTR message;
+        HRESULT hr = args->TryGetWebMessageAsString(&message);
+        if (FAILED(hr)) {
+            return hr;
+        }
+
+        // Convert to char*
+        int size = WideCharToMultiByte(CP_UTF8, 0, message, -1, NULL, 0, NULL, NULL);
+        char* message_char = new char[size];
+        WideCharToMultiByte(CP_UTF8, 0, message, -1, message_char, size, NULL, NULL);
+
+        // Parse the message to determine type and route to appropriate handler
+        std::string messageStr(message_char);
+        
+        // Try to parse as JSON to get the type and data
+        size_t typePos = messageStr.find("\"type\":");
+        if (typePos != std::string::npos) {
+            // Extract the type value
+            size_t typeStart = messageStr.find("\"", typePos + 7);
+            if (typeStart != std::string::npos) {
+                typeStart++; // Skip the opening quote
+                size_t typeEnd = messageStr.find("\"", typeStart);
+                if (typeEnd != std::string::npos) {
+                    std::string messageType = messageStr.substr(typeStart, typeEnd - typeStart);
+                    
+                    // Extract the data value
+                    size_t dataPos = messageStr.find("\"data\":");
+                    if (dataPos != std::string::npos) {
+                        size_t dataStart = messageStr.find(":", dataPos + 6);
+                        if (dataStart != std::string::npos) {
+                            dataStart++; // Skip the colon
+                            // Find the end of the data value (handle both string and object data)
+                            size_t dataEnd = messageStr.rfind("}");
+                            if (dataEnd != std::string::npos) {
+                                std::string dataValue = messageStr.substr(dataStart, dataEnd - dataStart);
+                                
+                                // Remove leading/trailing whitespace and quotes if it's a string
+                                size_t start = dataValue.find_first_not_of(" \t\n\r");
+                                size_t end = dataValue.find_last_not_of(" \t\n\r");
+                                if (start != std::string::npos && end != std::string::npos) {
+                                    dataValue = dataValue.substr(start, end - start + 1);
+                                    if (dataValue.front() == '"' && dataValue.back() == '"') {
+                                        dataValue = dataValue.substr(1, dataValue.length() - 2);
+                                    }
+                                }
+                                
+                                // Route to appropriate handler
+                                if (messageType == "bunBridge" && m_bunCallback) {
+                                    char* dataCopy = new char[dataValue.length() + 1];
+                                    strcpy_s(dataCopy, dataValue.length() + 1, dataValue.c_str());
+                                    m_bunCallback(m_webviewId, dataCopy);
+                                    delete[] dataCopy;
+                                } else if (messageType == "internalBridge" && m_internalCallback) {
+                                    char* dataCopy = new char[dataValue.length() + 1];
+                                    strcpy_s(dataCopy, dataValue.length() + 1, dataValue.c_str());
+                                    m_internalCallback(m_webviewId, dataCopy);
+                                    delete[] dataCopy;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback: if no type field, treat as bunBridge for compatibility
+            if (m_bunCallback) {
+                m_bunCallback(m_webviewId, message_char);
+            }
+        }
+
+        delete[] message_char;
+        CoTaskMemFree(message);
+        return S_OK;
+    }
+};
+
 class MainThreadDispatcher {
 private:
     static HWND g_messageWindow;
@@ -159,6 +271,10 @@ public:
     // WebView2 specific members
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
+    
+    // Store unified message handler to keep it alive
+    ComPtr<UnifiedBridgeMessageHandler> unifiedBridgeHandler;
+    EventRegistrationToken messageToken;
     
     virtual ~AbstractView() = default;
 };
@@ -609,7 +725,7 @@ ELECTROBUN_EXPORT void shutdownApplication() {
     // Stub implementation
 }
 
-// Modified initWebview function with proper custom scheme registration
+// Modified initWebview function with separate bridge handlers
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          NSWindow *window,  // Actually HWND on Windows
                          const char *renderer,
@@ -625,7 +741,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript) {
     
-    log("=== Starting WebView2 Creation with views:// Custom Scheme ===");
+    log("=== Starting WebView2 Creation with Separate Bridge Handlers ===");
     
     HWND hwnd = reinterpret_cast<HWND>(window);
     
@@ -645,7 +761,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     
     // Dispatch WebView2 creation to main thread
     MainThreadDispatcher::dispatch_sync([=, urlStr = urlStr, electrobunScriptStr = electrobunScriptStr, customScriptStr = customScriptStr]() {
-        log("Creating WebView2 with views:// custom scheme on main thread");
+        log("Creating WebView2 with separate bridge handlers on main thread");
         
         // Get or create container for this window
         ContainerView* container = GetOrCreateContainer(hwnd);
@@ -809,33 +925,49 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                                 }).Get(),
                                             &navCompletedToken);
                                         
-                                        // Set up message handlers
+                                        // Set up unified message handler for both bridge types
                                         if (bunBridgeHandler || internalBridgeHandler) {
-                                            EventRegistrationToken messageToken;
+                                            log("Setting up unified bridge message handler");
+                                            view->unifiedBridgeHandler = new UnifiedBridgeMessageHandler(bunBridgeHandler, internalBridgeHandler, webviewId);
                                             view->webview->add_WebMessageReceived(
-                                                Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                                                    [bunBridgeHandler, internalBridgeHandler, webviewId](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
-                                                        LPWSTR message;
-                                                        args->TryGetWebMessageAsString(&message);
-                                                        
-                                                        // Convert to char*
-                                                        int size = WideCharToMultiByte(CP_UTF8, 0, message, -1, NULL, 0, NULL, NULL);
-                                                        char* message_char = new char[size];
-                                                        WideCharToMultiByte(CP_UTF8, 0, message, -1, message_char, size, NULL, NULL);
-                                                        
-                                                        // Call appropriate handlers
-                                                        if (bunBridgeHandler) {
-                                                            bunBridgeHandler(webviewId, message_char);
-                                                        }
-                                                        if (internalBridgeHandler) {
-                                                            internalBridgeHandler(webviewId, message_char);
-                                                        }
-                                                        
-                                                        delete[] message_char;
-                                                        CoTaskMemFree(message);
-                                                        return S_OK;
-                                                    }).Get(), 
-                                                &messageToken);
+                                                view->unifiedBridgeHandler.Get(),
+                                                &view->messageToken);
+                                            
+                                            // Inject scripts to set up both bridge postMessage channels
+                                            std::string bridgeScript = R"(
+                                                (function() {
+                                                    // Set up bunBridge
+                                                    if (!window.bunBridge) {
+                                                        window.bunBridge = {
+                                                            postMessage: function(message) {
+                                                                const messageObj = {
+                                                                    type: 'bunBridge',
+                                                                    data: message
+                                                                };
+                                                                window.chrome.webview.postMessage(JSON.stringify(messageObj));
+                                                            }
+                                                        };
+                                                    }
+                                                    
+                                                    // Set up internalBridge
+                                                    if (!window.internalBridge) {
+                                                        window.internalBridge = {
+                                                            postMessage: function(message) {
+                                                                const messageObj = {
+                                                                    type: 'internalBridge',
+                                                                    data: message
+                                                                };
+                                                                window.chrome.webview.postMessage(JSON.stringify(messageObj));
+                                                            }
+                                                        };
+                                                    }
+                                                })();
+                                            )";
+                                            
+                                            int size = MultiByteToWideChar(CP_UTF8, 0, bridgeScript.c_str(), -1, NULL, 0);
+                                            std::wstring wScript(size - 1, 0);
+                                            MultiByteToWideChar(CP_UTF8, 0, bridgeScript.c_str(), -1, &wScript[0], size);
+                                            view->webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
                                         }
                                         
                                         // Add preload scripts
