@@ -94,22 +94,26 @@ void log(const std::string& message) {
     }
 }
 
-// Bridge Message Handler COM Objects with message type parsing
-class UnifiedBridgeMessageHandler : public ICoreWebView2WebMessageReceivedEventHandler {
+// Generic Bridge Handler COM Object - can be used for any bridge type
+class BridgeHandler : public IUnknown {
 private:
     long m_refCount;
-    HandlePostMessage m_bunCallback;
-    HandlePostMessage m_internalCallback;
+    HandlePostMessage m_callback;
     uint32_t m_webviewId;
+    std::string m_bridgeName;
 
 public:
-    UnifiedBridgeMessageHandler(HandlePostMessage bunCallback, HandlePostMessage internalCallback, uint32_t webviewId) 
-        : m_refCount(1), m_bunCallback(bunCallback), m_internalCallback(internalCallback), m_webviewId(webviewId) {}
+    BridgeHandler(const std::string& bridgeName, HandlePostMessage callback, uint32_t webviewId) 
+        : m_refCount(1), m_callback(callback), m_webviewId(webviewId), m_bridgeName(bridgeName) {
+        char logMsg[256];
+        sprintf_s(logMsg, "Created %s bridge handler for webview %u", bridgeName.c_str(), webviewId);
+        log(logMsg);
+    }
 
     // IUnknown implementation
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
-        if (riid == IID_IUnknown || riid == __uuidof(ICoreWebView2WebMessageReceivedEventHandler)) {
-            *ppvObject = static_cast<ICoreWebView2WebMessageReceivedEventHandler*>(this);
+        if (riid == IID_IUnknown) {
+            *ppvObject = static_cast<IUnknown*>(this);
             AddRef();
             return S_OK;
         }
@@ -128,81 +132,209 @@ public:
         return refCount;
     }
 
-    // ICoreWebView2WebMessageReceivedEventHandler implementation
-    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) override {
-        LPWSTR message;
-        HRESULT hr = args->TryGetWebMessageAsString(&message);
-        if (FAILED(hr)) {
-            return hr;
+    // Bridge-specific method for posting messages
+    HRESULT PostMessage(BSTR message) {
+        if (!m_callback) {
+            log("ERROR: Bridge callback is null");
+            return E_FAIL;
         }
 
-        // Convert to char*
+        // Convert BSTR to char*
         int size = WideCharToMultiByte(CP_UTF8, 0, message, -1, NULL, 0, NULL, NULL);
-        char* message_char = new char[size];
-        WideCharToMultiByte(CP_UTF8, 0, message, -1, message_char, size, NULL, NULL);
-
-        // Parse the message to determine type and route to appropriate handler
-        std::string messageStr(message_char);
-        
-        // Try to parse as JSON to get the type and data
-        size_t typePos = messageStr.find("\"type\":");
-        if (typePos != std::string::npos) {
-            // Extract the type value
-            size_t typeStart = messageStr.find("\"", typePos + 7);
-            if (typeStart != std::string::npos) {
-                typeStart++; // Skip the opening quote
-                size_t typeEnd = messageStr.find("\"", typeStart);
-                if (typeEnd != std::string::npos) {
-                    std::string messageType = messageStr.substr(typeStart, typeEnd - typeStart);
-                    
-                    // Extract the data value
-                    size_t dataPos = messageStr.find("\"data\":");
-                    if (dataPos != std::string::npos) {
-                        size_t dataStart = messageStr.find(":", dataPos + 6);
-                        if (dataStart != std::string::npos) {
-                            dataStart++; // Skip the colon
-                            // Find the end of the data value (handle both string and object data)
-                            size_t dataEnd = messageStr.rfind("}");
-                            if (dataEnd != std::string::npos) {
-                                std::string dataValue = messageStr.substr(dataStart, dataEnd - dataStart);
-                                
-                                // Remove leading/trailing whitespace and quotes if it's a string
-                                size_t start = dataValue.find_first_not_of(" \t\n\r");
-                                size_t end = dataValue.find_last_not_of(" \t\n\r");
-                                if (start != std::string::npos && end != std::string::npos) {
-                                    dataValue = dataValue.substr(start, end - start + 1);
-                                    if (dataValue.front() == '"' && dataValue.back() == '"') {
-                                        dataValue = dataValue.substr(1, dataValue.length() - 2);
-                                    }
-                                }
-                                
-                                // Route to appropriate handler
-                                if (messageType == "bunBridge" && m_bunCallback) {
-                                    char* dataCopy = new char[dataValue.length() + 1];
-                                    strcpy_s(dataCopy, dataValue.length() + 1, dataValue.c_str());
-                                    m_bunCallback(m_webviewId, dataCopy);
-                                    delete[] dataCopy;
-                                } else if (messageType == "internalBridge" && m_internalCallback) {
-                                    char* dataCopy = new char[dataValue.length() + 1];
-                                    strcpy_s(dataCopy, dataValue.length() + 1, dataValue.c_str());
-                                    m_internalCallback(m_webviewId, dataCopy);
-                                    delete[] dataCopy;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // Fallback: if no type field, treat as bunBridge for compatibility
-            if (m_bunCallback) {
-                m_bunCallback(m_webviewId, message_char);
-            }
+        if (size <= 0) {
+            log("ERROR: Failed to get required buffer size for message conversion");
+            return E_FAIL;
         }
 
-        delete[] message_char;
-        CoTaskMemFree(message);
+        char* message_char = new char[size];
+        int result = WideCharToMultiByte(CP_UTF8, 0, message, -1, message_char, size, NULL, NULL);
+        if (result == 0) {
+            delete[] message_char;
+            log("ERROR: Failed to convert message to UTF-8");
+            return E_FAIL;
+        }
+
+        char logMsg[512];
+        sprintf_s(logMsg, "%s bridge received message: %.100s%s", 
+                 m_bridgeName.c_str(), 
+                 message_char, 
+                 strlen(message_char) > 100 ? "..." : "");
+        log(logMsg);
+
+        // Create a copy for the callback to avoid memory issues
+        char* messageCopy = new char[strlen(message_char) + 1];
+        strcpy_s(messageCopy, strlen(message_char) + 1, message_char);
+
+        // Call the callback
+        try {
+            m_callback(m_webviewId, messageCopy);
+        } catch (...) {
+            log("ERROR: Exception in bridge callback");
+            delete[] message_char;
+            delete[] messageCopy;
+            return E_FAIL;
+        }
+
+        // Schedule cleanup after a delay to avoid premature deallocation
+        // (similar to the original delay-based cleanup)
+        std::thread([messageCopy, message_char]() {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            delete[] messageCopy;
+            delete[] message_char;
+        }).detach();
+
         return S_OK;
+    }
+};
+
+// Dispatch IDs for the bridge methods
+#define DISPID_POSTMESSAGE 1
+
+// Dispatch interface for BunBridge
+class BunBridgeDispatch : public IDispatch {
+private:
+    long m_refCount;
+    ComPtr<BridgeHandler> m_bridgeHandler;
+
+public:
+    BunBridgeDispatch(ComPtr<BridgeHandler> bridgeHandler) 
+        : m_refCount(1), m_bridgeHandler(bridgeHandler) {}
+
+    // IUnknown implementation
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
+        if (riid == IID_IUnknown || riid == IID_IDispatch) {
+            *ppvObject = static_cast<IDispatch*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return InterlockedIncrement(&m_refCount);
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        long refCount = InterlockedDecrement(&m_refCount);
+        if (refCount == 0) {
+            delete this;
+        }
+        return refCount;
+    }
+
+    // IDispatch implementation
+    HRESULT STDMETHODCALLTYPE GetTypeInfoCount(UINT* pctinfo) override {
+        *pctinfo = 0;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, ITypeInfo** ppTInfo) override {
+        return E_NOTIMPL;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetIDsOfNames(REFIID riid, LPOLESTR* rgszNames, UINT cNames, LCID lcid, DISPID* rgDispId) override {
+        if (cNames != 1) return E_INVALIDARG;
+        
+        std::wstring name(rgszNames[0]);
+        if (name == L"postMessage") {
+            rgDispId[0] = DISPID_POSTMESSAGE;
+            return S_OK;
+        }
+        
+        return DISP_E_UNKNOWNNAME;
+    }
+
+    HRESULT STDMETHODCALLTYPE Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD wFlags, 
+                                   DISPPARAMS* pDispParams, VARIANT* pVarResult, 
+                                   EXCEPINFO* pExcepInfo, UINT* puArgErr) override {
+        if (dispIdMember == DISPID_POSTMESSAGE) {
+            if (pDispParams->cArgs != 1) {
+                return DISP_E_BADPARAMCOUNT;
+            }
+            
+            VARIANT* arg = &pDispParams->rgvarg[0];
+            if (arg->vt != VT_BSTR) {
+                return DISP_E_TYPEMISMATCH;
+            }
+            
+            return m_bridgeHandler->PostMessage(arg->bstrVal);
+        }
+        
+        return DISP_E_MEMBERNOTFOUND;
+    }
+};
+
+// Dispatch interface for InternalBridge (same implementation, different name for clarity)
+class InternalBridgeDispatch : public IDispatch {
+private:
+    long m_refCount;
+    ComPtr<BridgeHandler> m_bridgeHandler;
+
+public:
+    InternalBridgeDispatch(ComPtr<BridgeHandler> bridgeHandler) 
+        : m_refCount(1), m_bridgeHandler(bridgeHandler) {}
+
+    // IUnknown implementation
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
+        if (riid == IID_IUnknown || riid == IID_IDispatch) {
+            *ppvObject = static_cast<IDispatch*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return InterlockedIncrement(&m_refCount);
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        long refCount = InterlockedDecrement(&m_refCount);
+        if (refCount == 0) {
+            delete this;
+        }
+        return refCount;
+    }
+
+    // IDispatch implementation (identical to BunBridgeDispatch)
+    HRESULT STDMETHODCALLTYPE GetTypeInfoCount(UINT* pctinfo) override {
+        *pctinfo = 0;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, ITypeInfo** ppTInfo) override {
+        return E_NOTIMPL;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetIDsOfNames(REFIID riid, LPOLESTR* rgszNames, UINT cNames, LCID lcid, DISPID* rgDispId) override {
+        if (cNames != 1) return E_INVALIDARG;
+        
+        std::wstring name(rgszNames[0]);
+        if (name == L"postMessage") {
+            rgDispId[0] = DISPID_POSTMESSAGE;
+            return S_OK;
+        }
+        
+        return DISP_E_UNKNOWNNAME;
+    }
+
+    HRESULT STDMETHODCALLTYPE Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD wFlags, 
+                                   DISPPARAMS* pDispParams, VARIANT* pVarResult, 
+                                   EXCEPINFO* pExcepInfo, UINT* puArgErr) override {
+        if (dispIdMember == DISPID_POSTMESSAGE) {
+            if (pDispParams->cArgs != 1) {
+                return DISP_E_BADPARAMCOUNT;
+            }
+            
+            VARIANT* arg = &pDispParams->rgvarg[0];
+            if (arg->vt != VT_BSTR) {
+                return DISP_E_TYPEMISMATCH;
+            }
+            
+            return m_bridgeHandler->PostMessage(arg->bstrVal);
+        }
+        
+        return DISP_E_MEMBERNOTFOUND;
     }
 };
 
@@ -272,9 +404,11 @@ public:
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
     
-    // Store unified message handler to keep it alive
-    ComPtr<UnifiedBridgeMessageHandler> unifiedBridgeHandler;
-    EventRegistrationToken messageToken;
+    // Store bridge handlers to keep them alive
+    ComPtr<BridgeHandler> bunBridgeHandler;
+    ComPtr<BridgeHandler> internalBridgeHandler;
+    ComPtr<BunBridgeDispatch> bunBridgeDispatch;
+    ComPtr<InternalBridgeDispatch> internalBridgeDispatch;
     
     virtual ~AbstractView() = default;
 };
@@ -725,7 +859,7 @@ ELECTROBUN_EXPORT void shutdownApplication() {
     // Stub implementation
 }
 
-// Modified initWebview function with separate bridge handlers
+// Modified initWebview function with direct COM bridge objects
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          NSWindow *window,  // Actually HWND on Windows
                          const char *renderer,
@@ -741,7 +875,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript) {
     
-    log("=== Starting WebView2 Creation with Separate Bridge Handlers ===");
+    log("=== Starting WebView2 Creation with Direct COM Bridge Objects ===");
     
     HWND hwnd = reinterpret_cast<HWND>(window);
     
@@ -761,7 +895,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     
     // Dispatch WebView2 creation to main thread
     MainThreadDispatcher::dispatch_sync([=, urlStr = urlStr, electrobunScriptStr = electrobunScriptStr, customScriptStr = customScriptStr]() {
-        log("Creating WebView2 with separate bridge handlers on main thread");
+        log("Creating WebView2 with direct COM bridge objects on main thread");
         
         // Get or create container for this window
         ContainerView* container = GetOrCreateContainer(hwnd);
@@ -925,49 +1059,55 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                                 }).Get(),
                                             &navCompletedToken);
                                         
-                                        // Set up unified message handler for both bridge types
+                                        // Create and set up direct COM bridge objects
                                         if (bunBridgeHandler || internalBridgeHandler) {
-                                            log("Setting up unified bridge message handler");
-                                            view->unifiedBridgeHandler = new UnifiedBridgeMessageHandler(bunBridgeHandler, internalBridgeHandler, webviewId);
-                                            view->webview->add_WebMessageReceived(
-                                                view->unifiedBridgeHandler.Get(),
-                                                &view->messageToken);
+                                            log("Setting up direct COM bridge objects");
                                             
-                                            // Inject scripts to set up both bridge postMessage channels
-                                            std::string bridgeScript = R"(
-                                                (function() {
-                                                    // Set up bunBridge
-                                                    if (!window.bunBridge) {
-                                                        window.bunBridge = {
-                                                            postMessage: function(message) {
-                                                                const messageObj = {
-                                                                    type: 'bunBridge',
-                                                                    data: message
-                                                                };
-                                                                window.chrome.webview.postMessage(JSON.stringify(messageObj));
-                                                            }
-                                                        };
-                                                    }
-                                                    
-                                                    // Set up internalBridge
-                                                    if (!window.internalBridge) {
-                                                        window.internalBridge = {
-                                                            postMessage: function(message) {
-                                                                const messageObj = {
-                                                                    type: 'internalBridge',
-                                                                    data: message
-                                                                };
-                                                                window.chrome.webview.postMessage(JSON.stringify(messageObj));
-                                                            }
-                                                        };
-                                                    }
-                                                })();
-                                            )";
+                                            // Create BunBridge if handler provided
+                                            if (bunBridgeHandler) {
+                                                view->bunBridgeHandler = new BridgeHandler("bunBridge", bunBridgeHandler, webviewId);
+                                                view->bunBridgeDispatch = new BunBridgeDispatch(view->bunBridgeHandler);
+                                                
+                                                VARIANT bunBridgeVariant;
+                                                VariantInit(&bunBridgeVariant);
+                                                bunBridgeVariant.vt = VT_DISPATCH;
+                                                bunBridgeVariant.pdispVal = view->bunBridgeDispatch.Get();
+                                                view->bunBridgeDispatch->AddRef(); // AddRef for the VARIANT
+                                                
+                                                HRESULT bunResult = view->webview->AddHostObjectToScript(L"bunBridge", &bunBridgeVariant);
+                                                VariantClear(&bunBridgeVariant);
+                                                
+                                                if (SUCCEEDED(bunResult)) {
+                                                    log("bunBridge COM object added successfully");
+                                                } else {
+                                                    char errorMsg[256];
+                                                    sprintf_s(errorMsg, "Failed to add bunBridge COM object: 0x%lx", bunResult);
+                                                    log(errorMsg);
+                                                }
+                                            }
                                             
-                                            int size = MultiByteToWideChar(CP_UTF8, 0, bridgeScript.c_str(), -1, NULL, 0);
-                                            std::wstring wScript(size - 1, 0);
-                                            MultiByteToWideChar(CP_UTF8, 0, bridgeScript.c_str(), -1, &wScript[0], size);
-                                            view->webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
+                                            // Create InternalBridge if handler provided
+                                            if (internalBridgeHandler) {
+                                                view->internalBridgeHandler = new BridgeHandler("internalBridge", internalBridgeHandler, webviewId);
+                                                view->internalBridgeDispatch = new InternalBridgeDispatch(view->internalBridgeHandler);
+                                                
+                                                VARIANT internalBridgeVariant;
+                                                VariantInit(&internalBridgeVariant);
+                                                internalBridgeVariant.vt = VT_DISPATCH;
+                                                internalBridgeVariant.pdispVal = view->internalBridgeDispatch.Get();
+                                                view->internalBridgeDispatch->AddRef(); // AddRef for the VARIANT
+                                                
+                                                HRESULT internalResult = view->webview->AddHostObjectToScript(L"internalBridge", &internalBridgeVariant);
+                                                VariantClear(&internalBridgeVariant);
+                                                
+                                                if (SUCCEEDED(internalResult)) {
+                                                    log("internalBridge COM object added successfully");
+                                                } else {
+                                                    char errorMsg[256];
+                                                    sprintf_s(errorMsg, "Failed to add internalBridge COM object: 0x%lx", internalResult);
+                                                    log(errorMsg);
+                                                }
+                                            }
                                         }
                                         
                                         // Add preload scripts

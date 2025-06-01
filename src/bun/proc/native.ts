@@ -405,6 +405,8 @@ export const ffi = {
          window.__electrobunWebviewId = ${id};
          window.__electrobunWindowId = ${windowId};
          window.__electrobunRpcSocketPort = ${rpcPort};
+         window.__electrobunInternalBridge = window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
+         window.__electrobunBunBridge = window.webkit?.messageHandlers?.bunBridge || window.bunBridge || window.chrome?.webview?.hostObjects?.bunBridge;
         (async () => {
         
          function base64ToUint8Array(base64) {
@@ -481,12 +483,8 @@ export const ffi = {
            // or something where the JSCallback that this postMessage fires is not available or busy or
            // its memory is allocated to something else or something and the handler receives garbage data in Bun.
            setTimeout(() => {
-              console.log('emitWebviewEvent', eventName, detail)
-             if (window.webkit?.messageHandlers?.internalBridge) {
-                 window.webkit.messageHandlers.internalBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
-             } else {
-                 window.internalBridge.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
-             }
+              console.log('emitWebviewEvent', eventName, detail)             
+              window.__electrobunInternalBridge?.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
           });
          };                 
         
@@ -929,7 +927,7 @@ const bunBridgePostmessageHandler = new JSCallback((id, msg) => {
 
 const internalBridgeHandler = new JSCallback((id, msg) => {    
   try {    
-    const batchMessage = new CString(msg);    
+    const batchMessage = new CString(msg); 
 
     const jsonBatch = JSON.parse(batchMessage);
 

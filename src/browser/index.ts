@@ -155,17 +155,8 @@ class Electroview<T> {
     
     const batchMessage = JSON.stringify(that.sendToInternalQueue);
     that.sendToInternalQueue = [];
-
-    if (window.webkit?.messageHandlers?.internalBridge) {
-      window.webkit.messageHandlers.internalBridge.postMessage(
-        batchMessage
-      );
-    } else {
-      window.internalBridge.postMessage(
-        batchMessage
-      );
-    }
-
+    window.__electrobunInternalBridge?.postMessage(batchMessage);
+    
     // Note: The postmessage handler is routed via native code to a Bun JSCallback.
     // Currently JSCallbacks are somewhat experimental and were designed for a single invocation
     // But we have tons of resize events in this webview's thread that are sent, maybe to main thread
@@ -265,11 +256,7 @@ class Electroview<T> {
     // repro now that other places are chunking messages and laptop restart
 
     if (true || msg.length < 8 * 1024) {      
-      if (window.webkit?.messageHandlers?.bunBridge){
-        window.webkit.messageHandlers.bunBridge.postMessage(msg);
-      } else {
-        window.bunBridge.postMessage(msg);
-      }
+      window.__electrobunBunBridge?.postMessage(msg);
     } else {
       var xhr = new XMLHttpRequest();
 
