@@ -639,7 +639,7 @@ export const ffi = {
         } = params;
 
         const tray = Tray.getById(id);
-
+        console.log('native.symbols.setTrayMenu', tray.ptr, menuConfig)
         native.symbols.setTrayMenu(
           tray.ptr,
           toCString(menuConfig)

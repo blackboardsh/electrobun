@@ -6,7 +6,6 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
-#include <string>
 #include <ctime>
 #include <functional>
 #include <future>
@@ -15,18 +14,25 @@
 #include <wrl.h>
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
-#include <string>
 #include <map>
 #include <algorithm>
 #include <stdint.h>
+#include <shellapi.h>
+#include <commctrl.h>
+#include <winrt/Windows.Data.Json.h>
+#include <winrt/base.h>
 
 // Link required Windows libraries
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "comctl32.lib")
+
 
 using namespace Microsoft::WRL;
+
 
 // Ensure the exported functions have appropriate visibility
 #define ELECTROBUN_EXPORT __declspec(dllexport)
@@ -697,10 +703,7 @@ public:
     void* contentView;
 };
 
-class NSStatusItem {
-public:
-    void* button;
-};
+
 
 class MyScriptMessageHandlerWithReply {
 public:
@@ -819,6 +822,323 @@ LRESULT CALLBACK MessageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return DefWindowProc(hwnd, msg, wParam, lParam);
     }
 }
+
+
+class NSStatusItem {
+public:
+    NOTIFYICONDATA nid;
+    HWND hwnd;
+    uint32_t trayId;
+    ZigStatusItemHandler handler;
+    HMENU contextMenu;
+    std::string title;
+    std::string imagePath;
+    
+    NSStatusItem() {
+        memset(&nid, 0, sizeof(NOTIFYICONDATA));
+        hwnd = NULL;
+        trayId = 0;
+        handler = nullptr;
+        contextMenu = NULL;
+    }
+    
+    ~NSStatusItem() {
+        if (contextMenu) {
+            DestroyMenu(contextMenu);
+        }
+        // Remove from system tray
+        Shell_NotifyIcon(NIM_DELETE, &nid);
+    }
+};
+
+// Global map to store tray items by their window handle
+static std::map<HWND, NSStatusItem*> g_trayItems;
+static UINT g_trayMessageId = WM_USER + 100;
+
+struct SimpleJsonValue {
+    enum Type { STRING, BOOL, ARRAY, OBJECT, UNKNOWN };
+    Type type = UNKNOWN;
+    std::string stringValue;
+    bool boolValue = false;
+    std::vector<SimpleJsonValue> arrayValue;
+    std::map<std::string, SimpleJsonValue> objectValue;
+};
+
+// Simple JSON parsing functions
+std::string trimWhitespace(const std::string& str) {
+    size_t start = str.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return "";
+    size_t end = str.find_last_not_of(" \t\n\r");
+    return str.substr(start, end - start + 1);
+}
+
+std::string extractQuotedString(const std::string& json, size_t& pos) {
+    if (pos >= json.length() || json[pos] != '"') return "";
+    pos++; // Skip opening quote
+    
+    std::string result;
+    while (pos < json.length() && json[pos] != '"') {
+        if (json[pos] == '\\' && pos + 1 < json.length()) {
+            pos++; // Skip escape character
+            switch (json[pos]) {
+                case 'n': result += '\n'; break;
+                case 't': result += '\t'; break;
+                case 'r': result += '\r'; break;
+                case '\\': result += '\\'; break;
+                case '"': result += '"'; break;
+                default: result += json[pos]; break;
+            }
+        } else {
+            result += json[pos];
+        }
+        pos++;
+    }
+    
+    if (pos < json.length() && json[pos] == '"') {
+        pos++; // Skip closing quote
+    }
+    
+    return result;
+}
+
+SimpleJsonValue parseJsonValue(const std::string& json, size_t& pos);
+
+SimpleJsonValue parseJsonObject(const std::string& json, size_t& pos) {
+    SimpleJsonValue obj;
+    obj.type = SimpleJsonValue::OBJECT;
+    
+    if (pos >= json.length() || json[pos] != '{') return obj;
+    pos++; // Skip '{'
+    
+    while (pos < json.length()) {
+        // Skip whitespace
+        while (pos < json.length() && isspace(json[pos])) pos++;
+        
+        if (pos >= json.length()) break;
+        if (json[pos] == '}') {
+            pos++; // Skip '}'
+            break;
+        }
+        
+        // Parse key
+        std::string key = extractQuotedString(json, pos);
+        
+        // Skip whitespace and ':'
+        while (pos < json.length() && (isspace(json[pos]) || json[pos] == ':')) pos++;
+        
+        // Parse value
+        SimpleJsonValue value = parseJsonValue(json, pos);
+        obj.objectValue[key] = value;
+        
+        // Skip whitespace and optional ','
+        while (pos < json.length() && (isspace(json[pos]) || json[pos] == ',')) pos++;
+    }
+    
+    return obj;
+}
+
+SimpleJsonValue parseJsonArray(const std::string& json, size_t& pos) {
+    SimpleJsonValue arr;
+    arr.type = SimpleJsonValue::ARRAY;
+    
+    if (pos >= json.length() || json[pos] != '[') return arr;
+    pos++; // Skip '['
+    
+    while (pos < json.length()) {
+        // Skip whitespace
+        while (pos < json.length() && isspace(json[pos])) pos++;
+        
+        if (pos >= json.length()) break;
+        if (json[pos] == ']') {
+            pos++; // Skip ']'
+            break;
+        }
+        
+        // Parse value
+        SimpleJsonValue value = parseJsonValue(json, pos);
+        arr.arrayValue.push_back(value);
+        
+        // Skip whitespace and optional ','
+        while (pos < json.length() && (isspace(json[pos]) || json[pos] == ',')) pos++;
+    }
+    
+    return arr;
+}
+
+SimpleJsonValue parseJsonValue(const std::string& json, size_t& pos) {
+    SimpleJsonValue value;
+    
+    // Skip whitespace
+    while (pos < json.length() && isspace(json[pos])) pos++;
+    
+    if (pos >= json.length()) return value;
+    
+    if (json[pos] == '"') {
+        // String value
+        value.type = SimpleJsonValue::STRING;
+        value.stringValue = extractQuotedString(json, pos);
+    } else if (json[pos] == '{') {
+        // Object value
+        value = parseJsonObject(json, pos);
+    } else if (json[pos] == '[') {
+        // Array value
+        value = parseJsonArray(json, pos);
+    } else if (json.substr(pos, 4) == "true") {
+        // Boolean true
+        value.type = SimpleJsonValue::BOOL;
+        value.boolValue = true;
+        pos += 4;
+    } else if (json.substr(pos, 5) == "false") {
+        // Boolean false
+        value.type = SimpleJsonValue::BOOL;
+        value.boolValue = false;
+        pos += 5;
+    } else {
+        // Skip unknown values
+        while (pos < json.length() && json[pos] != ',' && json[pos] != '}' && json[pos] != ']') pos++;
+    }
+    
+    return value;
+}
+
+SimpleJsonValue parseJson(const std::string& json) {
+    size_t pos = 0;
+    return parseJsonValue(json, pos);
+}
+
+// Global map to store menu item actions by menu ID
+static std::map<UINT, std::string> g_menuItemActions;
+static UINT g_nextMenuId = WM_USER + 1000;  // Start menu IDs from a safe range
+
+// Function to create Windows menu from JSON config (equivalent to createMenuFromConfig)
+HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* statusItem) {
+    HMENU menu = CreatePopupMenu();
+    if (!menu) {
+        log("ERROR: Failed to create popup menu");
+        return NULL;
+    }
+    
+    if (menuConfig.type != SimpleJsonValue::ARRAY) {
+        log("ERROR: Menu config is not an array");
+        return menu;
+    }
+    
+    for (const auto& itemValue : menuConfig.arrayValue) {
+        if (itemValue.type != SimpleJsonValue::OBJECT) continue;
+        
+        const auto& itemData = itemValue.objectValue;
+        
+        // Helper lambda to get string value
+        auto getString = [&](const std::string& key, const std::string& defaultVal = "") -> std::string {
+            auto it = itemData.find(key);
+            if (it != itemData.end() && it->second.type == SimpleJsonValue::STRING) {
+                return it->second.stringValue;
+            }
+            return defaultVal;
+        };
+        
+        // Helper lambda to get bool value
+        auto getBool = [&](const std::string& key, bool defaultVal = false) -> bool {
+            auto it = itemData.find(key);
+            if (it != itemData.end() && it->second.type == SimpleJsonValue::BOOL) {
+                return it->second.boolValue;
+            }
+            return defaultVal;
+        };
+        
+        std::string type = getString("type");
+        std::string label = getString("label");
+        std::string action = getString("action");
+        std::string role = getString("role");
+        std::string accelerator = getString("accelerator");
+        
+        bool enabled = getBool("enabled", true);
+        bool checked = getBool("checked", false);
+        bool hidden = getBool("hidden", false);
+        std::string tooltip = getString("tooltip");
+        
+        if (type == "divider") {
+            AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+        } else {
+            UINT flags = MF_STRING;
+            if (!enabled) flags |= MF_GRAYED;
+            if (checked) flags |= MF_CHECKED;
+            
+            UINT menuId = g_nextMenuId++;
+            
+            // Store the action for this menu ID
+            if (!action.empty()) {
+                g_menuItemActions[menuId] = action;
+            }
+            
+            // Handle system roles (similar to macOS implementation)
+            if (!role.empty()) {
+                if (role == "quit") {
+                    // For quit, we'll handle it specially in the menu callback
+                    g_menuItemActions[menuId] = "__quit__";
+                }
+                // Add other role handling as needed
+            }
+            
+            // Append the menu item
+            AppendMenuA(menu, flags, menuId, label.c_str());
+            
+            // Handle submenus
+            auto submenuIt = itemData.find("submenu");
+            if (submenuIt != itemData.end() && submenuIt->second.type == SimpleJsonValue::ARRAY) {
+                HMENU submenu = createMenuFromConfig(submenuIt->second, statusItem);
+                if (submenu) {
+                    ModifyMenuA(menu, menuId, MF_BYCOMMAND | MF_POPUP, (UINT_PTR)submenu, label.c_str());
+                }
+            }
+        }
+    }
+    
+    return menu;
+}
+
+// Function to handle menu item selection
+void handleMenuItemSelection(UINT menuId, NSStatusItem* statusItem) {
+    auto it = g_menuItemActions.find(menuId);
+    if (it != g_menuItemActions.end()) {
+        const std::string& action = it->second;
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "Menu item selected: ID=%u, Action=%s", menuId, action.c_str());
+        log(logMsg);
+        
+        if (statusItem && statusItem->handler) {
+            if (action == "__quit__") {
+                // Handle quit specially
+                PostQuitMessage(0);
+            } else {
+                statusItem->handler(statusItem->trayId, action.c_str());
+            }
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 extern "C" {
 
@@ -1360,16 +1680,160 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
 }
 
 ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
-    // Stub implementation
+    // On Windows, NSWindow* is actually HWND
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    
+    if (!IsWindow(hwnd)) {
+        log("ERROR: Invalid window handle in makeNSWindowKeyAndOrderFront");
+        return;
+    }
+    
+    // Dispatch to main thread to ensure thread safety
+    MainThreadDispatcher::dispatch_sync([=]() {
+        char logMsg[256];
+        sprintf_s(logMsg, "Bringing window to front and activating: HWND=%p", hwnd);
+        log(logMsg);
+        
+        // Show the window if it's hidden
+        if (!IsWindowVisible(hwnd)) {
+            ShowWindow(hwnd, SW_SHOW);
+        }
+        
+        // Bring window to foreground - this is more complex on Windows
+        // due to foreground window restrictions
+        
+        // First, try the simple approach
+        if (SetForegroundWindow(hwnd)) {
+            log("Window brought to foreground successfully with SetForegroundWindow");
+        } else {
+            // If that fails, we need to work around Windows' foreground restrictions
+            DWORD currentThreadId = GetCurrentThreadId();
+            DWORD foregroundThreadId = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+            
+            if (currentThreadId != foregroundThreadId) {
+                // Attach to the foreground thread's input queue temporarily
+                if (AttachThreadInput(currentThreadId, foregroundThreadId, TRUE)) {
+                    SetForegroundWindow(hwnd);
+                    SetFocus(hwnd);
+                    AttachThreadInput(currentThreadId, foregroundThreadId, FALSE);
+                    log("Window brought to foreground using thread input attachment");
+                } else {
+                    // Last resort - flash the window to get user attention
+                    FLASHWINFO fwi = {0};
+                    fwi.cbSize = sizeof(FLASHWINFO);
+                    fwi.hwnd = hwnd;
+                    fwi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;
+                    fwi.uCount = 3;
+                    fwi.dwTimeout = 0;
+                    FlashWindowEx(&fwi);
+                    
+                    log("Could not bring window to foreground, flashed window instead");
+                }
+            }
+        }
+        
+        // Ensure the window is active and focused
+        SetActiveWindow(hwnd);
+        SetFocus(hwnd);
+        
+        // Bring to top of Z-order
+        SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, 
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        
+        log("Window activation sequence completed");
+    });
 }
 
 ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
-    // Stub implementation
+    // On Windows, NSWindow* is actually HWND
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    
+    if (!IsWindow(hwnd)) {
+        log("ERROR: Invalid window handle in setNSWindowTitle");
+        return;
+    }
+    
+    // Dispatch to main thread to ensure thread safety
+    MainThreadDispatcher::dispatch_sync([=]() {
+        if (title && strlen(title) > 0) {
+            // Convert UTF-8 to wide string for Unicode support
+            int size = MultiByteToWideChar(CP_UTF8, 0, title, -1, NULL, 0);
+            if (size > 0) {
+                std::wstring wTitle(size - 1, 0);
+                MultiByteToWideChar(CP_UTF8, 0, title, -1, &wTitle[0], size);
+                
+                // Set the window title
+                if (SetWindowTextW(hwnd, wTitle.c_str())) {
+                    char logMsg[512];
+                    sprintf_s(logMsg, "Window title set successfully: %s", title);
+                    log(logMsg);
+                } else {
+                    DWORD error = GetLastError();
+                    char errorMsg[256];
+                    sprintf_s(errorMsg, "Failed to set window title, error: %lu", error);
+                    log(errorMsg);
+                }
+            } else {
+                log("ERROR: Failed to convert title to wide string");
+            }
+        } else {
+            // Set empty title
+            if (SetWindowTextW(hwnd, L"")) {
+                log("Window title cleared successfully");
+            } else {
+                DWORD error = GetLastError();
+                char errorMsg[256];
+                sprintf_s(errorMsg, "Failed to clear window title, error: %lu", error);
+                log(errorMsg);
+            }
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
-    // Stub implementation
-    delete window;
+    // On Windows, NSWindow* is actually HWND
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    
+    if (!IsWindow(hwnd)) {
+        log("ERROR: Invalid window handle in closeNSWindow");
+        return;
+    }
+    
+    // Dispatch to main thread to ensure thread safety
+    MainThreadDispatcher::dispatch_sync([=]() {
+        char logMsg[256];
+        sprintf_s(logMsg, "Closing window: HWND=%p", hwnd);
+        log(logMsg);
+        
+        // Clean up any associated container views before closing
+        auto containerIt = g_containerViews.find(hwnd);
+        if (containerIt != g_containerViews.end()) {
+            log("Cleaning up container view for window");
+            g_containerViews.erase(containerIt);
+        }
+        
+        // Send WM_CLOSE message to the window
+        // This will trigger the window's close handler if one is set
+        if (PostMessage(hwnd, WM_CLOSE, 0, 0)) {
+            log("WM_CLOSE message sent successfully");
+        } else {
+            DWORD error = GetLastError();
+            char errorMsg[256];
+            sprintf_s(errorMsg, "Failed to send WM_CLOSE message, error: %lu", error);
+            log(errorMsg);
+            
+            // If PostMessage fails, try DestroyWindow as a fallback
+            log("Attempting DestroyWindow as fallback");
+            if (DestroyWindow(hwnd)) {
+                log("Window destroyed successfully with DestroyWindow");
+            } else {
+                DWORD destroyError = GetLastError();
+                char destroyErrorMsg[256];
+                sprintf_s(destroyErrorMsg, "DestroyWindow also failed, error: %lu", destroyError);
+                log(destroyErrorMsg);
+            }
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
@@ -1402,26 +1866,410 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
     return nullptr;
 }
 
+
+
+// Window procedure for handling tray messages
+LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_CLOSE:
+        case WM_DESTROY:
+            // Don't allow the tray window to be closed/destroyed by default handlers
+            log("Preventing tray window close/destroy");
+            return 0;
+            
+        case WM_COMMAND:
+            // Handle menu item clicks
+            {
+                auto it = g_trayItems.find(hwnd);
+                if (it != g_trayItems.end()) {
+                    NSStatusItem* trayItem = it->second;
+                    UINT menuItemId = LOWORD(wParam);
+                    
+                    char logMsg[256];
+                    sprintf_s(logMsg, "Menu command received: tray=%u, menuId=%u", trayItem->trayId, menuItemId);
+                    log(logMsg);
+                    
+                    // TODO: Map menu item ID back to action string
+                    // For now, call with empty action
+                    if (trayItem->handler) {
+                        trayItem->handler(trayItem->trayId, "");
+                    }
+                }
+                return 0;
+            }
+            
+        default:
+            // Check if this is our tray message
+            if (msg == g_trayMessageId) {
+                // Find the tray item
+                auto it = g_trayItems.find(hwnd);
+                if (it != g_trayItems.end()) {
+                    NSStatusItem* trayItem = it->second;
+                    
+                    switch (LOWORD(lParam)) {
+                        case WM_LBUTTONUP:
+                            // Left click - just call the handler, don't show menu
+                            {   
+                                if (trayItem->handler) {
+                                    // Use a separate thread or async call to prevent blocking
+                                    std::thread([trayItem]() {
+                                        try {
+                                            
+                                            trayItem->handler(trayItem->trayId, "");
+                                        } catch (...) {
+                                            log("Exception in tray handler");
+                                        }
+                                    }).detach();
+                                }
+                            }
+                            return 0;
+                            
+                        case WM_RBUTTONUP:
+                            // Right click - show context menu if it exists, otherwise call handler
+                            if (trayItem->contextMenu) {
+                                char logMsg[256];
+                                sprintf_s(logMsg, "Right click on tray item %u - showing menu", trayItem->trayId);
+                                log(logMsg);
+                                
+                                POINT pt;
+                                GetCursorPos(&pt);
+                                
+                                // This is required for the menu to work properly
+                                SetForegroundWindow(hwnd);
+                                
+                                // Show the menu
+                                BOOL menuResult = TrackPopupMenu(
+                                    trayItem->contextMenu, 
+                                    TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN,
+                                    pt.x, pt.y, 
+                                    0, 
+                                    hwnd, 
+                                    NULL
+                                );
+                                
+                                // This message helps ensure the menu closes properly
+                                PostMessage(hwnd, WM_NULL, 0, 0);
+                                
+                                if (!menuResult) {
+                                    log("TrackPopupMenu failed");
+                                }
+                            } else {
+                                // No menu exists yet, call handler (this will trigger menu creation)
+                                char logMsg[256];
+                                sprintf_s(logMsg, "Right click on tray item %u - no menu, calling handler", trayItem->trayId);
+                                log(logMsg);
+                                
+                                if (trayItem->handler) {
+                                    // Use a separate thread or async call to prevent blocking
+                                    std::thread([trayItem]() {
+                                        try {
+                                            trayItem->handler(trayItem->trayId, "");
+                                        } catch (...) {
+                                            log("Exception in tray handler");
+                                        }
+                                    }).detach();
+                                }
+                            }
+                            return 0;
+                            
+                        default:
+                            break;
+                    }
+                }
+                return 0;
+            }
+            break;
+    }
+    
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
 ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,
                         uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
-    // Stub implementation
-    return new NSStatusItem();
+    
+    return MainThreadDispatcher::dispatch_sync([=]() -> NSStatusItem* {
+        log("Creating system tray icon");
+        
+        NSStatusItem* statusItem = new NSStatusItem();
+        statusItem->trayId = trayId;
+        statusItem->handler = zigTrayItemHandler;
+        
+        if (title) {
+            statusItem->title = std::string(title);
+        }
+        if (pathToImage) {
+            statusItem->imagePath = std::string(pathToImage);
+        }
+        
+        // Create a hidden window to receive tray messages
+        static bool classRegistered = false;
+        if (!classRegistered) {
+            WNDCLASSA wc = {0};
+            wc.lpfnWndProc = TrayWindowProc;
+            wc.hInstance = GetModuleHandle(NULL);
+            wc.lpszClassName = "TrayWindowClass";
+            wc.hbrBackground = NULL;
+            wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+            wc.style = 0; // No special styles
+            
+            if (!RegisterClassA(&wc)) {
+                DWORD error = GetLastError();
+                if (error != ERROR_CLASS_ALREADY_EXISTS) {
+                    char errorMsg[256];
+                    sprintf_s(errorMsg, "Failed to register TrayWindowClass: %lu", error);
+                    log(errorMsg);
+                    delete statusItem;
+                    return nullptr;
+                }
+            }
+            classRegistered = true;
+        }
+        
+        // Create message-only window (safer for tray operations)
+        statusItem->hwnd = CreateWindowA(
+            "TrayWindowClass", 
+            "TrayWindow", 
+            0,                    // No visible style
+            0, 0, 0, 0,          // Position and size (ignored for message-only)
+            HWND_MESSAGE,        // Message-only window
+            NULL, 
+            GetModuleHandle(NULL), 
+            NULL
+        );
+        
+        if (!statusItem->hwnd) {
+            DWORD error = GetLastError();
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to create tray window: %lu", error);
+            log(errorMsg);
+            delete statusItem;
+            return nullptr;
+        }
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "Tray window created: HWND=%p", statusItem->hwnd);
+        log(logMsg);
+        
+        // Store in global map before setting up the tray icon
+        g_trayItems[statusItem->hwnd] = statusItem;
+        
+        // Set up NOTIFYICONDATA
+        statusItem->nid.cbSize = sizeof(NOTIFYICONDATA);
+        statusItem->nid.hWnd = statusItem->hwnd;
+        statusItem->nid.uID = trayId;
+        statusItem->nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        statusItem->nid.uCallbackMessage = g_trayMessageId;
+        
+        // Set title/tooltip
+        if (!statusItem->title.empty()) {
+            strncpy_s(statusItem->nid.szTip, sizeof(statusItem->nid.szTip), 
+                     statusItem->title.c_str(), sizeof(statusItem->nid.szTip) - 1);
+        }
+        
+        // Load icon
+        if (!statusItem->imagePath.empty()) {
+            // Convert to wide string for LoadImage
+            int size = MultiByteToWideChar(CP_UTF8, 0, statusItem->imagePath.c_str(), -1, NULL, 0);
+            if (size > 0) {
+                std::wstring wImagePath(size - 1, 0);
+                MultiByteToWideChar(CP_UTF8, 0, statusItem->imagePath.c_str(), -1, &wImagePath[0], size);
+                
+                statusItem->nid.hIcon = (HICON)LoadImageW(NULL, wImagePath.c_str(), IMAGE_ICON,
+                                                         width, height, LR_LOADFROMFILE);
+                
+                if (!statusItem->nid.hIcon) {
+                    char errorMsg[256];
+                    sprintf_s(errorMsg, "Failed to load icon from: %s", statusItem->imagePath.c_str());
+                    log(errorMsg);
+                }
+            }
+        }
+        
+        // Use default icon if loading failed
+        if (!statusItem->nid.hIcon) {
+            statusItem->nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+            log("Using default application icon");
+        }
+        
+        // Add to system tray
+        if (Shell_NotifyIcon(NIM_ADD, &statusItem->nid)) {
+            char successMsg[256];
+            sprintf_s(successMsg, "System tray icon created successfully: ID=%u, HWND=%p", trayId, statusItem->hwnd);
+            log(successMsg);
+        } else {
+            DWORD error = GetLastError();
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to add icon to system tray: %lu", error);
+            log(errorMsg);
+            
+            DestroyWindow(statusItem->hwnd);
+            g_trayItems.erase(statusItem->hwnd);
+            delete statusItem;
+            return nullptr;
+        }
+        
+        return statusItem;
+    });
 }
 
 ELECTROBUN_EXPORT void setTrayTitle(NSStatusItem *statusItem, const char *title) {
-    // Stub implementation
+    if (!statusItem) return;
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        log("Setting tray title");
+        
+        if (title) {
+            statusItem->title = std::string(title);
+            strncpy_s(statusItem->nid.szTip, title, sizeof(statusItem->nid.szTip) - 1);
+        } else {
+            statusItem->title.clear();
+            statusItem->nid.szTip[0] = '\0';
+        }
+        
+        // Update the tray icon
+        Shell_NotifyIcon(NIM_MODIFY, &statusItem->nid);
+    });
 }
 
 ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image) {
-    // Stub implementation
+    if (!statusItem) return;
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        log("Setting tray image");
+        
+        HICON oldIcon = statusItem->nid.hIcon;
+        
+        if (image && strlen(image) > 0) {
+            statusItem->imagePath = std::string(image);
+            
+            // Convert to wide string
+            int size = MultiByteToWideChar(CP_UTF8, 0, image, -1, NULL, 0);
+            if (size > 0) {
+                std::wstring wImagePath(size - 1, 0);
+                MultiByteToWideChar(CP_UTF8, 0, image, -1, &wImagePath[0], size);
+                
+                statusItem->nid.hIcon = (HICON)LoadImageW(NULL, wImagePath.c_str(), IMAGE_ICON,
+                                                         0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+            }
+        }
+        
+        // Use default icon if loading failed
+        if (!statusItem->nid.hIcon) {
+            statusItem->nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+        }
+        
+        // Update the tray icon
+        if (Shell_NotifyIcon(NIM_MODIFY, &statusItem->nid)) {
+            // Clean up old icon if it's not the default
+            if (oldIcon && oldIcon != LoadIcon(NULL, IDI_APPLICATION)) {
+                DestroyIcon(oldIcon);
+            }
+            log("Tray image updated successfully");
+        } else {
+            log("ERROR: Failed to update tray image");
+            // Restore old icon on failure
+            statusItem->nid.hIcon = oldIcon;
+        }
+    });
 }
 
+// Updated setTrayMenuFromJSON function
 ELECTROBUN_EXPORT void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {
-    // Stub implementation
+    if (!statusItem || !jsonString) return;
+    
+    log("setTrayMenuFromJSON");
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        log("setTrayMenuFromJSON main thread");
+        
+        if (!statusItem->handler) {
+            log("ERROR: No handler found for status item");
+            return;
+        }
+        
+        try {
+            // Parse JSON using our simple parser
+            SimpleJsonValue menuConfig = parseJson(std::string(jsonString));
+            
+            if (menuConfig.type != SimpleJsonValue::ARRAY) {
+                log("ERROR: JSON menu configuration is not an array");
+                return;
+            }
+            
+            // Clean up existing menu
+            if (statusItem->contextMenu) {
+                DestroyMenu(statusItem->contextMenu);
+                statusItem->contextMenu = NULL;
+            }
+            
+            // Create new menu from JSON config
+            statusItem->contextMenu = createMenuFromConfig(menuConfig, statusItem);
+            
+            if (statusItem->contextMenu) {
+                log("Context menu created successfully from JSON configuration");
+            } else {
+                log("ERROR: Failed to create context menu from JSON configuration");
+            }
+            
+        } catch (const std::exception& e) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Exception parsing JSON: %s", e.what());
+            log(errorMsg);
+        } catch (...) {
+            log("ERROR: Unknown exception parsing JSON");
+        }
+    });
+}
+
+// You'll also need to update your tray click handler to process menu selections
+// This should be called from your window procedure when handling tray icon messages
+void handleTrayIconMessage(HWND hwnd, WPARAM wParam, LPARAM lParam) {
+    NSStatusItem* statusItem = nullptr;
+    
+    // Find the status item from the global map
+    auto it = g_trayItems.find(hwnd);
+    if (it != g_trayItems.end()) {
+        statusItem = it->second;
+    }
+    
+    switch (lParam) {
+        case WM_RBUTTONUP:
+        case WM_CONTEXTMENU:
+            if (statusItem && statusItem->contextMenu) {
+                POINT pt;
+                GetCursorPos(&pt);
+                
+                // Required for popup menus to work correctly
+                SetForegroundWindow(hwnd);
+                
+                UINT cmd = TrackPopupMenu(
+                    statusItem->contextMenu,
+                    TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                    pt.x, pt.y,
+                    0, hwnd, NULL
+                );
+                
+                if (cmd != 0) {
+                    handleMenuItemSelection(cmd, statusItem);
+                }
+                
+                // Required cleanup
+                PostMessage(hwnd, WM_NULL, 0, 0);
+            }
+            break;
+            
+        case WM_LBUTTONUP:
+            // Handle left click on tray icon
+            if (statusItem && statusItem->handler) {
+                statusItem->handler(statusItem->trayId, "");
+            }
+            break;
+    }
 }
 
 ELECTROBUN_EXPORT void setTrayMenu(NSStatusItem *statusItem, const char *menuConfig) {
-    // Stub implementation
+    // Delegate to JSON version for now
+    setTrayMenuFromJSON(statusItem, menuConfig);
 }
 
 ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
