@@ -1057,12 +1057,13 @@ HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* stat
         bool hidden = getBool("hidden", false);
         std::string tooltip = getString("tooltip");
         
-        if (type == "divider") {
+        if (hidden) {
+            continue;
+        } else if (type == "divider") {
             AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
         } else {
             UINT flags = MF_STRING;
             if (!enabled) flags |= MF_GRAYED;
-            if (checked) flags |= MF_CHECKED;
             
             UINT menuId = g_nextMenuId++;
             
@@ -1077,11 +1078,15 @@ HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* stat
                     // For quit, we'll handle it specially in the menu callback
                     g_menuItemActions[menuId] = "__quit__";
                 }
-                // Add other role handling as needed
+                // TODO: fill in other roles
             }
             
             // Append the menu item
             AppendMenuA(menu, flags, menuId, label.c_str());
+
+            if (checked) {
+                CheckMenuItem(menu, menuId, MF_BYCOMMAND | MF_CHECKED);
+            }
             
             // Handle submenus
             auto submenuIt = itemData.find("submenu");
@@ -1102,10 +1107,6 @@ void handleMenuItemSelection(UINT menuId, NSStatusItem* statusItem) {
     auto it = g_menuItemActions.find(menuId);
     if (it != g_menuItemActions.end()) {
         const std::string& action = it->second;
-        
-        char logMsg[256];
-        sprintf_s(logMsg, "Menu item selected: ID=%u, Action=%s", menuId, action.c_str());
-        log(logMsg);
         
         if (statusItem && statusItem->handler) {
             if (action == "__quit__") {
@@ -1878,25 +1879,18 @@ LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
             
         case WM_COMMAND:
-            // Handle menu item clicks
-            {
-                auto it = g_trayItems.find(hwnd);
-                if (it != g_trayItems.end()) {
-                    NSStatusItem* trayItem = it->second;
-                    UINT menuItemId = LOWORD(wParam);
-                    
-                    char logMsg[256];
-                    sprintf_s(logMsg, "Menu command received: tray=%u, menuId=%u", trayItem->trayId, menuItemId);
-                    log(logMsg);
-                    
-                    // TODO: Map menu item ID back to action string
-                    // For now, call with empty action
-                    if (trayItem->handler) {
-                        trayItem->handler(trayItem->trayId, "");
-                    }
-                }
-                return 0;
+        // Handle menu item clicks
+        {
+            auto it = g_trayItems.find(hwnd);
+            if (it != g_trayItems.end()) {
+                NSStatusItem* trayItem = it->second;
+                UINT menuItemId = LOWORD(wParam);
+                
+                // Use your existing function to handle the menu selection
+                handleMenuItemSelection(menuItemId, trayItem);
             }
+            return 0;
+        }
             
         default:
             // Check if this is our tray message
@@ -1908,21 +1902,7 @@ LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     
                     switch (LOWORD(lParam)) {
                         case WM_LBUTTONUP:
-                            // Left click - just call the handler, don't show menu
-                            {   
-                                if (trayItem->handler) {
-                                    // Use a separate thread or async call to prevent blocking
-                                    std::thread([trayItem]() {
-                                        try {
-                                            
-                                            trayItem->handler(trayItem->trayId, "");
-                                        } catch (...) {
-                                            log("Exception in tray handler");
-                                        }
-                                    }).detach();
-                                }
-                            }
-                            return 0;
+                           
                             
                         case WM_RBUTTONUP:
                             // Right click - show context menu if it exists, otherwise call handler
