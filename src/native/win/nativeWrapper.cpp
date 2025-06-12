@@ -747,7 +747,7 @@ LRESULT CALLBACK CustomWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (data && data->closeHandler) {
                 data->closeHandler(data->windowId);
             }
-            return 0; // Don't close the window yet, let the handler decide
+            // return 0; // Return something to not close the window yet, let the handler decide
             
         case WM_MOVE:
             if (data && data->moveHandler) {
