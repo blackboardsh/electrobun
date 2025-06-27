@@ -484,6 +484,7 @@ private:
     }
     
     void UpdateActiveWebviewForMousePosition(POINT mousePos) {
+        log("=======>>>>>> UpdateActiveWebviewForMousePosition");
         bool stillSearching = true;
         
         // Iterate through webviews in reverse order (top-most first)
@@ -517,6 +518,8 @@ private:
     }
     
     void SetWebViewMirrorMode(AbstractView* view, bool mirror) {
+        log("=======>>>>>> SetWEbviewMirrorMode");
+
         if (!view->controller) return;
         
         if (view->mirrorModeEnabled == mirror) return;
@@ -531,6 +534,57 @@ private:
             view->controller->put_IsVisible(TRUE);
             view->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
         }
+    }
+
+    struct EnumChildData {
+        RECT targetBounds;
+        HWND containerHwnd;
+    };
+    
+    static BOOL CALLBACK EnumChildCallback(HWND child, LPARAM lParam) {
+        EnumChildData* data = (EnumChildData*)lParam;
+        
+        char className[256];
+        GetClassNameA(child, className, sizeof(className));
+        
+        // Look for WebView2/Chrome child windows
+        if (strstr(className, "Chrome_WidgetWin") || 
+            strstr(className, "Chrome_RenderWidgetHostHWND")) {
+            
+            RECT childRect;
+            GetWindowRect(child, &childRect);
+            
+            // Convert to container coordinates
+            POINT topLeft = {childRect.left, childRect.top};
+            POINT bottomRight = {childRect.right, childRect.bottom};
+            ScreenToClient(data->containerHwnd, &topLeft);
+            ScreenToClient(data->containerHwnd, &bottomRight);
+            
+            // Check if this matches our WebView's bounds (with some tolerance)
+            if (abs(topLeft.x - data->targetBounds.left) < 5 && 
+                abs(topLeft.y - data->targetBounds.top) < 5) {
+                // This is likely our WebView's child window
+                SetWindowPos(child, HWND_TOP, 0, 0, 0, 0,
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                return FALSE; // Stop enumeration
+            }
+        }
+        return TRUE; // Continue enumeration
+    }
+    
+    void BringWebView2ChildWindowToFront(AbstractView* view) {
+        if (!view->controller) return;
+        
+        // Get the bounds of this WebView to identify its child window
+        RECT viewBounds;
+        view->controller->get_Bounds(&viewBounds);
+        
+        EnumChildData enumData;
+        enumData.targetBounds = viewBounds;
+        enumData.containerHwnd = m_hwnd;
+        
+        // Find and bring the WebView2's child window to front
+        EnumChildWindows(m_hwnd, EnumChildCallback, (LPARAM)&enumData);
     }
 
 public:
@@ -643,6 +697,23 @@ public:
             log(successMsg);
         }
     }
+
+    void BringViewToFront(uint32_t webviewId) {
+        auto it = std::find_if(m_abstractViews.begin(), m_abstractViews.end(),
+            [webviewId](const std::shared_ptr<AbstractView>& view) {
+                return view->webviewId == webviewId;
+            });
+        
+        if (it != m_abstractViews.end()) {
+            auto view = *it;
+            // Move to front of vector (most recent first)
+            m_abstractViews.erase(it);
+            m_abstractViews.insert(m_abstractViews.begin(), view);
+            
+            // Now bring the actual WebView2 child window to front
+            BringWebView2ChildWindowToFront(view.get());
+        }
+    }
     
     ~ContainerView() {
         if (m_hwnd) {
@@ -653,8 +724,12 @@ public:
     HWND GetHwnd() const { return m_hwnd; }
     
     void AddAbstractView(std::shared_ptr<AbstractView> view) {
+    
         // Add to front of vector so it's top-most first
-        m_abstractViews.insert(m_abstractViews.begin(), view);
+        m_abstractViews.insert(m_abstractViews.begin(), view); 
+        BringViewToFront(view->webviewId);
+      
+       
     }
     
     void RemoveAbstractViewWithId(uint32_t webviewId) {
@@ -1197,6 +1272,10 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *customPreloadScript) {
     
     log("=== Starting WebView2 Creation with Direct COM Bridge Objects ===");
+    log("=======>>>>>> initWebview");
+
+    printf("[LOG] WebView geometry - x: %.2f, y: %.2f, width: %.2f, height: %.2f, autoResize: %s\n", 
+       x, y, width, height, autoResize ? "true" : "false");
     
     HWND hwnd = reinterpret_cast<HWND>(window);
     
@@ -1305,7 +1384,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                         RECT bounds;
                                         if (autoResize) {
                                             GetClientRect(containerHwnd, &bounds);
+                                            log("autoResize");
                                         } else {
+                                            log("set bounds");
                                             bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                                         }
                                         controller->put_Bounds(bounds);
