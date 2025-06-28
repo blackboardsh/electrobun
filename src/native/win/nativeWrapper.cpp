@@ -448,19 +448,24 @@ private:
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (msg) {
             case WM_SIZE: {
-                // Resize all full-size webviews when container resizes
+                // // Resize all full-size webviews when container resizes
+                // int width = LOWORD(lParam);
+                // int height = HIWORD(lParam);
+                
+                // for (auto& view : m_abstractViews) {
+                //     if (view->fullSize) {
+                //         // Resize the webview to match container
+                //         if (view->controller) {
+                //             RECT bounds = {0, 0, width, height};
+                //             view->controller->put_Bounds(bounds);
+                //         }
+                //     }
+                // }
                 int width = LOWORD(lParam);
                 int height = HIWORD(lParam);
                 
-                for (auto& view : m_abstractViews) {
-                    if (view->fullSize) {
-                        // Resize the webview to match container
-                        if (view->controller) {
-                            RECT bounds = {0, 0, width, height};
-                            view->controller->put_Bounds(bounds);
-                        }
-                    }
-                }
+                ResizeAutoSizingViews(width, height);
+                
                 break;
             }
             
@@ -698,6 +703,27 @@ public:
         }
     }
 
+    void ContainerView::ResizeAutoSizingViews(int width, int height) {
+        for (auto& view : m_abstractViews) {
+            if (view->fullSize && view->controller) {
+                // Resize the webview to match container
+                RECT bounds = {0, 0, width, height};
+                HRESULT hr = view->controller->put_Bounds(bounds);
+                
+                if (FAILED(hr)) {
+                    char errorMsg[256];
+                    sprintf_s(errorMsg, "Failed to resize WebView2 bounds: 0x%lx", hr);
+                    log(errorMsg);
+                } else {
+                    char logMsg[256];
+                    sprintf_s(logMsg, "Resized auto-sizing WebView %u to %dx%d", 
+                            view->webviewId, width, height);
+                    log(logMsg);
+                }
+            }
+        }
+    }
+
     void BringViewToFront(uint32_t webviewId) {
         auto it = std::find_if(m_abstractViews.begin(), m_abstractViews.end(),
             [webviewId](const std::shared_ptr<AbstractView>& view) {
@@ -839,11 +865,16 @@ LRESULT CALLBACK CustomWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (containerIt != g_containerViews.end()) {
                     RECT clientRect;
                     GetClientRect(hwnd, &clientRect);
+                    int width = clientRect.right - clientRect.left;
+                    int height = clientRect.bottom - clientRect.top;
+                    
+                    // Resize the container window itself
                     SetWindowPos(containerIt->second->GetHwnd(), NULL, 
-                        0, 0, 
-                        clientRect.right - clientRect.left,
-                        clientRect.bottom - clientRect.top,
+                        0, 0, width, height,
                         SWP_NOZORDER | SWP_NOACTIVATE);
+                    
+                    // Resize all auto-resizing webviews in this container
+                    containerIt->second->ResizeAutoSizingViews(width, height);
                 }
                 
                 if (data && data->resizeHandler) {
@@ -1919,8 +1950,34 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
 }
 
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
-    // Stub implementation
-}
+        if (!abstractView || !abstractView->controller) {
+            log("ERROR: Invalid AbstractView or controller in resizeWebview");
+            return;
+        }
+        
+        MainThreadDispatcher::dispatch_sync([=]() {
+            RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+            HRESULT hr = abstractView->controller->put_Bounds(bounds);
+            
+            if (SUCCEEDED(hr)) {
+                char logMsg[256];
+                sprintf_s(logMsg, "Manually resized WebView %u to bounds (%d,%d,%d,%d)", 
+                         abstractView->webviewId, bounds.left, bounds.top, bounds.right, bounds.bottom);
+                log(logMsg);
+            } else {
+                char errorMsg[256];
+                sprintf_s(errorMsg, "Failed to manually resize WebView %u: 0x%lx", 
+                         abstractView->webviewId, hr);
+                log(errorMsg);
+            }
+            
+            // Note: masksJson parameter is not implemented for Windows yet
+            // This would require implementing clipping regions similar to macOS
+            if (masksJson && strlen(masksJson) > 0) {
+                log("Warning: WebView masking not yet implemented on Windows");
+            }
+        });
+    }
 
 ELECTROBUN_EXPORT void stopWindowMove() {
     // Stub implementation
