@@ -160,12 +160,7 @@ public:
             return E_FAIL;
         }
 
-        char logMsg[512];
-        sprintf_s(logMsg, "%s bridge received message: %.100s%s", 
-                 m_bridgeName.c_str(), 
-                 message_char, 
-                 strlen(message_char) > 100 ? "..." : "");
-        log(logMsg);
+        
 
         // Create a copy for the callback to avoid memory issues
         char* messageCopy = new char[strlen(message_char) + 1];
@@ -1415,9 +1410,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                         RECT bounds;
                                         if (autoResize) {
                                             GetClientRect(containerHwnd, &bounds);
-                                            log("autoResize");
                                         } else {
-                                            log("set bounds");
                                             bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                                         }
                                         controller->put_Bounds(bounds);
@@ -1533,13 +1526,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                                 HRESULT internalResult = view->webview->AddHostObjectToScript(L"internalBridge", &internalBridgeVariant);
                                                 VariantClear(&internalBridgeVariant);
                                                 
-                                                if (SUCCEEDED(internalResult)) {
-                                                    log("internalBridge COM object added successfully");
-                                                } else {
-                                                    char errorMsg[256];
-                                                    sprintf_s(errorMsg, "Failed to add internalBridge COM object: 0x%lx", internalResult);
-                                                    log(errorMsg);
-                                                }
+                                               
                                             }
                                         }
                                         
@@ -1645,7 +1632,70 @@ ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
 }
 
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
-    // Stub implementation
+    if (!abstractView || !script) {
+        log("ERROR: Invalid parameters passed to evaluateJavaScriptWithNoCompletion");
+        return;
+    }
+    
+    if (!abstractView->webview) {
+        log("ERROR: WebView2 instance is null in evaluateJavaScriptWithNoCompletion");
+        return;
+    }
+    
+    // Dispatch to main thread since WebView2 operations must happen on the UI thread
+    MainThreadDispatcher::dispatch_sync([=]() {
+        char logMsg[512];
+        
+        
+        try {
+            // Convert UTF-8 script to wide string for WebView2
+            int size = MultiByteToWideChar(CP_UTF8, 0, script, -1, NULL, 0);
+            if (size <= 0) {
+                log("ERROR: Failed to get required buffer size for script conversion");
+                return;
+            }
+            
+            std::wstring wScript(size - 1, 0);
+            int result = MultiByteToWideChar(CP_UTF8, 0, script, -1, &wScript[0], size);
+            if (result == 0) {
+                log("ERROR: Failed to convert script to wide string");
+                return;
+            }
+            
+            // Execute the JavaScript with no completion handler (fire and forget)
+            HRESULT hr = abstractView->webview->ExecuteScript(
+                wScript.c_str(),
+                Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                    [](HRESULT result, LPCWSTR resultObjectAsJson) -> HRESULT {
+                        // We don't care about the result for "no completion" version
+                        // but we should log errors for debugging
+                        if (FAILED(result)) {
+                            char errorMsg[256];
+                            sprintf_s(errorMsg, "JavaScript execution failed with HRESULT: 0x%lx", result);
+                            log(errorMsg);
+                        } else {
+                            // log("JavaScript executed successfully (no completion tracking)");
+                        }
+                        return S_OK;
+                    }).Get()
+            );
+            
+            if (FAILED(hr)) {
+                char errorMsg[256];
+                sprintf_s(errorMsg, "ERROR: Failed to execute JavaScript, HRESULT: 0x%lx", hr);
+                log(errorMsg);
+            } else {
+                log("JavaScript execution initiated successfully");
+            }
+            
+        } catch (const std::exception& e) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Exception in evaluateJavaScriptWithNoCompletion: %s", e.what());
+            log(errorMsg);
+        } catch (...) {
+            log("ERROR: Unknown exception in evaluateJavaScriptWithNoCompletion");
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void testFFI(void *ptr) {
@@ -1950,7 +2000,7 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
 }
 
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
-        if (!abstractView || !abstractView->controller) {
+         if (!abstractView || !abstractView->controller) {
             log("ERROR: Invalid AbstractView or controller in resizeWebview");
             return;
         }
@@ -1958,18 +2008,6 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
         MainThreadDispatcher::dispatch_sync([=]() {
             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
             HRESULT hr = abstractView->controller->put_Bounds(bounds);
-            
-            if (SUCCEEDED(hr)) {
-                char logMsg[256];
-                sprintf_s(logMsg, "Manually resized WebView %u to bounds (%d,%d,%d,%d)", 
-                         abstractView->webviewId, bounds.left, bounds.top, bounds.right, bounds.bottom);
-                log(logMsg);
-            } else {
-                char errorMsg[256];
-                sprintf_s(errorMsg, "Failed to manually resize WebView %u: 0x%lx", 
-                         abstractView->webviewId, hr);
-                log(errorMsg);
-            }
             
             // Note: masksJson parameter is not implemented for Windows yet
             // This would require implementing clipping regions similar to macOS
