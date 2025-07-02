@@ -45,6 +45,7 @@ class NSWindow;
 class NSStatusItem;
 class WKWebView;
 class MyScriptMessageHandlerWithReply;
+class StatusItemTarget;
 
 // Type definitions to match macOS types
 typedef double CGFloat;
@@ -74,6 +75,23 @@ static ComPtr<ICoreWebView2> g_webview;
 static ComPtr<ICoreWebView2Environment> g_environment;  // Add global environment
 static ComPtr<ICoreWebView2CustomSchemeRegistration> g_customScheme;
 static ComPtr<ICoreWebView2EnvironmentOptions> g_envOptions;
+
+static HMENU g_applicationMenu = NULL;
+static std::unique_ptr<StatusItemTarget> g_appMenuTarget = nullptr;
+
+// Global map to store menu item actions by menu ID
+static std::map<UINT, std::string> g_menuItemActions;
+static UINT g_nextMenuId = WM_USER + 1000;  // Start menu IDs from a safe range
+
+class StatusItemTarget {
+public:
+    ZigStatusItemHandler zigHandler;
+    uint32_t trayId;
+    
+    StatusItemTarget() : zigHandler(nullptr), trayId(0) {}
+};
+
+
 
 // Forward declare helper functions
 void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId);
@@ -338,6 +356,10 @@ public:
         return DISP_E_MEMBERNOTFOUND;
     }
 };
+
+
+
+
 
 class MainThreadDispatcher {
 private:
@@ -833,17 +855,83 @@ typedef struct {
     WindowResizeHandler resizeHandler;
 } WindowData;
 
+
+// Handle application menu item selection
+void handleApplicationMenuSelection(UINT menuId) {
+    auto it = g_menuItemActions.find(menuId);
+    if (it != g_menuItemActions.end()) {
+        const std::string& action = it->second;
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "Application menu action: %s", action.c_str());
+        log(logMsg);
+        
+        if (g_appMenuTarget && g_appMenuTarget->zigHandler) {
+            if (action == "__quit__") {
+                PostQuitMessage(0);
+            } else if (action == "__undo__") {
+                HWND focusedWindow = GetFocus();
+                if (focusedWindow) {
+                    SendMessage(focusedWindow, WM_UNDO, 0, 0);
+                }
+            } else if (action == "__cut__") {
+                HWND focusedWindow = GetFocus();
+                if (focusedWindow) {
+                    SendMessage(focusedWindow, WM_CUT, 0, 0);
+                }
+            } else if (action == "__copy__") {
+                HWND focusedWindow = GetFocus();
+                if (focusedWindow) {
+                    SendMessage(focusedWindow, WM_COPY, 0, 0);
+                }
+            } else if (action == "__paste__") {
+                HWND focusedWindow = GetFocus();
+                if (focusedWindow) {
+                    SendMessage(focusedWindow, WM_PASTE, 0, 0);
+                }
+            } else if (action == "__selectAll__") {
+                HWND focusedWindow = GetFocus();
+                if (focusedWindow) {
+                    SendMessage(focusedWindow, EM_SETSEL, 0, -1);
+                }
+            } else if (action == "__minimize__") {
+                HWND activeWindow = GetActiveWindow();
+                if (activeWindow) {
+                    ShowWindow(activeWindow, SW_MINIMIZE);
+                }
+            } else if (action == "__close__") {
+                HWND activeWindow = GetActiveWindow();
+                if (activeWindow) {
+                    PostMessage(activeWindow, WM_CLOSE, 0, 0);
+                }
+            } else {
+                g_appMenuTarget->zigHandler(g_appMenuTarget->trayId, action.c_str());
+            }
+        }
+    }
+}
+
+
 // Window procedure that will handle events and call your handlers
-LRESULT CALLBACK CustomWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     // Get our custom data
     WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
     switch (msg) {
+        case WM_COMMAND:
+            // Check if this is an application menu command
+            if (HIWORD(wParam) == 0) { // Menu item selected
+                UINT menuId = LOWORD(wParam);
+                handleApplicationMenuSelection(menuId);
+                return 0;
+            }
+            break;
+            
         case WM_CLOSE:
             if (data && data->closeHandler) {
                 data->closeHandler(data->windowId);
             }
-            // return 0; // Return something to not close the window yet, let the handler decide
+            break;
             
         case WM_MOVE:
             if (data && data->moveHandler) {
@@ -899,6 +987,13 @@ LRESULT CALLBACK CustomWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
             
         case WM_DESTROY:
+            // Clean up application menu when main window is destroyed
+            if (g_applicationMenu) {
+                DestroyMenu(g_applicationMenu);
+                g_applicationMenu = NULL;
+            }
+            g_appMenuTarget.reset();
+            
             // Clean up container view
             g_containerViews.erase(hwnd);
             
@@ -1107,9 +1202,7 @@ SimpleJsonValue parseJson(const std::string& json) {
     return parseJsonValue(json, pos);
 }
 
-// Global map to store menu item actions by menu ID
-static std::map<UINT, std::string> g_menuItemActions;
-static UINT g_nextMenuId = WM_USER + 1000;  // Start menu IDs from a safe range
+
 
 // Function to create Windows menu from JSON config (equivalent to createMenuFromConfig)
 HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* statusItem) {
@@ -1221,6 +1314,225 @@ void handleMenuItemSelection(UINT menuId, NSStatusItem* statusItem) {
 }
 
 
+
+// Function to set accelerator keys for menu items
+void setMenuItemAccelerator(HMENU menu, UINT menuId, const std::string& accelerator, UINT modifierMask = 0) {
+    if (accelerator.empty()) return;
+    
+    UINT key = 0;
+    UINT modifiers = 0;
+    
+    // Parse simple accelerators like "Ctrl+C", "Ctrl+V", etc.
+    if (accelerator.length() == 1) {
+        key = VkKeyScan(accelerator[0]) & 0xFF;
+        modifiers = FCONTROL;
+    } else if (accelerator.find("Ctrl+") == 0 && accelerator.length() == 6) {
+        char keyChar = accelerator[5];
+        key = VkKeyScan(keyChar) & 0xFF;
+        modifiers = FCONTROL;
+    } else if (accelerator.find("Alt+") == 0 && accelerator.length() == 5) {
+        char keyChar = accelerator[4];
+        key = VkKeyScan(keyChar) & 0xFF;
+        modifiers = FALT;
+    } else if (accelerator.find("Shift+") == 0 && accelerator.length() == 7) {
+        char keyChar = accelerator[6];
+        key = VkKeyScan(keyChar) & 0xFF;
+        modifiers = FSHIFT;
+    }
+    
+    if (modifierMask > 0) {
+        modifiers = 0;
+        if (modifierMask & 1) modifiers |= FCONTROL;
+        if (modifierMask & 2) modifiers |= FSHIFT;
+        if (modifierMask & 4) modifiers |= FALT;
+    }
+    
+    if (key > 0) {
+        char logMsg[256];
+        sprintf_s(logMsg, "Setting accelerator for menu item %u: key=%u, modifiers=%u", menuId, key, modifiers);
+        log(logMsg);
+    }
+}
+
+// Enhanced createMenuFromConfig for application menu
+HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusItemTarget* target) {
+    HMENU menuBar = CreateMenu();
+    if (!menuBar) {
+        log("ERROR: Failed to create menu bar");
+        return NULL;
+    }
+    
+    if (menuConfig.type != SimpleJsonValue::ARRAY) {
+        log("ERROR: Application menu config is not an array");
+        DestroyMenu(menuBar);
+        return NULL;
+    }
+    
+    for (const auto& topLevelItem : menuConfig.arrayValue) {
+        if (topLevelItem.type != SimpleJsonValue::OBJECT) continue;
+        
+        const auto& itemData = topLevelItem.objectValue;
+        
+        // Helper lambda to get string value
+        auto getString = [&](const std::string& key, const std::string& defaultVal = "") -> std::string {
+            auto it = itemData.find(key);
+            if (it != itemData.end() && it->second.type == SimpleJsonValue::STRING) {
+                return it->second.stringValue;
+            }
+            return defaultVal;
+        };
+        
+        // Helper lambda to get bool value
+        auto getBool = [&](const std::string& key, bool defaultVal = false) -> bool {
+            auto it = itemData.find(key);
+            if (it != itemData.end() && it->second.type == SimpleJsonValue::BOOL) {
+                return it->second.boolValue;
+            }
+            return defaultVal;
+        };
+        
+        std::string label = getString("label");
+        bool hidden = getBool("hidden", false);
+        
+        if (hidden) continue;
+        
+        // Check if this has a submenu
+        auto submenuIt = itemData.find("submenu");
+        if (submenuIt != itemData.end() && submenuIt->second.type == SimpleJsonValue::ARRAY) {
+            HMENU popupMenu = CreatePopupMenu();
+            if (!popupMenu) continue;
+            
+            // Process submenu items
+            for (const auto& subItemValue : submenuIt->second.arrayValue) {
+                if (subItemValue.type != SimpleJsonValue::OBJECT) continue;
+                
+                const auto& subItemData = subItemValue.objectValue;
+                
+                // Helper lambdas for subitem data
+                auto getSubString = [&](const std::string& key, const std::string& defaultVal = "") -> std::string {
+                    auto it = subItemData.find(key);
+                    if (it != subItemData.end() && it->second.type == SimpleJsonValue::STRING) {
+                        return it->second.stringValue;
+                    }
+                    return defaultVal;
+                };
+                
+                auto getSubBool = [&](const std::string& key, bool defaultVal = false) -> bool {
+                    auto it = subItemData.find(key);
+                    if (it != subItemData.end() && it->second.type == SimpleJsonValue::BOOL) {
+                        return it->second.boolValue;
+                    }
+                    return defaultVal;
+                };
+                
+                std::string subType = getSubString("type");
+                std::string subLabel = getSubString("label");
+                std::string subAction = getSubString("action");
+                std::string subRole = getSubString("role");
+                std::string subAccelerator = getSubString("accelerator");
+                
+                bool subEnabled = getSubBool("enabled", true);
+                bool subChecked = getSubBool("checked", false);
+                bool subHidden = getSubBool("hidden", false);
+                
+                if (subHidden) {
+                    continue;
+                } else if (subType == "divider") {
+                    AppendMenuA(popupMenu, MF_SEPARATOR, 0, NULL);
+                } else {
+                    UINT flags = MF_STRING;
+                    if (!subEnabled) flags |= MF_GRAYED;
+                    
+                    UINT menuId = g_nextMenuId++;
+                    
+                    // Store the action for this menu ID
+                    if (!subAction.empty()) {
+                        g_menuItemActions[menuId] = subAction;
+                    }
+                    
+                    // Handle system roles
+                    if (!subRole.empty()) {
+                        if (subRole == "quit") {
+                            g_menuItemActions[menuId] = "__quit__";
+                        } else if (subRole == "undo") {
+                            g_menuItemActions[menuId] = "__undo__";
+                        } else if (subRole == "redo") {
+                            g_menuItemActions[menuId] = "__redo__";
+                        } else if (subRole == "cut") {
+                            g_menuItemActions[menuId] = "__cut__";
+                        } else if (subRole == "copy") {
+                            g_menuItemActions[menuId] = "__copy__";
+                        } else if (subRole == "paste") {
+                            g_menuItemActions[menuId] = "__paste__";
+                        } else if (subRole == "selectAll") {
+                            g_menuItemActions[menuId] = "__selectAll__";
+                        } else if (subRole == "minimize") {
+                            g_menuItemActions[menuId] = "__minimize__";
+                        } else if (subRole == "close") {
+                            g_menuItemActions[menuId] = "__close__";
+                        }
+                        
+                        // Set default accelerators for common roles if not specified
+                        if (subAccelerator.empty()) {
+                            if (subRole == "undo") {
+                                subAccelerator = "z";
+                            } else if (subRole == "redo") {
+                                subAccelerator = "y";
+                            } else if (subRole == "cut") {
+                                subAccelerator = "x";
+                            } else if (subRole == "copy") {
+                                subAccelerator = "c";
+                            } else if (subRole == "paste") {
+                                subAccelerator = "v";
+                            } else if (subRole == "selectAll") {
+                                subAccelerator = "a";
+                            }
+                        }
+                    }
+                    
+                    // Append the menu item
+                    AppendMenuA(popupMenu, flags, menuId, subLabel.c_str());
+                    
+                    if (subChecked) {
+                        CheckMenuItem(popupMenu, menuId, MF_BYCOMMAND | MF_CHECKED);
+                    }
+                    
+                    // Set accelerator if specified
+                    if (!subAccelerator.empty()) {
+                        setMenuItemAccelerator(popupMenu, menuId, subAccelerator, 1); // Default to Ctrl
+                    }
+                    
+                    // Handle nested submenus
+                    auto nestedSubmenuIt = subItemData.find("submenu");
+                    if (nestedSubmenuIt != subItemData.end() && nestedSubmenuIt->second.type == SimpleJsonValue::ARRAY) {
+                        HMENU nestedSubmenu = createMenuFromConfig(nestedSubmenuIt->second, reinterpret_cast<NSStatusItem*>(target));
+                        if (nestedSubmenu) {
+                            ModifyMenuA(popupMenu, menuId, MF_BYCOMMAND | MF_POPUP, (UINT_PTR)nestedSubmenu, subLabel.c_str());
+                        }
+                    }
+                }
+            }
+            
+            // Add the popup menu to the menu bar
+            AppendMenuA(menuBar, MF_POPUP, (UINT_PTR)popupMenu, label.c_str());
+        } else {
+            // Top-level item without submenu
+            UINT menuId = g_nextMenuId++;
+            std::string action = getString("action");
+            
+            if (!action.empty()) {
+                g_menuItemActions[menuId] = action;
+            }
+            
+            UINT flags = MF_STRING;
+            if (!getBool("enabled", true)) flags |= MF_GRAYED;
+            
+            AppendMenuA(menuBar, flags, menuId, label.c_str());
+        }
+    }
+    
+    return menuBar;
+}
 
 
 
@@ -1599,36 +1911,202 @@ ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithRe
     handler->webviewId = webviewId;
     return handler;
 }
-
 ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *urlString) {
-    // Stub implementation
+    if (!abstractView || !abstractView->webview || !urlString) {
+        log("ERROR: Invalid parameters passed to loadURLInWebView");
+        return;
+    }
+    
+    // Dispatch to main thread since WebView2 operations must happen on the UI thread
+    MainThreadDispatcher::dispatch_sync([=]() {
+        char logMsg[512];
+        sprintf_s(logMsg, "Loading URL in WebView %u: %s", abstractView->webviewId, urlString);
+        log(logMsg);
+        
+        // Convert UTF-8 URL to wide string for WebView2
+        int size = MultiByteToWideChar(CP_UTF8, 0, urlString, -1, NULL, 0);
+        if (size <= 0) {
+            log("ERROR: Failed to get required buffer size for URL conversion");
+            return;
+        }
+        
+        std::wstring wUrl(size - 1, 0);
+        int result = MultiByteToWideChar(CP_UTF8, 0, urlString, -1, &wUrl[0], size);
+        if (result == 0) {
+            log("ERROR: Failed to convert URL to wide string");
+            return;
+        }
+        
+        HRESULT hr = abstractView->webview->Navigate(wUrl.c_str());
+        
+        if (FAILED(hr)) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to navigate to URL, HRESULT: 0x%lx", hr);
+            log(errorMsg);
+        } else {
+            log("URL navigation initiated successfully");
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
-    // Stub implementation
+    if (!abstractView || !abstractView->webview) {
+        log("ERROR: Invalid AbstractView or webview in webviewGoBack");
+        return;
+    }
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        HRESULT hr = abstractView->webview->GoBack();
+        
+        if (FAILED(hr)) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to go back, HRESULT: 0x%lx", hr);
+            log(errorMsg);
+        } else {
+            char logMsg[256];
+            sprintf_s(logMsg, "WebView %u went back successfully", abstractView->webviewId);
+            log(logMsg);
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
-    // Stub implementation
+    if (!abstractView || !abstractView->webview) {
+        log("ERROR: Invalid AbstractView or webview in webviewGoForward");
+        return;
+    }
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        HRESULT hr = abstractView->webview->GoForward();
+        
+        if (FAILED(hr)) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to go forward, HRESULT: 0x%lx", hr);
+            log(errorMsg);
+        } else {
+            char logMsg[256];
+            sprintf_s(logMsg, "WebView %u went forward successfully", abstractView->webviewId);
+            log(logMsg);
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
-    // Stub implementation
+    if (!abstractView || !abstractView->webview) {
+        log("ERROR: Invalid AbstractView or webview in webviewReload");
+        return;
+    }
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        HRESULT hr = abstractView->webview->Reload();
+        
+        if (FAILED(hr)) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to reload, HRESULT: 0x%lx", hr);
+            log(errorMsg);
+        } else {
+            char logMsg[256];
+            sprintf_s(logMsg, "WebView %u reloaded successfully", abstractView->webviewId);
+            log(logMsg);
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
-    // Stub implementation
-    delete abstractView;
+    if (!abstractView) {
+        log("ERROR: Invalid AbstractView in webviewRemove");
+        return;
+    }
+    
+    char logMsg[256];
+    sprintf_s(logMsg, "Removing WebView %u", abstractView->webviewId);
+    log(logMsg);
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        // Clean up the WebView2 controller and webview
+        if (abstractView->controller) {
+            // Hide the webview first
+            abstractView->controller->put_IsVisible(FALSE);
+            
+            // Close the controller (this will clean up the webview too)
+            HRESULT hr = abstractView->controller->Close();
+            if (FAILED(hr)) {
+                char errorMsg[256];
+                sprintf_s(errorMsg, "ERROR: Failed to close WebView2 controller: 0x%lx", hr);
+                log(errorMsg);
+            }
+            
+            // Release our references
+            abstractView->controller = nullptr;
+            abstractView->webview = nullptr;
+        }
+        
+        // Clean up bridge handlers
+        if (abstractView->bunBridgeHandler) {
+            abstractView->bunBridgeHandler = nullptr;
+        }
+        if (abstractView->internalBridgeHandler) {
+            abstractView->internalBridgeHandler = nullptr;
+        }
+        if (abstractView->bunBridgeDispatch) {
+            abstractView->bunBridgeDispatch = nullptr;
+        }
+        if (abstractView->internalBridgeDispatch) {
+            abstractView->internalBridgeDispatch = nullptr;
+        }
+        
+        // Remove from container views
+        for (auto& containerPair : g_containerViews) {
+            containerPair.second->RemoveAbstractViewWithId(abstractView->webviewId);
+        }
+        
+        log("WebView cleanup completed");
+    });
+    
+    // Don't delete the abstractView here - it's managed as a shared_ptr in the container
+    // The container will handle the deletion when the shared_ptr goes out of scope
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
-    // Stub implementation
-    return FALSE;
+    if (!abstractView || !abstractView->webview) {
+        log("ERROR: Invalid AbstractView or webview in webviewCanGoBack");
+        return FALSE;
+    }
+    
+    return MainThreadDispatcher::dispatch_sync([=]() -> BOOL {
+        BOOL canGoBack = FALSE;
+        HRESULT hr = abstractView->webview->get_CanGoBack(&canGoBack);
+        
+        if (FAILED(hr)) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to check canGoBack, HRESULT: 0x%lx", hr);
+            log(errorMsg);
+            return FALSE;
+        }
+        
+        return canGoBack;
+    });
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
-    // Stub implementation
-    return FALSE;
+    if (!abstractView || !abstractView->webview) {
+        log("ERROR: Invalid AbstractView or webview in webviewCanGoForward");
+        return FALSE;
+    }
+    
+    return MainThreadDispatcher::dispatch_sync([=]() -> BOOL {
+        BOOL canGoForward = FALSE;
+        HRESULT hr = abstractView->webview->get_CanGoForward(&canGoForward);
+        
+        if (FAILED(hr)) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to check canGoForward, HRESULT: 0x%lx", hr);
+            log(errorMsg);
+            return FALSE;
+        }
+        
+        return canGoForward;
+    });
 }
 
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
@@ -1795,7 +2273,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         static bool classRegistered = false;
         if (!classRegistered) {
             WNDCLASSA wc = {0};  // Use ANSI version
-            wc.lpfnWndProc = CustomWindowProc;
+            wc.lpfnWndProc = WindowProc;
             wc.hInstance = GetModuleHandle(NULL);
             wc.lpszClassName = "BasicWindowClass";  // Use ANSI string
             RegisterClassA(&wc);  // Use ANSI version
@@ -1827,6 +2305,18 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         if (hwnd) {
             // Store our data with the window
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
+
+             if (g_applicationMenu) {
+                if (SetMenu(hwnd, g_applicationMenu)) {
+                    DrawMenuBar(hwnd);
+                    char logMsg[256];
+                    sprintf_s(logMsg, "Applied application menu to new window: HWND=%p", hwnd);
+                    log(logMsg);
+                } else {
+                    log("Failed to apply application menu to new window");
+                }
+            }
+            
             
             // Show the window
             ShowWindow(hwnd, SW_SHOW);
@@ -2429,8 +2919,77 @@ ELECTROBUN_EXPORT void setTrayMenu(NSStatusItem *statusItem, const char *menuCon
 }
 
 ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
-    // Stub implementation
+    if (!jsonString) {
+        log("ERROR: NULL JSON string passed to setApplicationMenu");
+        return;
+    }
+    
+    log("Setting application menu from JSON");
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        try {
+            // Parse JSON using our simple parser
+            SimpleJsonValue menuConfig = parseJson(std::string(jsonString));
+            
+            if (menuConfig.type != SimpleJsonValue::ARRAY) {
+                log("ERROR: Application menu JSON configuration is not an array");
+                return;
+            }
+            
+            // Create target for handling menu actions
+            g_appMenuTarget = std::make_unique<StatusItemTarget>();
+            g_appMenuTarget->zigHandler = zigTrayItemHandler;
+            g_appMenuTarget->trayId = 0;
+            
+            // Clean up existing application menu
+            if (g_applicationMenu) {
+                DestroyMenu(g_applicationMenu);
+                g_applicationMenu = NULL;
+            }
+            
+            // Create new application menu from JSON config
+            g_applicationMenu = createApplicationMenuFromConfig(menuConfig, g_appMenuTarget.get());
+            
+            if (g_applicationMenu) {
+                log("Application menu created successfully from JSON configuration");
+                
+                // Find the main application window to set the menu
+                HWND mainWindow = GetActiveWindow();
+                if (!mainWindow) {
+                    mainWindow = FindWindowA("BasicWindowClass", NULL);
+                }
+                
+                if (mainWindow) {
+                    if (SetMenu(mainWindow, g_applicationMenu)) {
+                        log("Application menu set on main window successfully");
+                        DrawMenuBar(mainWindow);
+                        
+                        char successMsg[256];
+                        sprintf_s(successMsg, "Application menu applied to window: HWND=%p", mainWindow);
+                        log(successMsg);
+                    } else {
+                        DWORD error = GetLastError();
+                        char errorMsg[256];
+                        sprintf_s(errorMsg, "Failed to set application menu on window: %lu", error);
+                        log(errorMsg);
+                    }
+                } else {
+                    log("Warning: No main window found to attach application menu");
+                }
+            } else {
+                log("ERROR: Failed to create application menu from JSON configuration");
+            }
+            
+        } catch (const std::exception& e) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Exception in setApplicationMenu: %s", e.what());
+            log(errorMsg);
+        } catch (...) {
+            log("ERROR: Unknown exception in setApplicationMenu");
+        }
+    });
 }
+
 
 ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
     // Stub implementation
