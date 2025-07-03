@@ -3011,7 +3011,7 @@ ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHand
             target->zigHandler = contextMenuHandler;
             target->trayId = 0;
             
-            HMENU menu = createMenuFromConfig(menuConfig, target.get());
+            HMENU menu = createMenuFromConfig(menuConfig, reinterpret_cast<NSStatusItem*>(target.get()));
             if (!menu) {
                 log("ERROR: Failed to create context menu");
                 return;
@@ -3042,7 +3042,7 @@ ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHand
             
             // Handle menu selection
             if (cmd != 0) {
-                handleMenuItemSelection(cmd, target.get());
+                handleMenuItemSelection(cmd, reinterpret_cast<NSStatusItem*>(target.get()));
             }
             
             // Required for proper cleanup
