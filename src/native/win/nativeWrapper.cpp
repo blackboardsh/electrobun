@@ -2992,7 +2992,69 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
 
 
 ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
-    // Stub implementation
+    if (!jsonString) {
+        log("ERROR: NULL JSON string passed to showContextMenu");
+        return;
+    }
+    
+    if (!contextMenuHandler) {
+        log("ERROR: NULL context menu handler passed to showContextMenu");
+        return;
+    }
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        try {
+            log("showContextMenu: parsing JSON menu configuration");
+            SimpleJsonValue menuConfig = parseJson(std::string(jsonString));
+            
+            std::unique_ptr<StatusItemTarget> target = std::make_unique<StatusItemTarget>();
+            target->zigHandler = contextMenuHandler;
+            target->trayId = 0;
+            
+            HMENU menu = createMenuFromConfig(menuConfig, target.get());
+            if (!menu) {
+                log("ERROR: Failed to create context menu");
+                return;
+            }
+            
+            // Get cursor position for menu display
+            POINT pt;
+            GetCursorPos(&pt);
+            
+            // Get the foreground window or use desktop
+            HWND hwnd = GetForegroundWindow();
+            if (!hwnd) {
+                hwnd = GetDesktopWindow();
+            }
+            
+            // Required for proper menu operation
+            SetForegroundWindow(hwnd);
+            
+            log("showContextMenu: displaying menu at cursor position");
+            
+            // Show the context menu
+            UINT cmd = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                pt.x, pt.y,
+                0, hwnd, NULL
+            );
+            
+            // Handle menu selection
+            if (cmd != 0) {
+                handleMenuItemSelection(cmd, target.get());
+            }
+            
+            // Required for proper cleanup
+            PostMessage(hwnd, WM_NULL, 0, 0);
+            
+            // Cleanup menu
+            DestroyMenu(menu);
+            
+        } catch (const std::exception& e) {
+            log("ERROR: Exception in showContextMenu: " + std::string(e.what()));
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
