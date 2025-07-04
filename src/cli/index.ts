@@ -941,8 +941,8 @@ if (commandArg === "init") {
       cwd: bundleExecPath
     })
   } else if (OS === 'win') {
-    // Note: for some reason on windows bun will only execute from within its own folder
-    mainProc =  Bun.spawn(['bun.exe', 'main.js' ], {
+    // Use the bundled bun.exe from the app bundle
+    mainProc =  Bun.spawn([join(bundleExecPath,'bun.exe'), join(bundleExecPath, 'main.js')], {
       stdio: ['inherit', 'inherit', 'inherit'],
       cwd: bundleExecPath
     })
