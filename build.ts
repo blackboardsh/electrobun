@@ -229,13 +229,15 @@ async function vendorZig() {
 }
 
 async function vendorCEF() {
-    // Use current CEF version
-    const CEF_VERSION = `138.0.17+gac9b751`;
-    const CHROMIUM_VERSION = `138.0.7204.97`;
+    // Use stable CEF version for macOS, current for Windows
+    const CEF_VERSION_MAC = `125.0.22+g4b2c969`;
+    const CHROMIUM_VERSION_MAC = `125.0.6422.142`;
+    const CEF_VERSION_WIN = `138.0.17+gac9b751`;
+    const CHROMIUM_VERSION_WIN = `138.0.7204.97`;
     
     if (OS === 'macos') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
-            await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}%2Bchromium-${CHROMIUM_VERSION}_macosarm64_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;                                                                                                                                        
+            await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}%2Bchromium-${CHROMIUM_VERSION_MAC}_macosarm64_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;                                                                                                                                        
         }
         
         // Build process_helper binary
@@ -265,7 +267,7 @@ async function vendorCEF() {
             
             // Download CEF - using URL encoding for the + character
             console.log('Downloading CEF binaries...');
-            await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}%2Bchromium-${CHROMIUM_VERSION}_windows64_minimal.tar.bz2" -o "${tempPath}"`;
+            await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_WIN}%2Bchromium-${CHROMIUM_VERSION_WIN}_windows64_minimal.tar.bz2" -o "${tempPath}"`;
             
             // Verify download completed
             if (!existsSync(tempPath)) {
@@ -280,69 +282,44 @@ async function vendorCEF() {
                 throw new Error(`Download failed - file too small: ${stats.size} bytes`);
             }
             
-            // Extract using PowerShell
+            // Extract using tar (Windows 10+ has built-in tar support)
             console.log('Extracting CEF...');
             await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef_temp' -Force | Out-Null"`;
             await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef' -Force | Out-Null"`;
             
-            // Try extraction
-            try {
-                console.log('Attempting tar extraction...');
-                await $`powershell -command "tar -xjf '${tempPath}' -C 'vendors/cef_temp'"`;
-                
-                // Check what was extracted
-                const tempDir = 'vendors/cef_temp';
-                console.log('Checking extracted contents...');
-                
-                if (!existsSync(tempDir)) {
-                    throw new Error('Temp extraction directory not created');
-                }
-                
-                const extractedDirs = readdirSync(tempDir);
-                console.log('Extracted directories:', extractedDirs);
-                
-                if (extractedDirs.length === 0) {
-                    throw new Error('No files extracted');
-                }
-                
-                // Move the contents from the first (and likely only) directory
-                const extractedPath = join(tempDir, extractedDirs[0]);
-                console.log('Moving files from:', extractedPath);
-                
-                if (existsSync(extractedPath)) {
-                    // Use robocopy for reliable directory moving on Windows
-                    await $`robocopy "${extractedPath}" "vendors/cef" /E /MOVE /NP /NFL /NDL /NJH /NJS`;
-                } else {
-                    // If it's not a directory, the files might be directly in cef_temp
-                    await $`robocopy "vendors/cef_temp" "vendors/cef" /E /MOVE /NP /NFL /NDL /NJH /NJS`;
-                }
-                
-                // Clean up temp directory
-                if (existsSync('vendors/cef_temp')) {
-                    await $`powershell -command "Remove-Item 'vendors/cef_temp' -Recurse -Force"`;
-                }
-                
-            } catch (error) {
-                console.log('Extraction failed:', error);
-                console.log('Attempting manual PowerShell extraction...');
-                
-                try {
-                    // Manual PowerShell extraction as fallback
-                    await $`powershell -command "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('${tempPath}', 'vendors/cef_temp')"`;
-                    
-                    const tempDir = 'vendors/cef_temp';
-                    const extractedDirs = readdirSync(tempDir);
-                    
-                    if (extractedDirs.length > 0) {
-                        const extractedPath = join(tempDir, extractedDirs[0]);
-                        await $`robocopy "${extractedPath}" "vendors/cef" /E /MOVE /NP /NFL /NDL /NJH /NJS`;
-                        await $`powershell -command "Remove-Item 'vendors/cef_temp' -Recurse -Force"`;
-                    }
-                } catch (fallbackError) {
-                    console.log('All extraction methods failed:', fallbackError);
-                    throw new Error('CEF extraction completely failed');
-                }
+            // Extract tar.bz2 using Windows built-in tar
+            console.log('Extracting with tar...');
+            await $`tar -xjf "${tempPath}" -C vendors/cef_temp`;
+            
+            // Check what was extracted
+            const tempDir = 'vendors/cef_temp';
+            console.log('Checking extracted contents...');
+            
+            if (!existsSync(tempDir)) {
+                throw new Error('Temp extraction directory not created');
             }
+            
+            const extractedDirs = readdirSync(tempDir);
+            console.log('Extracted directories:', extractedDirs);
+            
+            if (extractedDirs.length === 0) {
+                throw new Error('No files extracted');
+            }
+            
+            // Move the contents from the extracted directory
+            const extractedPath = join(tempDir, extractedDirs[0]);
+            console.log('Moving files from:', extractedPath);
+            
+            if (existsSync(extractedPath)) {
+                // Use PowerShell Copy-Item for reliable directory copying
+                await $`powershell -command "Copy-Item -Path '${extractedPath}\\*' -Destination 'vendors\\cef' -Recurse -Force"`;
+            } else {
+                // If it's not a directory, the files might be directly in cef_temp
+                await $`powershell -command "Copy-Item -Path 'vendors\\cef_temp\\*' -Destination 'vendors\\cef' -Recurse -Force"`;
+            }
+            
+            // Clean up temp directory
+            await $`powershell -command "Remove-Item 'vendors/cef_temp' -Recurse -Force"`;
             
             // Clean up temp file
             await $`powershell -command "Remove-Item '${tempPath}' -Force"`;
