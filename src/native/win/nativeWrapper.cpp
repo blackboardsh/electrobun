@@ -27,14 +27,13 @@
 #include <dcomp.h>     // For DirectComposition
 #include <d2d1.h>      // For Direct2D
 
-#ifdef USING_CEF
 // Push macro definitions to avoid conflicts with Windows headers
 #pragma push_macro("GetNextSibling")
 #pragma push_macro("GetFirstChild")
 #undef GetNextSibling
 #undef GetFirstChild
 
-// CEF includes
+// CEF includes - always include for runtime detection
 #include "include/cef_app.h"
 #include "include/cef_client.h"
 #include "include/cef_browser.h"
@@ -45,7 +44,6 @@
 // Restore macro definitions
 #pragma pop_macro("GetFirstChild")
 #pragma pop_macro("GetNextSibling")
-#endif
 
 // Link required Windows libraries
 #pragma comment(lib, "gdi32.lib")
@@ -2049,16 +2047,35 @@ ELECTROBUN_EXPORT void runNSApplication() {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
         
-#ifdef USING_CEF
-        // Perform CEF message loop work
-        if (g_cef_initialized) {
+        // Perform CEF message loop work if CEF is available and initialized
+        if (isCEFAvailable() && g_cef_initialized) {
             CefDoMessageLoopWork();
         }
-#endif
     }
 }
 
-#ifdef USING_CEF
+// Runtime CEF availability detection - Windows equivalent of macOS isCEFAvailable()
+bool isCEFAvailable() {
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    char* lastSlash = strrchr(exePath, '\\');
+    if (lastSlash) {
+        *lastSlash = '\0';
+    }
+    
+    // Check for essential CEF files
+    std::string cefLibPath = std::string(exePath) + "\\libcef.dll";
+    std::string icuDataPath = std::string(exePath) + "\\icudtl.dat";
+    
+    DWORD libAttributes = GetFileAttributesA(cefLibPath.c_str());
+    DWORD icuAttributes = GetFileAttributesA(icuDataPath.c_str());
+    
+    bool libExists = (libAttributes != INVALID_FILE_ATTRIBUTES && !(libAttributes & FILE_ATTRIBUTE_DIRECTORY));
+    bool icuExists = (icuAttributes != INVALID_FILE_ATTRIBUTES && !(icuAttributes & FILE_ATTRIBUTE_DIRECTORY));
+    
+    return libExists && icuExists;
+}
+
 ELECTROBUN_EXPORT bool initCEF() {
     if (g_cef_initialized) {
         return true; // Already initialized
@@ -2154,9 +2171,12 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     
     HWND hwnd = reinterpret_cast<HWND>(window);
 
-#ifdef USING_CEF
-    // Check if CEF renderer is requested
+    // Check if CEF renderer is requested and CEF is available
     if (renderer && strcmp(renderer, "cef") == 0) {
+        if (!isCEFAvailable()) {
+            log("WARNING: CEF renderer requested but CEF files not found, falling back to WebView2");
+            // Fall through to WebView2 creation
+        } else {
         log("=== Creating CEF Browser ===");
         
         // Initialize CEF if not already done
@@ -2199,8 +2219,8 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         }
         
         return view.get();
+        }
     }
-#endif
 
     log("=== Starting WebView2 Creation with Direct COM Bridge Objects ===");
     

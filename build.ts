@@ -399,8 +399,8 @@ async function buildNative() {
         const cefLib = `./vendors/cef/Release/libcef.lib`;
         const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
 
-        // Compile the main wrapper with both WebView2 and CEF support
-        await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /DUSING_CEF /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
+        // Compile the main wrapper with both WebView2 and CEF support (runtime detection)
+        await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
 
         // Link with both WebView2 and CEF libraries
         await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
