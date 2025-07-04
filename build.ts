@@ -1,13 +1,13 @@
 // Run this script via terminal or command line with bun build.ts
 
-console.log("building...", platform(), arch())
-
 import { $ } from "bun";
 import { platform, arch } from "os";
 import { join } from 'path';
 import { existsSync, readdirSync, renameSync } from "fs";
 import { parseArgs } from 'util';
 import process from 'process';
+
+console.log("building...", platform(), arch())
 
 const {values: args} = parseArgs({
     args: Bun.argv,
@@ -229,9 +229,9 @@ async function vendorZig() {
 }
 
 async function vendorCEF() {
-    // Download minimal cef binaries
-    const CEF_VERSION = `126.2.10+g61241e4`;
-    const CHROMIUM_VERSION = `126.0.6478.127`;
+    // Use a more stable CEF version
+    const CEF_VERSION = `125.0.22+g4b2c969`;
+    const CHROMIUM_VERSION = `125.0.6422.142`;
     
     if (OS === 'macos') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
@@ -252,10 +252,8 @@ async function vendorCEF() {
             await $`install_name_tool -change "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" "@executable_path/../../../../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" src/native/build/process_helper`;            
         }
     } else if (OS === 'win') {
-        // Check if we have a broken CEF download (minimal instead of standard)
-        const cefCMakeFile = join(process.cwd(), 'vendors', 'cef', 'libcef_dll', 'CMakeLists.txt');
-        if (existsSync(join(process.cwd(), 'vendors', 'cef')) && !existsSync(cefCMakeFile)) {
-            // Remove broken minimal download
+        // Force removal of any existing CEF to ensure clean download of new version
+        if (existsSync(join(process.cwd(), 'vendors', 'cef'))) {
             await $`powershell -command "Remove-Item -Recurse -Force vendors/cef"`;
         }
         
@@ -277,9 +275,9 @@ async function vendorCEF() {
             // Clean and create build directory
             await $`cd vendors/cef && powershell -command "if (Test-Path build) { Remove-Item -Recurse -Force build }"`;
             await $`cd vendors/cef && mkdir build`;
-            // Generate Visual Studio project
-            await $`cd vendors/cef/build && cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release ..`;
-            // Build the wrapper library
+            // Generate Visual Studio project with sandbox disabled
+            await $`cd vendors/cef/build && cmake -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
+            // Build the wrapper library only
             await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
         }
     }
