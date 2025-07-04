@@ -28,6 +28,12 @@
 #include <d2d1.h>      // For Direct2D
 
 #ifdef USING_CEF
+// Push macro definitions to avoid conflicts with Windows headers
+#pragma push_macro("GetNextSibling")
+#pragma push_macro("GetFirstChild")
+#undef GetNextSibling
+#undef GetFirstChild
+
 // CEF includes
 #include "include/cef_app.h"
 #include "include/cef_client.h"
@@ -35,6 +41,10 @@
 #include "include/cef_command_line.h"
 #include "include/cef_scheme.h"
 #include "include/wrapper/cef_helpers.h"
+
+// Restore macro definitions
+#pragma pop_macro("GetFirstChild")
+#pragma pop_macro("GetNextSibling")
 #endif
 
 // Link required Windows libraries
@@ -2078,7 +2088,7 @@ ELECTROBUN_EXPORT bool initCEF() {
     // CEF settings
     CefSettings settings;
     settings.no_sandbox = true;
-    settings.single_process = false; // Use multi-process for stability
+    settings.multi_threaded_message_loop = false; // Use single-threaded message loop
     
     // Set paths
     CefString(&settings.resources_dir_path) = cefDir + "\\Resources";
@@ -2157,12 +2167,8 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         
         // Create CEF browser window info
         CefWindowInfo window_info;
-        RECT rect;
-        rect.left = (long)x;
-        rect.top = (long)y;
-        rect.right = rect.left + (long)width;
-        rect.bottom = rect.top + (long)height;
-        window_info.SetAsChild(hwnd, rect);
+        CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
+        window_info.SetAsChild(hwnd, cef_rect);
         
         // Create CEF browser settings
         CefBrowserSettings browser_settings;
