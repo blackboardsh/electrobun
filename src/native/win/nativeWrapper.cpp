@@ -92,6 +92,8 @@ static HWND g_targetWindow = NULL;
 static POINT g_initialCursorPos = {};
 static POINT g_initialWindowPos = {};
 static HHOOK g_mouseHook = NULL;
+static BOOL g_offsetCalculated = FALSE;
+static DWORD g_moveStartTime = 0;
 
 class StatusItemTarget {
 public:
@@ -2531,6 +2533,8 @@ void stopWindowMoveInternal() {
     // Clear state
     g_initialCursorPos = {};
     g_initialWindowPos = {};
+    g_offsetCalculated = FALSE;
+    g_moveStartTime = 0;
     
     log("Stopped custom window move");
 }
@@ -2539,22 +2543,42 @@ void stopWindowMoveInternal() {
 LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0 && g_isMovingWindow && g_targetWindow) {
         MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
+        DWORD currentTime = GetTickCount();
+        
+        // Add timing protection - ignore events within first 100ms to prevent immediate stop
+        if (currentTime - g_moveStartTime < 100) {
+            return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+        }
         
         if (wParam == WM_MOUSEMOVE) {
-            // Calculate new window position based on mouse movement
             POINT currentCursorPos = pMouseStruct->pt;
-            int deltaX = currentCursorPos.x - g_initialCursorPos.x;
-            int deltaY = currentCursorPos.y - g_initialCursorPos.y;
             
-            int newX = g_initialWindowPos.x + deltaX;
-            int newY = g_initialWindowPos.y + deltaY;
+            // Lazy offset calculation (like macOS) - calculate only on first mouse move
+            if (!g_offsetCalculated) {
+                RECT windowRect;
+                if (GetWindowRect(g_targetWindow, &windowRect)) {
+                    g_initialWindowPos.x = windowRect.left;
+                    g_initialWindowPos.y = windowRect.top;
+                    g_offsetCalculated = TRUE;
+                    log("Calculated window offset for dragging");
+                }
+            }
             
-            // Move the window to the new position
-            SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
-                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            if (g_offsetCalculated) {
+                // Calculate new window position based on mouse movement
+                int deltaX = currentCursorPos.x - g_initialCursorPos.x;
+                int deltaY = currentCursorPos.y - g_initialCursorPos.y;
+                
+                int newX = g_initialWindowPos.x + deltaX;
+                int newY = g_initialWindowPos.y + deltaY;
+                
+                // Move the window to the new position
+                SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
+                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
         }
         else if (wParam == WM_LBUTTONUP) {
-            // Stop window movement on mouse up
+            log("Mouse button released - stopping window move");
             stopWindowMoveInternal();
         }
     }
@@ -2586,19 +2610,11 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
         return;
     }
     
-    // Get current window position
-    RECT windowRect;
-    if (!GetWindowRect(hwnd, &windowRect)) {
-        log("ERROR: Failed to get window position in startWindowMove");
-        return;
-    }
-    
-    g_initialWindowPos.x = windowRect.left;
-    g_initialWindowPos.y = windowRect.top;
-    
-    // Set up state
+    // Set up state (defer window position calculation to first mouse move like macOS)
     g_targetWindow = hwnd;
     g_isMovingWindow = TRUE;
+    g_offsetCalculated = FALSE;
+    g_moveStartTime = GetTickCount();
     
     // Install low-level mouse hook to capture mouse events globally
     g_mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseHookProc, GetModuleHandle(NULL), 0);
@@ -2610,7 +2626,7 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
         return;
     }
     
-    log("Started custom window move for window handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)));
+    log("Started custom window move for window handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)) + " at time: " + std::to_string(g_moveStartTime));
 }
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
