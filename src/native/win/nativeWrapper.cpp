@@ -117,7 +117,6 @@ static POINT g_initialWindowPos = {};
 // WebView positioning constants
 static const int OFFSCREEN_OFFSET = -20000;
 
-#ifdef USING_CEF
 // CEF global variables
 static bool g_cef_initialized = false;
 static CefRefPtr<CefApp> g_cef_app;
@@ -157,7 +156,6 @@ public:
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
-#endif
 
 class StatusItemTarget {
 public:
@@ -2121,7 +2119,7 @@ ELECTROBUN_EXPORT bool initCEF() {
     // Set log level for debugging
     settings.log_severity = LOGSEVERITY_INFO;
     
-    bool success = CefInitialize(main_args, settings, g_cef_app.get(), nullptr);
+    bool success = CefInitialize(main_args, settings, g_cef_app.get());
     if (success) {
         g_cef_initialized = true;
         log("CEF initialized successfully");
@@ -2131,16 +2129,13 @@ ELECTROBUN_EXPORT bool initCEF() {
     
     return success;
 }
-#endif
 
 ELECTROBUN_EXPORT void killApp() {
-#ifdef USING_CEF
-    if (g_cef_initialized) {
+    if (isCEFAvailable() && g_cef_initialized) {
         CefShutdown();
         g_cef_initialized = false;
         log("CEF shutdown");
     }
-#endif
     ExitProcess(1);
 }
 
