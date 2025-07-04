@@ -441,8 +441,9 @@ if (commandArg === "init") {
         });
       });
     } else if (OS === 'win') {
-      // Copy CEF DLLs to the main executable directory
+      // Copy CEF DLLs from dist/cef/ to the main executable directory
       const electrobunDistPath = join(ELECTROBUN_DEP_PATH, "dist");
+      const cefSourcePath = join(electrobunDistPath, "cef");
       const cefDllFiles = [
         'libcef.dll',
         'chrome_elf.dll', 
@@ -454,7 +455,7 @@ if (commandArg === "init") {
       ];
       
       cefDllFiles.forEach(dllFile => {
-        const sourcePath = join(electrobunDistPath, dllFile);
+        const sourcePath = join(cefSourcePath, dllFile);
         const destPath = join(appBundleMacOSPath, dllFile);
         if (existsSync(sourcePath)) {
           cpSync(sourcePath, destPath);

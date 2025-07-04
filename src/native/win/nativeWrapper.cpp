@@ -2090,8 +2090,8 @@ ELECTROBUN_EXPORT bool initCEF() {
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single-threaded message loop
     
-    // Set paths - icudtl.dat and .pak files are in Resources subdirectory
-    CefString(&settings.resources_dir_path) = cefResourceDir + "\\Resources";
+    // Set paths - icudtl.dat and .pak files are in cef directory root
+    CefString(&settings.resources_dir_path) = cefResourceDir;
     CefString(&settings.locales_dir_path) = cefResourceDir + "\\Resources\\locales";
     CefString(&settings.cache_path) = userDataDir;
     

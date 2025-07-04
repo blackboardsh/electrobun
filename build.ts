@@ -112,24 +112,24 @@ async function copyToDist() {
         await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
         // native system webview library
         await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll dist/WebView2Loader.dll`;
-        // CEF binaries for Windows - copy main DLLs to root dist for loading, keep resources in cef/
-        // Copy main CEF DLLs to dist root (needed for loading)
-        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dll') { Copy-Item 'vendors/cef/Release/*.dll' 'dist/' -Force }"`;
-        
-        // CEF resources to cef/ subdirectory 
-        try {
-            await $`cp -R vendors/cef/Resources dist/cef/Resources`;
-        } catch (e) { 
-            console.log("Resources directory not found, skipping"); 
-        }
+        // CEF binaries for Windows - copy ALL CEF files to cef/ subdirectory for consistent organization
+        // Copy main CEF DLLs to cef/ subdirectory
+        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dll') { Copy-Item 'vendors/cef/Release/*.dll' 'dist/cef/' -Force }"`;
         
         // Copy all available resource files to cef/ subdirectory
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.pak') { Copy-Item 'vendors/cef/Release/*.pak' 'dist/cef/' -Force }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dat') { Copy-Item 'vendors/cef/Release/*.dat' 'dist/cef/' -Force }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.bin') { Copy-Item 'vendors/cef/Release/*.bin' 'dist/cef/' -Force }"`;
         
-        // Copy locales if they exist - ensure Resources directory exists first
+        // CEF resources to cef/Resources subdirectory 
         await $`powershell -command "if (-not (Test-Path 'dist/cef/Resources')) { New-Item -ItemType Directory -Path 'dist/cef/Resources' -Force | Out-Null }"`;
+        try {
+            await $`cp -R vendors/cef/Resources dist/cef/Resources`;
+        } catch (e) { 
+            console.log("Resources directory not found, skipping"); 
+        }
+        
+        // Copy locales if they exist
         await $`powershell -command "if (Test-Path 'vendors/cef/Resources/locales') { Copy-Item 'vendors/cef/Resources/locales' 'dist/cef/Resources/' -Recurse -Force }"`.catch(() => {});
     } else if (OS === 'linux') {
 
