@@ -947,6 +947,50 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             log("MainWindow WM_MOUSEMOVE at (" + std::to_string(mousePos.x) + "," + std::to_string(mousePos.y) + ")");
             break;
         }
+        
+        case WM_INPUT: {
+            log("Received WM_INPUT message for raw input");
+            
+            if (g_isMovingWindow && g_targetWindow) {
+                UINT dwSize = 0;
+                GetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &dwSize, sizeof(RAWINPUTHEADER));
+                
+                LPBYTE lpb = new BYTE[dwSize];
+                if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, lpb, &dwSize, sizeof(RAWINPUTHEADER)) == dwSize) {
+                    RAWINPUT* raw = (RAWINPUT*)lpb;
+                    
+                    if (raw->header.dwType == RIM_TYPEMOUSE) {
+                        log("Raw mouse input: flags=" + std::to_string(raw->data.mouse.usButtonFlags) + 
+                            " dx=" + std::to_string(raw->data.mouse.lLastX) + 
+                            " dy=" + std::to_string(raw->data.mouse.lLastY));
+                        
+                        // Check for mouse button release
+                        if (raw->data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP) {
+                            log("Raw input detected mouse button release - stopping window move");
+                            stopWindowMove();
+                        }
+                        
+                        // If we have relative movement, apply it to window position
+                        if (raw->data.mouse.lLastX != 0 || raw->data.mouse.lLastY != 0) {
+                            RECT currentRect;
+                            if (GetWindowRect(g_targetWindow, &currentRect)) {
+                                int newX = currentRect.left + raw->data.mouse.lLastX;
+                                int newY = currentRect.top + raw->data.mouse.lLastY;
+                                
+                                SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
+                                           SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                                
+                                log("Moved window by raw input delta (" + std::to_string(raw->data.mouse.lLastX) + 
+                                    "," + std::to_string(raw->data.mouse.lLastY) + ") to (" + 
+                                    std::to_string(newX) + "," + std::to_string(newY) + ")");
+                            }
+                        }
+                    }
+                }
+                delete[] lpb;
+            }
+            break;
+        }
         case WM_COMMAND:
             // Check if this is an application menu command
             if (HIWORD(wParam) == 0) { // Menu item selected
@@ -2654,7 +2698,25 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 ELECTROBUN_EXPORT void stopWindowMove() {
-    log("Stop window move called - with native approach, Windows handles this automatically");
+    log("Stop window move called");
+    
+    if (g_isMovingWindow) {
+        // Unregister raw input device
+        RAWINPUTDEVICE rid;
+        rid.usUsagePage = 0x01;
+        rid.usUsage = 0x02;
+        rid.dwFlags = RIDEV_REMOVE;
+        rid.hwndTarget = NULL;
+        
+        if (RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE))) {
+            log("Raw input device unregistered successfully");
+        } else {
+            log("ERROR: Failed to unregister raw input device");
+        }
+        
+        g_isMovingWindow = FALSE;
+        g_targetWindow = NULL;
+    }
 }
 
 ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
@@ -2668,13 +2730,36 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     
     log("Starting window move for handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)));
     
-    // Try the simple Windows approach: Release any current mouse capture and start drag
-    ReleaseCapture();
+    // Try Raw Input API for system-wide mouse tracking
+    g_targetWindow = hwnd;
+    g_isMovingWindow = TRUE;
     
-    // Send the standard Windows message to start dragging
-    PostMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+    // Get initial cursor position
+    GetCursorPos(&g_initialCursorPos);
     
-    log("Posted WM_NCLBUTTONDOWN message to start native window drag");
+    // Get initial window position
+    RECT windowRect;
+    GetWindowRect(hwnd, &windowRect);
+    g_initialWindowPos.x = windowRect.left;
+    g_initialWindowPos.y = windowRect.top;
+    
+    // Register for raw mouse input
+    RAWINPUTDEVICE rid;
+    rid.usUsagePage = 0x01;  // HID_USAGE_PAGE_GENERIC
+    rid.usUsage = 0x02;      // HID_USAGE_GENERIC_MOUSE
+    rid.dwFlags = RIDEV_INPUTSINK; // Receive input even when not in foreground
+    rid.hwndTarget = hwnd;   // Send messages to our window
+    
+    if (RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE))) {
+        log("Raw input device registered successfully for mouse tracking");
+    } else {
+        log("ERROR: Failed to register raw input device - error: " + std::to_string(GetLastError()));
+        g_isMovingWindow = FALSE;
+        g_targetWindow = NULL;
+        return;
+    }
+    
+    log("Started window move with raw input tracking");
 }
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
