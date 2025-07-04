@@ -603,7 +603,7 @@ public:
         sprintf_s(logMsg, "applyVisualMask: Processed %d mask regions", maskCount);
         log(logMsg);
         
-        // Find WebView2's HWND to apply the region
+        // Try window region approach first
         HWND webviewHwnd = FindWebViewHWND();
         if (webviewHwnd) {
             sprintf_s(logMsg, "applyVisualMask: Found WebView HWND: %p, applying region", webviewHwnd);
@@ -618,6 +618,9 @@ public:
             log("applyVisualMask: Could not find WebView HWND");
             DeleteObject(baseRegion);
         }
+        
+        // Also inject CSS to create visual masks (more reliable for WebView2)
+        injectMaskCSS();
     }
     
     // Find the WebView2's HWND for visual masking
@@ -673,6 +676,97 @@ public:
         log(logMsg);
         
         return findData.foundHwnd;
+    }
+    
+    // Inject CSS to create visual masks (more reliable than window regions)
+    void injectMaskCSS() {
+        if (!webview || maskJSON.empty()) {
+            log("injectMaskCSS: No webview or empty maskJSON");
+            return;
+        }
+        
+        log("injectMaskCSS: Creating CSS-based visual masks");
+        
+        // Build CSS for mask overlays
+        std::string css = "<style id='electrobun-masks'>";
+        
+        size_t pos = 0;
+        int maskIndex = 0;
+        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+            try {
+                // Extract mask rectangle coordinates
+                size_t xStart = maskJSON.find(":", pos) + 1;
+                size_t xEnd = maskJSON.find(",", xStart);
+                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+                
+                size_t yPos = maskJSON.find("\"y\":", pos);
+                size_t yStart = maskJSON.find(":", yPos) + 1;
+                size_t yEnd = maskJSON.find(",", yStart);
+                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+                
+                size_t wPos = maskJSON.find("\"width\":", pos);
+                size_t wStart = maskJSON.find(":", wPos) + 1;
+                size_t wEnd = maskJSON.find(",", wStart);
+                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+                
+                size_t hPos = maskJSON.find("\"height\":", pos);
+                size_t hStart = maskJSON.find(":", hPos) + 1;
+                size_t hEnd = maskJSON.find("}", hStart);
+                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+                
+                // Add CSS for this mask
+                css += ".electrobun-mask-" + std::to_string(maskIndex) + " { ";
+                css += "position: fixed; ";
+                css += "left: " + std::to_string(x) + "px; ";
+                css += "top: " + std::to_string(y) + "px; ";
+                css += "width: " + std::to_string(width) + "px; ";
+                css += "height: " + std::to_string(height) + "px; ";
+                css += "background: transparent; ";
+                css += "pointer-events: none; ";
+                css += "z-index: 999999; ";
+                css += "border: 2px dashed rgba(255,0,0,0.5); ";
+                css += "box-sizing: border-box; ";
+                css += "} ";
+                
+                maskIndex++;
+                pos = hEnd;
+            } catch (...) {
+                pos++;
+            }
+        }
+        
+        css += "</style>";
+        
+        // Build JavaScript to inject the CSS and create mask elements
+        std::string script = 
+            "(function() { "
+            "  // Remove existing masks "
+            "  var oldStyle = document.getElementById('electrobun-masks'); "
+            "  if (oldStyle) oldStyle.remove(); "
+            "  var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
+            "  oldMasks.forEach(m => m.remove()); "
+            "  "
+            "  // Add new style "
+            "  document.head.insertAdjacentHTML('beforeend', '" + css + "'); "
+            "  "
+            "  // Create mask elements "
+            "  for (var i = 0; i < " + std::to_string(maskIndex) + "; i++) { "
+            "    var mask = document.createElement('div'); "
+            "    mask.className = 'electrobun-mask-' + i; "
+            "    document.body.appendChild(mask); "
+            "  } "
+            "  "
+            "  console.log('Electrobun: Applied " + std::to_string(maskIndex) + " visual masks'); "
+            "})();";
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "injectMaskCSS: Injecting script with %d masks", maskIndex);
+        log(logMsg);
+        
+        // Execute the script
+        std::wstring wScript(script.begin(), script.end());
+        webview->ExecuteScript(wScript.c_str(), nullptr);
     }
     
     // Toggle mirror mode (disable input while keeping visual position)
