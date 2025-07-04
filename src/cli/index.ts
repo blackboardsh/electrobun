@@ -941,10 +941,20 @@ if (commandArg === "init") {
       cwd: bundleExecPath
     })
   } else if (OS === 'win') {
+    // Debug: Check if files exist
+    const bunExePath = join(bundleExecPath, 'bun.exe');
+    const mainJsPath = join(bundleExecPath, 'main.js');
+    console.log('Windows bundleExecPath:', bundleExecPath);
+    console.log('bun.exe exists:', existsSync(bunExePath));
+    console.log('main.js exists:', existsSync(mainJsPath));
+    
     // Use the bundled bun.exe from the app bundle - use relative path since cwd is set
     mainProc =  Bun.spawn(['./bun.exe', './main.js'], {
       stdio: ['inherit', 'inherit', 'inherit'],
-      cwd: bundleExecPath
+      cwd: bundleExecPath,
+      onExit: (proc, exitCode, signalCode, error) => {
+        console.log('Bun process exited:', { exitCode, signalCode, error });
+      }
     })
   }
 
