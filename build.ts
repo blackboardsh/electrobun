@@ -252,10 +252,17 @@ async function vendorCEF() {
             await $`install_name_tool -change "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" "@executable_path/../../../../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" src/native/build/process_helper`;            
         }
     } else if (OS === 'win') {
+        // Check if we have a broken CEF download (minimal instead of standard)
+        const cefCMakeFile = join(process.cwd(), 'vendors', 'cef', 'libcef_dll', 'CMakeLists.txt');
+        if (existsSync(join(process.cwd(), 'vendors', 'cef')) && !existsSync(cefCMakeFile)) {
+            // Remove broken minimal download
+            await $`powershell -command "Remove-Item -Recurse -Force vendors/cef"`;
+        }
+        
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {
-            // Download Windows CEF binaries
+            // Download Windows CEF binaries (standard distribution with full source)
             const tempPath = join(process.cwd(), 'vendors', 'cef_temp.tar.bz2');
-            await $`mkdir -p vendors && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_windows64_minimal.tar.bz2" -o ${tempPath}`;
+            await $`mkdir -p vendors && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_windows64.tar.bz2" -o ${tempPath}`;
             
             // Extract using PowerShell (Windows compatible)
             await $`mkdir vendors/cef_temp`;
