@@ -116,9 +116,14 @@ async function copyToDist() {
         // Copy main CEF DLLs to cef/ subdirectory
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dll') { Copy-Item 'vendors/cef/Release/*.dll' 'dist/cef/' -Force }"`;
         
-        // Copy all available resource files to cef/ subdirectory
-        console.log('Checking for CEF .pak files...');
-        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.pak') { Write-Host 'Found .pak files, copying...'; Copy-Item 'vendors/cef/Release/*.pak' 'dist/cef/' -Force } else { Write-Host 'No .pak files found in vendors/cef/Release/' }"`;
+        // Copy all available resource files to cef/ subdirectory from both Release and Resources directories
+        console.log('Copying CEF resource files...');
+        
+        // Copy .pak files from Resources directory
+        await $`powershell -command "if (Test-Path 'vendors/cef/Resources/*.pak') { Write-Host 'Found .pak files in Resources, copying...'; Copy-Item 'vendors/cef/Resources/*.pak' 'dist/cef/' -Force } else { Write-Host 'No .pak files found in vendors/cef/Resources/' }"`;
+        
+        // Copy resource files from Release directory
+        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.pak') { Write-Host 'Found .pak files in Release, copying...'; Copy-Item 'vendors/cef/Release/*.pak' 'dist/cef/' -Force }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dat') { Copy-Item 'vendors/cef/Release/*.dat' 'dist/cef/' -Force }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.bin') { Copy-Item 'vendors/cef/Release/*.bin' 'dist/cef/' -Force }"`;
         
