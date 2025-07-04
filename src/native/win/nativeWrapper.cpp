@@ -2536,7 +2536,7 @@ ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
     widePath[wideCharLen] = L'\0';  // Ensure double null termination
     
     // Use SHFileOperation to move to recycle bin
-    SHFILEOPSTRUCT fileOp = {};
+    SHFILEOPSTRUCTW fileOp = {};
     fileOp.hwnd = NULL;
     fileOp.wFunc = FO_DELETE;
     fileOp.pFrom = widePath.data();
@@ -2546,7 +2546,7 @@ ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
     fileOp.hNameMappings = NULL;
     fileOp.lpszProgressTitle = NULL;
     
-    int result = SHFileOperation(&fileOp);
+    int result = SHFileOperationW(&fileOp);
     
     if (result == 0 && !fileOp.fAnyOperationsAborted) {
         log("Successfully moved to trash: " + std::string(pathString));
@@ -2592,8 +2592,8 @@ ELECTROBUN_EXPORT void showItemInFolder(char *path) {
     );
     
     // Check if the operation was successful
-    if (reinterpret_cast<int>(result) <= 32) {
-        log("ERROR: Failed to show item in folder: " + pathString + " (error code: " + std::to_string(reinterpret_cast<int>(result)) + ")");
+    if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        log("ERROR: Failed to show item in folder: " + pathString + " (error code: " + std::to_string(reinterpret_cast<INT_PTR>(result)) + ")");
     } else {
         log("Successfully opened folder for: " + pathString);
     }
