@@ -95,6 +95,9 @@ static HHOOK g_mouseHook = NULL;
 static BOOL g_offsetCalculated = FALSE;
 static DWORD g_moveStartTime = 0;
 
+// Alternative approach using SetCapture
+static BOOL g_useAlternativeMethod = TRUE;
+
 class StatusItemTarget {
 public:
     ZigStatusItemHandler zigHandler;
@@ -2542,9 +2545,16 @@ void stopWindowMoveInternal() {
 // Mouse hook procedure for custom window dragging
 LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
-        // Debug: Log all mouse events when moving
+        // Debug: Log ANY mouse events received when we're supposed to be moving
         if (g_isMovingWindow && g_targetWindow) {
+            static DWORD lastLogTime = 0;
             DWORD currentTime = GetTickCount();
+            
+            // Log hook activity every 500ms to verify it's working
+            if (currentTime - lastLogTime > 500) {
+                log("Mouse hook active - received event: " + std::to_string(wParam));
+                lastLogTime = currentTime;
+            }
             
             if (wParam == WM_MOUSEMOVE) {
                 // Add timing protection - ignore events within first 100ms to prevent immediate stop
@@ -2638,13 +2648,15 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     g_mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseHookProc, GetModuleHandle(NULL), 0);
     
     if (!g_mouseHook) {
-        log("ERROR: Failed to install mouse hook in startWindowMove");
+        DWORD error = GetLastError();
+        log("ERROR: Failed to install mouse hook in startWindowMove - error: " + std::to_string(error));
         g_isMovingWindow = FALSE;
         g_targetWindow = NULL;
         return;
     }
     
-    log("Started custom window move for window handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)) + " at time: " + std::to_string(g_moveStartTime));
+    log("Started custom window move for window handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)) + 
+        " at time: " + std::to_string(g_moveStartTime) + " hook: " + std::to_string(reinterpret_cast<INT_PTR>(g_mouseHook)));
 }
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
