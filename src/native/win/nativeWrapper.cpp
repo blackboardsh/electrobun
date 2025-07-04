@@ -506,6 +506,15 @@ private:
             case WM_MOUSEMOVE: {
                 // Handle mouse movement for determining active webview
                 POINT mousePos = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                
+                // Log mouse movement to debug what's happening
+                static int containerMoveCount = 0;
+                containerMoveCount++;
+                if (containerMoveCount % 30 == 0) { // Log every 30th move to avoid spam
+                    log("ContainerWndProc WM_MOUSEMOVE #" + std::to_string(containerMoveCount) + 
+                        " at (" + std::to_string(mousePos.x) + "," + std::to_string(mousePos.y) + ")");
+                }
+                
                 UpdateActiveWebviewForMousePosition(mousePos);
                 break;
             }
