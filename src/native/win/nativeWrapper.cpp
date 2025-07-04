@@ -2207,19 +2207,26 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         // Create CEF client
         CefRefPtr<ElectrobunCefClient> client = new ElectrobunCefClient();
         
-        // Use the provided URL or default to Google
-        std::string cef_url = url && strlen(url) > 0 ? std::string(url) : "https://www.google.com";
+        // Store the target URL for later navigation
+        std::string target_url = url && strlen(url) > 0 ? std::string(url) : "https://www.google.com";
         
-        // Create the browser synchronously
-        log("Creating CEF browser...");
+        // Debug: Log the URL being used
+        log(("CEF Target URL: " + target_url).c_str());
+        
+        // Create the browser with about:blank first (following macOS pattern to avoid timing issues)
+        log("Creating CEF browser with about:blank...");
         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
-            window_info, client.get(), cef_url, browser_settings, nullptr, nullptr);
+            window_info, client.get(), "about:blank", browser_settings, nullptr, nullptr);
             
         if (browser) {
             log("CEF browser created successfully");
             // Store container window handle in view for proper management
             view->hwnd = containerHwnd;
             view->browser = browser;
+            
+            // Navigate to the actual URL after browser is created (following macOS pattern)
+            log(("Navigating CEF browser to: " + target_url).c_str());
+            browser->GetMainFrame()->LoadURL(CefString(target_url));
         } else {
             log("ERROR: Failed to create CEF browser");
         }
