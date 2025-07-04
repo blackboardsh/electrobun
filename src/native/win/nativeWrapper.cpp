@@ -504,6 +504,7 @@ private:
             }
             
             case WM_MOUSEMOVE: {
+                log("WM_Mousemove in container");
                 // Handle mouse movement for determining active webview
                 POINT mousePos = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
                 
@@ -2612,12 +2613,14 @@ VOID CALLBACK DragTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime
 
 // Mouse hook procedure for custom window dragging
 LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    log("mousehokproc");
     if (nCode >= 0) {
         static int eventCount = 0;
         eventCount++;
         
         // Log EVERY mouse event we receive for debugging
         if (wParam == WM_MOUSEMOVE) {
+            log("WM_Mousemove in mousehookProc");
             static int moveCount = 0;
             moveCount++;
             if (moveCount % 50 == 0) { // Log every 50th move to avoid spam
