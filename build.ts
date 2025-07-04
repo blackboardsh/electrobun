@@ -270,11 +270,44 @@ async function vendorCEF() {
             // Extract using PowerShell
             console.log('Extracting CEF...');
             await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef_temp' -Force | Out-Null"`;
-            await $`powershell -command "tar -xjf '${tempPath}' --strip-components=1 -C 'vendors/cef_temp'"`;
-            await $`powershell -command "Move-Item 'vendors/cef_temp' 'vendors/cef' -Force"`;
+            await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef' -Force | Out-Null"`;
             
-            // Clean up
+            // Try extraction - Windows tar might not support --strip-components properly
+            try {
+                await $`powershell -command "tar -xjf '${tempPath}' -C 'vendors/cef_temp'"`;
+                
+                // Find the extracted directory (will be something like cef_binary_125.0.22+g4b2c969+chromium-125.0.6422.142_windows64)
+                const tempDir = 'vendors/cef_temp';
+                const extractedDirs = readdirSync(tempDir);
+                if (extractedDirs.length > 0) {
+                    const extractedPath = join(tempDir, extractedDirs[0]);
+                    await $`powershell -command "Move-Item '${extractedPath}/*' 'vendors/cef' -Force"`;
+                    await $`powershell -command "Remove-Item 'vendors/cef_temp' -Recurse -Force"`;
+                } else {
+                    throw new Error('No extracted directory found');
+                }
+            } catch (error) {
+                console.log('Tar extraction failed, trying 7-zip...');
+                // Fallback: try using 7-zip if available
+                await $`powershell -command "7z x '${tempPath}' -o'vendors/cef_temp' -y"`;
+                const tempDir = 'vendors/cef_temp';
+                const extractedDirs = readdirSync(tempDir);
+                if (extractedDirs.length > 0) {
+                    const extractedPath = join(tempDir, extractedDirs[0]);
+                    await $`powershell -command "Move-Item '${extractedPath}/*' 'vendors/cef' -Force"`;
+                    await $`powershell -command "Remove-Item 'vendors/cef_temp' -Recurse -Force"`;
+                }
+            }
+            
+            // Clean up temp file
             await $`powershell -command "Remove-Item '${tempPath}' -Force"`;
+            
+            // Verify extraction worked
+            const cefCMakeFile = join(process.cwd(), 'vendors', 'cef', 'CMakeLists.txt');
+            if (!existsSync(cefCMakeFile)) {
+                throw new Error('CEF extraction failed - CMakeLists.txt not found');
+            }
+            console.log('CEF extracted successfully');
         }
         
         // Build CEF wrapper library for Windows
