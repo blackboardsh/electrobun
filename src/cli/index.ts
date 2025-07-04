@@ -474,8 +474,12 @@ if (commandArg === "init") {
       essentialPakFiles.forEach(pakFile => {
         const sourcePath = join(cefSourcePath, pakFile);
         const destPath = join(appBundleMacOSPath, pakFile);
+        console.log(`Checking CEF file: ${sourcePath}`);
         if (existsSync(sourcePath)) {
           cpSync(sourcePath, destPath);
+          console.log(`Copied CEF file: ${pakFile}`);
+        } else {
+          console.log(`WARNING: Missing CEF file: ${sourcePath}`);
         }
       });
       
