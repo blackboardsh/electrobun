@@ -2541,45 +2541,63 @@ void stopWindowMoveInternal() {
 
 // Mouse hook procedure for custom window dragging
 LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode >= 0 && g_isMovingWindow && g_targetWindow) {
-        MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
-        DWORD currentTime = GetTickCount();
-        
-        // Add timing protection - ignore events within first 100ms to prevent immediate stop
-        if (currentTime - g_moveStartTime < 100) {
-            return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
-        }
-        
-        if (wParam == WM_MOUSEMOVE) {
-            POINT currentCursorPos = pMouseStruct->pt;
+    if (nCode >= 0) {
+        // Debug: Log all mouse events when moving
+        if (g_isMovingWindow && g_targetWindow) {
+            DWORD currentTime = GetTickCount();
             
-            // Lazy offset calculation (like macOS) - calculate only on first mouse move
-            if (!g_offsetCalculated) {
-                RECT windowRect;
-                if (GetWindowRect(g_targetWindow, &windowRect)) {
-                    g_initialWindowPos.x = windowRect.left;
-                    g_initialWindowPos.y = windowRect.top;
-                    g_offsetCalculated = TRUE;
-                    log("Calculated window offset for dragging");
+            if (wParam == WM_MOUSEMOVE) {
+                // Add timing protection - ignore events within first 100ms to prevent immediate stop
+                if (currentTime - g_moveStartTime >= 100) {
+                    MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
+                    POINT currentCursorPos = pMouseStruct->pt;
+                    
+                    // Lazy offset calculation (like macOS) - calculate only on first mouse move
+                    if (!g_offsetCalculated) {
+                        RECT windowRect;
+                        if (GetWindowRect(g_targetWindow, &windowRect)) {
+                            g_initialWindowPos.x = windowRect.left;
+                            g_initialWindowPos.y = windowRect.top;
+                            g_offsetCalculated = TRUE;
+                            log("Calculated window offset for dragging - window at (" + 
+                                std::to_string(g_initialWindowPos.x) + "," + std::to_string(g_initialWindowPos.y) + 
+                                ") mouse at (" + std::to_string(g_initialCursorPos.x) + "," + std::to_string(g_initialCursorPos.y) + ")");
+                        }
+                    }
+                    
+                    if (g_offsetCalculated) {
+                        // Calculate new window position based on mouse movement
+                        int deltaX = currentCursorPos.x - g_initialCursorPos.x;
+                        int deltaY = currentCursorPos.y - g_initialCursorPos.y;
+                        
+                        int newX = g_initialWindowPos.x + deltaX;
+                        int newY = g_initialWindowPos.y + deltaY;
+                        
+                        // Debug: Log the movement calculation
+                        static int moveCount = 0;
+                        moveCount++;
+                        if (moveCount % 10 == 0) { // Log every 10th move to avoid spam
+                            log("Moving window: delta(" + std::to_string(deltaX) + "," + std::to_string(deltaY) + 
+                                ") new pos(" + std::to_string(newX) + "," + std::to_string(newY) + ")");
+                        }
+                        
+                        // Move the window to the new position
+                        BOOL moveResult = SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
+                                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                        
+                        if (!moveResult && moveCount % 10 == 0) {
+                            log("ERROR: SetWindowPos failed with error: " + std::to_string(GetLastError()));
+                        }
+                    }
                 }
             }
-            
-            if (g_offsetCalculated) {
-                // Calculate new window position based on mouse movement
-                int deltaX = currentCursorPos.x - g_initialCursorPos.x;
-                int deltaY = currentCursorPos.y - g_initialCursorPos.y;
-                
-                int newX = g_initialWindowPos.x + deltaX;
-                int newY = g_initialWindowPos.y + deltaY;
-                
-                // Move the window to the new position
-                SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
-                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            else if (wParam == WM_LBUTTONUP) {
+                log("Mouse button released - stopping window move");
+                stopWindowMoveInternal();
             }
-        }
-        else if (wParam == WM_LBUTTONUP) {
-            log("Mouse button released - stopping window move");
-            stopWindowMoveInternal();
+            else if (wParam == WM_LBUTTONDOWN) {
+                log("Mouse button pressed during window move");
+            }
         }
     }
     
