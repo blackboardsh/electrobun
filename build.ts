@@ -111,6 +111,21 @@ async function copyToDist() {
         await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
         // native system webview library
         await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll dist/WebView2Loader.dll`;
+        // CEF binaries for Windows - organized in cef/ subdirectory
+        await $`cp vendors/cef/Release/libcef.dll dist/cef/libcef.dll`;
+        await $`cp vendors/cef/Release/chrome_elf.dll dist/cef/chrome_elf.dll`;
+        await $`cp vendors/cef/Release/d3dcompiler_47.dll dist/cef/d3dcompiler_47.dll`;
+        await $`cp vendors/cef/Release/libEGL.dll dist/cef/libEGL.dll`;
+        await $`cp vendors/cef/Release/libGLESv2.dll dist/cef/libGLESv2.dll`;
+        await $`cp vendors/cef/Release/vk_swiftshader.dll dist/cef/vk_swiftshader.dll`;
+        await $`cp vendors/cef/Release/vulkan-1.dll dist/cef/vulkan-1.dll`;
+        // CEF resources
+        await $`cp -R vendors/cef/Resources dist/cef/Resources`;
+        await $`cp vendors/cef/Release/icudtl.dat dist/cef/icudtl.dat`;
+        await $`cp vendors/cef/Release/chrome_100_percent.pak dist/cef/chrome_100_percent.pak`;
+        await $`cp vendors/cef/Release/chrome_200_percent.pak dist/cef/chrome_200_percent.pak`;
+        await $`cp vendors/cef/Release/resources.pak dist/cef/resources.pak`;
+        await $`cp vendors/cef/Release/v8_context_snapshot.bin dist/cef/v8_context_snapshot.bin`;
     } else if (OS === 'linux') {
 
     }
@@ -150,6 +165,9 @@ async function createDistFolder() {
     await $`mkdir -p dist/api`;
     await $`mkdir -p dist/api/bun`;
     await $`mkdir -p dist/api/browser`;
+    if (OS === 'win') {
+        await $`mkdir -p dist/cef`;
+    }
 }
 
 async function BunInstall() {
@@ -213,12 +231,13 @@ async function vendorCEF() {
     // Download minimal cef binaries
     const CEF_VERSION = `126.2.10+g61241e4`;
     const CHROMIUM_VERSION = `126.0.6478.127`;
-    if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
-        await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_macosarm64_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;                                                                                                                                        
-    }
     
-    // Build process_helper binary
     if (OS === 'macos') {
+        if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
+            await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_macosarm64_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;                                                                                                                                        
+        }
+        
+        // Build process_helper binary
         if (!existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper'))) {                
             await $`mkdir -p src/native/build`;
             // build
@@ -232,7 +251,28 @@ async function vendorCEF() {
             await $`install_name_tool -change "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" "@executable_path/../../../../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" src/native/build/process_helper`;            
         }
     } else if (OS === 'win') {
-
+        if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {
+            // Download Windows CEF binaries
+            const tempPath = join(process.cwd(), 'vendors', 'cef_temp.tar.bz2');
+            await $`mkdir -p vendors && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_windows64_minimal.tar.bz2" -o ${tempPath}`;
+            
+            // Extract using 7-zip or tar (if available on Windows)
+            try {
+                await $`mkdir -p vendors/cef_temp && tar -xjf ${tempPath} --strip-components=1 -C vendors/cef_temp`;
+                await $`mv vendors/cef_temp vendors/cef`;
+            } catch {
+                // Fallback: try PowerShell with tar if available
+                await $`mkdir -p vendors/cef_temp && powershell -command "tar -xjf ${tempPath} --strip-components=1 -C vendors/cef_temp"`;
+                await $`mv vendors/cef_temp vendors/cef`;
+            }
+            
+            await $`rm ${tempPath}`;
+        }
+        
+        // Build CEF wrapper library for Windows
+        if (!existsSync(join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'Release', 'libcef_dll_wrapper.lib'))) {
+            await $`cd vendors/cef && if exist build rmdir /s /q build && mkdir build && cd build && cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release .. && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
+        }
     }
 }
 
@@ -291,13 +331,15 @@ async function buildNative() {
     } else if (OS === 'win') {
         const webview2Include = `./vendors/webview2/Microsoft.Web.WebView2/build/native/include`;
         const webview2Lib = `./vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2LoaderStatic.lib`;
+        const cefInclude = `./vendors/cef`;
+        const cefLib = `./vendors/cef/Release/libcef.lib`;
+        const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
 
-        // Compile the main wrapper
-        await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /I"${webview2Include}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
+        // Compile the main wrapper with both WebView2 and CEF support
+        await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /DUSING_CEF /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
 
-        // await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll src/native/win/build/nativeWrapper.obj src/native/win/build/webview2impl.obj "${webview2Lib}" user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib`;
-
-        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib "${webview2Lib}" /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
+        // Link with both WebView2 and CEF libraries
+        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
 
     }
@@ -312,7 +354,8 @@ async function buildLauncher() {
 }
 
 async function buildMainJs() {
-    return await Bun.build({
+    const bunModule = await import('bun');
+    return await bunModule.build({
         entrypoints: [join('src', 'launcher', 'main.ts')],
         outdir: join('dist'),
         external: [],
