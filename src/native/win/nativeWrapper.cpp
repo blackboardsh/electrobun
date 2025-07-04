@@ -1753,12 +1753,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                             // Disable context menus to reduce mouse event consumption
                                             settings->put_AreDefaultContextMenusEnabled(FALSE);
                                             
-                                            // Disable drag/drop to reduce mouse event consumption
-                                            settings->put_IsGeneralAutofillEnabled(FALSE);
-                                            
-                                            // Try to minimize WebView2's mouse event handling
-                                            settings->put_IsScriptEnabled(TRUE); // Keep scripts enabled for our bridge
-                                            settings->put_IsWebMessageEnabled(TRUE); // Keep web messaging for our bridge
+                                            // Keep scripts and messaging enabled for our bridge
+                                            settings->put_IsScriptEnabled(TRUE);
+                                            settings->put_IsWebMessageEnabled(TRUE);
                                             
                                             log("WebView2 settings configured successfully");
                                         } else {
@@ -1777,19 +1774,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                         }
                                         controller->put_Bounds(bounds);
                                         
-                                        // Try advanced controller settings for mouse handling
-                                        ComPtr<ICoreWebView2Controller4> controller4;
-                                        HRESULT controller4Result = controller->QueryInterface(IID_PPV_ARGS(&controller4));
-                                        if (SUCCEEDED(controller4Result)) {
-                                            log("Using advanced ICoreWebView2Controller4 for window management");
-                                            
-                                            // Try to configure window behavior
-                                            controller4->put_AllowExternalDrop(FALSE);
-                                            
-                                            log("Advanced controller settings applied");
-                                        } else {
-                                            log("ICoreWebView2Controller4 not available - using basic controller");
-                                        }
+                                        // Note: Advanced controller settings (ICoreWebView2Controller4) not available in this WebView2 version
                                         
                                         // Make webview visible
                                         controller->put_IsVisible(TRUE);
