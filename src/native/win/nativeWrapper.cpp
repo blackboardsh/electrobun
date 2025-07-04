@@ -525,6 +525,10 @@ public:
     ComPtr<ICoreWebView2CompositionController> compositionController;
     ComPtr<ICoreWebView2> webview;
     
+    // CEF specific members
+    CefRefPtr<CefBrowser> browser;
+    HWND hwnd = NULL; // Container window handle
+    
     // Input routing state
     bool isReceivingInput = true;  // Whether this webview should receive input events
     
@@ -2187,10 +2191,15 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         view->webviewId = webviewId;
         view->fullSize = autoResize;
         
-        // Create CEF browser window info
+        // Use the existing container window (hwnd is the container, not the system window)
+        HWND containerHwnd = hwnd;
+        
+        log("Using existing container window for CEF webview");
+        
+        // Create CEF browser window info as child of the existing container
         CefWindowInfo window_info;
         CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
-        window_info.SetAsChild(hwnd, cef_rect);
+        window_info.SetAsChild(containerHwnd, cef_rect);
         
         // Create CEF browser settings
         CefBrowserSettings browser_settings;
@@ -2208,8 +2217,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             
         if (browser) {
             log("CEF browser created successfully");
-            // Store browser reference in view (you might need to extend AbstractView for this)
-            // For now, just return the view
+            // Store container window handle in view for proper management
+            view->hwnd = containerHwnd;
+            view->browser = browser;
         } else {
             log("ERROR: Failed to create CEF browser");
         }
