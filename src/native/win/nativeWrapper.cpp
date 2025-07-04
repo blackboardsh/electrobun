@@ -117,6 +117,7 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
                              uint32_t webviewId);
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
+ELECTROBUN_EXPORT void stopWindowMove();
 
 void log(const std::string& message) {
     // Get current time
