@@ -2626,16 +2626,7 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 ELECTROBUN_EXPORT void stopWindowMove() {
-    log("Stop window move called");
-    
-    if (g_mouseHook) {
-        UnhookWindowsHookEx(g_mouseHook);
-        g_mouseHook = NULL;
-        log("Mouse hook removed");
-    }
-    
-    g_isMovingWindow = FALSE;
-    g_targetWindow = NULL;
+    log("Stop window move called - with native approach, Windows handles this automatically");
 }
 
 ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
@@ -2649,27 +2640,13 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     
     log("Starting window move for handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)));
     
-    // Step 1: Just try to install a basic mouse hook to log mouse movement
-    if (g_mouseHook) {
-        UnhookWindowsHookEx(g_mouseHook);
-        g_mouseHook = NULL;
-    }
+    // Try the simple Windows approach: Release any current mouse capture and start drag
+    ReleaseCapture();
     
-    g_targetWindow = hwnd;
-    g_isMovingWindow = TRUE;
+    // Send the standard Windows message to start dragging
+    PostMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
     
-    // Install mouse hook just to log mouse movement
-    g_mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseHookProc, GetModuleHandle(NULL), 0);
-    
-    if (!g_mouseHook) {
-        DWORD error = GetLastError();
-        log("ERROR: Failed to install mouse hook - error: " + std::to_string(error));
-        g_isMovingWindow = FALSE;
-        g_targetWindow = NULL;
-        return;
-    }
-    
-    log("Mouse hook installed successfully - handle: " + std::to_string(reinterpret_cast<INT_PTR>(g_mouseHook)));
+    log("Posted WM_NCLBUTTONDOWN message to start native window drag");
 }
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
