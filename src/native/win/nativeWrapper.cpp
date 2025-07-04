@@ -27,6 +27,16 @@
 #include <dcomp.h>     // For DirectComposition
 #include <d2d1.h>      // For Direct2D
 
+#ifdef USING_CEF
+// CEF includes
+#include "include/cef_app.h"
+#include "include/cef_client.h"
+#include "include/cef_browser.h"
+#include "include/cef_command_line.h"
+#include "include/cef_scheme.h"
+#include "include/wrapper/cef_helpers.h"
+#endif
+
 // Link required Windows libraries
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
@@ -98,6 +108,48 @@ static POINT g_initialWindowPos = {};
 
 // WebView positioning constants
 static const int OFFSCREEN_OFFSET = -20000;
+
+#ifdef USING_CEF
+// CEF global variables
+static bool g_cef_initialized = false;
+static CefRefPtr<CefApp> g_cef_app;
+
+// Simple CEF App class for minimal implementation
+class ElectrobunCefApp : public CefApp, public CefBrowserProcessHandler {
+public:
+    CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
+        return this;
+    }
+
+    void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
+        // Disable features for minimal implementation
+        command_line->AppendSwitch("disable-web-security");
+        command_line->AppendSwitch("disable-features=VizDisplayCompositor");
+    }
+
+    void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
+        // Register views:// scheme
+        registrar->AddCustomScheme("views",
+            CEF_SCHEME_OPTION_STANDARD |
+            CEF_SCHEME_OPTION_CORS_ENABLED |
+            CEF_SCHEME_OPTION_SECURE |
+            CEF_SCHEME_OPTION_CSP_BYPASSING |
+            CEF_SCHEME_OPTION_FETCH_ENABLED);
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunCefApp);
+};
+
+// Simple CEF Client class for minimal implementation
+class ElectrobunCefClient : public CefClient {
+public:
+    ElectrobunCefClient() {}
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
+};
+#endif
 
 class StatusItemTarget {
 public:
@@ -1986,10 +2038,76 @@ ELECTROBUN_EXPORT void runNSApplication() {
     while (GetMessage(&msg, NULL, 0, 0)) { // NULL means process messages for all windows in this thread
         TranslateMessage(&msg);
         DispatchMessage(&msg);
+        
+#ifdef USING_CEF
+        // Perform CEF message loop work
+        if (g_cef_initialized) {
+            CefDoMessageLoopWork();
+        }
+#endif
     }
 }
 
+#ifdef USING_CEF
+ELECTROBUN_EXPORT bool initCEF() {
+    if (g_cef_initialized) {
+        return true; // Already initialized
+    }
+
+    // Get the directory where the current executable is located
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    char* lastSlash = strrchr(exePath, '\\');
+    if (lastSlash) {
+        *lastSlash = '\0'; // Remove the executable name
+    }
+
+    // Set up CEF paths
+    std::string cefDir = std::string(exePath) + "\\cef";
+    std::string userDataDir = std::string(exePath) + "\\cef_cache";
+
+    // Create cache directory if it doesn't exist
+    CreateDirectoryA(userDataDir.c_str(), NULL);
+
+    // Initialize CEF
+    CefMainArgs main_args(GetModuleHandle(NULL));
+    
+    // Create the app
+    g_cef_app = new ElectrobunCefApp();
+
+    // CEF settings
+    CefSettings settings;
+    settings.no_sandbox = true;
+    settings.single_process = false; // Use multi-process for stability
+    
+    // Set paths
+    CefString(&settings.resources_dir_path) = cefDir + "\\Resources";
+    CefString(&settings.locales_dir_path) = cefDir + "\\Resources\\locales";
+    CefString(&settings.cache_path) = userDataDir;
+    
+    // Set log level for debugging
+    settings.log_severity = LOGSEVERITY_INFO;
+    
+    bool success = CefInitialize(main_args, settings, g_cef_app.get(), nullptr);
+    if (success) {
+        g_cef_initialized = true;
+        log("CEF initialized successfully");
+    } else {
+        log("Failed to initialize CEF");
+    }
+    
+    return success;
+}
+#endif
+
 ELECTROBUN_EXPORT void killApp() {
+#ifdef USING_CEF
+    if (g_cef_initialized) {
+        CefShutdown();
+        g_cef_initialized = false;
+        log("CEF shutdown");
+    }
+#endif
     ExitProcess(1);
 }
 
@@ -2013,13 +2131,66 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript) {
     
-    log("=== Starting WebView2 Creation with Direct COM Bridge Objects ===");
     log("=======>>>>>> initWebview");
-
+    printf("[LOG] Renderer: %s\n", renderer ? renderer : "default");
     printf("[LOG] WebView geometry - x: %.2f, y: %.2f, width: %.2f, height: %.2f, autoResize: %s\n", 
        x, y, width, height, autoResize ? "true" : "false");
     
     HWND hwnd = reinterpret_cast<HWND>(window);
+
+#ifdef USING_CEF
+    // Check if CEF renderer is requested
+    if (renderer && strcmp(renderer, "cef") == 0) {
+        log("=== Creating CEF Browser ===");
+        
+        // Initialize CEF if not already done
+        if (!initCEF()) {
+            log("ERROR: Failed to initialize CEF");
+            auto view = std::make_shared<AbstractView>();
+            view->webviewId = webviewId;
+            return view.get();
+        }
+
+        auto view = std::make_shared<AbstractView>();
+        view->webviewId = webviewId;
+        view->fullSize = autoResize;
+        
+        // Create CEF browser window info
+        CefWindowInfo window_info;
+        RECT rect;
+        rect.left = (long)x;
+        rect.top = (long)y;
+        rect.right = rect.left + (long)width;
+        rect.bottom = rect.top + (long)height;
+        window_info.SetAsChild(hwnd, rect);
+        
+        // Create CEF browser settings
+        CefBrowserSettings browser_settings;
+        
+        // Create CEF client
+        CefRefPtr<ElectrobunCefClient> client = new ElectrobunCefClient();
+        
+        // Use the provided URL or default to Google
+        std::string cef_url = url && strlen(url) > 0 ? std::string(url) : "https://www.google.com";
+        
+        // Create the browser synchronously
+        log("Creating CEF browser...");
+        CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
+            window_info, client.get(), cef_url, browser_settings, nullptr, nullptr);
+            
+        if (browser) {
+            log("CEF browser created successfully");
+            // Store browser reference in view (you might need to extend AbstractView for this)
+            // For now, just return the view
+        } else {
+            log("ERROR: Failed to create CEF browser");
+        }
+        
+        return view.get();
+    }
+#endif
+
+    log("=== Starting WebView2 Creation with Direct COM Bridge Objects ===");
     
     auto view = std::make_shared<AbstractView>();
     view->webviewId = webviewId;
