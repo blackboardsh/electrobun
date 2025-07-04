@@ -2072,9 +2072,9 @@ ELECTROBUN_EXPORT bool initCEF() {
         *lastSlash = '\0'; // Remove the executable name
     }
 
-    // Set up CEF paths
-    std::string cefDir = std::string(exePath) + "\\cef";
-    std::string userDataDir = std::string(exePath) + "\\cef_cache";
+    // Set up CEF paths (resources are in ../cef relative to MacOS directory)
+    std::string cefResourceDir = std::string(exePath) + "\\..\\cef";
+    std::string userDataDir = std::string(exePath) + "\\..\\cef_cache";
 
     // Create cache directory if it doesn't exist
     CreateDirectoryA(userDataDir.c_str(), NULL);
@@ -2091,8 +2091,8 @@ ELECTROBUN_EXPORT bool initCEF() {
     settings.multi_threaded_message_loop = false; // Use single-threaded message loop
     
     // Set paths
-    CefString(&settings.resources_dir_path) = cefDir + "\\Resources";
-    CefString(&settings.locales_dir_path) = cefDir + "\\Resources\\locales";
+    CefString(&settings.resources_dir_path) = cefResourceDir + "\\Resources";
+    CefString(&settings.locales_dir_path) = cefResourceDir + "\\Resources\\locales";
     CefString(&settings.cache_path) = userDataDir;
     
     // Set log level for debugging

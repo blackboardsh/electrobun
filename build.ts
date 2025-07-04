@@ -112,30 +112,18 @@ async function copyToDist() {
         await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
         // native system webview library
         await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll dist/WebView2Loader.dll`;
-        // CEF binaries for Windows - copy only files that exist in minimal distribution
-        try {
-            await $`cp vendors/cef/Release/libcef.dll dist/cef/libcef.dll`;
-        } catch (e) { console.log("libcef.dll not found, skipping"); }
+        // CEF binaries for Windows - copy main DLLs to root dist for loading, keep resources in cef/
+        // Copy main CEF DLLs to dist root (needed for loading)
+        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dll') { Copy-Item 'vendors/cef/Release/*.dll' 'dist/' -Force }"`;
         
-        try {
-            await $`cp vendors/cef/Release/chrome_elf.dll dist/cef/chrome_elf.dll`;
-        } catch (e) { console.log("chrome_elf.dll not found, skipping"); }
-        
-        try {
-            await $`cp vendors/cef/Release/d3dcompiler_47.dll dist/cef/d3dcompiler_47.dll`;
-        } catch (e) { console.log("d3dcompiler_47.dll not found, skipping"); }
-        
-        // Copy all available DLLs from Release directory
-        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dll') { Copy-Item 'vendors/cef/Release/*.dll' 'dist/cef/' -Force }"`;
-        
-        // CEF resources
+        // CEF resources to cef/ subdirectory 
         try {
             await $`cp -R vendors/cef/Resources dist/cef/Resources`;
         } catch (e) { 
             console.log("Resources directory not found, skipping"); 
         }
         
-        // Copy all available resource files
+        // Copy all available resource files to cef/ subdirectory
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.pak') { Copy-Item 'vendors/cef/Release/*.pak' 'dist/cef/' -Force }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dat') { Copy-Item 'vendors/cef/Release/*.dat' 'dist/cef/' -Force }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.bin') { Copy-Item 'vendors/cef/Release/*.bin' 'dist/cef/' -Force }"`;

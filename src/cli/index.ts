@@ -440,6 +440,37 @@ if (commandArg === "init") {
           dereference: true,
         });
       });
+    } else if (OS === 'win') {
+      // Copy CEF DLLs to the main executable directory
+      const electrobunDistPath = join(ELECTROBUN_DEP_PATH, "dist");
+      const cefDllFiles = [
+        'libcef.dll',
+        'chrome_elf.dll', 
+        'd3dcompiler_47.dll',
+        'libEGL.dll',
+        'libGLESv2.dll',
+        'vk_swiftshader.dll',
+        'vulkan-1.dll'
+      ];
+      
+      cefDllFiles.forEach(dllFile => {
+        const sourcePath = join(electrobunDistPath, dllFile);
+        const destPath = join(appBundleMacOSPath, dllFile);
+        if (existsSync(sourcePath)) {
+          cpSync(sourcePath, destPath);
+        }
+      });
+      
+      // Copy CEF resources to cef/ subdirectory
+      const cefResourcesSource = join(electrobunDistPath, 'cef');
+      const cefResourcesDestination = join(appBundleFolderContentsPath, 'cef');
+      
+      if (existsSync(cefResourcesSource)) {
+        cpSync(cefResourcesSource, cefResourcesDestination, {
+          recursive: true,
+          dereference: true,
+        });
+      }
     }
   }
 
