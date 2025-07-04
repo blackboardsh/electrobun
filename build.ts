@@ -6,7 +6,8 @@ import { $ } from "bun";
 import { platform, arch } from "os";
 import { join } from 'path';
 import { existsSync, readdirSync, renameSync } from "fs";
-import {parseArgs} from 'util';
+import { parseArgs } from 'util';
+import process from 'process';
 
 const {values: args} = parseArgs({
     args: Bun.argv,
@@ -256,22 +257,23 @@ async function vendorCEF() {
             const tempPath = join(process.cwd(), 'vendors', 'cef_temp.tar.bz2');
             await $`mkdir -p vendors && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_windows64_minimal.tar.bz2" -o ${tempPath}`;
             
-            // Extract using 7-zip or tar (if available on Windows)
-            try {
-                await $`mkdir -p vendors/cef_temp && tar -xjf ${tempPath} --strip-components=1 -C vendors/cef_temp`;
-                await $`mv vendors/cef_temp vendors/cef`;
-            } catch {
-                // Fallback: try PowerShell with tar if available
-                await $`mkdir -p vendors/cef_temp && powershell -command "tar -xjf ${tempPath} --strip-components=1 -C vendors/cef_temp"`;
-                await $`mv vendors/cef_temp vendors/cef`;
-            }
+            // Extract using PowerShell (Windows compatible)
+            await $`mkdir vendors/cef_temp`;
+            await $`powershell -command "tar -xjf ${tempPath} --strip-components=1 -C vendors/cef_temp"`;
+            await $`move vendors/cef_temp vendors/cef`;
             
             await $`rm ${tempPath}`;
         }
         
         // Build CEF wrapper library for Windows
         if (!existsSync(join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'Release', 'libcef_dll_wrapper.lib'))) {
-            await $`cd vendors/cef && if exist build rmdir /s /q build && mkdir build && cd build && cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release .. && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
+            // Clean and create build directory
+            await $`cd vendors/cef && powershell -command "if (Test-Path build) { Remove-Item -Recurse -Force build }"`;
+            await $`cd vendors/cef && mkdir build`;
+            // Generate Visual Studio project
+            await $`cd vendors/cef/build && cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release ..`;
+            // Build the wrapper library
+            await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
         }
     }
 }
@@ -299,7 +301,7 @@ async function vendorWebview2() {
         await $`vendors/nuget/nuget.exe install Microsoft.Web.WebView2 -OutputDirectory vendors/webview2`;
 
         const webview2BasePath = './vendors/webview2';
-        const webview2Dir = readdirSync(webview2BasePath).find(dir => dir.startsWith('Microsoft.Web.WebView2'));
+        const webview2Dir = readdirSync(webview2BasePath).find((dir: string) => dir.startsWith('Microsoft.Web.WebView2'));
 
         if (webview2Dir && webview2Dir !== 'Microsoft.Web.WebView2') {
             const oldPath = join(webview2BasePath, webview2Dir);
