@@ -110,7 +110,6 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
                              uint32_t webviewId);
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
-ELECTROBUN_EXPORT void stopWindowMove();
 
 void log(const std::string& message) {
     // Get current time
@@ -2518,6 +2517,24 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
         });
     }
 
+// Internal function to stop window movement (without export linkage)
+void stopWindowMoveInternal() {
+    g_isMovingWindow = FALSE;
+    g_targetWindow = NULL;
+    
+    // Remove the mouse hook
+    if (g_mouseHook) {
+        UnhookWindowsHookEx(g_mouseHook);
+        g_mouseHook = NULL;
+    }
+    
+    // Clear state
+    g_initialCursorPos = {};
+    g_initialWindowPos = {};
+    
+    log("Stopped custom window move");
+}
+
 // Mouse hook procedure for custom window dragging
 LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0 && g_isMovingWindow && g_targetWindow) {
@@ -2538,7 +2555,7 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
         }
         else if (wParam == WM_LBUTTONUP) {
             // Stop window movement on mouse up
-            stopWindowMove();
+            stopWindowMoveInternal();
         }
     }
     
@@ -2546,20 +2563,7 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 ELECTROBUN_EXPORT void stopWindowMove() {
-    g_isMovingWindow = FALSE;
-    g_targetWindow = NULL;
-    
-    // Remove the mouse hook
-    if (g_mouseHook) {
-        UnhookWindowsHookEx(g_mouseHook);
-        g_mouseHook = NULL;
-    }
-    
-    // Clear state
-    g_initialCursorPos = {};
-    g_initialWindowPos = {};
-    
-    log("Stopped custom window move");
+    stopWindowMoveInternal();
 }
 
 ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
@@ -2573,7 +2577,7 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     
     // Stop any existing window move operation
     if (g_isMovingWindow) {
-        stopWindowMove();
+        stopWindowMoveInternal();
     }
     
     // Get current cursor position
