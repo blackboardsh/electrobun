@@ -944,9 +944,11 @@ if (commandArg === "init") {
     // Debug: Check if files exist
     const bunExePath = join(bundleExecPath, 'bun.exe');
     const mainJsPath = join(bundleExecPath, 'main.js');
+    const nativeLibPath = join(bundleExecPath, 'libNativeWrapper.dll');
     console.log('Windows bundleExecPath:', bundleExecPath);
     console.log('bun.exe exists:', existsSync(bunExePath));
     console.log('main.js exists:', existsSync(mainJsPath));
+    console.log('libNativeWrapper.dll exists:', existsSync(nativeLibPath));
     
     // Use the bundled bun.exe from the app bundle - use relative path since cwd is set
     mainProc =  Bun.spawn(['./bun.exe', './main.js'], {
