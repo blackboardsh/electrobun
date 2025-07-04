@@ -469,6 +469,16 @@ if (commandArg === "init") {
         cpSync(icuDataSource, icuDataDest);
       }
       
+      // Copy essential CEF pak files to MacOS root (same folder as libcef.dll) - required for CEF resources
+      const essentialPakFiles = ['chrome_100_percent.pak', 'resources.pak', 'v8_context_snapshot.bin'];
+      essentialPakFiles.forEach(pakFile => {
+        const sourcePath = join(cefSourcePath, pakFile);
+        const destPath = join(appBundleMacOSPath, pakFile);
+        if (existsSync(sourcePath)) {
+          cpSync(sourcePath, destPath);
+        }
+      });
+      
       // Copy CEF resources to MacOS/cef/ subdirectory for other resources like locales
       const cefResourcesSource = join(electrobunDistPath, 'cef');
       const cefResourcesDestination = join(appBundleMacOSPath, 'cef');
