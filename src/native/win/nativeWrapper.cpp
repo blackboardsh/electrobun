@@ -514,7 +514,6 @@ private:
     }
     
     void UpdateActiveWebviewForMousePosition(POINT mousePos) {
-        log("=======>>>>>> UpdateActiveWebviewForMousePosition");
         bool stillSearching = true;
         
         // Iterate through webviews in reverse order (top-most first)
@@ -548,7 +547,6 @@ private:
     }
     
     void SetWebViewMirrorMode(AbstractView* view, bool mirror) {
-        log("=======>>>>>> SetWEbviewMirrorMode");
 
         if (!view->controller) return;
         
@@ -671,7 +669,6 @@ public:
         }
         
         // Try creating with our custom class first
-        log("Creating container window with custom ContainerViewClass");
         m_hwnd = CreateWindowExA(
             0,
             "ContainerViewClass",
@@ -708,10 +705,8 @@ public:
                 log(errorMsg);
                 return;
             } else {
-                log("Container window created successfully with STATIC class (limited functionality)");
             }
         } else {
-            log("Container window created successfully with custom ContainerViewClass");
         }
         
         if (m_hwnd) {
@@ -803,7 +798,6 @@ ContainerView* GetOrCreateContainer(HWND parentWindow) {
     
     auto it = g_containerViews.find(parentWindow);
     if (it == g_containerViews.end()) {
-        log("Creating new container for window");
         
         auto container = std::make_unique<ContainerView>(parentWindow);
         ContainerView* containerPtr = container.get();
@@ -811,7 +805,6 @@ ContainerView* GetOrCreateContainer(HWND parentWindow) {
         // Only store if creation was successful
         if (containerPtr->GetHwnd() != NULL) {
             g_containerViews[parentWindow] = std::move(container);
-            log("Container created and stored successfully");
             return containerPtr;
         } else {
             log("ERROR: Container creation failed, not storing");
@@ -1708,7 +1701,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         // Get the interface that supports custom scheme registration  
         Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
         if (SUCCEEDED(options.As(&options4))) {
-            log("Setting up views:// custom scheme registration");
             
             // Set allowed origins for the custom scheme
             const WCHAR* allowedOrigins[1] = {L"*"};
@@ -1727,7 +1719,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             HRESULT schemeResult = options4->SetCustomSchemeRegistrations(1, registrations);
             
             if (SUCCEEDED(schemeResult)) {
-                log("views:// custom scheme registration set successfully");
             } else {
                 char errorMsg[256];
                 sprintf_s(errorMsg, "Failed to set views:// custom scheme registration: 0x%lx", schemeResult);
@@ -1745,7 +1736,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
                 [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                     if (SUCCEEDED(result)) {
-                        log("WebView2 environment created successfully with views:// scheme support");
                         
                         // Store environment globally
                         g_environment = env;
@@ -1755,7 +1745,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                             Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                                 [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                                     if (SUCCEEDED(result)) {
-                                        log("WebView2 controller created successfully");
                                         
                                         // Store controller in the view
                                         view->controller = controller;
@@ -1774,7 +1763,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                         ComPtr<ICoreWebView2Settings> settings;
                                         HRESULT settingsResult = view->webview->get_Settings(&settings);
                                         if (SUCCEEDED(settingsResult)) {
-                                            log("Configuring WebView2 settings for mouse passthrough");
                                             
                                             // Disable context menus to reduce mouse event consumption
                                             settings->put_AreDefaultContextMenusEnabled(FALSE);
@@ -1783,7 +1771,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                             settings->put_IsScriptEnabled(TRUE);
                                             settings->put_IsWebMessageEnabled(TRUE);
                                             
-                                            log("WebView2 settings configured successfully");
                                         } else {
                                             log("ERROR: Failed to get WebView2 settings - HRESULT: " + std::to_string(settingsResult));
                                         }
@@ -1845,7 +1832,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                                     BOOL success;
                                                     args->get_IsSuccess(&success);
                                                     if (success) {
-                                                        log("Navigation completed successfully");
                                                         if (webviewEventHandler) {
                                                             // Get current URL
                                                             LPWSTR uri;
@@ -1874,7 +1860,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                         
                                         // Create and set up direct COM bridge objects
                                         if (bunBridgeHandler || internalBridgeHandler) {
-                                            log("Setting up direct COM bridge objects");
                                             
                                             // Create BunBridge if handler provided
                                             if (bunBridgeHandler) {
@@ -1891,7 +1876,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                                 VariantClear(&bunBridgeVariant);
                                                 
                                                 if (SUCCEEDED(bunResult)) {
-                                                    log("bunBridge COM object added successfully");
                                                 } else {
                                                     char errorMsg[256];
                                                     sprintf_s(errorMsg, "Failed to add bunBridge COM object: 0x%lx", bunResult);
@@ -2019,7 +2003,6 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
             sprintf_s(errorMsg, "ERROR: Failed to navigate to URL, HRESULT: 0x%lx", hr);
             log(errorMsg);
         } else {
-            log("URL navigation initiated successfully");
         }
     });
 }
@@ -2238,7 +2221,6 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
                 sprintf_s(errorMsg, "ERROR: Failed to execute JavaScript, HRESULT: 0x%lx", hr);
                 log(errorMsg);
             } else {
-                log("JavaScript execution initiated successfully");
             }
             
         } catch (const std::exception& e) {
@@ -2432,7 +2414,6 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
         
         // First, try the simple approach
         if (SetForegroundWindow(hwnd)) {
-            log("Window brought to foreground successfully with SetForegroundWindow");
         } else {
             // If that fails, we need to work around Windows' foreground restrictions
             DWORD currentThreadId = GetCurrentThreadId();
@@ -2507,7 +2488,6 @@ ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
         } else {
             // Set empty title
             if (SetWindowTextW(hwnd, L"")) {
-                log("Window title cleared successfully");
             } else {
                 DWORD error = GetLastError();
                 char errorMsg[256];
@@ -2543,7 +2523,6 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
         // Send WM_CLOSE message to the window
         // This will trigger the window's close handler if one is set
         if (PostMessage(hwnd, WM_CLOSE, 0, 0)) {
-            log("WM_CLOSE message sent successfully");
         } else {
             DWORD error = GetLastError();
             char errorMsg[256];
@@ -2553,7 +2532,6 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
             // If PostMessage fails, try DestroyWindow as a fallback
             log("Attempting DestroyWindow as fallback");
             if (DestroyWindow(hwnd)) {
-                log("Window destroyed successfully with DestroyWindow");
             } else {
                 DWORD destroyError = GetLastError();
                 char destroyErrorMsg[256];
@@ -3115,7 +3093,6 @@ ELECTROBUN_EXPORT void setTrayTitle(NSStatusItem *statusItem, const char *title)
     if (!statusItem) return;
     
     MainThreadDispatcher::dispatch_sync([=]() {
-        log("Setting tray title");
         
         if (title) {
             statusItem->title = std::string(title);
@@ -3134,7 +3111,6 @@ ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image)
     if (!statusItem) return;
     
     MainThreadDispatcher::dispatch_sync([=]() {
-        log("Setting tray image");
         
         HICON oldIcon = statusItem->nid.hIcon;
         
@@ -3163,7 +3139,6 @@ ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image)
             if (oldIcon && oldIcon != LoadIcon(NULL, IDI_APPLICATION)) {
                 DestroyIcon(oldIcon);
             }
-            log("Tray image updated successfully");
         } else {
             log("ERROR: Failed to update tray image");
             // Restore old icon on failure
@@ -3205,7 +3180,6 @@ ELECTROBUN_EXPORT void setTrayMenuFromJSON(NSStatusItem *statusItem, const char 
             statusItem->contextMenu = createMenuFromConfig(menuConfig, statusItem);
             
             if (statusItem->contextMenu) {
-                log("Context menu created successfully from JSON configuration");
             } else {
                 log("ERROR: Failed to create context menu from JSON configuration");
             }
@@ -3277,7 +3251,6 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
         return;
     }
     
-    log("Setting application menu from JSON");
     
     MainThreadDispatcher::dispatch_sync([=]() {
         try {
@@ -3304,7 +3277,6 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
             g_applicationMenu = createApplicationMenuFromConfig(menuConfig, g_appMenuTarget.get());
             
             if (g_applicationMenu) {
-                log("Application menu created successfully from JSON configuration");
                 
                 // Find the main application window to set the menu
                 HWND mainWindow = GetActiveWindow();
@@ -3314,7 +3286,6 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
                 
                 if (mainWindow) {
                     if (SetMenu(mainWindow, g_applicationMenu)) {
-                        log("Application menu set on main window successfully");
                         DrawMenuBar(mainWindow);
                         
                         char successMsg[256];
@@ -3423,7 +3394,6 @@ ELECTROBUN_EXPORT void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
 ELECTROBUN_EXPORT void setJSUtils(GetMimeType getMimeType, GetHTMLForWebviewSync getHTMLForWebviewSync) {
     g_getMimeType = getMimeType;
     g_getHTMLForWebviewSync = getHTMLForWebviewSync;
-    log("JS utility callbacks stored successfully");
 }
 
 // Adding a few Windows-specific functions for interop if needed
@@ -3453,7 +3423,6 @@ ELECTROBUN_EXPORT uint32_t getNSWindowStyleMask(
 
 // New function for handling views:// scheme requests
 void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
-    log("Setting up WebView2 resource request handler for views:// scheme");
     
     // Add web resource request filter for views:// scheme
     EventRegistrationToken resourceToken;
@@ -3502,7 +3471,6 @@ void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
         sprintf_s(errorMsg, "Failed to add resource filter for views://: 0x%lx", hr);
         log(errorMsg);
     } else {
-        log("Added resource filter for views:// scheme successfully");
     }
 }
 
