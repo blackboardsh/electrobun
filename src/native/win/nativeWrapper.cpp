@@ -480,6 +480,9 @@ private:
     }
     
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
+        // Debug: Log ALL messages received to see what's happening
+        log("ContainerView HandleMessage: msg=" + std::to_string(msg) + " (WM_MOUSEMOVE=" + std::to_string(WM_MOUSEMOVE) + ")");
+        
         switch (msg) {
             case WM_SIZE: {
                 // // Resize all full-size webviews when container resizes
@@ -504,17 +507,8 @@ private:
             }
             
             case WM_MOUSEMOVE: {
-                log("WM_Mousemove in container");
-                // Handle mouse movement for determining active webview
                 POINT mousePos = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-                
-                // Log mouse movement to debug what's happening
-                static int containerMoveCount = 0;
-                containerMoveCount++;
-                if (containerMoveCount % 30 == 0) { // Log every 30th move to avoid spam
-                    log("ContainerWndProc WM_MOUSEMOVE #" + std::to_string(containerMoveCount) + 
-                        " at (" + std::to_string(mousePos.x) + "," + std::to_string(mousePos.y) + ")");
-                }
+                log("ContainerWndProc WM_MOUSEMOVE at (" + std::to_string(mousePos.x) + "," + std::to_string(mousePos.y) + ")");
                 
                 UpdateActiveWebviewForMousePosition(mousePos);
                 break;
@@ -941,10 +935,18 @@ void handleApplicationMenuSelection(UINT menuId) {
 
 // Window procedure that will handle events and call your handlers
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    // Debug: Log ALL messages to see if this window gets mouse events
+    log("MainWindow WindowProc: msg=" + std::to_string(msg) + " (WM_MOUSEMOVE=" + std::to_string(WM_MOUSEMOVE) + ")");
+    
     // Get our custom data
     WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
     switch (msg) {
+        case WM_MOUSEMOVE: {
+            POINT mousePos = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            log("MainWindow WM_MOUSEMOVE at (" + std::to_string(mousePos.x) + "," + std::to_string(mousePos.y) + ")");
+            break;
+        }
         case WM_COMMAND:
             // Check if this is an application menu command
             if (HIWORD(wParam) == 0) { // Menu item selected
@@ -2620,17 +2622,11 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
         
         // Log EVERY mouse event we receive for debugging
         if (wParam == WM_MOUSEMOVE) {
-            log("WM_Mousemove in mousehookProc");
-            static int moveCount = 0;
-            moveCount++;
-            if (moveCount % 50 == 0) { // Log every 50th move to avoid spam
-                MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
-                log("MOUSE MOVE #" + std::to_string(moveCount) + " at (" + 
-                    std::to_string(pMouseStruct->pt.x) + "," + std::to_string(pMouseStruct->pt.y) + ")");
-            }
+            MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
+            log("MouseHookProc WM_MOUSEMOVE at (" + 
+                std::to_string(pMouseStruct->pt.x) + "," + std::to_string(pMouseStruct->pt.y) + ")");
         } else {
-            // Log all non-move events
-            log("Mouse event: " + std::to_string(wParam) + " (event #" + std::to_string(eventCount) + ")");
+            log("MouseHookProc event: " + std::to_string(wParam) + " (event #" + std::to_string(eventCount) + ")");
         }
     }
     
