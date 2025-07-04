@@ -24,6 +24,8 @@
 #include <winrt/base.h>
 #include <shobjidl.h>  // For IFileOpenDialog
 #include <shlguid.h>   // For CLSID_FileOpenDialog
+#include <dcomp.h>     // For DirectComposition
+#include <d2d1.h>      // For Direct2D
 
 // Link required Windows libraries
 #pragma comment(lib, "gdi32.lib")
@@ -32,6 +34,8 @@
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "dcomp.lib")
+#pragma comment(lib, "d2d1.lib")
 
 
 using namespace Microsoft::WRL;
@@ -92,6 +96,9 @@ static HWND g_targetWindow = NULL;
 static POINT g_initialCursorPos = {};
 static POINT g_initialWindowPos = {};
 
+// WebView positioning constants
+static const int OFFSCREEN_OFFSET = -20000;
+
 class StatusItemTarget {
 public:
     ZigStatusItemHandler zigHandler;
@@ -109,6 +116,7 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
                              uint32_t webviewId);
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
+void updateActiveWebviewForMousePosition(ContainerView* container, POINT mousePos);
 
 void log(const std::string& message) {
     // Get current time
@@ -434,7 +442,14 @@ public:
     
     // WebView2 specific members
     ComPtr<ICoreWebView2Controller> controller;
+    ComPtr<ICoreWebView2CompositionController> compositionController;
     ComPtr<ICoreWebView2> webview;
+    
+    // Input routing state
+    bool isReceivingInput = true;  // Whether this webview should receive input events
+    
+    // Mask support for hit testing
+    std::string maskJSON;  // JSON string defining mask areas
     
     // Store bridge handlers to keep them alive
     ComPtr<BridgeHandler> bunBridgeHandler;
@@ -442,7 +457,82 @@ public:
     ComPtr<BunBridgeDispatch> bunBridgeDispatch;
     ComPtr<InternalBridgeDispatch> internalBridgeDispatch;
     
+    // Store visual bounds
+    RECT visualBounds = {};
+    
     virtual ~AbstractView() = default;
+    
+    // Check if point is in a masked (cut-out) area based on maskJSON
+    bool isPointInMask(POINT localPoint) {
+        if (maskJSON.empty()) return false;
+        
+        // Simple JSON parsing for mask rectangles
+        // Expected format: [{"x":10,"y":20,"width":100,"height":50},...]
+        size_t pos = 0;
+        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+            try {
+                // Extract x, y, width, height from JSON
+                size_t xStart = maskJSON.find(":", pos) + 1;
+                size_t xEnd = maskJSON.find(",", xStart);
+                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+                
+                size_t yPos = maskJSON.find("\"y\":", pos);
+                size_t yStart = maskJSON.find(":", yPos) + 1;
+                size_t yEnd = maskJSON.find(",", yStart);
+                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+                
+                size_t wPos = maskJSON.find("\"width\":", pos);
+                size_t wStart = maskJSON.find(":", wPos) + 1;
+                size_t wEnd = maskJSON.find(",", wStart);
+                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+                
+                size_t hPos = maskJSON.find("\"height\":", pos);
+                size_t hStart = maskJSON.find(":", hPos) + 1;
+                size_t hEnd = maskJSON.find("}", hStart);
+                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+                
+                // Check if point is within this mask rectangle
+                if (localPoint.x >= x && localPoint.x < x + width &&
+                    localPoint.y >= y && localPoint.y < y + height) {
+                    return true;  // Point is in a masked area
+                }
+                
+                pos = hEnd;
+            } catch (...) {
+                // JSON parsing error, skip this mask
+                pos++;
+            }
+        }
+        
+        return false;  // Point is not in any masked area
+    }
+    
+    // Toggle mirror mode (disable input while keeping visual position)
+    void toggleMirrorMode(bool enable) {
+        if (!controller) return;
+        
+        if (enable && !mirrorModeEnabled) {
+            // Moving to mirror mode - disable input but keep visual position
+            mirrorModeEnabled = true;
+            // Make webview non-interactive but keep it visually rendered
+            // Note: We keep visual position but disable input handling
+        } else if (!enable && mirrorModeEnabled) {
+            // Moving back to interactive mode - enable input
+            mirrorModeEnabled = false;
+            // Make webview interactive and give it focus
+            controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        }
+    }
+    
+    // Update visual bounds (always updates actual bounds since WebView2 doesn't separate layers)
+    void updateVisualBounds(const RECT& newBounds) {
+        visualBounds = newBounds;
+        if (controller) {
+            // WebView2 doesn't separate visual from interactive bounds
+            controller->put_Bounds(newBounds);
+        }
+    }
 };
 
 // ContainerView class definition
@@ -451,6 +541,9 @@ private:
     HWND m_hwnd;
     HWND m_parentWindow;
     std::vector<std::shared_ptr<AbstractView>> m_abstractViews;
+    
+    // Input management
+    AbstractView* m_activeWebView = nullptr;  // Currently active webview for input
     
     // Window procedure for the container
     static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -514,55 +607,55 @@ private:
     }
     
     void UpdateActiveWebviewForMousePosition(POINT mousePos) {
-        bool stillSearching = true;
+        AbstractView* newActiveView = nullptr;
         
         // Iterate through webviews in reverse order (top-most first)
         for (auto it = m_abstractViews.rbegin(); it != m_abstractViews.rend(); ++it) {
             auto& view = *it;
             
             if (view->isMousePassthroughEnabled) {
-                // Set to mirror mode (invisible/non-interactive)
-                SetWebViewMirrorMode(view.get(), true);
+                // Skip passthrough webviews
+                view->toggleMirrorMode(true);
                 continue;
             }
             
-            if (stillSearching) {
+            if (!newActiveView) {
                 // Check if mouse is over this webview's bounds
                 RECT viewBounds;
                 if (view->controller) {
                     view->controller->get_Bounds(&viewBounds);
                     
                     if (PtInRect(&viewBounds, mousePos)) {
-                        // Mouse is over this webview, make it active
-                        SetWebViewMirrorMode(view.get(), false);
-                        stillSearching = false;
+                        // Convert to local coordinates for mask checking
+                        POINT localPoint = {
+                            mousePos.x - viewBounds.left,
+                            mousePos.y - viewBounds.top
+                        };
+                        
+                        // Check if point is in a masked (cut-out) area
+                        if (view->isPointInMask(localPoint)) {
+                            // Point is in masked area, don't make this webview active
+                            // Continue to check lower webviews
+                            view->toggleMirrorMode(true);
+                            continue;
+                        }
+                        
+                        // Point is in unmasked area, make this webview active
+                        newActiveView = view.get();
+                        view->toggleMirrorMode(false);
                         continue;
                     }
                 }
             }
             
-            // Set to mirror mode
-            SetWebViewMirrorMode(view.get(), true);
+            // All other webviews are non-interactive
+            view->toggleMirrorMode(true);
         }
+        
+        // Update active webview for input routing
+        m_activeWebView = newActiveView;
     }
     
-    void SetWebViewMirrorMode(AbstractView* view, bool mirror) {
-
-        if (!view->controller) return;
-        
-        if (view->mirrorModeEnabled == mirror) return;
-        
-        view->mirrorModeEnabled = mirror;
-        
-        if (mirror) {
-            // Move webview offscreen or make it non-interactive
-            view->controller->put_IsVisible(FALSE);
-        } else {
-            // Make webview visible and interactive
-            view->controller->put_IsVisible(TRUE);
-            view->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-        }
-    }
 
     struct EnumChildData {
         RECT targetBounds;
@@ -774,8 +867,10 @@ public:
         // Add to front of vector so it's top-most first
         m_abstractViews.insert(m_abstractViews.begin(), view); 
         BringViewToFront(view->webviewId);
-      
-       
+        
+        // Start new webviews in mirror mode (input disabled)
+        // They will be made interactive when mouse hovers over them
+        view->toggleMirrorMode(true);
     }
     
     void RemoveAbstractViewWithId(uint32_t webviewId) {
@@ -2550,12 +2645,14 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
         
         MainThreadDispatcher::dispatch_sync([=]() {
             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-            HRESULT hr = abstractView->controller->put_Bounds(bounds);
             
-            // Note: masksJson parameter is not implemented for Windows yet
-            // This would require implementing clipping regions similar to macOS
+            // Always update actual bounds since WebView2 doesn't separate visual/interactive layers
+            HRESULT hr = abstractView->controller->put_Bounds(bounds);
+            abstractView->visualBounds = bounds;
+            
+            // Store mask JSON for hit testing
             if (masksJson && strlen(masksJson) > 0) {
-                log("Warning: WebView masking not yet implemented on Windows");
+                abstractView->maskJSON = std::string(masksJson);
             }
         });
     }
