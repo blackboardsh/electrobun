@@ -2072,9 +2072,9 @@ ELECTROBUN_EXPORT bool initCEF() {
         *lastSlash = '\0'; // Remove the executable name
     }
 
-    // Set up CEF paths (resources are in ../cef relative to MacOS directory)
-    std::string cefResourceDir = std::string(exePath) + "\\..\\cef";
-    std::string userDataDir = std::string(exePath) + "\\..\\cef_cache";
+    // Set up CEF paths (resources are in ./cef relative to executable)
+    std::string cefResourceDir = std::string(exePath) + "\\cef";
+    std::string userDataDir = std::string(exePath) + "\\cef_cache";
 
     // Create cache directory if it doesn't exist
     CreateDirectoryA(userDataDir.c_str(), NULL);

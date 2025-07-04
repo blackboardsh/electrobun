@@ -461,9 +461,9 @@ if (commandArg === "init") {
         }
       });
       
-      // Copy CEF resources to cef/ subdirectory
+      // Copy CEF resources to MacOS/cef/ subdirectory (same directory as DLLs)
       const cefResourcesSource = join(electrobunDistPath, 'cef');
-      const cefResourcesDestination = join(appBundleFolderContentsPath, 'cef');
+      const cefResourcesDestination = join(appBundleMacOSPath, 'cef');
       
       if (existsSync(cefResourcesSource)) {
         cpSync(cefResourcesSource, cefResourcesDestination, {
