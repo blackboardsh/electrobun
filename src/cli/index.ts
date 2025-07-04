@@ -949,15 +949,34 @@ if (commandArg === "init") {
     console.log('bun.exe exists:', existsSync(bunExePath));
     console.log('main.js exists:', existsSync(mainJsPath));
     console.log('libNativeWrapper.dll exists:', existsSync(nativeLibPath));
+    console.log('WebView2Loader.dll exists:', existsSync(join(bundleExecPath, 'WebView2Loader.dll')));
+    console.log('libcef.dll exists:', existsSync(join(bundleExecPath, 'libcef.dll')));
+    console.log('CEF folder exists:', existsSync(join(bundleExecPath, 'cef')));
     
     // Use the bundled bun.exe from the app bundle - use relative path since cwd is set
     mainProc =  Bun.spawn(['./bun.exe', './main.js'], {
-      stdio: ['inherit', 'inherit', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'], // Capture output to see error messages
       cwd: bundleExecPath,
       onExit: (proc, exitCode, signalCode, error) => {
         console.log('Bun process exited:', { exitCode, signalCode, error });
       }
-    })
+    });
+    
+    // Capture and log stdout/stderr
+    if (mainProc.stdout) {
+      mainProc.stdout.pipeTo(new WritableStream({
+        write(chunk) {
+          console.log('STDOUT:', new TextDecoder().decode(chunk));
+        }
+      }));
+    }
+    if (mainProc.stderr) {
+      mainProc.stderr.pipeTo(new WritableStream({
+        write(chunk) {
+          console.log('STDERR:', new TextDecoder().decode(chunk));
+        }
+      }));
+    }
   }
 
   
