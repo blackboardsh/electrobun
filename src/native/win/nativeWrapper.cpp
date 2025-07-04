@@ -524,8 +524,14 @@ public:
     
     // Apply visual masking using window regions (creates actual holes)
     void applyVisualMask() {
-        if (!controller || maskJSON.empty()) {
-            log("applyVisualMask: No controller or empty maskJSON");
+        if (!controller) {
+            log("applyVisualMask: No controller available");
+            return;
+        }
+        
+        if (maskJSON.empty()) {
+            log("applyVisualMask: Empty maskJSON, removing existing masks");
+            removeMasks();
             return;
         }
         
@@ -680,8 +686,14 @@ public:
     
     // Inject CSS to create visual masks (more reliable than window regions)
     void injectMaskCSS() {
-        if (!webview || maskJSON.empty()) {
-            log("injectMaskCSS: No webview or empty maskJSON");
+        if (!webview) {
+            log("injectMaskCSS: No webview available");
+            return;
+        }
+        
+        if (maskJSON.empty()) {
+            log("injectMaskCSS: Empty maskJSON, removing existing masks");
+            removeMasks();
             return;
         }
         
@@ -767,6 +779,57 @@ public:
         // Execute the script
         std::wstring wScript(script.begin(), script.end());
         webview->ExecuteScript(wScript.c_str(), nullptr);
+    }
+    
+    // Remove all masks (both visual and window regions)
+    void removeMasks() {
+        if (!webview) {
+            log("removeMasks: No webview available");
+            return;
+        }
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "removeMasks: Removing all masks for webview %u", webviewId);
+        log(logMsg);
+        
+        // Remove CSS masks via JavaScript
+        std::string script = 
+            "(function() { "
+            "  // Remove mask style "
+            "  var oldStyle = document.getElementById('electrobun-masks'); "
+            "  if (oldStyle) { "
+            "    oldStyle.remove(); "
+            "    console.log('Electrobun: Removed mask styles'); "
+            "  } "
+            "  "
+            "  // Remove mask elements "
+            "  var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
+            "  var maskCount = oldMasks.length; "
+            "  oldMasks.forEach(m => m.remove()); "
+            "  "
+            "  if (maskCount > 0) { "
+            "    console.log('Electrobun: Removed ' + maskCount + ' mask elements'); "
+            "  } "
+            "})();";
+        
+        log("removeMasks: Executing mask removal script");
+        std::wstring wScript(script.begin(), script.end());
+        webview->ExecuteScript(wScript.c_str(), nullptr);
+        
+        // Remove window region (restore full window)
+        if (controller) {
+            HWND webviewHwnd = FindWebViewHWND();
+            if (webviewHwnd) {
+                log("removeMasks: Removing window region");
+                int result = SetWindowRgn(webviewHwnd, NULL, TRUE);
+                sprintf_s(logMsg, "removeMasks: SetWindowRgn(NULL) result: %d", result);
+                log(logMsg);
+            } else {
+                log("removeMasks: Could not find WebView HWND to remove region");
+            }
+        }
+        
+        log("removeMasks: Mask removal completed");
     }
     
     // Toggle mirror mode (disable input while keeping visual position)
@@ -2929,8 +2992,12 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
                 abstractView->applyVisualMask();
             } else {
                 char logMsg[256];
-                sprintf_s(logMsg, "resizeWebview: No maskJSON provided for webview %u", abstractView->webviewId);
+                sprintf_s(logMsg, "resizeWebview: Removing masks for webview %u (empty/null maskJSON)", abstractView->webviewId);
                 log(logMsg);
+                
+                // Clear existing masks
+                abstractView->maskJSON.clear();
+                abstractView->removeMasks();
             }
         });
     }
