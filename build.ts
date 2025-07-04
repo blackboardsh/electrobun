@@ -254,11 +254,6 @@ async function vendorCEF() {
             await $`install_name_tool -change "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" "@executable_path/../../../../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" src/native/build/process_helper`;            
         }
     } else if (OS === 'win') {
-        // Force removal of any existing CEF to ensure clean download of new version
-        if (existsSync(join(process.cwd(), 'vendors', 'cef'))) {
-            await $`powershell -command "Remove-Item -Recurse -Force vendors/cef"`;
-        }
-        
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {
             // Download Windows CEF binaries (minimal distribution)
             const tempPath = join(process.cwd(), 'vendors', 'cef_temp.tar.bz2');
