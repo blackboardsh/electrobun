@@ -1744,6 +1744,27 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                         // Store in global
                                         g_webview = view->webview;
 
+                                        // Configure WebView2 settings to try to allow mouse passthrough
+                                        ComPtr<ICoreWebView2Settings> settings;
+                                        HRESULT settingsResult = view->webview->get_Settings(&settings);
+                                        if (SUCCEEDED(settingsResult)) {
+                                            log("Configuring WebView2 settings for mouse passthrough");
+                                            
+                                            // Disable context menus to reduce mouse event consumption
+                                            settings->put_AreDefaultContextMenusEnabled(FALSE);
+                                            
+                                            // Disable drag/drop to reduce mouse event consumption
+                                            settings->put_IsGeneralAutofillEnabled(FALSE);
+                                            
+                                            // Try to minimize WebView2's mouse event handling
+                                            settings->put_IsScriptEnabled(TRUE); // Keep scripts enabled for our bridge
+                                            settings->put_IsWebMessageEnabled(TRUE); // Keep web messaging for our bridge
+                                            
+                                            log("WebView2 settings configured successfully");
+                                        } else {
+                                            log("ERROR: Failed to get WebView2 settings - HRESULT: " + std::to_string(settingsResult));
+                                        }
+
                                         // Set up resource request handler for views:// scheme
                                         setupViewsSchemeHandler(view->webview.Get(), webviewId);
                                         
@@ -1755,6 +1776,20 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                             bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                                         }
                                         controller->put_Bounds(bounds);
+                                        
+                                        // Try advanced controller settings for mouse handling
+                                        ComPtr<ICoreWebView2Controller4> controller4;
+                                        HRESULT controller4Result = controller->QueryInterface(IID_PPV_ARGS(&controller4));
+                                        if (SUCCEEDED(controller4Result)) {
+                                            log("Using advanced ICoreWebView2Controller4 for window management");
+                                            
+                                            // Try to configure window behavior
+                                            controller4->put_AllowExternalDrop(FALSE);
+                                            
+                                            log("Advanced controller settings applied");
+                                        } else {
+                                            log("ICoreWebView2Controller4 not available - using basic controller");
+                                        }
                                         
                                         // Make webview visible
                                         controller->put_IsVisible(TRUE);
