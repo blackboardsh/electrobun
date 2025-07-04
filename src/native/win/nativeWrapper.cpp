@@ -117,7 +117,6 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
                              uint32_t webviewId);
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
-ELECTROBUN_EXPORT void stopWindowMove();
 
 void log(const std::string& message) {
     // Get current time
@@ -968,7 +967,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         // Check for mouse button release
                         if (raw->data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP) {
                             log("Raw input detected mouse button release - stopping window move");
-                            stopWindowMove();
+                            
+                            // Stop window move inline (avoid forward declaration issues)
+                            if (g_isMovingWindow) {
+                                RAWINPUTDEVICE rid;
+                                rid.usUsagePage = 0x01;
+                                rid.usUsage = 0x02;
+                                rid.dwFlags = RIDEV_REMOVE;
+                                rid.hwndTarget = NULL;
+                                
+                                RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
+                                g_isMovingWindow = FALSE;
+                                g_targetWindow = NULL;
+                                log("Stopped window move from raw input handler");
+                            }
                         }
                         
                         // If we have relative movement, apply it to window position
