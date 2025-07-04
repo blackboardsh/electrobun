@@ -462,7 +462,14 @@ if (commandArg === "init") {
         }
       });
       
-      // Copy CEF resources to MacOS/cef/ subdirectory (same directory as DLLs)
+      // Copy icudtl.dat to MacOS root (same folder as libcef.dll) - required for CEF initialization
+      const icuDataSource = join(cefSourcePath, 'icudtl.dat');
+      const icuDataDest = join(appBundleMacOSPath, 'icudtl.dat');
+      if (existsSync(icuDataSource)) {
+        cpSync(icuDataSource, icuDataDest);
+      }
+      
+      // Copy CEF resources to MacOS/cef/ subdirectory for other resources like locales
       const cefResourcesSource = join(electrobunDistPath, 'cef');
       const cefResourcesDestination = join(appBundleMacOSPath, 'cef');
       
