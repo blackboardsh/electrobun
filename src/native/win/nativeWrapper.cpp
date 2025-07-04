@@ -2516,8 +2516,42 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
 }
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
-    // Stub implementation
-    return FALSE;
+    if (!pathString) {
+        log("ERROR: NULL path string passed to moveToTrash");
+        return FALSE;
+    }
+    
+    // Convert to wide string for Windows API
+    int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, pathString, -1, NULL, 0);
+    if (wideCharLen == 0) {
+        log("ERROR: Failed to convert path to wide string");
+        return FALSE;
+    }
+    
+    std::vector<wchar_t> widePath(wideCharLen + 1);  // +1 for double null terminator
+    MultiByteToWideChar(CP_UTF8, 0, pathString, -1, widePath.data(), wideCharLen);
+    widePath[wideCharLen] = L'\0';  // Ensure double null termination
+    
+    // Use SHFileOperation to move to recycle bin
+    SHFILEOPSTRUCT fileOp = {};
+    fileOp.hwnd = NULL;
+    fileOp.wFunc = FO_DELETE;
+    fileOp.pFrom = widePath.data();
+    fileOp.pTo = NULL;
+    fileOp.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT;
+    fileOp.fAnyOperationsAborted = FALSE;
+    fileOp.hNameMappings = NULL;
+    fileOp.lpszProgressTitle = NULL;
+    
+    int result = SHFileOperation(&fileOp);
+    
+    if (result == 0 && !fileOp.fAnyOperationsAborted) {
+        log("Successfully moved to trash: " + std::string(pathString));
+        return TRUE;
+    } else {
+        log("ERROR: Failed to move to trash: " + std::string(pathString) + " (error code: " + std::to_string(result) + ")");
+        return FALSE;
+    }
 }
 
 ELECTROBUN_EXPORT void showItemInFolder(char *path) {
