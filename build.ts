@@ -117,7 +117,8 @@ async function copyToDist() {
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dll') { Copy-Item 'vendors/cef/Release/*.dll' 'dist/cef/' -Force }"`;
         
         // Copy all available resource files to cef/ subdirectory
-        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.pak') { Copy-Item 'vendors/cef/Release/*.pak' 'dist/cef/' -Force }"`;
+        console.log('Checking for CEF .pak files...');
+        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.pak') { Write-Host 'Found .pak files, copying...'; Copy-Item 'vendors/cef/Release/*.pak' 'dist/cef/' -Force } else { Write-Host 'No .pak files found in vendors/cef/Release/' }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dat') { Copy-Item 'vendors/cef/Release/*.dat' 'dist/cef/' -Force }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.bin') { Copy-Item 'vendors/cef/Release/*.bin' 'dist/cef/' -Force }"`;
         
