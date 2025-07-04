@@ -2095,6 +2095,12 @@ ELECTROBUN_EXPORT bool initCEF() {
     CefString(&settings.locales_dir_path) = cefResourceDir + "\\Resources\\locales";
     CefString(&settings.cache_path) = userDataDir;
     
+    // Debug logging to see actual paths
+    log(("CEF executable path: " + std::string(exePath)).c_str());
+    log(("CEF resource dir: " + cefResourceDir).c_str());
+    log(("CEF locales dir: " + cefResourceDir + "\\Resources\\locales").c_str());
+    log(("CEF cache dir: " + userDataDir).c_str());
+    
     // Set log level for debugging
     settings.log_severity = LOGSEVERITY_INFO;
     
