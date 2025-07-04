@@ -953,30 +953,25 @@ if (commandArg === "init") {
     console.log('libcef.dll exists:', existsSync(join(bundleExecPath, 'libcef.dll')));
     console.log('CEF folder exists:', existsSync(join(bundleExecPath, 'cef')));
     
-    // Use the bundled bun.exe from the app bundle - use relative path since cwd is set
+    // Test if bundled bun.exe works at all
+    console.log('Testing bundled bun.exe...');
+    const testProc = Bun.spawn(['./bun.exe', '--version'], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+      cwd: bundleExecPath
+    });
+    
+    // Wait a bit for test to complete
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    console.log('Test bun.exe exit code:', testProc.exitCode);
+    
+    // Try the main process
     mainProc =  Bun.spawn(['./bun.exe', './main.js'], {
-      stdio: ['pipe', 'pipe', 'pipe'], // Capture output to see error messages
+      stdio: ['inherit', 'inherit', 'inherit'],
       cwd: bundleExecPath,
       onExit: (proc, exitCode, signalCode, error) => {
         console.log('Bun process exited:', { exitCode, signalCode, error });
       }
-    });
-    
-    // Capture and log stdout/stderr
-    if (mainProc.stdout) {
-      mainProc.stdout.pipeTo(new WritableStream({
-        write(chunk) {
-          console.log('STDOUT:', new TextDecoder().decode(chunk));
-        }
-      }));
-    }
-    if (mainProc.stderr) {
-      mainProc.stderr.pipeTo(new WritableStream({
-        write(chunk) {
-          console.log('STDERR:', new TextDecoder().decode(chunk));
-        }
-      }));
-    }
+    })
   }
 
   
