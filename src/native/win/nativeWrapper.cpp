@@ -6,6 +6,7 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <ctime>
 #include <functional>
 #include <future>
@@ -21,6 +22,8 @@
 #include <commctrl.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/base.h>
+#include <shobjidl.h>  // For IFileOpenDialog
+#include <shlguid.h>   // For CLSID_FileOpenDialog
 
 // Link required Windows libraries
 #pragma comment(lib, "gdi32.lib")
@@ -2601,8 +2604,169 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                           BOOL canChooseFiles,
                           BOOL canChooseDirectories,
                           BOOL allowsMultipleSelection) {
-    // Stub implementation
-    return nullptr;
+    if (!canChooseFiles && !canChooseDirectories) {
+        log("ERROR: Both canChooseFiles and canChooseDirectories are false");
+        return nullptr;
+    }
+    
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    if (FAILED(hr)) {
+        log("ERROR: Failed to initialize COM");
+        return nullptr;
+    }
+    
+    IFileOpenDialog *pFileDialog = nullptr;
+    hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_ALL, IID_IFileOpenDialog, (void**)&pFileDialog);
+    if (FAILED(hr)) {
+        log("ERROR: Failed to create file dialog");
+        CoUninitialize();
+        return nullptr;
+    }
+    
+    // Set dialog options
+    DWORD dwFlags = 0;
+    pFileDialog->GetOptions(&dwFlags);
+    
+    if (canChooseDirectories) {
+        dwFlags |= FOS_PICKFOLDERS;
+    }
+    if (allowsMultipleSelection) {
+        dwFlags |= FOS_ALLOWMULTISELECT;
+    }
+    if (!canChooseFiles) {
+        dwFlags |= FOS_PICKFOLDERS;
+    }
+    
+    pFileDialog->SetOptions(dwFlags);
+    
+    // Set starting folder
+    if (startingFolder && strlen(startingFolder) > 0) {
+        int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, startingFolder, -1, nullptr, 0);
+        if (wideCharLen > 0) {
+            std::vector<wchar_t> wideStartingFolder(wideCharLen);
+            MultiByteToWideChar(CP_UTF8, 0, startingFolder, -1, wideStartingFolder.data(), wideCharLen);
+            
+            IShellItem *pStartingFolder = nullptr;
+            hr = SHCreateItemFromParsingName(wideStartingFolder.data(), nullptr, IID_IShellItem, (void**)&pStartingFolder);
+            if (SUCCEEDED(hr)) {
+                pFileDialog->SetFolder(pStartingFolder);
+                pStartingFolder->Release();
+            }
+        }
+    }
+    
+    // Set file type filters
+    if (allowedFileTypes && strlen(allowedFileTypes) > 0 && strcmp(allowedFileTypes, "*") != 0) {
+        std::string typesStr(allowedFileTypes);
+        std::vector<std::string> extensions;
+        std::stringstream ss(typesStr);
+        std::string extension;
+        
+        while (std::getline(ss, extension, ',')) {
+            // Trim whitespace
+            extension.erase(0, extension.find_first_not_of(" \t"));
+            extension.erase(extension.find_last_not_of(" \t") + 1);
+            if (!extension.empty()) {
+                extensions.push_back(extension);
+            }
+        }
+        
+        if (!extensions.empty()) {
+            // Create filter specification
+            std::vector<COMDLG_FILTERSPEC> filterSpecs;
+            std::vector<std::wstring> filterNames;
+            std::vector<std::wstring> filterPatterns;
+            
+            for (const auto& ext : extensions) {
+                std::wstring wExt = std::wstring(ext.begin(), ext.end());
+                if (wExt.find(L".") != 0) {
+                    wExt = L"." + wExt;
+                }
+                std::wstring pattern = L"*" + wExt;
+                std::wstring name = wExt.substr(1) + L" files";
+                
+                filterNames.push_back(name);
+                filterPatterns.push_back(pattern);
+                
+                COMDLG_FILTERSPEC spec;
+                spec.pszName = filterNames.back().c_str();
+                spec.pszSpec = filterPatterns.back().c_str();
+                filterSpecs.push_back(spec);
+            }
+            
+            pFileDialog->SetFileTypes(static_cast<UINT>(filterSpecs.size()), filterSpecs.data());
+        }
+    }
+    
+    // Show the dialog
+    hr = pFileDialog->Show(nullptr);
+    std::string result;
+    
+    if (SUCCEEDED(hr)) {
+        if (allowsMultipleSelection) {
+            IShellItemArray *pShellItemArray = nullptr;
+            hr = pFileDialog->GetResults(&pShellItemArray);
+            if (SUCCEEDED(hr)) {
+                DWORD itemCount = 0;
+                pShellItemArray->GetCount(&itemCount);
+                
+                std::vector<std::string> paths;
+                for (DWORD i = 0; i < itemCount; i++) {
+                    IShellItem *pShellItem = nullptr;
+                    hr = pShellItemArray->GetItemAt(i, &pShellItem);
+                    if (SUCCEEDED(hr)) {
+                        PWSTR pszPath = nullptr;
+                        hr = pShellItem->GetDisplayName(SIGDN_FILESYSPATH, &pszPath);
+                        if (SUCCEEDED(hr)) {
+                            int utf8Len = WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, nullptr, 0, nullptr, nullptr);
+                            if (utf8Len > 0) {
+                                std::vector<char> utf8Path(utf8Len);
+                                WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, utf8Path.data(), utf8Len, nullptr, nullptr);
+                                paths.push_back(std::string(utf8Path.data()));
+                            }
+                            CoTaskMemFree(pszPath);
+                        }
+                        pShellItem->Release();
+                    }
+                }
+                pShellItemArray->Release();
+                
+                // Join paths with comma
+                for (size_t i = 0; i < paths.size(); i++) {
+                    if (i > 0) result += ",";
+                    result += paths[i];
+                }
+            }
+        } else {
+            IShellItem *pShellItem = nullptr;
+            hr = pFileDialog->GetResult(&pShellItem);
+            if (SUCCEEDED(hr)) {
+                PWSTR pszPath = nullptr;
+                hr = pShellItem->GetDisplayName(SIGDN_FILESYSPATH, &pszPath);
+                if (SUCCEEDED(hr)) {
+                    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, nullptr, 0, nullptr, nullptr);
+                    if (utf8Len > 0) {
+                        std::vector<char> utf8Path(utf8Len);
+                        WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, utf8Path.data(), utf8Len, nullptr, nullptr);
+                        result = std::string(utf8Path.data());
+                    }
+                    CoTaskMemFree(pszPath);
+                }
+                pShellItem->Release();
+            }
+        }
+    }
+    
+    pFileDialog->Release();
+    CoUninitialize();
+    
+    if (result.empty()) {
+        log("File dialog cancelled or no selection made");
+        return nullptr;
+    }
+    
+    log("File dialog selection: " + result);
+    return strdup(result.c_str());
 }
 
 
