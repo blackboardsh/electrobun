@@ -190,7 +190,7 @@ async function vendorBun() {
     const extractDir = join("vendors", "bun");
     
     // Download zip file
-    await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.2.12/${bunUrlSegment}`;
+    await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.2.2/${bunUrlSegment}`;
     
     // Extract zip file
     // await $`unzip -o ${tempZipPath} -d ${join("vendors", "bun")}`;
