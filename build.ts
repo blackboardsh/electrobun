@@ -229,13 +229,13 @@ async function vendorZig() {
 }
 
 async function vendorCEF() {
-    // Use a more stable CEF version
-    const CEF_VERSION = `125.0.22+g4b2c969`;
-    const CHROMIUM_VERSION = `125.0.6422.142`;
+    // Use current CEF version
+    const CEF_VERSION = `138.0.17+gac9b751`;
+    const CHROMIUM_VERSION = `138.0.7204.97`;
     
     if (OS === 'macos') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
-            await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_macosarm64_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;                                                                                                                                        
+            await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}%2Bchromium-${CHROMIUM_VERSION}_macosarm64_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;                                                                                                                                        
         }
         
         // Build process_helper binary
@@ -258,14 +258,27 @@ async function vendorCEF() {
         }
         
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {
-            // Download Windows CEF binaries (standard distribution with full source)
+            // Download Windows CEF binaries (minimal distribution)
             const tempPath = join(process.cwd(), 'vendors', 'cef_temp.tar.bz2');
             // Create vendors directory if needed
             await $`powershell -command "if (-not (Test-Path vendors)) { New-Item -ItemType Directory -Path vendors | Out-Null }"`;
             
-            // Download CEF
+            // Download CEF - using URL encoding for the + character
             console.log('Downloading CEF binaries...');
-            await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_windows64.tar.bz2" -o "${tempPath}"`;
+            await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}%2Bchromium-${CHROMIUM_VERSION}_windows64_minimal.tar.bz2" -o "${tempPath}"`;
+            
+            // Verify download completed
+            if (!existsSync(tempPath)) {
+                throw new Error('Download failed - file not found');
+            }
+            
+            const { statSync } = await import('fs');
+            const stats = statSync(tempPath);
+            console.log(`Downloaded file size: ${stats.size} bytes`);
+            
+            if (stats.size < 1000000) { // Less than 1MB indicates failed download
+                throw new Error(`Download failed - file too small: ${stats.size} bytes`);
+            }
             
             // Extract using PowerShell
             console.log('Extracting CEF...');
