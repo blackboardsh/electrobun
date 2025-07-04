@@ -2604,69 +2604,21 @@ VOID CALLBACK DragTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime
 // Mouse hook procedure for custom window dragging
 LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
-        // Debug: Log ANY mouse events received when we're supposed to be moving
-        if (g_isMovingWindow && g_targetWindow) {
-            static DWORD lastLogTime = 0;
-            DWORD currentTime = GetTickCount();
-            
-            // Log hook activity every 500ms to verify it's working
-            if (currentTime - lastLogTime > 500) {
-                log("Mouse hook active - received event: " + std::to_string(wParam));
-                lastLogTime = currentTime;
+        static int eventCount = 0;
+        eventCount++;
+        
+        // Log EVERY mouse event we receive for debugging
+        if (wParam == WM_MOUSEMOVE) {
+            static int moveCount = 0;
+            moveCount++;
+            if (moveCount % 50 == 0) { // Log every 50th move to avoid spam
+                MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
+                log("MOUSE MOVE #" + std::to_string(moveCount) + " at (" + 
+                    std::to_string(pMouseStruct->pt.x) + "," + std::to_string(pMouseStruct->pt.y) + ")");
             }
-            
-            if (wParam == WM_MOUSEMOVE) {
-                // Add timing protection - ignore events within first 100ms to prevent immediate stop
-                if (currentTime - g_moveStartTime >= 100) {
-                    MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
-                    POINT currentCursorPos = pMouseStruct->pt;
-                    
-                    // Lazy offset calculation (like macOS) - calculate only on first mouse move
-                    if (!g_offsetCalculated) {
-                        RECT windowRect;
-                        if (GetWindowRect(g_targetWindow, &windowRect)) {
-                            g_initialWindowPos.x = windowRect.left;
-                            g_initialWindowPos.y = windowRect.top;
-                            g_offsetCalculated = TRUE;
-                            log("Calculated window offset for dragging - window at (" + 
-                                std::to_string(g_initialWindowPos.x) + "," + std::to_string(g_initialWindowPos.y) + 
-                                ") mouse at (" + std::to_string(g_initialCursorPos.x) + "," + std::to_string(g_initialCursorPos.y) + ")");
-                        }
-                    }
-                    
-                    if (g_offsetCalculated) {
-                        // Calculate new window position based on mouse movement
-                        int deltaX = currentCursorPos.x - g_initialCursorPos.x;
-                        int deltaY = currentCursorPos.y - g_initialCursorPos.y;
-                        
-                        int newX = g_initialWindowPos.x + deltaX;
-                        int newY = g_initialWindowPos.y + deltaY;
-                        
-                        // Debug: Log the movement calculation
-                        static int moveCount = 0;
-                        moveCount++;
-                        if (moveCount % 10 == 0) { // Log every 10th move to avoid spam
-                            log("Moving window: delta(" + std::to_string(deltaX) + "," + std::to_string(deltaY) + 
-                                ") new pos(" + std::to_string(newX) + "," + std::to_string(newY) + ")");
-                        }
-                        
-                        // Move the window to the new position
-                        BOOL moveResult = SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
-                                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                        
-                        if (!moveResult && moveCount % 10 == 0) {
-                            log("ERROR: SetWindowPos failed with error: " + std::to_string(GetLastError()));
-                        }
-                    }
-                }
-            }
-            else if (wParam == WM_LBUTTONUP) {
-                log("Mouse button released - stopping window move");
-                stopWindowMoveInternal();
-            }
-            else if (wParam == WM_LBUTTONDOWN) {
-                log("Mouse button pressed during window move");
-            }
+        } else {
+            // Log all non-move events
+            log("Mouse event: " + std::to_string(wParam) + " (event #" + std::to_string(eventCount) + ")");
         }
     }
     
@@ -2674,9 +2626,16 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 ELECTROBUN_EXPORT void stopWindowMove() {
-    // For the simple WM_NCLBUTTONDOWN approach, Windows handles everything
-    // We just need to send a mouse up message if needed
     log("Stop window move called");
+    
+    if (g_mouseHook) {
+        UnhookWindowsHookEx(g_mouseHook);
+        g_mouseHook = NULL;
+        log("Mouse hook removed");
+    }
+    
+    g_isMovingWindow = FALSE;
+    g_targetWindow = NULL;
 }
 
 ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
@@ -2690,15 +2649,27 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     
     log("Starting window move for handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)));
     
-    // The simple Windows way: simulate a title bar drag
-    // This tells Windows that the user is dragging the title bar
-    POINT pt;
-    GetCursorPos(&pt);
+    // Step 1: Just try to install a basic mouse hook to log mouse movement
+    if (g_mouseHook) {
+        UnhookWindowsHookEx(g_mouseHook);
+        g_mouseHook = NULL;
+    }
     
-    // Send the message that initiates window dragging
-    SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(pt.x, pt.y));
+    g_targetWindow = hwnd;
+    g_isMovingWindow = TRUE;
     
-    log("Sent WM_NCLBUTTONDOWN message to start window drag");
+    // Install mouse hook just to log mouse movement
+    g_mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseHookProc, GetModuleHandle(NULL), 0);
+    
+    if (!g_mouseHook) {
+        DWORD error = GetLastError();
+        log("ERROR: Failed to install mouse hook - error: " + std::to_string(error));
+        g_isMovingWindow = FALSE;
+        g_targetWindow = NULL;
+        return;
+    }
+    
+    log("Mouse hook installed successfully - handle: " + std::to_string(reinterpret_cast<INT_PTR>(g_mouseHook)));
 }
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
