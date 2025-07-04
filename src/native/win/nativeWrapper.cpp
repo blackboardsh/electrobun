@@ -95,8 +95,10 @@ static HHOOK g_mouseHook = NULL;
 static BOOL g_offsetCalculated = FALSE;
 static DWORD g_moveStartTime = 0;
 
-// Alternative approach using SetCapture
+// Alternative approach using SetCapture and timer polling
 static BOOL g_useAlternativeMethod = TRUE;
+static UINT_PTR g_dragTimer = 0;
+static const UINT WM_DRAG_TIMER = WM_USER + 2000;
 
 class StatusItemTarget {
 public:
@@ -2522,15 +2524,85 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
         });
     }
 
+// Timer callback for window dragging (alternative method)
+VOID CALLBACK DragTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
+    if (g_isMovingWindow && g_targetWindow) {
+        POINT currentCursorPos;
+        if (GetCursorPos(&currentCursorPos)) {
+            // Check if mouse button is still pressed
+            if (!(GetKeyState(VK_LBUTTON) & 0x8000)) {
+                log("Mouse button released (timer) - stopping window move");
+                stopWindowMoveInternal();
+                return;
+            }
+            
+            DWORD currentTime = GetTickCount();
+            if (currentTime - g_moveStartTime >= 100) { // Same 100ms protection
+                // Lazy offset calculation
+                if (!g_offsetCalculated) {
+                    RECT windowRect;
+                    if (GetWindowRect(g_targetWindow, &windowRect)) {
+                        g_initialWindowPos.x = windowRect.left;
+                        g_initialWindowPos.y = windowRect.top;
+                        g_offsetCalculated = TRUE;
+                        log("Calculated window offset for dragging (timer) - window at (" + 
+                            std::to_string(g_initialWindowPos.x) + "," + std::to_string(g_initialWindowPos.y) + 
+                            ") mouse at (" + std::to_string(g_initialCursorPos.x) + "," + std::to_string(g_initialCursorPos.y) + ")");
+                    }
+                }
+                
+                if (g_offsetCalculated) {
+                    // Calculate new window position
+                    int deltaX = currentCursorPos.x - g_initialCursorPos.x;
+                    int deltaY = currentCursorPos.y - g_initialCursorPos.y;
+                    
+                    int newX = g_initialWindowPos.x + deltaX;
+                    int newY = g_initialWindowPos.y + deltaY;
+                    
+                    // Move the window
+                    BOOL moveResult = SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
+                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    
+                    static int moveCount = 0;
+                    moveCount++;
+                    if (moveCount % 5 == 0) { // Log every 5th move
+                        log("Moving window (timer): delta(" + std::to_string(deltaX) + "," + std::to_string(deltaY) + 
+                            ") new pos(" + std::to_string(newX) + "," + std::to_string(newY) + ") result: " + std::to_string(moveResult));
+                    }
+                    
+                    if (!moveResult && moveCount % 5 == 0) {
+                        log("ERROR: SetWindowPos failed with error: " + std::to_string(GetLastError()));
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Internal function to stop window movement (without export linkage)
 void stopWindowMoveInternal() {
     g_isMovingWindow = FALSE;
     g_targetWindow = NULL;
     
-    // Remove the mouse hook
-    if (g_mouseHook) {
-        UnhookWindowsHookEx(g_mouseHook);
-        g_mouseHook = NULL;
+    if (g_useAlternativeMethod) {
+        // Stop the timer
+        if (g_dragTimer) {
+            KillTimer(NULL, g_dragTimer);
+            g_dragTimer = 0;
+            log("Killed drag timer");
+        }
+        
+        // Release mouse capture
+        if (GetCapture()) {
+            ReleaseCapture();
+            log("Released mouse capture");
+        }
+    } else {
+        // Remove the mouse hook (old method)
+        if (g_mouseHook) {
+            UnhookWindowsHookEx(g_mouseHook);
+            g_mouseHook = NULL;
+        }
     }
     
     // Clear state
@@ -2644,19 +2716,35 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     g_offsetCalculated = FALSE;
     g_moveStartTime = GetTickCount();
     
-    // Install low-level mouse hook to capture mouse events globally
-    g_mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseHookProc, GetModuleHandle(NULL), 0);
-    
-    if (!g_mouseHook) {
-        DWORD error = GetLastError();
-        log("ERROR: Failed to install mouse hook in startWindowMove - error: " + std::to_string(error));
-        g_isMovingWindow = FALSE;
-        g_targetWindow = NULL;
-        return;
+    if (g_useAlternativeMethod) {
+        // Use timer-based polling approach
+        g_dragTimer = SetTimer(NULL, 0, 16, DragTimerProc); // ~60 FPS
+        
+        if (!g_dragTimer) {
+            DWORD error = GetLastError();
+            log("ERROR: Failed to create drag timer - error: " + std::to_string(error));
+            g_isMovingWindow = FALSE;
+            g_targetWindow = NULL;
+            return;
+        }
+        
+        log("Started custom window move (timer method) for window handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)) + 
+            " at time: " + std::to_string(g_moveStartTime) + " timer: " + std::to_string(g_dragTimer));
+    } else {
+        // Install low-level mouse hook to capture mouse events globally
+        g_mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseHookProc, GetModuleHandle(NULL), 0);
+        
+        if (!g_mouseHook) {
+            DWORD error = GetLastError();
+            log("ERROR: Failed to install mouse hook in startWindowMove - error: " + std::to_string(error));
+            g_isMovingWindow = FALSE;
+            g_targetWindow = NULL;
+            return;
+        }
+        
+        log("Started custom window move (hook method) for window handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)) + 
+            " at time: " + std::to_string(g_moveStartTime) + " hook: " + std::to_string(reinterpret_cast<INT_PTR>(g_mouseHook)));
     }
-    
-    log("Started custom window move for window handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)) + 
-        " at time: " + std::to_string(g_moveStartTime) + " hook: " + std::to_string(reinterpret_cast<INT_PTR>(g_mouseHook)));
 }
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
