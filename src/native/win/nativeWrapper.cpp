@@ -983,31 +983,25 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                             }
                         }
                         
-                        // Handle movement - check if we're getting absolute or relative coordinates
+                        // Since we're getting absolute coordinates, use cursor position tracking instead
                         if (raw->data.mouse.lLastX != 0 || raw->data.mouse.lLastY != 0) {
-                            // Get current cursor position for comparison
+                            // Get current cursor position
                             POINT currentCursor;
                             GetCursorPos(&currentCursor);
                             
-                            // Check if raw input values look like absolute coordinates (too large for deltas)
-                            if (abs(raw->data.mouse.lLastX) > 10000 || abs(raw->data.mouse.lLastY) > 10000) {
-                                log("Raw input appears to be absolute coordinates, ignoring");
-                                // Don't use these values - they're absolute coordinates, not deltas
-                            } else {
-                                // Use raw input deltas directly (relative movement)
-                                RECT currentRect;
-                                if (GetWindowRect(g_targetWindow, &currentRect)) {
-                                    int newX = currentRect.left + raw->data.mouse.lLastX;
-                                    int newY = currentRect.top + raw->data.mouse.lLastY;
-                                    
-                                    SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
-                                               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                                    
-                                    log("Moved window by raw input delta (" + std::to_string(raw->data.mouse.lLastX) + 
-                                        "," + std::to_string(raw->data.mouse.lLastY) + ") to (" + 
-                                        std::to_string(newX) + "," + std::to_string(newY) + ")");
-                                }
-                            }
+                            // Calculate delta from initial cursor position when drag started
+                            int deltaX = currentCursor.x - g_initialCursorPos.x;
+                            int deltaY = currentCursor.y - g_initialCursorPos.y;
+                            
+                            // Calculate new window position based on initial window position + cursor delta
+                            int newX = g_initialWindowPos.x + deltaX;
+                            int newY = g_initialWindowPos.y + deltaY;
+                            
+                            SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
+                                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                            
+                            log("Moved window using cursor tracking: delta(" + std::to_string(deltaX) + 
+                                "," + std::to_string(deltaY) + ") to (" + std::to_string(newX) + "," + std::to_string(newY) + ")");
                         }
                     }
                 }
