@@ -272,30 +272,62 @@ async function vendorCEF() {
             await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef_temp' -Force | Out-Null"`;
             await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef' -Force | Out-Null"`;
             
-            // Try extraction - Windows tar might not support --strip-components properly
+            // Try extraction
             try {
+                console.log('Attempting tar extraction...');
                 await $`powershell -command "tar -xjf '${tempPath}' -C 'vendors/cef_temp'"`;
                 
-                // Find the extracted directory (will be something like cef_binary_125.0.22+g4b2c969+chromium-125.0.6422.142_windows64)
+                // Check what was extracted
                 const tempDir = 'vendors/cef_temp';
-                const extractedDirs = readdirSync(tempDir);
-                if (extractedDirs.length > 0) {
-                    const extractedPath = join(tempDir, extractedDirs[0]);
-                    await $`powershell -command "Move-Item '${extractedPath}/*' 'vendors/cef' -Force"`;
-                    await $`powershell -command "Remove-Item 'vendors/cef_temp' -Recurse -Force"`;
-                } else {
-                    throw new Error('No extracted directory found');
+                console.log('Checking extracted contents...');
+                
+                if (!existsSync(tempDir)) {
+                    throw new Error('Temp extraction directory not created');
                 }
-            } catch (error) {
-                console.log('Tar extraction failed, trying 7-zip...');
-                // Fallback: try using 7-zip if available
-                await $`powershell -command "7z x '${tempPath}' -o'vendors/cef_temp' -y"`;
-                const tempDir = 'vendors/cef_temp';
+                
                 const extractedDirs = readdirSync(tempDir);
-                if (extractedDirs.length > 0) {
-                    const extractedPath = join(tempDir, extractedDirs[0]);
-                    await $`powershell -command "Move-Item '${extractedPath}/*' 'vendors/cef' -Force"`;
+                console.log('Extracted directories:', extractedDirs);
+                
+                if (extractedDirs.length === 0) {
+                    throw new Error('No files extracted');
+                }
+                
+                // Move the contents from the first (and likely only) directory
+                const extractedPath = join(tempDir, extractedDirs[0]);
+                console.log('Moving files from:', extractedPath);
+                
+                if (existsSync(extractedPath)) {
+                    // Use robocopy for reliable directory moving on Windows
+                    await $`robocopy "${extractedPath}" "vendors/cef" /E /MOVE /NP /NFL /NDL /NJH /NJS`;
+                } else {
+                    // If it's not a directory, the files might be directly in cef_temp
+                    await $`robocopy "vendors/cef_temp" "vendors/cef" /E /MOVE /NP /NFL /NDL /NJH /NJS`;
+                }
+                
+                // Clean up temp directory
+                if (existsSync('vendors/cef_temp')) {
                     await $`powershell -command "Remove-Item 'vendors/cef_temp' -Recurse -Force"`;
+                }
+                
+            } catch (error) {
+                console.log('Extraction failed:', error);
+                console.log('Attempting manual PowerShell extraction...');
+                
+                try {
+                    // Manual PowerShell extraction as fallback
+                    await $`powershell -command "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('${tempPath}', 'vendors/cef_temp')"`;
+                    
+                    const tempDir = 'vendors/cef_temp';
+                    const extractedDirs = readdirSync(tempDir);
+                    
+                    if (extractedDirs.length > 0) {
+                        const extractedPath = join(tempDir, extractedDirs[0]);
+                        await $`robocopy "${extractedPath}" "vendors/cef" /E /MOVE /NP /NFL /NDL /NJH /NJS`;
+                        await $`powershell -command "Remove-Item 'vendors/cef_temp' -Recurse -Force"`;
+                    }
+                } catch (fallbackError) {
+                    console.log('All extraction methods failed:', fallbackError);
+                    throw new Error('CEF extraction completely failed');
                 }
             }
             
