@@ -260,15 +260,21 @@ async function vendorCEF() {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {
             // Download Windows CEF binaries (standard distribution with full source)
             const tempPath = join(process.cwd(), 'vendors', 'cef_temp.tar.bz2');
-            await $`powershell -command "if (!(Test-Path vendors)) { New-Item -ItemType Directory -Path vendors }"`;
-            await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_windows64.tar.bz2" -o ${tempPath}`;
+            // Create vendors directory if needed
+            await $`powershell -command "if (-not (Test-Path vendors)) { New-Item -ItemType Directory -Path vendors | Out-Null }"`;
             
-            // Extract using PowerShell (Windows compatible)
-            await $`powershell -command "New-Item -ItemType Directory -Path vendors/cef_temp -Force"`;
-            await $`powershell -command "tar -xjf ${tempPath} --strip-components=1 -C vendors/cef_temp"`;
-            await $`powershell -command "Move-Item vendors/cef_temp vendors/cef"`;
+            // Download CEF
+            console.log('Downloading CEF binaries...');
+            await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_windows64.tar.bz2" -o "${tempPath}"`;
             
-            await $`powershell -command "Remove-Item ${tempPath} -Force"`;
+            // Extract using PowerShell
+            console.log('Extracting CEF...');
+            await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef_temp' -Force | Out-Null"`;
+            await $`powershell -command "tar -xjf '${tempPath}' --strip-components=1 -C 'vendors/cef_temp'"`;
+            await $`powershell -command "Move-Item 'vendors/cef_temp' 'vendors/cef' -Force"`;
+            
+            // Clean up
+            await $`powershell -command "Remove-Item '${tempPath}' -Force"`;
         }
         
         // Build CEF wrapper library for Windows
