@@ -468,11 +468,6 @@ public:
             return false;
         }
         
-        char logMsg[512];
-        sprintf_s(logMsg, "isPointInMask: Checking point (%d,%d) against maskJSON: %s", 
-                 localPoint.x, localPoint.y, maskJSON.c_str());
-        log(logMsg);
-        
         // Simple JSON parsing for mask rectangles
         // Expected format: [{"x":10,"y":20,"width":100,"height":50},...]
         size_t pos = 0;
@@ -499,16 +494,9 @@ public:
                 size_t hEnd = maskJSON.find("}", hStart);
                 int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
                 
-                sprintf_s(logMsg, "isPointInMask: Checking mask rect x=%d,y=%d,w=%d,h=%d against point (%d,%d)", 
-                         x, y, width, height, localPoint.x, localPoint.y);
-                log(logMsg);
-                
                 // Check if point is within this mask rectangle
                 if (localPoint.x >= x && localPoint.x < x + width &&
                     localPoint.y >= y && localPoint.y < y + height) {
-                    sprintf_s(logMsg, "isPointInMask: Point (%d,%d) IS IN mask rect (%d,%d,%d,%d)", 
-                             localPoint.x, localPoint.y, x, y, width, height);
-                    log(logMsg);
                     return true;  // Point is in a masked area
                 }
                 
@@ -525,28 +513,19 @@ public:
     // Apply visual masking using window regions (creates actual holes)
     void applyVisualMask() {
         if (!controller) {
-            log("applyVisualMask: No controller available");
             return;
         }
         
         if (maskJSON.empty()) {
-            log("applyVisualMask: Empty maskJSON, removing existing masks");
             removeMasks();
             return;
         }
-        
-        char logMsg[512];
-        sprintf_s(logMsg, "applyVisualMask: Processing maskJSON for webview %u: %s", webviewId, maskJSON.c_str());
-        log(logMsg);
         
         // Get the webview's bounds
         RECT bounds;
         controller->get_Bounds(&bounds);
         int width = bounds.right - bounds.left;
         int height = bounds.bottom - bounds.top;
-        
-        sprintf_s(logMsg, "applyVisualMask: WebView bounds: %d,%d %dx%d", bounds.left, bounds.top, width, height);
-        log(logMsg);
         
         // Create base region covering entire webview
         HRGN baseRegion = CreateRectRgn(0, 0, width, height);
@@ -582,20 +561,12 @@ public:
                 size_t hEnd = maskJSON.find("}", hStart);
                 int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
                 
-                sprintf_s(logMsg, "applyVisualMask: Found mask %d: x=%d, y=%d, w=%d, h=%d", maskCount, x, y, width, height);
-                log(logMsg);
-                
                 // Create mask region and subtract from base
                 HRGN maskRegion = CreateRectRgn(x, y, x + width, y + height);
                 if (maskRegion) {
-                    int result = CombineRgn(baseRegion, baseRegion, maskRegion, RGN_DIFF);
-                    sprintf_s(logMsg, "applyVisualMask: CombineRgn result: %d", result);
-                    log(logMsg);
-                    
+                    CombineRgn(baseRegion, baseRegion, maskRegion, RGN_DIFF);
                     DeleteObject(maskRegion);
                     maskCount++;
-                } else {
-                    log("applyVisualMask: Failed to create mask region");
                 }
                 
                 pos = hEnd;
@@ -606,22 +577,12 @@ public:
             }
         }
         
-        sprintf_s(logMsg, "applyVisualMask: Processed %d mask regions", maskCount);
-        log(logMsg);
-        
         // Try window region approach first
         HWND webviewHwnd = FindWebViewHWND();
         if (webviewHwnd) {
-            sprintf_s(logMsg, "applyVisualMask: Found WebView HWND: %p, applying region", webviewHwnd);
-            log(logMsg);
-            
-            int result = SetWindowRgn(webviewHwnd, baseRegion, TRUE);
-            sprintf_s(logMsg, "applyVisualMask: SetWindowRgn result: %d", result);
-            log(logMsg);
-            
+            SetWindowRgn(webviewHwnd, baseRegion, TRUE);
             // Note: baseRegion is now owned by the window, don't delete it
         } else {
-            log("applyVisualMask: Could not find WebView HWND");
             DeleteObject(baseRegion);
         }
         
@@ -676,10 +637,6 @@ public:
             return TRUE; // Continue enumeration
         }, (LPARAM)&findData);
         
-        char logMsg[256];
-        sprintf_s(logMsg, "FindWebViewHWND: Found HWND: %p for bounds (%d,%d,%d,%d)", 
-                 findData.foundHwnd, ourBounds.left, ourBounds.top, ourBounds.right, ourBounds.bottom);
-        log(logMsg);
         
         return findData.foundHwnd;
     }
@@ -687,17 +644,13 @@ public:
     // Inject CSS to create visual masks (more reliable than window regions)
     void injectMaskCSS() {
         if (!webview) {
-            log("injectMaskCSS: No webview available");
             return;
         }
         
         if (maskJSON.empty()) {
-            log("injectMaskCSS: Empty maskJSON, removing existing masks");
             removeMasks();
             return;
         }
-        
-        log("injectMaskCSS: Creating CSS-based visual masks");
         
         // Build CSS for mask overlays
         std::string css = "<style id='electrobun-masks'>";
@@ -772,9 +725,6 @@ public:
             "  console.log('Electrobun: Applied " + std::to_string(maskIndex) + " visual masks'); "
             "})();";
         
-        char logMsg[256];
-        sprintf_s(logMsg, "injectMaskCSS: Injecting script with %d masks", maskIndex);
-        log(logMsg);
         
         // Execute the script
         std::wstring wScript(script.begin(), script.end());
@@ -784,13 +734,9 @@ public:
     // Remove all masks (both visual and window regions)
     void removeMasks() {
         if (!webview) {
-            log("removeMasks: No webview available");
             return;
         }
         
-        char logMsg[256];
-        sprintf_s(logMsg, "removeMasks: Removing all masks for webview %u", webviewId);
-        log(logMsg);
         
         // Remove CSS masks via JavaScript
         std::string script = 
@@ -812,7 +758,6 @@ public:
             "  } "
             "})();";
         
-        log("removeMasks: Executing mask removal script");
         std::wstring wScript(script.begin(), script.end());
         webview->ExecuteScript(wScript.c_str(), nullptr);
         
@@ -820,16 +765,9 @@ public:
         if (controller) {
             HWND webviewHwnd = FindWebViewHWND();
             if (webviewHwnd) {
-                log("removeMasks: Removing window region");
-                int result = SetWindowRgn(webviewHwnd, NULL, TRUE);
-                sprintf_s(logMsg, "removeMasks: SetWindowRgn(NULL) result: %d", result);
-                log(logMsg);
-            } else {
-                log("removeMasks: Could not find WebView HWND to remove region");
+                SetWindowRgn(webviewHwnd, NULL, TRUE);
             }
         }
-        
-        log("removeMasks: Mask removal completed");
     }
     
     // Toggle mirror mode (disable input while keeping visual position)
@@ -957,13 +895,7 @@ private:
                         };
                         
                         // Check if point is in a masked (cut-out) area
-                        bool inMask = view->isPointInMask(localPoint);
-                        if (inMask) {
-                            char logMsg[256];
-                            sprintf_s(logMsg, "Mouse at (%d,%d) is in mask for webview %u - passing through", 
-                                     localPoint.x, localPoint.y, view->webviewId);
-                            log(logMsg);
-                            
+                        if (view->isPointInMask(localPoint)) {
                             // Point is in masked area, don't make this webview active
                             // Continue to check lower webviews
                             view->toggleMirrorMode(true);
@@ -2982,19 +2914,10 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
             
             // Store mask JSON for hit testing and visual masking
             if (masksJson && strlen(masksJson) > 0) {
-                char logMsg[512];
-                sprintf_s(logMsg, "resizeWebview: Applying maskJSON to webview %u: %s", abstractView->webviewId, masksJson);
-                log(logMsg);
-                
                 abstractView->maskJSON = std::string(masksJson);
-                
                 // Apply visual masking to create actual holes
                 abstractView->applyVisualMask();
             } else {
-                char logMsg[256];
-                sprintf_s(logMsg, "resizeWebview: Removing masks for webview %u (empty/null maskJSON)", abstractView->webviewId);
-                log(logMsg);
-                
                 // Clear existing masks
                 abstractView->maskJSON.clear();
                 abstractView->removeMasks();
