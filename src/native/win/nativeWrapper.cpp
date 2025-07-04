@@ -464,7 +464,14 @@ public:
     
     // Check if point is in a masked (cut-out) area based on maskJSON
     bool isPointInMask(POINT localPoint) {
-        if (maskJSON.empty()) return false;
+        if (maskJSON.empty()) {
+            return false;
+        }
+        
+        char logMsg[512];
+        sprintf_s(logMsg, "isPointInMask: Checking point (%d,%d) against maskJSON: %s", 
+                 localPoint.x, localPoint.y, maskJSON.c_str());
+        log(logMsg);
         
         // Simple JSON parsing for mask rectangles
         // Expected format: [{"x":10,"y":20,"width":100,"height":50},...]
@@ -492,9 +499,16 @@ public:
                 size_t hEnd = maskJSON.find("}", hStart);
                 int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
                 
+                sprintf_s(logMsg, "isPointInMask: Checking mask rect x=%d,y=%d,w=%d,h=%d against point (%d,%d)", 
+                         x, y, width, height, localPoint.x, localPoint.y);
+                log(logMsg);
+                
                 // Check if point is within this mask rectangle
                 if (localPoint.x >= x && localPoint.x < x + width &&
                     localPoint.y >= y && localPoint.y < y + height) {
+                    sprintf_s(logMsg, "isPointInMask: Point (%d,%d) IS IN mask rect (%d,%d,%d,%d)", 
+                             localPoint.x, localPoint.y, x, y, width, height);
+                    log(logMsg);
                     return true;  // Point is in a masked area
                 }
                 
@@ -506,6 +520,159 @@ public:
         }
         
         return false;  // Point is not in any masked area
+    }
+    
+    // Apply visual masking using window regions (creates actual holes)
+    void applyVisualMask() {
+        if (!controller || maskJSON.empty()) {
+            log("applyVisualMask: No controller or empty maskJSON");
+            return;
+        }
+        
+        char logMsg[512];
+        sprintf_s(logMsg, "applyVisualMask: Processing maskJSON for webview %u: %s", webviewId, maskJSON.c_str());
+        log(logMsg);
+        
+        // Get the webview's bounds
+        RECT bounds;
+        controller->get_Bounds(&bounds);
+        int width = bounds.right - bounds.left;
+        int height = bounds.bottom - bounds.top;
+        
+        sprintf_s(logMsg, "applyVisualMask: WebView bounds: %d,%d %dx%d", bounds.left, bounds.top, width, height);
+        log(logMsg);
+        
+        // Create base region covering entire webview
+        HRGN baseRegion = CreateRectRgn(0, 0, width, height);
+        if (!baseRegion) {
+            log("applyVisualMask: Failed to create base region");
+            return;
+        }
+        
+        int maskCount = 0;
+        
+        // Parse maskJSON and subtract mask regions
+        size_t pos = 0;
+        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+            try {
+                // Extract mask rectangle coordinates
+                size_t xStart = maskJSON.find(":", pos) + 1;
+                size_t xEnd = maskJSON.find(",", xStart);
+                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+                
+                size_t yPos = maskJSON.find("\"y\":", pos);
+                size_t yStart = maskJSON.find(":", yPos) + 1;
+                size_t yEnd = maskJSON.find(",", yStart);
+                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+                
+                size_t wPos = maskJSON.find("\"width\":", pos);
+                size_t wStart = maskJSON.find(":", wPos) + 1;
+                size_t wEnd = maskJSON.find(",", wStart);
+                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+                
+                size_t hPos = maskJSON.find("\"height\":", pos);
+                size_t hStart = maskJSON.find(":", hPos) + 1;
+                size_t hEnd = maskJSON.find("}", hStart);
+                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+                
+                sprintf_s(logMsg, "applyVisualMask: Found mask %d: x=%d, y=%d, w=%d, h=%d", maskCount, x, y, width, height);
+                log(logMsg);
+                
+                // Create mask region and subtract from base
+                HRGN maskRegion = CreateRectRgn(x, y, x + width, y + height);
+                if (maskRegion) {
+                    int result = CombineRgn(baseRegion, baseRegion, maskRegion, RGN_DIFF);
+                    sprintf_s(logMsg, "applyVisualMask: CombineRgn result: %d", result);
+                    log(logMsg);
+                    
+                    DeleteObject(maskRegion);
+                    maskCount++;
+                } else {
+                    log("applyVisualMask: Failed to create mask region");
+                }
+                
+                pos = hEnd;
+            } catch (const std::exception& e) {
+                sprintf_s(logMsg, "applyVisualMask: JSON parsing error: %s", e.what());
+                log(logMsg);
+                pos++;
+            }
+        }
+        
+        sprintf_s(logMsg, "applyVisualMask: Processed %d mask regions", maskCount);
+        log(logMsg);
+        
+        // Find WebView2's HWND to apply the region
+        HWND webviewHwnd = FindWebViewHWND();
+        if (webviewHwnd) {
+            sprintf_s(logMsg, "applyVisualMask: Found WebView HWND: %p, applying region", webviewHwnd);
+            log(logMsg);
+            
+            int result = SetWindowRgn(webviewHwnd, baseRegion, TRUE);
+            sprintf_s(logMsg, "applyVisualMask: SetWindowRgn result: %d", result);
+            log(logMsg);
+            
+            // Note: baseRegion is now owned by the window, don't delete it
+        } else {
+            log("applyVisualMask: Could not find WebView HWND");
+            DeleteObject(baseRegion);
+        }
+    }
+    
+    // Find the WebView2's HWND for visual masking
+    HWND FindWebViewHWND() {
+        if (!controller) return NULL;
+        
+        // Get the controller's parent window
+        HWND parentHwnd = NULL;
+        controller->get_ParentWindow(&parentHwnd);
+        if (!parentHwnd) {
+            log("FindWebViewHWND: No parent window");
+            return NULL;
+        }
+        
+        // WebView2 creates child windows - find the one that matches our bounds
+        RECT ourBounds;
+        controller->get_Bounds(&ourBounds);
+        
+        struct FindData {
+            RECT targetBounds;
+            HWND foundHwnd;
+        } findData = { ourBounds, NULL };
+        
+        EnumChildWindows(parentHwnd, [](HWND hwnd, LPARAM lParam) -> BOOL {
+            FindData* data = (FindData*)lParam;
+            
+            RECT childRect;
+            GetWindowRect(hwnd, &childRect);
+            
+            // Convert to parent coordinates
+            POINT topLeft = { childRect.left, childRect.top };
+            POINT bottomRight = { childRect.right, childRect.bottom };
+            ScreenToClient(GetParent(hwnd), &topLeft);
+            ScreenToClient(GetParent(hwnd), &bottomRight);
+            
+            // Check if bounds roughly match (allowing small differences)
+            int deltaX = abs(topLeft.x - data->targetBounds.left);
+            int deltaY = abs(topLeft.y - data->targetBounds.top);
+            int deltaW = abs((bottomRight.x - topLeft.x) - (data->targetBounds.right - data->targetBounds.left));
+            int deltaH = abs((bottomRight.y - topLeft.y) - (data->targetBounds.bottom - data->targetBounds.top));
+            
+            if (deltaX < 5 && deltaY < 5 && deltaW < 5 && deltaH < 5) {
+                data->foundHwnd = hwnd;
+                return FALSE; // Stop enumeration
+            }
+            
+            return TRUE; // Continue enumeration
+        }, (LPARAM)&findData);
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "FindWebViewHWND: Found HWND: %p for bounds (%d,%d,%d,%d)", 
+                 findData.foundHwnd, ourBounds.left, ourBounds.top, ourBounds.right, ourBounds.bottom);
+        log(logMsg);
+        
+        return findData.foundHwnd;
     }
     
     // Toggle mirror mode (disable input while keeping visual position)
@@ -633,7 +800,13 @@ private:
                         };
                         
                         // Check if point is in a masked (cut-out) area
-                        if (view->isPointInMask(localPoint)) {
+                        bool inMask = view->isPointInMask(localPoint);
+                        if (inMask) {
+                            char logMsg[256];
+                            sprintf_s(logMsg, "Mouse at (%d,%d) is in mask for webview %u - passing through", 
+                                     localPoint.x, localPoint.y, view->webviewId);
+                            log(logMsg);
+                            
                             // Point is in masked area, don't make this webview active
                             // Continue to check lower webviews
                             view->toggleMirrorMode(true);
@@ -2650,9 +2823,20 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
             HRESULT hr = abstractView->controller->put_Bounds(bounds);
             abstractView->visualBounds = bounds;
             
-            // Store mask JSON for hit testing
+            // Store mask JSON for hit testing and visual masking
             if (masksJson && strlen(masksJson) > 0) {
+                char logMsg[512];
+                sprintf_s(logMsg, "resizeWebview: Applying maskJSON to webview %u: %s", abstractView->webviewId, masksJson);
+                log(logMsg);
+                
                 abstractView->maskJSON = std::string(masksJson);
+                
+                // Apply visual masking to create actual holes
+                abstractView->applyVisualMask();
+            } else {
+                char logMsg[256];
+                sprintf_s(logMsg, "resizeWebview: No maskJSON provided for webview %u", abstractView->webviewId);
+                log(logMsg);
             }
         });
     }
