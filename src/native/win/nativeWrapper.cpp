@@ -86,6 +86,13 @@ static std::unique_ptr<StatusItemTarget> g_appMenuTarget = nullptr;
 static std::map<UINT, std::string> g_menuItemActions;
 static UINT g_nextMenuId = WM_USER + 1000;  // Start menu IDs from a safe range
 
+// Global state for custom window dragging
+static BOOL g_isMovingWindow = FALSE;
+static HWND g_targetWindow = NULL;
+static POINT g_initialCursorPos = {};
+static POINT g_initialWindowPos = {};
+static HHOOK g_mouseHook = NULL;
+
 class StatusItemTarget {
 public:
     ZigStatusItemHandler zigHandler;
@@ -2510,12 +2517,95 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
         });
     }
 
+// Mouse hook procedure for custom window dragging
+LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode >= 0 && g_isMovingWindow && g_targetWindow) {
+        MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
+        
+        if (wParam == WM_MOUSEMOVE) {
+            // Calculate new window position based on mouse movement
+            POINT currentCursorPos = pMouseStruct->pt;
+            int deltaX = currentCursorPos.x - g_initialCursorPos.x;
+            int deltaY = currentCursorPos.y - g_initialCursorPos.y;
+            
+            int newX = g_initialWindowPos.x + deltaX;
+            int newY = g_initialWindowPos.y + deltaY;
+            
+            // Move the window to the new position
+            SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        else if (wParam == WM_LBUTTONUP) {
+            // Stop window movement on mouse up
+            stopWindowMove();
+        }
+    }
+    
+    return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+}
+
 ELECTROBUN_EXPORT void stopWindowMove() {
-    // Stub implementation
+    g_isMovingWindow = FALSE;
+    g_targetWindow = NULL;
+    
+    // Remove the mouse hook
+    if (g_mouseHook) {
+        UnhookWindowsHookEx(g_mouseHook);
+        g_mouseHook = NULL;
+    }
+    
+    // Clear state
+    g_initialCursorPos = {};
+    g_initialWindowPos = {};
+    
+    log("Stopped custom window move");
 }
 
 ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
-    // Stub implementation
+    // On Windows, NSWindow* is actually HWND
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    
+    if (!IsWindow(hwnd)) {
+        log("ERROR: Invalid window handle in startWindowMove");
+        return;
+    }
+    
+    // Stop any existing window move operation
+    if (g_isMovingWindow) {
+        stopWindowMove();
+    }
+    
+    // Get current cursor position
+    if (!GetCursorPos(&g_initialCursorPos)) {
+        log("ERROR: Failed to get cursor position in startWindowMove");
+        return;
+    }
+    
+    // Get current window position
+    RECT windowRect;
+    if (!GetWindowRect(hwnd, &windowRect)) {
+        log("ERROR: Failed to get window position in startWindowMove");
+        return;
+    }
+    
+    g_initialWindowPos.x = windowRect.left;
+    g_initialWindowPos.y = windowRect.top;
+    
+    // Set up state
+    g_targetWindow = hwnd;
+    g_isMovingWindow = TRUE;
+    
+    // Install low-level mouse hook to capture mouse events globally
+    g_mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseHookProc, GetModuleHandle(NULL), 0);
+    
+    if (!g_mouseHook) {
+        log("ERROR: Failed to install mouse hook in startWindowMove");
+        g_isMovingWindow = FALSE;
+        g_targetWindow = NULL;
+        return;
+    }
+    
+    log("Started custom window move for window handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)));
 }
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
