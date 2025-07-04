@@ -91,14 +91,6 @@ static BOOL g_isMovingWindow = FALSE;
 static HWND g_targetWindow = NULL;
 static POINT g_initialCursorPos = {};
 static POINT g_initialWindowPos = {};
-static HHOOK g_mouseHook = NULL;
-static BOOL g_offsetCalculated = FALSE;
-static DWORD g_moveStartTime = 0;
-
-// Alternative approach using SetCapture and timer polling
-static BOOL g_useAlternativeMethod = TRUE;
-static UINT_PTR g_dragTimer = 0;
-static const UINT WM_DRAG_TIMER = WM_USER + 2000;
 
 class StatusItemTarget {
 public:
@@ -480,9 +472,6 @@ private:
     }
     
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
-        // Debug: Log ALL messages received to see what's happening
-        log("ContainerView HandleMessage: msg=" + std::to_string(msg) + " (WM_MOUSEMOVE=" + std::to_string(WM_MOUSEMOVE) + ")");
-        
         switch (msg) {
             case WM_SIZE: {
                 // // Resize all full-size webviews when container resizes
@@ -508,8 +497,6 @@ private:
             
             case WM_MOUSEMOVE: {
                 POINT mousePos = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-                log("ContainerWndProc WM_MOUSEMOVE at (" + std::to_string(mousePos.x) + "," + std::to_string(mousePos.y) + ")");
-                
                 UpdateActiveWebviewForMousePosition(mousePos);
                 break;
             }
@@ -935,22 +922,12 @@ void handleApplicationMenuSelection(UINT menuId) {
 
 // Window procedure that will handle events and call your handlers
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    // Debug: Log ALL messages to see if this window gets mouse events
-    log("MainWindow WindowProc: msg=" + std::to_string(msg) + " (WM_MOUSEMOVE=" + std::to_string(WM_MOUSEMOVE) + ")");
-    
     // Get our custom data
     WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
     switch (msg) {
-        case WM_MOUSEMOVE: {
-            POINT mousePos = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            log("MainWindow WM_MOUSEMOVE at (" + std::to_string(mousePos.x) + "," + std::to_string(mousePos.y) + ")");
-            break;
-        }
         
         case WM_INPUT: {
-            log("Received WM_INPUT message for raw input");
-            
             if (g_isMovingWindow && g_targetWindow) {
                 UINT dwSize = 0;
                 GetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &dwSize, sizeof(RAWINPUTHEADER));
@@ -960,32 +937,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     RAWINPUT* raw = (RAWINPUT*)lpb;
                     
                     if (raw->header.dwType == RIM_TYPEMOUSE) {
-                        log("Raw mouse input: flags=" + std::to_string(raw->data.mouse.usButtonFlags) + 
-                            " dx=" + std::to_string(raw->data.mouse.lLastX) + 
-                            " dy=" + std::to_string(raw->data.mouse.lLastY));
-                        
                         // Check for mouse button release
                         if (raw->data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP) {
-                            log("Raw input detected mouse button release - stopping window move");
+                            // Stop window move
+                            RAWINPUTDEVICE rid;
+                            rid.usUsagePage = 0x01;
+                            rid.usUsage = 0x02;
+                            rid.dwFlags = RIDEV_REMOVE;
+                            rid.hwndTarget = NULL;
                             
-                            // Stop window move inline (avoid forward declaration issues)
-                            if (g_isMovingWindow) {
-                                RAWINPUTDEVICE rid;
-                                rid.usUsagePage = 0x01;
-                                rid.usUsage = 0x02;
-                                rid.dwFlags = RIDEV_REMOVE;
-                                rid.hwndTarget = NULL;
-                                
-                                RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
-                                g_isMovingWindow = FALSE;
-                                g_targetWindow = NULL;
-                                log("Stopped window move from raw input handler");
-                            }
+                            RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
+                            g_isMovingWindow = FALSE;
+                            g_targetWindow = NULL;
                         }
                         
-                        // Since we're getting absolute coordinates, use cursor position tracking instead
-                        if (raw->data.mouse.lLastX != 0 || raw->data.mouse.lLastY != 0) {
-                            // Get current cursor position
+                        // Handle mouse movement using cursor position tracking
+                        else if (raw->data.mouse.lLastX != 0 || raw->data.mouse.lLastY != 0) {
                             POINT currentCursor;
                             GetCursorPos(&currentCursor);
                             
@@ -993,15 +960,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                             int deltaX = currentCursor.x - g_initialCursorPos.x;
                             int deltaY = currentCursor.y - g_initialCursorPos.y;
                             
-                            // Calculate new window position based on initial window position + cursor delta
+                            // Calculate new window position
                             int newX = g_initialWindowPos.x + deltaX;
                             int newY = g_initialWindowPos.y + deltaY;
                             
                             SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
                                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                            
-                            log("Moved window using cursor tracking: delta(" + std::to_string(deltaX) + 
-                                "," + std::to_string(deltaY) + ") to (" + std::to_string(newX) + "," + std::to_string(newY) + ")");
                         }
                     }
                 }
@@ -2619,105 +2583,10 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
     }
 
 // Internal function to stop window movement (without export linkage)
-void stopWindowMoveInternal() {
-    g_isMovingWindow = FALSE;
-    g_targetWindow = NULL;
-    
-    if (g_useAlternativeMethod) {
-        // Stop the timer
-        if (g_dragTimer) {
-            KillTimer(NULL, g_dragTimer);
-            g_dragTimer = 0;
-            log("Killed drag timer");
-        }
-        
-        // Release mouse capture
-        if (GetCapture()) {
-            ReleaseCapture();
-            log("Released mouse capture");
-        }
-    } else {
-        // Remove the mouse hook (old method)
-        if (g_mouseHook) {
-            UnhookWindowsHookEx(g_mouseHook);
-            g_mouseHook = NULL;
-        }
-    }
-    
-    // Clear state
-    g_initialCursorPos = {};
-    g_initialWindowPos = {};
-    g_offsetCalculated = FALSE;
-    g_moveStartTime = 0;
-    
-    log("Stopped custom window move");
-}
 
-// Timer callback for window dragging (alternative method)
-VOID CALLBACK DragTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
-    static int timerCount = 0;
-    timerCount++;
-    
-    // First, just log that the timer is firing
-    if (timerCount % 30 == 0) { // Log every 30th call (about every 500ms at 60fps)
-        log("Timer firing - count: " + std::to_string(timerCount) + " moving: " + std::to_string(g_isMovingWindow));
-    }
-    
-    if (g_isMovingWindow && g_targetWindow) {
-        POINT currentCursorPos;
-        if (GetCursorPos(&currentCursorPos)) {
-            // Always log mouse position to verify we're getting cursor data
-            if (timerCount % 30 == 0) {
-                log("Mouse position: (" + std::to_string(currentCursorPos.x) + "," + std::to_string(currentCursorPos.y) + ")");
-            }
-            
-            // Check if mouse button is still pressed
-            BOOL buttonPressed = (GetKeyState(VK_LBUTTON) & 0x8000) != 0;
-            if (timerCount % 30 == 0) {
-                log("Left button pressed: " + std::to_string(buttonPressed));
-            }
-            
-            if (!buttonPressed) {
-                log("Mouse button released (timer) - stopping window move");
-                stopWindowMoveInternal();
-                return;
-            }
-            
-            // For now, just log movement detection without actually moving the window
-            int deltaX = currentCursorPos.x - g_initialCursorPos.x;
-            int deltaY = currentCursorPos.y - g_initialCursorPos.y;
-            
-            if (timerCount % 30 == 0) {
-                log("Movement delta: (" + std::to_string(deltaX) + "," + std::to_string(deltaY) + 
-                    ") from initial: (" + std::to_string(g_initialCursorPos.x) + "," + std::to_string(g_initialCursorPos.y) + ")");
-            }
-        }
-    }
-}
 
-// Mouse hook procedure for custom window dragging
-LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    log("mousehokproc");
-    if (nCode >= 0) {
-        static int eventCount = 0;
-        eventCount++;
-        
-        // Log EVERY mouse event we receive for debugging
-        if (wParam == WM_MOUSEMOVE) {
-            MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
-            log("MouseHookProc WM_MOUSEMOVE at (" + 
-                std::to_string(pMouseStruct->pt.x) + "," + std::to_string(pMouseStruct->pt.y) + ")");
-        } else {
-            log("MouseHookProc event: " + std::to_string(wParam) + " (event #" + std::to_string(eventCount) + ")");
-        }
-    }
-    
-    return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
-}
 
 ELECTROBUN_EXPORT void stopWindowMove() {
-    log("Stop window move called");
-    
     if (g_isMovingWindow) {
         // Unregister raw input device
         RAWINPUTDEVICE rid;
@@ -2726,12 +2595,7 @@ ELECTROBUN_EXPORT void stopWindowMove() {
         rid.dwFlags = RIDEV_REMOVE;
         rid.hwndTarget = NULL;
         
-        if (RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE))) {
-            log("Raw input device unregistered successfully");
-        } else {
-            log("ERROR: Failed to unregister raw input device");
-        }
-        
+        RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
         g_isMovingWindow = FALSE;
         g_targetWindow = NULL;
     }
@@ -2746,38 +2610,29 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
         return;
     }
     
-    log("Starting window move for handle: " + std::to_string(reinterpret_cast<INT_PTR>(hwnd)));
-    
-    // Try Raw Input API for system-wide mouse tracking
+    // Set up window dragging state
     g_targetWindow = hwnd;
     g_isMovingWindow = TRUE;
     
-    // Get initial cursor position
+    // Get initial cursor and window positions
     GetCursorPos(&g_initialCursorPos);
-    
-    // Get initial window position
     RECT windowRect;
     GetWindowRect(hwnd, &windowRect);
     g_initialWindowPos.x = windowRect.left;
     g_initialWindowPos.y = windowRect.top;
     
-    // Register for raw mouse input
+    // Register for raw mouse input to bypass WebView2 event consumption
     RAWINPUTDEVICE rid;
     rid.usUsagePage = 0x01;  // HID_USAGE_PAGE_GENERIC
     rid.usUsage = 0x02;      // HID_USAGE_GENERIC_MOUSE
     rid.dwFlags = RIDEV_INPUTSINK; // Receive input even when not in foreground
     rid.hwndTarget = hwnd;   // Send messages to our window
     
-    if (RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE))) {
-        log("Raw input device registered successfully for mouse tracking");
-    } else {
+    if (!RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE))) {
         log("ERROR: Failed to register raw input device - error: " + std::to_string(GetLastError()));
         g_isMovingWindow = FALSE;
         g_targetWindow = NULL;
-        return;
     }
-    
-    log("Started window move with raw input tracking");
 }
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
