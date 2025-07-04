@@ -571,8 +571,7 @@ public:
                 
                 pos = hEnd;
             } catch (const std::exception& e) {
-                sprintf_s(logMsg, "applyVisualMask: JSON parsing error: %s", e.what());
-                log(logMsg);
+                // JSON parsing error, skip this mask
                 pos++;
             }
         }
