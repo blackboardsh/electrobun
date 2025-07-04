@@ -983,19 +983,30 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                             }
                         }
                         
-                        // If we have relative movement, apply it to window position
+                        // Handle movement - check if we're getting absolute or relative coordinates
                         if (raw->data.mouse.lLastX != 0 || raw->data.mouse.lLastY != 0) {
-                            RECT currentRect;
-                            if (GetWindowRect(g_targetWindow, &currentRect)) {
-                                int newX = currentRect.left + raw->data.mouse.lLastX;
-                                int newY = currentRect.top + raw->data.mouse.lLastY;
-                                
-                                SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
-                                           SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                                
-                                log("Moved window by raw input delta (" + std::to_string(raw->data.mouse.lLastX) + 
-                                    "," + std::to_string(raw->data.mouse.lLastY) + ") to (" + 
-                                    std::to_string(newX) + "," + std::to_string(newY) + ")");
+                            // Get current cursor position for comparison
+                            POINT currentCursor;
+                            GetCursorPos(&currentCursor);
+                            
+                            // Check if raw input values look like absolute coordinates (too large for deltas)
+                            if (abs(raw->data.mouse.lLastX) > 10000 || abs(raw->data.mouse.lLastY) > 10000) {
+                                log("Raw input appears to be absolute coordinates, ignoring");
+                                // Don't use these values - they're absolute coordinates, not deltas
+                            } else {
+                                // Use raw input deltas directly (relative movement)
+                                RECT currentRect;
+                                if (GetWindowRect(g_targetWindow, &currentRect)) {
+                                    int newX = currentRect.left + raw->data.mouse.lLastX;
+                                    int newY = currentRect.top + raw->data.mouse.lLastY;
+                                    
+                                    SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
+                                               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                                    
+                                    log("Moved window by raw input delta (" + std::to_string(raw->data.mouse.lLastX) + 
+                                        "," + std::to_string(raw->data.mouse.lLastY) + ") to (" + 
+                                        std::to_string(newX) + "," + std::to_string(newY) + ")");
+                                }
                             }
                         }
                     }
