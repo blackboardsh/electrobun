@@ -2555,7 +2555,45 @@ ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
 }
 
 ELECTROBUN_EXPORT void showItemInFolder(char *path) {
-    // Stub implementation
+    if (!path) {
+        log("ERROR: NULL path passed to showItemInFolder");
+        return;
+    }
+    
+    std::string pathString(path);
+    if (pathString.empty()) {
+        log("ERROR: Empty path passed to showItemInFolder");
+        return;
+    }
+    
+    // Convert to wide string for Windows API
+    int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+    if (wideCharLen == 0) {
+        log("ERROR: Failed to convert path to wide string in showItemInFolder");
+        return;
+    }
+    
+    std::vector<wchar_t> widePath(wideCharLen);
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, widePath.data(), wideCharLen);
+    
+    // Use ShellExecute to open Explorer and select the file
+    std::wstring selectParam = L"/select,\"" + std::wstring(widePath.data()) + L"\"";
+    
+    HINSTANCE result = ShellExecuteW(
+        NULL,                    // parent window
+        L"open",                 // operation
+        L"explorer.exe",         // executable
+        selectParam.c_str(),     // parameters
+        NULL,                    // working directory
+        SW_SHOWNORMAL           // show command
+    );
+    
+    // Check if the operation was successful
+    if (reinterpret_cast<int>(result) <= 32) {
+        log("ERROR: Failed to show item in folder: " + pathString + " (error code: " + std::to_string(reinterpret_cast<int>(result)) + ")");
+    } else {
+        log("Successfully opened folder for: " + pathString);
+    }
 }
 
 ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
