@@ -112,21 +112,36 @@ async function copyToDist() {
         await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
         // native system webview library
         await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll dist/WebView2Loader.dll`;
-        // CEF binaries for Windows - organized in cef/ subdirectory
-        await $`cp vendors/cef/Release/libcef.dll dist/cef/libcef.dll`;
-        await $`cp vendors/cef/Release/chrome_elf.dll dist/cef/chrome_elf.dll`;
-        await $`cp vendors/cef/Release/d3dcompiler_47.dll dist/cef/d3dcompiler_47.dll`;
-        await $`cp vendors/cef/Release/libEGL.dll dist/cef/libEGL.dll`;
-        await $`cp vendors/cef/Release/libGLESv2.dll dist/cef/libGLESv2.dll`;
-        await $`cp vendors/cef/Release/vk_swiftshader.dll dist/cef/vk_swiftshader.dll`;
-        await $`cp vendors/cef/Release/vulkan-1.dll dist/cef/vulkan-1.dll`;
+        // CEF binaries for Windows - copy only files that exist in minimal distribution
+        try {
+            await $`cp vendors/cef/Release/libcef.dll dist/cef/libcef.dll`;
+        } catch (e) { console.log("libcef.dll not found, skipping"); }
+        
+        try {
+            await $`cp vendors/cef/Release/chrome_elf.dll dist/cef/chrome_elf.dll`;
+        } catch (e) { console.log("chrome_elf.dll not found, skipping"); }
+        
+        try {
+            await $`cp vendors/cef/Release/d3dcompiler_47.dll dist/cef/d3dcompiler_47.dll`;
+        } catch (e) { console.log("d3dcompiler_47.dll not found, skipping"); }
+        
+        // Copy all available DLLs from Release directory
+        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dll') { Copy-Item 'vendors/cef/Release/*.dll' 'dist/cef/' -Force }"`;
+        
         // CEF resources
-        await $`cp -R vendors/cef/Resources dist/cef/Resources`;
-        await $`cp vendors/cef/Release/icudtl.dat dist/cef/icudtl.dat`;
-        await $`cp vendors/cef/Release/chrome_100_percent.pak dist/cef/chrome_100_percent.pak`;
-        await $`cp vendors/cef/Release/chrome_200_percent.pak dist/cef/chrome_200_percent.pak`;
-        await $`cp vendors/cef/Release/resources.pak dist/cef/resources.pak`;
-        await $`cp vendors/cef/Release/v8_context_snapshot.bin dist/cef/v8_context_snapshot.bin`;
+        try {
+            await $`cp -R vendors/cef/Resources dist/cef/Resources`;
+        } catch (e) { 
+            console.log("Resources directory not found, skipping"); 
+        }
+        
+        // Copy all available resource files
+        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.pak') { Copy-Item 'vendors/cef/Release/*.pak' 'dist/cef/' -Force }"`;
+        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dat') { Copy-Item 'vendors/cef/Release/*.dat' 'dist/cef/' -Force }"`;
+        await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.bin') { Copy-Item 'vendors/cef/Release/*.bin' 'dist/cef/' -Force }"`;
+        
+        // Copy locales if they exist
+        await $`powershell -command "if (Test-Path 'vendors/cef/Resources/locales') { Copy-Item 'vendors/cef/Resources/locales' 'dist/cef/Resources/' -Recurse -Force }"`.catch(() => {});
     } else if (OS === 'linux') {
 
     }
