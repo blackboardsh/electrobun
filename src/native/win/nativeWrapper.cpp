@@ -157,6 +157,28 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
 
+// Runtime CEF availability detection - Windows equivalent of macOS isCEFAvailable()
+bool isCEFAvailable() {
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    char* lastSlash = strrchr(exePath, '\\');
+    if (lastSlash) {
+        *lastSlash = '\0';
+    }
+    
+    // Check for essential CEF files
+    std::string cefLibPath = std::string(exePath) + "\\libcef.dll";
+    std::string icuDataPath = std::string(exePath) + "\\icudtl.dat";
+    
+    DWORD libAttributes = GetFileAttributesA(cefLibPath.c_str());
+    DWORD icuAttributes = GetFileAttributesA(icuDataPath.c_str());
+    
+    bool libExists = (libAttributes != INVALID_FILE_ATTRIBUTES && !(libAttributes & FILE_ATTRIBUTE_DIRECTORY));
+    bool icuExists = (icuAttributes != INVALID_FILE_ATTRIBUTES && !(icuAttributes & FILE_ATTRIBUTE_DIRECTORY));
+    
+    return libExists && icuExists;
+}
+
 class StatusItemTarget {
 public:
     ZigStatusItemHandler zigHandler;
@@ -2052,27 +2074,6 @@ ELECTROBUN_EXPORT void runNSApplication() {
     }
 }
 
-// Runtime CEF availability detection - Windows equivalent of macOS isCEFAvailable()
-bool isCEFAvailable() {
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    char* lastSlash = strrchr(exePath, '\\');
-    if (lastSlash) {
-        *lastSlash = '\0';
-    }
-    
-    // Check for essential CEF files
-    std::string cefLibPath = std::string(exePath) + "\\libcef.dll";
-    std::string icuDataPath = std::string(exePath) + "\\icudtl.dat";
-    
-    DWORD libAttributes = GetFileAttributesA(cefLibPath.c_str());
-    DWORD icuAttributes = GetFileAttributesA(icuDataPath.c_str());
-    
-    bool libExists = (libAttributes != INVALID_FILE_ATTRIBUTES && !(libAttributes & FILE_ATTRIBUTE_DIRECTORY));
-    bool icuExists = (icuAttributes != INVALID_FILE_ATTRIBUTES && !(icuAttributes & FILE_ATTRIBUTE_DIRECTORY));
-    
-    return libExists && icuExists;
-}
 
 ELECTROBUN_EXPORT bool initCEF() {
     if (g_cef_initialized) {
@@ -2119,7 +2120,7 @@ ELECTROBUN_EXPORT bool initCEF() {
     // Set log level for debugging
     settings.log_severity = LOGSEVERITY_INFO;
     
-    bool success = CefInitialize(main_args, settings, g_cef_app.get());
+    bool success = CefInitialize(main_args, settings, g_cef_app.get(), nullptr);
     if (success) {
         g_cef_initialized = true;
         log("CEF initialized successfully");
