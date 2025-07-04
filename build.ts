@@ -121,15 +121,11 @@ async function copyToDist() {
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dat') { Copy-Item 'vendors/cef/Release/*.dat' 'dist/cef/' -Force }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.bin') { Copy-Item 'vendors/cef/Release/*.bin' 'dist/cef/' -Force }"`;
         
-        // CEF resources to cef/Resources subdirectory 
-        await $`powershell -command "if (-not (Test-Path 'dist/cef/Resources')) { New-Item -ItemType Directory -Path 'dist/cef/Resources' -Force | Out-Null }"`;
-        try {
-            await $`cp -R vendors/cef/Resources dist/cef/Resources`;
-        } catch (e) { 
-            console.log("Resources directory not found, skipping"); 
-        }
+        // Copy icudtl.dat directly to cef/ root (same folder as DLLs) - this is required for CEF initialization
+        await $`powershell -command "if (Test-Path 'vendors/cef/Resources/icudtl.dat') { Copy-Item 'vendors/cef/Resources/icudtl.dat' 'dist/cef/' -Force }"`.catch(() => {});
         
-        // Copy locales if they exist
+        // CEF locales to cef/Resources/locales subdirectory 
+        await $`powershell -command "if (-not (Test-Path 'dist/cef/Resources')) { New-Item -ItemType Directory -Path 'dist/cef/Resources' -Force | Out-Null }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Resources/locales') { Copy-Item 'vendors/cef/Resources/locales' 'dist/cef/Resources/' -Recurse -Force }"`.catch(() => {});
     } else if (OS === 'linux') {
 
