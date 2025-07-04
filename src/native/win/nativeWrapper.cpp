@@ -117,7 +117,6 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
                              uint32_t webviewId);
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
-void stopWindowMoveInternal();
 
 void log(const std::string& message) {
     // Get current time
@@ -2525,6 +2524,41 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
         });
     }
 
+// Internal function to stop window movement (without export linkage)
+void stopWindowMoveInternal() {
+    g_isMovingWindow = FALSE;
+    g_targetWindow = NULL;
+    
+    if (g_useAlternativeMethod) {
+        // Stop the timer
+        if (g_dragTimer) {
+            KillTimer(NULL, g_dragTimer);
+            g_dragTimer = 0;
+            log("Killed drag timer");
+        }
+        
+        // Release mouse capture
+        if (GetCapture()) {
+            ReleaseCapture();
+            log("Released mouse capture");
+        }
+    } else {
+        // Remove the mouse hook (old method)
+        if (g_mouseHook) {
+            UnhookWindowsHookEx(g_mouseHook);
+            g_mouseHook = NULL;
+        }
+    }
+    
+    // Clear state
+    g_initialCursorPos = {};
+    g_initialWindowPos = {};
+    g_offsetCalculated = FALSE;
+    g_moveStartTime = 0;
+    
+    log("Stopped custom window move");
+}
+
 // Timer callback for window dragging (alternative method)
 VOID CALLBACK DragTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
     if (g_isMovingWindow && g_targetWindow) {
@@ -2578,41 +2612,6 @@ VOID CALLBACK DragTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime
             }
         }
     }
-}
-
-// Internal function to stop window movement (without export linkage)
-void stopWindowMoveInternal() {
-    g_isMovingWindow = FALSE;
-    g_targetWindow = NULL;
-    
-    if (g_useAlternativeMethod) {
-        // Stop the timer
-        if (g_dragTimer) {
-            KillTimer(NULL, g_dragTimer);
-            g_dragTimer = 0;
-            log("Killed drag timer");
-        }
-        
-        // Release mouse capture
-        if (GetCapture()) {
-            ReleaseCapture();
-            log("Released mouse capture");
-        }
-    } else {
-        // Remove the mouse hook (old method)
-        if (g_mouseHook) {
-            UnhookWindowsHookEx(g_mouseHook);
-            g_mouseHook = NULL;
-        }
-    }
-    
-    // Clear state
-    g_initialCursorPos = {};
-    g_initialWindowPos = {};
-    g_offsetCalculated = FALSE;
-    g_moveStartTime = 0;
-    
-    log("Stopped custom window move");
 }
 
 // Mouse hook procedure for custom window dragging
