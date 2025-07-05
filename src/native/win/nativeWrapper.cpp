@@ -324,7 +324,12 @@ private:
 
 class ElectrobunCefClient : public CefClient {
 public:
-    ElectrobunCefClient() {
+    ElectrobunCefClient(uint32_t webviewId,
+                       HandlePostMessage bunBridgeHandler,
+                       HandlePostMessage internalBridgeHandler) 
+        : webview_id_(webviewId), 
+          bun_bridge_handler_(bunBridgeHandler),
+          webview_tag_handler_(internalBridgeHandler) {
         m_loadHandler = new ElectrobunLoadHandler();
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
         m_requestHandler = new ElectrobunRequestHandler();
@@ -342,7 +347,34 @@ public:
         return m_requestHandler;
     }
 
+    bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                 CefRefPtr<CefFrame> frame,
+                                 CefProcessId source_process,
+                                 CefRefPtr<CefProcessMessage> message) override {
+        std::string messageName = message->GetName().ToString();
+        std::string messageContent = message->GetArgumentList()->GetString(0).ToString();
+        
+        char* contentCopy = strdup(messageContent.c_str());
+        
+        if (messageName == "BunBridgeMessage") {
+            if (bun_bridge_handler_) {
+                bun_bridge_handler_(webview_id_, contentCopy);
+            }
+            return true;
+        } else if (messageName == "internalMessage") {
+            if (webview_tag_handler_) {
+                webview_tag_handler_(webview_id_, contentCopy);
+            }
+            return true;
+        }
+        
+        return false;
+    }
+
 private:
+    uint32_t webview_id_;
+    HandlePostMessage bun_bridge_handler_;
+    HandlePostMessage webview_tag_handler_;
     CefRefPtr<ElectrobunLoadHandler> m_loadHandler;
     CefRefPtr<ElectrobunLifeSpanHandler> m_lifeSpanHandler;
     CefRefPtr<ElectrobunRequestHandler> m_requestHandler;
@@ -2598,12 +2630,11 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         CefBrowserSettings browserSettings;
         // Note: web_security setting for CEF would need correct API
         
-        // Create CEF client
-        auto client = new ElectrobunCefClient();
-        // Note: These methods would need to be implemented in ElectrobunCefClient
+        // Create CEF client with bridge handlers
+        auto client = new ElectrobunCefClient(webviewId, bunBridgeHandler, internalBridgeHandler);
+        // Note: Additional callback methods would need to be implemented if needed
         // client->SetNavigationCallback(navigationCallback);
         // client->SetWebviewEventHandler(webviewEventHandler);
-        // client->SetBridgeHandlers(bunBridgeHandler, internalBridgeHandler);
         
         view->setClient(client);
         
