@@ -39,8 +39,6 @@
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
 #include "include/cef_scheme.h"
-#include "include/cef_task.h"
-#include "include/base/cef_bind.h"
 #include "include/wrapper/cef_helpers.h"
 
 // Restore macro definitions
@@ -2329,17 +2327,10 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                     
                     std::cout << "[CEF] Executing deferred navigation to: " << deferred_url << std::endl;
                     
-                    // Ensure we're on the main thread before calling CEF
-                    if (CefCurrentlyOn(TID_UI)) {
-                        browser->GetMainFrame()->LoadURL(CefString(deferred_url));
-                        std::cout << "[CEF] LoadURL called successfully" << std::endl;
-                    } else {
-                        std::cout << "[CEF] ERROR: Not on UI thread!" << std::endl;
-                        // Post to UI thread if needed
-                        CefPostTask(TID_UI, base::BindOnce([browser, deferred_url]() {
-                            browser->GetMainFrame()->LoadURL(CefString(deferred_url));
-                        }));
-                    }
+                    // Windows timer callbacks run on the main UI thread, so we can call CEF directly
+                    // Note: Windows timers always execute on the thread that called SetTimer (main UI thread)
+                    browser->GetMainFrame()->LoadURL(CefString(deferred_url));
+                    std::cout << "[CEF] LoadURL called successfully" << std::endl;
                     
                     // Clean up
                     g_pendingCefNavigations.erase(navIt);
