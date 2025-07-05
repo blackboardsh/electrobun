@@ -2276,8 +2276,17 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         
         // Create the browser with about:blank first (following macOS pattern to avoid timing issues)
         log("Creating CEF browser with about:blank...");
+        
+        // Debug: Log all parameters before creation
+        std::cout << "[CEF] Window info parent: " << window_info.parent_window << std::endl;
+        std::cout << "[CEF] Window info style: " << window_info.style << std::endl;
+        std::cout << "[CEF] Client valid: " << (client.get() != nullptr ? "YES" : "NO") << std::endl;
+        std::cout << "[CEF] Browser settings valid: " << "YES" << std::endl;
+        
         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
             window_info, client.get(), "about:blank", browser_settings, nullptr, nullptr);
+            
+        std::cout << "[CEF] CreateBrowserSync returned: " << (browser.get() != nullptr ? "SUCCESS" : "FAILED") << std::endl;
             
         if (browser) {
             log("CEF browser created successfully");
