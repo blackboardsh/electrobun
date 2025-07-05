@@ -98,6 +98,8 @@ static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 static std::map<int, std::string> g_pendingCefNavigations;
 // Global map to store browser references by ID for safe access
 static std::map<int, CefRefPtr<CefBrowser>> g_cefBrowsers;
+// Static variable for browser counting (defined here for ElectrobunLifeSpanHandler)
+int ElectrobunLifeSpanHandler::browser_count_ = 0;
 // Global map to store pending URLs for async browser creation
 static std::map<HWND, std::string> g_pendingUrls;
 
@@ -183,6 +185,11 @@ public:
         std::cout << "[CEF] *** OnAfterCreated callback triggered! ***" << std::endl;
         std::cout << "[CEF] OnAfterCreated: Browser ID " << browser->GetIdentifier() << " created successfully" << std::endl;
         
+        // Track browser creation
+        g_cefBrowsers[browser->GetIdentifier()] = browser;
+        browser_count_++;
+        std::cout << "[CEF] Total browsers: " << browser_count_ << std::endl;
+        
         // Get the window handle and look up pending URL
         HWND browserWindow = browser->GetHost()->GetWindowHandle();
         HWND parentWindow = GetParent(browserWindow);
@@ -206,7 +213,24 @@ public:
         }
     }
 
+    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        std::cout << "[CEF] OnBeforeClose: Browser ID " << browser->GetIdentifier() << " closing" << std::endl;
+        
+        // Remove browser from global tracking
+        g_cefBrowsers.erase(browser->GetIdentifier());
+        browser_count_--;
+        
+        std::cout << "[CEF] Remaining browsers: " << browser_count_ << std::endl;
+        
+        // If this was the last browser, quit the CEF message loop
+        if (browser_count_ == 0) {
+            std::cout << "[CEF] Last browser closed, quitting message loop" << std::endl;
+            CefQuitMessageLoop();
+        }
+    }
+
 private:
+    static int browser_count_;
     IMPLEMENT_REFCOUNTING(ElectrobunLifeSpanHandler);
 };
 
@@ -2140,15 +2164,30 @@ ELECTROBUN_EXPORT void runNSApplication() {
     // Initialize the dispatcher
     MainThreadDispatcher::initialize(messageWindow);
     
-    // Start the message loop - process messages for ALL windows, not just the message window
-    MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) { // NULL means process messages for all windows in this thread
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-        
-        // Perform CEF message loop work if CEF is available and initialized
-        if (isCEFAvailable() && g_cef_initialized) {
-            CefDoMessageLoopWork();
+    // Initialize CEF if available
+    if (isCEFAvailable()) {
+        std::cout << "[CEF] Initializing CEF for message loop" << std::endl;
+        if (initCEF()) {
+            std::cout << "[CEF] Starting CEF message loop" << std::endl;
+            CefRunMessageLoop(); // Use CEF's message loop like macOS
+            std::cout << "[CEF] CEF message loop ended, shutting down" << std::endl;
+            CefShutdown();
+        } else {
+            std::cout << "[CEF] Failed to initialize CEF, falling back to Windows message loop" << std::endl;
+            // Fall back to Windows message loop if CEF init fails
+            MSG msg;
+            while (GetMessage(&msg, NULL, 0, 0)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+        }
+    } else {
+        std::cout << "[CEF] CEF not available, using Windows message loop" << std::endl;
+        // Use Windows message loop if CEF is not available
+        MSG msg;
+        while (GetMessage(&msg, NULL, 0, 0)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
         }
     }
 }
@@ -2222,11 +2261,14 @@ ELECTROBUN_EXPORT bool initCEF() {
 
 ELECTROBUN_EXPORT void killApp() {
     if (isCEFAvailable() && g_cef_initialized) {
-        CefShutdown();
-        g_cef_initialized = false;
-        log("CEF shutdown");
+        std::cout << "[CEF] Initiating graceful shutdown via CefQuitMessageLoop()" << std::endl;
+        // Use CefQuitMessageLoop() for graceful shutdown, which will trigger OnBeforeClose handlers
+        CefQuitMessageLoop();
+        log("CEF shutdown initiated");
+    } else {
+        // If CEF is not running, exit directly
+        ExitProcess(1);
     }
-    ExitProcess(1);
 }
 
 ELECTROBUN_EXPORT void shutdownApplication() {
@@ -2345,20 +2387,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             // Store the view for later use when browser creation completes
             std::cout << "[CEF] Browser creation initiated asynchronously" << std::endl;
             
-            // Start the CEF message pump timer using the container window
-            static bool messagePumpStarted = false;
-            if (!messagePumpStarted) {
-                SetTimer(containerHwnd, 999, 10, [](HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) -> VOID {
-                    static int pumpCount = 0;
-                    CefDoMessageLoopWork();
-                    pumpCount++;
-                    if (pumpCount % 100 == 0) { // Log every 1 second (100 * 10ms)
-                        std::cout << "[CEF] Message pump running, count: " << pumpCount << std::endl;
-                    }
-                });
-                messagePumpStarted = true;
-                std::cout << "[CEF] Started message pump timer with container window" << std::endl;
-            }
+            // Message pumping is now handled by CefRunMessageLoop() in runNSApplication
             
             // We'll need to handle the browser reference in the client's OnAfterCreated callback
             // For now, just store basic view info
