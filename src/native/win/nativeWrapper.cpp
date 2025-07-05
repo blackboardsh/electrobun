@@ -2228,6 +2228,11 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         view->webviewId = webviewId;
         view->fullSize = autoResize;
         
+        // CEF operations must happen on the main thread - dispatch everything
+        std::string target_url = url ? std::string(url) : "about:blank";
+        
+        MainThreadDispatcher::dispatch_sync([=, target_url = target_url]() {
+        
         // Use the existing container window (hwnd is the container, not the system window)
         HWND containerHwnd = hwnd;
         
@@ -2345,6 +2350,8 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         } else {
             log("ERROR: Failed to create CEF browser");
         }
+        
+        }); // End of MainThreadDispatcher::dispatch_sync
         
         return view.get();
         }
