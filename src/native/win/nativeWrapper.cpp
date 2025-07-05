@@ -169,24 +169,7 @@ class ElectrobunLoadHandler : public CefLoadHandler {
 public:
     void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override {
         std::cout << "[CEF] LoadStart: Navigation started" << std::endl;
-        
-        // Execute preload scripts on main frame at start of navigation
-        if (frame->IsMain()) {
-            int browserId = browser->GetIdentifier();
-            std::cout << "[CEF] OnLoadStart: Looking for scripts for browser " << browserId << std::endl;
-            auto scriptIt = g_preloadScripts.find(browserId);
-            if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
-                frame->ExecuteJavaScript(scriptIt->second, "", 0);
-                std::cout << "[CEF] Executed preload scripts for browser " << browserId << " at load start (script length: " << scriptIt->second.length() << ")" << std::endl;
-            } else {
-                std::cout << "[CEF] No preload scripts found for browser " << browserId << std::endl;
-                std::cout << "[CEF] Available script browsers: ";
-                for (auto& pair : g_preloadScripts) {
-                    std::cout << pair.first << " ";
-                }
-                std::cout << std::endl;
-            }
-        }
+        // Script execution moved to OnContextCreated for earlier timing
     }
     
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
@@ -500,6 +483,7 @@ public:
         return false;
     }
 
+
     std::string GetCombinedScript() const {
         std::string combined_script = electrobun_script_;
         if (!custom_script_.empty()) {
@@ -537,11 +521,16 @@ private:
 void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser) {
     if (client && browser) {
         client->SetBrowser(browser);
-        // Store preload scripts for this browser ID so load handler can access them
+        // Store preload scripts for this browser ID
         std::string script = client->GetCombinedScript();
         if (!script.empty()) {
             g_preloadScripts[browser->GetIdentifier()] = script;
             std::cout << "[CEF] Stored preload scripts for browser " << browser->GetIdentifier() << std::endl;
+            
+            // Execute preload scripts immediately in browser process
+            // This ensures they run before any page JavaScript
+            browser->GetMainFrame()->ExecuteJavaScript(script, "", 0);
+            std::cout << "[CEF] Executed preload scripts immediately for browser " << browser->GetIdentifier() << std::endl;
         }
     }
 }
