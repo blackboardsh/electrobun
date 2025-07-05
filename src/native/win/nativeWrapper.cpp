@@ -2246,11 +2246,26 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             view->hwnd = containerHwnd;
             view->browser = browser;
             
-            // Debug: Check if CEF browser has a window handle
+            // Debug: Check if CEF browser has a window handle and is visible
             HWND cefWindowHandle = browser->GetHost()->GetWindowHandle();
-            char cefDebug[256];
-            sprintf_s(cefDebug, "CEF Browser window handle: %p", cefWindowHandle);
-            log(cefDebug);
+            char cefDebug[512];
+            if (cefWindowHandle) {
+                RECT cefRect;
+                GetWindowRect(cefWindowHandle, &cefRect);
+                sprintf_s(cefDebug, "CEF window: HWND=%p, visible=%s, rect=(%d,%d,%d,%d)", 
+                          cefWindowHandle, 
+                          IsWindowVisible(cefWindowHandle) ? "YES" : "NO",
+                          cefRect.left, cefRect.top, cefRect.right, cefRect.bottom);
+                log(cefDebug);
+                
+                // Force CEF window to be visible and properly sized
+                ShowWindow(cefWindowHandle, SW_SHOW);
+                SetWindowPos(cefWindowHandle, HWND_TOP, 0, 0, (int)width, (int)height, SWP_SHOWWINDOW);
+                log("Forced CEF window to be visible and positioned");
+            } else {
+                sprintf_s(cefDebug, "CEF Browser window handle: NULL!");
+                log(cefDebug);
+            }
             
             // Defer navigation to allow window/browser to fully initialize (following macOS timing pattern)
             log("Deferring CEF navigation for proper initialization...");
