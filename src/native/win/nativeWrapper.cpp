@@ -712,327 +712,10 @@ public:
         return false;  // Point is not in any masked area
     }
     
-    // Apply visual masking using window regions (creates actual holes)
-    void applyVisualMask() {
-        if (!controller) {
-            return;
-        }
-        
-        if (maskJSON.empty()) {
-            removeMasks();
-            return;
-        }
-        
-        // Get the webview's bounds
-        RECT bounds;
-        controller->get_Bounds(&bounds);
-        int width = bounds.right - bounds.left;
-        int height = bounds.bottom - bounds.top;
-        
-        // Create base region covering entire webview
-        HRGN baseRegion = CreateRectRgn(0, 0, width, height);
-        if (!baseRegion) {
-            log("applyVisualMask: Failed to create base region");
-            return;
-        }
-        
-        int maskCount = 0;
-        
-        // Parse maskJSON and subtract mask regions
-        size_t pos = 0;
-        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
-            try {
-                // Extract mask rectangle coordinates
-                size_t xStart = maskJSON.find(":", pos) + 1;
-                size_t xEnd = maskJSON.find(",", xStart);
-                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
-                
-                size_t yPos = maskJSON.find("\"y\":", pos);
-                size_t yStart = maskJSON.find(":", yPos) + 1;
-                size_t yEnd = maskJSON.find(",", yStart);
-                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
-                
-                size_t wPos = maskJSON.find("\"width\":", pos);
-                size_t wStart = maskJSON.find(":", wPos) + 1;
-                size_t wEnd = maskJSON.find(",", wStart);
-                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
-                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
-                
-                size_t hPos = maskJSON.find("\"height\":", pos);
-                size_t hStart = maskJSON.find(":", hPos) + 1;
-                size_t hEnd = maskJSON.find("}", hStart);
-                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
-                
-                // Create mask region and subtract from base
-                HRGN maskRegion = CreateRectRgn(x, y, x + width, y + height);
-                if (maskRegion) {
-                    CombineRgn(baseRegion, baseRegion, maskRegion, RGN_DIFF);
-                    DeleteObject(maskRegion);
-                    maskCount++;
-                }
-                
-                pos = hEnd;
-            } catch (const std::exception& e) {
-                // JSON parsing error, skip this mask
-                pos++;
-            }
-        }
-        
-        // Try window region approach first
-        HWND webviewHwnd = FindWebViewHWND();
-        if (webviewHwnd) {
-            SetWindowRgn(webviewHwnd, baseRegion, TRUE);
-            // Note: baseRegion is now owned by the window, don't delete it
-        } else {
-            DeleteObject(baseRegion);
-        }
-        
-        // Also inject CSS to create visual masks (more reliable for WebView2)
-        injectMaskCSS();
-    }
-    
-    // Find the WebView2's HWND for visual masking
-    HWND FindWebViewHWND() {
-        if (!controller) return NULL;
-        
-        // Get the controller's parent window
-        HWND parentHwnd = NULL;
-        controller->get_ParentWindow(&parentHwnd);
-        if (!parentHwnd) {
-            log("FindWebViewHWND: No parent window");
-            return NULL;
-        }
-        
-        // WebView2 creates child windows - find the one that matches our bounds
-        RECT ourBounds;
-        controller->get_Bounds(&ourBounds);
-        
-        struct FindData {
-            RECT targetBounds;
-            HWND foundHwnd;
-        } findData = { ourBounds, NULL };
-        
-        EnumChildWindows(parentHwnd, [](HWND hwnd, LPARAM lParam) -> BOOL {
-            FindData* data = (FindData*)lParam;
-            
-            RECT childRect;
-            GetWindowRect(hwnd, &childRect);
-            
-            // Convert to parent coordinates
-            POINT topLeft = { childRect.left, childRect.top };
-            POINT bottomRight = { childRect.right, childRect.bottom };
-            ScreenToClient(GetParent(hwnd), &topLeft);
-            ScreenToClient(GetParent(hwnd), &bottomRight);
-            
-            // Check if bounds roughly match (allowing small differences)
-            int deltaX = abs(topLeft.x - data->targetBounds.left);
-            int deltaY = abs(topLeft.y - data->targetBounds.top);
-            int deltaW = abs((bottomRight.x - topLeft.x) - (data->targetBounds.right - data->targetBounds.left));
-            int deltaH = abs((bottomRight.y - topLeft.y) - (data->targetBounds.bottom - data->targetBounds.top));
-            
-            if (deltaX < 5 && deltaY < 5 && deltaW < 5 && deltaH < 5) {
-                data->foundHwnd = hwnd;
-                return FALSE; // Stop enumeration
-            }
-            
-            return TRUE; // Continue enumeration
-        }, (LPARAM)&findData);
-        
-        
-        return findData.foundHwnd;
-    }
-    
-    // Inject CSS to create visual masks (more reliable than window regions)
-    void injectMaskCSS() {
-        if (!webview) {
-            return;
-        }
-        
-        if (maskJSON.empty()) {
-            removeMasks();
-            return;
-        }
-        
-        // Build CSS for mask overlays
-        std::string css = "<style id='electrobun-masks'>";
-        
-        size_t pos = 0;
-        int maskIndex = 0;
-        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
-            try {
-                // Extract mask rectangle coordinates
-                size_t xStart = maskJSON.find(":", pos) + 1;
-                size_t xEnd = maskJSON.find(",", xStart);
-                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
-                
-                size_t yPos = maskJSON.find("\"y\":", pos);
-                size_t yStart = maskJSON.find(":", yPos) + 1;
-                size_t yEnd = maskJSON.find(",", yStart);
-                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
-                
-                size_t wPos = maskJSON.find("\"width\":", pos);
-                size_t wStart = maskJSON.find(":", wPos) + 1;
-                size_t wEnd = maskJSON.find(",", wStart);
-                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
-                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
-                
-                size_t hPos = maskJSON.find("\"height\":", pos);
-                size_t hStart = maskJSON.find(":", hPos) + 1;
-                size_t hEnd = maskJSON.find("}", hStart);
-                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
-                
-                // Add CSS for this mask
-                css += ".electrobun-mask-" + std::to_string(maskIndex) + " { ";
-                css += "position: fixed; ";
-                css += "left: " + std::to_string(x) + "px; ";
-                css += "top: " + std::to_string(y) + "px; ";
-                css += "width: " + std::to_string(width) + "px; ";
-                css += "height: " + std::to_string(height) + "px; ";
-                css += "background: transparent; ";
-                css += "pointer-events: none; ";
-                css += "z-index: 999999; ";
-                css += "border: 2px dashed rgba(255,0,0,0.5); ";
-                css += "box-sizing: border-box; ";
-                css += "} ";
-                
-                maskIndex++;
-                pos = hEnd;
-            } catch (...) {
-                pos++;
-            }
-        }
-        
-        css += "</style>";
-        
-        // Build JavaScript to inject the CSS and create mask elements
-        std::string script = 
-            "(function() { "
-            "  // Remove existing masks "
-            "  var oldStyle = document.getElementById('electrobun-masks'); "
-            "  if (oldStyle) oldStyle.remove(); "
-            "  var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
-            "  oldMasks.forEach(m => m.remove()); "
-            "  "
-            "  // Add new style "
-            "  document.head.insertAdjacentHTML('beforeend', '" + css + "'); "
-            "  "
-            "  // Create mask elements "
-            "  for (var i = 0; i < " + std::to_string(maskIndex) + "; i++) { "
-            "    var mask = document.createElement('div'); "
-            "    mask.className = 'electrobun-mask-' + i; "
-            "    document.body.appendChild(mask); "
-            "  } "
-            "  "
-            "  console.log('Electrobun: Applied " + std::to_string(maskIndex) + " visual masks'); "
-            "})();";
-        
-        
-        // Execute the script
-        std::wstring wScript(script.begin(), script.end());
-        webview->ExecuteScript(wScript.c_str(), nullptr);
-    }
-    
-    // Remove all masks (both visual and window regions)
-    void removeMasks() {
-        if (!webview) {
-            return;
-        }
-        
-        
-        // Remove CSS masks via JavaScript
-        std::string script = 
-            "(function() { "
-            "  // Remove mask style "
-            "  var oldStyle = document.getElementById('electrobun-masks'); "
-            "  if (oldStyle) { "
-            "    oldStyle.remove(); "
-            "    console.log('Electrobun: Removed mask styles'); "
-            "  } "
-            "  "
-            "  // Remove mask elements "
-            "  var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
-            "  var maskCount = oldMasks.length; "
-            "  oldMasks.forEach(m => m.remove()); "
-            "  "
-            "  if (maskCount > 0) { "
-            "    console.log('Electrobun: Removed ' + maskCount + ' mask elements'); "
-            "  } "
-            "})();";
-        
-        std::wstring wScript(script.begin(), script.end());
-        webview->ExecuteScript(wScript.c_str(), nullptr);
-        
-        // Remove window region (restore full window)
-        if (controller) {
-            HWND webviewHwnd = FindWebViewHWND();
-            if (webviewHwnd) {
-                SetWindowRgn(webviewHwnd, NULL, TRUE);
-            }
-        }
-    }
-    
-    // Toggle mirror mode (disable input while keeping visual position)
-    void toggleMirrorMode(bool enable) {
-        if (!controller) return;
-        
-        if (enable && !mirrorModeEnabled) {
-            // Moving to mirror mode - disable input but keep visual position
-            mirrorModeEnabled = true;
-            // Make webview non-interactive but keep it visually rendered
-            // Note: We keep visual position but disable input handling
-        } else if (!enable && mirrorModeEnabled) {
-            // Moving back to interactive mode - enable input
-            mirrorModeEnabled = false;
-            // Make webview interactive and give it focus
-            controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-        }
-    }
-    
-    // Utility methods for mask functionality
-    bool isPointInMask(POINT localPoint) {
-        if (maskJSON.empty()) return false;
-        
-        // Simple JSON parsing for mask rectangles
-        // Expected format: [{"x":10,"y":20,"width":100,"height":50},...]
-        size_t pos = 0;
-        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
-            try {
-                // Extract x, y, width, height from JSON
-                size_t xStart = maskJSON.find(":", pos) + 1;
-                size_t xEnd = maskJSON.find(",", xStart);
-                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
-                
-                size_t yPos = maskJSON.find("\"y\":", pos);
-                size_t yStart = maskJSON.find(":", yPos) + 1;
-                size_t yEnd = maskJSON.find(",", yStart);
-                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
-                
-                size_t wPos = maskJSON.find("\"width\":", pos);
-                size_t wStart = maskJSON.find(":", wPos) + 1;
-                size_t wEnd = maskJSON.find(",", wStart);
-                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
-                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
-                
-                size_t hPos = maskJSON.find("\"height\":", pos);
-                size_t hStart = maskJSON.find(":", hPos) + 1;
-                size_t hEnd = maskJSON.find("}", hStart);
-                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
-                
-                // Check if point is within this mask rectangle
-                if (localPoint.x >= x && localPoint.x < x + width &&
-                    localPoint.y >= y && localPoint.y < y + height) {
-                    return true;  // Point is in a masked area
-                }
-                
-                pos = hEnd;
-            } catch (...) {
-                // JSON parsing error, skip this mask
-                pos++;
-            }
-        }
-        
-        return false;  // Point is not in any masked area
-    }
+    // Virtual methods for subclass-specific functionality
+    virtual void applyVisualMask() = 0;
+    virtual void removeMasks() = 0;
+    virtual void toggleMirrorMode(bool enable) = 0;
 };
 
 // WebView2View class - implements AbstractView for WebView2
@@ -1150,6 +833,178 @@ public:
     ComPtr<ICoreWebView2> getWebView() {
         return webview;
     }
+    
+    // WebView2-specific implementation of mask functionality
+    void applyVisualMask() override {
+        if (!controller) {
+            return;
+        }
+        
+        if (maskJSON.empty()) {
+            removeMasks();
+            return;
+        }
+        
+        // Get the webview's bounds
+        RECT bounds;
+        controller->get_Bounds(&bounds);
+        int width = bounds.right - bounds.left;
+        int height = bounds.bottom - bounds.top;
+        
+        // Create base region covering entire webview
+        HRGN baseRegion = CreateRectRgn(0, 0, width, height);
+        if (!baseRegion) {
+            log("applyVisualMask: Failed to create base region");
+            return;
+        }
+        
+        // Parse maskJSON and subtract mask regions
+        size_t pos = 0;
+        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+            try {
+                // Extract mask rectangle coordinates
+                size_t xStart = maskJSON.find(":", pos) + 1;
+                size_t xEnd = maskJSON.find(",", xStart);
+                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+                
+                size_t yPos = maskJSON.find("\"y\":", pos);
+                size_t yStart = maskJSON.find(":", yPos) + 1;
+                size_t yEnd = maskJSON.find(",", yStart);
+                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+                
+                size_t wPos = maskJSON.find("\"width\":", pos);
+                size_t wStart = maskJSON.find(":", wPos) + 1;
+                size_t wEnd = maskJSON.find(",", wStart);
+                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+                
+                size_t hPos = maskJSON.find("\"height\":", pos);
+                size_t hStart = maskJSON.find(":", hPos) + 1;
+                size_t hEnd = maskJSON.find("}", hStart);
+                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+                
+                // Create mask region and subtract from base
+                HRGN maskRegion = CreateRectRgn(x, y, x + width, y + height);
+                if (maskRegion) {
+                    CombineRgn(baseRegion, baseRegion, maskRegion, RGN_DIFF);
+                    DeleteObject(maskRegion);
+                }
+                
+                pos = hEnd;
+            } catch (const std::exception& e) {
+                pos++;
+            }
+        }
+        
+        // Apply visual mask via CSS injection (more reliable for WebView2)
+        injectMaskCSS();
+        DeleteObject(baseRegion);
+    }
+    
+    void removeMasks() override {
+        if (!webview) {
+            return;
+        }
+        
+        // Remove CSS masks via JavaScript
+        std::string script = 
+            "(function() { "
+            "  var oldStyle = document.getElementById('electrobun-masks'); "
+            "  if (oldStyle) oldStyle.remove(); "
+            "  var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
+            "  oldMasks.forEach(m => m.remove()); "
+            "})();";
+        
+        std::wstring wScript(script.begin(), script.end());
+        webview->ExecuteScript(wScript.c_str(), nullptr);
+    }
+    
+    void toggleMirrorMode(bool enable) override {
+        if (!controller) return;
+        
+        if (enable && !mirrorModeEnabled) {
+            mirrorModeEnabled = true;
+            // Disable input for WebView2
+        } else if (!enable && mirrorModeEnabled) {
+            mirrorModeEnabled = false;
+            controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        }
+    }
+
+private:
+    // WebView2-specific helper for CSS mask injection
+    void injectMaskCSS() {
+        if (!webview || maskJSON.empty()) {
+            return;
+        }
+        
+        // Build CSS for mask overlays
+        std::string css = "<style id='electrobun-masks'>";
+        
+        size_t pos = 0;
+        int maskIndex = 0;
+        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+            try {
+                // Extract mask rectangle coordinates  
+                size_t xStart = maskJSON.find(":", pos) + 1;
+                size_t xEnd = maskJSON.find(",", xStart);
+                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+                
+                size_t yPos = maskJSON.find("\"y\":", pos);
+                size_t yStart = maskJSON.find(":", yPos) + 1;
+                size_t yEnd = maskJSON.find(",", yStart);
+                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+                
+                size_t wPos = maskJSON.find("\"width\":", pos);
+                size_t wStart = maskJSON.find(":", wPos) + 1;
+                size_t wEnd = maskJSON.find(",", wStart);
+                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+                
+                size_t hPos = maskJSON.find("\"height\":", pos);
+                size_t hStart = maskJSON.find(":", hPos) + 1;
+                size_t hEnd = maskJSON.find("}", hStart);
+                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+                
+                // Add CSS for this mask
+                css += ".electrobun-mask-" + std::to_string(maskIndex) + " { ";
+                css += "position: fixed; ";
+                css += "left: " + std::to_string(x) + "px; ";
+                css += "top: " + std::to_string(y) + "px; ";
+                css += "width: " + std::to_string(width) + "px; ";
+                css += "height: " + std::to_string(height) + "px; ";
+                css += "background: transparent; ";
+                css += "pointer-events: none; ";
+                css += "z-index: 999999; ";
+                css += "} ";
+                
+                maskIndex++;
+                pos = hEnd;
+            } catch (...) {
+                pos++;
+            }
+        }
+        
+        css += "</style>";
+        
+        // Build JavaScript to inject the CSS and create mask elements
+        std::string script = 
+            "(function() { "
+            "  var oldStyle = document.getElementById('electrobun-masks'); "
+            "  if (oldStyle) oldStyle.remove(); "
+            "  var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
+            "  oldMasks.forEach(m => m.remove()); "
+            "  document.head.insertAdjacentHTML('beforeend', '" + css + "'); "
+            "  for (var i = 0; i < " + std::to_string(maskIndex) + "; i++) { "
+            "    var mask = document.createElement('div'); "
+            "    mask.className = 'electrobun-mask-' + i; "
+            "    document.body.appendChild(mask); "
+            "  } "
+            "})();";
+        
+        std::wstring wScript(script.begin(), script.end());
+        webview->ExecuteScript(wScript.c_str(), nullptr);
+    }
 };
 
 // CEFView class - implements AbstractView for CEF
@@ -1250,6 +1105,27 @@ public:
     
     CefRefPtr<CefBrowser> getBrowser() {
         return browser;
+    }
+    
+    // CEF-specific implementation of mask functionality
+    void applyVisualMask() override {
+        // CEF mask implementation - stub for now
+        // This would require CEF-specific masking logic
+    }
+    
+    void removeMasks() override {
+        // CEF mask removal - stub for now
+        // This would require CEF-specific masking logic
+    }
+    
+    void toggleMirrorMode(bool enable) override {
+        if (enable && !mirrorModeEnabled) {
+            mirrorModeEnabled = true;
+            // CEF-specific input disabling
+        } else if (!enable && mirrorModeEnabled) {
+            mirrorModeEnabled = false;
+            // CEF-specific input enabling
+        }
     }
 };
 
@@ -2547,8 +2423,8 @@ ELECTROBUN_EXPORT void shutdownApplication() {
 }
 
 // Modified initWebview function with direct COM bridge objects
-// Factory method for creating WebView2 instances
-std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
+// Internal factory method for creating WebView2 instances
+static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  HWND hwnd,
                                                  const char *url,
                                                  double x, double y,
@@ -2587,7 +2463,7 @@ std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 }
                 
                 // Create WebView2 controller
-                return env->CreateCoreWebView2Controller(container->getHwnd(),
+                return env->CreateCoreWebView2Controller(container->GetHwnd(),
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
@@ -2613,7 +2489,7 @@ std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             }
                             
                             // Add to container
-                            container->addAbstractView(view);
+                            container->AddAbstractView(view);
                             
                             return S_OK;
                         }).Get());
@@ -2629,8 +2505,8 @@ std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     return view;
 }
 
-// Factory method for creating CEF instances
-std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
+// Internal factory method for creating CEF instances  
+static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                                        HWND hwnd,
                                        const char *url,
                                        double x, double y,
@@ -2668,16 +2544,17 @@ std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         // Create CEF browser info
         CefWindowInfo windowInfo;
-        windowInfo.SetAsChild(container->getHwnd(), {(int)x, (int)y, (int)(x + width), (int)(y + height)});
+        windowInfo.SetAsChild(container->GetHwnd(), {(int)x, (int)y, (int)(x + width), (int)(y + height)});
         
         CefBrowserSettings browserSettings;
-        browserSettings.web_security = STATE_DISABLED;
+        // Note: web_security setting for CEF would need correct API
         
         // Create CEF client
         auto client = new ElectrobunCefClient();
-        client->SetNavigationCallback(navigationCallback);
-        client->SetWebviewEventHandler(webviewEventHandler);
-        client->SetBridgeHandlers(bunBridgeHandler, internalBridgeHandler);
+        // Note: These methods would need to be implemented in ElectrobunCefClient
+        // client->SetNavigationCallback(navigationCallback);
+        // client->SetWebviewEventHandler(webviewEventHandler);
+        // client->SetBridgeHandlers(bunBridgeHandler, internalBridgeHandler);
         
         view->setClient(client);
         
@@ -2686,7 +2563,7 @@ std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, nullptr);
         
         if (success) {
-            container->addAbstractView(view);
+            container->AddAbstractView(view);
         }
     });
     
@@ -2748,103 +2625,47 @@ ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithRe
     return handler;
 }
 ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *urlString) {
-    if (!abstractView || !abstractView->webview || !urlString) {
+    if (!abstractView || !urlString) {
         log("ERROR: Invalid parameters passed to loadURLInWebView");
         return;
     }
     
-    // Dispatch to main thread since WebView2 operations must happen on the UI thread
-    MainThreadDispatcher::dispatch_sync([=]() {
-        char logMsg[512];
-        sprintf_s(logMsg, "Loading URL in WebView %u: %s", abstractView->webviewId, urlString);
-        log(logMsg);
-        
-        // Convert UTF-8 URL to wide string for WebView2
-        int size = MultiByteToWideChar(CP_UTF8, 0, urlString, -1, NULL, 0);
-        if (size <= 0) {
-            log("ERROR: Failed to get required buffer size for URL conversion");
-            return;
-        }
-        
-        std::wstring wUrl(size - 1, 0);
-        int result = MultiByteToWideChar(CP_UTF8, 0, urlString, -1, &wUrl[0], size);
-        if (result == 0) {
-            log("ERROR: Failed to convert URL to wide string");
-            return;
-        }
-        
-        HRESULT hr = abstractView->webview->Navigate(wUrl.c_str());
-        
-        if (FAILED(hr)) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "ERROR: Failed to navigate to URL, HRESULT: 0x%lx", hr);
-            log(errorMsg);
-        } else {
-        }
-    });
+    // Use virtual method which handles threading and implementation details
+    char logMsg[512];
+    sprintf_s(logMsg, "Loading URL in WebView %u: %s", abstractView->webviewId, urlString);
+    log(logMsg);
+    
+    abstractView->loadURL(urlString);
 }
 
 ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
-    if (!abstractView || !abstractView->webview) {
+    if (!abstractView) {
         log("ERROR: Invalid AbstractView or webview in webviewGoBack");
         return;
     }
     
-    MainThreadDispatcher::dispatch_sync([=]() {
-        HRESULT hr = abstractView->webview->GoBack();
-        
-        if (FAILED(hr)) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "ERROR: Failed to go back, HRESULT: 0x%lx", hr);
-            log(errorMsg);
-        } else {
-            char logMsg[256];
-            sprintf_s(logMsg, "WebView %u went back successfully", abstractView->webviewId);
-            log(logMsg);
-        }
-    });
+    log("Webview going back");
+    abstractView->goBack();
 }
 
 ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
-    if (!abstractView || !abstractView->webview) {
+    if (!abstractView) {
         log("ERROR: Invalid AbstractView or webview in webviewGoForward");
         return;
     }
     
-    MainThreadDispatcher::dispatch_sync([=]() {
-        HRESULT hr = abstractView->webview->GoForward();
-        
-        if (FAILED(hr)) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "ERROR: Failed to go forward, HRESULT: 0x%lx", hr);
-            log(errorMsg);
-        } else {
-            char logMsg[256];
-            sprintf_s(logMsg, "WebView %u went forward successfully", abstractView->webviewId);
-            log(logMsg);
-        }
-    });
+    log("Webview going forward");
+    abstractView->goForward();
 }
 
 ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
-    if (!abstractView || !abstractView->webview) {
+    if (!abstractView) {
         log("ERROR: Invalid AbstractView or webview in webviewReload");
         return;
     }
     
-    MainThreadDispatcher::dispatch_sync([=]() {
-        HRESULT hr = abstractView->webview->Reload();
-        
-        if (FAILED(hr)) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "ERROR: Failed to reload, HRESULT: 0x%lx", hr);
-            log(errorMsg);
-        } else {
-            char logMsg[256];
-            sprintf_s(logMsg, "WebView %u reloaded successfully", abstractView->webviewId);
-            log(logMsg);
-        }
-    });
+    log("Webview reloading");
+    abstractView->reload();
 }
 
 ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
@@ -2857,91 +2678,25 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
     sprintf_s(logMsg, "Removing WebView %u", abstractView->webviewId);
     log(logMsg);
     
-    MainThreadDispatcher::dispatch_sync([=]() {
-        // Clean up the WebView2 controller and webview
-        if (abstractView->controller) {
-            // Hide the webview first
-            abstractView->controller->put_IsVisible(FALSE);
-            
-            // Close the controller (this will clean up the webview too)
-            HRESULT hr = abstractView->controller->Close();
-            if (FAILED(hr)) {
-                char errorMsg[256];
-                sprintf_s(errorMsg, "ERROR: Failed to close WebView2 controller: 0x%lx", hr);
-                log(errorMsg);
-            }
-            
-            // Release our references
-            abstractView->controller = nullptr;
-            abstractView->webview = nullptr;
-        }
-        
-        // Clean up bridge handlers
-        if (abstractView->bunBridgeHandler) {
-            abstractView->bunBridgeHandler = nullptr;
-        }
-        if (abstractView->internalBridgeHandler) {
-            abstractView->internalBridgeHandler = nullptr;
-        }
-        if (abstractView->bunBridgeDispatch) {
-            abstractView->bunBridgeDispatch = nullptr;
-        }
-        if (abstractView->internalBridgeDispatch) {
-            abstractView->internalBridgeDispatch = nullptr;
-        }
-        
-        // Remove from container views
-        for (auto& containerPair : g_containerViews) {
-            containerPair.second->RemoveAbstractViewWithId(abstractView->webviewId);
-        }
-        
-        log("WebView cleanup completed");
-    });
-    
-    // Don't delete the abstractView here - it's managed as a shared_ptr in the container
-    // The container will handle the deletion when the shared_ptr goes out of scope
+    abstractView->remove();
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
-    if (!abstractView || !abstractView->webview) {
+    if (!abstractView) {
         log("ERROR: Invalid AbstractView or webview in webviewCanGoBack");
         return FALSE;
     }
     
-    return MainThreadDispatcher::dispatch_sync([=]() -> BOOL {
-        BOOL canGoBack = FALSE;
-        HRESULT hr = abstractView->webview->get_CanGoBack(&canGoBack);
-        
-        if (FAILED(hr)) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "ERROR: Failed to check canGoBack, HRESULT: 0x%lx", hr);
-            log(errorMsg);
-            return FALSE;
-        }
-        
-        return canGoBack;
-    });
+    return abstractView->canGoBack();
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
-    if (!abstractView || !abstractView->webview) {
+    if (!abstractView) {
         log("ERROR: Invalid AbstractView or webview in webviewCanGoForward");
         return FALSE;
     }
     
-    return MainThreadDispatcher::dispatch_sync([=]() -> BOOL {
-        BOOL canGoForward = FALSE;
-        HRESULT hr = abstractView->webview->get_CanGoForward(&canGoForward);
-        
-        if (FAILED(hr)) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "ERROR: Failed to check canGoForward, HRESULT: 0x%lx", hr);
-            log(errorMsg);
-            return FALSE;
-        }
-        
-        return canGoForward;
-    });
+    return abstractView->canGoForward();
 }
 
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
@@ -2950,64 +2705,7 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
         return;
     }
     
-    if (!abstractView->webview) {
-        log("ERROR: WebView2 instance is null in evaluateJavaScriptWithNoCompletion");
-        return;
-    }
-    
-    // Dispatch to main thread since WebView2 operations must happen on the UI thread
-    MainThreadDispatcher::dispatch_sync([=]() {
-        char logMsg[512];
-        
-        
-        try {
-            // Convert UTF-8 script to wide string for WebView2
-            int size = MultiByteToWideChar(CP_UTF8, 0, script, -1, NULL, 0);
-            if (size <= 0) {
-                log("ERROR: Failed to get required buffer size for script conversion");
-                return;
-            }
-            
-            std::wstring wScript(size - 1, 0);
-            int result = MultiByteToWideChar(CP_UTF8, 0, script, -1, &wScript[0], size);
-            if (result == 0) {
-                log("ERROR: Failed to convert script to wide string");
-                return;
-            }
-            
-            // Execute the JavaScript with no completion handler (fire and forget)
-            HRESULT hr = abstractView->webview->ExecuteScript(
-                wScript.c_str(),
-                Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-                    [](HRESULT result, LPCWSTR resultObjectAsJson) -> HRESULT {
-                        // We don't care about the result for "no completion" version
-                        // but we should log errors for debugging
-                        if (FAILED(result)) {
-                            char errorMsg[256];
-                            sprintf_s(errorMsg, "JavaScript execution failed with HRESULT: 0x%lx", result);
-                            log(errorMsg);
-                        } else {
-                            // log("JavaScript executed successfully (no completion tracking)");
-                        }
-                        return S_OK;
-                    }).Get()
-            );
-            
-            if (FAILED(hr)) {
-                char errorMsg[256];
-                sprintf_s(errorMsg, "ERROR: Failed to execute JavaScript, HRESULT: 0x%lx", hr);
-                log(errorMsg);
-            } else {
-            }
-            
-        } catch (const std::exception& e) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "ERROR: Exception in evaluateJavaScriptWithNoCompletion: %s", e.what());
-            log(errorMsg);
-        } catch (...) {
-            log("ERROR: Unknown exception in evaluateJavaScriptWithNoCompletion");
-        }
-    });
+    abstractView->evaluateJavaScriptWithNoCompletion(script);
 }
 
 ELECTROBUN_EXPORT void testFFI(void *ptr) {
@@ -3320,30 +3018,14 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
 }
 
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
-         if (!abstractView || !abstractView->controller) {
-            log("ERROR: Invalid AbstractView or controller in resizeWebview");
-            return;
-        }
-        
-        MainThreadDispatcher::dispatch_sync([=]() {
-            RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-            
-            // Always update actual bounds since WebView2 doesn't separate visual/interactive layers
-            HRESULT hr = abstractView->controller->put_Bounds(bounds);
-            abstractView->visualBounds = bounds;
-            
-            // Store mask JSON for hit testing and visual masking
-            if (masksJson && strlen(masksJson) > 0) {
-                abstractView->maskJSON = std::string(masksJson);
-                // Apply visual masking to create actual holes
-                abstractView->applyVisualMask();
-            } else {
-                // Clear existing masks
-                abstractView->maskJSON.clear();
-                abstractView->removeMasks();
-            }
-        });
+    if (!abstractView) {
+        log("ERROR: Invalid AbstractView in resizeWebview");
+        return;
     }
+    
+    RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+    abstractView->resize(bounds, masksJson);
+}
 
 // Internal function to stop window movement (without export linkage)
 
