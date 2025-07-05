@@ -190,6 +190,9 @@ class ElectrobunCefClient;
 // Global map to store CEF clients for browser connection
 static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
 
+// Forward declaration for helper function (defined after ElectrobunCefClient)
+void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser);
+
 // CEF Life Span Handler for async browser creation
 class ElectrobunLifeSpanHandler : public CefLifeSpanHandler {
 public:
@@ -213,7 +216,9 @@ public:
         if (clientIt != g_cefClients.end()) {
             auto client = clientIt->second;
             if (client) {
-                client->SetBrowser(browser);
+                // Store browser-client pair for later processing
+                // We'll call SetBrowser after the full class definition
+                SetBrowserOnClient(client, browser);
                 std::cout << "[CEF] Connected browser to client for script execution" << std::endl;
             }
         }
@@ -497,6 +502,13 @@ private:
     CefRefPtr<ElectrobunRequestHandler> m_requestHandler;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
+
+// Helper function implementation (defined after ElectrobunCefClient class)
+void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser) {
+    if (client) {
+        client->SetBrowser(browser);
+    }
+}
 
 // Runtime CEF availability detection - Windows equivalent of macOS isCEFAvailable()
 bool isCEFAvailable() {
