@@ -84,7 +84,7 @@ private:
 // Entry point function for Windows sub-processes.
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     // Provide CEF with command-line arguments.
-    CefMainArgs main_args(GetCommandLineW());
+    CefMainArgs main_args(hInstance);
 
     CefRefPtr<CefApp> app(new HelperApp);
 
