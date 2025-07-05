@@ -2824,9 +2824,10 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         if (success) {
             container->AddAbstractView(view);
-            // Add client to global map for OnAfterCreated callback
-            g_cefClients[hwnd] = client;
-            std::cout << "[CEF] Stored client for hwnd: " << hwnd << std::endl;
+            // Add client to global map for OnAfterCreated callback using container window handle
+            HWND containerHwnd = container->GetHwnd();
+            g_cefClients[containerHwnd] = client;
+            std::cout << "[CEF] Stored client for container hwnd: " << containerHwnd << std::endl;
         }
     });
     
