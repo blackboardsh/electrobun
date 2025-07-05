@@ -98,9 +98,8 @@ static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 static GetMimeType g_getMimeType = nullptr;
 static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 
-// Forward declaration for CEF view mapping
-class CEFView;
-static std::map<HWND, std::shared_ptr<CEFView>> g_cefViews;
+// Global map to store CEF clients for browser connection
+static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
 
 // Global map to store pending CEF navigations for timing workaround - use browser ID instead of pointer
 static std::map<int, std::string> g_pendingCefNavigations;
@@ -206,18 +205,13 @@ public:
         
         std::cout << "[CEF] Browser window: " << browserWindow << ", parent: " << parentWindow << std::endl;
         
-        // Set browser on the CEF view and client
-        auto viewIt = g_cefViews.find(parentWindow);
-        if (viewIt != g_cefViews.end()) {
-            auto view = viewIt->second;
-            if (view) {
-                view->setBrowser(browser);
-                // Also set browser on the client for script execution
-                auto client = view->getClient();
-                if (client) {
-                    client->SetBrowser(browser);
-                }
-                std::cout << "[CEF] Connected browser to view and client" << std::endl;
+        // Set browser on the CEF client for script execution
+        auto clientIt = g_cefClients.find(parentWindow);
+        if (clientIt != g_cefClients.end()) {
+            auto client = clientIt->second;
+            if (client) {
+                client->SetBrowser(browser);
+                std::cout << "[CEF] Connected browser to client for script execution" << std::endl;
             }
         }
         
@@ -2780,8 +2774,8 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         if (success) {
             container->AddAbstractView(view);
-            // Add view to global map for OnAfterCreated callback
-            g_cefViews[hwnd] = view;
+            // Add client to global map for OnAfterCreated callback
+            g_cefClients[hwnd] = client;
         }
     });
     
