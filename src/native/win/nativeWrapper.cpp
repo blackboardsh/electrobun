@@ -237,6 +237,21 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunLifeSpanHandler);
 };
 
+// CEF Request Handler for views:// scheme support
+class ElectrobunRequestHandler : public CefRequestHandler {
+public:
+    // For now, return nullptr to use default behavior
+    // CEF views:// support relies on global scheme registration
+    CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
+                                                   CefRefPtr<CefFrame> frame,
+                                                   CefRefPtr<CefRequest> request) override {
+        return nullptr;
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
+};
+
 // CEF Client class with load and life span handlers
 // Forward declarations for existing views:// functions
 std::string loadViewsFile(const std::string& path);
