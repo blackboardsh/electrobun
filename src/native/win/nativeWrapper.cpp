@@ -155,13 +155,13 @@ private:
 class ElectrobunLoadHandler : public CefLoadHandler {
 public:
     void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override {
-        log("CEF LoadStart: Navigation started");
+        ::log("CEF LoadStart: Navigation started");
     }
     
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
         char msg[256];
         sprintf_s(msg, "CEF LoadEnd: Navigation completed with status %d", httpStatusCode);
-        log(msg);
+        ::log(msg);
     }
     
     void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override {
@@ -170,7 +170,7 @@ public:
                   static_cast<int>(errorCode), 
                   errorText.ToString().c_str(), 
                   failedUrl.ToString().c_str());
-        log(msg);
+        ::log(msg);
     }
 
 private:
