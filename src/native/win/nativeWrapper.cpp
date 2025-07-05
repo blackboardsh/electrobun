@@ -2206,6 +2206,13 @@ ELECTROBUN_EXPORT bool initCEF() {
     if (success) {
         g_cef_initialized = true;
         log("CEF initialized successfully");
+        
+        // Start a timer to pump CEF messages since we're using single-threaded mode
+        // This is essential for CEF callbacks like OnAfterCreated to be called
+        SetTimer(NULL, 1, 10, [](HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) -> VOID {
+            CefDoMessageLoopWork();
+        });
+        std::cout << "[CEF] Started message pump timer" << std::endl;
     } else {
         log("Failed to initialize CEF");
     }
