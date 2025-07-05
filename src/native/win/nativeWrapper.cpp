@@ -2234,9 +2234,11 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             g_pendingCefNavigations[browser] = target_url;
             
             // Use a timer to defer navigation (similar to macOS 0.1 second delay)
-            SetTimer(containerHwnd, reinterpret_cast<UINT_PTR>(browser.get()), 100, [](HWND hwnd, UINT, UINT_PTR browserPtr, DWORD) -> VOID {
+            UINT_PTR timerId = reinterpret_cast<UINT_PTR>(browser.get());
+            SetTimer(containerHwnd, timerId, 100, [](HWND hwnd, UINT, UINT_PTR browserPtr, DWORD) -> VOID {
                 // Convert back to browser pointer
-                CefRefPtr<CefBrowser> browser = reinterpret_cast<CefBrowser*>(browserPtr);
+                CefBrowser* browserRaw = reinterpret_cast<CefBrowser*>(browserPtr);
+                CefRefPtr<CefBrowser> browser(browserRaw);
                 
                 // Find and execute pending navigation
                 auto it = g_pendingCefNavigations.find(browser);
@@ -2247,7 +2249,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                     
                     // Clean up
                     g_pendingCefNavigations.erase(it);
-                    KillTimer(hwnd, reinterpret_cast<UINT_PTR>(browserPtr));
+                    KillTimer(hwnd, browserPtr);  // KillTimer takes HWND and timer ID
                 }
             });
         } else {
