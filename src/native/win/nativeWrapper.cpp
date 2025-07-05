@@ -310,12 +310,91 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandlerFactory);
 };
 
-// CEF Request Handler for views:// scheme support
-class ElectrobunRequestHandler : public CefRequestHandler {
+// CEF Response Filter for script injection
+class ElectrobunResponseFilter : public CefResponseFilter {
 public:
-    // For now, use default behavior - views:// will be handled by scheme registration
+    ElectrobunResponseFilter(const std::string& script) : script_(script) {}
+
+    bool InitFilter() override {
+        return true;
+    }
+
+    FilterStatus Filter(void* data_in, size_t data_in_size, size_t& data_in_read,
+                       void* data_out, size_t data_out_size, size_t& data_out_written) override {
+        // Read all input data
+        if (data_in_size > 0) {
+            data_buffer_.append(static_cast<char*>(data_in), data_in_size);
+            data_in_read = data_in_size;
+        } else {
+            data_in_read = 0;
+        }
+        
+        // If no input data (end of stream), process the accumulated data
+        if (data_in_size == 0 && !processed_) {
+            ProcessAccumulatedData();
+            processed_ = true;
+        }
+        
+        // Output processed data
+        data_out_written = 0;
+        if (processed_ && output_offset_ < processed_data_.size()) {
+            size_t copy_size = std::min(data_out_size, processed_data_.size() - output_offset_);
+            memcpy(data_out, processed_data_.data() + output_offset_, copy_size);
+            output_offset_ += copy_size;
+            data_out_written = copy_size;
+        }
+        
+        // Return status based on whether we have more data to output
+        if (data_in_size == 0 && output_offset_ >= processed_data_.size()) {
+            return RESPONSE_FILTER_DONE;
+        } else {
+            return RESPONSE_FILTER_NEED_MORE_DATA;
+        }
+    }
+
+    void ProcessAccumulatedData() {
+        // Process accumulated data and inject script
+        processed_data_ = data_buffer_;
+        
+        // Look for </head> tag and inject script before it
+        size_t head_pos = processed_data_.find("</head>");
+        if (head_pos != std::string::npos && !script_.empty()) {
+            std::string script_tag = "<script>" + script_ + "</script>";
+            processed_data_.insert(head_pos, script_tag);
+        }
+    }
 
 private:
+    std::string script_;
+    std::string data_buffer_;
+    std::string processed_data_;
+    size_t output_offset_ = 0;
+    bool processed_ = false;
+    IMPLEMENT_REFCOUNTING(ElectrobunResponseFilter);
+};
+
+// CEF Request Handler for views:// scheme support and script injection
+class ElectrobunRequestHandler : public CefRequestHandler {
+public:
+    ElectrobunRequestHandler(ElectrobunCefClient* client) : client_(client) {}
+
+    CefRefPtr<CefResponseFilter> GetResourceResponseFilter(CefRefPtr<CefBrowser> browser,
+                                                          CefRefPtr<CefFrame> frame,
+                                                          CefRefPtr<CefRequest> request,
+                                                          CefRefPtr<CefResponse> response) override {
+        // Only inject scripts into HTML responses
+        std::string mime_type = response->GetMimeType();
+        if (mime_type.find("text/html") != std::string::npos) {
+            std::string script = client_->GetCombinedScript();
+            if (!script.empty()) {
+                return new ElectrobunResponseFilter(script);
+            }
+        }
+        return nullptr;
+    }
+
+private:
+    ElectrobunCefClient* client_;
     IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
 };
 
@@ -332,7 +411,15 @@ public:
           webview_tag_handler_(internalBridgeHandler) {
         m_loadHandler = new ElectrobunLoadHandler();
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
-        m_requestHandler = new ElectrobunRequestHandler();
+        m_requestHandler = new ElectrobunRequestHandler(this);
+    }
+
+    void AddPreloadScript(const std::string& script) {
+        electrobun_script_ = script;
+    }
+
+    void UpdateCustomPreloadScript(const std::string& script) {
+        custom_script_ = script;
     }
     
     CefRefPtr<CefLoadHandler> GetLoadHandler() override {
@@ -371,10 +458,20 @@ public:
         return false;
     }
 
+    std::string GetCombinedScript() const {
+        std::string combined_script = electrobun_script_;
+        if (!custom_script_.empty()) {
+            combined_script += "\n" + custom_script_;
+        }
+        return combined_script;
+    }
+
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
     HandlePostMessage webview_tag_handler_;
+    std::string electrobun_script_;
+    std::string custom_script_;
     CefRefPtr<ElectrobunLoadHandler> m_loadHandler;
     CefRefPtr<ElectrobunLifeSpanHandler> m_lifeSpanHandler;
     CefRefPtr<ElectrobunRequestHandler> m_requestHandler;
@@ -2632,6 +2729,15 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         // Create CEF client with bridge handlers
         auto client = new ElectrobunCefClient(webviewId, bunBridgeHandler, internalBridgeHandler);
+        
+        // Set up preload scripts
+        if (electrobunPreloadScript && strlen(electrobunPreloadScript) > 0) {
+            client->AddPreloadScript(std::string(electrobunPreloadScript));
+        }
+        if (customPreloadScript && strlen(customPreloadScript) > 0) {
+            client->UpdateCustomPreloadScript(std::string(customPreloadScript));
+        }
+        
         // Note: Additional callback methods would need to be implemented if needed
         // client->SetNavigationCallback(navigationCallback);
         // client->SetWebviewEventHandler(webviewEventHandler);
