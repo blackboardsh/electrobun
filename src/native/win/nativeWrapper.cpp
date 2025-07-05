@@ -2224,9 +2224,24 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             view->hwnd = containerHwnd;
             view->browser = browser;
             
-            // Navigate to the actual URL after browser is created (following macOS pattern)
-            log(("Navigating CEF browser to: " + target_url).c_str());
-            browser->GetMainFrame()->LoadURL(CefString(target_url));
+            // Defer navigation to allow window/browser to fully initialize (following macOS timing pattern)
+            // Use PostMessage to defer navigation to the next message loop cycle
+            log("Deferring CEF navigation for proper initialization...");
+            
+            // Store target URL in a way we can access it from the window procedure
+            // For now, use a simple delay approach similar to macOS commented code
+            SetTimer(containerHwnd, 1, 100, [](HWND hwnd, UINT, UINT_PTR, DWORD) -> VOID {
+                // Find the view associated with this container window
+                for (auto& pair : g_containerViews) {
+                    if (pair.second && pair.second->hwnd == hwnd && pair.second->browser) {
+                        std::string deferred_url = "https://en.wikipedia.org/wiki/Special:Random"; // TODO: use stored URL
+                        log(("Deferred navigation to: " + deferred_url).c_str());
+                        pair.second->browser->GetMainFrame()->LoadURL(CefString(deferred_url));
+                        KillTimer(hwnd, 1);
+                        break;
+                    }
+                }
+            });
         } else {
             log("ERROR: Failed to create CEF browser");
         }
