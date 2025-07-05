@@ -237,73 +237,89 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunLifeSpanHandler);
 };
 
-// CEF Resource Handler for views:// scheme
-class ElectrobunResourceHandler : public CefResourceHandler {
+// Forward declarations for functions defined later in the file
+std::string loadViewsFile(const std::string& path);
+std::string getMimeTypeForFile(const std::string& path);
+
+// CEF Resource Handler for views:// scheme (based on Mac implementation)
+class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
-    ElectrobunResourceHandler(const std::string& url) : url_(url) {}
+    ElectrobunSchemeHandler() : offset_(0), hasResponse_(false) {}
 
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
         handle_request = true;
         
-        // Extract path from views:// URL
-        std::string path = url_.substr(8); // Remove "views://" prefix
+        std::string url = request->GetURL();
+        std::string path = url.substr(8); // Remove "views://" prefix
         if (path.empty()) path = "index.html";
         
-        // Load file content using existing WebView2 function
-        content_ = loadViewsFile(path);
-        mime_type_ = getMimeTypeForFile(path);
+        // Load file content using existing function
+        std::string content = loadViewsFile(path);
+        mimeType_ = getMimeTypeForFile(path);
         
-        return !content_.empty();
+        if (!content.empty()) {
+            responseData_.assign(content.begin(), content.end());
+            hasResponse_ = true;
+        } else {
+            hasResponse_ = false;
+        }
+        
+        return hasResponse_;
     }
 
-    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64& response_length, CefString& redirectUrl) override {
+    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override {
         response->SetStatus(200);
-        response->SetMimeType(mime_type_);
-        response_length = content_.length();
+        response->SetMimeType(mimeType_);
+        response_length = static_cast<int64_t>(responseData_.size());
     }
 
     bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override {
         bytes_read = 0;
-        if (offset_ < content_.length()) {
-            int transfer = std::min(bytes_to_read, static_cast<int>(content_.length() - offset_));
-            memcpy(data_out, content_.data() + offset_, transfer);
-            offset_ += transfer;
-            bytes_read = transfer;
+        if (!hasResponse_ || offset_ >= responseData_.size()) {
+            return false;
         }
-        return bytes_read > 0;
+        size_t remaining = responseData_.size() - offset_;
+        bytes_read = (bytes_to_read < static_cast<int>(remaining)) ? 
+                     bytes_to_read : static_cast<int>(remaining);
+        memcpy(data_out, responseData_.data() + offset_, bytes_read);
+        offset_ += bytes_read;
+        return true;
     }
 
     void Cancel() override {}
 
 private:
-    std::string url_;
-    std::string content_;
-    std::string mime_type_;
-    size_t offset_ = 0;
-    IMPLEMENT_REFCOUNTING(ElectrobunResourceHandler);
+    std::string mimeType_;
+    std::vector<char> responseData_;
+    bool hasResponse_;
+    size_t offset_;
+    IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandler);
+};
+
+// CEF Scheme Handler Factory
+class ElectrobunSchemeHandlerFactory : public CefSchemeHandlerFactory {
+public:
+    CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser,
+                                       CefRefPtr<CefFrame> frame,
+                                       const CefString& scheme_name,
+                                       CefRefPtr<CefRequest> request) override {
+        return new ElectrobunSchemeHandler();
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandlerFactory);
 };
 
 // CEF Request Handler for views:// scheme support
 class ElectrobunRequestHandler : public CefRequestHandler {
 public:
-    CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
-                                                   CefRefPtr<CefFrame> frame,
-                                                   CefRefPtr<CefRequest> request) override {
-        std::string url = request->GetURL();
-        if (url.substr(0, 8) == "views://") {
-            return new ElectrobunResourceHandler(url);
-        }
-        return nullptr;
-    }
+    // For now, use default behavior - views:// will be handled by scheme registration
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
 };
 
 // CEF Client class with load and life span handlers
-// Forward declarations for existing views:// functions
-std::string loadViewsFile(const std::string& path);
-std::string getMimeTypeForFile(const std::string& path);
 
 
 class ElectrobunCefClient : public CefClient {
@@ -2442,6 +2458,10 @@ ELECTROBUN_EXPORT bool initCEF() {
     if (success) {
         g_cef_initialized = true;
         ::log("CEF initialized successfully");
+        
+        // Register the views:// scheme handler factory
+        CefRegisterSchemeHandlerFactory("views", "", new ElectrobunSchemeHandlerFactory());
+        ::log("Registered views:// scheme handler factory");
         
         // We'll start the message pump timer when we create the first browser
         std::cout << "[CEF] CEF initialized, message pump will start with first browser" << std::endl;
