@@ -613,39 +613,56 @@ public:
 
 HWND MainThreadDispatcher::g_messageWindow = NULL;
 
-// AbstractView class definition
+// AbstractView base class - Windows implementation matching Mac pattern
 class AbstractView {
 public:
     uint32_t webviewId;
+    HWND hwnd = NULL;
     bool isMousePassthroughEnabled = false;
     bool mirrorModeEnabled = false;
     bool fullSize = false;
     
-    // WebView2 specific members
-    ComPtr<ICoreWebView2Controller> controller;
-    ComPtr<ICoreWebView2CompositionController> compositionController;
-    ComPtr<ICoreWebView2> webview;
+    // Common state
+    bool isReceivingInput = true;
+    std::string maskJSON;
+    RECT visualBounds = {};
     
-    // CEF specific members
-    CefRefPtr<CefBrowser> browser;
-    HWND hwnd = NULL; // Container window handle
-    
-    // Input routing state
-    bool isReceivingInput = true;  // Whether this webview should receive input events
-    
-    // Mask support for hit testing
-    std::string maskJSON;  // JSON string defining mask areas
-    
-    // Store bridge handlers to keep them alive
+    // Bridge handlers
     ComPtr<BridgeHandler> bunBridgeHandler;
     ComPtr<BridgeHandler> internalBridgeHandler;
     ComPtr<BunBridgeDispatch> bunBridgeDispatch;
     ComPtr<InternalBridgeDispatch> internalBridgeDispatch;
     
-    // Store visual bounds
-    RECT visualBounds = {};
-    
     virtual ~AbstractView() = default;
+    
+    // Pure virtual methods - must be implemented by subclasses
+    virtual void loadURL(const char* urlString) = 0;
+    virtual void goBack() = 0;
+    virtual void goForward() = 0;
+    virtual void reload() = 0;
+    virtual void remove() = 0;
+    virtual bool canGoBack() = 0;
+    virtual bool canGoForward() = 0;
+    virtual void evaluateJavaScriptWithNoCompletion(const char* jsString) = 0;
+    virtual void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) = 0;
+    virtual void addPreloadScriptToWebView(const char* jsString) = 0;
+    virtual void updateCustomPreloadScript(const char* jsString) = 0;
+    virtual void resize(const RECT& frame, const char* masksJson) = 0;
+    
+    // Common implementations
+    virtual void setTransparent(bool transparent) {
+        // Default implementation - can be overridden
+    }
+    
+    virtual void setPassthrough(bool enable) {
+        isMousePassthroughEnabled = enable;
+    }
+    
+    virtual void setHidden(bool hidden) {
+        if (hwnd) {
+            ShowWindow(hwnd, hidden ? SW_HIDE : SW_SHOW);
+        }
+    }
     
     // Check if point is in a masked (cut-out) area based on maskJSON
     bool isPointInMask(POINT localPoint) {
@@ -971,13 +988,268 @@ public:
         }
     }
     
-    // Update visual bounds (always updates actual bounds since WebView2 doesn't separate layers)
-    void updateVisualBounds(const RECT& newBounds) {
-        visualBounds = newBounds;
-        if (controller) {
-            // WebView2 doesn't separate visual from interactive bounds
-            controller->put_Bounds(newBounds);
+    // Utility methods for mask functionality
+    bool isPointInMask(POINT localPoint) {
+        if (maskJSON.empty()) return false;
+        
+        // Simple JSON parsing for mask rectangles
+        // Expected format: [{"x":10,"y":20,"width":100,"height":50},...]
+        size_t pos = 0;
+        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+            try {
+                // Extract x, y, width, height from JSON
+                size_t xStart = maskJSON.find(":", pos) + 1;
+                size_t xEnd = maskJSON.find(",", xStart);
+                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+                
+                size_t yPos = maskJSON.find("\"y\":", pos);
+                size_t yStart = maskJSON.find(":", yPos) + 1;
+                size_t yEnd = maskJSON.find(",", yStart);
+                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+                
+                size_t wPos = maskJSON.find("\"width\":", pos);
+                size_t wStart = maskJSON.find(":", wPos) + 1;
+                size_t wEnd = maskJSON.find(",", wStart);
+                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+                
+                size_t hPos = maskJSON.find("\"height\":", pos);
+                size_t hStart = maskJSON.find(":", hPos) + 1;
+                size_t hEnd = maskJSON.find("}", hStart);
+                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+                
+                // Check if point is within this mask rectangle
+                if (localPoint.x >= x && localPoint.x < x + width &&
+                    localPoint.y >= y && localPoint.y < y + height) {
+                    return true;  // Point is in a masked area
+                }
+                
+                pos = hEnd;
+            } catch (...) {
+                // JSON parsing error, skip this mask
+                pos++;
+            }
         }
+        
+        return false;  // Point is not in any masked area
+    }
+};
+
+// WebView2View class - implements AbstractView for WebView2
+class WebView2View : public AbstractView {
+private:
+    ComPtr<ICoreWebView2Controller> controller;
+    ComPtr<ICoreWebView2CompositionController> compositionController;
+    ComPtr<ICoreWebView2> webview;
+    
+public:
+    WebView2View(uint32_t webviewId) {
+        this->webviewId = webviewId;
+    }
+    
+    void loadURL(const char* urlString) override {
+        if (webview) {
+            std::wstring url = std::wstring(urlString, urlString + strlen(urlString));
+            webview->Navigate(url.c_str());
+        }
+    }
+    
+    void goBack() override {
+        if (webview) {
+            webview->GoBack();
+        }
+    }
+    
+    void goForward() override {
+        if (webview) {
+            webview->GoForward();
+        }
+    }
+    
+    void reload() override {
+        if (webview) {
+            webview->Reload();
+        }
+    }
+    
+    void remove() override {
+        if (controller) {
+            controller->Close();
+            controller = nullptr;
+        }
+        webview = nullptr;
+    }
+    
+    bool canGoBack() override {
+        if (webview) {
+            BOOL canGoBack = FALSE;
+            webview->get_CanGoBack(&canGoBack);
+            return canGoBack;
+        }
+        return false;
+    }
+    
+    bool canGoForward() override {
+        if (webview) {
+            BOOL canGoForward = FALSE;
+            webview->get_CanGoForward(&canGoForward);
+            return canGoForward;
+        }
+        return false;
+    }
+    
+    void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
+        if (webview) {
+            std::wstring js = std::wstring(jsString, jsString + strlen(jsString));
+            webview->ExecuteScript(js.c_str(), nullptr);
+        }
+    }
+    
+    void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) override {
+        if (webview) {
+            std::wstring js = std::wstring(jsString, jsString + strlen(jsString));
+            webview->ExecuteScript(js.c_str(), (ICoreWebView2ExecuteScriptCompletedHandler*)completionHandler);
+        }
+    }
+    
+    void addPreloadScriptToWebView(const char* jsString) override {
+        if (webview) {
+            std::wstring js = std::wstring(jsString, jsString + strlen(jsString));
+            webview->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT);
+            // Note: Full preload script implementation would require additional setup
+        }
+    }
+    
+    void updateCustomPreloadScript(const char* jsString) override {
+        // Implementation for updating custom preload script
+    }
+    
+    void resize(const RECT& frame, const char* masksJson) override {
+        if (controller) {
+            controller->put_Bounds(frame);
+            visualBounds = frame;
+            if (masksJson) {
+                maskJSON = masksJson;
+            }
+        }
+    }
+    
+    // WebView2-specific methods
+    void setController(ComPtr<ICoreWebView2Controller> ctrl) {
+        controller = ctrl;
+    }
+    
+    void setWebView(ComPtr<ICoreWebView2> wv) {
+        webview = wv;
+    }
+    
+    ComPtr<ICoreWebView2Controller> getController() {
+        return controller;
+    }
+    
+    ComPtr<ICoreWebView2> getWebView() {
+        return webview;
+    }
+};
+
+// CEFView class - implements AbstractView for CEF
+class CEFView : public AbstractView {
+private:
+    CefRefPtr<CefBrowser> browser;
+    CefRefPtr<ElectrobunCefClient> client;
+    
+public:
+    CEFView(uint32_t webviewId) {
+        this->webviewId = webviewId;
+    }
+    
+    void loadURL(const char* urlString) override {
+        if (browser) {
+            browser->GetMainFrame()->LoadURL(urlString);
+        }
+    }
+    
+    void goBack() override {
+        if (browser) {
+            browser->GoBack();
+        }
+    }
+    
+    void goForward() override {
+        if (browser) {
+            browser->GoForward();
+        }
+    }
+    
+    void reload() override {
+        if (browser) {
+            browser->Reload();
+        }
+    }
+    
+    void remove() override {
+        if (browser) {
+            browser->GetHost()->CloseBrowser(true);
+            browser = nullptr;
+        }
+    }
+    
+    bool canGoBack() override {
+        if (browser) {
+            return browser->CanGoBack();
+        }
+        return false;
+    }
+    
+    bool canGoForward() override {
+        if (browser) {
+            return browser->CanGoForward();
+        }
+        return false;
+    }
+    
+    void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
+        if (browser) {
+            browser->GetMainFrame()->ExecuteJavaScript(jsString, "", 0);
+        }
+    }
+    
+    void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) override {
+        if (browser) {
+            // CEF async JavaScript execution would need additional implementation
+            browser->GetMainFrame()->ExecuteJavaScript(jsString, "", 0);
+        }
+    }
+    
+    void addPreloadScriptToWebView(const char* jsString) override {
+        // CEF preload script implementation
+    }
+    
+    void updateCustomPreloadScript(const char* jsString) override {
+        // CEF custom preload script implementation
+    }
+    
+    void resize(const RECT& frame, const char* masksJson) override {
+        if (browser) {
+            browser->GetHost()->WasResized();
+            visualBounds = frame;
+            if (masksJson) {
+                maskJSON = masksJson;
+            }
+        }
+    }
+    
+    // CEF-specific methods
+    void setBrowser(CefRefPtr<CefBrowser> br) {
+        browser = br;
+    }
+    
+    void setClient(CefRefPtr<ElectrobunCefClient> cl) {
+        client = cl;
+    }
+    
+    CefRefPtr<CefBrowser> getBrowser() {
+        return browser;
     }
 };
 
@@ -2275,6 +2547,153 @@ ELECTROBUN_EXPORT void shutdownApplication() {
 }
 
 // Modified initWebview function with direct COM bridge objects
+// Factory method for creating WebView2 instances
+std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
+                                                 HWND hwnd,
+                                                 const char *url,
+                                                 double x, double y,
+                                                 double width, double height,
+                                                 bool autoResize,
+                                                 const char *partitionIdentifier,
+                                                 DecideNavigationCallback navigationCallback,
+                                                 WebviewEventHandler webviewEventHandler,
+                                                 HandlePostMessage bunBridgeHandler,
+                                                 HandlePostMessage internalBridgeHandler,
+                                                 const char *electrobunPreloadScript,
+                                                 const char *customPreloadScript) {
+    
+    auto view = std::make_shared<WebView2View>(webviewId);
+    view->hwnd = hwnd;
+    view->fullSize = autoResize;
+    
+    // WebView2 creation logic moved to factory method
+    MainThreadDispatcher::dispatch_sync([=]() {
+        // Initialize COM for this thread
+        CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+        
+        // Get or create container
+        auto container = GetOrCreateContainer(hwnd);
+        if (!container) {
+            log("ERROR: Failed to create container");
+            return;
+        }
+        
+        // Create WebView2 environment
+        auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                if (FAILED(result)) {
+                    log("ERROR: Failed to create WebView2 environment");
+                    return S_OK;
+                }
+                
+                // Create WebView2 controller
+                return env->CreateCoreWebView2Controller(container->getHwnd(),
+                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                        [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                            if (FAILED(result)) {
+                                log("ERROR: Failed to create WebView2 controller");
+                                return S_OK;
+                            }
+                            
+                            // Set up WebView2 controller and core
+                            ComPtr<ICoreWebView2Controller> ctrl(controller);
+                            ComPtr<ICoreWebView2> webview;
+                            
+                            ctrl->get_CoreWebView2(&webview);
+                            view->setController(ctrl);
+                            view->setWebView(webview);
+                            
+                            // Set bounds
+                            RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+                            ctrl->put_Bounds(bounds);
+                            
+                            // Navigate to URL
+                            if (url && strlen(url) > 0) {
+                                view->loadURL(url);
+                            }
+                            
+                            // Add to container
+                            container->addAbstractView(view);
+                            
+                            return S_OK;
+                        }).Get());
+            }).Get();
+        
+        // Create WebView2 environment with custom scheme support
+        auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+        options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
+        
+        CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler);
+    });
+    
+    return view;
+}
+
+// Factory method for creating CEF instances
+std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
+                                       HWND hwnd,
+                                       const char *url,
+                                       double x, double y,
+                                       double width, double height,
+                                       bool autoResize,
+                                       const char *partitionIdentifier,
+                                       DecideNavigationCallback navigationCallback,
+                                       WebviewEventHandler webviewEventHandler,
+                                       HandlePostMessage bunBridgeHandler,
+                                       HandlePostMessage internalBridgeHandler,
+                                       const char *electrobunPreloadScript,
+                                       const char *customPreloadScript) {
+    
+    auto view = std::make_shared<CEFView>(webviewId);
+    view->hwnd = hwnd;
+    view->fullSize = autoResize;
+    
+    // Initialize CEF on main thread
+    bool cefInitResult = MainThreadDispatcher::dispatch_sync([=]() -> bool {
+        return initCEF();
+    });
+    
+    if (!cefInitResult) {
+        log("ERROR: Failed to initialize CEF");
+        return view;
+    }
+    
+    // CEF browser creation logic
+    MainThreadDispatcher::dispatch_sync([=]() {
+        auto container = GetOrCreateContainer(hwnd);
+        if (!container) {
+            log("ERROR: Failed to create container");
+            return;
+        }
+        
+        // Create CEF browser info
+        CefWindowInfo windowInfo;
+        windowInfo.SetAsChild(container->getHwnd(), {(int)x, (int)y, (int)(x + width), (int)(y + height)});
+        
+        CefBrowserSettings browserSettings;
+        browserSettings.web_security = STATE_DISABLED;
+        
+        // Create CEF client
+        auto client = new ElectrobunCefClient();
+        client->SetNavigationCallback(navigationCallback);
+        client->SetWebviewEventHandler(webviewEventHandler);
+        client->SetBridgeHandlers(bunBridgeHandler, internalBridgeHandler);
+        
+        view->setClient(client);
+        
+        // Create browser
+        bool success = CefBrowserHost::CreateBrowser(
+            windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, nullptr);
+        
+        if (success) {
+            container->addAbstractView(view);
+        }
+    });
+    
+    return view;
+}
+
+// Clean, elegant initWebview function - Windows version matching Mac pattern
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          NSWindow *window,  // Actually HWND on Windows
                          const char *renderer,
@@ -2296,411 +2715,26 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
        x, y, width, height, autoResize ? "true" : "false");
     
     HWND hwnd = reinterpret_cast<HWND>(window);
-
-    // Check if CEF renderer is requested and CEF is available
-    if (renderer && strcmp(renderer, "cef") == 0) {
-        if (!isCEFAvailable()) {
-            log("WARNING: CEF renderer requested but CEF files not found, falling back to WebView2");
-            // Fall through to WebView2 creation
-        } else {
+    
+    // Factory pattern - choose implementation based on renderer
+    std::shared_ptr<AbstractView> view = nullptr;
+    
+    if (renderer && strcmp(renderer, "cef") == 0 && isCEFAvailable()) {
         log("=== Creating CEF Browser ===");
-        
-        // Initialize CEF on main thread if not already done
-        bool cefInitResult = MainThreadDispatcher::dispatch_sync([=]() -> bool {
-            return initCEF();
-        });
-        
-        if (!cefInitResult) {
-            log("ERROR: Failed to initialize CEF");
-            auto view = std::make_shared<AbstractView>();
-            view->webviewId = webviewId;
-            return view.get();
-        }
-
-        auto view = std::make_shared<AbstractView>();
-        view->webviewId = webviewId;
-        view->fullSize = autoResize;
-        
-        // CEF operations must happen on the main thread - dispatch everything
-        std::string target_url = url ? std::string(url) : "about:blank";
-        
-        MainThreadDispatcher::dispatch_sync([=, target_url = target_url]() {
-        
-        // Use the existing container window (hwnd is the container, not the system window)
-        HWND containerHwnd = hwnd;
-        
-        // Debug: Check container window validity
-        if (IsWindow(containerHwnd)) {
-            RECT containerRect;
-            GetWindowRect(containerHwnd, &containerRect);
-            char containerDebug[256];
-            sprintf_s(containerDebug, "Container window HWND=%p is valid, visible=%s", 
-                      containerHwnd, IsWindowVisible(containerHwnd) ? "YES" : "NO");
-            log(containerDebug);
-        } else {
-            log("ERROR: Container window is not valid!");
-            return view.get();
-        }
-        
-        log("Using existing container window for CEF webview");
-        
-        // Create CEF browser window info as child of the existing container
-        CefWindowInfo window_info;
-        CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
-        window_info.SetAsChild(containerHwnd, cef_rect);
-        
-        // Debug: Log window hierarchy
-        char windowDebug[512];
-        sprintf_s(windowDebug, "CEF Browser: Container HWND=%p, Rect=(%d,%d,%d,%d)", 
-                  containerHwnd, (int)x, (int)y, (int)width, (int)height);
-        log(windowDebug);
-        
-        // Create CEF browser settings
-        CefBrowserSettings browser_settings;
-        
-        // Create CEF client
-        CefRefPtr<ElectrobunCefClient> client = new ElectrobunCefClient();
-        
-        // Store the target URL for later navigation
-        std::string target_url = url && strlen(url) > 0 ? std::string(url) : "https://www.google.com";
-        
-        // Debug: Log the URL being used
-        log(("CEF Target URL: " + target_url).c_str());
-        
-        // Create the browser with about:blank first (following macOS pattern to avoid timing issues)
-        log("Creating CEF browser with about:blank...");
-        
-        // Debug: Log all parameters before creation
-        std::cout << "[CEF] Window info parent: " << window_info.parent_window << std::endl;
-        std::cout << "[CEF] Window info style: " << window_info.style << std::endl;
-        std::cout << "[CEF] Client valid: " << (client.get() != nullptr ? "YES" : "NO") << std::endl;
-        std::cout << "[CEF] Browser settings valid: " << "YES" << std::endl;
-        
-        // Use asynchronous CreateBrowser instead of CreateBrowserSync (more reliable on Windows)
-        bool browserRequested = CefBrowserHost::CreateBrowser(
-            window_info, client.get(), "about:blank", browser_settings, nullptr, nullptr);
-            
-        std::cout << "[CEF] CreateBrowser requested: " << (browserRequested ? "SUCCESS" : "FAILED") << std::endl;
-            
-        if (browserRequested) {
-            // Store the view for later use when browser creation completes
-            std::cout << "[CEF] Browser creation initiated asynchronously" << std::endl;
-            
-            // Message pumping is now handled by CefRunMessageLoop() in runNSApplication
-            
-            // We'll need to handle the browser reference in the client's OnAfterCreated callback
-            // For now, just store basic view info
-            view->hwnd = containerHwnd;
-            
-            // Since we don't have the browser object yet, we'll defer navigation differently
-            // Store the target URL in a way that can be accessed when browser is ready
-            g_pendingUrls[containerHwnd] = target_url;
-            std::cout << "[CEF] Stored pending URL for container: " << containerHwnd << " -> " << target_url << std::endl;
-        } else {
-            log("ERROR: Failed to create CEF browser");
-        }
-        
-        }); // End of MainThreadDispatcher::dispatch_sync
-        
-        return view.get();
-        }
+        view = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
+                            partitionIdentifier, navigationCallback, webviewEventHandler,
+                            bunBridgeHandler, internalBridgeHandler,
+                            electrobunPreloadScript, customPreloadScript);
+    } else {
+        log("=== Creating WebView2 Browser ===");
+        view = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
+                                 partitionIdentifier, navigationCallback, webviewEventHandler,
+                                 bunBridgeHandler, internalBridgeHandler,
+                                 electrobunPreloadScript, customPreloadScript);
     }
-
-    log("=== Starting WebView2 Creation with Direct COM Bridge Objects ===");
-    
-    auto view = std::make_shared<AbstractView>();
-    view->webviewId = webviewId;
-    view->fullSize = autoResize;
-    
-    if (!IsWindow(hwnd)) {
-        log("ERROR: Invalid window handle provided");
-        return view.get();
-    }
-    
-    // Copy parameters that might be destroyed when this function returns
-    std::string urlStr = url ? std::string(url) : "";
-    std::string electrobunScriptStr = electrobunPreloadScript ? std::string(electrobunPreloadScript) : "";
-    std::string customScriptStr = customPreloadScript ? std::string(customPreloadScript) : "";
-    
-    // Dispatch WebView2 creation to main thread
-    MainThreadDispatcher::dispatch_sync([=, urlStr = urlStr, electrobunScriptStr = electrobunScriptStr, customScriptStr = customScriptStr]() {
-        log("Creating WebView2 with direct COM bridge objects on main thread");
-        
-        // Get or create container for this window
-        ContainerView* container = GetOrCreateContainer(hwnd);
-        if (!container) {
-            log("ERROR: Failed to get or create container");
-            return;
-        }
-        
-        HWND containerHwnd = container->GetHwnd();
-        
-        // Initialize COM on main thread
-        CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-        
-        // Create environment options with custom scheme registration
-        auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
-        
-        // Get the interface that supports custom scheme registration  
-        Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
-        if (SUCCEEDED(options.As(&options4))) {
-            
-            // Set allowed origins for the custom scheme
-            const WCHAR* allowedOrigins[1] = {L"*"};
-            
-            // Create custom scheme registration for "views"
-            auto viewsSchemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>(L"views");
-            viewsSchemeRegistration->put_TreatAsSecure(TRUE);
-            viewsSchemeRegistration->put_HasAuthorityComponent(TRUE); // This allows views://host/path format
-            viewsSchemeRegistration->SetAllowedOrigins(1, allowedOrigins);
-            
-            // Set the custom scheme registrations
-            ICoreWebView2CustomSchemeRegistration* registrations[1] = {
-                viewsSchemeRegistration.Get()
-            };
-            
-            HRESULT schemeResult = options4->SetCustomSchemeRegistrations(1, registrations);
-            
-            if (SUCCEEDED(schemeResult)) {
-            } else {
-                char errorMsg[256];
-                sprintf_s(errorMsg, "Failed to set views:// custom scheme registration: 0x%lx", schemeResult);
-                log(errorMsg);
-            }
-        } else {
-            log("ERROR: Failed to get ICoreWebView2EnvironmentOptions4 interface for custom scheme registration");
-        }
-        
-        // Create WebView2 environment with custom scheme registration
-        HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
-            nullptr,  // browser folder (use default)
-            nullptr,  // user data folder (use default)
-            options.Get(),  // environment options with custom scheme
-            Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-                [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
-                    if (SUCCEEDED(result)) {
-                        
-                        // Store environment globally
-                        g_environment = env;
-                        
-                        // Create WebView2 controller
-                        env->CreateCoreWebView2Controller(containerHwnd,
-                            Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                                [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
-                                    if (SUCCEEDED(result)) {
-                                        
-                                        // Store controller in the view
-                                        view->controller = controller;
-                                        
-                                        // Get the WebView2 core
-                                        HRESULT webviewResult = controller->get_CoreWebView2(&view->webview);
-                                        if (FAILED(webviewResult)) {
-                                            log("ERROR: Failed to get CoreWebView2");
-                                            return S_OK;
-                                        }
-
-                                        // Store in global
-                                        g_webview = view->webview;
-
-                                        // Configure WebView2 settings to try to allow mouse passthrough
-                                        ComPtr<ICoreWebView2Settings> settings;
-                                        HRESULT settingsResult = view->webview->get_Settings(&settings);
-                                        if (SUCCEEDED(settingsResult)) {
-                                            
-                                            // Disable context menus to reduce mouse event consumption
-                                            settings->put_AreDefaultContextMenusEnabled(FALSE);
-                                            
-                                            // Keep scripts and messaging enabled for our bridge
-                                            settings->put_IsScriptEnabled(TRUE);
-                                            settings->put_IsWebMessageEnabled(TRUE);
-                                            
-                                        } else {
-                                            log("ERROR: Failed to get WebView2 settings - HRESULT: " + std::to_string(settingsResult));
-                                        }
-
-                                        // Set up resource request handler for views:// scheme
-                                        setupViewsSchemeHandler(view->webview.Get(), webviewId);
-                                        
-                                        // Set bounds within container
-                                        RECT bounds;
-                                        if (autoResize) {
-                                            GetClientRect(containerHwnd, &bounds);
-                                        } else {
-                                            bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-                                        }
-                                        controller->put_Bounds(bounds);
-                                        
-                                        // Note: Advanced controller settings (ICoreWebView2Controller4) not available in this WebView2 version
-                                        
-                                        // Make webview visible
-                                        controller->put_IsVisible(TRUE);
-                                        controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-                                        
-                                        // Add view to container
-                                        container->AddAbstractView(view);
-                                        
-                                        // Set up navigation event handlers
-                                        if (navigationCallback) {
-                                            EventRegistrationToken navigationToken;
-                                            view->webview->add_NavigationStarting(
-                                                Callback<ICoreWebView2NavigationStartingEventHandler>(
-                                                    [navigationCallback, webviewId](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
-                                                        LPWSTR uri;
-                                                        args->get_Uri(&uri);
-                                                        
-                                                        // Convert to char* and call callback
-                                                        int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, NULL, 0, NULL, NULL);
-                                                        char* url_char = new char[size];
-                                                        WideCharToMultiByte(CP_UTF8, 0, uri, -1, url_char, size, NULL, NULL);
-
-                                                        char logMsg[512];
-                                                        sprintf_s(logMsg, "Navigation starting to: %s", url_char);
-                                                        log(logMsg);
-                                                        
-                                                        bool allow = navigationCallback(webviewId, url_char);
-                                                        args->put_Cancel(!allow);
-                                                        
-                                                        delete[] url_char;
-                                                        CoTaskMemFree(uri);
-                                                        return S_OK;
-                                                    }).Get(), 
-                                                &navigationToken);
-                                        }
-                                        
-                                        // Set up navigation completion handler
-                                        EventRegistrationToken navCompletedToken;
-                                        view->webview->add_NavigationCompleted(
-                                            Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                                                [webviewEventHandler, webviewId](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
-                                                    BOOL success;
-                                                    args->get_IsSuccess(&success);
-                                                    if (success) {
-                                                        if (webviewEventHandler) {
-                                                            // Get current URL
-                                                            LPWSTR uri;
-                                                            sender->get_Source(&uri);
-                                                            
-                                                            int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, NULL, 0, NULL, NULL);
-                                                            char* url_char = new char[size];
-                                                            WideCharToMultiByte(CP_UTF8, 0, uri, -1, url_char, size, NULL, NULL);
-                                                            
-                                                            webviewEventHandler(webviewId, "did-navigate", url_char);
-                                                            
-                                                            delete[] url_char;
-                                                            CoTaskMemFree(uri);
-                                                        }
-                                                    } else {
-                                                        log("Navigation failed");
-                                                        COREWEBVIEW2_WEB_ERROR_STATUS error;
-                                                        args->get_WebErrorStatus(&error);
-                                                        char errorMsg[256];
-                                                        sprintf_s(errorMsg, "Navigation error: %d", error);
-                                                        log(errorMsg);
-                                                    }
-                                                    return S_OK;
-                                                }).Get(),
-                                            &navCompletedToken);
-                                        
-                                        // Create and set up direct COM bridge objects
-                                        if (bunBridgeHandler || internalBridgeHandler) {
-                                            
-                                            // Create BunBridge if handler provided
-                                            if (bunBridgeHandler) {
-                                                view->bunBridgeHandler = new BridgeHandler("bunBridge", bunBridgeHandler, webviewId);
-                                                view->bunBridgeDispatch = new BunBridgeDispatch(view->bunBridgeHandler);
-                                                
-                                                VARIANT bunBridgeVariant;
-                                                VariantInit(&bunBridgeVariant);
-                                                bunBridgeVariant.vt = VT_DISPATCH;
-                                                bunBridgeVariant.pdispVal = view->bunBridgeDispatch.Get();
-                                                view->bunBridgeDispatch->AddRef(); // AddRef for the VARIANT
-                                                
-                                                HRESULT bunResult = view->webview->AddHostObjectToScript(L"bunBridge", &bunBridgeVariant);
-                                                VariantClear(&bunBridgeVariant);
-                                                
-                                                if (SUCCEEDED(bunResult)) {
-                                                } else {
-                                                    char errorMsg[256];
-                                                    sprintf_s(errorMsg, "Failed to add bunBridge COM object: 0x%lx", bunResult);
-                                                    log(errorMsg);
-                                                }
-                                            }
-                                            
-                                            // Create InternalBridge if handler provided
-                                            if (internalBridgeHandler) {
-                                                view->internalBridgeHandler = new BridgeHandler("internalBridge", internalBridgeHandler, webviewId);
-                                                view->internalBridgeDispatch = new InternalBridgeDispatch(view->internalBridgeHandler);
-                                                
-                                                VARIANT internalBridgeVariant;
-                                                VariantInit(&internalBridgeVariant);
-                                                internalBridgeVariant.vt = VT_DISPATCH;
-                                                internalBridgeVariant.pdispVal = view->internalBridgeDispatch.Get();
-                                                view->internalBridgeDispatch->AddRef(); // AddRef for the VARIANT
-                                                
-                                                HRESULT internalResult = view->webview->AddHostObjectToScript(L"internalBridge", &internalBridgeVariant);
-                                                VariantClear(&internalBridgeVariant);
-                                                
-                                               
-                                            }
-                                        }
-                                        
-                                        // Add preload scripts
-                                        std::string combinedScript = "";
-                                        if (!electrobunScriptStr.empty()) {
-                                            combinedScript += electrobunScriptStr;
-                                            combinedScript += "\n";
-                                        }
-                                        if (!customScriptStr.empty()) {
-                                            combinedScript += customScriptStr;
-                                        }
-                                        
-                                        if (!combinedScript.empty()) {
-                                            // Convert to wstring
-                                            int size = MultiByteToWideChar(CP_UTF8, 0, combinedScript.c_str(), -1, NULL, 0);
-                                            std::wstring wScript(size - 1, 0);
-                                            MultiByteToWideChar(CP_UTF8, 0, combinedScript.c_str(), -1, &wScript[0], size);
-                                            
-                                            view->webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
-                                        }
-                                        
-                                        // Navigate to URL if provided
-                                        if (!urlStr.empty()) {
-                                            // Convert URL to wstring
-                                            int size = MultiByteToWideChar(CP_UTF8, 0, urlStr.c_str(), -1, NULL, 0);
-                                            std::wstring wUrl(size - 1, 0);
-                                            MultiByteToWideChar(CP_UTF8, 0, urlStr.c_str(), -1, &wUrl[0], size);
-                                            
-                                            char logMsg[512];
-                                            sprintf_s(logMsg, "Navigating to: %s", urlStr.c_str());
-                                            log(logMsg);
-                                            
-                                            view->webview->Navigate(wUrl.c_str());
-                                        } else {
-                                            log("No URL provided, loading about:blank");
-                                            view->webview->Navigate(L"about:blank");
-                                        }
-                                        
-                                    } else {
-                                        log("Failed to create WebView2 controller");
-                                    }
-                                    return S_OK;
-                                }).Get());
-                    } else {
-                        char errorMsg[256];
-                        sprintf_s(errorMsg, "Failed to create WebView2 environment: 0x%lx", result);
-                        log(errorMsg);
-                    }
-                    return S_OK;
-                }).Get());
-        
-        if (FAILED(hr)) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "Failed to create WebView2 environment with options: 0x%lx", hr);
-            log(errorMsg);
-        }
-    });
     
     return view.get();
+
 }
 
 ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView,
