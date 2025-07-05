@@ -161,15 +161,22 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunCefApp);
 };
 
-// CEF Load Handler for debugging navigation
+// CEF Load Handler for debugging navigation and script injection
 class ElectrobunLoadHandler : public CefLoadHandler {
 public:
+    ElectrobunLoadHandler(ElectrobunCefClient* client) : client_(client) {}
+    
     void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override {
         std::cout << "[CEF] LoadStart: Navigation started" << std::endl;
     }
     
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
         std::cout << "[CEF] LoadEnd: Navigation completed with status " << httpStatusCode << std::endl;
+        
+        // Execute preload scripts after page load
+        if (frame->IsMain() && client_) {
+            client_->ExecutePreloadScripts(browser);
+        }
     }
     
     void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override {
@@ -179,6 +186,7 @@ public:
     }
 
 private:
+    ElectrobunCefClient* client_;
     IMPLEMENT_REFCOUNTING(ElectrobunLoadHandler);
 };
 
@@ -240,6 +248,9 @@ private:
 // Forward declarations for functions defined later in the file
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
+
+// Forward declaration for CEF client
+class ElectrobunCefClient;
 
 // CEF Resource Handler for views:// scheme (based on Mac implementation)
 class ElectrobunSchemeHandler : public CefResourceHandler {
@@ -338,7 +349,8 @@ public:
         // Output processed data
         data_out_written = 0;
         if (processed_ && output_offset_ < processed_data_.size()) {
-            size_t copy_size = std::min(data_out_size, processed_data_.size() - output_offset_);
+            size_t remaining = processed_data_.size() - output_offset_;
+            size_t copy_size = (data_out_size < remaining) ? data_out_size : remaining;
             memcpy(data_out, processed_data_.data() + output_offset_, copy_size);
             output_offset_ += copy_size;
             data_out_written = copy_size;
@@ -373,28 +385,15 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunResponseFilter);
 };
 
-// CEF Request Handler for views:// scheme support and script injection
+// CEF Request Handler for views:// scheme support
 class ElectrobunRequestHandler : public CefRequestHandler {
 public:
-    ElectrobunRequestHandler(ElectrobunCefClient* client) : client_(client) {}
+    ElectrobunRequestHandler() {}
 
-    CefRefPtr<CefResponseFilter> GetResourceResponseFilter(CefRefPtr<CefBrowser> browser,
-                                                          CefRefPtr<CefFrame> frame,
-                                                          CefRefPtr<CefRequest> request,
-                                                          CefRefPtr<CefResponse> response) override {
-        // Only inject scripts into HTML responses
-        std::string mime_type = response->GetMimeType();
-        if (mime_type.find("text/html") != std::string::npos) {
-            std::string script = client_->GetCombinedScript();
-            if (!script.empty()) {
-                return new ElectrobunResponseFilter(script);
-            }
-        }
-        return nullptr;
-    }
+    // For now, use default behavior and handle script injection differently
+    // The GetResourceResponseFilter method signature varies between CEF versions
 
 private:
-    ElectrobunCefClient* client_;
     IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
 };
 
@@ -409,9 +408,9 @@ public:
         : webview_id_(webviewId), 
           bun_bridge_handler_(bunBridgeHandler),
           webview_tag_handler_(internalBridgeHandler) {
-        m_loadHandler = new ElectrobunLoadHandler();
+        m_loadHandler = new ElectrobunLoadHandler(this);
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
-        m_requestHandler = new ElectrobunRequestHandler(this);
+        m_requestHandler = new ElectrobunRequestHandler();
     }
 
     void AddPreloadScript(const std::string& script) {
@@ -464,6 +463,13 @@ public:
             combined_script += "\n" + custom_script_;
         }
         return combined_script;
+    }
+
+    void ExecutePreloadScripts(CefRefPtr<CefBrowser> browser) {
+        std::string script = GetCombinedScript();
+        if (!script.empty() && browser && browser->GetMainFrame()) {
+            browser->GetMainFrame()->ExecuteJavaScript(script, "", 0);
+        }
     }
 
 private:
