@@ -241,8 +241,8 @@ async function vendorCEF() {
     // Use stable CEF version for macOS, current for Windows
     const CEF_VERSION_MAC = `125.0.22+g4b2c969`;
     const CHROMIUM_VERSION_MAC = `125.0.6422.142`;
-    const CEF_VERSION_WIN = `138.0.17+gac9b751`;
-    const CHROMIUM_VERSION_WIN = `138.0.7204.97`;
+    const CEF_VERSION_WIN = `125.0.22+gc410c95`;
+    const CHROMIUM_VERSION_WIN = `125.0.6422.142`;
     
     if (OS === 'macos') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
