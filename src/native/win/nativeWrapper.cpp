@@ -171,7 +171,15 @@ public:
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
         std::cout << "[CEF] LoadEnd: Navigation completed with status " << httpStatusCode << std::endl;
         
-        // Script injection will be handled by the client directly
+        // Execute preload scripts on main frame after page load
+        if (frame->IsMain()) {
+            int browserId = browser->GetIdentifier();
+            auto scriptIt = g_preloadScripts.find(browserId);
+            if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
+                browser->GetMainFrame()->ExecuteJavaScript(scriptIt->second, "", 0);
+                std::cout << "[CEF] Executed preload scripts for browser " << browserId << std::endl;
+            }
+        }
     }
     
     void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override {
@@ -189,6 +197,9 @@ class ElectrobunCefClient;
 
 // Global map to store CEF clients for browser connection
 static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
+
+// Global map to store preload scripts by browser ID
+static std::map<int, std::string> g_preloadScripts;
 
 // Forward declaration for helper function (defined after ElectrobunCefClient)
 void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser);
@@ -245,6 +256,8 @@ public:
         
         // Remove browser from global tracking
         g_cefBrowsers.erase(browser->GetIdentifier());
+        // Clean up preload scripts for this browser
+        g_preloadScripts.erase(browser->GetIdentifier());
         g_browser_count--;
         
         std::cout << "[CEF] Remaining browsers: " << g_browser_count << std::endl;
@@ -479,8 +492,7 @@ public:
 
     void SetBrowser(CefRefPtr<CefBrowser> browser) {
         browser_ = browser;
-        // Execute preload scripts immediately when browser is set
-        ExecutePreloadScripts();
+        // Don't execute scripts here - they should execute on each navigation
     }
 
     void ExecutePreloadScripts() {
@@ -505,8 +517,13 @@ private:
 
 // Helper function implementation (defined after ElectrobunCefClient class)
 void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser) {
-    if (client) {
+    if (client && browser) {
         client->SetBrowser(browser);
+        // Store preload scripts for this browser ID so load handler can access them
+        std::string script = client->GetCombinedScript();
+        if (!script.empty()) {
+            g_preloadScripts[browser->GetIdentifier()] = script;
+        }
     }
 }
 
