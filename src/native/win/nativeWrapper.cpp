@@ -180,6 +180,7 @@ private:
 class ElectrobunLifeSpanHandler : public CefLifeSpanHandler {
 public:
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+        std::cout << "[CEF] *** OnAfterCreated callback triggered! ***" << std::endl;
         std::cout << "[CEF] OnAfterCreated: Browser ID " << browser->GetIdentifier() << " created successfully" << std::endl;
         
         // Get the window handle and look up pending URL
@@ -2210,7 +2211,12 @@ ELECTROBUN_EXPORT bool initCEF() {
         // Start a timer to pump CEF messages since we're using single-threaded mode
         // This is essential for CEF callbacks like OnAfterCreated to be called
         SetTimer(NULL, 1, 10, [](HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) -> VOID {
+            static int pumpCount = 0;
             CefDoMessageLoopWork();
+            pumpCount++;
+            if (pumpCount % 100 == 0) { // Log every 1 second (100 * 10ms)
+                std::cout << "[CEF] Message pump running, count: " << pumpCount << std::endl;
+            }
         });
         std::cout << "[CEF] Started message pump timer" << std::endl;
     } else {
