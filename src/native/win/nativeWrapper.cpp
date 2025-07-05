@@ -39,6 +39,8 @@
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
 #include "include/cef_scheme.h"
+#include "include/cef_task.h"
+#include "include/base/cef_bind.h"
 #include "include/wrapper/cef_helpers.h"
 
 // Restore macro definitions
@@ -94,8 +96,10 @@ static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 static GetMimeType g_getMimeType = nullptr;
 static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 
-// Global map to store pending CEF navigations for timing workaround
-static std::map<CefRefPtr<CefBrowser>, std::string> g_pendingCefNavigations;
+// Global map to store pending CEF navigations for timing workaround - use browser ID instead of pointer
+static std::map<int, std::string> g_pendingCefNavigations;
+// Global map to store browser references by ID for safe access
+static std::map<int, CefRefPtr<CefBrowser>> g_cefBrowsers;
 
 // Global WebView2 instances - moved to global scope
 static ComPtr<ICoreWebView2Controller> g_controller;
@@ -2302,26 +2306,49 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             // Defer navigation to allow window/browser to fully initialize (following macOS timing pattern)
             log("Deferring CEF navigation for proper initialization...");
             
-            // Store the pending navigation
-            g_pendingCefNavigations[browser] = target_url;
+            // Get browser ID for safe timer callback
+            int browserId = browser->GetIdentifier();
             
-            // Use a timer to defer navigation (similar to macOS 0.1 second delay)
-            UINT_PTR timerId = reinterpret_cast<UINT_PTR>(browser.get());
-            SetTimer(containerHwnd, timerId, 100, [](HWND hwnd, UINT, UINT_PTR browserPtr, DWORD) -> VOID {
-                // Convert back to browser pointer
-                CefBrowser* browserRaw = reinterpret_cast<CefBrowser*>(browserPtr);
-                CefRefPtr<CefBrowser> browser(browserRaw);
+            // Store the browser reference and pending navigation by ID
+            g_cefBrowsers[browserId] = browser;
+            g_pendingCefNavigations[browserId] = target_url;
+            
+            // Use a timer to defer navigation - 3 second delay for proper initialization
+            SetTimer(containerHwnd, static_cast<UINT_PTR>(browserId), 3000, [](HWND hwnd, UINT uMsg, UINT_PTR browserId, DWORD dwTime) -> VOID {
+                // This callback runs on the main UI thread, which is required for CEF operations
                 
-                // Find and execute pending navigation
-                auto it = g_pendingCefNavigations.find(browser);
-                if (it != g_pendingCefNavigations.end()) {
-                    std::string deferred_url = it->second;
-                    log(("Deferred navigation to: " + deferred_url).c_str());
-                    browser->GetMainFrame()->LoadURL(CefString(deferred_url));
+                std::cout << "[CEF] Timer callback executing for browser ID: " << browserId << std::endl;
+                
+                // Find the browser and pending navigation by ID
+                auto browserIt = g_cefBrowsers.find(static_cast<int>(browserId));
+                auto navIt = g_pendingCefNavigations.find(static_cast<int>(browserId));
+                
+                if (browserIt != g_cefBrowsers.end() && navIt != g_pendingCefNavigations.end()) {
+                    CefRefPtr<CefBrowser> browser = browserIt->second;
+                    std::string deferred_url = navIt->second;
+                    
+                    std::cout << "[CEF] Executing deferred navigation to: " << deferred_url << std::endl;
+                    
+                    // Ensure we're on the main thread before calling CEF
+                    if (CefCurrentlyOn(TID_UI)) {
+                        browser->GetMainFrame()->LoadURL(CefString(deferred_url));
+                        std::cout << "[CEF] LoadURL called successfully" << std::endl;
+                    } else {
+                        std::cout << "[CEF] ERROR: Not on UI thread!" << std::endl;
+                        // Post to UI thread if needed
+                        CefPostTask(TID_UI, base::BindOnce([browser, deferred_url]() {
+                            browser->GetMainFrame()->LoadURL(CefString(deferred_url));
+                        }));
+                    }
                     
                     // Clean up
-                    g_pendingCefNavigations.erase(it);
-                    KillTimer(hwnd, browserPtr);  // KillTimer takes HWND and timer ID
+                    g_pendingCefNavigations.erase(navIt);
+                    g_cefBrowsers.erase(browserIt);
+                    KillTimer(hwnd, browserId);
+                    
+                    std::cout << "[CEF] Timer cleanup completed" << std::endl;
+                } else {
+                    std::cout << "[CEF] ERROR: Browser or navigation not found for ID: " << browserId << std::endl;
                 }
             });
         } else {
