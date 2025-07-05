@@ -98,6 +98,8 @@ static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 static std::map<int, std::string> g_pendingCefNavigations;
 // Global map to store browser references by ID for safe access
 static std::map<int, CefRefPtr<CefBrowser>> g_cefBrowsers;
+// Global map to store pending URLs for async browser creation
+static std::map<HWND, std::string> g_pendingUrls;
 
 // Global WebView2 instances - moved to global scope
 static ComPtr<ICoreWebView2Controller> g_controller;
@@ -174,19 +176,58 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunLoadHandler);
 };
 
-// CEF Client class with load handler for debugging
+// CEF Life Span Handler for async browser creation
+class ElectrobunLifeSpanHandler : public CefLifeSpanHandler {
+public:
+    void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+        std::cout << "[CEF] OnAfterCreated: Browser ID " << browser->GetIdentifier() << " created successfully" << std::endl;
+        
+        // Get the window handle and look up pending URL
+        HWND browserWindow = browser->GetHost()->GetWindowHandle();
+        HWND parentWindow = GetParent(browserWindow);
+        
+        std::cout << "[CEF] Browser window: " << browserWindow << ", parent: " << parentWindow << std::endl;
+        
+        // Look for pending URL using parent window
+        auto it = g_pendingUrls.find(parentWindow);
+        if (it != g_pendingUrls.end()) {
+            std::string target_url = it->second;
+            std::cout << "[CEF] Found pending URL: " << target_url << std::endl;
+            
+            // Navigate to the target URL
+            browser->GetMainFrame()->LoadURL(CefString(target_url));
+            std::cout << "[CEF] Navigation initiated to: " << target_url << std::endl;
+            
+            // Clean up
+            g_pendingUrls.erase(it);
+        } else {
+            std::cout << "[CEF] No pending URL found for parent window: " << parentWindow << std::endl;
+        }
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunLifeSpanHandler);
+};
+
+// CEF Client class with load and life span handlers
 class ElectrobunCefClient : public CefClient {
 public:
     ElectrobunCefClient() {
         m_loadHandler = new ElectrobunLoadHandler();
+        m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
     }
     
     CefRefPtr<CefLoadHandler> GetLoadHandler() override {
         return m_loadHandler;
     }
+    
+    CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
+        return m_lifeSpanHandler;
+    }
 
 private:
     CefRefPtr<ElectrobunLoadHandler> m_loadHandler;
+    CefRefPtr<ElectrobunLifeSpanHandler> m_lifeSpanHandler;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
 
@@ -2283,79 +2324,24 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         std::cout << "[CEF] Client valid: " << (client.get() != nullptr ? "YES" : "NO") << std::endl;
         std::cout << "[CEF] Browser settings valid: " << "YES" << std::endl;
         
-        CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
+        // Use asynchronous CreateBrowser instead of CreateBrowserSync (more reliable on Windows)
+        bool browserRequested = CefBrowserHost::CreateBrowser(
             window_info, client.get(), "about:blank", browser_settings, nullptr, nullptr);
             
-        std::cout << "[CEF] CreateBrowserSync returned: " << (browser.get() != nullptr ? "SUCCESS" : "FAILED") << std::endl;
+        std::cout << "[CEF] CreateBrowser requested: " << (browserRequested ? "SUCCESS" : "FAILED") << std::endl;
             
-        if (browser) {
-            log("CEF browser created successfully");
-            // Store container window handle in view for proper management
+        if (browserRequested) {
+            // Store the view for later use when browser creation completes
+            std::cout << "[CEF] Browser creation initiated asynchronously" << std::endl;
+            
+            // We'll need to handle the browser reference in the client's OnAfterCreated callback
+            // For now, just store basic view info
             view->hwnd = containerHwnd;
-            view->browser = browser;
             
-            // Debug: Check if CEF browser has a window handle and is visible
-            HWND cefWindowHandle = browser->GetHost()->GetWindowHandle();
-            char cefDebug[512];
-            if (cefWindowHandle) {
-                RECT cefRect;
-                GetWindowRect(cefWindowHandle, &cefRect);
-                sprintf_s(cefDebug, "CEF window: HWND=%p, visible=%s, rect=(%d,%d,%d,%d)", 
-                          cefWindowHandle, 
-                          IsWindowVisible(cefWindowHandle) ? "YES" : "NO",
-                          cefRect.left, cefRect.top, cefRect.right, cefRect.bottom);
-                log(cefDebug);
-                
-                // Force CEF window to be visible and properly sized
-                ShowWindow(cefWindowHandle, SW_SHOW);
-                SetWindowPos(cefWindowHandle, HWND_TOP, 0, 0, (int)width, (int)height, SWP_SHOWWINDOW);
-                log("Forced CEF window to be visible and positioned");
-            } else {
-                sprintf_s(cefDebug, "CEF Browser window handle: NULL!");
-                log(cefDebug);
-            }
-            
-            // Defer navigation to allow window/browser to fully initialize (following macOS timing pattern)
-            log("Deferring CEF navigation for proper initialization...");
-            
-            // Get browser ID for safe timer callback
-            int browserId = browser->GetIdentifier();
-            
-            // Store the browser reference and pending navigation by ID
-            g_cefBrowsers[browserId] = browser;
-            g_pendingCefNavigations[browserId] = target_url;
-            
-            // Use a timer to defer navigation - 3 second delay for proper initialization
-            SetTimer(containerHwnd, static_cast<UINT_PTR>(browserId), 3000, [](HWND hwnd, UINT uMsg, UINT_PTR browserId, DWORD dwTime) -> VOID {
-                // This callback runs on the main UI thread, which is required for CEF operations
-                
-                std::cout << "[CEF] Timer callback executing for browser ID: " << browserId << std::endl;
-                
-                // Find the browser and pending navigation by ID
-                auto browserIt = g_cefBrowsers.find(static_cast<int>(browserId));
-                auto navIt = g_pendingCefNavigations.find(static_cast<int>(browserId));
-                
-                if (browserIt != g_cefBrowsers.end() && navIt != g_pendingCefNavigations.end()) {
-                    CefRefPtr<CefBrowser> browser = browserIt->second;
-                    std::string deferred_url = navIt->second;
-                    
-                    std::cout << "[CEF] Executing deferred navigation to: " << deferred_url << std::endl;
-                    
-                    // Windows timer callbacks run on the main UI thread, so we can call CEF directly
-                    // Note: Windows timers always execute on the thread that called SetTimer (main UI thread)
-                    browser->GetMainFrame()->LoadURL(CefString(deferred_url));
-                    std::cout << "[CEF] LoadURL called successfully" << std::endl;
-                    
-                    // Clean up
-                    g_pendingCefNavigations.erase(navIt);
-                    g_cefBrowsers.erase(browserIt);
-                    KillTimer(hwnd, browserId);
-                    
-                    std::cout << "[CEF] Timer cleanup completed" << std::endl;
-                } else {
-                    std::cout << "[CEF] ERROR: Browser or navigation not found for ID: " << browserId << std::endl;
-                }
-            });
+            // Since we don't have the browser object yet, we'll defer navigation differently
+            // Store the target URL in a way that can be accessed when browser is ready
+            g_pendingUrls[containerHwnd] = target_url;
+            std::cout << "[CEF] Stored pending URL for container: " << containerHwnd << " -> " << target_url << std::endl;
         } else {
             log("ERROR: Failed to create CEF browser");
         }
