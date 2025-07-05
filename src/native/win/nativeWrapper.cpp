@@ -173,10 +173,18 @@ public:
         // Execute preload scripts on main frame at start of navigation
         if (frame->IsMain()) {
             int browserId = browser->GetIdentifier();
+            std::cout << "[CEF] OnLoadStart: Looking for scripts for browser " << browserId << std::endl;
             auto scriptIt = g_preloadScripts.find(browserId);
             if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
                 frame->ExecuteJavaScript(scriptIt->second, "", 0);
-                std::cout << "[CEF] Executed preload scripts for browser " << browserId << " at load start" << std::endl;
+                std::cout << "[CEF] Executed preload scripts for browser " << browserId << " at load start (script length: " << scriptIt->second.length() << ")" << std::endl;
+            } else {
+                std::cout << "[CEF] No preload scripts found for browser " << browserId << std::endl;
+                std::cout << "[CEF] Available script browsers: ";
+                for (auto& pair : g_preloadScripts) {
+                    std::cout << pair.first << " ";
+                }
+                std::cout << std::endl;
             }
         }
     }
@@ -225,6 +233,7 @@ public:
         std::cout << "[CEF] Browser window: " << browserWindow << ", parent: " << parentWindow << std::endl;
         
         // Set browser on the CEF client for script execution
+        std::cout << "[CEF] Looking for client with parentWindow: " << parentWindow << std::endl;
         auto clientIt = g_cefClients.find(parentWindow);
         if (clientIt != g_cefClients.end()) {
             auto client = clientIt->second;
@@ -233,7 +242,16 @@ public:
                 // We'll call SetBrowser after the full class definition
                 SetBrowserOnClient(client, browser);
                 std::cout << "[CEF] Connected browser to client for script execution" << std::endl;
+            } else {
+                std::cout << "[CEF] Found client entry but client is null" << std::endl;
             }
+        } else {
+            std::cout << "[CEF] No client found for parentWindow: " << parentWindow << std::endl;
+            std::cout << "[CEF] Available client windows: ";
+            for (auto& pair : g_cefClients) {
+                std::cout << pair.first << " ";
+            }
+            std::cout << std::endl;
         }
         
         // Look for pending URL using parent window
@@ -2787,9 +2805,11 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         // Set up preload scripts
         if (electrobunPreloadScript && strlen(electrobunPreloadScript) > 0) {
             client->AddPreloadScript(std::string(electrobunPreloadScript));
+            std::cout << "[CEF] Added electrobun preload script (length: " << strlen(electrobunPreloadScript) << ")" << std::endl;
         }
         if (customPreloadScript && strlen(customPreloadScript) > 0) {
             client->UpdateCustomPreloadScript(std::string(customPreloadScript));
+            std::cout << "[CEF] Added custom preload script (length: " << strlen(customPreloadScript) << ")" << std::endl;
         }
         
         // Note: Additional callback methods would need to be implemented if needed
@@ -2806,6 +2826,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             container->AddAbstractView(view);
             // Add client to global map for OnAfterCreated callback
             g_cefClients[hwnd] = client;
+            std::cout << "[CEF] Stored client for hwnd: " << hwnd << std::endl;
         }
     });
     
