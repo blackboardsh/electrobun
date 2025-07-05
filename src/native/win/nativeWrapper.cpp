@@ -94,6 +94,9 @@ static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 static GetMimeType g_getMimeType = nullptr;
 static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 
+// Global map to store pending CEF navigations for timing workaround
+static std::map<CefRefPtr<CefBrowser>, std::string> g_pendingCefNavigations;
+
 // Global WebView2 instances - moved to global scope
 static ComPtr<ICoreWebView2Controller> g_controller;
 static ComPtr<ICoreWebView2> g_webview;
@@ -2225,21 +2228,26 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             view->browser = browser;
             
             // Defer navigation to allow window/browser to fully initialize (following macOS timing pattern)
-            // Use PostMessage to defer navigation to the next message loop cycle
             log("Deferring CEF navigation for proper initialization...");
             
-            // Store target URL in a way we can access it from the window procedure
-            // For now, use a simple delay approach similar to macOS commented code
-            SetTimer(containerHwnd, 1, 100, [](HWND hwnd, UINT, UINT_PTR, DWORD) -> VOID {
-                // Find the view associated with this container window
-                for (auto& pair : g_containerViews) {
-                    if (pair.second && pair.second->hwnd == hwnd && pair.second->browser) {
-                        std::string deferred_url = "https://en.wikipedia.org/wiki/Special:Random"; // TODO: use stored URL
-                        log(("Deferred navigation to: " + deferred_url).c_str());
-                        pair.second->browser->GetMainFrame()->LoadURL(CefString(deferred_url));
-                        KillTimer(hwnd, 1);
-                        break;
-                    }
+            // Store the pending navigation
+            g_pendingCefNavigations[browser] = target_url;
+            
+            // Use a timer to defer navigation (similar to macOS 0.1 second delay)
+            SetTimer(containerHwnd, reinterpret_cast<UINT_PTR>(browser.get()), 100, [](HWND hwnd, UINT, UINT_PTR browserPtr, DWORD) -> VOID {
+                // Convert back to browser pointer
+                CefRefPtr<CefBrowser> browser = reinterpret_cast<CefBrowser*>(browserPtr);
+                
+                // Find and execute pending navigation
+                auto it = g_pendingCefNavigations.find(browser);
+                if (it != g_pendingCefNavigations.end()) {
+                    std::string deferred_url = it->second;
+                    log(("Deferred navigation to: " + deferred_url).c_str());
+                    browser->GetMainFrame()->LoadURL(CefString(deferred_url));
+                    
+                    // Clean up
+                    g_pendingCefNavigations.erase(it);
+                    KillTimer(hwnd, reinterpret_cast<UINT_PTR>(browserPtr));
                 }
             });
         } else {
