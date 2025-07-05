@@ -98,6 +98,9 @@ static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 static GetMimeType g_getMimeType = nullptr;
 static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 
+// Global map to store preload scripts by browser ID (needs to be early for load handler)
+static std::map<int, std::string> g_preloadScripts;
+
 // Global map to store pending CEF navigations for timing workaround - use browser ID instead of pointer
 static std::map<int, std::string> g_pendingCefNavigations;
 // Global map to store browser references by ID for safe access
@@ -197,9 +200,6 @@ class ElectrobunCefClient;
 
 // Global map to store CEF clients for browser connection
 static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
-
-// Global map to store preload scripts by browser ID
-static std::map<int, std::string> g_preloadScripts;
 
 // Forward declaration for helper function (defined after ElectrobunCefClient)
 void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser);
