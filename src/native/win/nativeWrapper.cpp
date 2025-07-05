@@ -26,6 +26,7 @@
 #include <shlguid.h>   // For CLSID_FileOpenDialog
 #include <dcomp.h>     // For DirectComposition
 #include <d2d1.h>      // For Direct2D
+#include <direct.h>    // For _getcwd
 
 // Push macro definitions to avoid conflicts with Windows headers
 #pragma push_macro("GetNextSibling")
@@ -237,6 +238,175 @@ private:
 };
 
 // CEF Client class with load and life span handlers
+// CEF Resource Handler for views:// scheme
+class ViewsSchemeResourceHandler : public CefResourceHandler {
+public:
+    ViewsSchemeResourceHandler() = default;
+    
+    bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
+        CEF_REQUIRE_IO_THREAD();
+        
+        std::string url = request->GetURL();
+        log("ViewsSchemeResourceHandler: Processing request for: " + url);
+        
+        // Check if this is a views:// URL
+        if (url.find("views://") != 0) {
+            return false;
+        }
+        
+        // Extract path after "views://"
+        std::string path = url.substr(8); // Remove "views://" prefix
+        if (path.empty()) {
+            path = "index.html"; // Default
+        }
+        
+        // Check for special internal HTML request
+        if (path == "internal/index.html") {
+            // For now, return a simple HTML response
+            // This would need to be connected to JS utilities like the Mac version
+            response_data_ = "<html><body><h1>Electrobun CEF Views</h1><p>Internal HTML placeholder</p></body></html>";
+            mime_type_ = "text/html";
+        } else {
+            // Try to read file from views directory
+            std::string content = readViewsFile(path);
+            if (content.empty()) {
+                // File not found, return 404
+                response_data_ = "<html><body><h1>404 - File Not Found</h1><p>Views file not found: " + path + "</p></body></html>";
+                mime_type_ = "text/html";
+                status_code_ = 404;
+            } else {
+                response_data_ = content;
+                mime_type_ = getMimeType(path);
+                status_code_ = 200;
+            }
+        }
+        
+        offset_ = 0;
+        handle_request = true;
+        return true;
+    }
+    
+    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64& response_length, CefString& redirectUrl) override {
+        CEF_REQUIRE_IO_THREAD();
+        
+        response->SetStatus(status_code_);
+        response->SetMimeType(mime_type_);
+        
+        if (status_code_ == 200) {
+            response->SetStatusText("OK");
+        } else if (status_code_ == 404) {
+            response->SetStatusText("Not Found");
+        }
+        
+        // Add CORS headers for cross-origin requests
+        CefResponse::HeaderMap headers;
+        headers.insert(std::make_pair("Access-Control-Allow-Origin", "*"));
+        headers.insert(std::make_pair("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"));
+        headers.insert(std::make_pair("Access-Control-Allow-Headers", "Content-Type, Authorization"));
+        response->SetHeaderMap(headers);
+        
+        response_length = response_data_.length();
+    }
+    
+    bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override {
+        CEF_REQUIRE_IO_THREAD();
+        
+        bytes_read = 0;
+        
+        if (offset_ < response_data_.length()) {
+            int transfer_size = std::min(bytes_to_read, static_cast<int>(response_data_.length() - offset_));
+            memcpy(data_out, response_data_.c_str() + offset_, transfer_size);
+            offset_ += transfer_size;
+            bytes_read = transfer_size;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    void Cancel() override {
+        CEF_REQUIRE_IO_THREAD();
+    }
+
+private:
+    std::string response_data_;
+    std::string mime_type_ = "text/html";
+    int status_code_ = 200;
+    size_t offset_ = 0;
+    
+    // Helper function to read views files
+    std::string readViewsFile(const std::string& path) {
+        try {
+            // Get current working directory
+            char cwd[MAX_PATH];
+            if (_getcwd(cwd, sizeof(cwd)) == nullptr) {
+                log("Error: Could not get current working directory");
+                return "";
+            }
+            
+            // Build full path to views file
+            std::string viewsDir = std::string(cwd) + "\\..\\Resources\\app\\views";
+            std::string fullPath = viewsDir + "\\" + path;
+            
+            // Replace forward slashes with backslashes for Windows
+            std::replace(fullPath.begin(), fullPath.end(), '/', '\\');
+            
+            char logMsg[512];
+            sprintf_s(logMsg, "ViewsSchemeResourceHandler: Attempting to read file: %s", fullPath.c_str());
+            log(logMsg);
+            
+            // Try to open and read the file
+            std::ifstream file(fullPath, std::ios::binary);
+            if (!file.is_open()) {
+                sprintf_s(logMsg, "ViewsSchemeResourceHandler: Could not open file: %s", fullPath.c_str());
+                log(logMsg);
+                return "";
+            }
+            
+            // Read file contents
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            file.close();
+            
+            sprintf_s(logMsg, "ViewsSchemeResourceHandler: Successfully read %zu bytes from: %s", content.length(), fullPath.c_str());
+            log(logMsg);
+            
+            return content;
+        } catch (const std::exception& e) {
+            char logMsg[512];
+            sprintf_s(logMsg, "ViewsSchemeResourceHandler: Exception reading file %s: %s", path.c_str(), e.what());
+            log(logMsg);
+            return "";
+        }
+    }
+    
+    // Helper function to determine MIME type based on file extension
+    std::string getMimeType(const std::string& path) {
+        size_t dotPos = path.rfind('.');
+        if (dotPos == std::string::npos) {
+            return "text/plain";
+        }
+        
+        std::string extension = path.substr(dotPos + 1);
+        std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+        
+        if (extension == "html" || extension == "htm") return "text/html";
+        if (extension == "css") return "text/css";
+        if (extension == "js") return "application/javascript";
+        if (extension == "json") return "application/json";
+        if (extension == "png") return "image/png";
+        if (extension == "jpg" || extension == "jpeg") return "image/jpeg";
+        if (extension == "gif") return "image/gif";
+        if (extension == "svg") return "image/svg+xml";
+        if (extension == "ico") return "image/x-icon";
+        if (extension == "txt") return "text/plain";
+        if (extension == "xml") return "application/xml";
+        
+        return "application/octet-stream";
+    }
+    
+    IMPLEMENT_REFCOUNTING(ViewsSchemeResourceHandler);
+};
+
 class ElectrobunCefClient : public CefClient {
 public:
     ElectrobunCefClient() {
@@ -250,6 +420,26 @@ public:
     
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
         return m_lifeSpanHandler;
+    }
+    
+    CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
+                                                    CefRefPtr<CefFrame> frame,
+                                                    CefRefPtr<CefRequest> request) override {
+        CEF_REQUIRE_IO_THREAD();
+        
+        std::string url = request->GetURL();
+        
+        // Check if this is a views:// URL
+        if (url.find("views://") == 0) {
+            char logMsg[512];
+            sprintf_s(logMsg, "ElectrobunCefClient: Creating resource handler for views:// URL: %s", url.c_str());
+            log(logMsg);
+            
+            return new ViewsSchemeResourceHandler();
+        }
+        
+        // For all other URLs, use default handling
+        return nullptr;
     }
 
 private:
@@ -1077,11 +1267,83 @@ public:
     }
     
     void addPreloadScriptToWebView(const char* jsString) override {
-        // CEF preload script implementation
+        if (!jsString) return;
+        
+        // For CEF, preload scripts are typically handled via CefClient::OnContextCreated
+        // For now, store the script to be injected when the context is created
+        if (browser) {
+            browser->GetMainFrame()->ExecuteJavaScript(jsString, browser->GetMainFrame()->GetURL(), 0);
+        }
     }
     
     void updateCustomPreloadScript(const char* jsString) override {
-        // CEF custom preload script implementation
+        if (!jsString) return;
+        
+        // Check if this is a views:// URL for a script file
+        if (strncmp(jsString, "views://", 8) == 0) {
+            // Read the script file from views directory
+            std::string scriptContent = readViewsFile(std::string(jsString + 8)); // Remove "views://" prefix
+            if (!scriptContent.empty()) {
+                if (browser) {
+                    browser->GetMainFrame()->ExecuteJavaScript(scriptContent.c_str(), browser->GetMainFrame()->GetURL(), 0);
+                }
+            } else {
+                char logMsg[512];
+                sprintf_s(logMsg, "CEFView: Could not read preload script from: %s", jsString);
+                log(logMsg);
+            }
+        } else {
+            // Inline JavaScript
+            if (browser) {
+                browser->GetMainFrame()->ExecuteJavaScript(jsString, browser->GetMainFrame()->GetURL(), 0);
+            }
+        }
+    }
+
+private:
+    // Helper function to read views files (same logic as in ViewsSchemeResourceHandler)
+    std::string readViewsFile(const std::string& path) {
+        try {
+            // Get current working directory
+            char cwd[MAX_PATH];
+            if (_getcwd(cwd, sizeof(cwd)) == nullptr) {
+                log("Error: Could not get current working directory");
+                return "";
+            }
+            
+            // Build full path to views file
+            std::string viewsDir = std::string(cwd) + "\\..\\Resources\\app\\views";
+            std::string fullPath = viewsDir + "\\" + path;
+            
+            // Replace forward slashes with backslashes for Windows
+            std::replace(fullPath.begin(), fullPath.end(), '/', '\\');
+            
+            char logMsg[512];
+            sprintf_s(logMsg, "CEFView: Attempting to read views file: %s", fullPath.c_str());
+            log(logMsg);
+            
+            // Try to open and read the file
+            std::ifstream file(fullPath, std::ios::binary);
+            if (!file.is_open()) {
+                sprintf_s(logMsg, "CEFView: Could not open file: %s", fullPath.c_str());
+                log(logMsg);
+                return "";
+            }
+            
+            // Read file contents
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            file.close();
+            
+            sprintf_s(logMsg, "CEFView: Successfully read %zu bytes from: %s", content.length(), fullPath.c_str());
+            log(logMsg);
+            
+            return content;
+        } catch (const std::exception& e) {
+            char logMsg[512];
+            sprintf_s(logMsg, "CEFView: Exception reading file %s: %s", path.c_str(), e.what());
+            log(logMsg);
+            return "";
+        }
     }
     
     void resize(const RECT& frame, const char* masksJson) override {
