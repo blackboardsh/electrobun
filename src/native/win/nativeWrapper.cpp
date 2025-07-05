@@ -72,6 +72,10 @@ class WKWebView;
 class MyScriptMessageHandlerWithReply;
 class StatusItemTarget;
 
+// CEF function declarations
+bool initCEF();
+bool isCEFAvailable();
+
 // Type definitions to match macOS types
 typedef double CGFloat;
 
@@ -98,8 +102,8 @@ static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 static std::map<int, std::string> g_pendingCefNavigations;
 // Global map to store browser references by ID for safe access
 static std::map<int, CefRefPtr<CefBrowser>> g_cefBrowsers;
-// Static variable for browser counting (defined here for ElectrobunLifeSpanHandler)
-int ElectrobunLifeSpanHandler::browser_count_ = 0;
+// Global browser counter (moved from class static to global)
+static int g_browser_count = 0;
 // Global map to store pending URLs for async browser creation
 static std::map<HWND, std::string> g_pendingUrls;
 
@@ -187,8 +191,8 @@ public:
         
         // Track browser creation
         g_cefBrowsers[browser->GetIdentifier()] = browser;
-        browser_count_++;
-        std::cout << "[CEF] Total browsers: " << browser_count_ << std::endl;
+        g_browser_count++;
+        std::cout << "[CEF] Total browsers: " << g_browser_count << std::endl;
         
         // Get the window handle and look up pending URL
         HWND browserWindow = browser->GetHost()->GetWindowHandle();
@@ -218,19 +222,18 @@ public:
         
         // Remove browser from global tracking
         g_cefBrowsers.erase(browser->GetIdentifier());
-        browser_count_--;
+        g_browser_count--;
         
-        std::cout << "[CEF] Remaining browsers: " << browser_count_ << std::endl;
+        std::cout << "[CEF] Remaining browsers: " << g_browser_count << std::endl;
         
         // If this was the last browser, quit the CEF message loop
-        if (browser_count_ == 0) {
+        if (g_browser_count == 0) {
             std::cout << "[CEF] Last browser closed, quitting message loop" << std::endl;
             CefQuitMessageLoop();
         }
     }
 
 private:
-    static int browser_count_;
     IMPLEMENT_REFCOUNTING(ElectrobunLifeSpanHandler);
 };
 
