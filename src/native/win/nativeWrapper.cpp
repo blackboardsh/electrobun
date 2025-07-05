@@ -73,8 +73,8 @@ class MyScriptMessageHandlerWithReply;
 class StatusItemTarget;
 
 // CEF function declarations
-bool initCEF();
-bool isCEFAvailable();
+extern "C" bool initCEF();
+extern "C" bool isCEFAvailable();
 
 // Type definitions to match macOS types
 typedef double CGFloat;
