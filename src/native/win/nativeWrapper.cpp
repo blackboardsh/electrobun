@@ -73,6 +73,7 @@ class MyScriptMessageHandlerWithReply;
 class StatusItemTarget;
 
 // CEF function declarations
+ELECTROBUN_EXPORT bool initCEF();
 ELECTROBUN_EXPORT bool isCEFAvailable();
 
 // Type definitions to match macOS types
