@@ -247,7 +247,7 @@ public:
         CEF_REQUIRE_IO_THREAD();
         
         std::string url = request->GetURL();
-        log("ViewsSchemeResourceHandler: Processing request for: " + url);
+        ::log("ViewsSchemeResourceHandler: Processing request for: " + url);
         
         // Check if this is a views:// URL
         if (url.find("views://") != 0) {
@@ -286,7 +286,7 @@ public:
         return true;
     }
     
-    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64& response_length, CefString& redirectUrl) override {
+    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override {
         CEF_REQUIRE_IO_THREAD();
         
         response->SetStatus(status_code_);
@@ -340,7 +340,7 @@ private:
             // Get current working directory
             char cwd[MAX_PATH];
             if (_getcwd(cwd, sizeof(cwd)) == nullptr) {
-                log("Error: Could not get current working directory");
+                ::log("Error: Could not get current working directory");
                 return "";
             }
             
@@ -353,13 +353,13 @@ private:
             
             char logMsg[512];
             sprintf_s(logMsg, "ViewsSchemeResourceHandler: Attempting to read file: %s", fullPath.c_str());
-            log(logMsg);
+            ::log(logMsg);
             
             // Try to open and read the file
             std::ifstream file(fullPath, std::ios::binary);
             if (!file.is_open()) {
                 sprintf_s(logMsg, "ViewsSchemeResourceHandler: Could not open file: %s", fullPath.c_str());
-                log(logMsg);
+                ::log(logMsg);
                 return "";
             }
             
@@ -368,13 +368,13 @@ private:
             file.close();
             
             sprintf_s(logMsg, "ViewsSchemeResourceHandler: Successfully read %zu bytes from: %s", content.length(), fullPath.c_str());
-            log(logMsg);
+            ::log(logMsg);
             
             return content;
         } catch (const std::exception& e) {
             char logMsg[512];
             sprintf_s(logMsg, "ViewsSchemeResourceHandler: Exception reading file %s: %s", path.c_str(), e.what());
-            log(logMsg);
+            ::log(logMsg);
             return "";
         }
     }
@@ -407,21 +407,9 @@ private:
     IMPLEMENT_REFCOUNTING(ViewsSchemeResourceHandler);
 };
 
-class ElectrobunCefClient : public CefClient {
+// CEF Request Handler for intercepting requests
+class ElectrobunRequestHandler : public CefRequestHandler {
 public:
-    ElectrobunCefClient() {
-        m_loadHandler = new ElectrobunLoadHandler();
-        m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
-    }
-    
-    CefRefPtr<CefLoadHandler> GetLoadHandler() override {
-        return m_loadHandler;
-    }
-    
-    CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
-        return m_lifeSpanHandler;
-    }
-    
     CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
                                                     CefRefPtr<CefFrame> frame,
                                                     CefRefPtr<CefRequest> request) override {
@@ -432,8 +420,8 @@ public:
         // Check if this is a views:// URL
         if (url.find("views://") == 0) {
             char logMsg[512];
-            sprintf_s(logMsg, "ElectrobunCefClient: Creating resource handler for views:// URL: %s", url.c_str());
-            log(logMsg);
+            sprintf_s(logMsg, "ElectrobunRequestHandler: Creating resource handler for views:// URL: %s", url.c_str());
+            ::log(logMsg);
             
             return new ViewsSchemeResourceHandler();
         }
@@ -443,8 +431,33 @@ public:
     }
 
 private:
+    IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
+};
+
+class ElectrobunCefClient : public CefClient {
+public:
+    ElectrobunCefClient() {
+        m_loadHandler = new ElectrobunLoadHandler();
+        m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
+        m_requestHandler = new ElectrobunRequestHandler();
+    }
+    
+    CefRefPtr<CefLoadHandler> GetLoadHandler() override {
+        return m_loadHandler;
+    }
+    
+    CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
+        return m_lifeSpanHandler;
+    }
+    
+    CefRefPtr<CefRequestHandler> GetRequestHandler() override {
+        return m_requestHandler;
+    }
+
+private:
     CefRefPtr<ElectrobunLoadHandler> m_loadHandler;
     CefRefPtr<ElectrobunLifeSpanHandler> m_lifeSpanHandler;
+    CefRefPtr<ElectrobunRequestHandler> m_requestHandler;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
 
@@ -519,7 +532,7 @@ public:
         : m_refCount(1), m_callback(callback), m_webviewId(webviewId), m_bridgeName(bridgeName) {
         char logMsg[256];
         sprintf_s(logMsg, "Created %s bridge handler for webview %u", bridgeName.c_str(), webviewId);
-        log(logMsg);
+        ::log(logMsg);
     }
 
     // IUnknown implementation
@@ -547,14 +560,14 @@ public:
     // Bridge-specific method for posting messages
     HRESULT PostMessage(BSTR message) {
         if (!m_callback) {
-            log("ERROR: Bridge callback is null");
+            ::log("ERROR: Bridge callback is null");
             return E_FAIL;
         }
 
         // Convert BSTR to char*
         int size = WideCharToMultiByte(CP_UTF8, 0, message, -1, NULL, 0, NULL, NULL);
         if (size <= 0) {
-            log("ERROR: Failed to get required buffer size for message conversion");
+            ::log("ERROR: Failed to get required buffer size for message conversion");
             return E_FAIL;
         }
 
@@ -562,7 +575,7 @@ public:
         int result = WideCharToMultiByte(CP_UTF8, 0, message, -1, message_char, size, NULL, NULL);
         if (result == 0) {
             delete[] message_char;
-            log("ERROR: Failed to convert message to UTF-8");
+            ::log("ERROR: Failed to convert message to UTF-8");
             return E_FAIL;
         }
 
@@ -576,7 +589,7 @@ public:
         try {
             m_callback(m_webviewId, messageCopy);
         } catch (...) {
-            log("ERROR: Exception in bridge callback");
+            ::log("ERROR: Exception in bridge callback");
             delete[] message_char;
             delete[] messageCopy;
             return E_FAIL;
@@ -1044,7 +1057,7 @@ public:
         // Create base region covering entire webview
         HRGN baseRegion = CreateRectRgn(0, 0, width, height);
         if (!baseRegion) {
-            log("applyVisualMask: Failed to create base region");
+            ::log("applyVisualMask: Failed to create base region");
             return;
         }
         
@@ -1290,68 +1303,12 @@ public:
             } else {
                 char logMsg[512];
                 sprintf_s(logMsg, "CEFView: Could not read preload script from: %s", jsString);
-                log(logMsg);
+                ::log(logMsg);
             }
         } else {
             // Inline JavaScript
             if (browser) {
                 browser->GetMainFrame()->ExecuteJavaScript(jsString, browser->GetMainFrame()->GetURL(), 0);
-            }
-        }
-    }
-
-private:
-    // Helper function to read views files (same logic as in ViewsSchemeResourceHandler)
-    std::string readViewsFile(const std::string& path) {
-        try {
-            // Get current working directory
-            char cwd[MAX_PATH];
-            if (_getcwd(cwd, sizeof(cwd)) == nullptr) {
-                log("Error: Could not get current working directory");
-                return "";
-            }
-            
-            // Build full path to views file
-            std::string viewsDir = std::string(cwd) + "\\..\\Resources\\app\\views";
-            std::string fullPath = viewsDir + "\\" + path;
-            
-            // Replace forward slashes with backslashes for Windows
-            std::replace(fullPath.begin(), fullPath.end(), '/', '\\');
-            
-            char logMsg[512];
-            sprintf_s(logMsg, "CEFView: Attempting to read views file: %s", fullPath.c_str());
-            log(logMsg);
-            
-            // Try to open and read the file
-            std::ifstream file(fullPath, std::ios::binary);
-            if (!file.is_open()) {
-                sprintf_s(logMsg, "CEFView: Could not open file: %s", fullPath.c_str());
-                log(logMsg);
-                return "";
-            }
-            
-            // Read file contents
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            file.close();
-            
-            sprintf_s(logMsg, "CEFView: Successfully read %zu bytes from: %s", content.length(), fullPath.c_str());
-            log(logMsg);
-            
-            return content;
-        } catch (const std::exception& e) {
-            char logMsg[512];
-            sprintf_s(logMsg, "CEFView: Exception reading file %s: %s", path.c_str(), e.what());
-            log(logMsg);
-            return "";
-        }
-    }
-    
-    void resize(const RECT& frame, const char* masksJson) override {
-        if (browser) {
-            browser->GetHost()->WasResized();
-            visualBounds = frame;
-            if (masksJson) {
-                maskJSON = masksJson;
             }
         }
     }
@@ -1367,6 +1324,62 @@ private:
     
     CefRefPtr<CefBrowser> getBrowser() {
         return browser;
+    }
+
+private:
+    // Helper function to read views files (same logic as in ViewsSchemeResourceHandler)
+    std::string readViewsFile(const std::string& path) {
+        try {
+            // Get current working directory
+            char cwd[MAX_PATH];
+            if (_getcwd(cwd, sizeof(cwd)) == nullptr) {
+                ::log("Error: Could not get current working directory");
+                return "";
+            }
+            
+            // Build full path to views file
+            std::string viewsDir = std::string(cwd) + "\\..\\Resources\\app\\views";
+            std::string fullPath = viewsDir + "\\" + path;
+            
+            // Replace forward slashes with backslashes for Windows
+            std::replace(fullPath.begin(), fullPath.end(), '/', '\\');
+            
+            char logMsg[512];
+            sprintf_s(logMsg, "CEFView: Attempting to read views file: %s", fullPath.c_str());
+            ::log(logMsg);
+            
+            // Try to open and read the file
+            std::ifstream file(fullPath, std::ios::binary);
+            if (!file.is_open()) {
+                sprintf_s(logMsg, "CEFView: Could not open file: %s", fullPath.c_str());
+                ::log(logMsg);
+                return "";
+            }
+            
+            // Read file contents
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            file.close();
+            
+            sprintf_s(logMsg, "CEFView: Successfully read %zu bytes from: %s", content.length(), fullPath.c_str());
+            ::log(logMsg);
+            
+            return content;
+        } catch (const std::exception& e) {
+            char logMsg[512];
+            sprintf_s(logMsg, "CEFView: Exception reading file %s: %s", path.c_str(), e.what());
+            ::log(logMsg);
+            return "";
+        }
+    }
+    
+    void resize(const RECT& frame, const char* masksJson) override {
+        if (browser) {
+            browser->GetHost()->WasResized();
+            visualBounds = frame;
+            if (masksJson) {
+                maskJSON = masksJson;
+            }
+        }
     }
     
     // CEF-specific implementation of mask functionality
@@ -1573,7 +1586,7 @@ public:
     ContainerView(HWND parentWindow) : m_parentWindow(parentWindow), m_hwnd(NULL) {
         // Double-check parent window is valid
         if (!IsWindow(parentWindow)) {
-            log("ERROR: Parent window handle is invalid in ContainerView constructor");
+            ::log("ERROR: Parent window handle is invalid in ContainerView constructor");
             return;
         }
         
@@ -1583,7 +1596,7 @@ public:
             DWORD error = GetLastError();
             char errorMsg[256];
             sprintf_s(errorMsg, "ERROR: Failed to get parent window client rect, error: %lu", error);
-            log(errorMsg);
+            ::log(errorMsg);
             return;
         }
         
@@ -1594,7 +1607,7 @@ public:
         if (width <= 0 || height <= 0) {
             char errorMsg[256];
             sprintf_s(errorMsg, "ERROR: Parent window has invalid client area: %dx%d", width, height);
-            log(errorMsg);
+            ::log(errorMsg);
             return;
         }
         
@@ -1614,7 +1627,7 @@ public:
                 if (error != ERROR_CLASS_ALREADY_EXISTS) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to register ContainerViewClass, error: %lu", error);
-                    log(errorMsg);
+                    ::log(errorMsg);
                     // Fall back to STATIC class
                     goto use_static_class;
                 }
@@ -1636,7 +1649,7 @@ public:
         );
         
         if (!m_hwnd) {
-            log("Custom class failed, falling back to STATIC class");
+            ::log("Custom class failed, falling back to STATIC class");
             
             use_static_class:
             // Fallback to STATIC class
@@ -1656,7 +1669,7 @@ public:
                 DWORD error = GetLastError();
                 char errorMsg[256];
                 sprintf_s(errorMsg, "ERROR: Failed to create container window even with STATIC class, error: %lu", error);
-                log(errorMsg);
+                ::log(errorMsg);
                 return;
             } else {
             }
@@ -1666,14 +1679,14 @@ public:
         if (m_hwnd) {
             // Verify the container window is valid
             if (!IsWindow(m_hwnd)) {
-                log("ERROR: Container window creation returned handle but window is not valid");
+                ::log("ERROR: Container window creation returned handle but window is not valid");
                 m_hwnd = NULL;
                 return;
             }
             
             char successMsg[256];
             sprintf_s(successMsg, "Container window setup completed: HWND=%p", m_hwnd);
-            log(successMsg);
+            ::log(successMsg);
         }
     }
 
@@ -1687,7 +1700,7 @@ public:
                 char logMsg[256];
                 sprintf_s(logMsg, "Resized auto-sizing WebView %u to %dx%d", 
                         view->webviewId, width, height);
-                log(logMsg);
+                ::log(logMsg);
             }
         }
     }
@@ -1742,7 +1755,7 @@ public:
 ContainerView* GetOrCreateContainer(HWND parentWindow) {
     // Validate the parent window handle
     if (!IsWindow(parentWindow)) {
-        log("ERROR: Parent window handle is invalid");
+        ::log("ERROR: Parent window handle is invalid");
         return nullptr;
     }
     
@@ -1757,7 +1770,7 @@ ContainerView* GetOrCreateContainer(HWND parentWindow) {
             g_containerViews[parentWindow] = std::move(container);
             return containerPtr;
         } else {
-            log("ERROR: Container creation failed, not storing");
+            ::log("ERROR: Container creation failed, not storing");
             return nullptr;
         }
     }
@@ -1815,7 +1828,7 @@ void handleApplicationMenuSelection(UINT menuId) {
         
         char logMsg[256];
         sprintf_s(logMsg, "Application menu action: %s", action.c_str());
-        log(logMsg);
+        ::log(logMsg);
         
         if (g_appMenuTarget && g_appMenuTarget->zigHandler) {
             if (action == "__quit__") {
@@ -1978,7 +1991,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_TIMER:
             if (wParam == 1) {
                 KillTimer(hwnd, 1);
-                log("Timer fired - forcing window refresh");
+                ::log("Timer fired - forcing window refresh");
                 InvalidateRect(hwnd, NULL, TRUE);
                 UpdateWindow(hwnd);
             }
@@ -2206,12 +2219,12 @@ SimpleJsonValue parseJson(const std::string& json) {
 HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* statusItem) {
     HMENU menu = CreatePopupMenu();
     if (!menu) {
-        log("ERROR: Failed to create popup menu");
+        ::log("ERROR: Failed to create popup menu");
         return NULL;
     }
     
     if (menuConfig.type != SimpleJsonValue::ARRAY) {
-        log("ERROR: Menu config is not an array");
+        ::log("ERROR: Menu config is not an array");
         return menu;
     }
     
@@ -2348,7 +2361,7 @@ void setMenuItemAccelerator(HMENU menu, UINT menuId, const std::string& accelera
     if (key > 0) {
         char logMsg[256];
         sprintf_s(logMsg, "Setting accelerator for menu item %u: key=%u, modifiers=%u", menuId, key, modifiers);
-        log(logMsg);
+        ::log(logMsg);
     }
 }
 
@@ -2356,12 +2369,12 @@ void setMenuItemAccelerator(HMENU menu, UINT menuId, const std::string& accelera
 HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusItemTarget* target) {
     HMENU menuBar = CreateMenu();
     if (!menuBar) {
-        log("ERROR: Failed to create menu bar");
+        ::log("ERROR: Failed to create menu bar");
         return NULL;
     }
     
     if (menuConfig.type != SimpleJsonValue::ARRAY) {
-        log("ERROR: Application menu config is not an array");
+        ::log("ERROR: Application menu config is not an array");
         DestroyMenu(menuBar);
         return NULL;
     }
@@ -2604,12 +2617,12 @@ ELECTROBUN_EXPORT bool initCEF() {
     bool success = CefInitialize(main_args, settings, g_cef_app.get(), nullptr);
     if (success) {
         g_cef_initialized = true;
-        log("CEF initialized successfully");
+        ::log("CEF initialized successfully");
         
         // We'll start the message pump timer when we create the first browser
         std::cout << "[CEF] CEF initialized, message pump will start with first browser" << std::endl;
     } else {
-        log("Failed to initialize CEF");
+        ::log("Failed to initialize CEF");
     }
     
     return success;
@@ -2642,7 +2655,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         // Get or create container
         auto container = GetOrCreateContainer(hwnd);
         if (!container) {
-            log("ERROR: Failed to create container");
+            ::log("ERROR: Failed to create container");
             return;
         }
         
@@ -2650,7 +2663,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                 if (FAILED(result)) {
-                    log("ERROR: Failed to create WebView2 environment");
+                    ::log("ERROR: Failed to create WebView2 environment");
                     return S_OK;
                 }
                 
@@ -2659,7 +2672,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
-                                log("ERROR: Failed to create WebView2 controller");
+                                ::log("ERROR: Failed to create WebView2 controller");
                                 return S_OK;
                             }
                             
@@ -2722,7 +2735,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
     });
     
     if (!cefInitResult) {
-        log("ERROR: Failed to initialize CEF");
+        ::log("ERROR: Failed to initialize CEF");
         return view;
     }
     
@@ -2730,7 +2743,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
     MainThreadDispatcher::dispatch_sync([=]() {
         auto container = GetOrCreateContainer(hwnd);
         if (!container) {
-            log("ERROR: Failed to create container");
+            ::log("ERROR: Failed to create container");
             return;
         }
         
@@ -2819,7 +2832,7 @@ ELECTROBUN_EXPORT void killApp() {
         std::cout << "[CEF] Initiating graceful shutdown via CefQuitMessageLoop()" << std::endl;
         // Use CefQuitMessageLoop() for graceful shutdown, which will trigger OnBeforeClose handlers
         CefQuitMessageLoop();
-        log("CEF shutdown initiated");
+        ::log("CEF shutdown initiated");
     } else {
         // If CEF is not running, exit directly
         ExitProcess(1);
@@ -2858,13 +2871,13 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     std::shared_ptr<AbstractView> view = nullptr;
     
     if (renderer && strcmp(renderer, "cef") == 0 && isCEFAvailable()) {
-        log("=== Creating CEF Browser ===");
+        ::log("=== Creating CEF Browser ===");
         view = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
                             partitionIdentifier, navigationCallback, webviewEventHandler,
                             bunBridgeHandler, internalBridgeHandler,
                             electrobunPreloadScript, customPreloadScript);
     } else {
-        log("=== Creating WebView2 Browser ===");
+        ::log("=== Creating WebView2 Browser ===");
         view = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
                                  partitionIdentifier, navigationCallback, webviewEventHandler,
                                  bunBridgeHandler, internalBridgeHandler,
@@ -2887,7 +2900,7 @@ ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithRe
 }
 ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *urlString) {
     if (!abstractView || !urlString) {
-        log("ERROR: Invalid parameters passed to loadURLInWebView");
+        ::log("ERROR: Invalid parameters passed to loadURLInWebView");
         return;
     }
     
@@ -2901,7 +2914,7 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
 
 ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
     if (!abstractView) {
-        log("ERROR: Invalid AbstractView or webview in webviewGoBack");
+        ::log("ERROR: Invalid AbstractView or webview in webviewGoBack");
         return;
     }
     
@@ -2911,7 +2924,7 @@ ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
     if (!abstractView) {
-        log("ERROR: Invalid AbstractView or webview in webviewGoForward");
+        ::log("ERROR: Invalid AbstractView or webview in webviewGoForward");
         return;
     }
     
@@ -2921,7 +2934,7 @@ ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
     if (!abstractView) {
-        log("ERROR: Invalid AbstractView or webview in webviewReload");
+        ::log("ERROR: Invalid AbstractView or webview in webviewReload");
         return;
     }
     
@@ -2931,7 +2944,7 @@ ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
     if (!abstractView) {
-        log("ERROR: Invalid AbstractView in webviewRemove");
+        ::log("ERROR: Invalid AbstractView in webviewRemove");
         return;
     }
     
@@ -2944,7 +2957,7 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
     if (!abstractView) {
-        log("ERROR: Invalid AbstractView or webview in webviewCanGoBack");
+        ::log("ERROR: Invalid AbstractView or webview in webviewCanGoBack");
         return FALSE;
     }
     
@@ -2953,7 +2966,7 @@ ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
     if (!abstractView) {
-        log("ERROR: Invalid AbstractView or webview in webviewCanGoForward");
+        ::log("ERROR: Invalid AbstractView or webview in webviewCanGoForward");
         return FALSE;
     }
     
@@ -2962,7 +2975,7 @@ ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
     if (!abstractView || !script) {
-        log("ERROR: Invalid parameters passed to evaluateJavaScriptWithNoCompletion");
+        ::log("ERROR: Invalid parameters passed to evaluateJavaScriptWithNoCompletion");
         return;
     }
     
@@ -3104,9 +3117,9 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
                     DrawMenuBar(hwnd);
                     char logMsg[256];
                     sprintf_s(logMsg, "Applied application menu to new window: HWND=%p", hwnd);
-                    log(logMsg);
+                    ::log(logMsg);
                 } else {
-                    log("Failed to apply application menu to new window");
+                    ::log("Failed to apply application menu to new window");
                 }
             }
             
@@ -3130,7 +3143,7 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     
     if (!IsWindow(hwnd)) {
-        log("ERROR: Invalid window handle in makeNSWindowKeyAndOrderFront");
+        ::log("ERROR: Invalid window handle in makeNSWindowKeyAndOrderFront");
         return;
     }
     
@@ -3138,7 +3151,7 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
     MainThreadDispatcher::dispatch_sync([=]() {
         char logMsg[256];
         sprintf_s(logMsg, "Bringing window to front and activating: HWND=%p", hwnd);
-        log(logMsg);
+        ::log(logMsg);
         
         // Show the window if it's hidden
         if (!IsWindowVisible(hwnd)) {
@@ -3161,7 +3174,7 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
                     SetForegroundWindow(hwnd);
                     SetFocus(hwnd);
                     AttachThreadInput(currentThreadId, foregroundThreadId, FALSE);
-                    log("Window brought to foreground using thread input attachment");
+                    ::log("Window brought to foreground using thread input attachment");
                 } else {
                     // Last resort - flash the window to get user attention
                     FLASHWINFO fwi = {0};
@@ -3172,7 +3185,7 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
                     fwi.dwTimeout = 0;
                     FlashWindowEx(&fwi);
                     
-                    log("Could not bring window to foreground, flashed window instead");
+                    ::log("Could not bring window to foreground, flashed window instead");
                 }
             }
         }
@@ -3185,7 +3198,7 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
         SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, 
                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         
-        log("Window activation sequence completed");
+        ::log("Window activation sequence completed");
     });
 }
 
@@ -3194,7 +3207,7 @@ ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     
     if (!IsWindow(hwnd)) {
-        log("ERROR: Invalid window handle in setNSWindowTitle");
+        ::log("ERROR: Invalid window handle in setNSWindowTitle");
         return;
     }
     
@@ -3211,15 +3224,15 @@ ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
                 if (SetWindowTextW(hwnd, wTitle.c_str())) {
                     char logMsg[512];
                     sprintf_s(logMsg, "Window title set successfully: %s", title);
-                    log(logMsg);
+                    ::log(logMsg);
                 } else {
                     DWORD error = GetLastError();
                     char errorMsg[256];
                     sprintf_s(errorMsg, "Failed to set window title, error: %lu", error);
-                    log(errorMsg);
+                    ::log(errorMsg);
                 }
             } else {
-                log("ERROR: Failed to convert title to wide string");
+                ::log("ERROR: Failed to convert title to wide string");
             }
         } else {
             // Set empty title
@@ -3228,7 +3241,7 @@ ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
                 DWORD error = GetLastError();
                 char errorMsg[256];
                 sprintf_s(errorMsg, "Failed to clear window title, error: %lu", error);
-                log(errorMsg);
+                ::log(errorMsg);
             }
         }
     });
@@ -3239,7 +3252,7 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     
     if (!IsWindow(hwnd)) {
-        log("ERROR: Invalid window handle in closeNSWindow");
+        ::log("ERROR: Invalid window handle in closeNSWindow");
         return;
     }
     
@@ -3247,12 +3260,12 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
     MainThreadDispatcher::dispatch_sync([=]() {
         char logMsg[256];
         sprintf_s(logMsg, "Closing window: HWND=%p", hwnd);
-        log(logMsg);
+        ::log(logMsg);
         
         // Clean up any associated container views before closing
         auto containerIt = g_containerViews.find(hwnd);
         if (containerIt != g_containerViews.end()) {
-            log("Cleaning up container view for window");
+            ::log("Cleaning up container view for window");
             g_containerViews.erase(containerIt);
         }
         
@@ -3263,16 +3276,16 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
             DWORD error = GetLastError();
             char errorMsg[256];
             sprintf_s(errorMsg, "Failed to send WM_CLOSE message, error: %lu", error);
-            log(errorMsg);
+            ::log(errorMsg);
             
             // If PostMessage fails, try DestroyWindow as a fallback
-            log("Attempting DestroyWindow as fallback");
+            ::log("Attempting DestroyWindow as fallback");
             if (DestroyWindow(hwnd)) {
             } else {
                 DWORD destroyError = GetLastError();
                 char destroyErrorMsg[256];
                 sprintf_s(destroyErrorMsg, "DestroyWindow also failed, error: %lu", destroyError);
-                log(destroyErrorMsg);
+                ::log(destroyErrorMsg);
             }
         }
     });
@@ -3280,7 +3293,7 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
 
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
     if (!abstractView) {
-        log("ERROR: Invalid AbstractView in resizeWebview");
+        ::log("ERROR: Invalid AbstractView in resizeWebview");
         return;
     }
     
@@ -3312,7 +3325,7 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     
     if (!IsWindow(hwnd)) {
-        log("ERROR: Invalid window handle in startWindowMove");
+        ::log("ERROR: Invalid window handle in startWindowMove");
         return;
     }
     
@@ -3335,7 +3348,7 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     rid.hwndTarget = hwnd;   // Send messages to our window
     
     if (!RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE))) {
-        log("ERROR: Failed to register raw input device - error: " + std::to_string(GetLastError()));
+        ::log("ERROR: Failed to register raw input device - error: " + std::to_string(GetLastError()));
         g_isMovingWindow = FALSE;
         g_targetWindow = NULL;
     }
@@ -3343,14 +3356,14 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
 
 ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
     if (!pathString) {
-        log("ERROR: NULL path string passed to moveToTrash");
+        ::log("ERROR: NULL path string passed to moveToTrash");
         return FALSE;
     }
     
     // Convert to wide string for Windows API
     int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, pathString, -1, NULL, 0);
     if (wideCharLen == 0) {
-        log("ERROR: Failed to convert path to wide string");
+        ::log("ERROR: Failed to convert path to wide string");
         return FALSE;
     }
     
@@ -3372,30 +3385,30 @@ ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
     int result = SHFileOperationW(&fileOp);
     
     if (result == 0 && !fileOp.fAnyOperationsAborted) {
-        log("Successfully moved to trash: " + std::string(pathString));
+        ::log("Successfully moved to trash: " + std::string(pathString));
         return TRUE;
     } else {
-        log("ERROR: Failed to move to trash: " + std::string(pathString) + " (error code: " + std::to_string(result) + ")");
+        ::log("ERROR: Failed to move to trash: " + std::string(pathString) + " (error code: " + std::to_string(result) + ")");
         return FALSE;
     }
 }
 
 ELECTROBUN_EXPORT void showItemInFolder(char *path) {
     if (!path) {
-        log("ERROR: NULL path passed to showItemInFolder");
+        ::log("ERROR: NULL path passed to showItemInFolder");
         return;
     }
     
     std::string pathString(path);
     if (pathString.empty()) {
-        log("ERROR: Empty path passed to showItemInFolder");
+        ::log("ERROR: Empty path passed to showItemInFolder");
         return;
     }
     
     // Convert to wide string for Windows API
     int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
     if (wideCharLen == 0) {
-        log("ERROR: Failed to convert path to wide string in showItemInFolder");
+        ::log("ERROR: Failed to convert path to wide string in showItemInFolder");
         return;
     }
     
@@ -3416,9 +3429,9 @@ ELECTROBUN_EXPORT void showItemInFolder(char *path) {
     
     // Check if the operation was successful
     if (reinterpret_cast<INT_PTR>(result) <= 32) {
-        log("ERROR: Failed to show item in folder: " + pathString + " (error code: " + std::to_string(reinterpret_cast<INT_PTR>(result)) + ")");
+        ::log("ERROR: Failed to show item in folder: " + pathString + " (error code: " + std::to_string(reinterpret_cast<INT_PTR>(result)) + ")");
     } else {
-        log("Successfully opened folder for: " + pathString);
+        ::log("Successfully opened folder for: " + pathString);
     }
 }
 
@@ -3428,20 +3441,20 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                           BOOL canChooseDirectories,
                           BOOL allowsMultipleSelection) {
     if (!canChooseFiles && !canChooseDirectories) {
-        log("ERROR: Both canChooseFiles and canChooseDirectories are false");
+        ::log("ERROR: Both canChooseFiles and canChooseDirectories are false");
         return nullptr;
     }
     
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr)) {
-        log("ERROR: Failed to initialize COM");
+        ::log("ERROR: Failed to initialize COM");
         return nullptr;
     }
     
     IFileOpenDialog *pFileDialog = nullptr;
     hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_ALL, IID_IFileOpenDialog, (void**)&pFileDialog);
     if (FAILED(hr)) {
-        log("ERROR: Failed to create file dialog");
+        ::log("ERROR: Failed to create file dialog");
         CoUninitialize();
         return nullptr;
     }
@@ -3584,7 +3597,7 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
     CoUninitialize();
     
     if (result.empty()) {
-        log("File dialog cancelled or no selection made");
+        ::log("File dialog cancelled or no selection made");
         return nullptr;
     }
     
@@ -3600,7 +3613,7 @@ LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_CLOSE:
         case WM_DESTROY:
             // Don't allow the tray window to be closed/destroyed by default handlers
-            log("Preventing tray window close/destroy");
+            ::log("Preventing tray window close/destroy");
             return 0;
             
         case WM_COMMAND:
@@ -3634,7 +3647,7 @@ LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             if (trayItem->contextMenu) {
                                 char logMsg[256];
                                 sprintf_s(logMsg, "Right click on tray item %u - showing menu", trayItem->trayId);
-                                log(logMsg);
+                                ::log(logMsg);
                                 
                                 POINT pt;
                                 GetCursorPos(&pt);
@@ -3656,13 +3669,13 @@ LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 PostMessage(hwnd, WM_NULL, 0, 0);
                                 
                                 if (!menuResult) {
-                                    log("TrackPopupMenu failed");
+                                    ::log("TrackPopupMenu failed");
                                 }
                             } else {
                                 // No menu exists yet, call handler (this will trigger menu creation)
                                 char logMsg[256];
                                 sprintf_s(logMsg, "Right click on tray item %u - no menu, calling handler", trayItem->trayId);
-                                log(logMsg);
+                                ::log(logMsg);
                                 
                                 if (trayItem->handler) {
                                     // Use a separate thread or async call to prevent blocking
@@ -3670,7 +3683,7 @@ LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                         try {
                                             trayItem->handler(trayItem->trayId, "");
                                         } catch (...) {
-                                            log("Exception in tray handler");
+                                            ::log("Exception in tray handler");
                                         }
                                     }).detach();
                                 }
@@ -3693,7 +3706,7 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
                         uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
     
     return MainThreadDispatcher::dispatch_sync([=]() -> NSStatusItem* {
-        log("Creating system tray icon");
+        ::log("Creating system tray icon");
         
         NSStatusItem* statusItem = new NSStatusItem();
         statusItem->trayId = trayId;
@@ -3722,7 +3735,7 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
                 if (error != ERROR_CLASS_ALREADY_EXISTS) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "Failed to register TrayWindowClass: %lu", error);
-                    log(errorMsg);
+                    ::log(errorMsg);
                     delete statusItem;
                     return nullptr;
                 }
@@ -3746,14 +3759,14 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
             DWORD error = GetLastError();
             char errorMsg[256];
             sprintf_s(errorMsg, "ERROR: Failed to create tray window: %lu", error);
-            log(errorMsg);
+            ::log(errorMsg);
             delete statusItem;
             return nullptr;
         }
         
         char logMsg[256];
         sprintf_s(logMsg, "Tray window created: HWND=%p", statusItem->hwnd);
-        log(logMsg);
+        ::log(logMsg);
         
         // Store in global map before setting up the tray icon
         g_trayItems[statusItem->hwnd] = statusItem;
@@ -3785,7 +3798,7 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
                 if (!statusItem->nid.hIcon) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "Failed to load icon from: %s", statusItem->imagePath.c_str());
-                    log(errorMsg);
+                    ::log(errorMsg);
                 }
             }
         }
@@ -3793,19 +3806,19 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
         // Use default icon if loading failed
         if (!statusItem->nid.hIcon) {
             statusItem->nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-            log("Using default application icon");
+            ::log("Using default application icon");
         }
         
         // Add to system tray
         if (Shell_NotifyIcon(NIM_ADD, &statusItem->nid)) {
             char successMsg[256];
             sprintf_s(successMsg, "System tray icon created successfully: ID=%u, HWND=%p", trayId, statusItem->hwnd);
-            log(successMsg);
+            ::log(successMsg);
         } else {
             DWORD error = GetLastError();
             char errorMsg[256];
             sprintf_s(errorMsg, "ERROR: Failed to add icon to system tray: %lu", error);
-            log(errorMsg);
+            ::log(errorMsg);
             
             DestroyWindow(statusItem->hwnd);
             g_trayItems.erase(statusItem->hwnd);
@@ -3868,7 +3881,7 @@ ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image)
                 DestroyIcon(oldIcon);
             }
         } else {
-            log("ERROR: Failed to update tray image");
+            ::log("ERROR: Failed to update tray image");
             // Restore old icon on failure
             statusItem->nid.hIcon = oldIcon;
         }
@@ -3882,10 +3895,10 @@ ELECTROBUN_EXPORT void setTrayMenuFromJSON(NSStatusItem *statusItem, const char 
     log("setTrayMenuFromJSON");
     
     MainThreadDispatcher::dispatch_sync([=]() {
-        log("setTrayMenuFromJSON main thread");
+        ::log("setTrayMenuFromJSON main thread");
         
         if (!statusItem->handler) {
-            log("ERROR: No handler found for status item");
+            ::log("ERROR: No handler found for status item");
             return;
         }
         
@@ -3894,7 +3907,7 @@ ELECTROBUN_EXPORT void setTrayMenuFromJSON(NSStatusItem *statusItem, const char 
             SimpleJsonValue menuConfig = parseJson(std::string(jsonString));
             
             if (menuConfig.type != SimpleJsonValue::ARRAY) {
-                log("ERROR: JSON menu configuration is not an array");
+                ::log("ERROR: JSON menu configuration is not an array");
                 return;
             }
             
@@ -3909,15 +3922,15 @@ ELECTROBUN_EXPORT void setTrayMenuFromJSON(NSStatusItem *statusItem, const char 
             
             if (statusItem->contextMenu) {
             } else {
-                log("ERROR: Failed to create context menu from JSON configuration");
+                ::log("ERROR: Failed to create context menu from JSON configuration");
             }
             
         } catch (const std::exception& e) {
             char errorMsg[256];
             sprintf_s(errorMsg, "ERROR: Exception parsing JSON: %s", e.what());
-            log(errorMsg);
+            ::log(errorMsg);
         } catch (...) {
-            log("ERROR: Unknown exception parsing JSON");
+            ::log("ERROR: Unknown exception parsing JSON");
         }
     });
 }
@@ -3975,7 +3988,7 @@ ELECTROBUN_EXPORT void setTrayMenu(NSStatusItem *statusItem, const char *menuCon
 
 ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
     if (!jsonString) {
-        log("ERROR: NULL JSON string passed to setApplicationMenu");
+        ::log("ERROR: NULL JSON string passed to setApplicationMenu");
         return;
     }
     
@@ -3986,7 +3999,7 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
             SimpleJsonValue menuConfig = parseJson(std::string(jsonString));
             
             if (menuConfig.type != SimpleJsonValue::ARRAY) {
-                log("ERROR: Application menu JSON configuration is not an array");
+                ::log("ERROR: Application menu JSON configuration is not an array");
                 return;
             }
             
@@ -4018,26 +4031,26 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
                         
                         char successMsg[256];
                         sprintf_s(successMsg, "Application menu applied to window: HWND=%p", mainWindow);
-                        log(successMsg);
+                        ::log(successMsg);
                     } else {
                         DWORD error = GetLastError();
                         char errorMsg[256];
                         sprintf_s(errorMsg, "Failed to set application menu on window: %lu", error);
-                        log(errorMsg);
+                        ::log(errorMsg);
                     }
                 } else {
-                    log("Warning: No main window found to attach application menu");
+                    ::log("Warning: No main window found to attach application menu");
                 }
             } else {
-                log("ERROR: Failed to create application menu from JSON configuration");
+                ::log("ERROR: Failed to create application menu from JSON configuration");
             }
             
         } catch (const std::exception& e) {
             char errorMsg[256];
             sprintf_s(errorMsg, "ERROR: Exception in setApplicationMenu: %s", e.what());
-            log(errorMsg);
+            ::log(errorMsg);
         } catch (...) {
-            log("ERROR: Unknown exception in setApplicationMenu");
+            ::log("ERROR: Unknown exception in setApplicationMenu");
         }
     });
 }
@@ -4045,18 +4058,18 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
 
 ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
     if (!jsonString) {
-        log("ERROR: NULL JSON string passed to showContextMenu");
+        ::log("ERROR: NULL JSON string passed to showContextMenu");
         return;
     }
     
     if (!contextMenuHandler) {
-        log("ERROR: NULL context menu handler passed to showContextMenu");
+        ::log("ERROR: NULL context menu handler passed to showContextMenu");
         return;
     }
     
     MainThreadDispatcher::dispatch_sync([=]() {
         try {
-            log("showContextMenu: parsing JSON menu configuration");
+            ::log("showContextMenu: parsing JSON menu configuration");
             SimpleJsonValue menuConfig = parseJson(std::string(jsonString));
             
             std::unique_ptr<StatusItemTarget> target = std::make_unique<StatusItemTarget>();
@@ -4065,7 +4078,7 @@ ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHand
             
             HMENU menu = createMenuFromConfig(menuConfig, reinterpret_cast<NSStatusItem*>(target.get()));
             if (!menu) {
-                log("ERROR: Failed to create context menu");
+                ::log("ERROR: Failed to create context menu");
                 return;
             }
             
@@ -4082,7 +4095,7 @@ ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHand
             // Required for proper menu operation
             SetForegroundWindow(hwnd);
             
-            log("showContextMenu: displaying menu at cursor position");
+            ::log("showContextMenu: displaying menu at cursor position");
             
             // Show the context menu
             UINT cmd = TrackPopupMenu(
@@ -4104,7 +4117,7 @@ ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHand
             DestroyMenu(menu);
             
         } catch (const std::exception& e) {
-            log("ERROR: Exception in showContextMenu: " + std::string(e.what()));
+            ::log("ERROR: Exception in showContextMenu: " + std::string(e.what()));
         }
     });
 }
@@ -4172,11 +4185,11 @@ void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
                 
                 char logMsg[512];
                 sprintf_s(logMsg, "Resource request intercepted: %s", uriStr.c_str());
-                log(logMsg);
+                ::log(logMsg);
                 
                 // Check if this is a views:// URL
                 if (wUri.find(L"views://") == 0) {
-                    log("Processing views:// request");
+                    ::log("Processing views:// request");
                     handleViewsSchemeRequest(args, wUri, webviewId);
                 }
                 
@@ -4188,7 +4201,7 @@ void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
     if (FAILED(hr)) {
         char errorMsg[256];
         sprintf_s(errorMsg, "Failed to add WebResourceRequested handler: 0x%lx", hr);
-        log(errorMsg);
+        ::log(errorMsg);
         return;
     }
     
@@ -4197,7 +4210,7 @@ void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
     if (FAILED(hr)) {
         char errorMsg[256];
         sprintf_s(errorMsg, "Failed to add resource filter for views://: 0x%lx", hr);
-        log(errorMsg);
+        ::log(errorMsg);
     } else {
     }
 }
@@ -4233,19 +4246,19 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
     if (path == "internal/index.html") {
         // Handle internal HTML content using your JS callback
         if (g_getHTMLForWebviewSync) {
-            log("Calling g_getHTMLForWebviewSync...");
+            ::log("Calling g_getHTMLForWebviewSync...");
             const char* htmlContent = g_getHTMLForWebviewSync(webviewId);
             if (htmlContent && strlen(htmlContent) > 0) {
                 responseData = std::string(htmlContent);
                 sprintf_s(logMsg, "Got HTML content from JS callback: %zu bytes", responseData.length());
-                log(logMsg);
+                ::log(logMsg);
             } else {
                 responseData = "<html><body><h1>Empty HTML content from callback!</h1></body></html>";
-                log("JS callback returned empty or null content");
+                ::log("JS callback returned empty or null content");
             }
         } else {
             responseData = "<html><body><h1>JS callback not available</h1><p>g_getHTMLForWebviewSync is null</p></body></html>";
-            log("JS callback (g_getHTMLForWebviewSync) is not set");
+            ::log("JS callback (g_getHTMLForWebviewSync) is not set");
         }
         mimeType = "text/html";
     } else {
@@ -4256,7 +4269,7 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
         if (responseData.empty()) {
             responseData = "<html><body><h1>404 - Views file not found</h1><p>Path: " + path + "</p></body></html>";
             mimeType = "text/html";
-            log("Views file not found, returning 404");
+            ::log("Views file not found, returning 404");
         }
     }
     
@@ -4265,7 +4278,7 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
     
     // Create the response using the global environment
     if (!g_environment) {
-        log("ERROR: No global environment available for creating response");
+        ::log("ERROR: No global environment available for creating response");
         return;
     }
     
@@ -4274,14 +4287,14 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
         ComPtr<IStream> stream;
         HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, responseData.length());
         if (!hGlobal) {
-            log("ERROR: Failed to allocate global memory");
+            ::log("ERROR: Failed to allocate global memory");
             return;
         }
         
         void* pData = GlobalLock(hGlobal);
         if (!pData) {
             GlobalFree(hGlobal);
-            log("ERROR: Failed to lock global memory");
+            ::log("ERROR: Failed to lock global memory");
             return;
         }
         
@@ -4292,7 +4305,7 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
         if (FAILED(streamResult)) {
             GlobalFree(hGlobal);
             sprintf_s(logMsg, "ERROR: Failed to create stream on global: 0x%lx", streamResult);
-            log(logMsg);
+            ::log(logMsg);
             return;
         }
         
@@ -4310,7 +4323,7 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
         
         if (FAILED(responseResult)) {
             sprintf_s(logMsg, "ERROR: Failed to create web resource response: 0x%lx", responseResult);
-            log(logMsg);
+            ::log(logMsg);
             return;
         }
         
@@ -4318,14 +4331,14 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
         HRESULT setResult = args->put_Response(response.Get());
         if (FAILED(setResult)) {
             sprintf_s(logMsg, "ERROR: Failed to set response: 0x%lx", setResult);
-            log(logMsg);
+            ::log(logMsg);
             return;
         }
         
-        log("Successfully created and set views:// response");
+        ::log("Successfully created and set views:// response");
         
     } catch (...) {
-        log("ERROR: Exception occurred while creating response");
+        ::log("ERROR: Exception occurred while creating response");
     }
 }
 
@@ -4336,7 +4349,7 @@ std::string loadViewsFile(const std::string& path) {
     DWORD result = GetCurrentDirectoryA(MAX_PATH, currentDir);
     
     if (result == 0 || result > MAX_PATH) {
-        log("ERROR: Failed to get current working directory");
+        ::log("ERROR: Failed to get current working directory");
         return "";
     }
     
@@ -4351,7 +4364,7 @@ std::string loadViewsFile(const std::string& path) {
     std::ifstream file(fullPath, std::ios::binary);
     if (!file.is_open()) {
         sprintf_s(logMsg, "Could not open views file: %s", fullPath.c_str());
-        log(logMsg);
+        ::log(logMsg);
         return "";
     }
     
