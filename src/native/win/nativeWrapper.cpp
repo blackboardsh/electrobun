@@ -275,87 +275,8 @@ std::string getMimeTypeForExtension(const std::string& url) {
     return getMimeTypeForFile(path);
 }
 
-// CEF Resource Handler that reuses existing views:// functionality
-class ViewsSchemeResourceHandler : public CefResourceHandler {
-public:
-    ViewsSchemeResourceHandler(const std::string& url) : url_(url) {}
-    
-    bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
-        CEF_REQUIRE_IO_THREAD();
-        
-        // Reuse existing views:// logic
-        response_data_ = readViewsFileContent(url_);
-        mime_type_ = getMimeTypeForExtension(url_);
-        
-        offset_ = 0;
-        handle_request = true;
-        return true;
-    }
-    
-    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override {
-        CEF_REQUIRE_IO_THREAD();
-        
-        response->SetStatus(200);
-        response->SetMimeType(mime_type_);
-        response->SetStatusText("OK");
-        
-        // Add CORS headers
-        CefResponse::HeaderMap headers;
-        headers.insert(std::make_pair("Access-Control-Allow-Origin", "*"));
-        response->SetHeaderMap(headers);
-        
-        response_length = response_data_.length();
-    }
-    
-    bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override {
-        CEF_REQUIRE_IO_THREAD();
-        
-        bytes_read = 0;
-        if (offset_ < response_data_.length()) {
-            int transfer_size = std::min(bytes_to_read, static_cast<int>(response_data_.length() - offset_));
-            memcpy(data_out, response_data_.c_str() + offset_, transfer_size);
-            offset_ += transfer_size;
-            bytes_read = transfer_size;
-            return true;
-        }
-        return false;
-    }
-    
-    void Cancel() override {
-        CEF_REQUIRE_IO_THREAD();
-    }
-
-private:
-    std::string url_;
-    std::string response_data_;
-    std::string mime_type_ = "text/html";
-    size_t offset_ = 0;
-    
-    IMPLEMENT_REFCOUNTING(ViewsSchemeResourceHandler);
-};
-
-// CEF Request Handler for intercepting requests
-class ElectrobunRequestHandler : public CefRequestHandler {
-public:
-    CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
-                                                    CefRefPtr<CefFrame> frame,
-                                                    CefRefPtr<CefRequest> request) override {
-        CEF_REQUIRE_IO_THREAD();
-        
-        std::string url = request->GetURL();
-        
-        // Check if this is a views:// URL
-        if (url.find("views://") == 0) {
-            log("ElectrobunRequestHandler: Handling views:// URL: " + url);
-            return new ViewsSchemeResourceHandler(url);
-        }
-        
-        return nullptr;
-    }
-
-private:
-    IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
-};
+// Note: For now, CEF views:// support will rely on the global scheme registration
+// that's already in place. We can add custom resource handlers later if needed.
 
 class ElectrobunCefClient : public CefClient {
 public:
@@ -1224,7 +1145,7 @@ public:
                     browser->GetMainFrame()->ExecuteJavaScript(scriptContent.c_str(), browser->GetMainFrame()->GetURL(), 0);
                 }
             } else {
-                log("CEFView: Could not read preload script from: " + std::string(jsString));
+                log(std::string("CEFView: Could not read preload script from: ") + std::string(jsString));
             }
         } else {
             // Inline JavaScript
