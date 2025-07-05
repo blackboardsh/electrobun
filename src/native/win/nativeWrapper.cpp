@@ -151,12 +151,45 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunCefApp);
 };
 
-// Simple CEF Client class for minimal implementation
-class ElectrobunCefClient : public CefClient {
+// CEF Load Handler for debugging navigation
+class ElectrobunLoadHandler : public CefLoadHandler {
 public:
-    ElectrobunCefClient() {}
+    void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override {
+        log("CEF LoadStart: Navigation started");
+    }
+    
+    void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
+        char msg[256];
+        sprintf_s(msg, "CEF LoadEnd: Navigation completed with status %d", httpStatusCode);
+        log(msg);
+    }
+    
+    void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override {
+        char msg[512];
+        sprintf_s(msg, "CEF LoadError: %d - %s for URL: %s", 
+                  static_cast<int>(errorCode), 
+                  errorText.ToString().c_str(), 
+                  failedUrl.ToString().c_str());
+        log(msg);
+    }
 
 private:
+    IMPLEMENT_REFCOUNTING(ElectrobunLoadHandler);
+};
+
+// CEF Client class with load handler for debugging
+class ElectrobunCefClient : public CefClient {
+public:
+    ElectrobunCefClient() {
+        m_loadHandler = new ElectrobunLoadHandler();
+    }
+    
+    CefRefPtr<CefLoadHandler> GetLoadHandler() override {
+        return m_loadHandler;
+    }
+
+private:
+    CefRefPtr<ElectrobunLoadHandler> m_loadHandler;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
 
@@ -2118,14 +2151,18 @@ ELECTROBUN_EXPORT bool initCEF() {
     CefString(&settings.locales_dir_path) = cefResourceDir + "\\Resources\\locales";
     CefString(&settings.cache_path) = userDataDir;
     
+    // Add language settings like macOS
+    CefString(&settings.accept_language_list) = "en-US,en";
+    
+    // Enable debug logging for more verbose output
+    settings.log_severity = LOGSEVERITY_VERBOSE;
+    CefString(&settings.log_file) = std::string(exePath) + "\\cef_debug.log";
+    
     // Debug logging to see actual paths
     log(("CEF executable path: " + std::string(exePath)).c_str());
     log(("CEF resource dir: " + cefResourceDir).c_str());
     log(("CEF locales dir: " + cefResourceDir + "\\Resources\\locales").c_str());
     log(("CEF cache dir: " + userDataDir).c_str());
-    
-    // Set log level for debugging
-    settings.log_severity = LOGSEVERITY_INFO;
     
     bool success = CefInitialize(main_args, settings, g_cef_app.get(), nullptr);
     if (success) {
