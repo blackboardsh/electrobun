@@ -133,6 +133,9 @@ async function copyToDist() {
         // CEF locales to cef/Resources/locales subdirectory 
         await $`powershell -command "if (-not (Test-Path 'dist/cef/Resources')) { New-Item -ItemType Directory -Path 'dist/cef/Resources' -Force | Out-Null }"`;
         await $`powershell -command "if (Test-Path 'vendors/cef/Resources/locales') { Copy-Item 'vendors/cef/Resources/locales' 'dist/cef/Resources/' -Recurse -Force }"`.catch(() => {});
+        
+        // Copy CEF helper process
+        await $`cp src/native/build/process_helper.exe dist/process_helper.exe`;
     } else if (OS === 'linux') {
 
     }
@@ -342,6 +345,21 @@ async function vendorCEF() {
             await $`cd vendors/cef/build && cmake -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
             // Build the wrapper library only
             await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
+        }
+        
+        // Build process_helper binary for Windows
+        if (!existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper.exe'))) {                
+            await $`mkdir -p src/native/build`;
+            
+            const cefInclude = `./vendors/cef`;
+            const cefLib = `./vendors/cef/Release/libcef.lib`;
+            const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
+            
+            // Compile the Windows helper process
+            await $`cl /c /EHsc /std:c++17 /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/build/process_helper_win.obj src/native/win/cef_process_helper_win.cpp`;
+            
+            // Link to create the helper executable
+            await $`link /OUT:src/native/build/process_helper.exe user32.lib ole32.lib shell32.lib "${cefLib}" "${cefWrapperLib}" /SUBSYSTEM:WINDOWS src/native/build/process_helper_win.obj`;
         }
     }
 }

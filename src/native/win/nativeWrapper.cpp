@@ -2185,6 +2185,9 @@ ELECTROBUN_EXPORT bool initCEF() {
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single-threaded message loop
     
+    // Set the subprocess path to the helper executable
+    CefString(&settings.browser_subprocess_path) = std::string(exePath) + "\\bun Helper.exe";
+    
     // Set paths - icudtl.dat and .pak files are in cef directory root
     CefString(&settings.resources_dir_path) = cefResourceDir;
     CefString(&settings.locales_dir_path) = cefResourceDir + "\\Resources\\locales";

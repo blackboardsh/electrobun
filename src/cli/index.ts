@@ -84,6 +84,7 @@ const PATHS = {
     "Chromium Embedded Framework.framework"
   ),
   CEF_HELPER_MACOS: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
+  CEF_HELPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "process_helper.exe"),
 };
 
 const commandDefaults = {
@@ -492,6 +493,26 @@ if (commandArg === "init") {
           recursive: true,
           dereference: true,
         });
+      }
+
+      // Copy CEF helper processes with different names
+      const cefHelperNames = [
+        "bun Helper",
+        "bun Helper (Alerts)", 
+        "bun Helper (GPU)",
+        "bun Helper (Plugin)",
+        "bun Helper (Renderer)",
+      ];
+
+      const helperSourcePath = PATHS.CEF_HELPER_WIN;
+      if (existsSync(helperSourcePath)) {
+        cefHelperNames.forEach((helperName) => {
+          const destinationPath = join(appBundleMacOSPath, `${helperName}.exe`);
+          cpSync(helperSourcePath, destinationPath);
+          console.log(`Copied CEF helper: ${helperName}.exe`);
+        });
+      } else {
+        console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
       }
     }
   }
