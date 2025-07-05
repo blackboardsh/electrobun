@@ -2208,17 +2208,8 @@ ELECTROBUN_EXPORT bool initCEF() {
         g_cef_initialized = true;
         log("CEF initialized successfully");
         
-        // Start a timer to pump CEF messages since we're using single-threaded mode
-        // This is essential for CEF callbacks like OnAfterCreated to be called
-        SetTimer(NULL, 1, 10, [](HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) -> VOID {
-            static int pumpCount = 0;
-            CefDoMessageLoopWork();
-            pumpCount++;
-            if (pumpCount % 100 == 0) { // Log every 1 second (100 * 10ms)
-                std::cout << "[CEF] Message pump running, count: " << pumpCount << std::endl;
-            }
-        });
-        std::cout << "[CEF] Started message pump timer" << std::endl;
+        // We'll start the message pump timer when we create the first browser
+        std::cout << "[CEF] CEF initialized, message pump will start with first browser" << std::endl;
     } else {
         log("Failed to initialize CEF");
     }
@@ -2270,8 +2261,12 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         } else {
         log("=== Creating CEF Browser ===");
         
-        // Initialize CEF if not already done
-        if (!initCEF()) {
+        // Initialize CEF on main thread if not already done
+        bool cefInitResult = MainThreadDispatcher::dispatch_sync([=]() -> bool {
+            return initCEF();
+        });
+        
+        if (!cefInitResult) {
             log("ERROR: Failed to initialize CEF");
             auto view = std::make_shared<AbstractView>();
             view->webviewId = webviewId;
@@ -2346,6 +2341,21 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         if (browserRequested) {
             // Store the view for later use when browser creation completes
             std::cout << "[CEF] Browser creation initiated asynchronously" << std::endl;
+            
+            // Start the CEF message pump timer using the container window
+            static bool messagePumpStarted = false;
+            if (!messagePumpStarted) {
+                SetTimer(containerHwnd, 999, 10, [](HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) -> VOID {
+                    static int pumpCount = 0;
+                    CefDoMessageLoopWork();
+                    pumpCount++;
+                    if (pumpCount % 100 == 0) { // Log every 1 second (100 * 10ms)
+                        std::cout << "[CEF] Message pump running, count: " << pumpCount << std::endl;
+                    }
+                });
+                messagePumpStarted = true;
+                std::cout << "[CEF] Started message pump timer with container window" << std::endl;
+            }
             
             // We'll need to handle the browser reference in the client's OnAfterCreated callback
             // For now, just store basic view info
