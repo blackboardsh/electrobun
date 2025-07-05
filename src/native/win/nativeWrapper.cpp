@@ -174,15 +174,7 @@ public:
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
         std::cout << "[CEF] LoadEnd: Navigation completed with status " << httpStatusCode << std::endl;
         
-        // Execute preload scripts on main frame after page load
-        if (frame->IsMain()) {
-            int browserId = browser->GetIdentifier();
-            auto scriptIt = g_preloadScripts.find(browserId);
-            if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
-                browser->GetMainFrame()->ExecuteJavaScript(scriptIt->second, "", 0);
-                std::cout << "[CEF] Executed preload scripts for browser " << browserId << std::endl;
-            }
-        }
+        // Script injection now handled by response filter during HTML parsing
     }
     
     void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override {
@@ -256,8 +248,6 @@ public:
         
         // Remove browser from global tracking
         g_cefBrowsers.erase(browser->GetIdentifier());
-        // Clean up preload scripts for this browser
-        g_preloadScripts.erase(browser->GetIdentifier());
         g_browser_count--;
         
         std::cout << "[CEF] Remaining browsers: " << g_browser_count << std::endl;
@@ -410,15 +400,28 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunResponseFilter);
 };
 
-// CEF Request Handler for views:// scheme support
+// CEF Request Handler for views:// scheme support and script injection
 class ElectrobunRequestHandler : public CefRequestHandler {
 public:
-    ElectrobunRequestHandler() {}
+    ElectrobunRequestHandler(ElectrobunCefClient* client) : client_(client) {}
 
-    // For now, use default behavior and handle script injection differently
-    // The GetResourceResponseFilter method signature varies between CEF versions
+    CefRefPtr<CefResponseFilter> GetResourceResponseFilter(CefRefPtr<CefBrowser> browser,
+                                                          CefRefPtr<CefFrame> frame,
+                                                          CefRefPtr<CefRequest> request,
+                                                          CefRefPtr<CefResponse> response) override {
+        // Only inject scripts into HTML responses
+        std::string mime_type = response->GetMimeType();
+        if (mime_type.find("text/html") != std::string::npos && client_) {
+            std::string script = client_->GetCombinedScript();
+            if (!script.empty()) {
+                return new ElectrobunResponseFilter(script);
+            }
+        }
+        return nullptr;
+    }
 
 private:
+    ElectrobunCefClient* client_;
     IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
 };
 
@@ -435,7 +438,7 @@ public:
           webview_tag_handler_(internalBridgeHandler) {
         m_loadHandler = new ElectrobunLoadHandler();
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
-        m_requestHandler = new ElectrobunRequestHandler();
+        m_requestHandler = new ElectrobunRequestHandler(this);
     }
 
     void AddPreloadScript(const std::string& script) {
@@ -519,11 +522,7 @@ private:
 void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser) {
     if (client && browser) {
         client->SetBrowser(browser);
-        // Store preload scripts for this browser ID so load handler can access them
-        std::string script = client->GetCombinedScript();
-        if (!script.empty()) {
-            g_preloadScripts[browser->GetIdentifier()] = script;
-        }
+        // Script injection now handled by response filter, no need to store globally
     }
 }
 
