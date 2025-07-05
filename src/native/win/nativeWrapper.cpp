@@ -184,6 +184,9 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunLoadHandler);
 };
 
+// Forward declaration for CEF client (needed for global map)
+class ElectrobunCefClient;
+
 // Global map to store CEF clients for browser connection
 static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
 
@@ -255,9 +258,6 @@ private:
 // Forward declarations for functions defined later in the file
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
-
-// Forward declaration for CEF client
-class ElectrobunCefClient;
 
 // CEF Resource Handler for views:// scheme (based on Mac implementation)
 class ElectrobunSchemeHandler : public CefResourceHandler {
