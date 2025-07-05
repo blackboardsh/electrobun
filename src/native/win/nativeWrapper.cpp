@@ -237,11 +237,64 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunLifeSpanHandler);
 };
 
+// CEF Resource Handler for views:// scheme
+class ElectrobunResourceHandler : public CefResourceHandler {
+public:
+    ElectrobunResourceHandler(const std::string& url) : url_(url) {}
+
+    bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
+        handle_request = true;
+        
+        // Extract path from views:// URL
+        std::string path = url_.substr(8); // Remove "views://" prefix
+        if (path.empty()) path = "index.html";
+        
+        // Load file content using existing WebView2 function
+        content_ = loadViewsFile(path);
+        mime_type_ = getMimeTypeForFile(path);
+        
+        return !content_.empty();
+    }
+
+    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64& response_length, CefString& redirectUrl) override {
+        response->SetStatus(200);
+        response->SetMimeType(mime_type_);
+        response_length = content_.length();
+    }
+
+    bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override {
+        bytes_read = 0;
+        if (offset_ < content_.length()) {
+            int transfer = std::min(bytes_to_read, static_cast<int>(content_.length() - offset_));
+            memcpy(data_out, content_.data() + offset_, transfer);
+            offset_ += transfer;
+            bytes_read = transfer;
+        }
+        return bytes_read > 0;
+    }
+
+    void Cancel() override {}
+
+private:
+    std::string url_;
+    std::string content_;
+    std::string mime_type_;
+    size_t offset_ = 0;
+    IMPLEMENT_REFCOUNTING(ElectrobunResourceHandler);
+};
+
 // CEF Request Handler for views:// scheme support
 class ElectrobunRequestHandler : public CefRequestHandler {
 public:
-    // For now, just use default behavior
-    // CEF views:// support relies on global scheme registration
+    CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
+                                                   CefRefPtr<CefFrame> frame,
+                                                   CefRefPtr<CefRequest> request) override {
+        std::string url = request->GetURL();
+        if (url.substr(0, 8) == "views://") {
+            return new ElectrobunResourceHandler(url);
+        }
+        return nullptr;
+    }
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
@@ -252,41 +305,6 @@ private:
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
 
-// Helper functions that reuse existing WebView2 views:// logic
-std::string readViewsFileContent(const std::string& url) {
-    // Extract path from full views:// URL
-    std::string path;
-    if (url.length() > 8) {
-        path = url.substr(8); // Remove "views://" prefix
-    } else {
-        path = "index.html"; // Default
-    }
-    
-    if (path == "internal/index.html") {
-        // For now return placeholder for internal HTML
-        // This could be connected to JS utilities later
-        return "<html><body><h1>Electrobun CEF Internal</h1><p>Internal HTML placeholder for CEF</p></body></html>";
-    } else {
-        // Use existing WebView2 file loading logic
-        return loadViewsFile(path);
-    }
-}
-
-std::string getMimeTypeForExtension(const std::string& url) {
-    // Extract path from full views:// URL
-    std::string path;
-    if (url.length() > 8) {
-        path = url.substr(8); // Remove "views://" prefix
-    } else {
-        path = "index.html"; // Default
-    }
-    
-    // Use existing WebView2 MIME type logic
-    return getMimeTypeForFile(path);
-}
-
-// Note: For now, CEF views:// support will rely on the global scheme registration
-// that's already in place. We can add custom resource handlers later if needed.
 
 class ElectrobunCefClient : public CefClient {
 public:
