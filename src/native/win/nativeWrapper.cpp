@@ -98,6 +98,10 @@ static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 static GetMimeType g_getMimeType = nullptr;
 static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 
+// Forward declaration for CEF view mapping
+class CEFView;
+static std::map<HWND, std::shared_ptr<CEFView>> g_cefViews;
+
 // Global map to store pending CEF navigations for timing workaround - use browser ID instead of pointer
 static std::map<int, std::string> g_pendingCefNavigations;
 // Global map to store browser references by ID for safe access
@@ -161,11 +165,9 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunCefApp);
 };
 
-// CEF Load Handler for debugging navigation and script injection
+// CEF Load Handler for debugging navigation
 class ElectrobunLoadHandler : public CefLoadHandler {
 public:
-    ElectrobunLoadHandler(ElectrobunCefClient* client) : client_(client) {}
-    
     void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override {
         std::cout << "[CEF] LoadStart: Navigation started" << std::endl;
     }
@@ -173,10 +175,7 @@ public:
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
         std::cout << "[CEF] LoadEnd: Navigation completed with status " << httpStatusCode << std::endl;
         
-        // Execute preload scripts after page load
-        if (frame->IsMain() && client_) {
-            client_->ExecutePreloadScripts(browser);
-        }
+        // Script injection will be handled by the client directly
     }
     
     void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override {
@@ -186,7 +185,6 @@ public:
     }
 
 private:
-    ElectrobunCefClient* client_;
     IMPLEMENT_REFCOUNTING(ElectrobunLoadHandler);
 };
 
@@ -207,6 +205,21 @@ public:
         HWND parentWindow = GetParent(browserWindow);
         
         std::cout << "[CEF] Browser window: " << browserWindow << ", parent: " << parentWindow << std::endl;
+        
+        // Set browser on the CEF view and client
+        auto viewIt = g_cefViews.find(parentWindow);
+        if (viewIt != g_cefViews.end()) {
+            auto view = viewIt->second;
+            if (view) {
+                view->setBrowser(browser);
+                // Also set browser on the client for script execution
+                auto client = view->getClient();
+                if (client) {
+                    client->SetBrowser(browser);
+                }
+                std::cout << "[CEF] Connected browser to view and client" << std::endl;
+            }
+        }
         
         // Look for pending URL using parent window
         auto it = g_pendingUrls.find(parentWindow);
@@ -408,7 +421,7 @@ public:
         : webview_id_(webviewId), 
           bun_bridge_handler_(bunBridgeHandler),
           webview_tag_handler_(internalBridgeHandler) {
-        m_loadHandler = new ElectrobunLoadHandler(this);
+        m_loadHandler = new ElectrobunLoadHandler();
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
         m_requestHandler = new ElectrobunRequestHandler();
     }
@@ -465,10 +478,16 @@ public:
         return combined_script;
     }
 
-    void ExecutePreloadScripts(CefRefPtr<CefBrowser> browser) {
+    void SetBrowser(CefRefPtr<CefBrowser> browser) {
+        browser_ = browser;
+        // Execute preload scripts immediately when browser is set
+        ExecutePreloadScripts();
+    }
+
+    void ExecutePreloadScripts() {
         std::string script = GetCombinedScript();
-        if (!script.empty() && browser && browser->GetMainFrame()) {
-            browser->GetMainFrame()->ExecuteJavaScript(script, "", 0);
+        if (!script.empty() && browser_ && browser_->GetMainFrame()) {
+            browser_->GetMainFrame()->ExecuteJavaScript(script, "", 0);
         }
     }
 
@@ -478,6 +497,7 @@ private:
     HandlePostMessage webview_tag_handler_;
     std::string electrobun_script_;
     std::string custom_script_;
+    CefRefPtr<CefBrowser> browser_;
     CefRefPtr<ElectrobunLoadHandler> m_loadHandler;
     CefRefPtr<ElectrobunLifeSpanHandler> m_lifeSpanHandler;
     CefRefPtr<ElectrobunRequestHandler> m_requestHandler;
@@ -1345,6 +1365,10 @@ public:
     
     CefRefPtr<CefBrowser> getBrowser() {
         return browser;
+    }
+    
+    CefRefPtr<ElectrobunCefClient> getClient() {
+        return client;
     }
     
     void resize(const RECT& frame, const char* masksJson) override {
@@ -2756,6 +2780,8 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         if (success) {
             container->AddAbstractView(view);
+            // Add view to global map for OnAfterCreated callback
+            g_cefViews[hwnd] = view;
         }
     });
     
