@@ -1215,9 +1215,12 @@ private:
             
             if (!newActiveView) {
                 // Check if mouse is over this webview's bounds
-                RECT viewBounds;
-                if (view->controller) {
-                    view->controller->get_Bounds(&viewBounds);
+                RECT viewBounds = view->visualBounds;
+                
+                // For WebView2, try to get actual bounds
+                auto webview2 = std::dynamic_pointer_cast<WebView2View>(view);
+                if (webview2 && webview2->getController()) {
+                    webview2->getController()->get_Bounds(&viewBounds);
                     
                     if (PtInRect(&viewBounds, mousePos)) {
                         // Convert to local coordinates for mask checking
@@ -1288,11 +1291,13 @@ private:
     }
     
     void BringWebView2ChildWindowToFront(AbstractView* view) {
-        if (!view->controller) return;
+        // Cast to WebView2View to access controller
+        auto webview2 = dynamic_cast<WebView2View*>(view);
+        if (!webview2 || !webview2->getController()) return;
         
         // Get the bounds of this WebView to identify its child window
         RECT viewBounds;
-        view->controller->get_Bounds(&viewBounds);
+        webview2->getController()->get_Bounds(&viewBounds);
         
         EnumChildData enumData;
         enumData.targetBounds = viewBounds;
@@ -1412,21 +1417,15 @@ public:
 
     void ContainerView::ResizeAutoSizingViews(int width, int height) {
         for (auto& view : m_abstractViews) {
-            if (view->fullSize && view->controller) {
+            if (view->fullSize) {
                 // Resize the webview to match container
                 RECT bounds = {0, 0, width, height};
-                HRESULT hr = view->controller->put_Bounds(bounds);
+                view->resize(bounds, nullptr);
                 
-                if (FAILED(hr)) {
-                    char errorMsg[256];
-                    sprintf_s(errorMsg, "Failed to resize WebView2 bounds: 0x%lx", hr);
-                    log(errorMsg);
-                } else {
-                    char logMsg[256];
-                    sprintf_s(logMsg, "Resized auto-sizing WebView %u to %dx%d", 
-                            view->webviewId, width, height);
-                    log(logMsg);
-                }
+                char logMsg[256];
+                sprintf_s(logMsg, "Resized auto-sizing WebView %u to %dx%d", 
+                        view->webviewId, width, height);
+                log(logMsg);
             }
         }
     }
@@ -2354,75 +2353,6 @@ ELECTROBUN_EXPORT bool initCEF() {
     return success;
 }
 
-extern "C" {
-
-ELECTROBUN_EXPORT void runNSApplication() {
-    // Create a hidden message-only window for dispatching
-    WNDCLASSA wc = {0};  // Use ANSI version
-    wc.lpfnWndProc = MessageWindowProc;
-    wc.hInstance = GetModuleHandle(NULL);
-    wc.lpszClassName = "MessageWindowClass";  // Use ANSI string
-    RegisterClassA(&wc);  // Use ANSI version
-    
-    HWND messageWindow = CreateWindowA(  // Use ANSI version
-        "MessageWindowClass",  // Use ANSI string
-        "", 
-        0, 0, 0, 0, 0,
-        HWND_MESSAGE, // This makes it a message-only window
-        NULL, 
-        GetModuleHandle(NULL), 
-        NULL
-    );
-    
-    // Initialize the dispatcher
-    MainThreadDispatcher::initialize(messageWindow);
-    
-    // Initialize CEF if available
-    if (isCEFAvailable()) {
-        std::cout << "[CEF] Initializing CEF for message loop" << std::endl;
-        if (initCEF()) {
-            std::cout << "[CEF] Starting CEF message loop" << std::endl;
-            CefRunMessageLoop(); // Use CEF's message loop like macOS
-            std::cout << "[CEF] CEF message loop ended, shutting down" << std::endl;
-            CefShutdown();
-        } else {
-            std::cout << "[CEF] Failed to initialize CEF, falling back to Windows message loop" << std::endl;
-            // Fall back to Windows message loop if CEF init fails
-            MSG msg;
-            while (GetMessage(&msg, NULL, 0, 0)) {
-                TranslateMessage(&msg);
-                DispatchMessage(&msg);
-            }
-        }
-    } else {
-        std::cout << "[CEF] CEF not available, using Windows message loop" << std::endl;
-        // Use Windows message loop if CEF is not available
-        MSG msg;
-        while (GetMessage(&msg, NULL, 0, 0)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-    }
-}
-
-
-ELECTROBUN_EXPORT void killApp() {
-    if (isCEFAvailable() && g_cef_initialized) {
-        std::cout << "[CEF] Initiating graceful shutdown via CefQuitMessageLoop()" << std::endl;
-        // Use CefQuitMessageLoop() for graceful shutdown, which will trigger OnBeforeClose handlers
-        CefQuitMessageLoop();
-        log("CEF shutdown initiated");
-    } else {
-        // If CEF is not running, exit directly
-        ExitProcess(1);
-    }
-}
-
-ELECTROBUN_EXPORT void shutdownApplication() {
-    // Stub implementation
-}
-
-// Modified initWebview function with direct COM bridge objects
 // Internal factory method for creating WebView2 instances
 static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  HWND hwnd,
@@ -2569,6 +2499,75 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
     
     return view;
 }
+
+extern "C" {
+
+ELECTROBUN_EXPORT void runNSApplication() {
+    // Create a hidden message-only window for dispatching
+    WNDCLASSA wc = {0};  // Use ANSI version
+    wc.lpfnWndProc = MessageWindowProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "MessageWindowClass";  // Use ANSI string
+    RegisterClassA(&wc);  // Use ANSI version
+    
+    HWND messageWindow = CreateWindowA(  // Use ANSI version
+        "MessageWindowClass",  // Use ANSI string
+        "", 
+        0, 0, 0, 0, 0,
+        HWND_MESSAGE, // This makes it a message-only window
+        NULL, 
+        GetModuleHandle(NULL), 
+        NULL
+    );
+    
+    // Initialize the dispatcher
+    MainThreadDispatcher::initialize(messageWindow);
+    
+    // Initialize CEF if available
+    if (isCEFAvailable()) {
+        std::cout << "[CEF] Initializing CEF for message loop" << std::endl;
+        if (initCEF()) {
+            std::cout << "[CEF] Starting CEF message loop" << std::endl;
+            CefRunMessageLoop(); // Use CEF's message loop like macOS
+            std::cout << "[CEF] CEF message loop ended, shutting down" << std::endl;
+            CefShutdown();
+        } else {
+            std::cout << "[CEF] Failed to initialize CEF, falling back to Windows message loop" << std::endl;
+            // Fall back to Windows message loop if CEF init fails
+            MSG msg;
+            while (GetMessage(&msg, NULL, 0, 0)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+        }
+    } else {
+        std::cout << "[CEF] CEF not available, using Windows message loop" << std::endl;
+        // Use Windows message loop if CEF is not available
+        MSG msg;
+        while (GetMessage(&msg, NULL, 0, 0)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+}
+
+
+ELECTROBUN_EXPORT void killApp() {
+    if (isCEFAvailable() && g_cef_initialized) {
+        std::cout << "[CEF] Initiating graceful shutdown via CefQuitMessageLoop()" << std::endl;
+        // Use CefQuitMessageLoop() for graceful shutdown, which will trigger OnBeforeClose handlers
+        CefQuitMessageLoop();
+        log("CEF shutdown initiated");
+    } else {
+        // If CEF is not running, exit directly
+        ExitProcess(1);
+    }
+}
+
+ELECTROBUN_EXPORT void shutdownApplication() {
+    // Stub implementation
+}
+
 
 // Clean, elegant initWebview function - Windows version matching Mac pattern
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
