@@ -2197,12 +2197,31 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         // Use the existing container window (hwnd is the container, not the system window)
         HWND containerHwnd = hwnd;
         
+        // Debug: Check container window validity
+        if (IsWindow(containerHwnd)) {
+            RECT containerRect;
+            GetWindowRect(containerHwnd, &containerRect);
+            char containerDebug[256];
+            sprintf_s(containerDebug, "Container window HWND=%p is valid, visible=%s", 
+                      containerHwnd, IsWindowVisible(containerHwnd) ? "YES" : "NO");
+            log(containerDebug);
+        } else {
+            log("ERROR: Container window is not valid!");
+            return view.get();
+        }
+        
         log("Using existing container window for CEF webview");
         
         // Create CEF browser window info as child of the existing container
         CefWindowInfo window_info;
         CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
         window_info.SetAsChild(containerHwnd, cef_rect);
+        
+        // Debug: Log window hierarchy
+        char windowDebug[512];
+        sprintf_s(windowDebug, "CEF Browser: Container HWND=%p, Rect=(%d,%d,%d,%d)", 
+                  containerHwnd, (int)x, (int)y, (int)width, (int)height);
+        log(windowDebug);
         
         // Create CEF browser settings
         CefBrowserSettings browser_settings;
@@ -2226,6 +2245,12 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
             // Store container window handle in view for proper management
             view->hwnd = containerHwnd;
             view->browser = browser;
+            
+            // Debug: Check if CEF browser has a window handle
+            HWND cefWindowHandle = browser->GetHost()->GetWindowHandle();
+            char cefDebug[256];
+            sprintf_s(cefDebug, "CEF Browser window handle: %p", cefWindowHandle);
+            log(cefDebug);
             
             // Defer navigation to allow window/browser to fully initialize (following macOS timing pattern)
             log("Deferring CEF navigation for proper initialization...");
