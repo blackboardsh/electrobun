@@ -73,7 +73,6 @@ class MyScriptMessageHandlerWithReply;
 class StatusItemTarget;
 
 // CEF function declarations
-ELECTROBUN_EXPORT bool initCEF();
 ELECTROBUN_EXPORT bool isCEFAvailable();
 
 // Type definitions to match macOS types
@@ -2141,61 +2140,6 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
 
 
 
-
-
-
-extern "C" {
-
-ELECTROBUN_EXPORT void runNSApplication() {
-    // Create a hidden message-only window for dispatching
-    WNDCLASSA wc = {0};  // Use ANSI version
-    wc.lpfnWndProc = MessageWindowProc;
-    wc.hInstance = GetModuleHandle(NULL);
-    wc.lpszClassName = "MessageWindowClass";  // Use ANSI string
-    RegisterClassA(&wc);  // Use ANSI version
-    
-    HWND messageWindow = CreateWindowA(  // Use ANSI version
-        "MessageWindowClass",  // Use ANSI string
-        "", 
-        0, 0, 0, 0, 0,
-        HWND_MESSAGE, // This makes it a message-only window
-        NULL, 
-        GetModuleHandle(NULL), 
-        NULL
-    );
-    
-    // Initialize the dispatcher
-    MainThreadDispatcher::initialize(messageWindow);
-    
-    // Initialize CEF if available
-    if (isCEFAvailable()) {
-        std::cout << "[CEF] Initializing CEF for message loop" << std::endl;
-        if (initCEF()) {
-            std::cout << "[CEF] Starting CEF message loop" << std::endl;
-            CefRunMessageLoop(); // Use CEF's message loop like macOS
-            std::cout << "[CEF] CEF message loop ended, shutting down" << std::endl;
-            CefShutdown();
-        } else {
-            std::cout << "[CEF] Failed to initialize CEF, falling back to Windows message loop" << std::endl;
-            // Fall back to Windows message loop if CEF init fails
-            MSG msg;
-            while (GetMessage(&msg, NULL, 0, 0)) {
-                TranslateMessage(&msg);
-                DispatchMessage(&msg);
-            }
-        }
-    } else {
-        std::cout << "[CEF] CEF not available, using Windows message loop" << std::endl;
-        // Use Windows message loop if CEF is not available
-        MSG msg;
-        while (GetMessage(&msg, NULL, 0, 0)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-    }
-}
-
-
 ELECTROBUN_EXPORT bool initCEF() {
     if (g_cef_initialized) {
         return true; // Already initialized
@@ -2261,6 +2205,58 @@ ELECTROBUN_EXPORT bool initCEF() {
     
     return success;
 }
+
+extern "C" {
+
+ELECTROBUN_EXPORT void runNSApplication() {
+    // Create a hidden message-only window for dispatching
+    WNDCLASSA wc = {0};  // Use ANSI version
+    wc.lpfnWndProc = MessageWindowProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "MessageWindowClass";  // Use ANSI string
+    RegisterClassA(&wc);  // Use ANSI version
+    
+    HWND messageWindow = CreateWindowA(  // Use ANSI version
+        "MessageWindowClass",  // Use ANSI string
+        "", 
+        0, 0, 0, 0, 0,
+        HWND_MESSAGE, // This makes it a message-only window
+        NULL, 
+        GetModuleHandle(NULL), 
+        NULL
+    );
+    
+    // Initialize the dispatcher
+    MainThreadDispatcher::initialize(messageWindow);
+    
+    // Initialize CEF if available
+    if (isCEFAvailable()) {
+        std::cout << "[CEF] Initializing CEF for message loop" << std::endl;
+        if (initCEF()) {
+            std::cout << "[CEF] Starting CEF message loop" << std::endl;
+            CefRunMessageLoop(); // Use CEF's message loop like macOS
+            std::cout << "[CEF] CEF message loop ended, shutting down" << std::endl;
+            CefShutdown();
+        } else {
+            std::cout << "[CEF] Failed to initialize CEF, falling back to Windows message loop" << std::endl;
+            // Fall back to Windows message loop if CEF init fails
+            MSG msg;
+            while (GetMessage(&msg, NULL, 0, 0)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+        }
+    } else {
+        std::cout << "[CEF] CEF not available, using Windows message loop" << std::endl;
+        // Use Windows message loop if CEF is not available
+        MSG msg;
+        while (GetMessage(&msg, NULL, 0, 0)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+}
+
 
 ELECTROBUN_EXPORT void killApp() {
     if (isCEFAvailable() && g_cef_initialized) {
