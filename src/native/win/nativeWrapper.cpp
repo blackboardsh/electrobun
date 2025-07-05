@@ -256,6 +256,9 @@ std::string getMimeTypeForFile(const std::string& path);
 // Forward declaration for CEF client
 class ElectrobunCefClient;
 
+// Global map to store CEF clients for browser connection (declared after forward declaration)
+static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
+
 // CEF Resource Handler for views:// scheme (based on Mac implementation)
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
@@ -494,9 +497,6 @@ private:
     CefRefPtr<ElectrobunRequestHandler> m_requestHandler;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
-
-// Global map to store CEF clients for browser connection
-static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
 
 // Runtime CEF availability detection - Windows equivalent of macOS isCEFAvailable()
 bool isCEFAvailable() {
