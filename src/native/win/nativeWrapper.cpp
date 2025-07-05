@@ -155,22 +155,17 @@ private:
 class ElectrobunLoadHandler : public CefLoadHandler {
 public:
     void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override {
-        ::log(std::string("CEF LoadStart: Navigation started"));
+        std::cout << "[CEF] LoadStart: Navigation started" << std::endl;
     }
     
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
-        char msg[256];
-        sprintf_s(msg, "CEF LoadEnd: Navigation completed with status %d", httpStatusCode);
-        ::log(std::string(msg));
+        std::cout << "[CEF] LoadEnd: Navigation completed with status " << httpStatusCode << std::endl;
     }
     
     void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override {
-        char msg[512];
-        sprintf_s(msg, "CEF LoadError: %d - %s for URL: %s", 
-                  static_cast<int>(errorCode), 
-                  errorText.ToString().c_str(), 
-                  failedUrl.ToString().c_str());
-        ::log(std::string(msg));
+        std::cout << "[CEF] LoadError: " << static_cast<int>(errorCode) 
+                  << " - " << errorText.ToString() 
+                  << " for URL: " << failedUrl.ToString() << std::endl;
     }
 
 private:
