@@ -2737,10 +2737,18 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     
     // Delay WebView2 creation to avoid conflict with Bun initialization
     MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
-        // Add a small delay to let Bun finish initializing
-        Sleep(100);
-        // Initialize COM for this thread
-        CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+        // Add a delay to let Bun finish initializing and avoid race conditions
+        Sleep(500);
+        
+        // Initialize COM for this thread with error checking
+        HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+        if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "ERROR: Failed to initialize COM, HRESULT: 0x%08X", comResult);
+            ::log(errorMsg);
+            return;
+        }
+        ::log("[WebView2] COM initialized successfully");
         
         // Get or create container
         auto container = GetOrCreateContainer(hwnd);
