@@ -2875,15 +2875,33 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
         case CTRL_CLOSE_EVENT:
         case CTRL_LOGOFF_EVENT:
         case CTRL_SHUTDOWN_EVENT:
-            std::cout << "[CEF] Received shutdown signal, cleaning up..." << std::endl;
+            std::cout << "[CEF] Received shutdown signal, closing browsers..." << std::endl;
             
-            // Quit CEF message loop if initialized
             if (g_cef_initialized) {
-                CefQuitMessageLoop();
+                // Close all CEF browsers first - this will trigger OnBeforeClose handlers
+                // which will call CefQuitMessageLoop() when the last browser closes
+                std::cout << "[CEF] Closing " << g_browser_count << " browsers..." << std::endl;
+                
+                // Create a copy of the map to avoid iterator invalidation
+                auto browsers_copy = g_cefBrowsers;
+                for (auto& pair : browsers_copy) {
+                    if (pair.second) {
+                        std::cout << "[CEF] Closing browser ID " << pair.first << std::endl;
+                        pair.second->GetHost()->CloseBrowser(true); // Force close
+                    }
+                }
+                
+                // Give browsers time to close gracefully
+                // OnBeforeClose will call CefQuitMessageLoop() when last browser closes
+                Sleep(3000);
+                
+                // If browsers didn't close properly, force quit
+                if (g_browser_count > 0) {
+                    std::cout << "[CEF] Browsers didn't close, forcing CEF shutdown" << std::endl;
+                    CefQuitMessageLoop();
+                    Sleep(1000);
+                }
             }
-            
-            // Give CEF time to shut down gracefully
-            Sleep(1000);
             
             // Force termination if still running
             std::cout << "[CEF] Forcing application exit" << std::endl;
