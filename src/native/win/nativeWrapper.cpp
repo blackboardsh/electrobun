@@ -2903,19 +2903,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             // Navigate to URL using the stored URL in view (avoiding lambda capture corruption)
                             std::cout << "[WebView2] About to navigate - pendingUrl: '" << view->pendingUrl << "'" << std::endl;
-                            
-                            // Test with hardcoded google.com first
-                            std::cout << "[WebView2] Testing with google.com instead of views://" << std::endl;
-                            view->loadURL("https://google.com");
-                            
-                            /* Original code:
                             if (!view->pendingUrl.empty()) {
                                 std::cout << "[WebView2] Navigating to: " << view->pendingUrl << std::endl;
                                 view->loadURL(view->pendingUrl.c_str());
                             } else {
                                 std::cout << "[WebView2] ERROR: pendingUrl is empty, cannot navigate" << std::endl;
                             }
-                            */
                             
                             // Add to container
                             container->AddAbstractView(view);
@@ -2928,6 +2921,38 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         try {
             auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
             options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --allow-insecure-localhost --disable-web-security");
+            
+            // Get the interface that supports custom scheme registration  
+            Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
+            if (SUCCEEDED(options.As(&options4))) {
+                ::log("Setting up views:// custom scheme registration");
+                
+                // Set allowed origins for the custom scheme
+                const WCHAR* allowedOrigins[1] = {L"*"};
+                
+                // Create custom scheme registration for "views"
+                auto viewsSchemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>(L"views");
+                viewsSchemeRegistration->put_TreatAsSecure(TRUE);
+                viewsSchemeRegistration->put_HasAuthorityComponent(TRUE); // This allows views://host/path format
+                viewsSchemeRegistration->SetAllowedOrigins(1, allowedOrigins);
+                
+                // Set the custom scheme registrations
+                ICoreWebView2CustomSchemeRegistration* registrations[1] = {
+                    viewsSchemeRegistration.Get()
+                };
+                
+                HRESULT schemeResult = options4->SetCustomSchemeRegistrations(1, registrations);
+                
+                if (SUCCEEDED(schemeResult)) {
+                    ::log("views:// custom scheme registration set successfully");
+                } else {
+                    char errorMsg[256];
+                    sprintf_s(errorMsg, "Failed to set views:// custom scheme registration: 0x%lx", schemeResult);
+                    ::log(errorMsg);
+                }
+            } else {
+                ::log("ERROR: Failed to get ICoreWebView2EnvironmentOptions4 interface for custom scheme registration");
+            }
             
             HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler);
             
