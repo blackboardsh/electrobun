@@ -2741,7 +2741,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                 if (FAILED(result)) {
-                    ::log("ERROR: Failed to create WebView2 environment");
+                    char errorMsg[256];
+                    sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
+                    ::log(errorMsg);
                     return S_OK;
                 }
                 
@@ -2750,7 +2752,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
-                                ::log("ERROR: Failed to create WebView2 controller");
+                                char errorMsg[256];
+                                sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
+                                ::log(errorMsg);
                                 return S_OK;
                             }
                             
@@ -2761,6 +2765,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             ctrl->get_CoreWebView2(&webview);
                             view->setController(ctrl);
                             view->setWebView(webview);
+                            
+                            std::cout << "[WebView2] Successfully created WebView2 controller and core webview" << std::endl;
                             
                             // Set bounds
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
@@ -3029,24 +3035,28 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     
     HWND hwnd = reinterpret_cast<HWND>(window);
     
-    // Factory pattern - choose implementation based on renderer
-    std::shared_ptr<AbstractView> view = nullptr;
+    // Factory pattern - choose implementation based on renderer  
+    AbstractView* view = nullptr;
     
     if (renderer && strcmp(renderer, "cef") == 0 && isCEFAvailable()) {
         ::log("=== Creating CEF Browser ===");
-        view = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
-                            partitionIdentifier, navigationCallback, webviewEventHandler,
-                            bunBridgeHandler, internalBridgeHandler,
-                            electrobunPreloadScript, customPreloadScript);
+        auto cefView = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
+                                    partitionIdentifier, navigationCallback, webviewEventHandler,
+                                    bunBridgeHandler, internalBridgeHandler,
+                                    electrobunPreloadScript, customPreloadScript);
+        view = cefView.get();
     } else {
         ::log("=== Creating WebView2 Browser ===");
-        view = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
-                                 partitionIdentifier, navigationCallback, webviewEventHandler,
-                                 bunBridgeHandler, internalBridgeHandler,
-                                 electrobunPreloadScript, customPreloadScript);
+        auto webview2View = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
+                                              partitionIdentifier, navigationCallback, webviewEventHandler,
+                                              bunBridgeHandler, internalBridgeHandler,
+                                              electrobunPreloadScript, customPreloadScript);
+        view = webview2View.get();
     }
     
-    return view.get();
+    // Note: Object lifetime is managed by the ContainerView which holds shared_ptr references
+    // The factories add the views to containers, so they remain alive after this function returns
+    return view;
 
 }
 
