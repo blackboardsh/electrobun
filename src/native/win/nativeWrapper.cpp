@@ -2841,7 +2841,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             }
                             
                             // Add views:// scheme support for WebView2
-                            webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+                            std::cout << "[WebView2] Adding resource filter for views://*" << std::endl;
+                            webview->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+                            std::cout << "[WebView2] Added wildcard resource filter" << std::endl;
                             
                             // Set up WebResourceRequested event handler for views:// scheme
                             webview->add_WebResourceRequested(
@@ -2922,23 +2924,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         // Create WebView2 environment with custom scheme support
         try {
             auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
-            options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
-            
-            // Register views:// custom scheme
-            auto schemeRegistrations = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistrationCollection>();
-            auto schemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>();
-            schemeRegistration->put_SchemeName(L"views");
-            schemeRegistration->put_IsStandard(TRUE);
-            schemeRegistration->put_IsLocal(FALSE);
-            schemeRegistration->put_IsDisplayIsolated(FALSE);
-            schemeRegistration->put_IsSecure(TRUE);
-            schemeRegistration->put_IsCorsEnabled(TRUE);
-            schemeRegistration->put_HasAuthorityComponent(FALSE);
-            
-            schemeRegistrations->Add(schemeRegistration.Get());
-            options->put_CustomSchemeRegistrations(schemeRegistrations.Get());
-            
-            std::cout << "[WebView2] Registered views:// custom scheme" << std::endl;
+            options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --allow-insecure-localhost --disable-web-security");
             
             HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler);
             
