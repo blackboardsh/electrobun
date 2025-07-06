@@ -2836,8 +2836,15 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             if (!combinedScript.empty()) {
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
-                                webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
-                                std::cout << "[WebView2] Added combined preload script to execute on document created" << std::endl;
+                                
+                                // Add some debug logging to the script itself
+                                std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); " + combinedScript;
+                                std::wstring wDebugScript(debugScript.begin(), debugScript.end());
+                                
+                                webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
+                                std::cout << "[WebView2] Added combined preload script to execute on document created (length: " << debugScript.length() << ")" << std::endl;
+                            } else {
+                                std::cout << "[WebView2] No preload scripts to add" << std::endl;
                             }
                             
                             // Add views:// scheme support for WebView2
