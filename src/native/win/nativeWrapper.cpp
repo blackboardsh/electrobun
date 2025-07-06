@@ -2737,18 +2737,11 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     
     // WebView2 creation logic moved to factory method
     MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
-        std::cout << "[WebView2] Starting WebView2 creation dispatch..." << std::endl;
-        std::cout << "[WebView2] Lambda captured urlString: '" << urlString << "' (length: " << urlString.length() << ")" << std::endl;
-        
         // Initialize COM for this thread
-        std::cout << "[WebView2] Initializing COM..." << std::endl;
-        HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-        std::cout << "[WebView2] COM initialization result: 0x" << std::hex << comResult << std::dec << std::endl;
+        CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         
         // Get or create container
-        std::cout << "[WebView2] Getting container for hwnd: " << hwnd << std::endl;
         auto container = GetOrCreateContainer(hwnd);
-        std::cout << "[WebView2] Container obtained: " << (container ? "success" : "failed") << std::endl;
         if (!container) {
             ::log("ERROR: Failed to create container");
             return;
@@ -2809,9 +2802,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             ComPtr<ICoreWebView2Controller> ctrl(controller);
                             ComPtr<ICoreWebView2> webview;
                             
-                            std::cout << "[WebView2] Before get_CoreWebView2 - urlString: '" << urlString << "'" << std::endl;
                             ctrl->get_CoreWebView2(&webview);
-                            std::cout << "[WebView2] After get_CoreWebView2 - urlString: '" << urlString << "'" << std::endl;
                             view->setController(ctrl);
                             view->setWebView(webview);
                             
@@ -2837,9 +2828,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             if (!combinedScript.empty()) {
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
-                                std::cout << "[WebView2] Before AddScriptToExecuteOnDocumentCreated - urlString: '" << urlString << "'" << std::endl;
                                 webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
-                                std::cout << "[WebView2] After AddScriptToExecuteOnDocumentCreated - urlString: '" << urlString << "'" << std::endl;
                                 std::cout << "[WebView2] Added combined preload script to execute on document created" << std::endl;
                             }
                             
@@ -2905,13 +2894,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             std::cout << "[WebView2] Added views:// scheme support" << std::endl;
                             
                             // Navigate to URL using the stored URL in view (avoiding lambda capture corruption)
-                            std::cout << "[WebView2] About to navigate - view->pendingUrl: '" << view->pendingUrl << "'" << std::endl;
-                            std::cout << "[WebView2] About to navigate - urlString: '" << urlString << "'" << std::endl;
                             if (!view->pendingUrl.empty()) {
-                                std::cout << "[WebView2] Navigating to URL: " << view->pendingUrl << std::endl;
                                 view->loadURL(view->pendingUrl.c_str());
-                            } else {
-                                std::cout << "[WebView2] No URL provided for navigation (pendingUrl is empty)" << std::endl;
                             }
                             
                             // Add to container
