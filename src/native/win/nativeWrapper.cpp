@@ -1052,6 +1052,15 @@ public:
         this->webviewId = webviewId;
     }
     
+    // Setter methods for COM objects (called from async creation callbacks)
+    void setController(ComPtr<ICoreWebView2Controller> ctrl) {
+        controller = ctrl;
+    }
+    
+    void setWebView(ComPtr<ICoreWebView2> wv) {
+        webview = wv;
+    }
+    
     void loadURL(const char* urlString) override {
         if (webview) {
             std::wstring url = std::wstring(urlString, urlString + strlen(urlString));
