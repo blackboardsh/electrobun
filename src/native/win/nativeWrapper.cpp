@@ -2841,8 +2841,21 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); " + combinedScript;
                                 std::wstring wDebugScript(debugScript.begin(), debugScript.end());
                                 
+                                // Add script to execute on document created
                                 webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
                                 std::cout << "[WebView2] Added combined preload script to execute on document created (length: " << debugScript.length() << ")" << std::endl;
+                                
+                                // Also add navigation event handler to inject script early
+                                webview->add_NavigationStarting(
+                                    Callback<ICoreWebView2NavigationStartingEventHandler>(
+                                        [debugScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                            std::cout << "[WebView2] Navigation starting, injecting preload script early" << std::endl;
+                                            std::wstring wDebugScript(debugScript.begin(), debugScript.end());
+                                            sender->ExecuteScript(wDebugScript.c_str(), nullptr);
+                                            return S_OK;
+                                        }).Get(),
+                                    nullptr);
+                                std::cout << "[WebView2] Added navigation event handler for early script injection" << std::endl;
                             } else {
                                 std::cout << "[WebView2] No preload scripts to add" << std::endl;
                             }
