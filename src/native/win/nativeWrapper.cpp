@@ -2743,7 +2743,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->customScript = customScript;
     
     // Delay WebView2 creation to avoid conflict with Bun initialization
-    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd]() {
+    MainThreadDispatcher::dispatch_async([view, urlString, x, y, width, height, hwnd]() {
         // Add a delay to let Bun finish initializing and avoid race conditions
         Sleep(500);
         
