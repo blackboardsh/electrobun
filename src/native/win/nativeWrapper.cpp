@@ -2745,11 +2745,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->electrobunScript = electrobunScript;
     view->customScript = customScript;
     
-    // Create WebView2 on main thread with serialization
+    // Create WebView2 on main thread  
     MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd]() {
-        // Serialize WebView2 creation to prevent race conditions with CEF
-        std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
-        
         // Initialize COM for this thread
         HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
