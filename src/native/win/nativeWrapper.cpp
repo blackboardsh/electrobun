@@ -2737,6 +2737,30 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             return;
         }
         
+        HWND containerHwnd = container->GetHwnd();
+        char debugMsg[256];
+        sprintf_s(debugMsg, "[WebView2] Creating controller for container HWND: %p, parent HWND: %p", containerHwnd, hwnd);
+        ::log(debugMsg);
+        
+        // Verify the container window is valid
+        if (!IsWindow(containerHwnd)) {
+            ::log("ERROR: Container window handle is invalid");
+            return;
+        }
+        
+        // Get window info for debugging
+        RECT windowRect;
+        GetWindowRect(containerHwnd, &windowRect);
+        DWORD windowStyle = GetWindowLong(containerHwnd, GWL_STYLE);
+        char windowDebug[512];
+        sprintf_s(windowDebug, "[WebView2] Container window - Rect: (%d,%d,%d,%d), Style: 0x%08X", 
+                 windowRect.left, windowRect.top, windowRect.right, windowRect.bottom, windowStyle);
+        ::log(windowDebug);
+        
+        // Make sure the window is visible (WebView2 requirement)
+        ShowWindow(containerHwnd, SW_SHOW);
+        UpdateWindow(containerHwnd);
+        
         // Create WebView2 environment
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
@@ -2748,7 +2772,13 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 }
                 
                 // Create WebView2 controller
-                return env->CreateCoreWebView2Controller(container->GetHwnd(),
+                ::log("[WebView2] Creating WebView2 controller...");
+                HWND targetHwnd = container->GetHwnd();
+                char controllerDebug[256];
+                sprintf_s(controllerDebug, "[WebView2] Target HWND for controller: %p", targetHwnd);
+                ::log(controllerDebug);
+                
+                return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
