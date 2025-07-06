@@ -2735,8 +2735,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     // Store URL in view to survive async callbacks
     view->pendingUrl = urlString;
     
-    // WebView2 creation logic moved to factory method
-    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
+    // Delay WebView2 creation to avoid conflict with Bun initialization
+    MainThreadDispatcher::dispatch_async([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
+        // Add a small delay to let Bun finish initializing
+        Sleep(100);
         // Initialize COM for this thread
         CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         
@@ -2789,6 +2791,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 char controllerDebug[256];
                 sprintf_s(controllerDebug, "[WebView2] Target HWND for controller: %p", targetHwnd);
                 ::log(controllerDebug);
+                
+                // Verify window is still valid before creating controller
+                if (!IsWindow(targetHwnd)) {
+                    ::log("ERROR: Target window is no longer valid");
+                    return S_OK;
+                }
                 
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
