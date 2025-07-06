@@ -1047,6 +1047,7 @@ private:
     ComPtr<ICoreWebView2> webview;
     
 public:
+    std::string pendingUrl;
     WebView2View(uint32_t webviewId) {
         this->webviewId = webviewId;
     }
@@ -2731,6 +2732,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->hwnd = hwnd;
     view->fullSize = autoResize;
     
+    // Store URL in view to survive async callbacks
+    view->pendingUrl = urlString;
+    
     // WebView2 creation logic moved to factory method
     MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
         std::cout << "[WebView2] Starting WebView2 creation dispatch..." << std::endl;
@@ -2900,14 +2904,14 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             std::cout << "[WebView2] Added views:// scheme support" << std::endl;
                             
-                            // Navigate to URL
-                            std::cout << "[WebView2] About to navigate - urlString length: " << urlString.length() << std::endl;
-                            std::cout << "[WebView2] urlString content: '" << urlString << "'" << std::endl;
-                            if (!urlString.empty()) {
-                                std::cout << "[WebView2] Navigating to URL: " << urlString << std::endl;
-                                view->loadURL(urlString.c_str());
+                            // Navigate to URL using the stored URL in view (avoiding lambda capture corruption)
+                            std::cout << "[WebView2] About to navigate - view->pendingUrl: '" << view->pendingUrl << "'" << std::endl;
+                            std::cout << "[WebView2] About to navigate - urlString: '" << urlString << "'" << std::endl;
+                            if (!view->pendingUrl.empty()) {
+                                std::cout << "[WebView2] Navigating to URL: " << view->pendingUrl << std::endl;
+                                view->loadURL(view->pendingUrl.c_str());
                             } else {
-                                std::cout << "[WebView2] No URL provided for navigation (urlString is empty)" << std::endl;
+                                std::cout << "[WebView2] No URL provided for navigation (pendingUrl is empty)" << std::endl;
                             }
                             
                             // Add to container
