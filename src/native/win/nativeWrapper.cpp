@@ -1048,6 +1048,9 @@ private:
     
 public:
     std::string pendingUrl;
+    std::string electrobunScript;
+    std::string customScript;
+    
     WebView2View(uint32_t webviewId) {
         this->webviewId = webviewId;
     }
@@ -2734,11 +2737,13 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->hwnd = hwnd;
     view->fullSize = autoResize;
     
-    // Store URL in view to survive async callbacks
+    // Store URL and scripts in view to survive async callbacks
     view->pendingUrl = urlString;
+    view->electrobunScript = electrobunScript;
+    view->customScript = customScript;
     
     // Delay WebView2 creation to avoid conflict with Bun initialization
-    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
+    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd]() {
         // Add a delay to let Bun finish initializing and avoid race conditions
         Sleep(500);
         
@@ -2785,7 +2790,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         
         // Create WebView2 environment
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [=, electrobunScript, customScript](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+            [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -2808,7 +2813,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [=, electrobunScript, customScript](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                        [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
                                 char errorMsg[256];
                                 sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
@@ -2830,17 +2835,18 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                             ctrl->put_Bounds(bounds);
                             
+                            // Add preload scripts using scripts stored in view object
                             std::string combinedScript;
-                            if (!electrobunScript.empty()) {
-                                combinedScript += electrobunScript;
-                                std::cout << "[WebView2] Added electrobun preload script (length: " << electrobunScript.length() << ")" << std::endl;
+                            if (!view->electrobunScript.empty()) {
+                                combinedScript += view->electrobunScript;
+                                std::cout << "[WebView2] Added electrobun preload script (length: " << view->electrobunScript.length() << ")" << std::endl;
                             }
-                            if (!customScript.empty()) {
+                            if (!view->customScript.empty()) {
                                 if (!combinedScript.empty()) {
                                     combinedScript += "\n";
                                 }
-                                combinedScript += customScript;
-                                std::cout << "[WebView2] Added custom preload script (length: " << customScript.length() << ")" << std::endl;
+                                combinedScript += view->customScript;
+                                std::cout << "[WebView2] Added custom preload script (length: " << view->customScript.length() << ")" << std::endl;
                             }
                             
                             if (!combinedScript.empty()) {
