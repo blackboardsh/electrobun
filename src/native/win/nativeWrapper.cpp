@@ -99,6 +99,9 @@ static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 static GetMimeType g_getMimeType = nullptr;
 static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 
+// Global mutex to serialize webview creation
+static std::mutex g_webviewCreationMutex;
+
 // Global map to store preload scripts by browser ID (needs to be early for load handler)
 static std::map<int, std::string> g_preloadScripts;
 
@@ -3205,10 +3208,6 @@ ELECTROBUN_EXPORT void killApp() {
 ELECTROBUN_EXPORT void shutdownApplication() {
     // Stub implementation
 }
-
-
-// Global mutex to serialize webview creation
-static std::mutex g_webviewCreationMutex;
 
 // Clean, elegant initWebview function - Windows version matching Mac pattern
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
