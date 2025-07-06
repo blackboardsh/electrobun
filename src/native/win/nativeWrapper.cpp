@@ -2736,7 +2736,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->pendingUrl = urlString;
     
     // Delay WebView2 creation to avoid conflict with Bun initialization
-    MainThreadDispatcher::dispatch_async([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
+    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
         // Add a small delay to let Bun finish initializing
         Sleep(100);
         // Initialize COM for this thread
