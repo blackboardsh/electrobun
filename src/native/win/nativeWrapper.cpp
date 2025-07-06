@@ -2805,7 +2805,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             ComPtr<ICoreWebView2Controller> ctrl(controller);
                             ComPtr<ICoreWebView2> webview;
                             
+                            std::cout << "[WebView2] Before get_CoreWebView2 - urlString: '" << urlString << "'" << std::endl;
                             ctrl->get_CoreWebView2(&webview);
+                            std::cout << "[WebView2] After get_CoreWebView2 - urlString: '" << urlString << "'" << std::endl;
                             view->setController(ctrl);
                             view->setWebView(webview);
                             
@@ -2831,7 +2833,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             if (!combinedScript.empty()) {
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
+                                std::cout << "[WebView2] Before AddScriptToExecuteOnDocumentCreated - urlString: '" << urlString << "'" << std::endl;
                                 webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
+                                std::cout << "[WebView2] After AddScriptToExecuteOnDocumentCreated - urlString: '" << urlString << "'" << std::endl;
                                 std::cout << "[WebView2] Added combined preload script to execute on document created" << std::endl;
                             }
                             
