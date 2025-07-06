@@ -2785,7 +2785,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         
         // Create WebView2 environment
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+            [=, electrobunScript, customScript](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -2808,7 +2808,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                        [=, electrobunScript, customScript](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                            std::cout << "[WebView2] *** CONTROLLER CALLBACK ENTERED ***" << std::endl;
                             if (FAILED(result)) {
                                 char errorMsg[256];
                                 sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
@@ -2830,7 +2831,15 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                             ctrl->put_Bounds(bounds);
                             
-                            // Add preload scripts before navigation
+                            // Add preload scripts before navigation - DEBUG SCRIPT CAPTURE
+                            std::cout << "[WebView2] *** SCRIPT DEBUG START ***" << std::endl;
+                            std::cout << "[WebView2] In lambda: electrobunScript length = " << electrobunScript.length() << std::endl;
+                            std::cout << "[WebView2] In lambda: customScript length = " << customScript.length() << std::endl;
+                            if (electrobunScript.length() > 0) {
+                                std::cout << "[WebView2] First 50 chars of electrobunScript: " << electrobunScript.substr(0, 50) << std::endl;
+                            }
+                            std::cout << "[WebView2] *** SCRIPT DEBUG END ***" << std::endl;
+                            
                             std::string combinedScript;
                             if (!electrobunScript.empty()) {
                                 combinedScript += electrobunScript;
