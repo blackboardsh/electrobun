@@ -3200,6 +3200,9 @@ ELECTROBUN_EXPORT void shutdownApplication() {
 }
 
 
+// Global mutex to serialize webview creation
+static std::mutex g_webviewCreationMutex;
+
 // Clean, elegant initWebview function - Windows version matching Mac pattern
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          NSWindow *window,  // Actually HWND on Windows
@@ -3216,7 +3219,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript) {
     
-    log("=======>>>>>> initWebview");
+    // Serialize webview creation to avoid CEF/WebView2 conflicts
+    std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
+    ::log("=======>>>>>> initWebview (serialized)");
     printf("[LOG] Renderer: %s\n", renderer ? renderer : "default");
     printf("[LOG] WebView geometry - x: %.2f, y: %.2f, width: %.2f, height: %.2f, autoResize: %s\n", 
        x, y, width, height, autoResize ? "true" : "false");
