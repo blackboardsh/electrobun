@@ -2790,6 +2790,8 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         windowInfo.SetAsChild(container->GetHwnd(), {(int)x, (int)y, (int)(x + width), (int)(y + height)});
         
         CefBrowserSettings browserSettings;
+        // Enable devtools by default
+        browserSettings.remote_debugging_port = 9222;
         // Note: web_security setting for CEF would need correct API
         
         // Create CEF client with bridge handlers
