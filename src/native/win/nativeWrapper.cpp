@@ -2867,9 +2867,41 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
     return view;
 }
 
+// Console control handler for graceful shutdown
+BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
+    switch (dwCtrlType) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            std::cout << "[CEF] Received shutdown signal, cleaning up..." << std::endl;
+            
+            // Quit CEF message loop if initialized
+            if (g_cef_initialized) {
+                CefQuitMessageLoop();
+            }
+            
+            // Give CEF time to shut down gracefully
+            Sleep(1000);
+            
+            // Force termination if still running
+            std::cout << "[CEF] Forcing application exit" << std::endl;
+            ExitProcess(0);
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
 extern "C" {
 
 ELECTROBUN_EXPORT void runNSApplication() {
+    // Set up console control handler for graceful shutdown on Ctrl+C
+    if (!SetConsoleCtrlHandler(ConsoleControlHandler, TRUE)) {
+        std::cout << "[CEF] Warning: Failed to set console control handler" << std::endl;
+    }
+    
     // Create a hidden message-only window for dispatching
     WNDCLASSA wc = {0};  // Use ANSI version
     wc.lpfnWndProc = MessageWindowProc;
