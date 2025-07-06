@@ -2847,6 +2847,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             webview->add_WebResourceRequested(
                                 Callback<ICoreWebView2WebResourceRequestedEventHandler>(
                                     [env](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                                        std::cout << "[WebView2] WebResourceRequested event triggered!" << std::endl;
                                         ComPtr<ICoreWebView2WebResourceRequest> request;
                                         args->get_Request(&request);
                                         
@@ -2855,6 +2856,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         
                                         std::wstring wUri(uri);
                                         std::string uriStr(wUri.begin(), wUri.end());
+                                        std::cout << "[WebView2] Request URI: " << uriStr << std::endl;
                                         
                                         if (uriStr.substr(0, 8) == "views://") {
                                             std::string filePath = uriStr.substr(8); // Remove "views://" prefix
@@ -2890,7 +2892,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                     &response);
                                                 
                                                 args->put_Response(response.Get());
-                                                std::cout << "[WebView2] Served views:// file: " << filePath << std::endl;
+                                                std::cout << "[WebView2] Served views:// file: " << filePath << " (" << content.size() << " bytes)" << std::endl;
                                             }
                                         }
                                         
