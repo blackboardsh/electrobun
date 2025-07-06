@@ -2727,6 +2727,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     std::string electrobunScript = electrobunPreloadScript ? std::string(electrobunPreloadScript) : "";
     std::string customScript = customPreloadScript ? std::string(customPreloadScript) : "";
     std::cout << "[WebView2] createWebView2View called with URL: " << (url ? url : "NULL") << std::endl;
+    std::cout << "[WebView2] Electrobun script length: " << electrobunScript.length() << std::endl;
+    std::cout << "[WebView2] Custom script length: " << customScript.length() << std::endl;
     
     auto view = std::make_shared<WebView2View>(webviewId);
     view->hwnd = hwnd;
