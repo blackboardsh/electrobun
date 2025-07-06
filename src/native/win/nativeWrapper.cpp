@@ -2721,8 +2721,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  const char *electrobunPreloadScript,
                                                  const char *customPreloadScript) {
     
-    // Make a safe copy of the URL to avoid memory corruption in lambda captures
+    // Make safe copies of string parameters to avoid memory corruption in lambda captures
     std::string urlString = url ? std::string(url) : "";
+    std::string electrobunScript = electrobunPreloadScript ? std::string(electrobunPreloadScript) : "";
+    std::string customScript = customPreloadScript ? std::string(customPreloadScript) : "";
     std::cout << "[WebView2] createWebView2View called with URL: " << (url ? url : "NULL") << std::endl;
     
     auto view = std::make_shared<WebView2View>(webviewId);
@@ -2730,7 +2732,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->fullSize = autoResize;
     
     // WebView2 creation logic moved to factory method
-    MainThreadDispatcher::dispatch_sync([=]() {
+    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
         // Initialize COM for this thread
         CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         
@@ -2808,16 +2810,16 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             // Add preload scripts before navigation
                             std::string combinedScript;
-                            if (electrobunPreloadScript && strlen(electrobunPreloadScript) > 0) {
-                                combinedScript += electrobunPreloadScript;
-                                std::cout << "[WebView2] Added electrobun preload script (length: " << strlen(electrobunPreloadScript) << ")" << std::endl;
+                            if (!electrobunScript.empty()) {
+                                combinedScript += electrobunScript;
+                                std::cout << "[WebView2] Added electrobun preload script (length: " << electrobunScript.length() << ")" << std::endl;
                             }
-                            if (customPreloadScript && strlen(customPreloadScript) > 0) {
+                            if (!customScript.empty()) {
                                 if (!combinedScript.empty()) {
                                     combinedScript += "\n";
                                 }
-                                combinedScript += customPreloadScript;
-                                std::cout << "[WebView2] Added custom preload script (length: " << strlen(customPreloadScript) << ")" << std::endl;
+                                combinedScript += customScript;
+                                std::cout << "[WebView2] Added custom preload script (length: " << customScript.length() << ")" << std::endl;
                             }
                             
                             if (!combinedScript.empty()) {
