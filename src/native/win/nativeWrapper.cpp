@@ -2798,7 +2798,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Set up WebResourceRequested event handler for views:// scheme
                             webview->add_WebResourceRequested(
                                 Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-                                    [](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                                    [env](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
                                         ComPtr<ICoreWebView2WebResourceRequest> request;
                                         args->get_Request(&request);
                                         
@@ -2821,8 +2821,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                 
                                                 std::wstring wMimeType(mimeType.begin(), mimeType.end());
                                                 
-                                                ComPtr<ICoreWebView2Environment> env;
-                                                sender->get_Environment(&env);
+                                                // Use the captured environment from the outer scope
                                                 
                                                 // Create a memory stream for the content
                                                 ComPtr<IStream> contentStream;
