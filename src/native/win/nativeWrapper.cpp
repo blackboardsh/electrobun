@@ -2721,6 +2721,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  const char *electrobunPreloadScript,
                                                  const char *customPreloadScript) {
     
+    // Make a safe copy of the URL to avoid memory corruption in lambda captures
+    std::string urlString = url ? std::string(url) : "";
+    std::cout << "[WebView2] createWebView2View called with URL: " << (url ? url : "NULL") << std::endl;
+    
     auto view = std::make_shared<WebView2View>(webviewId);
     view->hwnd = hwnd;
     view->fullSize = autoResize;
@@ -2884,11 +2888,11 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             std::cout << "[WebView2] Added views:// scheme support" << std::endl;
                             
                             // Navigate to URL
-                            if (url && strlen(url) > 0) {
-                                std::cout << "[WebView2] Navigating to URL: " << url << std::endl;
-                                view->loadURL(url);
+                            if (!urlString.empty()) {
+                                std::cout << "[WebView2] Navigating to URL: " << urlString << std::endl;
+                                view->loadURL(urlString.c_str());
                             } else {
-                                std::cout << "[WebView2] No URL provided for navigation (url=" << (url ? url : "NULL") << ")" << std::endl;
+                                std::cout << "[WebView2] No URL provided for navigation (urlString is empty)" << std::endl;
                             }
                             
                             // Add to container
