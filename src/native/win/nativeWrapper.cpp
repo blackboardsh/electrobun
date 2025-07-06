@@ -2742,20 +2742,18 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->electrobunScript = electrobunScript;
     view->customScript = customScript;
     
-    // Delay WebView2 creation to avoid conflict with Bun initialization
-    MainThreadDispatcher::dispatch_async([view, urlString, x, y, width, height, hwnd]() {
-        // Add a delay to let Bun finish initializing and avoid race conditions
-        Sleep(500);
-        
-        // Initialize COM for this thread with error checking
-        HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-        if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "ERROR: Failed to initialize COM, HRESULT: 0x%08X", comResult);
-            ::log(errorMsg);
-            return;
-        }
-        ::log("[WebView2] COM initialized successfully");
+    // Initialize COM first - do this on calling thread
+    HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
+        char errorMsg[256];
+        sprintf_s(errorMsg, "ERROR: Failed to initialize COM, HRESULT: 0x%08X", comResult);
+        ::log(errorMsg);
+        return view;
+    }
+    ::log("[WebView2] COM initialized successfully");
+    
+    // Create WebView2 on main thread without delay
+    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd]() {
         
         // Get or create container
         auto container = GetOrCreateContainer(hwnd);
