@@ -2772,8 +2772,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         UpdateWindow(containerHwnd);
         
         // Create WebView2 environment
+        std::cout << "[WebView2] Creating WebView2 environment..." << std::endl;
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                std::cout << "[WebView2] Environment creation callback - HRESULT: 0x" << std::hex << result << std::dec << std::endl;
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -2906,10 +2908,24 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             }).Get();
         
         // Create WebView2 environment with custom scheme support
-        auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
-        options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
-        
-        CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler);
+        try {
+            auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+            options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
+            
+            std::cout << "[WebView2] Calling CreateCoreWebView2EnvironmentWithOptions..." << std::endl;
+            HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler);
+            std::cout << "[WebView2] CreateCoreWebView2EnvironmentWithOptions returned: 0x" << std::hex << hr << std::dec << std::endl;
+            
+            if (FAILED(hr)) {
+                char errorMsg[256];
+                sprintf_s(errorMsg, "ERROR: CreateCoreWebView2EnvironmentWithOptions failed with HRESULT: 0x%08X", hr);
+                ::log(errorMsg);
+            }
+        } catch (const std::exception& e) {
+            std::cout << "[WebView2] Exception in WebView2 creation: " << e.what() << std::endl;
+        } catch (...) {
+            std::cout << "[WebView2] Unknown exception in WebView2 creation" << std::endl;
+        }
     });
     
     return view;
