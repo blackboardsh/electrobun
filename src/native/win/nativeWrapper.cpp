@@ -2733,11 +2733,17 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     
     // WebView2 creation logic moved to factory method
     MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, electrobunScript, customScript]() {
+        std::cout << "[WebView2] Starting WebView2 creation dispatch..." << std::endl;
+        
         // Initialize COM for this thread
-        CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+        std::cout << "[WebView2] Initializing COM..." << std::endl;
+        HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+        std::cout << "[WebView2] COM initialization result: 0x" << std::hex << comResult << std::dec << std::endl;
         
         // Get or create container
+        std::cout << "[WebView2] Getting container for hwnd: " << hwnd << std::endl;
         auto container = GetOrCreateContainer(hwnd);
+        std::cout << "[WebView2] Container obtained: " << (container ? "success" : "failed") << std::endl;
         if (!container) {
             ::log("ERROR: Failed to create container");
             return;
