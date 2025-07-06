@@ -2840,70 +2840,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 std::cout << "[WebView2] Added combined preload script to execute on document created" << std::endl;
                             }
                             
-                            // Add views:// scheme support for WebView2
-                            std::cout << "[WebView2] Adding resource filter for views://*" << std::endl;
-                            webview->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-                            std::cout << "[WebView2] Added wildcard resource filter" << std::endl;
-                            
-                            // Set up WebResourceRequested event handler for views:// scheme
-                            webview->add_WebResourceRequested(
-                                Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-                                    [env](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
-                                        std::cout << "[WebView2] WebResourceRequested event triggered!" << std::endl;
-                                        ComPtr<ICoreWebView2WebResourceRequest> request;
-                                        args->get_Request(&request);
-                                        
-                                        LPWSTR uri;
-                                        request->get_Uri(&uri);
-                                        
-                                        std::wstring wUri(uri);
-                                        std::string uriStr(wUri.begin(), wUri.end());
-                                        std::cout << "[WebView2] Request URI: " << uriStr << std::endl;
-                                        
-                                        if (uriStr.substr(0, 8) == "views://") {
-                                            std::string filePath = uriStr.substr(8); // Remove "views://" prefix
-                                            std::string content = loadViewsFile(filePath);
-                                            
-                                            if (!content.empty()) {
-                                                // Create response
-                                                std::string mimeType = "text/html";
-                                                if (filePath.find(".js") != std::string::npos) mimeType = "application/javascript";
-                                                else if (filePath.find(".css") != std::string::npos) mimeType = "text/css";
-                                                else if (filePath.find(".png") != std::string::npos) mimeType = "image/png";
-                                                
-                                                std::wstring wMimeType(mimeType.begin(), mimeType.end());
-                                                
-                                                // Use the captured environment from the outer scope
-                                                
-                                                // Create a memory stream for the content
-                                                ComPtr<IStream> contentStream;
-                                                HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, content.size());
-                                                if (hGlobal) {
-                                                    void* pData = GlobalLock(hGlobal);
-                                                    memcpy(pData, content.c_str(), content.size());
-                                                    GlobalUnlock(hGlobal);
-                                                    CreateStreamOnHGlobal(hGlobal, TRUE, &contentStream);
-                                                }
-                                                
-                                                ComPtr<ICoreWebView2WebResourceResponse> response;
-                                                env->CreateWebResourceResponse(
-                                                    contentStream.Get(),
-                                                    200,
-                                                    L"OK",
-                                                    wMimeType.c_str(),
-                                                    &response);
-                                                
-                                                args->put_Response(response.Get());
-                                                std::cout << "[WebView2] Served views:// file: " << filePath << " (" << content.size() << " bytes)" << std::endl;
-                                            }
-                                        }
-                                        
-                                        CoTaskMemFree(uri);
-                                        return S_OK;
-                                    }).Get(),
-                                nullptr);
-                            
-                            std::cout << "[WebView2] Added views:// scheme support" << std::endl;
+                            std::cout << "[WebView2] WebView2 initialization complete, skipping views:// for now" << std::endl;
                             
                             // Navigate to URL using the stored URL in view (avoiding lambda capture corruption)
                             std::cout << "[WebView2] About to navigate - pendingUrl: '" << view->pendingUrl << "'" << std::endl;
