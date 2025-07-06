@@ -2885,7 +2885,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             // Navigate to URL
                             if (url && strlen(url) > 0) {
+                                std::cout << "[WebView2] Navigating to URL: " << url << std::endl;
                                 view->loadURL(url);
+                            } else {
+                                std::cout << "[WebView2] No URL provided for navigation (url=" << (url ? url : "NULL") << ")" << std::endl;
                             }
                             
                             // Add to container
