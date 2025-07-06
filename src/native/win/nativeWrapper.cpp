@@ -2903,12 +2903,19 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             // Navigate to URL using the stored URL in view (avoiding lambda capture corruption)
                             std::cout << "[WebView2] About to navigate - pendingUrl: '" << view->pendingUrl << "'" << std::endl;
+                            
+                            // Test with hardcoded google.com first
+                            std::cout << "[WebView2] Testing with google.com instead of views://" << std::endl;
+                            view->loadURL("https://google.com");
+                            
+                            /* Original code:
                             if (!view->pendingUrl.empty()) {
                                 std::cout << "[WebView2] Navigating to: " << view->pendingUrl << std::endl;
                                 view->loadURL(view->pendingUrl.c_str());
                             } else {
                                 std::cout << "[WebView2] ERROR: pendingUrl is empty, cannot navigate" << std::endl;
                             }
+                            */
                             
                             // Add to container
                             container->AddAbstractView(view);
