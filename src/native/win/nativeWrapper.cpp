@@ -40,6 +40,7 @@
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
 #include "include/cef_scheme.h"
+#include "include/cef_context_menu_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
 // Restore macro definitions
@@ -432,9 +433,42 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
 };
 
+// CEF Context Menu Handler for devtools support
+class ElectrobunContextMenuHandler : public CefContextMenuHandler {
+public:
+    ElectrobunContextMenuHandler() {}
+    
+    void OnBeforeContextMenu(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefFrame> frame,
+                           CefRefPtr<CefContextMenuParams> params,
+                           CefRefPtr<CefMenuModel> model) override {
+        // Add "Inspect Element" menu item
+        model->AddSeparator();
+        model->AddItem(26501, "Inspect Element");
+    }
+    
+    bool OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
+                            CefRefPtr<CefFrame> frame,
+                            CefRefPtr<CefContextMenuParams> params,
+                            int command_id,
+                            EventFlags event_flags) override {
+        if (command_id == 26501) {
+            // Show devtools
+            CefWindowInfo windowInfo;
+            CefBrowserSettings settings;
+            CefPoint point(params->GetXCoord(), params->GetYCoord());
+            
+            browser->GetHost()->ShowDevTools(windowInfo, nullptr, settings, point);
+            return true;
+        }
+        return false;
+    }
+    
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunContextMenuHandler);
+};
+
 // CEF Client class with load and life span handlers
-
-
 class ElectrobunCefClient : public CefClient {
 public:
     ElectrobunCefClient(uint32_t webviewId,
@@ -446,6 +480,7 @@ public:
         m_loadHandler = new ElectrobunLoadHandler();
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
         m_requestHandler = new ElectrobunRequestHandler();
+        m_contextMenuHandler = new ElectrobunContextMenuHandler();
     }
 
     void AddPreloadScript(const std::string& script) {
@@ -466,6 +501,10 @@ public:
     
     CefRefPtr<CefRequestHandler> GetRequestHandler() override {
         return m_requestHandler;
+    }
+    
+    CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override {
+        return m_contextMenuHandler;
     }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -523,6 +562,7 @@ private:
     CefRefPtr<ElectrobunLoadHandler> m_loadHandler;
     CefRefPtr<ElectrobunLifeSpanHandler> m_lifeSpanHandler;
     CefRefPtr<ElectrobunRequestHandler> m_requestHandler;
+    CefRefPtr<ElectrobunContextMenuHandler> m_contextMenuHandler;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
 
@@ -2790,8 +2830,6 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         windowInfo.SetAsChild(container->GetHwnd(), {(int)x, (int)y, (int)(x + width), (int)(y + height)});
         
         CefBrowserSettings browserSettings;
-        // Enable devtools by default
-        browserSettings.remote_debugging_port = 9222;
         // Note: web_security setting for CEF would need correct API
         
         // Create CEF client with bridge handlers
