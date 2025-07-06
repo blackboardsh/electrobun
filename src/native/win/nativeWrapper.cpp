@@ -1117,10 +1117,10 @@ public:
     }
     
     void addPreloadScriptToWebView(const char* jsString) override {
-        if (webview) {
+        if (webview && jsString) {
             std::wstring js = std::wstring(jsString, jsString + strlen(jsString));
-            webview->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT);
-            // Note: Full preload script implementation would require additional setup
+            webview->AddScriptToExecuteOnDocumentCreated(js.c_str(), nullptr);
+            std::cout << "[WebView2] Added preload script to execute on document created (length: " << strlen(jsString) << ")" << std::endl;
         }
     }
     
@@ -2765,6 +2765,26 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Set bounds
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                             ctrl->put_Bounds(bounds);
+                            
+                            // Add preload scripts before navigation
+                            std::string combinedScript;
+                            if (electrobunPreloadScript && strlen(electrobunPreloadScript) > 0) {
+                                combinedScript += electrobunPreloadScript;
+                                std::cout << "[WebView2] Added electrobun preload script (length: " << strlen(electrobunPreloadScript) << ")" << std::endl;
+                            }
+                            if (customPreloadScript && strlen(customPreloadScript) > 0) {
+                                if (!combinedScript.empty()) {
+                                    combinedScript += "\n";
+                                }
+                                combinedScript += customPreloadScript;
+                                std::cout << "[WebView2] Added custom preload script (length: " << strlen(customPreloadScript) << ")" << std::endl;
+                            }
+                            
+                            if (!combinedScript.empty()) {
+                                std::wstring wScript(combinedScript.begin(), combinedScript.end());
+                                webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
+                                std::cout << "[WebView2] Added combined preload script to execute on document created" << std::endl;
+                            }
                             
                             // Navigate to URL
                             if (url && strlen(url) > 0) {
