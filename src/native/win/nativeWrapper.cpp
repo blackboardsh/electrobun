@@ -2881,12 +2881,15 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                     CreateStreamOnHGlobal(hGlobal, TRUE, &contentStream);
                                                 }
                                                 
+                                                // Format headers properly
+                                                std::wstring headers = L"Content-Type: " + wMimeType + L"\r\nAccess-Control-Allow-Origin: *";
+                                                
                                                 ComPtr<ICoreWebView2WebResourceResponse> response;
                                                 env->CreateWebResourceResponse(
                                                     contentStream.Get(),
                                                     200,
                                                     L"OK",
-                                                    wMimeType.c_str(),
+                                                    headers.c_str(),
                                                     &response);
                                                 
                                                 args->put_Response(response.Get());
