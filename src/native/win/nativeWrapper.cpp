@@ -1148,15 +1148,6 @@ public:
         }
     }
     
-    // WebView2-specific methods
-    void setController(ComPtr<ICoreWebView2Controller> ctrl) {
-        controller = ctrl;
-    }
-    
-    void setWebView(ComPtr<ICoreWebView2> wv) {
-        webview = wv;
-    }
-    
     ComPtr<ICoreWebView2Controller> getController() {
         return controller;
     }
