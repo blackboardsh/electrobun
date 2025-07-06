@@ -2774,10 +2774,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         UpdateWindow(containerHwnd);
         
         // Create WebView2 environment
-        std::cout << "[WebView2] Creating WebView2 environment..." << std::endl;
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
-                std::cout << "[WebView2] Environment creation callback - HRESULT: 0x" << std::hex << result << std::dec << std::endl;
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -2904,8 +2902,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             std::cout << "[WebView2] Added views:// scheme support" << std::endl;
                             
                             // Navigate to URL using the stored URL in view (avoiding lambda capture corruption)
+                            std::cout << "[WebView2] About to navigate - pendingUrl: '" << view->pendingUrl << "'" << std::endl;
                             if (!view->pendingUrl.empty()) {
+                                std::cout << "[WebView2] Navigating to: " << view->pendingUrl << std::endl;
                                 view->loadURL(view->pendingUrl.c_str());
+                            } else {
+                                std::cout << "[WebView2] ERROR: pendingUrl is empty, cannot navigate" << std::endl;
                             }
                             
                             // Add to container
@@ -2920,9 +2922,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
             options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
             
-            std::cout << "[WebView2] Calling CreateCoreWebView2EnvironmentWithOptions..." << std::endl;
             HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler);
-            std::cout << "[WebView2] CreateCoreWebView2EnvironmentWithOptions returned: 0x" << std::hex << hr << std::dec << std::endl;
             
             if (FAILED(hr)) {
                 char errorMsg[256];
