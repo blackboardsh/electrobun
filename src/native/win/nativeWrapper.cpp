@@ -2924,6 +2924,22 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
             options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
             
+            // Register views:// custom scheme
+            auto schemeRegistrations = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistrationCollection>();
+            auto schemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>();
+            schemeRegistration->put_SchemeName(L"views");
+            schemeRegistration->put_IsStandard(TRUE);
+            schemeRegistration->put_IsLocal(FALSE);
+            schemeRegistration->put_IsDisplayIsolated(FALSE);
+            schemeRegistration->put_IsSecure(TRUE);
+            schemeRegistration->put_IsCorsEnabled(TRUE);
+            schemeRegistration->put_HasAuthorityComponent(FALSE);
+            
+            schemeRegistrations->Add(schemeRegistration.Get());
+            options->put_CustomSchemeRegistrations(schemeRegistrations.Get());
+            
+            std::cout << "[WebView2] Registered views:// custom scheme" << std::endl;
+            
             HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler);
             
             if (FAILED(hr)) {
