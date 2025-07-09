@@ -2821,7 +2821,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         
         // Create WebView2 environment
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [=](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+            [view, container, x, y, width, height](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -2846,7 +2846,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [=](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
                                 char errorMsg[256];
                                 sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
