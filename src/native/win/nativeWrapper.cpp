@@ -2946,6 +2946,46 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             ::log("[WebView2] Added views:// scheme support");
                             
+                            // Add preload scripts - TEST ADDITION
+                            ::log("[WebView2] Adding preload scripts");
+                            std::string combinedScript;
+                            if (!view->electrobunScript.empty()) {
+                                combinedScript += view->electrobunScript;
+                                ::log("[WebView2] Added electrobun preload script");
+                            }
+                            if (!view->customScript.empty()) {
+                                if (!combinedScript.empty()) {
+                                    combinedScript += "\n";
+                                }
+                                combinedScript += view->customScript;
+                                ::log("[WebView2] Added custom preload script");
+                            }
+                            
+                            if (!combinedScript.empty()) {
+                                ::log("[WebView2] Converting script to wide string");
+                                std::wstring wScript(combinedScript.begin(), combinedScript.end());
+                                
+                                std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); " + combinedScript;
+                                std::wstring wDebugScript(debugScript.begin(), debugScript.end());
+                                
+                                ::log("[WebView2] Adding script to execute on document created");
+                                webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
+                                
+                                ::log("[WebView2] Adding navigation event handler");
+                                webview->add_NavigationStarting(
+                                    Callback<ICoreWebView2NavigationStartingEventHandler>(
+                                        [debugScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                            ::log("[WebView2] Navigation starting, injecting preload script early");
+                                            std::wstring wDebugScript(debugScript.begin(), debugScript.end());
+                                            sender->ExecuteScript(wDebugScript.c_str(), nullptr);
+                                            return S_OK;
+                                        }).Get(),
+                                    nullptr);
+                                ::log("[WebView2] Added navigation event handler for early script injection");
+                            } else {
+                                ::log("[WebView2] No preload scripts to add");
+                            }
+                            
                             // Navigate to URL
                             if (!view->pendingUrl.empty()) {
                                 ::log("[WebView2] Navigating to pending URL");
