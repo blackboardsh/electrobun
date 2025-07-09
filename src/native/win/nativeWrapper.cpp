@@ -2851,7 +2851,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 ::log("[WebView2] About to create controller...");
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [view, container, x, y, width, height](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             ::log("[WebView2] Controller creation callback executed");
                             if (FAILED(result)) {
                                 char errorMsg[256];
