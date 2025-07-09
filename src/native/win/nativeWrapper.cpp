@@ -2838,16 +2838,215 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             });
         
         /*
-        // COMMENTED OUT: Original complex callback logic for WebView2 controller creation
-        // TODO: Restore this after fixing the crash issue
-        // This was the original environmentCompletedHandler that included:
-        // - WebView2 controller creation
-        // - Window validation
-        // - Script injection
-        // - Navigation handling
-        // - Container integration
-        // The crash was happening during CreateCoreWebView2EnvironmentWithOptions call
-        // when this complex callback was being passed as the completion handler
+        // COMMENTED OUT: Original complex callback - uncomment to restore
+        auto environmentCompletedHandler_ORIGINAL = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [view, container, x, y, width, height](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                if (FAILED(result)) {
+                    char errorMsg[256];
+                    sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
+                    ::log(errorMsg);
+                    // Mark view as failed
+                    view->setCreationFailed(true);
+                    return result;
+                }
+                
+                // Create WebView2 controller
+                ::log("[WebView2] Creating WebView2 controller...");
+                HWND targetHwnd = container->GetHwnd();
+                char controllerDebug[256];
+                sprintf_s(controllerDebug, "[WebView2] Target HWND for controller: %p", targetHwnd);
+                ::log(controllerDebug);
+                
+                // Verify window is still valid before creating controller
+                if (!IsWindow(targetHwnd)) {
+                    ::log("ERROR: Target window is no longer valid");
+                    view->setCreationFailed(true);
+                    return S_OK;
+                }
+                
+                // Additional window state validation
+                if (!IsWindowVisible(targetHwnd)) {
+                    ::log("WARNING: Target window is not visible");
+                }
+                
+                DWORD windowStyle = GetWindowLong(targetHwnd, GWL_STYLE);
+                char windowStateDebug[512];
+                sprintf_s(windowStateDebug, "[WebView2] Window state - Style: 0x%08X, Visible: %s, Enabled: %s", 
+                         windowStyle, IsWindowVisible(targetHwnd) ? "Yes" : "No", IsWindowEnabled(targetHwnd) ? "Yes" : "No");
+                ::log(windowStateDebug);
+                
+                return env->CreateCoreWebView2Controller(targetHwnd,
+                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                            if (FAILED(result)) {
+                                char errorMsg[512];
+                                const char* errorDescription = "";
+                                switch (result) {
+                                    case 0x80004004: errorDescription = "E_ABORT - Operation was aborted"; break;
+                                    case 0x80070005: errorDescription = "E_ACCESSDENIED - Access denied"; break;
+                                    case 0x8007000E: errorDescription = "E_OUTOFMEMORY - Out of memory"; break;
+                                    case 0x80004005: errorDescription = "E_FAIL - Unspecified failure"; break;
+                                    case 0x80070057: errorDescription = "E_INVALIDARG - Invalid argument"; break;
+                                    default: errorDescription = "Unknown error"; break;
+                                }
+                                sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X (%s)", result, errorDescription);
+                                ::log(errorMsg);
+                                
+                                // Check if target window is still valid when the callback executes
+                                HWND callbackTargetHwnd = container->GetHwnd();
+                                char windowCheckMsg[256];
+                                sprintf_s(windowCheckMsg, "[WebView2] Window state in callback - HWND: %p, Valid: %s, Visible: %s", 
+                                         callbackTargetHwnd, IsWindow(callbackTargetHwnd) ? "Yes" : "No", 
+                                         IsWindowVisible(callbackTargetHwnd) ? "Yes" : "No");
+                                ::log(windowCheckMsg);
+                                
+                                // Mark view as failed
+                                view->setCreationFailed(true);
+                                return result;
+                            }
+                            
+                            // Set up WebView2 controller and core
+                            ComPtr<ICoreWebView2Controller> ctrl(controller);
+                            ComPtr<ICoreWebView2> webview;
+                            
+                            ctrl->get_CoreWebView2(&webview);
+                            view->setController(ctrl);
+                            view->setWebView(webview);
+                            
+                            std::cout << "[WebView2] Successfully created WebView2 controller and core webview" << std::endl;
+                            
+                            // Set bounds
+                            RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+                            ctrl->put_Bounds(bounds);
+                            
+                            // Add preload scripts using scripts stored in view object
+                            std::string combinedScript;
+                            if (!view->electrobunScript.empty()) {
+                                combinedScript += view->electrobunScript;
+                                std::cout << "[WebView2] Added electrobun preload script (length: " << view->electrobunScript.length() << ")" << std::endl;
+                            }
+                            if (!view->customScript.empty()) {
+                                if (!combinedScript.empty()) {
+                                    combinedScript += "\n";
+                                }
+                                combinedScript += view->customScript;
+                                std::cout << "[WebView2] Added custom preload script (length: " << view->customScript.length() << ")" << std::endl;
+                            }
+                            
+                            if (!combinedScript.empty()) {
+                                std::wstring wScript(combinedScript.begin(), combinedScript.end());
+                                
+                                // Add some debug logging to the script itself
+                                std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); " + combinedScript;
+                                std::wstring wDebugScript(debugScript.begin(), debugScript.end());
+                                
+                                // Add script to execute on document created
+                                webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
+                                std::cout << "[WebView2] Added combined preload script to execute on document created (length: " << debugScript.length() << ")" << std::endl;
+                                
+                                // Also add navigation event handler to inject script early
+                                webview->add_NavigationStarting(
+                                    Callback<ICoreWebView2NavigationStartingEventHandler>(
+                                        [debugScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                            std::cout << "[WebView2] Navigation starting, injecting preload script early" << std::endl;
+                                            std::wstring wDebugScript(debugScript.begin(), debugScript.end());
+                                            sender->ExecuteScript(wDebugScript.c_str(), nullptr);
+                                            return S_OK;
+                                        }).Get(),
+                                    nullptr);
+                                std::cout << "[WebView2] Added navigation event handler for early script injection" << std::endl;
+                            } else {
+                                std::cout << "[WebView2] No preload scripts to add" << std::endl;
+                            }
+                            
+                            // Add views:// scheme support for WebView2
+                            webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+                            
+                            // Set up WebResourceRequested event handler for views:// scheme
+                            webview->add_WebResourceRequested(
+                                Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+                                    [env](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                                        std::cout << "[WebView2] WebResourceRequested event triggered!" << std::endl;
+                                        ComPtr<ICoreWebView2WebResourceRequest> request;
+                                        args->get_Request(&request);
+                                        
+                                        LPWSTR uri;
+                                        request->get_Uri(&uri);
+                                        
+                                        std::wstring wUri(uri);
+                                        std::string uriStr;
+                                        int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, nullptr, 0, nullptr, nullptr);
+                                        if (size > 0) {
+                                            uriStr.resize(size - 1);
+                                            WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, nullptr, nullptr);
+                                        }
+                                        std::cout << "[WebView2] Request URI: " << uriStr << std::endl;
+                                        
+                                        if (uriStr.substr(0, 8) == "views://") {
+                                            std::string filePath = uriStr.substr(8); // Remove "views://" prefix
+                                            std::string content = loadViewsFile(filePath);
+                                            
+                                            if (!content.empty()) {
+                                                // Create response
+                                                std::string mimeType = "text/html";
+                                                if (filePath.find(".js") != std::string::npos) mimeType = "application/javascript";
+                                                else if (filePath.find(".css") != std::string::npos) mimeType = "text/css";
+                                                else if (filePath.find(".png") != std::string::npos) mimeType = "image/png";
+                                                
+                                                std::wstring wMimeType(mimeType.begin(), mimeType.end());
+                                                
+                                                // Create a memory stream for the content
+                                                ComPtr<IStream> contentStream;
+                                                HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, content.size());
+                                                if (hGlobal) {
+                                                    void* pData = GlobalLock(hGlobal);
+                                                    memcpy(pData, content.c_str(), content.size());
+                                                    GlobalUnlock(hGlobal);
+                                                    CreateStreamOnHGlobal(hGlobal, TRUE, &contentStream);
+                                                }
+                                                
+                                                // Format headers properly
+                                                std::wstring headers = L"Content-Type: " + wMimeType + L"\r\nAccess-Control-Allow-Origin: *";
+                                                
+                                                ComPtr<ICoreWebView2WebResourceResponse> response;
+                                                env->CreateWebResourceResponse(
+                                                    contentStream.Get(),
+                                                    200,
+                                                    L"OK",
+                                                    headers.c_str(),
+                                                    &response);
+                                                
+                                                args->put_Response(response.Get());
+                                                std::cout << "[WebView2] Served views:// file: " << filePath << " (" << content.size() << " bytes)" << std::endl;
+                                            }
+                                        }
+                                        
+                                        CoTaskMemFree(uri);
+                                        return S_OK;
+                                    }).Get(),
+                                nullptr);
+                            
+                            std::cout << "[WebView2] Added views:// scheme support" << std::endl;
+                            
+                            // Navigate to URL using the stored URL in view (avoiding lambda capture corruption)
+                            std::cout << "[WebView2] About to navigate - pendingUrl: '" << view->pendingUrl << "'" << std::endl;
+                            if (!view->pendingUrl.empty()) {
+                                std::cout << "[WebView2] Navigating to: " << view->pendingUrl << std::endl;
+                                view->loadURL(view->pendingUrl.c_str());
+                            } else {
+                                std::cout << "[WebView2] ERROR: pendingUrl is empty, cannot navigate" << std::endl;
+                            }
+                            
+                            // Mark creation as complete - all setup is done
+                            view->setCreationComplete(true);
+                            std::cout << "[WebView2] Creation completed successfully" << std::endl;
+                            
+                            // Add to container
+                            container->AddAbstractView(view);
+                            
+                            return S_OK;
+                        }).Get());
+            }).Get();
         */
         
         // Create WebView2 environment with custom scheme support
