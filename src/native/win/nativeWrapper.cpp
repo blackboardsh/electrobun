@@ -2825,16 +2825,67 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         HWND parentHwnd = hwnd;
         
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+            [view, container, x, y, width, height](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                 ::log("[WebView2] Environment creation callback executed");
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
                     ::log(errorMsg);
+                    view->setCreationFailed(true);
                     return result;
                 }
-                ::log("[WebView2] Environment created successfully - simplified callback");
-                return S_OK;
+                ::log("[WebView2] Environment created successfully - starting controller creation");
+                
+                // Create WebView2 controller - MINIMAL VERSION
+                HWND targetHwnd = container->GetHwnd();
+                char controllerDebug[256];
+                sprintf_s(controllerDebug, "[WebView2] Target HWND for controller: %p", targetHwnd);
+                ::log(controllerDebug);
+                
+                if (!IsWindow(targetHwnd)) {
+                    ::log("ERROR: Target window is no longer valid");
+                    view->setCreationFailed(true);
+                    return S_OK;
+                }
+                
+                ::log("[WebView2] About to create controller...");
+                return env->CreateCoreWebView2Controller(targetHwnd,
+                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                        [view, container, x, y, width, height](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                            ::log("[WebView2] Controller creation callback executed");
+                            if (FAILED(result)) {
+                                char errorMsg[256];
+                                sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
+                                ::log(errorMsg);
+                                view->setCreationFailed(true);
+                                return result;
+                            }
+                            
+                            ::log("[WebView2] Controller created successfully - minimal setup");
+                            
+                            // Minimal controller setup
+                            ComPtr<ICoreWebView2Controller> ctrl(controller);
+                            ComPtr<ICoreWebView2> webview;
+                            ctrl->get_CoreWebView2(&webview);
+                            view->setController(ctrl);
+                            view->setWebView(webview);
+                            
+                            // Set bounds
+                            RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+                            ctrl->put_Bounds(bounds);
+                            
+                            // Navigate to URL
+                            if (!view->pendingUrl.empty()) {
+                                ::log("[WebView2] Navigating to pending URL");
+                                view->loadURL(view->pendingUrl.c_str());
+                            }
+                            
+                            view->setCreationComplete(true);
+                            container->AddAbstractView(view);
+                            ::log("[WebView2] Minimal controller setup completed successfully");
+                            
+                            return S_OK;
+                        }).Get());
             });
         
         /*
