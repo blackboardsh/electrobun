@@ -2837,6 +2837,19 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 return S_OK;
             });
         
+        /*
+        // COMMENTED OUT: Original complex callback logic for WebView2 controller creation
+        // TODO: Restore this after fixing the crash issue
+        // This was the original environmentCompletedHandler that included:
+        // - WebView2 controller creation
+        // - Window validation
+        // - Script injection
+        // - Navigation handling
+        // - Container integration
+        // The crash was happening during CreateCoreWebView2EnvironmentWithOptions call
+        // when this complex callback was being passed as the completion handler
+        */
+        
         // Create WebView2 environment with custom scheme support
         try {
             auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
@@ -2876,7 +2889,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             
             ::log("[WebView2] About to call CreateCoreWebView2EnvironmentWithOptions...");
             
-            HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler);
+            HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler.Get());
             
             ::log("[WebView2] CreateCoreWebView2EnvironmentWithOptions returned");
             
