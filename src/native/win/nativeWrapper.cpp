@@ -1138,8 +1138,12 @@ public:
     
     void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
         if (webview) {
-            std::wstring js = std::wstring(jsString, jsString + strlen(jsString));
-            webview->ExecuteScript(js.c_str(), nullptr);
+            // Copy string to avoid lifetime issues in lambda
+            std::string jsStringCopy = jsString;
+            MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
+                std::wstring js = std::wstring(jsStringCopy.begin(), jsStringCopy.end());
+                webview->ExecuteScript(js.c_str(), nullptr);
+            });
         }
     }
     
@@ -1411,7 +1415,11 @@ public:
     
     void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
         if (browser) {
-            browser->GetMainFrame()->ExecuteJavaScript(jsString, "", 0);
+            // Copy string to avoid lifetime issues in lambda
+            std::string jsStringCopy = jsString;
+            MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
+                browser->GetMainFrame()->ExecuteJavaScript(jsStringCopy.c_str(), "", 0);
+            });
         }
     }
     
@@ -3610,7 +3618,13 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
         return;
     }
     
+    char logMsg[256];
+    sprintf_s(logMsg, "Executing JavaScript in webview %u: %.100s", abstractView->webviewId, script);
+    ::log(logMsg);
+    
     abstractView->evaluateJavaScriptWithNoCompletion(script);
+    
+    ::log("JavaScript execution dispatched to main thread");
 }
 
 ELECTROBUN_EXPORT void testFFI(void *ptr) {
