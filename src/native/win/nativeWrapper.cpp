@@ -2874,6 +2874,78 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                             ctrl->put_Bounds(bounds);
                             
+                            // Add views:// scheme support - TEST ADDITION
+                            ::log("[WebView2] Adding views:// scheme support");
+                            webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+                            
+                            // Set up WebResourceRequested event handler for views:// scheme
+                            webview->add_WebResourceRequested(
+                                Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+                                    [env](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                                        ::log("[WebView2] WebResourceRequested event triggered");
+                                        ComPtr<ICoreWebView2WebResourceRequest> request;
+                                        args->get_Request(&request);
+                                        
+                                        LPWSTR uri;
+                                        request->get_Uri(&uri);
+                                        
+                                        // Safe string conversion
+                                        std::string uriStr;
+                                        int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, nullptr, 0, nullptr, nullptr);
+                                        if (size > 0) {
+                                            uriStr.resize(size - 1);
+                                            WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, nullptr, nullptr);
+                                        }
+                                        
+                                        ::log("[WebView2] Request URI converted successfully");
+                                        
+                                        if (uriStr.substr(0, 8) == "views://") {
+                                            std::string filePath = uriStr.substr(8);
+                                            std::string content = loadViewsFile(filePath);
+                                            
+                                            if (!content.empty()) {
+                                                ::log("[WebView2] Loaded views file content, creating response");
+                                                
+                                                // Create response (simplified)
+                                                std::string mimeType = "text/html";
+                                                if (filePath.find(".js") != std::string::npos) mimeType = "application/javascript";
+                                                else if (filePath.find(".css") != std::string::npos) mimeType = "text/css";
+                                                else if (filePath.find(".png") != std::string::npos) mimeType = "image/png";
+                                                
+                                                std::wstring wMimeType(mimeType.begin(), mimeType.end());
+                                                
+                                                // Create memory stream
+                                                ComPtr<IStream> contentStream;
+                                                HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, content.size());
+                                                if (hGlobal) {
+                                                    void* pData = GlobalLock(hGlobal);
+                                                    memcpy(pData, content.c_str(), content.size());
+                                                    GlobalUnlock(hGlobal);
+                                                    CreateStreamOnHGlobal(hGlobal, TRUE, &contentStream);
+                                                }
+                                                
+                                                std::wstring headers = L"Content-Type: " + wMimeType + L"\r\nAccess-Control-Allow-Origin: *";
+                                                
+                                                ComPtr<ICoreWebView2WebResourceResponse> response;
+                                                env->CreateWebResourceResponse(
+                                                    contentStream.Get(),
+                                                    200,
+                                                    L"OK",
+                                                    headers.c_str(),
+                                                    &response);
+                                                
+                                                args->put_Response(response.Get());
+                                                ::log("[WebView2] Successfully served views:// file");
+                                            }
+                                        }
+                                        
+                                        CoTaskMemFree(uri);
+                                        return S_OK;
+                                    }).Get(),
+                                nullptr);
+                            
+                            ::log("[WebView2] Added views:// scheme support");
+                            
                             // Navigate to URL
                             if (!view->pendingUrl.empty()) {
                                 ::log("[WebView2] Navigating to pending URL");
