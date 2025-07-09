@@ -2841,16 +2841,46 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 // Verify window is still valid before creating controller
                 if (!IsWindow(targetHwnd)) {
                     ::log("ERROR: Target window is no longer valid");
+                    view->setCreationFailed(true);
                     return S_OK;
                 }
+                
+                // Additional window state validation
+                if (!IsWindowVisible(targetHwnd)) {
+                    ::log("WARNING: Target window is not visible");
+                }
+                
+                DWORD windowStyle = GetWindowLong(targetHwnd, GWL_STYLE);
+                char windowStateDebug[512];
+                sprintf_s(windowStateDebug, "[WebView2] Window state - Style: 0x%08X, Visible: %s, Enabled: %s", 
+                         windowStyle, IsWindowVisible(targetHwnd) ? "Yes" : "No", IsWindowEnabled(targetHwnd) ? "Yes" : "No");
+                ::log(windowStateDebug);
                 
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
-                                char errorMsg[256];
-                                sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
+                                char errorMsg[512];
+                                const char* errorDescription = "";
+                                switch (result) {
+                                    case 0x80004004: errorDescription = "E_ABORT - Operation was aborted"; break;
+                                    case 0x80070005: errorDescription = "E_ACCESSDENIED - Access denied"; break;
+                                    case 0x8007000E: errorDescription = "E_OUTOFMEMORY - Out of memory"; break;
+                                    case 0x80004005: errorDescription = "E_FAIL - Unspecified failure"; break;
+                                    case 0x80070057: errorDescription = "E_INVALIDARG - Invalid argument"; break;
+                                    default: errorDescription = "Unknown error"; break;
+                                }
+                                sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X (%s)", result, errorDescription);
                                 ::log(errorMsg);
+                                
+                                // Check if target window is still valid when the callback executes
+                                HWND callbackTargetHwnd = container->GetHwnd();
+                                char windowCheckMsg[256];
+                                sprintf_s(windowCheckMsg, "[WebView2] Window state in callback - HWND: %p, Valid: %s, Visible: %s", 
+                                         callbackTargetHwnd, IsWindow(callbackTargetHwnd) ? "Yes" : "No", 
+                                         IsWindowVisible(callbackTargetHwnd) ? "Yes" : "No");
+                                ::log(windowCheckMsg);
+                                
                                 // Mark view as failed
                                 view->setCreationFailed(true);
                                 return result;
