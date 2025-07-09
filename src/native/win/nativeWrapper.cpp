@@ -3066,12 +3066,18 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 ::log("ERROR: Failed to get ICoreWebView2EnvironmentOptions4 interface for custom scheme registration");
             }
             
+            ::log("[WebView2] About to call CreateCoreWebView2EnvironmentWithOptions...");
+            
             HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler);
+            
+            ::log("[WebView2] CreateCoreWebView2EnvironmentWithOptions returned");
             
             if (FAILED(hr)) {
                 char errorMsg[256];
                 sprintf_s(errorMsg, "ERROR: CreateCoreWebView2EnvironmentWithOptions failed with HRESULT: 0x%08X", hr);
                 ::log(errorMsg);
+            } else {
+                ::log("[WebView2] CreateCoreWebView2EnvironmentWithOptions succeeded");
             }
         } catch (const std::exception& e) {
             std::cout << "[WebView2] Exception in WebView2 creation: " << e.what() << std::endl;
