@@ -950,6 +950,7 @@ public:
     bool isReceivingInput = true;
     std::string maskJSON;
     RECT visualBounds = {};
+    bool creationFailed = false;
     
     // Bridge handlers
     ComPtr<BridgeHandler> bunBridgeHandler;
@@ -986,6 +987,14 @@ public:
         if (hwnd) {
             ShowWindow(hwnd, hidden ? SW_HIDE : SW_SHOW);
         }
+    }
+    
+    virtual void setCreationFailed(bool failed) {
+        creationFailed = failed;
+    }
+    
+    virtual bool hasCreationFailed() const {
+        return creationFailed;
     }
     
     // Check if point is in a masked (cut-out) area based on maskJSON
@@ -1053,6 +1062,7 @@ public:
     std::string pendingUrl;
     std::string electrobunScript;
     std::string customScript;
+    bool isCreationComplete = false;
     
     WebView2View(uint32_t webviewId) {
         this->webviewId = webviewId;
@@ -1065,6 +1075,14 @@ public:
     
     void setWebView(ComPtr<ICoreWebView2> wv) {
         webview = wv;
+    }
+    
+    void setCreationComplete(bool complete) {
+        isCreationComplete = complete;
+    }
+    
+    bool isReady() const {
+        return isCreationComplete && !creationFailed;
     }
     
     void loadURL(const char* urlString) override {
@@ -2727,6 +2745,19 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  HandlePostMessage internalBridgeHandler,
                                                  const char *electrobunPreloadScript,
                                                  const char *customPreloadScript) {
+    // Check if WebView2 runtime is available
+    LPWSTR versionInfo = nullptr;
+    HRESULT result = GetAvailableCoreWebView2BrowserVersionString(nullptr, &versionInfo);
+    if (FAILED(result)) {
+        ::log("ERROR: WebView2 runtime is not available. Please install Microsoft Edge WebView2 Runtime");
+        auto view = std::make_shared<WebView2View>(webviewId);
+        view->setCreationFailed(true);
+        return view;
+    }
+    if (versionInfo) {
+        CoTaskMemFree(versionInfo);
+    }
+    
     
     // Make safe copies of string parameters to avoid memory corruption in lambda captures
     std::string urlString = url ? std::string(url) : "";
@@ -2795,7 +2826,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
                     ::log(errorMsg);
-                    return S_OK;
+                    // Mark view as failed
+                    view->setCreationFailed(true);
+                    return result;
                 }
                 
                 // Create WebView2 controller
@@ -2818,7 +2851,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 char errorMsg[256];
                                 sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
                                 ::log(errorMsg);
-                                return S_OK;
+                                // Mark view as failed
+                                view->setCreationFailed(true);
+                                return result;
                             }
                             
                             // Set up WebView2 controller and core
@@ -2890,7 +2925,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         request->get_Uri(&uri);
                                         
                                         std::wstring wUri(uri);
-                                        std::string uriStr(wUri.begin(), wUri.end());
+                                        std::string uriStr;
+                                        int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, nullptr, 0, nullptr, nullptr);
+                                        if (size > 0) {
+                                            uriStr.resize(size - 1);
+                                            WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, nullptr, nullptr);
+                                        }
                                         std::cout << "[WebView2] Request URI: " << uriStr << std::endl;
                                         
                                         if (uriStr.substr(0, 8) == "views://") {
@@ -2947,6 +2987,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             } else {
                                 std::cout << "[WebView2] ERROR: pendingUrl is empty, cannot navigate" << std::endl;
                             }
+                            
+                            // Mark creation as complete - all setup is done
+                            view->setCreationComplete(true);
+                            std::cout << "[WebView2] Creation completed successfully" << std::endl;
                             
                             // Add to container
                             container->AddAbstractView(view);
