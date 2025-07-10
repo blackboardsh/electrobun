@@ -177,7 +177,6 @@ private:
 class ElectrobunLoadHandler : public CefLoadHandler {
 public:
     void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override {
-        std::cout << "[CEF] LoadStart: Navigation started" << std::endl;
         
         // Execute preload scripts immediately at load start for main frame
         if (frame->IsMain()) {
@@ -191,7 +190,6 @@ public:
     }
     
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
-        std::cout << "[CEF] LoadEnd: Navigation completed with status " << httpStatusCode << std::endl;
         
         // Also execute preload scripts at load end to ensure they're available
         if (frame->IsMain()) {
@@ -228,7 +226,6 @@ void SetWebViewOnWebView2View(HWND containerWindow, void* webview);
 class ElectrobunLifeSpanHandler : public CefLifeSpanHandler {
 public:
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
-        std::cout << "[CEF] OnAfterCreated: Browser ID " << browser->GetIdentifier() << " (sync creation complete)" << std::endl;
         // Note: Browser setup is now handled synchronously during CreateBrowserSync
     }
 
@@ -543,7 +540,6 @@ void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrow
         std::string script = client->GetCombinedScript();
         if (!script.empty()) {
             g_preloadScripts[browser->GetIdentifier()] = script;
-            std::cout << "[CEF] Stored preload scripts for browser " << browser->GetIdentifier() << " (length: " << script.length() << ")" << std::endl;
         }
     }
 }
@@ -1614,17 +1610,12 @@ public:
     }
     
     void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
-        ::log("CEF: evaluateJavaScriptWithNoCompletion called");
         if (browser) {
-            ::log("CEF: browser is valid, executing JavaScript");
             // Copy string to avoid lifetime issues in lambda
             std::string jsStringCopy = jsString;
             MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
                 browser->GetMainFrame()->ExecuteJavaScript(jsStringCopy.c_str(), "", 0);
-                ::log("CEF: ExecuteJavaScript completed");
             });
-        } else {
-            ::log("CEF: browser is NULL, cannot execute JavaScript");
         }
     }
     
@@ -1858,23 +1849,17 @@ public:
 
 // Helper function to set browser on CEFView (defined after CEFView class)
 void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser) {
-    std::cout << "[CEF] Looking for CEFView with parentWindow: " << parentWindow << std::endl;
     auto viewIt = g_cefViews.find(parentWindow);
     if (viewIt != g_cefViews.end()) {
         auto view = static_cast<CEFView*>(viewIt->second);
         if (view) {
             view->setBrowser(browser);
-            std::cout << "[CEF] Set browser on CEFView for webview ID: " << view->webviewId << std::endl;
             
             // Trigger an immediate resize to bring CEF browser to front
             // The resize method will handle the z-ordering
             RECT currentBounds = view->visualBounds;
             view->resize(currentBounds, nullptr);
-        } else {
-            std::cout << "[CEF] Found CEFView entry but view is null" << std::endl;
         }
-    } else {
-        std::cout << "[CEF] No CEFView found for parentWindow: " << parentWindow << std::endl;
     }
 }
 
@@ -3149,7 +3134,6 @@ ELECTROBUN_EXPORT bool initCEF() {
         ::log("Registered views:// scheme handler factory");
         
         // We'll start the message pump timer when we create the first browser
-        std::cout << "[CEF] CEF initialized, message pump will start with first browser" << std::endl;
     } else {
         ::log("Failed to initialize CEF");
     }
@@ -3778,11 +3762,9 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         // Set up preload scripts
         if (electrobunPreloadScript && strlen(electrobunPreloadScript) > 0) {
             client->AddPreloadScript(std::string(electrobunPreloadScript));
-            std::cout << "[CEF] Added electrobun preload script (length: " << strlen(electrobunPreloadScript) << ")" << std::endl;
         }
         if (customPreloadScript && strlen(customPreloadScript) > 0) {
             client->UpdateCustomPreloadScript(std::string(customPreloadScript));
-            std::cout << "[CEF] Added custom preload script (length: " << strlen(customPreloadScript) << ")" << std::endl;
         }
         
         // Note: Additional callback methods would need to be implemented if needed
@@ -3821,10 +3803,8 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             // Add client to global map
             HWND containerHwnd = container->GetHwnd();
             g_cefClients[containerHwnd] = client;
-            std::cout << "[CEF] Stored client for container hwnd: " << containerHwnd << std::endl;
-            // Add CEFView to global map
+                // Add CEFView to global map
             g_cefViews[containerHwnd] = view.get();
-            std::cout << "[CEF] Stored CEFView for container hwnd: " << containerHwnd << std::endl;
             
             // Set browser on client for script execution
             client->SetBrowser(browser);
@@ -3836,7 +3816,6 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             // Handle z-ordering immediately since browser is ready
             view->resize(initialBounds, nullptr);
             
-            std::cout << "[CEF] Browser ID " << browser->GetIdentifier() << " created synchronously" << std::endl;
         }
     });
     
@@ -3918,14 +3897,10 @@ ELECTROBUN_EXPORT void runNSApplication() {
     
     // Initialize CEF if available
     if (isCEFAvailable()) {
-        std::cout << "[CEF] Initializing CEF for message loop" << std::endl;
         if (initCEF()) {
-            std::cout << "[CEF] Starting CEF message loop" << std::endl;
             CefRunMessageLoop(); // Use CEF's message loop like macOS
-            std::cout << "[CEF] CEF message loop ended, shutting down" << std::endl;
             CefShutdown();
         } else {
-            std::cout << "[CEF] Failed to initialize CEF, falling back to Windows message loop" << std::endl;
             // Fall back to Windows message loop if CEF init fails
             MSG msg;
             while (GetMessage(&msg, NULL, 0, 0)) {
@@ -3934,7 +3909,6 @@ ELECTROBUN_EXPORT void runNSApplication() {
             }
         }
     } else {
-        std::cout << "[CEF] CEF not available, using Windows message loop" << std::endl;
         // Use Windows message loop if CEF is not available
         MSG msg;
         while (GetMessage(&msg, NULL, 0, 0)) {
@@ -3990,7 +3964,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     AbstractView* view = nullptr;
     
     if (renderer && strcmp(renderer, "cef") == 0 && isCEFAvailable()) {
-        ::log("=== Creating CEF Browser ===");
         auto cefView = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     bunBridgeHandler, internalBridgeHandler,
