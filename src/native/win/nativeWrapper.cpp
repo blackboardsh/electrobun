@@ -1731,8 +1731,26 @@ public:
     
     void resize(const RECT& frame, const char* masksJson) override {
         if (browser) {
+            // Get the CEF browser's window handle and update its position/size
+            HWND browserHwnd = browser->GetHost()->GetWindowHandle();
+            if (browserHwnd) {
+                int width = frame.right - frame.left;
+                int height = frame.bottom - frame.top;
+                
+                char logMsg[256];
+                sprintf_s(logMsg, "CEF resize: Setting bounds (%d,%d,%d,%d) for browser HWND=%p", 
+                         frame.left, frame.top, width, height, browserHwnd);
+                ::log(logMsg);
+                
+                // Move and resize the CEF browser window
+                SetWindowPos(browserHwnd, NULL, frame.left, frame.top, width, height,
+                           SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            
+            // Notify CEF that the browser was resized
             browser->GetHost()->WasResized();
             visualBounds = frame;
+            
             if (masksJson) {
                 maskJSON = masksJson;
             }
@@ -1754,9 +1772,29 @@ public:
         if (enable && !mirrorModeEnabled) {
             mirrorModeEnabled = true;
             // CEF-specific input disabling
+            if (browser) {
+                HWND browserHwnd = browser->GetHost()->GetWindowHandle();
+                if (browserHwnd) {
+                    // Disable input by making the window non-interactive
+                    EnableWindow(browserHwnd, FALSE);
+                    char logMsg[128];
+                    sprintf_s(logMsg, "CEF mirror mode: Disabled input for browser HWND=%p", browserHwnd);
+                    ::log(logMsg);
+                }
+            }
         } else if (!enable && mirrorModeEnabled) {
             mirrorModeEnabled = false;
             // CEF-specific input enabling
+            if (browser) {
+                HWND browserHwnd = browser->GetHost()->GetWindowHandle();
+                if (browserHwnd) {
+                    // Enable input by making the window interactive again
+                    EnableWindow(browserHwnd, TRUE);
+                    char logMsg[128];
+                    sprintf_s(logMsg, "CEF mirror mode: Enabled input for browser HWND=%p", browserHwnd);
+                    ::log(logMsg);
+                }
+            }
         }
     }
 };
@@ -1885,18 +1923,24 @@ private:
                 
                 // For WebView2, try to get actual bounds
                 auto webview2 = std::dynamic_pointer_cast<WebView2View>(view);
+                auto cefView = std::dynamic_pointer_cast<CEFView>(view);
+                
                 if (webview2 && webview2->getController()) {
                     webview2->getController()->get_Bounds(&viewBounds);
+                } else if (cefView && cefView->getBrowser()) {
+                    // For CEF, use the visualBounds which are set by resize
+                    viewBounds = view->visualBounds;
+                }
+                
+                if (PtInRect(&viewBounds, mousePos)) {
+                    // Convert to local coordinates for mask checking
+                    POINT localPoint = {
+                        mousePos.x - viewBounds.left,
+                        mousePos.y - viewBounds.top
+                    };
                     
-                    if (PtInRect(&viewBounds, mousePos)) {
-                        // Convert to local coordinates for mask checking
-                        POINT localPoint = {
-                            mousePos.x - viewBounds.left,
-                            mousePos.y - viewBounds.top
-                        };
-                        
-                        // Check if point is in a masked (cut-out) area
-                        if (view->isPointInMask(localPoint)) {
+                    // Check if point is in a masked (cut-out) area
+                    if (view->isPointInMask(localPoint)) {
                             // Point is in masked area, don't make this webview active
                             // Continue to check lower webviews
                             view->toggleMirrorMode(true);
@@ -1971,6 +2015,27 @@ private:
         
         // Find and bring the WebView2's child window to front
         EnumChildWindows(m_hwnd, EnumChildCallback, (LPARAM)&enumData);
+    }
+    
+    void BringCEFChildWindowToFront(AbstractView* view) {
+        // Cast to CEFView to access browser
+        auto cefView = dynamic_cast<CEFView*>(view);
+        if (!cefView || !cefView->getBrowser()) return;
+        
+        CefRefPtr<CefBrowser> browser = cefView->getBrowser();
+        if (!browser) return;
+        
+        // Get the CEF browser's window handle
+        HWND browserHwnd = browser->GetHost()->GetWindowHandle();
+        if (!browserHwnd) return;
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "BringCEFChildWindowToFront: Bringing CEF browser HWND=%p to front", browserHwnd);
+        ::log(logMsg);
+        
+        // Bring the CEF browser window to front
+        SetWindowPos(browserHwnd, HWND_TOP, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
 public:
@@ -2108,8 +2173,15 @@ public:
             m_abstractViews.erase(it);
             m_abstractViews.insert(m_abstractViews.begin(), view);
             
-            // Now bring the actual WebView2 child window to front
-            BringWebView2ChildWindowToFront(view.get());
+            // Bring the appropriate child window to front
+            auto webview2 = dynamic_cast<WebView2View*>(view.get());
+            auto cefView = dynamic_cast<CEFView*>(view.get());
+            
+            if (webview2) {
+                BringWebView2ChildWindowToFront(view.get());
+            } else if (cefView) {
+                BringCEFChildWindowToFront(view.get());
+            }
         }
     }
     
