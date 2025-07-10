@@ -1131,7 +1131,6 @@ public:
         std::wstring wDebugScript(debugScript.begin(), debugScript.end());
         webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
         
-        ::log("[WebView2] JavaScript bridge hostObjects set up successfully");
     }
     
     void loadURL(const char* urlString) override {
@@ -1683,10 +1682,6 @@ public:
                 int width = frame.right - frame.left;
                 int height = frame.bottom - frame.top;
                 
-                char logMsg[256];
-                sprintf_s(logMsg, "CEF resize: Setting bounds (%d,%d,%d,%d) for browser HWND=%p", 
-                         frame.left, frame.top, width, height, browserHwnd);
-                ::log(logMsg);
                 
                 // Move and resize the CEF browser window, bringing it to front
                 SetWindowPos(browserHwnd, HWND_TOP, frame.left, frame.top, width, height,
@@ -3114,9 +3109,9 @@ ELECTROBUN_EXPORT bool initCEF() {
     // Add language settings like macOS
     CefString(&settings.accept_language_list) = "en-US,en";
     
-    // Enable debug logging for more verbose output
-    settings.log_severity = LOGSEVERITY_VERBOSE;
-    CefString(&settings.log_file) = std::string(exePath) + "\\cef_debug.log";
+    // Set minimal logging
+    settings.log_severity = LOGSEVERITY_ERROR;
+    CefString(&settings.log_file) = "";
     
     // Debug logging to see actual paths
     log(("CEF executable path: " + std::string(exePath)).c_str());
@@ -3258,11 +3253,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     return S_OK;
                 }
                 
-                ::log("[WebView2] About to create controller...");
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
-                            ::log("[WebView2] Controller creation callback executed");
                             if (FAILED(result)) {
                                 char errorMsg[256];
                                 sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
@@ -3271,7 +3264,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 return result;
                             }
                             
-                            ::log("[WebView2] Controller created successfully - minimal setup");
                             
                             // Controller setup with composition fallback
                             ComPtr<ICoreWebView2Controller> ctrl(controller);
@@ -3288,7 +3280,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 view->setCompositionController(compCtrl);
                                 ::log("[WebView2] Composition controller interface available");
                             } else {
-                                ::log("[WebView2] Composition controller not available - using fallback mask approach");
                             }
                             
                             // Set up JavaScript bridge objects
@@ -3296,17 +3287,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             // Set bounds and visibility
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-                            char boundsLog[256];
-                            sprintf_s(boundsLog, "[WebView2] Setting bounds: (%d,%d,%d,%d)", bounds.left, bounds.top, bounds.right, bounds.bottom);
-                            ::log(boundsLog);
                             ctrl->put_Bounds(bounds);
                             
                             // Make sure the controller is visible
                             ctrl->put_IsVisible(TRUE);
-                            ::log("[WebView2] Controller visibility set to TRUE");
                             
                             // Add views:// scheme support - TEST ADDITION
-                            ::log("[WebView2] Adding views:// scheme support");
                             webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
                             
                             // Set up WebResourceRequested event handler for views:// scheme
@@ -3375,51 +3361,40 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                     }).Get(),
                                 nullptr);
                             
-                            ::log("[WebView2] Added views:// scheme support");
                             
                             // Add preload scripts - TEST ADDITION
-                            ::log("[WebView2] Adding preload scripts");
                             std::string combinedScript;
                             if (!view->electrobunScript.empty()) {
                                 combinedScript += view->electrobunScript;
-                                ::log("[WebView2] Added electrobun preload script");
                             }
                             if (!view->customScript.empty()) {
                                 if (!combinedScript.empty()) {
                                     combinedScript += "\n";
                                 }
                                 combinedScript += view->customScript;
-                                ::log("[WebView2] Added custom preload script");
                             }
                             
                             if (!combinedScript.empty()) {
-                                ::log("[WebView2] Converting script to wide string");
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
                                 
                                 std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); console.log('[WebView2] About to execute electrobun preload'); " + combinedScript + "; console.log('[WebView2] Electrobun preload script completed');";
                                 std::wstring wDebugScript(debugScript.begin(), debugScript.end());
                                 
-                                ::log("[WebView2] Adding script to execute on document created");
                                 webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
                                 
-                                ::log("[WebView2] Adding navigation event handler");
                                 webview->add_NavigationStarting(
                                     Callback<ICoreWebView2NavigationStartingEventHandler>(
                                         [debugScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
-                                            ::log("[WebView2] Navigation starting, injecting preload script early");
                                             std::wstring wDebugScript(debugScript.begin(), debugScript.end());
                                             sender->ExecuteScript(wDebugScript.c_str(), nullptr);
                                             return S_OK;
                                         }).Get(),
                                     nullptr);
-                                ::log("[WebView2] Added navigation event handler for early script injection");
                             } else {
-                                ::log("[WebView2] No preload scripts to add");
                             }
                             
                             // Navigate to URL
                             if (!view->pendingUrl.empty()) {
-                                ::log("[WebView2] Navigating to pending URL");
                                 view->loadURL(view->pendingUrl.c_str());
                             }
                             
@@ -3429,7 +3404,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Store WebView2View in global map for JavaScript execution
                             HWND containerHwnd = container->GetHwnd();
                             g_webview2Views[containerHwnd] = view.get();
-                            ::log("[WebView2] Stored WebView2View for container hwnd");
                             
                             
                             return S_OK;
