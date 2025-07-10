@@ -2182,8 +2182,6 @@ public:
             }
             
             char successMsg[256];
-            sprintf_s(successMsg, "Container window setup completed: HWND=%p", m_hwnd);
-            ::log(successMsg);
         }
     }
 
@@ -3113,20 +3111,12 @@ ELECTROBUN_EXPORT bool initCEF() {
     settings.log_severity = LOGSEVERITY_ERROR;
     CefString(&settings.log_file) = "";
     
-    // Debug logging to see actual paths
-    log(("CEF executable path: " + std::string(exePath)).c_str());
-    log(("CEF resource dir: " + cefResourceDir).c_str());
-    log(("CEF locales dir: " + cefResourceDir + "\\Resources\\locales").c_str());
-    log(("CEF cache dir: " + userDataDir).c_str());
     
     bool success = CefInitialize(main_args, settings, g_cef_app.get(), nullptr);
     if (success) {
         g_cef_initialized = true;
-        ::log("CEF initialized successfully");
-        
         // Register the views:// scheme handler factory
         CefRegisterSchemeHandlerFactory("views", "", new ElectrobunSchemeHandlerFactory());
-        ::log("Registered views:// scheme handler factory");
         
         // We'll start the message pump timer when we create the first browser
     } else {
@@ -3168,9 +3158,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     std::string urlString = url ? std::string(url) : "";
     std::string electrobunScript = electrobunPreloadScript ? std::string(electrobunPreloadScript) : "";
     std::string customScript = customPreloadScript ? std::string(customPreloadScript) : "";
-    std::cout << "[WebView2] createWebView2View called with URL: " << (url ? url : "NULL") << std::endl;
-    std::cout << "[WebView2] Electrobun script length: " << electrobunScript.length() << std::endl;
-    std::cout << "[WebView2] Custom script length: " << customScript.length() << std::endl;
     
     auto view = std::make_shared<WebView2View>(webviewId, bunBridgeHandler, internalBridgeHandler);
     view->hwnd = hwnd;
@@ -3191,7 +3178,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             ::log(errorMsg);
             return;
         }
-        ::log("[WebView2] COM initialized successfully");
         
         // Get or create container
         auto container = GetOrCreateContainer(hwnd);
@@ -3231,7 +3217,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [view, container, x, y, width, height](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
-                ::log("[WebView2] Environment creation callback executed");
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -3239,13 +3224,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     view->setCreationFailed(true);
                     return result;
                 }
-                ::log("[WebView2] Environment created successfully - starting controller creation");
                 
                 // Create WebView2 controller - MINIMAL VERSION
                 HWND targetHwnd = container->GetHwnd();
-                char controllerDebug[256];
-                sprintf_s(controllerDebug, "[WebView2] Target HWND for controller: %p", targetHwnd);
-                ::log(controllerDebug);
                 
                 if (!IsWindow(targetHwnd)) {
                     ::log("ERROR: Target window is no longer valid");
@@ -3426,9 +3407,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 // Create WebView2 controller
                 ::log("[WebView2] Creating WebView2 controller...");
                 HWND targetHwnd = container->GetHwnd();
-                char controllerDebug[256];
-                sprintf_s(controllerDebug, "[WebView2] Target HWND for controller: %p", targetHwnd);
-                ::log(controllerDebug);
                 
                 // Verify window is still valid before creating controller
                 if (!IsWindow(targetHwnd)) {
