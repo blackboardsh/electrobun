@@ -1131,32 +1131,59 @@ public:
     void setupJavaScriptBridges() {
         if (!webview) return;
         
-        // Create COM objects for the bridge handlers
-        bunBridgeHandler = Microsoft::WRL::Make<BridgeHandler>("bunBridge", bunBridgeCallbackHandler, webviewId);
-        internalBridgeHandler = Microsoft::WRL::Make<BridgeHandler>("internalBridge", internalBridgeCallbackHandler, webviewId);
+        // Set up WebMessageReceived event handler
+        webview->add_WebMessageReceived(
+            Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                [this](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                    LPWSTR messageRaw;
+                    args->get_WebMessageAsString(&messageRaw);
+                    
+                    // Convert to std::string
+                    std::string message;
+                    int size = WideCharToMultiByte(CP_UTF8, 0, messageRaw, -1, nullptr, 0, nullptr, nullptr);
+                    if (size > 0) {
+                        message.resize(size - 1);
+                        WideCharToMultiByte(CP_UTF8, 0, messageRaw, -1, &message[0], size, nullptr, nullptr);
+                    }
+                    
+                    ::log("[WebView2] Received web message");
+                    
+                    // Parse message to determine if it's for bun bridge or internal bridge
+                    if (message.find("\"type\":\"bunBridge\"") != std::string::npos) {
+                        if (bunBridgeCallbackHandler) {
+                            bunBridgeCallbackHandler(webviewId, message.c_str());
+                        }
+                    } else if (message.find("\"type\":\"internalBridge\"") != std::string::npos) {
+                        if (internalBridgeCallbackHandler) {
+                            internalBridgeCallbackHandler(webviewId, message.c_str());
+                        }
+                    }
+                    
+                    CoTaskMemFree(messageRaw);
+                    return S_OK;
+                }).Get(),
+            nullptr);
         
-        // Convert COM objects to VARIANT for AddHostObjectToScript
-        VARIANT bunBridgeVariant = {};
-        VariantInit(&bunBridgeVariant);
-        bunBridgeVariant.vt = VT_DISPATCH;
-        bunBridgeVariant.pdispVal = bunBridgeHandler.Get();
-        bunBridgeHandler->AddRef(); // AddRef for the VARIANT
+        // Inject bridge objects as simple JavaScript objects
+        std::string bridgeScript = R"(
+            window.__electrobunBunBridge = {
+                postMessage: function(msg) {
+                    var wrapped = JSON.stringify({type: 'bunBridge', data: msg});
+                    window.chrome.webview.postMessage(wrapped);
+                }
+            };
+            window.__electrobunInternalBridge = {
+                postMessage: function(msg) {
+                    var wrapped = JSON.stringify({type: 'internalBridge', data: msg});
+                    window.chrome.webview.postMessage(wrapped);
+                }
+            };
+        )";
         
-        VARIANT internalBridgeVariant = {};
-        VariantInit(&internalBridgeVariant);
-        internalBridgeVariant.vt = VT_DISPATCH;
-        internalBridgeVariant.pdispVal = internalBridgeHandler.Get();
-        internalBridgeHandler->AddRef(); // AddRef for the VARIANT
+        std::wstring wBridgeScript(bridgeScript.begin(), bridgeScript.end());
+        webview->AddScriptToExecuteOnDocumentCreated(wBridgeScript.c_str(), nullptr);
         
-        // Add the bridge objects to the JavaScript context
-        webview->AddHostObjectToScript(L"__electrobunBunBridge", &bunBridgeVariant);
-        webview->AddHostObjectToScript(L"__electrobunInternalBridge", &internalBridgeVariant);
-        
-        // Clean up VARIANTs
-        VariantClear(&bunBridgeVariant);
-        VariantClear(&internalBridgeVariant);
-        
-        ::log("[WebView2] JavaScript bridge objects added successfully");
+        ::log("[WebView2] JavaScript bridge objects injected successfully");
     }
     
     void loadURL(const char* urlString) override {
