@@ -3054,31 +3054,20 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                     nullptr);
                                 ::log("[WebView2] Added navigation event handler for early script injection");
                                 
-                                // Add console message handler to capture console.log output
-                                webview->add_ConsoleMessage(
-                                    Callback<ICoreWebView2ConsoleMessageEventHandler>(
-                                        [view](ICoreWebView2* sender, ICoreWebView2ConsoleMessageEventArgs* args) -> HRESULT {
-                                            LPWSTR message;
-                                            args->get_Message(&message);
-                                            std::wstring wMessage(message);
-                                            std::string sMessage(wMessage.begin(), wMessage.end());
+                                // Add DOM content loaded handler to verify page loads
+                                webview->add_DOMContentLoaded(
+                                    Callback<ICoreWebView2DOMContentLoadedEventHandler>(
+                                        [view](ICoreWebView2* sender, ICoreWebView2DOMContentLoadedEventArgs* args) -> HRESULT {
+                                            ::log("[WebView2] DOM content loaded - page ready");
                                             
-                                            LPWSTR source;
-                                            args->get_Source(&source);
-                                            std::wstring wSource(source);
-                                            std::string sSource(wSource.begin(), wSource.end());
+                                            // Execute a simple script to verify JavaScript execution works
+                                            std::wstring testScript = L"console.log('[WebView2] DOM loaded, testing JavaScript execution'); window.__webview2_test = true;";
+                                            sender->ExecuteScript(testScript.c_str(), nullptr);
                                             
-                                            INT32 line;
-                                            args->get_Line(&line);
-                                            
-                                            std::cout << "[WebView2:CONSOLE(" << line << ")] \"" << sMessage << "\", source: " << sSource << " (" << line << ")" << std::endl;
-                                            
-                                            CoTaskMemFree(message);
-                                            CoTaskMemFree(source);
                                             return S_OK;
                                         }).Get(),
                                     nullptr);
-                                ::log("[WebView2] Added console message handler");
+                                ::log("[WebView2] Added DOM content loaded handler");
                             } else {
                                 ::log("[WebView2] No preload scripts to add");
                             }
@@ -3222,31 +3211,20 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                     nullptr);
                                 std::cout << "[WebView2] Added navigation event handler for early script injection" << std::endl;
                                 
-                                // Add console message handler to capture console.log output
-                                webview->add_ConsoleMessage(
-                                    Callback<ICoreWebView2ConsoleMessageEventHandler>(
-                                        [view](ICoreWebView2* sender, ICoreWebView2ConsoleMessageEventArgs* args) -> HRESULT {
-                                            LPWSTR message;
-                                            args->get_Message(&message);
-                                            std::wstring wMessage(message);
-                                            std::string sMessage(wMessage.begin(), wMessage.end());
+                                // Add DOM content loaded handler to verify page loads  
+                                webview->add_DOMContentLoaded(
+                                    Callback<ICoreWebView2DOMContentLoadedEventHandler>(
+                                        [view](ICoreWebView2* sender, ICoreWebView2DOMContentLoadedEventArgs* args) -> HRESULT {
+                                            std::cout << "[WebView2] DOM content loaded - page ready" << std::endl;
                                             
-                                            LPWSTR source;
-                                            args->get_Source(&source);
-                                            std::wstring wSource(source);
-                                            std::string sSource(wSource.begin(), wSource.end());
+                                            // Execute a simple script to verify JavaScript execution works
+                                            std::wstring testScript = L"console.log('[WebView2] DOM loaded, testing JavaScript execution'); window.__webview2_test = true;";
+                                            sender->ExecuteScript(testScript.c_str(), nullptr);
                                             
-                                            INT32 line;
-                                            args->get_Line(&line);
-                                            
-                                            std::cout << "[WebView2:CONSOLE(" << line << ")] \"" << sMessage << "\", source: " << sSource << " (" << line << ")" << std::endl;
-                                            
-                                            CoTaskMemFree(message);
-                                            CoTaskMemFree(source);
                                             return S_OK;
                                         }).Get(),
                                     nullptr);
-                                std::cout << "[WebView2] Added console message handler" << std::endl;
+                                std::cout << "[WebView2] Added DOM content loaded handler" << std::endl;
                             } else {
                                 std::cout << "[WebView2] No preload scripts to add" << std::endl;
                             }
