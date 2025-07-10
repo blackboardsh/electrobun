@@ -1282,12 +1282,22 @@ public:
             });
             
             visualBounds = frame;
+            bool maskChanged = false;
             if (masksJson) {
-                maskJSON = masksJson;
+                std::string newMaskJSON = masksJson;
+                if (newMaskJSON != maskJSON) {
+                    maskJSON = newMaskJSON;
+                    maskChanged = true;
+                }
+            } else if (!maskJSON.empty()) {
+                maskJSON = "";
+                maskChanged = true;
             }
             
-            // Apply visual mask after resize (critical fix)
-            applyVisualMask();
+            // Only apply visual mask if mask data changed
+            if (maskChanged) {
+                applyVisualMask();
+            }
         } else {
             ::log("[WebView2] ERROR: Controller is NULL, cannot resize");
         }
@@ -1398,7 +1408,7 @@ private:
                 css += "top: " + std::to_string(y) + "px; ";
                 css += "width: " + std::to_string(width) + "px; ";
                 css += "height: " + std::to_string(height) + "px; ";
-                css += "background: rgba(0,0,0,0.01); ";
+                css += "background: rgba(255,0,0,0.3); ";
                 css += "pointer-events: auto; ";
                 css += "z-index: 999999; ";
                 css += "} ";
@@ -1428,11 +1438,21 @@ private:
             "})();";
         
         std::wstring wScript(script.begin(), script.end());
-        webview->ExecuteScript(wScript.c_str(), nullptr);
         
-        char logMsg2[256];
-        sprintf_s(logMsg2, "injectMaskCSS: executed script for webview=%u with %d masks", webviewId, maskIndex);
-        ::log(logMsg2);
+        // Execute script with callback to verify execution
+        webview->ExecuteScript(wScript.c_str(), Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+            [this, maskIndex](HRESULT result, LPCWSTR resultObjectAsJson) -> HRESULT {
+                if (SUCCEEDED(result)) {
+                    char logMsg[256];
+                    sprintf_s(logMsg, "injectMaskCSS: successfully injected %d masks for webview=%u", maskIndex, webviewId);
+                    ::log(logMsg);
+                } else {
+                    char logMsg[256];
+                    sprintf_s(logMsg, "injectMaskCSS: FAILED to inject masks for webview=%u, HRESULT: 0x%08X", webviewId, result);
+                    ::log(logMsg);
+                }
+                return S_OK;
+            }).Get());
     }
 };
 
