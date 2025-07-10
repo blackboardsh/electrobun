@@ -3053,21 +3053,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         }).Get(),
                                     nullptr);
                                 ::log("[WebView2] Added navigation event handler for early script injection");
-                                
-                                // Add DOM content loaded handler to verify page loads
-                                webview->add_DOMContentLoaded(
-                                    Callback<ICoreWebView2DOMContentLoadedEventHandler>(
-                                        [view](ICoreWebView2* sender, ICoreWebView2DOMContentLoadedEventArgs* args) -> HRESULT {
-                                            ::log("[WebView2] DOM content loaded - page ready");
-                                            
-                                            // Execute a simple script to verify JavaScript execution works
-                                            std::wstring testScript = L"console.log('[WebView2] DOM loaded, testing JavaScript execution'); window.__webview2_test = true;";
-                                            sender->ExecuteScript(testScript.c_str(), nullptr);
-                                            
-                                            return S_OK;
-                                        }).Get(),
-                                    nullptr);
-                                ::log("[WebView2] Added DOM content loaded handler");
                             } else {
                                 ::log("[WebView2] No preload scripts to add");
                             }
@@ -3210,21 +3195,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         }).Get(),
                                     nullptr);
                                 std::cout << "[WebView2] Added navigation event handler for early script injection" << std::endl;
-                                
-                                // Add DOM content loaded handler to verify page loads  
-                                webview->add_DOMContentLoaded(
-                                    Callback<ICoreWebView2DOMContentLoadedEventHandler>(
-                                        [view](ICoreWebView2* sender, ICoreWebView2DOMContentLoadedEventArgs* args) -> HRESULT {
-                                            std::cout << "[WebView2] DOM content loaded - page ready" << std::endl;
-                                            
-                                            // Execute a simple script to verify JavaScript execution works
-                                            std::wstring testScript = L"console.log('[WebView2] DOM loaded, testing JavaScript execution'); window.__webview2_test = true;";
-                                            sender->ExecuteScript(testScript.c_str(), nullptr);
-                                            
-                                            return S_OK;
-                                        }).Get(),
-                                    nullptr);
-                                std::cout << "[WebView2] Added DOM content loaded handler" << std::endl;
                             } else {
                                 std::cout << "[WebView2] No preload scripts to add" << std::endl;
                             }
@@ -3720,8 +3690,12 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
         return;
     }
     
-    char logMsg[256];
-    sprintf_s(logMsg, "Executing JavaScript in webview %u: %.100s", abstractView->webviewId, script);
+    char logMsg[512];
+    sprintf_s(logMsg, "Executing JavaScript in webview %u (type: %s): %.100s", 
+              abstractView->webviewId, 
+              (dynamic_cast<WebView2View*>(abstractView) ? "WebView2" : 
+               dynamic_cast<CEFView*>(abstractView) ? "CEF" : "Unknown"),
+              script);
     ::log(logMsg);
     
     abstractView->evaluateJavaScriptWithNoCompletion(script);
