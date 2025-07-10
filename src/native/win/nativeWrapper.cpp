@@ -222,65 +222,8 @@ void SetWebViewOnWebView2View(HWND containerWindow, void* webview);
 class ElectrobunLifeSpanHandler : public CefLifeSpanHandler {
 public:
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
-        std::cout << "[CEF] *** OnAfterCreated callback triggered! ***" << std::endl;
-        std::cout << "[CEF] OnAfterCreated: Browser ID " << browser->GetIdentifier() << " created successfully" << std::endl;
-        
-        // Track browser creation
-        g_cefBrowsers[browser->GetIdentifier()] = browser;
-        g_browser_count++;
-        std::cout << "[CEF] Total browsers: " << g_browser_count << std::endl;
-        
-        // Get the window handle and look up pending URL
-        HWND browserWindow = browser->GetHost()->GetWindowHandle();
-        HWND parentWindow = GetParent(browserWindow);
-        
-        std::cout << "[CEF] Browser window: " << browserWindow << ", parent: " << parentWindow << std::endl;
-        
-        // Set browser on the CEF client for script execution
-        std::cout << "[CEF] Looking for client with parentWindow: " << parentWindow << std::endl;
-        auto clientIt = g_cefClients.find(parentWindow);
-        if (clientIt != g_cefClients.end()) {
-            auto client = clientIt->second;
-            if (client) {
-                // Store browser-client pair for later processing
-                // We'll call SetBrowser after the full class definition
-                SetBrowserOnClient(client, browser);
-                std::cout << "[CEF] Connected browser to client for script execution" << std::endl;
-            } else {
-                std::cout << "[CEF] Found client entry but client is null" << std::endl;
-            }
-        } else {
-            std::cout << "[CEF] No client found for parentWindow: " << parentWindow << std::endl;
-            std::cout << "[CEF] Available client windows: ";
-            for (auto& pair : g_cefClients) {
-                std::cout << pair.first << " ";
-            }
-            std::cout << std::endl;
-        }
-        
-        // Set browser on the CEFView for direct JavaScript execution
-        // Note: CEFView casting will be handled in a helper function defined after class declaration
-        SetBrowserOnCEFView(parentWindow, browser);
-        
-        // Note: CEF browser z-ordering will be handled by a scheduled call
-        // We'll add the z-ordering logic in the SetBrowserOnCEFView function instead
-        std::cout << "[CEF] Browser ID " << browser->GetIdentifier() << " created, z-ordering will be handled separately" << std::endl;
-        
-        // Look for pending URL using parent window
-        auto it = g_pendingUrls.find(parentWindow);
-        if (it != g_pendingUrls.end()) {
-            std::string target_url = it->second;
-            std::cout << "[CEF] Found pending URL: " << target_url << std::endl;
-            
-            // Navigate to the target URL
-            browser->GetMainFrame()->LoadURL(CefString(target_url));
-            std::cout << "[CEF] Navigation initiated to: " << target_url << std::endl;
-            
-            // Clean up
-            g_pendingUrls.erase(it);
-        } else {
-            std::cout << "[CEF] No pending URL found for parent window: " << parentWindow << std::endl;
-        }
+        std::cout << "[CEF] OnAfterCreated: Browser ID " << browser->GetIdentifier() << " (sync creation complete)" << std::endl;
+        // Note: Browser setup is now handled synchronously during CreateBrowserSync
     }
 
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
@@ -3737,19 +3680,35 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         view->setClient(client);
         
-        // Create browser
-        bool success = CefBrowserHost::CreateBrowser(
+        // Create browser synchronously (like Mac implementation)
+        CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
             windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, nullptr);
         
-        if (success) {
+        if (browser) {
+            // Set browser on view immediately since we have it synchronously
+            view->setBrowser(browser);
+            
+            // Track browser in global map
+            g_cefBrowsers[browser->GetIdentifier()] = browser;
+            g_browser_count++;
+            
             container->AddAbstractView(view);
-            // Add client to global map for OnAfterCreated callback using container window handle
+            // Add client to global map
             HWND containerHwnd = container->GetHwnd();
             g_cefClients[containerHwnd] = client;
             std::cout << "[CEF] Stored client for container hwnd: " << containerHwnd << std::endl;
-            // Add CEFView to global map for OnAfterCreated callback using container window handle  
+            // Add CEFView to global map
             g_cefViews[containerHwnd] = view.get();
             std::cout << "[CEF] Stored CEFView for container hwnd: " << containerHwnd << std::endl;
+            
+            // Set browser on client for script execution
+            client->SetBrowser(browser);
+            
+            // Handle z-ordering immediately since browser is ready
+            RECT currentBounds = view->visualBounds;
+            view->resize(currentBounds, nullptr);
+            
+            std::cout << "[CEF] Browser ID " << browser->GetIdentifier() << " created synchronously" << std::endl;
         }
     });
     
