@@ -3481,9 +3481,9 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         // Create CEF browser info
         CefWindowInfo windowInfo;
-        RECT cefBounds = {(int)x, (int)y, (int)(x + width), (int)(y + height)};
+        CefRect cefBounds((int)x, (int)y, (int)width, (int)height);
         char cefBoundsLog[256];
-        sprintf_s(cefBoundsLog, "[CEF] Setting child window bounds: (%d,%d,%d,%d)", cefBounds.left, cefBounds.top, cefBounds.right, cefBounds.bottom);
+        sprintf_s(cefBoundsLog, "[CEF] Setting child window bounds: (%d,%d,%d,%d)", cefBounds.x, cefBounds.y, cefBounds.width, cefBounds.height);
         ::log(cefBoundsLog);
         windowInfo.SetAsChild(container->GetHwnd(), cefBounds);
         
