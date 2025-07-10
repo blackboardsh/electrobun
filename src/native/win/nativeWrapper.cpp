@@ -194,7 +194,15 @@ public:
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
         std::cout << "[CEF] LoadEnd: Navigation completed with status " << httpStatusCode << std::endl;
         
-        // Script injection now handled by response filter during HTML parsing
+        // Also execute preload scripts at load end to ensure they're available
+        if (frame->IsMain()) {
+            int browserId = browser->GetIdentifier();
+            auto scriptIt = g_preloadScripts.find(browserId);
+            if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
+                frame->ExecuteJavaScript(scriptIt->second, "", 0);
+                std::cout << "[CEF] Re-executed preload scripts at load end for browser " << browserId << std::endl;
+            }
+        }
     }
     
     void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override {
@@ -495,7 +503,9 @@ public:
 
     std::string GetCombinedScript() const {
         // Inject webviewId into global scope before other scripts
-        std::string combined_script = "window.webviewId = " + std::to_string(webview_id_) + ";\n";
+        std::string combined_script = "console.log('CEF: Injecting webviewId = " + std::to_string(webview_id_) + "');\n";
+        combined_script += "window.webviewId = " + std::to_string(webview_id_) + ";\n";
+        combined_script += "console.log('CEF: webviewId set to', window.webviewId);\n";
         combined_script += electrobun_script_;
         if (!custom_script_.empty()) {
             combined_script += "\n" + custom_script_;
