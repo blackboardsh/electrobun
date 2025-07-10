@@ -1425,34 +1425,39 @@ private:
         // Build JavaScript to inject the CSS and create mask elements
         std::string script = 
             "(function() { "
-            "  var oldStyle = document.getElementById('electrobun-masks'); "
-            "  if (oldStyle) oldStyle.remove(); "
-            "  var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
-            "  oldMasks.forEach(m => m.remove()); "
-            "  document.head.insertAdjacentHTML('beforeend', '" + css + "'); "
-            "  for (var i = 0; i < " + std::to_string(maskIndex) + "; i++) { "
-            "    var mask = document.createElement('div'); "
-            "    mask.className = 'electrobun-mask-' + i; "
-            "    document.body.appendChild(mask); "
+            "  try { "
+            "    console.log('Electrobun: Starting mask injection'); "
+            "    var oldStyle = document.getElementById('electrobun-masks'); "
+            "    if (oldStyle) oldStyle.remove(); "
+            "    var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
+            "    oldMasks.forEach(function(m) { m.remove(); }); "
+            "    document.head.insertAdjacentHTML('beforeend', '" + css + "'); "
+            "    for (var i = 0; i < " + std::to_string(maskIndex) + "; i++) { "
+            "      var mask = document.createElement('div'); "
+            "      mask.className = 'electrobun-mask-' + i; "
+            "      document.body.appendChild(mask); "
+            "    } "
+            "    console.log('Electrobun: Successfully injected ' + " + std::to_string(maskIndex) + " + ' masks'); "
+            "    return 'success';"
+            "  } catch(e) { "
+            "    console.error('Electrobun mask injection failed:', e); "
+            "    return 'error: ' + e.message; "
             "  } "
             "})();";
         
         std::wstring wScript(script.begin(), script.end());
         
-        // Execute script with callback to verify execution
-        webview->ExecuteScript(wScript.c_str(), Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-            [this, maskIndex](HRESULT result, LPCWSTR resultObjectAsJson) -> HRESULT {
-                if (SUCCEEDED(result)) {
-                    char logMsg[256];
-                    sprintf_s(logMsg, "injectMaskCSS: successfully injected %d masks for webview=%u", maskIndex, webviewId);
-                    ::log(logMsg);
-                } else {
-                    char logMsg[256];
-                    sprintf_s(logMsg, "injectMaskCSS: FAILED to inject masks for webview=%u, HRESULT: 0x%08X", webviewId, result);
-                    ::log(logMsg);
-                }
-                return S_OK;
-            }).Get());
+        // Execute script and log result
+        HRESULT executeResult = webview->ExecuteScript(wScript.c_str(), nullptr);
+        if (SUCCEEDED(executeResult)) {
+            char logMsg[256];
+            sprintf_s(logMsg, "injectMaskCSS: script execution started for webview=%u with %d masks", webviewId, maskIndex);
+            ::log(logMsg);
+        } else {
+            char logMsg[256];
+            sprintf_s(logMsg, "injectMaskCSS: FAILED to start script execution for webview=%u, HRESULT: 0x%08X", webviewId, executeResult);
+            ::log(logMsg);
+        }
     }
 };
 
