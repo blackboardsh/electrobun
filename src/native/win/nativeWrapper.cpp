@@ -1127,104 +1127,56 @@ public:
         return isCreationComplete && !creationFailed;
     }
     
-    // Set up the JavaScript bridge objects in the WebView2 context
+    // Set up the JavaScript bridge objects in the WebView2 context using hostObjects
     void setupJavaScriptBridges() {
         if (!webview) return;
         
-        // Set up WebMessageReceived event handler
-        webview->add_WebMessageReceived(
-            Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                [this](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
-                    LPWSTR messageRaw;
-                    args->TryGetWebMessageAsString(&messageRaw);
-                    
-                    // Convert to std::string
-                    std::string message;
-                    int size = WideCharToMultiByte(CP_UTF8, 0, messageRaw, -1, nullptr, 0, nullptr, nullptr);
-                    if (size > 0) {
-                        message.resize(size - 1);
-                        WideCharToMultiByte(CP_UTF8, 0, messageRaw, -1, &message[0], size, nullptr, nullptr);
-                    }
-                    
-                    ::log("[WebView2] Received web message");
-                    
-                    // Debug: log the full message
-                    char logBuffer[512];
-                    sprintf_s(logBuffer, "[WebView2] Received message: %.400s", message.c_str());
-                    ::log(logBuffer);
-                    
-                    // Parse message to determine if it's for bun bridge or internal bridge
-                    if (message.find("\"type\":\"bunBridge\"") != std::string::npos) {
-                        ::log("[WebView2] Routing to bunBridge handler");
-                        if (bunBridgeCallbackHandler) {
-                            bunBridgeCallbackHandler(webviewId, message.c_str());
-                        } else {
-                            ::log("[WebView2] ERROR: bunBridgeCallbackHandler is null");
-                        }
-                    } else if (message.find("\"type\":\"internalBridge\"") != std::string::npos) {
-                        ::log("[WebView2] Routing to internalBridge handler");
-                        if (internalBridgeCallbackHandler) {
-                            internalBridgeCallbackHandler(webviewId, message.c_str());
-                        } else {
-                            ::log("[WebView2] ERROR: internalBridgeCallbackHandler is null");
-                        }
-                    } else {
-                        ::log("[WebView2] Message type not recognized");
-                    }
-                    
-                    CoTaskMemFree(messageRaw);
-                    return S_OK;
-                }).Get(),
-            nullptr);
+        // Create COM objects for the bridge handlers
+        bunBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("bunBridge", bunBridgeCallbackHandler, webviewId));
+        internalBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("internalBridge", internalBridgeCallbackHandler, webviewId));
         
-        // Inject bridge objects as simple JavaScript objects
-        std::string bridgeScript = R"(
-            console.log('[WebView2] Injecting bridge objects...');
+        // Convert COM objects to VARIANT for AddHostObjectToScript
+        VARIANT bunBridgeVariant = {};
+        VariantInit(&bunBridgeVariant);
+        bunBridgeVariant.vt = VT_DISPATCH;
+        bunBridgeVariant.pdispVal = static_cast<IDispatch*>(bunBridgeHandler.Get());
+        
+        VARIANT internalBridgeVariant = {};
+        VariantInit(&internalBridgeVariant);
+        internalBridgeVariant.vt = VT_DISPATCH;
+        internalBridgeVariant.pdispVal = static_cast<IDispatch*>(internalBridgeHandler.Get());
+        
+        // Add the bridge objects to hostObjects
+        webview->AddHostObjectToScript(L"bunBridge", &bunBridgeVariant);
+        webview->AddHostObjectToScript(L"internalBridge", &internalBridgeVariant);
+        
+        // Clean up VARIANTs
+        VariantClear(&bunBridgeVariant);
+        VariantClear(&internalBridgeVariant);
+        
+        // Inject debug script to check hostObjects availability
+        std::string debugScript = R"(
+            console.log('[WebView2] Checking hostObjects...');
             console.log('[WebView2] window.chrome available:', !!window.chrome);
             console.log('[WebView2] window.chrome.webview available:', !!(window.chrome && window.chrome.webview));
-            console.log('[WebView2] window.chrome.webview.postMessage available:', !!(window.chrome && window.chrome.webview && window.chrome.webview.postMessage));
+            console.log('[WebView2] window.chrome.webview.hostObjects available:', !!(window.chrome && window.chrome.webview && window.chrome.webview.hostObjects));
+            console.log('[WebView2] bunBridge available:', !!(window.chrome && window.chrome.webview && window.chrome.webview.hostObjects && window.chrome.webview.hostObjects.bunBridge));
+            console.log('[WebView2] internalBridge available:', !!(window.chrome && window.chrome.webview && window.chrome.webview.hostObjects && window.chrome.webview.hostObjects.internalBridge));
             
-            window.__electrobunBunBridge = {
-                postMessage: function(msg) {
-                    console.log('[WebView2] BunBridge postMessage called with:', msg);
-                    try {
-                        if (!window.chrome || !window.chrome.webview || !window.chrome.webview.postMessage) {
-                            throw new Error('chrome.webview.postMessage is not available');
-                        }
-                        var wrapped = JSON.stringify({type: 'bunBridge', data: msg});
-                        console.log('[WebView2] Sending wrapped message:', wrapped);
-                        window.chrome.webview.postMessage(wrapped);
-                    } catch (error) {
-                        console.error('[WebView2] BunBridge postMessage error:', error);
-                        throw error;
-                    }
-                }
-            };
-            window.__electrobunInternalBridge = {
-                postMessage: function(msg) {
-                    console.log('[WebView2] InternalBridge postMessage called with:', msg);
-                    try {
-                        if (!window.chrome || !window.chrome.webview || !window.chrome.webview.postMessage) {
-                            throw new Error('chrome.webview.postMessage is not available');
-                        }
-                        var wrapped = JSON.stringify({type: 'internalBridge', data: msg});
-                        console.log('[WebView2] Sending wrapped message:', wrapped);
-                        window.chrome.webview.postMessage(wrapped);
-                    } catch (error) {
-                        console.error('[WebView2] InternalBridge postMessage error:', error);
-                        throw error;
-                    }
-                }
-            };
-            console.log('[WebView2] Bridge objects created successfully');
-            console.log('[WebView2] __electrobunBunBridge:', window.__electrobunBunBridge);
-            console.log('[WebView2] __electrobunInternalBridge:', window.__electrobunInternalBridge);
+            // Set up the bridge objects for compatibility with electrobun code
+            if (window.chrome && window.chrome.webview && window.chrome.webview.hostObjects) {
+                window.__electrobunBunBridge = window.chrome.webview.hostObjects.bunBridge;
+                window.__electrobunInternalBridge = window.chrome.webview.hostObjects.internalBridge;
+                console.log('[WebView2] Bridge objects set up successfully');
+            } else {
+                console.error('[WebView2] hostObjects not available');
+            }
         )";
         
-        std::wstring wBridgeScript(bridgeScript.begin(), bridgeScript.end());
-        webview->AddScriptToExecuteOnDocumentCreated(wBridgeScript.c_str(), nullptr);
+        std::wstring wDebugScript(debugScript.begin(), debugScript.end());
+        webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
         
-        ::log("[WebView2] JavaScript bridge objects injected successfully");
+        ::log("[WebView2] JavaScript bridge hostObjects set up successfully");
     }
     
     void loadURL(const char* urlString) override {
