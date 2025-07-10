@@ -1111,9 +1111,18 @@ export const internalRpcHandlers = {
   },
   message: {
     webviewTagResize: (params) => {
-      // console.log('------------------webviewTagResize', params)
-      const webviewPtr = BrowserView.getById(params.id)?.ptr;
-      const {x, y, width, height} = params.frame;      
+      console.log('[Bun] webviewTagResize received:', params);
+      const browserView = BrowserView.getById(params.id);
+      const webviewPtr = browserView?.ptr;
+      console.log('[Bun] webviewTagResize - browserView found:', !!browserView, 'ptr:', webviewPtr);
+      
+      if (!webviewPtr) {
+        console.log('[Bun] ERROR: webviewTagResize - no webview ptr found for id:', params.id);
+        return;
+      }
+      
+      const {x, y, width, height} = params.frame;
+      console.log('[Bun] webviewTagResize calling native.symbols.resizeWebview with:', {x, y, width, height});
       native.symbols.resizeWebview(webviewPtr, x, y, width, height, toCString(params.masks))
     },      
     webviewTagUpdateSrc: (params) => {

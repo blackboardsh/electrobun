@@ -1273,12 +1273,28 @@ public:
     }
     
     void resize(const RECT& frame, const char* masksJson) override {
+        char resizeLog[512];
+        sprintf_s(resizeLog, "[WebView2] resize called - webviewId: %u, bounds: (%d,%d,%d,%d), controller: %s", 
+                  webviewId, frame.left, frame.top, frame.right, frame.bottom,
+                  controller ? "valid" : "NULL");
+        ::log(resizeLog);
+        
         if (controller) {
-            controller->put_Bounds(frame);
+            HRESULT result = controller->put_Bounds(frame);
+            if (FAILED(result)) {
+                char errorLog[256];
+                sprintf_s(errorLog, "[WebView2] put_Bounds failed for webview %u, HRESULT: 0x%08X", webviewId, result);
+                ::log(errorLog);
+            } else {
+                ::log("[WebView2] put_Bounds succeeded");
+            }
+            
             visualBounds = frame;
             if (masksJson) {
                 maskJSON = masksJson;
             }
+        } else {
+            ::log("[WebView2] ERROR: Controller is NULL, cannot resize");
         }
     }
     
@@ -4114,6 +4130,13 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
         ::log("ERROR: Invalid AbstractView in resizeWebview");
         return;
     }
+    
+    char resizeLog[512];
+    sprintf_s(resizeLog, "[FFI] resizeWebview called - webviewId: %u, bounds: (%.2f,%.2f,%.2f,%.2f), type: %s", 
+              abstractView->webviewId, x, y, width, height,
+              (dynamic_cast<WebView2View*>(abstractView) ? "WebView2" : 
+               dynamic_cast<CEFView*>(abstractView) ? "CEF" : "Unknown"));
+    ::log(resizeLog);
     
     RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
     abstractView->resize(bounds, masksJson);
