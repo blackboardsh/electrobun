@@ -652,7 +652,7 @@ void log(const std::string& message) {
 }
 
 // Generic Bridge Handler COM Object - can be used for any bridge type
-class BridgeHandler : public IUnknown {
+class BridgeHandler : public IDispatch {
 private:
     long m_refCount;
     HandlePostMessage m_callback;
@@ -669,8 +669,8 @@ public:
 
     // IUnknown implementation
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
-        if (riid == IID_IUnknown) {
-            *ppvObject = static_cast<IUnknown*>(this);
+        if (riid == IID_IUnknown || riid == IID_IDispatch) {
+            *ppvObject = static_cast<IDispatch*>(this);
             AddRef();
             return S_OK;
         }
@@ -687,6 +687,34 @@ public:
             delete this;
         }
         return refCount;
+    }
+
+    // IDispatch implementation
+    HRESULT STDMETHODCALLTYPE GetTypeInfoCount(UINT* pctinfo) override {
+        *pctinfo = 0;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, ITypeInfo** ppTInfo) override {
+        return E_NOTIMPL;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetIDsOfNames(REFIID riid, LPOLESTR* rgszNames, UINT cNames, LCID lcid, DISPID* rgDispId) override {
+        if (cNames == 1 && wcscmp(rgszNames[0], L"postMessage") == 0) {
+            rgDispId[0] = 1; // DISPID for postMessage method
+            return S_OK;
+        }
+        return DISP_E_UNKNOWNNAME;
+    }
+
+    HRESULT STDMETHODCALLTYPE Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr) override {
+        if (dispIdMember == 1 && (wFlags & DISPATCH_METHOD)) { // postMessage method
+            if (pDispParams->cArgs == 1 && pDispParams->rgvarg[0].vt == VT_BSTR) {
+                return PostMessage(pDispParams->rgvarg[0].bstrVal);
+            }
+            return DISP_E_BADPARAMCOUNT;
+        }
+        return DISP_E_MEMBERNOTFOUND;
     }
 
     // Bridge-specific method for posting messages
@@ -1104,8 +1132,8 @@ public:
         if (!webview) return;
         
         // Create COM objects for the bridge handlers
-        bunBridgeHandler = Microsoft::WRL::Make<BridgeHandler>(webviewId, bunBridgeCallbackHandler);
-        internalBridgeHandler = Microsoft::WRL::Make<BridgeHandler>(webviewId, internalBridgeCallbackHandler);
+        bunBridgeHandler = Microsoft::WRL::Make<BridgeHandler>("bunBridge", bunBridgeCallbackHandler, webviewId);
+        internalBridgeHandler = Microsoft::WRL::Make<BridgeHandler>("internalBridge", internalBridgeCallbackHandler, webviewId);
         
         // Convert COM objects to VARIANT for AddHostObjectToScript
         VARIANT bunBridgeVariant = {};
