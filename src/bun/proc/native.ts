@@ -927,7 +927,6 @@ const bunBridgePostmessageHandler = new JSCallback((id, msg) => {
 
 const internalBridgeHandler = new JSCallback((id, msg) => {    
   try {    
-    console.log('--->>> internal request in bun');
     const batchMessage = new CString(msg); 
 
     const jsonBatch = JSON.parse(batchMessage);
@@ -967,8 +966,6 @@ const internalBridgeHandler = new JSCallback((id, msg) => {
           payload,
         }
         
-        console.log('--->>> internal request in bun: sendingInternalMessageViaExecute', resultObj);
-
         if (!hostWebview) {        
           console.log('--->>> internal request in bun: NO HOST WEBVIEW FOUND');
           return 
