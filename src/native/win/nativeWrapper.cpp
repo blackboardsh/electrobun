@@ -262,6 +262,22 @@ public:
         // Note: CEFView casting will be handled in a helper function defined after class declaration
         SetBrowserOnCEFView(parentWindow, browser);
         
+        // Bring the newly created CEF browser to front (this is the critical fix!)
+        auto viewIt = g_cefViews.find(parentWindow);
+        if (viewIt != g_cefViews.end()) {
+            auto view = static_cast<CEFView*>(viewIt->second);
+            if (view) {
+                // Find the container and bring this view to front
+                auto containerIt = g_containerViews.find(parentWindow);
+                if (containerIt != g_containerViews.end()) {
+                    char logMsg[256];
+                    sprintf_s(logMsg, "[CEF] Bringing browser ID %d (webview ID %u) to front", browser->GetIdentifier(), view->webviewId);
+                    std::cout << logMsg << std::endl;
+                    containerIt->second->BringViewToFront(view->webviewId);
+                }
+            }
+        }
+        
         // Look for pending URL using parent window
         auto it = g_pendingUrls.find(parentWindow);
         if (it != g_pendingUrls.end()) {
