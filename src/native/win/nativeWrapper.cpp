@@ -262,32 +262,9 @@ public:
         // Note: CEFView casting will be handled in a helper function defined after class declaration
         SetBrowserOnCEFView(parentWindow, browser);
         
-        // Schedule bringing the newly created CEF browser to front
-        // This needs to be done after the browser window is fully created
-        std::cout << "[CEF] Scheduling browser ID " << browser->GetIdentifier() << " to be brought to front" << std::endl;
-        
-        // Use MainThreadDispatcher to ensure proper timing and thread safety
-        HWND parentWindowCopy = parentWindow;
-        int browserIdCopy = browser->GetIdentifier();
-        
-        MainThreadDispatcher::dispatch_async([parentWindowCopy, browserIdCopy]() {
-            // Find the CEF view and container (classes are fully defined by the time this executes)
-            auto viewIt = g_cefViews.find(parentWindowCopy);
-            if (viewIt != g_cefViews.end()) {
-                void* viewPtr = viewIt->second;
-                if (viewPtr) {
-                    auto abstractView = static_cast<AbstractView*>(viewPtr);
-                    auto containerIt = g_containerViews.find(parentWindowCopy);
-                    if (containerIt != g_containerViews.end()) {
-                        char logMsg[256];
-                        sprintf_s(logMsg, sizeof(logMsg), "[CEF] Bringing browser ID %d (webview ID %u) to front", 
-                                 browserIdCopy, abstractView->webviewId);
-                        ::log(logMsg);
-                        containerIt->second.get()->BringViewToFront(abstractView->webviewId);
-                    }
-                }
-            }
-        });
+        // Note: CEF browser z-ordering will be handled by a scheduled call
+        // We'll add the z-ordering logic in the SetBrowserOnCEFView function instead
+        std::cout << "[CEF] Browser ID " << browser->GetIdentifier() << " created, z-ordering will be handled separately" << std::endl;
         
         // Look for pending URL using parent window
         auto it = g_pendingUrls.find(parentWindow);
@@ -1835,6 +1812,15 @@ void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser) {
         if (view) {
             view->setBrowser(browser);
             std::cout << "[CEF] Set browser on CEFView for webview ID: " << view->webviewId << std::endl;
+            
+            // Bring the newly created CEF browser to front - this is the z-ordering fix!
+            auto containerIt = g_containerViews.find(parentWindow);
+            if (containerIt != g_containerViews.end()) {
+                std::cout << "[CEF] Bringing browser ID " << browser->GetIdentifier() << " (webview ID " << view->webviewId << ") to front" << std::endl;
+                containerIt->second->BringViewToFront(view->webviewId);
+            } else {
+                std::cout << "[CEF] No container found for parentWindow: " << parentWindow << std::endl;
+            }
         } else {
             std::cout << "[CEF] Found CEFView entry but view is null" << std::endl;
         }
