@@ -186,7 +186,6 @@ public:
             if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
                 // Execute with very high priority and immediate execution
                 frame->ExecuteJavaScript(scriptIt->second, "", 0);
-                std::cout << "[CEF] Executed preload scripts at load start for browser " << browserId << std::endl;
             }
         }
     }
@@ -200,7 +199,6 @@ public:
             auto scriptIt = g_preloadScripts.find(browserId);
             if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
                 frame->ExecuteJavaScript(scriptIt->second, "", 0);
-                std::cout << "[CEF] Re-executed preload scripts at load end for browser " << browserId << std::endl;
             }
         }
     }
@@ -1729,23 +1727,16 @@ public:
     
     // CEF-specific implementation of mask functionality
     void applyVisualMask() override {
-        char logMsg[256];
-        sprintf_s(logMsg, "CEF applyVisualMask: webview=%u, maskJSON.empty()=%d", webviewId, maskJSON.empty());
-        ::log(logMsg);
-        
         if (!browser) {
-            ::log("CEF applyVisualMask: browser is null, returning");
             return;
         }
         
         HWND browserHwnd = browser->GetHost()->GetWindowHandle();
         if (!browserHwnd) {
-            ::log("CEF applyVisualMask: browserHwnd is null, returning");
             return;
         }
         
         if (maskJSON.empty()) {
-            ::log("CEF applyVisualMask: maskJSON empty, removing masks");
             // Remove any existing mask by setting full window region
             RECT windowRect;
             GetClientRect(browserHwnd, &windowRect);
@@ -1760,13 +1751,7 @@ public:
             int width = bounds.right - bounds.left;
             int height = bounds.bottom - bounds.top;
             
-            char boundsMsg[256];
-            sprintf_s(boundsMsg, "CEF applyVisualMask: browser bounds (%d,%d,%d,%d), size=%dx%d", 
-                     bounds.left, bounds.top, bounds.right, bounds.bottom, width, height);
-            ::log(boundsMsg);
-            
             if (width <= 0 || height <= 0) {
-                ::log("CEF applyVisualMask: invalid bounds, skipping mask");
                 return;
             }
             
@@ -1805,18 +1790,10 @@ public:
                         CombineRgn(browserRegion, browserRegion, holeRegion, RGN_DIFF);
                         DeleteObject(holeRegion);
                         maskCount++;
-                        
-                        char maskMsg[256];
-                        sprintf_s(maskMsg, "CEF applyVisualMask: added hole at (%d,%d,%d,%d)", 
-                                 x, y, x + maskWidth, y + maskHeight);
-                        ::log(maskMsg);
                     }
                     
                     pos = hEnd;
                 } catch (const std::exception& e) {
-                    char errorMsg[256];
-                    sprintf_s(errorMsg, "CEF applyVisualMask: JSON parsing error: %s", e.what());
-                    ::log(errorMsg);
                     pos++;
                 }
             }
@@ -1824,40 +1801,28 @@ public:
             if (maskCount > 0) {
                 // Apply the region with holes to the CEF browser window
                 SetWindowRgn(browserHwnd, browserRegion, TRUE);
-                
-                char successMsg[256];
-                sprintf_s(successMsg, "CEF applyVisualMask: created window region with %d mask holes for webview=%u", maskCount, webviewId);
-                ::log(successMsg);
             } else {
                 // No valid masks found, clean up
                 DeleteObject(browserRegion);
-                ::log("CEF applyVisualMask: no valid masks found");
             }
             
         } catch (const std::exception& e) {
-            char errorMsg[256];
-            sprintf_s(errorMsg, "CEF applyVisualMask: exception: %s", e.what());
-            ::log(errorMsg);
+            // Silent error handling
         }
     }
     
     void removeMasks() override {
-        ::log("CEF removeMasks: removing all masks");
-        
         if (!browser) {
-            ::log("CEF removeMasks: browser is null, returning");
             return;
         }
         
         HWND browserHwnd = browser->GetHost()->GetWindowHandle();
         if (!browserHwnd) {
-            ::log("CEF removeMasks: browserHwnd is null, returning");
             return;
         }
         
         // Remove window region to restore full visibility
         SetWindowRgn(browserHwnd, NULL, TRUE);
-        ::log("CEF removeMasks: removed window region");
     }
     
     void toggleMirrorMode(bool enable) override {
