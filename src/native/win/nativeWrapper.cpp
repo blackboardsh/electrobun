@@ -3692,11 +3692,27 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         view->setClient(client);
         
+        // Store preload scripts before browser creation so they're available during LoadStart
+        std::string combinedScript = client->GetCombinedScript();
+        if (!combinedScript.empty()) {
+            // We need to store by browser ID, but we don't have it yet
+            // Let's use a temporary approach - store by client pointer for now
+            static std::map<ElectrobunCefClient*, std::string> g_tempPreloadScripts;
+            g_tempPreloadScripts[client] = combinedScript;
+            std::cout << "[CEF] Pre-stored preload script (length: " << combinedScript.length() << ")" << std::endl;
+        }
+        
         // Create browser synchronously (like Mac implementation)
         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
             windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, nullptr);
         
         if (browser) {
+            // Now store the script with the actual browser ID
+            if (!combinedScript.empty()) {
+                g_preloadScripts[browser->GetIdentifier()] = combinedScript;
+                std::cout << "[CEF] Stored preload scripts for browser " << browser->GetIdentifier() << " (length: " << combinedScript.length() << ")" << std::endl;
+            }
+            
             // Set browser on view immediately since we have it synchronously
             view->setBrowser(browser);
             
