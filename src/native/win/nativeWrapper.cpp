@@ -1455,13 +1455,30 @@ private:
         try {
             // Get the WebView2 window bounds
             RECT bounds;
-            controller->get_Bounds(&bounds);
+            HRESULT boundsResult = controller->get_Bounds(&bounds);
             int width = bounds.right - bounds.left;
             int height = bounds.bottom - bounds.top;
             
+            char boundsMsg[256];
+            sprintf_s(boundsMsg, "applyWindowMask: bounds=(%d,%d,%d,%d) width=%d height=%d HRESULT=0x%08X", 
+                     bounds.left, bounds.top, bounds.right, bounds.bottom, width, height, boundsResult);
+            ::log(boundsMsg);
+            
             if (width <= 0 || height <= 0) {
-                ::log("applyWindowMask: invalid WebView2 bounds");
-                return;
+                ::log("applyWindowMask: invalid WebView2 bounds - using visual bounds fallback");
+                // Use the stored visual bounds instead
+                RECT visualRect = visualBounds;
+                width = visualRect.right - visualRect.left;
+                height = visualRect.bottom - visualRect.top;
+                
+                char fallbackMsg[256];
+                sprintf_s(fallbackMsg, "applyWindowMask: using visual bounds width=%d height=%d", width, height);
+                ::log(fallbackMsg);
+                
+                if (width <= 0 || height <= 0) {
+                    ::log("applyWindowMask: visual bounds also invalid, cannot apply mask");
+                    return;
+                }
             }
             
             // Create base region covering entire webview
