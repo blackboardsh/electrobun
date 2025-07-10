@@ -1317,37 +1317,29 @@ public:
         sprintf_s(logMsg, "applyVisualMask: webview=%u, maskJSON.empty()=%d", webviewId, maskJSON.empty());
         ::log(logMsg);
         
-        if (!webview) {
-            ::log("applyVisualMask: webview is null, returning");
+        if (!compositionController) {
+            ::log("applyVisualMask: compositionController is null, returning");
             return;
         }
         
         if (maskJSON.empty()) {
-            ::log("applyVisualMask: maskJSON empty, removing masks");
-            removeMasks();
+            ::log("applyVisualMask: maskJSON empty, removing mask region");
+            // Clear any existing mask region
+            compositionController->put_RootVisualTarget(nullptr);
             return;
         }
         
-        // Apply visual mask via CSS injection (more reliable for WebView2)
-        injectMaskCSS();
+        // Apply mask using WebView2 composition visual tree
+        applyCompositionMask();
     }
     
     void removeMasks() override {
-        if (!webview) {
+        if (!compositionController) {
             return;
         }
         
-        // Remove CSS masks via JavaScript
-        std::string script = 
-            "(function() { "
-            "  var oldStyle = document.getElementById('electrobun-masks'); "
-            "  if (oldStyle) oldStyle.remove(); "
-            "  var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
-            "  oldMasks.forEach(m => m.remove()); "
-            "})();";
-        
-        std::wstring wScript(script.begin(), script.end());
-        webview->ExecuteScript(wScript.c_str(), nullptr);
+        // Clear composition mask
+        compositionController->put_RootVisualTarget(nullptr);
     }
     
     void toggleMirrorMode(bool enable) override {
@@ -1363,100 +1355,79 @@ public:
     }
 
 private:
-    // WebView2-specific helper for CSS mask injection
-    void injectMaskCSS() {
-        if (!webview || maskJSON.empty()) {
+    // WebView2-specific helper for composition-based masking
+    void applyCompositionMask() {
+        if (!compositionController || maskJSON.empty()) {
             return;
         }
         
         char logMsg[256];
-        sprintf_s(logMsg, "injectMaskCSS: webview=%u, maskJSON=%s", webviewId, maskJSON.c_str());
+        sprintf_s(logMsg, "applyCompositionMask: webview=%u, maskJSON=%s", webviewId, maskJSON.c_str());
         ::log(logMsg);
         
-        // Build CSS for mask overlays
-        std::string css = "<style id='electrobun-masks'>";
-        
-        size_t pos = 0;
-        int maskIndex = 0;
-        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
-            try {
-                // Extract mask rectangle coordinates  
-                size_t xStart = maskJSON.find(":", pos) + 1;
-                size_t xEnd = maskJSON.find(",", xStart);
-                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
-                
-                size_t yPos = maskJSON.find("\"y\":", pos);
-                size_t yStart = maskJSON.find(":", yPos) + 1;
-                size_t yEnd = maskJSON.find(",", yStart);
-                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
-                
-                size_t wPos = maskJSON.find("\"width\":", pos);
-                size_t wStart = maskJSON.find(":", wPos) + 1;
-                size_t wEnd = maskJSON.find(",", wStart);
-                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
-                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
-                
-                size_t hPos = maskJSON.find("\"height\":", pos);
-                size_t hStart = maskJSON.find(":", hPos) + 1;
-                size_t hEnd = maskJSON.find("}", hStart);
-                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
-                
-                // Add CSS for this mask
-                css += ".electrobun-mask-" + std::to_string(maskIndex) + " { ";
-                css += "position: fixed; ";
-                css += "left: " + std::to_string(x) + "px; ";
-                css += "top: " + std::to_string(y) + "px; ";
-                css += "width: " + std::to_string(width) + "px; ";
-                css += "height: " + std::to_string(height) + "px; ";
-                css += "background: rgba(255,0,0,0.3); ";
-                css += "pointer-events: auto; ";
-                css += "z-index: 999999; ";
-                css += "} ";
-                
-                maskIndex++;
-                pos = hEnd;
-            } catch (...) {
-                pos++;
+        try {
+            // Create Windows composition visual with mask geometry
+            // This requires Direct Composition integration with WebView2
+            // For now, use the simpler approach of creating a mask region
+            HRGN maskRegion = CreateRectRgn(0, 0, 0, 0);
+            
+            // Parse maskJSON and build combined mask region
+            size_t pos = 0;
+            int maskCount = 0;
+            while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+                try {
+                    // Extract mask rectangle coordinates  
+                    size_t xStart = maskJSON.find(":", pos) + 1;
+                    size_t xEnd = maskJSON.find(",", xStart);
+                    int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+                    
+                    size_t yPos = maskJSON.find("\"y\":", pos);
+                    size_t yStart = maskJSON.find(":", yPos) + 1;
+                    size_t yEnd = maskJSON.find(",", yStart);
+                    int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+                    
+                    size_t wPos = maskJSON.find("\"width\":", pos);
+                    size_t wStart = maskJSON.find(":", wPos) + 1;
+                    size_t wEnd = maskJSON.find(",", wStart);
+                    if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                    int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+                    
+                    size_t hPos = maskJSON.find("\"height\":", pos);
+                    size_t hStart = maskJSON.find(":", hPos) + 1;
+                    size_t hEnd = maskJSON.find("}", hStart);
+                    int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+                    
+                    // Create region for this mask rectangle
+                    HRGN rectRegion = CreateRectRgn(x, y, x + width, y + height);
+                    if (rectRegion) {
+                        CombineRgn(maskRegion, maskRegion, rectRegion, RGN_OR);
+                        DeleteObject(rectRegion);
+                        maskCount++;
+                    }
+                    
+                    pos = hEnd;
+                } catch (...) {
+                    pos++;
+                }
             }
-        }
-        
-        css += "</style>";
-        
-        // Build JavaScript to inject the CSS and create mask elements
-        std::string script = 
-            "(function() { "
-            "  try { "
-            "    console.log('Electrobun: Starting mask injection'); "
-            "    var oldStyle = document.getElementById('electrobun-masks'); "
-            "    if (oldStyle) oldStyle.remove(); "
-            "    var oldMasks = document.querySelectorAll('[class*=\"electrobun-mask-\"]'); "
-            "    oldMasks.forEach(function(m) { m.remove(); }); "
-            "    document.head.insertAdjacentHTML('beforeend', '" + css + "'); "
-            "    for (var i = 0; i < " + std::to_string(maskIndex) + "; i++) { "
-            "      var mask = document.createElement('div'); "
-            "      mask.className = 'electrobun-mask-' + i; "
-            "      document.body.appendChild(mask); "
-            "    } "
-            "    console.log('Electrobun: Successfully injected ' + " + std::to_string(maskIndex) + " + ' masks'); "
-            "    return 'success';"
-            "  } catch(e) { "
-            "    console.error('Electrobun mask injection failed:', e); "
-            "    return 'error: ' + e.message; "
-            "  } "
-            "})();";
-        
-        std::wstring wScript(script.begin(), script.end());
-        
-        // Execute script and log result
-        HRESULT executeResult = webview->ExecuteScript(wScript.c_str(), nullptr);
-        if (SUCCEEDED(executeResult)) {
-            char logMsg[256];
-            sprintf_s(logMsg, "injectMaskCSS: script execution started for webview=%u with %d masks", webviewId, maskIndex);
-            ::log(logMsg);
-        } else {
-            char logMsg[256];
-            sprintf_s(logMsg, "injectMaskCSS: FAILED to start script execution for webview=%u, HRESULT: 0x%08X", webviewId, executeResult);
-            ::log(logMsg);
+            
+            if (maskCount > 0) {
+                char successMsg[256];
+                sprintf_s(successMsg, "applyCompositionMask: created mask region with %d rectangles for webview=%u", maskCount, webviewId);
+                ::log(successMsg);
+                
+                // For WebView2, we need to implement visual hosting approach
+                // This is a simplified version - full implementation would use DirectComposition
+                // TODO: Implement proper DirectComposition visual tree masking
+                
+                DeleteObject(maskRegion);
+            } else {
+                ::log("applyCompositionMask: no valid mask rectangles found");
+                DeleteObject(maskRegion);
+            }
+            
+        } catch (...) {
+            ::log("applyCompositionMask: exception occurred during mask creation");
         }
     }
 };
