@@ -1348,7 +1348,20 @@ public:
             compositionController->put_RootVisualTarget(nullptr);
             ::log("removeMasks: cleared composition mask");
         } else {
-            // For fallback approach, nothing to clean up from window regions
+            // For fallback approach, clear window region
+            if (hwnd) {
+                HWND containerHwnd = FindWindowEx(hwnd, nullptr, nullptr, nullptr);
+                if (containerHwnd) {
+                    // Clear the window region by setting it to nullptr
+                    if (SetWindowRgn(containerHwnd, nullptr, TRUE) != 0) {
+                        ::log("removeMasks: window region cleared successfully");
+                    } else {
+                        ::log("removeMasks: failed to clear window region");
+                    }
+                } else {
+                    ::log("removeMasks: could not find container window");
+                }
+            }
             ::log("removeMasks: cleared fallback mask");
         }
     }
@@ -1529,9 +1542,31 @@ private:
                 sprintf_s(successMsg, "applyWindowMask: created window region with %d mask holes for webview=%u", maskCount, webviewId);
                 ::log(successMsg);
                 
-                // For now, just log the successful region creation
-                // Full implementation would apply the region to the WebView2 window
-                // This requires more complex window manipulation
+                // Apply the region to the WebView2 container window
+                // We need to get the container HWND from the parent window
+                HWND containerHwnd = nullptr;
+                if (hwnd) {
+                    // Find the container window (child of the parent window)
+                    containerHwnd = FindWindowEx(hwnd, nullptr, nullptr, nullptr);
+                    if (containerHwnd) {
+                        char hwndMsg[256];
+                        sprintf_s(hwndMsg, "applyWindowMask: applying region to container HWND=%p", containerHwnd);
+                        ::log(hwndMsg);
+                        
+                        // Apply the region to the container window
+                        if (SetWindowRgn(containerHwnd, webviewRegion, TRUE) != 0) {
+                            ::log("applyWindowMask: window region applied successfully");
+                            // Don't delete the region - SetWindowRgn takes ownership
+                            return;
+                        } else {
+                            ::log("applyWindowMask: failed to apply window region");
+                        }
+                    } else {
+                        ::log("applyWindowMask: could not find container window");
+                    }
+                } else {
+                    ::log("applyWindowMask: parent hwnd is null");
+                }
             }
             
             DeleteObject(webviewRegion);
