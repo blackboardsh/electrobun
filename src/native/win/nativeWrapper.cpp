@@ -3312,16 +3312,13 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             if (!combinedScript.empty()) {
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
                                 
-                                std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); console.log('[WebView2] About to execute electrobun preload'); " + combinedScript + "; console.log('[WebView2] Electrobun preload script completed');";
-                                std::wstring wDebugScript(debugScript.begin(), debugScript.end());
-                                
-                                webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
+                                webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
                                 
                                 webview->add_NavigationStarting(
                                     Callback<ICoreWebView2NavigationStartingEventHandler>(
-                                        [debugScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
-                                            std::wstring wDebugScript(debugScript.begin(), debugScript.end());
-                                            sender->ExecuteScript(wDebugScript.c_str(), nullptr);
+                                        [combinedScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                            std::wstring wScript(combinedScript.begin(), combinedScript.end());
+                                            sender->ExecuteScript(wScript.c_str(), nullptr);
                                             return S_OK;
                                         }).Get(),
                                     nullptr);
