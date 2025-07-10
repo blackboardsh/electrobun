@@ -1285,6 +1285,9 @@ public:
             if (masksJson) {
                 maskJSON = masksJson;
             }
+            
+            // Apply visual mask after resize (critical fix)
+            applyVisualMask();
         } else {
             ::log("[WebView2] ERROR: Controller is NULL, cannot resize");
         }
@@ -1437,8 +1440,8 @@ private:
                 css += "top: " + std::to_string(y) + "px; ";
                 css += "width: " + std::to_string(width) + "px; ";
                 css += "height: " + std::to_string(height) + "px; ";
-                css += "background: transparent; ";
-                css += "pointer-events: none; ";
+                css += "background: rgba(0,0,0,0.01); ";
+                css += "pointer-events: auto; ";
                 css += "z-index: 999999; ";
                 css += "} ";
                 
