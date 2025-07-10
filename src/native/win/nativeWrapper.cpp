@@ -1941,17 +1941,16 @@ private:
                     
                     // Check if point is in a masked (cut-out) area
                     if (view->isPointInMask(localPoint)) {
-                            // Point is in masked area, don't make this webview active
-                            // Continue to check lower webviews
-                            view->toggleMirrorMode(true);
-                            continue;
-                        }
-                        
-                        // Point is in unmasked area, make this webview active
-                        newActiveView = view.get();
-                        view->toggleMirrorMode(false);
+                        // Point is in masked area, don't make this webview active
+                        // Continue to check lower webviews
+                        view->toggleMirrorMode(true);
                         continue;
                     }
+                    
+                    // Point is in unmasked area, make this webview active
+                    newActiveView = view.get();
+                    view->toggleMirrorMode(false);
+                    continue;
                 }
             }
             
@@ -2146,7 +2145,7 @@ public:
         }
     }
 
-    void ContainerView::ResizeAutoSizingViews(int width, int height) {
+    void ResizeAutoSizingViews(int width, int height) {
         for (auto& view : m_abstractViews) {
             if (view->fullSize) {
                 // Resize the webview to match container
