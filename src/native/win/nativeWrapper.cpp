@@ -1303,69 +1303,23 @@ public:
     
     // WebView2-specific implementation of mask functionality
     void applyVisualMask() override {
-        if (!controller) {
+        char logMsg[256];
+        sprintf_s(logMsg, "applyVisualMask: webview=%u, maskJSON.empty()=%d", webviewId, maskJSON.empty());
+        ::log(logMsg);
+        
+        if (!webview) {
+            ::log("applyVisualMask: webview is null, returning");
             return;
         }
         
         if (maskJSON.empty()) {
+            ::log("applyVisualMask: maskJSON empty, removing masks");
             removeMasks();
             return;
         }
         
-        // Get the webview's bounds
-        RECT bounds;
-        controller->get_Bounds(&bounds);
-        int width = bounds.right - bounds.left;
-        int height = bounds.bottom - bounds.top;
-        
-        // Create base region covering entire webview
-        HRGN baseRegion = CreateRectRgn(0, 0, width, height);
-        if (!baseRegion) {
-            ::log("applyVisualMask: Failed to create base region");
-            return;
-        }
-        
-        // Parse maskJSON and subtract mask regions
-        size_t pos = 0;
-        while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
-            try {
-                // Extract mask rectangle coordinates
-                size_t xStart = maskJSON.find(":", pos) + 1;
-                size_t xEnd = maskJSON.find(",", xStart);
-                int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
-                
-                size_t yPos = maskJSON.find("\"y\":", pos);
-                size_t yStart = maskJSON.find(":", yPos) + 1;
-                size_t yEnd = maskJSON.find(",", yStart);
-                int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
-                
-                size_t wPos = maskJSON.find("\"width\":", pos);
-                size_t wStart = maskJSON.find(":", wPos) + 1;
-                size_t wEnd = maskJSON.find(",", wStart);
-                if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
-                int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
-                
-                size_t hPos = maskJSON.find("\"height\":", pos);
-                size_t hStart = maskJSON.find(":", hPos) + 1;
-                size_t hEnd = maskJSON.find("}", hStart);
-                int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
-                
-                // Create mask region and subtract from base
-                HRGN maskRegion = CreateRectRgn(x, y, x + width, y + height);
-                if (maskRegion) {
-                    CombineRgn(baseRegion, baseRegion, maskRegion, RGN_DIFF);
-                    DeleteObject(maskRegion);
-                }
-                
-                pos = hEnd;
-            } catch (const std::exception& e) {
-                pos++;
-            }
-        }
-        
         // Apply visual mask via CSS injection (more reliable for WebView2)
         injectMaskCSS();
-        DeleteObject(baseRegion);
     }
     
     void removeMasks() override {
@@ -1404,6 +1358,10 @@ private:
         if (!webview || maskJSON.empty()) {
             return;
         }
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "injectMaskCSS: webview=%u, maskJSON=%s", webviewId, maskJSON.c_str());
+        ::log(logMsg);
         
         // Build CSS for mask overlays
         std::string css = "<style id='electrobun-masks'>";
@@ -1471,6 +1429,10 @@ private:
         
         std::wstring wScript(script.begin(), script.end());
         webview->ExecuteScript(wScript.c_str(), nullptr);
+        
+        char logMsg2[256];
+        sprintf_s(logMsg2, "injectMaskCSS: executed script for webview=%u with %d masks", webviewId, maskIndex);
+        ::log(logMsg2);
     }
 };
 
