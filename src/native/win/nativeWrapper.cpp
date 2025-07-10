@@ -1280,14 +1280,17 @@ public:
         ::log(resizeLog);
         
         if (controller) {
-            HRESULT result = controller->put_Bounds(frame);
-            if (FAILED(result)) {
-                char errorLog[256];
-                sprintf_s(errorLog, "[WebView2] put_Bounds failed for webview %u, HRESULT: 0x%08X", webviewId, result);
-                ::log(errorLog);
-            } else {
-                ::log("[WebView2] put_Bounds succeeded");
-            }
+            // WebView2 operations must be called from main thread to avoid TYPE_E_BADVARTYPE
+            MainThreadDispatcher::dispatch_sync([this, frame]() {
+                HRESULT result = controller->put_Bounds(frame);
+                if (FAILED(result)) {
+                    char errorLog[256];
+                    sprintf_s(errorLog, "[WebView2] put_Bounds failed for webview %u, HRESULT: 0x%08X", webviewId, result);
+                    ::log(errorLog);
+                } else {
+                    ::log("[WebView2] put_Bounds succeeded");
+                }
+            });
             
             visualBounds = frame;
             if (masksJson) {
