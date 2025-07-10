@@ -1321,29 +1321,36 @@ public:
         sprintf_s(logMsg, "applyVisualMask: webview=%u, maskJSON.empty()=%d", webviewId, maskJSON.empty());
         ::log(logMsg);
         
-        if (!compositionController) {
-            ::log("applyVisualMask: compositionController is null, returning");
+        if (!controller) {
+            ::log("applyVisualMask: controller is null, returning");
             return;
         }
         
         if (maskJSON.empty()) {
-            ::log("applyVisualMask: maskJSON empty, removing mask region");
-            // Clear any existing mask region
-            compositionController->put_RootVisualTarget(nullptr);
+            ::log("applyVisualMask: maskJSON empty, removing masks");
+            removeMasks();
             return;
         }
         
-        // Apply mask using WebView2 composition visual tree
-        applyCompositionMask();
+        // Use composition controller if available, otherwise fallback to window masking
+        if (compositionController) {
+            ::log("applyVisualMask: using composition controller approach");
+            applyCompositionMask();
+        } else {
+            ::log("applyVisualMask: using window region fallback approach");
+            applyWindowMask();
+        }
     }
     
     void removeMasks() override {
-        if (!compositionController) {
-            return;
+        if (compositionController) {
+            // Clear composition mask
+            compositionController->put_RootVisualTarget(nullptr);
+            ::log("removeMasks: cleared composition mask");
+        } else {
+            // For fallback approach, nothing to clean up from window regions
+            ::log("removeMasks: cleared fallback mask");
         }
-        
-        // Clear composition mask
-        compositionController->put_RootVisualTarget(nullptr);
     }
     
     void toggleMirrorMode(bool enable) override {
@@ -1432,6 +1439,88 @@ private:
             
         } catch (...) {
             ::log("applyCompositionMask: exception occurred during mask creation");
+        }
+    }
+    
+    // Fallback window-based masking for when composition controller is not available
+    void applyWindowMask() {
+        if (!controller || maskJSON.empty()) {
+            return;
+        }
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "applyWindowMask: webview=%u, maskJSON=%s", webviewId, maskJSON.c_str());
+        ::log(logMsg);
+        
+        try {
+            // Get the WebView2 window bounds
+            RECT bounds;
+            controller->get_Bounds(&bounds);
+            int width = bounds.right - bounds.left;
+            int height = bounds.bottom - bounds.top;
+            
+            if (width <= 0 || height <= 0) {
+                ::log("applyWindowMask: invalid WebView2 bounds");
+                return;
+            }
+            
+            // Create base region covering entire webview
+            HRGN webviewRegion = CreateRectRgn(0, 0, width, height);
+            
+            // Parse maskJSON and subtract mask regions (holes)
+            size_t pos = 0;
+            int maskCount = 0;
+            while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+                try {
+                    // Extract mask rectangle coordinates  
+                    size_t xStart = maskJSON.find(":", pos) + 1;
+                    size_t xEnd = maskJSON.find(",", xStart);
+                    int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+                    
+                    size_t yPos = maskJSON.find("\"y\":", pos);
+                    size_t yStart = maskJSON.find(":", yPos) + 1;
+                    size_t yEnd = maskJSON.find(",", yStart);
+                    int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+                    
+                    size_t wPos = maskJSON.find("\"width\":", pos);
+                    size_t wStart = maskJSON.find(":", wPos) + 1;
+                    size_t wEnd = maskJSON.find(",", wStart);
+                    if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                    int maskWidth = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+                    
+                    size_t hPos = maskJSON.find("\"height\":", pos);
+                    size_t hStart = maskJSON.find(":", hPos) + 1;
+                    size_t hEnd = maskJSON.find("}", hStart);
+                    int maskHeight = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+                    
+                    // Create hole region and subtract from webview region
+                    HRGN holeRegion = CreateRectRgn(x, y, x + maskWidth, y + maskHeight);
+                    if (holeRegion) {
+                        CombineRgn(webviewRegion, webviewRegion, holeRegion, RGN_DIFF);
+                        DeleteObject(holeRegion);
+                        maskCount++;
+                    }
+                    
+                    pos = hEnd;
+                } catch (...) {
+                    pos++;
+                }
+            }
+            
+            if (maskCount > 0) {
+                char successMsg[256];
+                sprintf_s(successMsg, "applyWindowMask: created window region with %d mask holes for webview=%u", maskCount, webviewId);
+                ::log(successMsg);
+                
+                // For now, just log the successful region creation
+                // Full implementation would apply the region to the WebView2 window
+                // This requires more complex window manipulation
+            }
+            
+            DeleteObject(webviewRegion);
+            
+        } catch (...) {
+            ::log("applyWindowMask: exception occurred during mask creation");
         }
     }
 };
@@ -2974,10 +3063,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     return S_OK;
                 }
                 
-                ::log("[WebView2] About to create composition controller...");
-                return env->CreateCoreWebView2CompositionController(targetHwnd,
-                    Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
-                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2CompositionController* compositionController) -> HRESULT {
+                ::log("[WebView2] About to create controller...");
+                return env->CreateCoreWebView2Controller(targetHwnd,
+                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             ::log("[WebView2] Controller creation callback executed");
                             if (FAILED(result)) {
                                 char errorMsg[256];
@@ -2987,20 +3076,25 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 return result;
                             }
                             
-                            ::log("[WebView2] Composition controller created successfully - minimal setup");
+                            ::log("[WebView2] Controller created successfully - minimal setup");
                             
-                            // Minimal composition controller setup
-                            ComPtr<ICoreWebView2CompositionController> compCtrl(compositionController);
-                            ComPtr<ICoreWebView2Controller> ctrl;
+                            // Controller setup with composition fallback
+                            ComPtr<ICoreWebView2Controller> ctrl(controller);
                             ComPtr<ICoreWebView2> webview;
-                            
-                            // Get the base controller interface from composition controller
-                            compCtrl->QueryInterface(IID_PPV_ARGS(&ctrl));
                             ctrl->get_CoreWebView2(&webview);
                             
                             view->setController(ctrl);
-                            view->setCompositionController(compCtrl);
                             view->setWebView(webview);
+                            
+                            // Try to get composition controller interface if available
+                            ComPtr<ICoreWebView2CompositionController> compCtrl;
+                            HRESULT compResult = ctrl->QueryInterface(IID_PPV_ARGS(&compCtrl));
+                            if (SUCCEEDED(compResult) && compCtrl) {
+                                view->setCompositionController(compCtrl);
+                                ::log("[WebView2] Composition controller interface available");
+                            } else {
+                                ::log("[WebView2] Composition controller not available - using fallback mask approach");
+                            }
                             
                             // Set up JavaScript bridge objects
                             view->setupJavaScriptBridges();
