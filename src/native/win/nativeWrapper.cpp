@@ -3036,7 +3036,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 ::log("[WebView2] Converting script to wide string");
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
                                 
-                                std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); " + combinedScript;
+                                std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); console.log('[WebView2] About to execute electrobun preload'); " + combinedScript + "; console.log('[WebView2] Electrobun preload script completed');";
                                 std::wstring wDebugScript(debugScript.begin(), debugScript.end());
                                 
                                 ::log("[WebView2] Adding script to execute on document created");
@@ -3053,6 +3053,32 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         }).Get(),
                                     nullptr);
                                 ::log("[WebView2] Added navigation event handler for early script injection");
+                                
+                                // Add console message handler to capture console.log output
+                                webview->add_ConsoleMessage(
+                                    Callback<ICoreWebView2ConsoleMessageEventHandler>(
+                                        [view](ICoreWebView2* sender, ICoreWebView2ConsoleMessageEventArgs* args) -> HRESULT {
+                                            LPWSTR message;
+                                            args->get_Message(&message);
+                                            std::wstring wMessage(message);
+                                            std::string sMessage(wMessage.begin(), wMessage.end());
+                                            
+                                            LPWSTR source;
+                                            args->get_Source(&source);
+                                            std::wstring wSource(source);
+                                            std::string sSource(wSource.begin(), wSource.end());
+                                            
+                                            INT32 line;
+                                            args->get_Line(&line);
+                                            
+                                            std::cout << "[WebView2:CONSOLE(" << line << ")] \"" << sMessage << "\", source: " << sSource << " (" << line << ")" << std::endl;
+                                            
+                                            CoTaskMemFree(message);
+                                            CoTaskMemFree(source);
+                                            return S_OK;
+                                        }).Get(),
+                                    nullptr);
+                                ::log("[WebView2] Added console message handler");
                             } else {
                                 ::log("[WebView2] No preload scripts to add");
                             }
@@ -3177,7 +3203,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
                                 
                                 // Add some debug logging to the script itself
-                                std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); " + combinedScript;
+                                std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); console.log('[WebView2] About to execute electrobun preload'); " + combinedScript + "; console.log('[WebView2] Electrobun preload script completed');";
                                 std::wstring wDebugScript(debugScript.begin(), debugScript.end());
                                 
                                 // Add script to execute on document created
@@ -3195,6 +3221,32 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         }).Get(),
                                     nullptr);
                                 std::cout << "[WebView2] Added navigation event handler for early script injection" << std::endl;
+                                
+                                // Add console message handler to capture console.log output
+                                webview->add_ConsoleMessage(
+                                    Callback<ICoreWebView2ConsoleMessageEventHandler>(
+                                        [view](ICoreWebView2* sender, ICoreWebView2ConsoleMessageEventArgs* args) -> HRESULT {
+                                            LPWSTR message;
+                                            args->get_Message(&message);
+                                            std::wstring wMessage(message);
+                                            std::string sMessage(wMessage.begin(), wMessage.end());
+                                            
+                                            LPWSTR source;
+                                            args->get_Source(&source);
+                                            std::wstring wSource(source);
+                                            std::string sSource(wSource.begin(), wSource.end());
+                                            
+                                            INT32 line;
+                                            args->get_Line(&line);
+                                            
+                                            std::cout << "[WebView2:CONSOLE(" << line << ")] \"" << sMessage << "\", source: " << sSource << " (" << line << ")" << std::endl;
+                                            
+                                            CoTaskMemFree(message);
+                                            CoTaskMemFree(source);
+                                            return S_OK;
+                                        }).Get(),
+                                    nullptr);
+                                std::cout << "[WebView2] Added console message handler" << std::endl;
                             } else {
                                 std::cout << "[WebView2] No preload scripts to add" << std::endl;
                             }
