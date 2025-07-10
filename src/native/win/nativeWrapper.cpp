@@ -262,25 +262,32 @@ public:
         // Note: CEFView casting will be handled in a helper function defined after class declaration
         SetBrowserOnCEFView(parentWindow, browser);
         
-        // Bring the newly created CEF browser to front (this is the critical fix!)
-        auto viewIt = g_cefViews.find(parentWindow);
-        if (viewIt != g_cefViews.end()) {
-            void* viewPtr = viewIt->second;
-            if (viewPtr) {
-                // Cast to AbstractView to access webviewId (avoiding CEFView forward declaration issue)
-                auto abstractView = static_cast<AbstractView*>(viewPtr);
-                
-                // Find the container and bring this view to front
-                auto containerIt = g_containerViews.find(parentWindow);
-                if (containerIt != g_containerViews.end()) {
-                    char logMsg[256];
-                    sprintf_s(logMsg, sizeof(logMsg), "[CEF] Bringing browser ID %d (webview ID %u) to front", 
-                             browser->GetIdentifier(), abstractView->webviewId);
-                    std::cout << logMsg << std::endl;
-                    containerIt->second.get()->BringViewToFront(abstractView->webviewId);
+        // Schedule bringing the newly created CEF browser to front
+        // This needs to be done after the browser window is fully created
+        std::cout << "[CEF] Scheduling browser ID " << browser->GetIdentifier() << " to be brought to front" << std::endl;
+        
+        // Use MainThreadDispatcher to ensure proper timing and thread safety
+        HWND parentWindowCopy = parentWindow;
+        int browserIdCopy = browser->GetIdentifier();
+        
+        MainThreadDispatcher::dispatch_async([parentWindowCopy, browserIdCopy]() {
+            // Find the CEF view and container (classes are fully defined by the time this executes)
+            auto viewIt = g_cefViews.find(parentWindowCopy);
+            if (viewIt != g_cefViews.end()) {
+                void* viewPtr = viewIt->second;
+                if (viewPtr) {
+                    auto abstractView = static_cast<AbstractView*>(viewPtr);
+                    auto containerIt = g_containerViews.find(parentWindowCopy);
+                    if (containerIt != g_containerViews.end()) {
+                        char logMsg[256];
+                        sprintf_s(logMsg, sizeof(logMsg), "[CEF] Bringing browser ID %d (webview ID %u) to front", 
+                                 browserIdCopy, abstractView->webviewId);
+                        ::log(logMsg);
+                        containerIt->second.get()->BringViewToFront(abstractView->webviewId);
+                    }
                 }
             }
-        }
+        });
         
         // Look for pending URL using parent window
         auto it = g_pendingUrls.find(parentWindow);
