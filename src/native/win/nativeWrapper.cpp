@@ -2911,7 +2911,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     HRESULT result = GetAvailableCoreWebView2BrowserVersionString(nullptr, &versionInfo);
     if (FAILED(result)) {
         ::log("ERROR: WebView2 runtime is not available. Please install Microsoft Edge WebView2 Runtime");
-        auto view = std::make_shared<WebView2View>(webviewId);
+        auto view = std::make_shared<WebView2View>(webviewId, bunBridgeHandler, internalBridgeHandler);
         view->setCreationFailed(true);
         return view;
     }
