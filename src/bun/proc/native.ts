@@ -927,6 +927,7 @@ const bunBridgePostmessageHandler = new JSCallback((id, msg) => {
 
 const internalBridgeHandler = new JSCallback((id, msg) => {    
   try {    
+    console.log('--->>> internal request in bun');
     const batchMessage = new CString(msg); 
 
     const jsonBatch = JSON.parse(batchMessage);
@@ -966,8 +967,10 @@ const internalBridgeHandler = new JSCallback((id, msg) => {
           payload,
         }
         
+        console.log('--->>> internal request in bun: sendingInternalMessageViaExecute', resultObj);
 
         if (!hostWebview) {        
+          console.log('--->>> internal request in bun: NO HOST WEBVIEW FOUND');
           return 
         }
               
@@ -1052,6 +1055,8 @@ export const internalRpcHandlers = {
     webviewTagInit: (params:
      BrowserViewOptions & { windowId: number }
     ) => {      
+      console.log('------>>>>> webviewTagInit in bun');
+      console.log('------>>>>> webviewTagInit in bun loading url: ', params.url);
       const {
         hostWebviewId,
         windowId,
@@ -1077,6 +1082,7 @@ export const internalRpcHandlers = {
         renderer,//: "cef",
         navigationRules,
       });      
+      console.log('------>>>>> webviewTagInit in bun, loaded with id: ', webviewForTag.id);
       return webviewForTag.id;
     },  
     webviewTagCanGoBack: (params) => {      

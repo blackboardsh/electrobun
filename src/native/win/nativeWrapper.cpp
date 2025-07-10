@@ -1068,6 +1068,8 @@ private:
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2CompositionController> compositionController;
     ComPtr<ICoreWebView2> webview;
+    HandlePostMessage bunBridgeCallbackHandler;
+    HandlePostMessage internalBridgeCallbackHandler;
     
 public:
     std::string pendingUrl;
@@ -1075,7 +1077,8 @@ public:
     std::string customScript;
     bool isCreationComplete = false;
     
-    WebView2View(uint32_t webviewId) {
+    WebView2View(uint32_t webviewId, HandlePostMessage bunBridgeHandler, HandlePostMessage internalBridgeHandler) 
+        : bunBridgeCallbackHandler(bunBridgeHandler), internalBridgeCallbackHandler(internalBridgeHandler) {
         this->webviewId = webviewId;
     }
     
@@ -1094,6 +1097,21 @@ public:
     
     bool isReady() const {
         return isCreationComplete && !creationFailed;
+    }
+    
+    // Set up the JavaScript bridge objects in the WebView2 context
+    void setupJavaScriptBridges() {
+        if (!webview) return;
+        
+        // Create COM objects for the bridge handlers
+        bunBridgeHandler = Microsoft::WRL::Make<BridgeHandler>(webviewId, bunBridgeCallbackHandler);
+        internalBridgeHandler = Microsoft::WRL::Make<BridgeHandler>(webviewId, internalBridgeCallbackHandler);
+        
+        // Add the bridge objects to the JavaScript context
+        webview->AddHostObjectToScript(L"__electrobunBunBridge", bunBridgeHandler.Get());
+        webview->AddHostObjectToScript(L"__electrobunInternalBridge", internalBridgeHandler.Get());
+        
+        ::log("[WebView2] JavaScript bridge objects added successfully");
     }
     
     void loadURL(const char* urlString) override {
@@ -2838,7 +2856,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     std::cout << "[WebView2] Electrobun script length: " << electrobunScript.length() << std::endl;
     std::cout << "[WebView2] Custom script length: " << customScript.length() << std::endl;
     
-    auto view = std::make_shared<WebView2View>(webviewId);
+    auto view = std::make_shared<WebView2View>(webviewId, bunBridgeHandler, internalBridgeHandler);
     view->hwnd = hwnd;
     view->fullSize = autoResize;
     
@@ -2940,6 +2958,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             ctrl->get_CoreWebView2(&webview);
                             view->setController(ctrl);
                             view->setWebView(webview);
+                            
+                            // Set up JavaScript bridge objects
+                            view->setupJavaScriptBridges();
                             
                             // Set bounds
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
