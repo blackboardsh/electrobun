@@ -1746,9 +1746,9 @@ public:
                          frame.left, frame.top, width, height, browserHwnd);
                 ::log(logMsg);
                 
-                // Move and resize the CEF browser window
-                SetWindowPos(browserHwnd, NULL, frame.left, frame.top, width, height,
-                           SWP_NOZORDER | SWP_NOACTIVATE);
+                // Move and resize the CEF browser window, bringing it to front
+                SetWindowPos(browserHwnd, HWND_TOP, frame.left, frame.top, width, height,
+                           SWP_NOACTIVATE | SWP_SHOWWINDOW);
             }
             
             // Notify CEF that the browser was resized
@@ -1813,14 +1813,10 @@ void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser) {
             view->setBrowser(browser);
             std::cout << "[CEF] Set browser on CEFView for webview ID: " << view->webviewId << std::endl;
             
-            // Bring the newly created CEF browser to front - this is the z-ordering fix!
-            auto containerIt = g_containerViews.find(parentWindow);
-            if (containerIt != g_containerViews.end()) {
-                std::cout << "[CEF] Bringing browser ID " << browser->GetIdentifier() << " (webview ID " << view->webviewId << ") to front" << std::endl;
-                containerIt->second.get()->BringViewToFront(view->webviewId);
-            } else {
-                std::cout << "[CEF] No container found for parentWindow: " << parentWindow << std::endl;
-            }
+            // Trigger an immediate resize to bring CEF browser to front
+            // The resize method will handle the z-ordering
+            RECT currentBounds = view->visualBounds;
+            view->resize(currentBounds, nullptr);
         } else {
             std::cout << "[CEF] Found CEFView entry but view is null" << std::endl;
         }
