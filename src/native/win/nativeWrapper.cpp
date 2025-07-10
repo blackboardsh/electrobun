@@ -494,7 +494,9 @@ public:
 
 
     std::string GetCombinedScript() const {
-        std::string combined_script = electrobun_script_;
+        // Inject webviewId into global scope before other scripts
+        std::string combined_script = "window.webviewId = " + std::to_string(webview_id_) + ";\n";
+        combined_script += electrobun_script_;
         if (!custom_script_.empty()) {
             combined_script += "\n" + custom_script_;
         }
@@ -3704,9 +3706,12 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             // Set browser on client for script execution
             client->SetBrowser(browser);
             
+            // Set initial bounds on view before calling resize
+            RECT initialBounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+            view->visualBounds = initialBounds;
+            
             // Handle z-ordering immediately since browser is ready
-            RECT currentBounds = view->visualBounds;
-            view->resize(currentBounds, nullptr);
+            view->resize(initialBounds, nullptr);
             
             std::cout << "[CEF] Browser ID " << browser->GetIdentifier() << " created synchronously" << std::endl;
         }
