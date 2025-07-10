@@ -454,6 +454,8 @@ public:
 
     void AddPreloadScript(const std::string& script) {
         electrobun_script_ = script;
+        std::cout << "[CEF] DEBUG: AddPreloadScript called with " << script.length() << " characters" << std::endl;
+        std::cout << "[CEF] DEBUG: electrobun_script_ now has " << electrobun_script_.length() << " characters" << std::endl;
     }
 
     void UpdateCustomPreloadScript(const std::string& script) {
@@ -502,6 +504,10 @@ public:
 
 
     std::string GetCombinedScript() const {
+        std::cout << "[CEF] DEBUG: GetCombinedScript called, webview_id_=" << webview_id_ << std::endl;
+        std::cout << "[CEF] DEBUG: electrobun_script_ length=" << electrobun_script_.length() << std::endl;
+        std::cout << "[CEF] DEBUG: custom_script_ length=" << custom_script_.length() << std::endl;
+        
         // Inject webviewId into global scope before other scripts
         std::string combined_script = "console.log('CEF: Injecting webviewId = " + std::to_string(webview_id_) + "');\n";
         combined_script += "window.webviewId = " + std::to_string(webview_id_) + ";\n";
@@ -510,6 +516,8 @@ public:
         if (!custom_script_.empty()) {
             combined_script += "\n" + custom_script_;
         }
+        
+        std::cout << "[CEF] DEBUG: Final combined_script length=" << combined_script.length() << std::endl;
         return combined_script;
     }
 
@@ -3694,12 +3702,15 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         // Store preload scripts before browser creation so they're available during LoadStart
         std::string combinedScript = client->GetCombinedScript();
+        std::cout << "[CEF] DEBUG: GetCombinedScript() returned " << combinedScript.length() << " characters" << std::endl;
         if (!combinedScript.empty()) {
             // We need to store by browser ID, but we don't have it yet
             // Let's use a temporary approach - store by client pointer for now
             static std::map<ElectrobunCefClient*, std::string> g_tempPreloadScripts;
             g_tempPreloadScripts[client] = combinedScript;
             std::cout << "[CEF] Pre-stored preload script (length: " << combinedScript.length() << ")" << std::endl;
+        } else {
+            std::cout << "[CEF] WARNING: GetCombinedScript() returned empty!" << std::endl;
         }
         
         // Create browser synchronously (like Mac implementation)
