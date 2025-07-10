@@ -1137,13 +1137,25 @@ public:
     }
     
     void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
+        ::log("WebView2: evaluateJavaScriptWithNoCompletion called");
         if (webview) {
+            ::log("WebView2: webview is valid, executing JavaScript");
             // Copy string to avoid lifetime issues in lambda
             std::string jsStringCopy = jsString;
             MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
+                ::log("WebView2: Main thread dispatch executing JavaScript");
                 std::wstring js = std::wstring(jsStringCopy.begin(), jsStringCopy.end());
-                webview->ExecuteScript(js.c_str(), nullptr);
+                HRESULT hr = webview->ExecuteScript(js.c_str(), nullptr);
+                if (FAILED(hr)) {
+                    char logMsg[256];
+                    sprintf_s(logMsg, "WebView2: ExecuteScript failed with HRESULT: 0x%08lX", hr);
+                    ::log(logMsg);
+                } else {
+                    ::log("WebView2: ExecuteScript succeeded");
+                }
             });
+        } else {
+            ::log("WebView2: webview is NULL, cannot execute JavaScript");
         }
     }
     
@@ -1414,12 +1426,18 @@ public:
     }
     
     void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
+        ::log("CEF: evaluateJavaScriptWithNoCompletion called");
         if (browser) {
+            ::log("CEF: browser is valid, executing JavaScript");
             // Copy string to avoid lifetime issues in lambda
             std::string jsStringCopy = jsString;
             MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
+                ::log("CEF: Main thread dispatch executing JavaScript");
                 browser->GetMainFrame()->ExecuteJavaScript(jsStringCopy.c_str(), "", 0);
+                ::log("CEF: ExecuteJavaScript completed");
             });
+        } else {
+            ::log("CEF: browser is NULL, cannot execute JavaScript");
         }
     }
     
