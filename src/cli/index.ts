@@ -475,10 +475,9 @@ if (commandArg === "init") {
       essentialPakFiles.forEach(pakFile => {
         const sourcePath = join(cefSourcePath, pakFile);
         const destPath = join(appBundleMacOSPath, pakFile);
-        console.log(`Checking CEF file: ${sourcePath}`);
+
         if (existsSync(sourcePath)) {
           cpSync(sourcePath, destPath);
-          console.log(`Copied CEF file: ${pakFile}`);
         } else {
           console.log(`WARNING: Missing CEF file: ${sourcePath}`);
         }
@@ -613,7 +612,7 @@ if (commandArg === "init") {
   buildIcons(appBundleFolderResourcesPath);
   // Run postBuild script
   if (config.scripts.postBuild) {
-    console.log('running build script', bunBinarySourcePath, config.scripts.postBuild)
+
     Bun.spawnSync([bunBinarySourcePath, config.scripts.postBuild], {
       stdio: ["ignore", "inherit", "inherit"],
       env: {
@@ -983,30 +982,7 @@ if (commandArg === "init") {
       stdio: ['inherit', 'inherit', 'inherit'],
       cwd: bundleExecPath
     })
-  } else if (OS === 'win') {
-    // Debug: Check if files exist
-    const bunExePath = join(bundleExecPath, 'bun.exe');
-    const mainJsPath = join(bundleExecPath, 'main.js');
-    const nativeLibPath = join(bundleExecPath, 'libNativeWrapper.dll');
-    console.log('Windows bundleExecPath:', bundleExecPath);
-    console.log('bun.exe exists:', existsSync(bunExePath));
-    console.log('main.js exists:', existsSync(mainJsPath));
-    console.log('libNativeWrapper.dll exists:', existsSync(nativeLibPath));
-    console.log('WebView2Loader.dll exists:', existsSync(join(bundleExecPath, 'WebView2Loader.dll')));
-    console.log('libcef.dll exists:', existsSync(join(bundleExecPath, 'libcef.dll')));
-    console.log('CEF folder exists:', existsSync(join(bundleExecPath, 'cef')));
-    
-    // Test if bundled bun.exe works at all
-    console.log('Testing bundled bun.exe...');
-    const testProc = Bun.spawn(['./bun.exe', '--version'], {
-      stdio: ['inherit', 'inherit', 'inherit'],
-      cwd: bundleExecPath
-    });
-    
-    // Wait a bit for test to complete
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    console.log('Test bun.exe exit code:', testProc.exitCode);
-    
+  } else if (OS === 'win') {  
     // Try the main process
     mainProc =  Bun.spawn(['./bun.exe', './main.js'], {
       stdio: ['inherit', 'inherit', 'inherit'],
@@ -1016,12 +992,6 @@ if (commandArg === "init") {
       }
     })
   }
-
-  
-
-  
-
-  console.log('mainProc running', bundleExecPath, mainProc.killed)
 
   process.on("SIGINT", () => {
     console.log('exit command')

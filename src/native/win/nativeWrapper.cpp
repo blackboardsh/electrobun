@@ -613,9 +613,7 @@ private:
 public:
     BridgeHandler(const std::string& bridgeName, HandlePostMessage callback, uint32_t webviewId) 
         : m_refCount(1), m_callback(callback), m_webviewId(webviewId), m_bridgeName(bridgeName) {
-        char logMsg[256];
-        sprintf_s(logMsg, "Created %s bridge handler for webview %u", bridgeName.c_str(), webviewId);
-        ::log(logMsg);
+        
     }
 
     // IUnknown implementation
@@ -1109,28 +1107,6 @@ public:
         VariantClear(&bunBridgeVariant);
         VariantClear(&internalBridgeVariant);
         
-        // Inject debug script to check hostObjects availability
-        std::string debugScript = R"(
-            console.log('[WebView2] Checking hostObjects...');
-            console.log('[WebView2] window.chrome available:', !!window.chrome);
-            console.log('[WebView2] window.chrome.webview available:', !!(window.chrome && window.chrome.webview));
-            console.log('[WebView2] window.chrome.webview.hostObjects available:', !!(window.chrome && window.chrome.webview && window.chrome.webview.hostObjects));
-            console.log('[WebView2] bunBridge available:', !!(window.chrome && window.chrome.webview && window.chrome.webview.hostObjects && window.chrome.webview.hostObjects.bunBridge));
-            console.log('[WebView2] internalBridge available:', !!(window.chrome && window.chrome.webview && window.chrome.webview.hostObjects && window.chrome.webview.hostObjects.internalBridge));
-            
-            // Set up the bridge objects for compatibility with electrobun code
-            if (window.chrome && window.chrome.webview && window.chrome.webview.hostObjects) {
-                window.__electrobunBunBridge = window.chrome.webview.hostObjects.bunBridge;
-                window.__electrobunInternalBridge = window.chrome.webview.hostObjects.internalBridge;
-                console.log('[WebView2] Bridge objects set up successfully');
-            } else {
-                console.error('[WebView2] hostObjects not available');
-            }
-        )";
-        
-        std::wstring wDebugScript(debugScript.begin(), debugScript.end());
-        webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
-        
     }
     
     void loadURL(const char* urlString) override {
@@ -1266,28 +1242,24 @@ public:
     }
     
     // WebView2-specific implementation of mask functionality
-    void applyVisualMask() override {
-        char logMsg[256];
-        sprintf_s(logMsg, "applyVisualMask: webview=%u, maskJSON.empty()=%d", webviewId, maskJSON.empty());
-        ::log(logMsg);
-        
+    void applyVisualMask() override {        
         if (!controller) {
             ::log("applyVisualMask: controller is null, returning");
             return;
         }
         
         if (maskJSON.empty()) {
-            ::log("applyVisualMask: maskJSON empty, removing masks");
+            // ::log("applyVisualMask: maskJSON empty, removing masks");
             removeMasks();
             return;
         }
         
         // Use composition controller if available, otherwise fallback to window masking
         if (compositionController) {
-            ::log("applyVisualMask: using composition controller approach");
+            // ::log("applyVisualMask: using composition controller approach");
             applyCompositionMask();
         } else {
-            ::log("applyVisualMask: using window region fallback approach");
+            // ::log("applyVisualMask: using window region fallback approach");
             applyWindowMask();
         }
     }
@@ -1296,21 +1268,21 @@ public:
         if (compositionController) {
             // Clear composition mask
             compositionController->put_RootVisualTarget(nullptr);
-            ::log("removeMasks: cleared composition mask");
+            // ::log("removeMasks: cleared composition mask");
         } else {
             // For fallback approach, clear window region from specific WebView2 window
             HWND webview2Hwnd = getWebView2WindowHandle();
             if (webview2Hwnd) {
                 // Clear the window region by setting it to nullptr
                 if (SetWindowRgn(webview2Hwnd, nullptr, TRUE) != 0) {
-                    ::log("removeMasks: window region cleared successfully from WebView2");
+                    // ::log("removeMasks: window region cleared successfully from WebView2");
                 } else {
-                    ::log("removeMasks: failed to clear window region from WebView2");
+                    // ::log("removeMasks: failed to clear window region from WebView2");
                 }
             } else {
                 ::log("removeMasks: could not find WebView2 window handle");
             }
-            ::log("removeMasks: cleared fallback mask");
+            // ::log("removeMasks: cleared fallback mask");
         }
     }
     
@@ -1367,10 +1339,6 @@ private:
             return;
         }
         
-        char logMsg[256];
-        sprintf_s(logMsg, "applyCompositionMask: webview=%u, maskJSON=%s", webviewId, maskJSON.c_str());
-        ::log(logMsg);
-        
         try {
             // Create Windows composition visual with mask geometry
             // This requires Direct Composition integration with WebView2
@@ -1418,9 +1386,7 @@ private:
             }
             
             if (maskCount > 0) {
-                char successMsg[256];
-                sprintf_s(successMsg, "applyCompositionMask: created mask region with %d rectangles for webview=%u", maskCount, webviewId);
-                ::log(successMsg);
+                
                 
                 // For WebView2, we need to implement visual hosting approach
                 // This is a simplified version - full implementation would use DirectComposition
@@ -1443,9 +1409,6 @@ private:
             return;
         }
         
-        char logMsg[256];
-        sprintf_s(logMsg, "applyWindowMask: webview=%u, maskJSON=%s", webviewId, maskJSON.c_str());
-        ::log(logMsg);
         
         try {
             // Get the WebView2 window bounds
@@ -1454,10 +1417,7 @@ private:
             int width = bounds.right - bounds.left;
             int height = bounds.bottom - bounds.top;
             
-            char boundsMsg[256];
-            sprintf_s(boundsMsg, "applyWindowMask: bounds=(%d,%d,%d,%d) width=%d height=%d HRESULT=0x%08X", 
-                     bounds.left, bounds.top, bounds.right, bounds.bottom, width, height, boundsResult);
-            ::log(boundsMsg);
+           
             
             if (width <= 0 || height <= 0) {
                 ::log("applyWindowMask: invalid WebView2 bounds - using visual bounds fallback");
@@ -1466,9 +1426,7 @@ private:
                 width = visualRect.right - visualRect.left;
                 height = visualRect.bottom - visualRect.top;
                 
-                char fallbackMsg[256];
-                sprintf_s(fallbackMsg, "applyWindowMask: using visual bounds width=%d height=%d", width, height);
-                ::log(fallbackMsg);
+                
                 
                 if (width <= 0 || height <= 0) {
                     ::log("applyWindowMask: visual bounds also invalid, cannot apply mask");
@@ -1520,20 +1478,16 @@ private:
             }
             
             if (maskCount > 0) {
-                char successMsg[256];
-                sprintf_s(successMsg, "applyWindowMask: created window region with %d mask holes for webview=%u", maskCount, webviewId);
-                ::log(successMsg);
+                
                 
                 // Apply the region to the specific WebView2 child window
                 HWND webview2Hwnd = getWebView2WindowHandle();
                 if (webview2Hwnd) {
-                    char hwndMsg[256];
-                    sprintf_s(hwndMsg, "applyWindowMask: applying region to WebView2 HWND=%p", webview2Hwnd);
-                    ::log(hwndMsg);
+                    
                     
                     // Apply the region to the specific WebView2 window
                     if (SetWindowRgn(webview2Hwnd, webviewRegion, TRUE) != 0) {
-                        ::log("applyWindowMask: window region applied successfully to WebView2");
+                        // ::log("applyWindowMask: window region applied successfully to WebView2");
                         // Don't delete the region - SetWindowRgn takes ownership
                         return;
                     } else {
@@ -1820,9 +1774,9 @@ public:
                 if (browserHwnd) {
                     // Disable input by making the window non-interactive
                     EnableWindow(browserHwnd, FALSE);
-                    char logMsg[128];
-                    sprintf_s(logMsg, "CEF mirror mode: Disabled input for browser HWND=%p", browserHwnd);
-                    ::log(logMsg);
+                    // char logMsg[128];
+                    // sprintf_s(logMsg, "CEF mirror mode: Disabled input for browser HWND=%p", browserHwnd);
+                    // ::log(logMsg);
                 }
             }
         } else if (!enable && mirrorModeEnabled) {
@@ -1833,9 +1787,9 @@ public:
                 if (browserHwnd) {
                     // Enable input by making the window interactive again
                     EnableWindow(browserHwnd, TRUE);
-                    char logMsg[128];
-                    sprintf_s(logMsg, "CEF mirror mode: Enabled input for browser HWND=%p", browserHwnd);
-                    ::log(logMsg);
+                    // char logMsg[128];
+                    // sprintf_s(logMsg, "CEF mirror mode: Enabled input for browser HWND=%p", browserHwnd);
+                    // ::log(logMsg);
                 }
             }
         }
@@ -2070,9 +2024,9 @@ private:
         HWND browserHwnd = browser->GetHost()->GetWindowHandle();
         if (!browserHwnd) return;
         
-        char logMsg[256];
-        sprintf_s(logMsg, "BringCEFChildWindowToFront: Bringing CEF browser HWND=%p to front", browserHwnd);
-        ::log(logMsg);
+        // char logMsg[256];
+        // sprintf_s(logMsg, "BringCEFChildWindowToFront: Bringing CEF browser HWND=%p to front", browserHwnd);
+        // ::log(logMsg);
         
         // Bring the CEF browser window to front
         SetWindowPos(browserHwnd, HWND_TOP, 0, 0, 0, 0,
@@ -2192,10 +2146,10 @@ public:
                 RECT bounds = {0, 0, width, height};
                 view->resize(bounds, nullptr);
                 
-                char logMsg[256];
-                sprintf_s(logMsg, "Resized auto-sizing WebView %u to %dx%d", 
-                        view->webviewId, width, height);
-                ::log(logMsg);
+                // char logMsg[256];
+                // sprintf_s(logMsg, "Resized auto-sizing WebView %u to %dx%d", 
+                //         view->webviewId, width, height);
+                // ::log(logMsg);
             }
         }
     }
@@ -2278,7 +2232,7 @@ ContainerView* GetOrCreateContainer(HWND parentWindow) {
         }
     }
     
-    log("Using existing container for window");
+    // log("Using existing container for window");
     return it->second.get();
 }
 
@@ -2329,9 +2283,9 @@ void handleApplicationMenuSelection(UINT menuId) {
     if (it != g_menuItemActions.end()) {
         const std::string& action = it->second;
         
-        char logMsg[256];
-        sprintf_s(logMsg, "Application menu action: %s", action.c_str());
-        ::log(logMsg);
+        // char logMsg[256];
+        // sprintf_s(logMsg, "Application menu action: %s", action.c_str());
+        // ::log(logMsg);
         
         if (g_appMenuTarget && g_appMenuTarget->zigHandler) {
             if (action == "__quit__") {
@@ -2862,9 +2816,9 @@ void setMenuItemAccelerator(HMENU menu, UINT menuId, const std::string& accelera
     }
     
     if (key > 0) {
-        char logMsg[256];
-        sprintf_s(logMsg, "Setting accelerator for menu item %u: key=%u, modifiers=%u", menuId, key, modifiers);
-        ::log(logMsg);
+        // char logMsg[256];
+        // sprintf_s(logMsg, "Setting accelerator for menu item %u: key=%u, modifiers=%u", menuId, key, modifiers);
+        // ::log(logMsg);
     }
 }
 
@@ -3187,9 +3141,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         }
         
         HWND containerHwnd = container->GetHwnd();
-        char debugMsg[256];
-        sprintf_s(debugMsg, "[WebView2] Creating controller for container HWND: %p, parent HWND: %p", containerHwnd, hwnd);
-        ::log(debugMsg);
+        // char debugMsg[256];
+        // sprintf_s(debugMsg, "[WebView2] Creating controller for container HWND: %p, parent HWND: %p", containerHwnd, hwnd);
+        // ::log(debugMsg);
         
         // Verify the container window is valid
         if (!IsWindow(containerHwnd)) {
@@ -3201,10 +3155,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         RECT windowRect;
         GetWindowRect(containerHwnd, &windowRect);
         DWORD windowStyle = GetWindowLong(containerHwnd, GWL_STYLE);
-        char windowDebug[512];
-        sprintf_s(windowDebug, "[WebView2] Container window - Rect: (%d,%d,%d,%d), Style: 0x%08X", 
-                 windowRect.left, windowRect.top, windowRect.right, windowRect.bottom, windowStyle);
-        ::log(windowDebug);
+        // char windowDebug[512];
+        // sprintf_s(windowDebug, "[WebView2] Container window - Rect: (%d,%d,%d,%d), Style: 0x%08X", 
+        //          windowRect.left, windowRect.top, windowRect.right, windowRect.bottom, windowStyle);
+        // ::log(windowDebug);
         
         // Make sure the window is visible (WebView2 requirement)
         ShowWindow(containerHwnd, SW_SHOW);
@@ -3259,7 +3213,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             HRESULT compResult = ctrl->QueryInterface(IID_PPV_ARGS(&compCtrl));
                             if (SUCCEEDED(compResult) && compCtrl) {
                                 view->setCompositionController(compCtrl);
-                                ::log("[WebView2] Composition controller interface available");
+                                // ::log("[WebView2] Composition controller interface available");
                             } else {
                             }
                             
@@ -3280,7 +3234,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             webview->add_WebResourceRequested(
                                 Callback<ICoreWebView2WebResourceRequestedEventHandler>(
                                     [env](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
-                                        ::log("[WebView2] WebResourceRequested event triggered");
+                                        // ::log("[WebView2] WebResourceRequested event triggered");
                                         ComPtr<ICoreWebView2WebResourceRequest> request;
                                         args->get_Request(&request);
                                         
@@ -3295,14 +3249,14 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                             WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, nullptr, nullptr);
                                         }
                                         
-                                        ::log("[WebView2] Request URI converted successfully");
+                                        // ::log("[WebView2] Request URI converted successfully");
                                         
                                         if (uriStr.substr(0, 8) == "views://") {
                                             std::string filePath = uriStr.substr(8);
                                             std::string content = loadViewsFile(filePath);
                                             
                                             if (!content.empty()) {
-                                                ::log("[WebView2] Loaded views file content, creating response");
+                                                // ::log("[WebView2] Loaded views file content, creating response");
                                                 
                                                 // Create response (simplified)
                                                 std::string mimeType = "text/html";
@@ -3333,7 +3287,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                     &response);
                                                 
                                                 args->put_Response(response.Get());
-                                                ::log("[WebView2] Successfully served views:// file");
+                                                // ::log("[WebView2] Successfully served views:// file");
                                             }
                                         }
                                         
@@ -3391,214 +3345,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                         }).Get());
             });
         
-        /*
-        // COMMENTED OUT: Original complex callback - uncomment to restore
-        auto environmentCompletedHandler_ORIGINAL = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [view, container, x, y, width, height](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
-                if (FAILED(result)) {
-                    char errorMsg[256];
-                    sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
-                    ::log(errorMsg);
-                    // Mark view as failed
-                    view->setCreationFailed(true);
-                    return result;
-                }
-                
-                // Create WebView2 controller
-                ::log("[WebView2] Creating WebView2 controller...");
-                HWND targetHwnd = container->GetHwnd();
-                
-                // Verify window is still valid before creating controller
-                if (!IsWindow(targetHwnd)) {
-                    ::log("ERROR: Target window is no longer valid");
-                    view->setCreationFailed(true);
-                    return S_OK;
-                }
-                
-                // Additional window state validation
-                if (!IsWindowVisible(targetHwnd)) {
-                    ::log("WARNING: Target window is not visible");
-                }
-                
-                DWORD windowStyle = GetWindowLong(targetHwnd, GWL_STYLE);
-                char windowStateDebug[512];
-                sprintf_s(windowStateDebug, "[WebView2] Window state - Style: 0x%08X, Visible: %s, Enabled: %s", 
-                         windowStyle, IsWindowVisible(targetHwnd) ? "Yes" : "No", IsWindowEnabled(targetHwnd) ? "Yes" : "No");
-                ::log(windowStateDebug);
-                
-                return env->CreateCoreWebView2Controller(targetHwnd,
-                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
-                            if (FAILED(result)) {
-                                char errorMsg[512];
-                                const char* errorDescription = "";
-                                switch (result) {
-                                    case 0x80004004: errorDescription = "E_ABORT - Operation was aborted"; break;
-                                    case 0x80070005: errorDescription = "E_ACCESSDENIED - Access denied"; break;
-                                    case 0x8007000E: errorDescription = "E_OUTOFMEMORY - Out of memory"; break;
-                                    case 0x80004005: errorDescription = "E_FAIL - Unspecified failure"; break;
-                                    case 0x80070057: errorDescription = "E_INVALIDARG - Invalid argument"; break;
-                                    default: errorDescription = "Unknown error"; break;
-                                }
-                                sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X (%s)", result, errorDescription);
-                                ::log(errorMsg);
-                                
-                                // Check if target window is still valid when the callback executes
-                                HWND callbackTargetHwnd = container->GetHwnd();
-                                char windowCheckMsg[256];
-                                sprintf_s(windowCheckMsg, "[WebView2] Window state in callback - HWND: %p, Valid: %s, Visible: %s", 
-                                         callbackTargetHwnd, IsWindow(callbackTargetHwnd) ? "Yes" : "No", 
-                                         IsWindowVisible(callbackTargetHwnd) ? "Yes" : "No");
-                                ::log(windowCheckMsg);
-                                
-                                // Mark view as failed
-                                view->setCreationFailed(true);
-                                return result;
-                            }
-                            
-                            // Set up WebView2 controller and core
-                            ComPtr<ICoreWebView2Controller> ctrl(controller);
-                            ComPtr<ICoreWebView2> webview;
-                            
-                            ctrl->get_CoreWebView2(&webview);
-                            view->setController(ctrl);
-                            view->setWebView(webview);
-                            
-                            std::cout << "[WebView2] Successfully created WebView2 controller and core webview" << std::endl;
-                            
-                            // Set bounds
-                            RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-                            ctrl->put_Bounds(bounds);
-                            
-                            // Add preload scripts using scripts stored in view object
-                            std::string combinedScript;
-                            if (!view->electrobunScript.empty()) {
-                                combinedScript += view->electrobunScript;
-                                std::cout << "[WebView2] Added electrobun preload script (length: " << view->electrobunScript.length() << ")" << std::endl;
-                            }
-                            if (!view->customScript.empty()) {
-                                if (!combinedScript.empty()) {
-                                    combinedScript += "\n";
-                                }
-                                combinedScript += view->customScript;
-                                std::cout << "[WebView2] Added custom preload script (length: " << view->customScript.length() << ")" << std::endl;
-                            }
-                            
-                            if (!combinedScript.empty()) {
-                                std::wstring wScript(combinedScript.begin(), combinedScript.end());
-                                
-                                // Add some debug logging to the script itself
-                                std::string debugScript = "console.log('[WebView2] Preload script executing at:', location.href); console.log('[WebView2] About to execute electrobun preload'); " + combinedScript + "; console.log('[WebView2] Electrobun preload script completed');";
-                                std::wstring wDebugScript(debugScript.begin(), debugScript.end());
-                                
-                                // Add script to execute on document created
-                                webview->AddScriptToExecuteOnDocumentCreated(wDebugScript.c_str(), nullptr);
-                                std::cout << "[WebView2] Added combined preload script to execute on document created (length: " << debugScript.length() << ")" << std::endl;
-                                
-                                // Also add navigation event handler to inject script early
-                                webview->add_NavigationStarting(
-                                    Callback<ICoreWebView2NavigationStartingEventHandler>(
-                                        [debugScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
-                                            std::cout << "[WebView2] Navigation starting, injecting preload script early" << std::endl;
-                                            std::wstring wDebugScript(debugScript.begin(), debugScript.end());
-                                            sender->ExecuteScript(wDebugScript.c_str(), nullptr);
-                                            return S_OK;
-                                        }).Get(),
-                                    nullptr);
-                                std::cout << "[WebView2] Added navigation event handler for early script injection" << std::endl;
-                            } else {
-                                std::cout << "[WebView2] No preload scripts to add" << std::endl;
-                            }
-                            
-                            // Add views:// scheme support for WebView2
-                            webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-                            
-                            // Set up WebResourceRequested event handler for views:// scheme
-                            webview->add_WebResourceRequested(
-                                Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-                                    [env](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
-                                        std::cout << "[WebView2] WebResourceRequested event triggered!" << std::endl;
-                                        ComPtr<ICoreWebView2WebResourceRequest> request;
-                                        args->get_Request(&request);
-                                        
-                                        LPWSTR uri;
-                                        request->get_Uri(&uri);
-                                        
-                                        std::wstring wUri(uri);
-                                        std::string uriStr;
-                                        int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, nullptr, 0, nullptr, nullptr);
-                                        if (size > 0) {
-                                            uriStr.resize(size - 1);
-                                            WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, nullptr, nullptr);
-                                        }
-                                        std::cout << "[WebView2] Request URI: " << uriStr << std::endl;
-                                        
-                                        if (uriStr.substr(0, 8) == "views://") {
-                                            std::string filePath = uriStr.substr(8); // Remove "views://" prefix
-                                            std::string content = loadViewsFile(filePath);
-                                            
-                                            if (!content.empty()) {
-                                                // Create response
-                                                std::string mimeType = "text/html";
-                                                if (filePath.find(".js") != std::string::npos) mimeType = "application/javascript";
-                                                else if (filePath.find(".css") != std::string::npos) mimeType = "text/css";
-                                                else if (filePath.find(".png") != std::string::npos) mimeType = "image/png";
-                                                
-                                                std::wstring wMimeType(mimeType.begin(), mimeType.end());
-                                                
-                                                // Create a memory stream for the content
-                                                ComPtr<IStream> contentStream;
-                                                HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, content.size());
-                                                if (hGlobal) {
-                                                    void* pData = GlobalLock(hGlobal);
-                                                    memcpy(pData, content.c_str(), content.size());
-                                                    GlobalUnlock(hGlobal);
-                                                    CreateStreamOnHGlobal(hGlobal, TRUE, &contentStream);
-                                                }
-                                                
-                                                // Format headers properly
-                                                std::wstring headers = L"Content-Type: " + wMimeType + L"\r\nAccess-Control-Allow-Origin: *";
-                                                
-                                                ComPtr<ICoreWebView2WebResourceResponse> response;
-                                                env->CreateWebResourceResponse(
-                                                    contentStream.Get(),
-                                                    200,
-                                                    L"OK",
-                                                    headers.c_str(),
-                                                    &response);
-                                                
-                                                args->put_Response(response.Get());
-                                                std::cout << "[WebView2] Served views:// file: " << filePath << " (" << content.size() << " bytes)" << std::endl;
-                                            }
-                                        }
-                                        
-                                        CoTaskMemFree(uri);
-                                        return S_OK;
-                                    }).Get(),
-                                nullptr);
-                            
-                            std::cout << "[WebView2] Added views:// scheme support" << std::endl;
-                            
-                            // Navigate to URL using the stored URL in view (avoiding lambda capture corruption)
-                            std::cout << "[WebView2] About to navigate - pendingUrl: '" << view->pendingUrl << "'" << std::endl;
-                            if (!view->pendingUrl.empty()) {
-                                std::cout << "[WebView2] Navigating to: " << view->pendingUrl << std::endl;
-                                view->loadURL(view->pendingUrl.c_str());
-                            } else {
-                                std::cout << "[WebView2] ERROR: pendingUrl is empty, cannot navigate" << std::endl;
-                            }
-                            
-                            // Mark creation as complete - all setup is done
-                            view->setCreationComplete(true);
-                            std::cout << "[WebView2] Creation completed successfully" << std::endl;
-                            
-                            // Add to container
-                            container->AddAbstractView(view);
-                            
-                            return S_OK;
-                        }).Get());
-            }).Get();
-        */
+        
         
         // Create WebView2 environment with custom scheme support
         try {
@@ -3608,7 +3355,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             // Get the interface that supports custom scheme registration  
             Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
             if (SUCCEEDED(options.As(&options4))) {
-                ::log("Setting up views:// custom scheme registration");
+                // ::log("Setting up views:// custom scheme registration");
                 
                 // Set allowed origins for the custom scheme
                 const WCHAR* allowedOrigins[1] = {L"*"};
@@ -3627,7 +3374,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 HRESULT schemeResult = options4->SetCustomSchemeRegistrations(1, registrations);
                 
                 if (SUCCEEDED(schemeResult)) {
-                    ::log("views:// custom scheme registration set successfully");
+                    // ::log("views:// custom scheme registration set successfully");
                 } else {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "Failed to set views:// custom scheme registration: 0x%lx", schemeResult);
@@ -3637,18 +3384,16 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 ::log("ERROR: Failed to get ICoreWebView2EnvironmentOptions4 interface for custom scheme registration");
             }
             
-            ::log("[WebView2] About to call CreateCoreWebView2EnvironmentWithOptions...");
             
             HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler.Get());
             
-            ::log("[WebView2] CreateCoreWebView2EnvironmentWithOptions returned");
             
             if (FAILED(hr)) {
                 char errorMsg[256];
                 sprintf_s(errorMsg, "ERROR: CreateCoreWebView2EnvironmentWithOptions failed with HRESULT: 0x%08X", hr);
                 ::log(errorMsg);
             } else {
-                ::log("[WebView2] CreateCoreWebView2EnvironmentWithOptions succeeded");
+                // ::log("[WebView2] CreateCoreWebView2EnvironmentWithOptions succeeded");
             }
         } catch (const std::exception& e) {
             std::cout << "[WebView2] Exception in WebView2 creation: " << e.what() << std::endl;
@@ -3700,9 +3445,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         // Create CEF browser info
         CefWindowInfo windowInfo;
         CefRect cefBounds((int)x, (int)y, (int)width, (int)height);
-        char cefBoundsLog[256];
-        sprintf_s(cefBoundsLog, "[CEF] Setting child window bounds: (%d,%d,%d,%d)", cefBounds.x, cefBounds.y, cefBounds.width, cefBounds.height);
-        ::log(cefBoundsLog);
+
         windowInfo.SetAsChild(container->GetHwnd(), cefBounds);
         
         CefBrowserSettings browserSettings;
@@ -3905,10 +3648,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
-    ::log("=======>>>>>> initWebview (serialized)");
-    printf("[LOG] Renderer: %s\n", renderer ? renderer : "default");
-    printf("[LOG] WebView geometry - x: %.2f, y: %.2f, width: %.2f, height: %.2f, autoResize: %s\n", 
-       x, y, width, height, autoResize ? "true" : "false");
+
     
     HWND hwnd = reinterpret_cast<HWND>(window);
     
@@ -3922,7 +3662,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                     electrobunPreloadScript, customPreloadScript);
         view = cefView.get();
     } else {
-        ::log("=== Creating WebView2 Browser ===");
         auto webview2View = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
                                               partitionIdentifier, navigationCallback, webviewEventHandler,
                                               bunBridgeHandler, internalBridgeHandler,
@@ -3953,9 +3692,6 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
     }
     
     // Use virtual method which handles threading and implementation details
-    char logMsg[512];
-    sprintf_s(logMsg, "Loading URL in WebView %u: %s", abstractView->webviewId, urlString);
-    log(logMsg);
     
     abstractView->loadURL(urlString);
 }
@@ -3966,7 +3702,6 @@ ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
         return;
     }
     
-    log("Webview going back");
     abstractView->goBack();
 }
 
@@ -3976,7 +3711,6 @@ ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
         return;
     }
     
-    log("Webview going forward");
     abstractView->goForward();
 }
 
@@ -3986,7 +3720,6 @@ ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
         return;
     }
     
-    log("Webview reloading");
     abstractView->reload();
 }
 
@@ -3996,9 +3729,6 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
         return;
     }
     
-    char logMsg[256];
-    sprintf_s(logMsg, "Removing WebView %u", abstractView->webviewId);
-    log(logMsg);
     
     abstractView->remove();
 }
@@ -4164,9 +3894,9 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
              if (g_applicationMenu) {
                 if (SetMenu(hwnd, g_applicationMenu)) {
                     DrawMenuBar(hwnd);
-                    char logMsg[256];
-                    sprintf_s(logMsg, "Applied application menu to new window: HWND=%p", hwnd);
-                    ::log(logMsg);
+                    // char logMsg[256];
+                    // sprintf_s(logMsg, "Applied application menu to new window: HWND=%p", hwnd);
+                    // ::log(logMsg);
                 } else {
                     ::log("Failed to apply application menu to new window");
                 }
@@ -4197,11 +3927,7 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
     }
     
     // Dispatch to main thread to ensure thread safety
-    MainThreadDispatcher::dispatch_sync([=]() {
-        char logMsg[256];
-        sprintf_s(logMsg, "Bringing window to front and activating: HWND=%p", hwnd);
-        ::log(logMsg);
-        
+    MainThreadDispatcher::dispatch_sync([=]() {      
         // Show the window if it's hidden
         if (!IsWindowVisible(hwnd)) {
             ShowWindow(hwnd, SW_SHOW);
@@ -4223,7 +3949,6 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
                     SetForegroundWindow(hwnd);
                     SetFocus(hwnd);
                     AttachThreadInput(currentThreadId, foregroundThreadId, FALSE);
-                    ::log("Window brought to foreground using thread input attachment");
                 } else {
                     // Last resort - flash the window to get user attention
                     FLASHWINFO fwi = {0};
@@ -4234,7 +3959,6 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
                     fwi.dwTimeout = 0;
                     FlashWindowEx(&fwi);
                     
-                    ::log("Could not bring window to foreground, flashed window instead");
                 }
             }
         }
@@ -4247,7 +3971,6 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
         SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, 
                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         
-        ::log("Window activation sequence completed");
     });
 }
 
@@ -4271,9 +3994,7 @@ ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
                 
                 // Set the window title
                 if (SetWindowTextW(hwnd, wTitle.c_str())) {
-                    char logMsg[512];
-                    sprintf_s(logMsg, "Window title set successfully: %s", title);
-                    ::log(logMsg);
+                    
                 } else {
                     DWORD error = GetLastError();
                     char errorMsg[256];
@@ -4307,14 +4028,11 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
     
     // Dispatch to main thread to ensure thread safety
     MainThreadDispatcher::dispatch_sync([=]() {
-        char logMsg[256];
-        sprintf_s(logMsg, "Closing window: HWND=%p", hwnd);
-        ::log(logMsg);
+
         
         // Clean up any associated container views before closing
         auto containerIt = g_containerViews.find(hwnd);
         if (containerIt != g_containerViews.end()) {
-            ::log("Cleaning up container view for window");
             g_containerViews.erase(containerIt);
         }
         
@@ -4651,7 +4369,6 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
         return nullptr;
     }
     
-    log("File dialog selection: " + result);
     return strdup(result.c_str());
 }
 
@@ -4695,9 +4412,7 @@ LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         case WM_RBUTTONUP:
                             // Right click - show context menu if it exists, otherwise call handler
                             if (trayItem->contextMenu) {
-                                char logMsg[256];
-                                sprintf_s(logMsg, "Right click on tray item %u - showing menu", trayItem->trayId);
-                                ::log(logMsg);
+                                
                                 
                                 POINT pt;
                                 GetCursorPos(&pt);
@@ -4723,9 +4438,7 @@ LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 }
                             } else {
                                 // No menu exists yet, call handler (this will trigger menu creation)
-                                char logMsg[256];
-                                sprintf_s(logMsg, "Right click on tray item %u - no menu, calling handler", trayItem->trayId);
-                                ::log(logMsg);
+                                
                                 
                                 if (trayItem->handler) {
                                     // Use a separate thread or async call to prevent blocking
@@ -4756,7 +4469,7 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
                         uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
     
     return MainThreadDispatcher::dispatch_sync([=]() -> NSStatusItem* {
-        ::log("Creating system tray icon");
+        // ::log("Creating system tray icon");
         
         NSStatusItem* statusItem = new NSStatusItem();
         statusItem->trayId = trayId;
@@ -4814,9 +4527,7 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
             return nullptr;
         }
         
-        char logMsg[256];
-        sprintf_s(logMsg, "Tray window created: HWND=%p", statusItem->hwnd);
-        ::log(logMsg);
+        
         
         // Store in global map before setting up the tray icon
         g_trayItems[statusItem->hwnd] = statusItem;
@@ -4861,9 +4572,9 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
         
         // Add to system tray
         if (Shell_NotifyIcon(NIM_ADD, &statusItem->nid)) {
-            char successMsg[256];
-            sprintf_s(successMsg, "System tray icon created successfully: ID=%u, HWND=%p", trayId, statusItem->hwnd);
-            ::log(successMsg);
+            // char successMsg[256];
+            // sprintf_s(successMsg, "System tray icon created successfully: ID=%u, HWND=%p", trayId, statusItem->hwnd);
+            // ::log(successMsg);
         } else {
             DWORD error = GetLastError();
             char errorMsg[256];
@@ -4941,11 +4652,8 @@ ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image)
 // Updated setTrayMenuFromJSON function
 ELECTROBUN_EXPORT void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {
     if (!statusItem || !jsonString) return;
-    
-    log("setTrayMenuFromJSON");
-    
+        
     MainThreadDispatcher::dispatch_sync([=]() {
-        ::log("setTrayMenuFromJSON main thread");
         
         if (!statusItem->handler) {
             ::log("ERROR: No handler found for status item");
@@ -5079,9 +4787,7 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
                     if (SetMenu(mainWindow, g_applicationMenu)) {
                         DrawMenuBar(mainWindow);
                         
-                        char successMsg[256];
-                        sprintf_s(successMsg, "Application menu applied to window: HWND=%p", mainWindow);
-                        ::log(successMsg);
+                       
                     } else {
                         DWORD error = GetLastError();
                         char errorMsg[256];
@@ -5119,7 +4825,6 @@ ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHand
     
     MainThreadDispatcher::dispatch_sync([=]() {
         try {
-            ::log("showContextMenu: parsing JSON menu configuration");
             SimpleJsonValue menuConfig = parseJson(std::string(jsonString));
             
             std::unique_ptr<StatusItemTarget> target = std::make_unique<StatusItemTarget>();
@@ -5144,9 +4849,7 @@ ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHand
             
             // Required for proper menu operation
             SetForegroundWindow(hwnd);
-            
-            ::log("showContextMenu: displaying menu at cursor position");
-            
+                        
             // Show the context menu
             UINT cmd = TrackPopupMenu(
                 menu,
@@ -5233,13 +4936,10 @@ void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
                 std::string uriStr(size - 1, 0);
                 WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, NULL, NULL);
                 
-                char logMsg[512];
-                sprintf_s(logMsg, "Resource request intercepted: %s", uriStr.c_str());
-                ::log(logMsg);
+                
                 
                 // Check if this is a views:// URL
                 if (wUri.find(L"views://") == 0) {
-                    ::log("Processing views:// request");
                     handleViewsSchemeRequest(args, wUri, webviewId);
                 }
                 
@@ -5270,17 +4970,12 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
                              const std::wstring& uri, 
                              uint32_t webviewId) {
     
-    log("=== HANDLING VIEWS:// REQUEST ===");
     
     // Convert URI to std::string for processing
     int size = WideCharToMultiByte(CP_UTF8, 0, uri.c_str(), -1, NULL, 0, NULL, NULL);
     std::string uriStr(size - 1, 0);
     WideCharToMultiByte(CP_UTF8, 0, uri.c_str(), -1, &uriStr[0], size, NULL, NULL);
 
-    
-    char logMsg[512];
-    sprintf_s(logMsg, "Processing views:// URL: %s", uriStr.c_str());
-    log(logMsg);
     
     // Extract the path after "views://"
     std::string path;
@@ -5296,12 +4991,11 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
     if (path == "internal/index.html") {
         // Handle internal HTML content using your JS callback
         if (g_getHTMLForWebviewSync) {
-            ::log("Calling g_getHTMLForWebviewSync...");
             const char* htmlContent = g_getHTMLForWebviewSync(webviewId);
             if (htmlContent && strlen(htmlContent) > 0) {
                 responseData = std::string(htmlContent);
-                sprintf_s(logMsg, "Got HTML content from JS callback: %zu bytes", responseData.length());
-                ::log(logMsg);
+                // sprintf_s(logMsg, "Got HTML content from JS callback: %zu bytes", responseData.length());
+                // ::log(logMsg);
             } else {
                 responseData = "<html><body><h1>Empty HTML content from callback!</h1></body></html>";
                 ::log("JS callback returned empty or null content");
@@ -5323,8 +5017,8 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
         }
     }
     
-    sprintf_s(logMsg, "Response data length: %zu bytes, MIME type: %s", responseData.length(), mimeType.c_str());
-    log(logMsg);
+    // sprintf_s(logMsg, "Response data length: %zu bytes, MIME type: %s", responseData.length(), mimeType.c_str());
+    // log(logMsg);
     
     // Create the response using the global environment
     if (!g_environment) {
@@ -5385,7 +5079,6 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
             return;
         }
         
-        ::log("Successfully created and set views:// response");
         
     } catch (...) {
         ::log("ERROR: Exception occurred while creating response");
@@ -5406,9 +5099,6 @@ std::string loadViewsFile(const std::string& path) {
     // Build full path to views file from current working directory
     std::string fullPath = std::string(currentDir) + "\\..\\Resources\\app\\views\\" + path;
     
-    char logMsg[512];
-    sprintf_s(logMsg, "Attempting to load views file: %s", fullPath.c_str());
-    log(logMsg);
     
     // Try to read the file
     std::ifstream file(fullPath, std::ios::binary);
@@ -5421,9 +5111,6 @@ std::string loadViewsFile(const std::string& path) {
     // Read file contents
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     file.close();
-    
-    sprintf_s(logMsg, "Loaded views file: %s (%zu bytes)", fullPath.c_str(), content.length());
-    log(logMsg);
     
     return content;
 }

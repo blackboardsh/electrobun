@@ -192,7 +192,6 @@ export class BrowserView<T> {
   // so we have to chunk it
   // TODO: is this still needed after switching from named pipes
   executeJavascript(js: string) {
-    console.log(`bun sending script to browser: `, js.substring(0, 100));
     ffi.request.evaluateJavascriptWithNoCompletion({id: this.id, js});
   }
 
