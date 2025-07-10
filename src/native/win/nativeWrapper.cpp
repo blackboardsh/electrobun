@@ -1817,7 +1817,7 @@ void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser) {
             auto containerIt = g_containerViews.find(parentWindow);
             if (containerIt != g_containerViews.end()) {
                 std::cout << "[CEF] Bringing browser ID " << browser->GetIdentifier() << " (webview ID " << view->webviewId << ") to front" << std::endl;
-                containerIt->second->BringViewToFront(view->webviewId);
+                containerIt->second.get()->BringViewToFront(view->webviewId);
             } else {
                 std::cout << "[CEF] No container found for parentWindow: " << parentWindow << std::endl;
             }
