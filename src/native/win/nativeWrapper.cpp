@@ -1237,7 +1237,6 @@ public:
             // Copy string to avoid lifetime issues in lambda
             std::string jsStringCopy = jsString;
             MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
-                ::log("WebView2: Main thread dispatch executing JavaScript");
                 std::wstring js = std::wstring(jsStringCopy.begin(), jsStringCopy.end());
                 HRESULT hr = webview->ExecuteScript(js.c_str(), nullptr);
                 if (FAILED(hr)) {
@@ -1245,7 +1244,6 @@ public:
                     sprintf_s(logMsg, "WebView2: ExecuteScript failed with HRESULT: 0x%08lX", hr);
                     ::log(logMsg);
                 } else {
-                    ::log("WebView2: ExecuteScript succeeded");
                 }
             });
         } else {
@@ -1273,11 +1271,6 @@ public:
     }
     
     void resize(const RECT& frame, const char* masksJson) override {
-        char resizeLog[512];
-        sprintf_s(resizeLog, "[WebView2] resize called - webviewId: %u, bounds: (%d,%d,%d,%d), controller: %s", 
-                  webviewId, frame.left, frame.top, frame.right, frame.bottom,
-                  controller ? "valid" : "NULL");
-        ::log(resizeLog);
         
         if (controller) {
             // WebView2 operations must be called from main thread to avoid TYPE_E_BADVARTYPE
@@ -1287,8 +1280,6 @@ public:
                     char errorLog[256];
                     sprintf_s(errorLog, "[WebView2] put_Bounds failed for webview %u, HRESULT: 0x%08X", webviewId, result);
                     ::log(errorLog);
-                } else {
-                    ::log("[WebView2] put_Bounds succeeded");
                 }
             });
             
@@ -1545,7 +1536,6 @@ public:
             // Copy string to avoid lifetime issues in lambda
             std::string jsStringCopy = jsString;
             MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
-                ::log("CEF: Main thread dispatch executing JavaScript");
                 browser->GetMainFrame()->ExecuteJavaScript(jsStringCopy.c_str(), "", 0);
                 ::log("CEF: ExecuteJavaScript completed");
             });
@@ -3183,7 +3173,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             g_webview2Views[containerHwnd] = view.get();
                             ::log("[WebView2] Stored WebView2View for container hwnd");
                             
-                            ::log("[WebView2] Minimal controller setup completed successfully");
                             
                             return S_OK;
                         }).Get());
@@ -3816,7 +3805,6 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
     
     abstractView->evaluateJavaScriptWithNoCompletion(script);
     
-    ::log("JavaScript execution dispatched to main thread");
 }
 
 ELECTROBUN_EXPORT void testFFI(void *ptr) {
@@ -4134,12 +4122,6 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
         return;
     }
     
-    char resizeLog[512];
-    sprintf_s(resizeLog, "[FFI] resizeWebview called - webviewId: %u, bounds: (%.2f,%.2f,%.2f,%.2f), type: %s", 
-              abstractView->webviewId, x, y, width, height,
-              (dynamic_cast<WebView2View*>(abstractView) ? "WebView2" : 
-               dynamic_cast<CEFView*>(abstractView) ? "CEF" : "Unknown"));
-    ::log(resizeLog);
     
     RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
     abstractView->resize(bounds, masksJson);
