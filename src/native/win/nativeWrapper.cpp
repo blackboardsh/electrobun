@@ -5045,8 +5045,7 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
         HRESULT streamResult = CreateStreamOnHGlobal(hGlobal, TRUE, &stream);
         if (FAILED(streamResult)) {
             GlobalFree(hGlobal);
-            sprintf_s(logMsg, "ERROR: Failed to create stream on global: 0x%lx", streamResult);
-            ::log(logMsg);
+            ::log("ERROR: Failed to create stream on global");
             return;
         }
         
@@ -5063,16 +5062,14 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
             &response);
         
         if (FAILED(responseResult)) {
-            sprintf_s(logMsg, "ERROR: Failed to create web resource response: 0x%lx", responseResult);
-            ::log(logMsg);
+            ::log("ERROR: Failed to create web resource response");
             return;
         }
         
         // Set the response
         HRESULT setResult = args->put_Response(response.Get());
         if (FAILED(setResult)) {
-            sprintf_s(logMsg, "ERROR: Failed to set response: 0x%lx", setResult);
-            ::log(logMsg);
+            ::log("ERROR: Failed to set response");
             return;
         }
         
@@ -5100,8 +5097,7 @@ std::string loadViewsFile(const std::string& path) {
     // Try to read the file
     std::ifstream file(fullPath, std::ios::binary);
     if (!file.is_open()) {
-        sprintf_s(logMsg, "Could not open views file: %s", fullPath.c_str());
-        ::log(logMsg);
+        ::log("ERROR: Could not open views file");
         return "";
     }
     
