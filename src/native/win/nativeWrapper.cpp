@@ -1107,9 +1107,26 @@ public:
         bunBridgeHandler = Microsoft::WRL::Make<BridgeHandler>(webviewId, bunBridgeCallbackHandler);
         internalBridgeHandler = Microsoft::WRL::Make<BridgeHandler>(webviewId, internalBridgeCallbackHandler);
         
+        // Convert COM objects to VARIANT for AddHostObjectToScript
+        VARIANT bunBridgeVariant = {};
+        VariantInit(&bunBridgeVariant);
+        bunBridgeVariant.vt = VT_DISPATCH;
+        bunBridgeVariant.pdispVal = bunBridgeHandler.Get();
+        bunBridgeHandler->AddRef(); // AddRef for the VARIANT
+        
+        VARIANT internalBridgeVariant = {};
+        VariantInit(&internalBridgeVariant);
+        internalBridgeVariant.vt = VT_DISPATCH;
+        internalBridgeVariant.pdispVal = internalBridgeHandler.Get();
+        internalBridgeHandler->AddRef(); // AddRef for the VARIANT
+        
         // Add the bridge objects to the JavaScript context
-        webview->AddHostObjectToScript(L"__electrobunBunBridge", bunBridgeHandler.Get());
-        webview->AddHostObjectToScript(L"__electrobunInternalBridge", internalBridgeHandler.Get());
+        webview->AddHostObjectToScript(L"__electrobunBunBridge", &bunBridgeVariant);
+        webview->AddHostObjectToScript(L"__electrobunInternalBridge", &internalBridgeVariant);
+        
+        // Clean up VARIANTs
+        VariantClear(&bunBridgeVariant);
+        VariantClear(&internalBridgeVariant);
         
         ::log("[WebView2] JavaScript bridge objects added successfully");
     }
