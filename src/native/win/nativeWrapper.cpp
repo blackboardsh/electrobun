@@ -105,8 +105,8 @@ static std::mutex g_webviewCreationMutex;
 // Global map to store preload scripts by browser ID (needs to be early for load handler)
 static std::map<int, std::string> g_preloadScripts;
 
-// Global map to store CEFViews by container window handle
-static std::map<HWND, std::shared_ptr<CEFView>> g_cefViews;
+// Global map to store CEFViews by container window handle (using void* to avoid forward declaration issues)
+static std::map<HWND, void*> g_cefViews;
 
 // Global map to store pending CEF navigations for timing workaround - use browser ID instead of pointer
 static std::map<int, std::string> g_pendingCefNavigations;
@@ -258,7 +258,7 @@ public:
         std::cout << "[CEF] Looking for CEFView with parentWindow: " << parentWindow << std::endl;
         auto viewIt = g_cefViews.find(parentWindow);
         if (viewIt != g_cefViews.end()) {
-            auto view = viewIt->second;
+            auto view = static_cast<CEFView*>(viewIt->second);
             if (view) {
                 view->setBrowser(browser);
                 std::cout << "[CEF] Set browser on CEFView for webview ID: " << view->webviewId << std::endl;
@@ -3390,7 +3390,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             g_cefClients[containerHwnd] = client;
             std::cout << "[CEF] Stored client for container hwnd: " << containerHwnd << std::endl;
             // Add CEFView to global map for OnAfterCreated callback using container window handle  
-            g_cefViews[containerHwnd] = view;
+            g_cefViews[containerHwnd] = view.get();
             std::cout << "[CEF] Stored CEFView for container hwnd: " << containerHwnd << std::endl;
         }
     });
