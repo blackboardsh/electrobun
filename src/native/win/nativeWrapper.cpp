@@ -1348,19 +1348,17 @@ public:
             compositionController->put_RootVisualTarget(nullptr);
             ::log("removeMasks: cleared composition mask");
         } else {
-            // For fallback approach, clear window region
-            if (hwnd) {
-                HWND containerHwnd = FindWindowEx(hwnd, nullptr, nullptr, nullptr);
-                if (containerHwnd) {
-                    // Clear the window region by setting it to nullptr
-                    if (SetWindowRgn(containerHwnd, nullptr, TRUE) != 0) {
-                        ::log("removeMasks: window region cleared successfully");
-                    } else {
-                        ::log("removeMasks: failed to clear window region");
-                    }
+            // For fallback approach, clear window region from specific WebView2 window
+            HWND webview2Hwnd = getWebView2WindowHandle();
+            if (webview2Hwnd) {
+                // Clear the window region by setting it to nullptr
+                if (SetWindowRgn(webview2Hwnd, nullptr, TRUE) != 0) {
+                    ::log("removeMasks: window region cleared successfully from WebView2");
                 } else {
-                    ::log("removeMasks: could not find container window");
+                    ::log("removeMasks: failed to clear window region from WebView2");
                 }
+            } else {
+                ::log("removeMasks: could not find WebView2 window handle");
             }
             ::log("removeMasks: cleared fallback mask");
         }
@@ -1376,6 +1374,40 @@ public:
             mirrorModeEnabled = false;
             controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
         }
+    }
+    
+    // Helper function to find the actual WebView2 child window handle
+    HWND getWebView2WindowHandle() {
+        if (!hwnd) return nullptr;
+        
+        // Find the container window first
+        HWND containerHwnd = FindWindowEx(hwnd, nullptr, nullptr, nullptr);
+        if (!containerHwnd) return nullptr;
+        
+        // Structure to pass data to the enum callback
+        struct EnumData {
+            HWND webview2Hwnd;
+            uint32_t targetWebviewId;
+        } enumData = { nullptr, webviewId };
+        
+        // Enumerate child windows of the container to find the WebView2 window
+        EnumChildWindows(containerHwnd, [](HWND hwnd, LPARAM lParam) -> BOOL {
+            EnumData* data = reinterpret_cast<EnumData*>(lParam);
+            
+            // Check if this is a WebView2 window by checking class name
+            char className[256];
+            if (GetClassNameA(hwnd, className, sizeof(className)) > 0) {
+                // WebView2 typically creates windows with Chrome-related class names
+                if (strstr(className, "Chrome") || strstr(className, "WebView") || 
+                    strstr(className, "Edge") || strstr(className, "Browser")) {
+                    data->webview2Hwnd = hwnd;
+                    return FALSE; // Stop enumeration
+                }
+            }
+            return TRUE; // Continue enumeration
+        }, reinterpret_cast<LPARAM>(&enumData));
+        
+        return enumData.webview2Hwnd;
     }
 
 private:
@@ -1542,30 +1574,23 @@ private:
                 sprintf_s(successMsg, "applyWindowMask: created window region with %d mask holes for webview=%u", maskCount, webviewId);
                 ::log(successMsg);
                 
-                // Apply the region to the WebView2 container window
-                // We need to get the container HWND from the parent window
-                HWND containerHwnd = nullptr;
-                if (hwnd) {
-                    // Find the container window (child of the parent window)
-                    containerHwnd = FindWindowEx(hwnd, nullptr, nullptr, nullptr);
-                    if (containerHwnd) {
-                        char hwndMsg[256];
-                        sprintf_s(hwndMsg, "applyWindowMask: applying region to container HWND=%p", containerHwnd);
-                        ::log(hwndMsg);
-                        
-                        // Apply the region to the container window
-                        if (SetWindowRgn(containerHwnd, webviewRegion, TRUE) != 0) {
-                            ::log("applyWindowMask: window region applied successfully");
-                            // Don't delete the region - SetWindowRgn takes ownership
-                            return;
-                        } else {
-                            ::log("applyWindowMask: failed to apply window region");
-                        }
+                // Apply the region to the specific WebView2 child window
+                HWND webview2Hwnd = getWebView2WindowHandle();
+                if (webview2Hwnd) {
+                    char hwndMsg[256];
+                    sprintf_s(hwndMsg, "applyWindowMask: applying region to WebView2 HWND=%p", webview2Hwnd);
+                    ::log(hwndMsg);
+                    
+                    // Apply the region to the specific WebView2 window
+                    if (SetWindowRgn(webview2Hwnd, webviewRegion, TRUE) != 0) {
+                        ::log("applyWindowMask: window region applied successfully to WebView2");
+                        // Don't delete the region - SetWindowRgn takes ownership
+                        return;
                     } else {
-                        ::log("applyWindowMask: could not find container window");
+                        ::log("applyWindowMask: failed to apply window region to WebView2");
                     }
                 } else {
-                    ::log("applyWindowMask: parent hwnd is null");
+                    ::log("applyWindowMask: could not find WebView2 window handle");
                 }
             }
             
