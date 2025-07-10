@@ -1136,7 +1136,7 @@ public:
             Callback<ICoreWebView2WebMessageReceivedEventHandler>(
                 [this](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
                     LPWSTR messageRaw;
-                    args->get_WebMessageAsString(&messageRaw);
+                    args->TryGetWebMessageAsString(&messageRaw);
                     
                     // Convert to std::string
                     std::string message;
