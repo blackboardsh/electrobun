@@ -1115,6 +1115,10 @@ public:
         controller = ctrl;
     }
     
+    void setCompositionController(ComPtr<ICoreWebView2CompositionController> compCtrl) {
+        compositionController = compCtrl;
+    }
+    
     void setWebView(ComPtr<ICoreWebView2> wv) {
         webview = wv;
     }
@@ -2970,10 +2974,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     return S_OK;
                 }
                 
-                ::log("[WebView2] About to create controller...");
-                return env->CreateCoreWebView2Controller(targetHwnd,
-                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                ::log("[WebView2] About to create composition controller...");
+                return env->CreateCoreWebView2CompositionController(targetHwnd,
+                    Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
+                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2CompositionController* compositionController) -> HRESULT {
                             ::log("[WebView2] Controller creation callback executed");
                             if (FAILED(result)) {
                                 char errorMsg[256];
@@ -2983,13 +2987,19 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 return result;
                             }
                             
-                            ::log("[WebView2] Controller created successfully - minimal setup");
+                            ::log("[WebView2] Composition controller created successfully - minimal setup");
                             
-                            // Minimal controller setup
-                            ComPtr<ICoreWebView2Controller> ctrl(controller);
+                            // Minimal composition controller setup
+                            ComPtr<ICoreWebView2CompositionController> compCtrl(compositionController);
+                            ComPtr<ICoreWebView2Controller> ctrl;
                             ComPtr<ICoreWebView2> webview;
+                            
+                            // Get the base controller interface from composition controller
+                            compCtrl->QueryInterface(IID_PPV_ARGS(&ctrl));
                             ctrl->get_CoreWebView2(&webview);
+                            
                             view->setController(ctrl);
+                            view->setCompositionController(compCtrl);
                             view->setWebView(webview);
                             
                             // Set up JavaScript bridge objects
