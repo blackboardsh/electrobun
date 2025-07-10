@@ -107,6 +107,8 @@ static std::map<int, std::string> g_preloadScripts;
 
 // Global map to store CEFViews by container window handle (using void* to avoid forward declaration issues)
 static std::map<HWND, void*> g_cefViews;
+// Global map to store WebView2Views by container window handle (using void* to avoid forward declaration issues)
+static std::map<HWND, void*> g_webview2Views;
 
 // Global map to store pending CEF navigations for timing workaround - use browser ID instead of pointer
 static std::map<int, std::string> g_pendingCefNavigations;
@@ -214,6 +216,7 @@ static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
 // Forward declaration for helper functions (defined after class definitions)
 void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser);
 void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser);
+void SetWebViewOnWebView2View(HWND containerWindow, void* webview);
 
 // CEF Life Span Handler for async browser creation
 class ElectrobunLifeSpanHandler : public CefLifeSpanHandler {
@@ -1551,6 +1554,23 @@ void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser) {
         }
     } else {
         std::cout << "[CEF] No CEFView found for parentWindow: " << parentWindow << std::endl;
+    }
+}
+
+// Helper function to set webview on WebView2View (defined after WebView2View class)
+void SetWebViewOnWebView2View(HWND containerWindow, void* webview) {
+    std::cout << "[WebView2] Looking for WebView2View with containerWindow: " << containerWindow << std::endl;
+    auto viewIt = g_webview2Views.find(containerWindow);
+    if (viewIt != g_webview2Views.end()) {
+        auto view = static_cast<WebView2View*>(viewIt->second);
+        if (view) {
+            // WebView2 is already set in the controller creation callback
+            std::cout << "[WebView2] Found WebView2View for webview ID: " << view->webviewId << std::endl;
+        } else {
+            std::cout << "[WebView2] Found WebView2View entry but view is null" << std::endl;
+        }
+    } else {
+        std::cout << "[WebView2] No WebView2View found for containerWindow: " << containerWindow << std::endl;
     }
 }
 
@@ -3045,6 +3065,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             view->setCreationComplete(true);
                             container->AddAbstractView(view);
+                            
+                            // Store WebView2View in global map for JavaScript execution
+                            HWND containerHwnd = container->GetHwnd();
+                            g_webview2Views[containerHwnd] = view.get();
+                            ::log("[WebView2] Stored WebView2View for container hwnd");
+                            
                             ::log("[WebView2] Minimal controller setup completed successfully");
                             
                             return S_OK;
