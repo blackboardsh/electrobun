@@ -211,8 +211,9 @@ class ElectrobunCefClient;
 // Global map to store CEF clients for browser connection
 static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
 
-// Forward declaration for helper function (defined after ElectrobunCefClient)
+// Forward declaration for helper functions (defined after class definitions)
 void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser);
+void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser);
 
 // CEF Life Span Handler for async browser creation
 class ElectrobunLifeSpanHandler : public CefLifeSpanHandler {
@@ -255,19 +256,8 @@ public:
         }
         
         // Set browser on the CEFView for direct JavaScript execution
-        std::cout << "[CEF] Looking for CEFView with parentWindow: " << parentWindow << std::endl;
-        auto viewIt = g_cefViews.find(parentWindow);
-        if (viewIt != g_cefViews.end()) {
-            auto view = static_cast<CEFView*>(viewIt->second);
-            if (view) {
-                view->setBrowser(browser);
-                std::cout << "[CEF] Set browser on CEFView for webview ID: " << view->webviewId << std::endl;
-            } else {
-                std::cout << "[CEF] Found CEFView entry but view is null" << std::endl;
-            }
-        } else {
-            std::cout << "[CEF] No CEFView found for parentWindow: " << parentWindow << std::endl;
-        }
+        // Note: CEFView casting will be handled in a helper function defined after class declaration
+        SetBrowserOnCEFView(parentWindow, browser);
         
         // Look for pending URL using parent window
         auto it = g_pendingUrls.find(parentWindow);
@@ -1546,6 +1536,23 @@ public:
         }
     }
 };
+
+// Helper function to set browser on CEFView (defined after CEFView class)
+void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser) {
+    std::cout << "[CEF] Looking for CEFView with parentWindow: " << parentWindow << std::endl;
+    auto viewIt = g_cefViews.find(parentWindow);
+    if (viewIt != g_cefViews.end()) {
+        auto view = static_cast<CEFView*>(viewIt->second);
+        if (view) {
+            view->setBrowser(browser);
+            std::cout << "[CEF] Set browser on CEFView for webview ID: " << view->webviewId << std::endl;
+        } else {
+            std::cout << "[CEF] Found CEFView entry but view is null" << std::endl;
+        }
+    } else {
+        std::cout << "[CEF] No CEFView found for parentWindow: " << parentWindow << std::endl;
+    }
+}
 
 // ContainerView class definition
 class ContainerView {
