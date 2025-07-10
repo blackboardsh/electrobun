@@ -1179,18 +1179,46 @@ public:
         
         // Inject bridge objects as simple JavaScript objects
         std::string bridgeScript = R"(
+            console.log('[WebView2] Injecting bridge objects...');
+            console.log('[WebView2] window.chrome available:', !!window.chrome);
+            console.log('[WebView2] window.chrome.webview available:', !!(window.chrome && window.chrome.webview));
+            console.log('[WebView2] window.chrome.webview.postMessage available:', !!(window.chrome && window.chrome.webview && window.chrome.webview.postMessage));
+            
             window.__electrobunBunBridge = {
                 postMessage: function(msg) {
-                    var wrapped = JSON.stringify({type: 'bunBridge', data: msg});
-                    window.chrome.webview.postMessage(wrapped);
+                    console.log('[WebView2] BunBridge postMessage called with:', msg);
+                    try {
+                        if (!window.chrome || !window.chrome.webview || !window.chrome.webview.postMessage) {
+                            throw new Error('chrome.webview.postMessage is not available');
+                        }
+                        var wrapped = JSON.stringify({type: 'bunBridge', data: msg});
+                        console.log('[WebView2] Sending wrapped message:', wrapped);
+                        window.chrome.webview.postMessage(wrapped);
+                    } catch (error) {
+                        console.error('[WebView2] BunBridge postMessage error:', error);
+                        throw error;
+                    }
                 }
             };
             window.__electrobunInternalBridge = {
                 postMessage: function(msg) {
-                    var wrapped = JSON.stringify({type: 'internalBridge', data: msg});
-                    window.chrome.webview.postMessage(wrapped);
+                    console.log('[WebView2] InternalBridge postMessage called with:', msg);
+                    try {
+                        if (!window.chrome || !window.chrome.webview || !window.chrome.webview.postMessage) {
+                            throw new Error('chrome.webview.postMessage is not available');
+                        }
+                        var wrapped = JSON.stringify({type: 'internalBridge', data: msg});
+                        console.log('[WebView2] Sending wrapped message:', wrapped);
+                        window.chrome.webview.postMessage(wrapped);
+                    } catch (error) {
+                        console.error('[WebView2] InternalBridge postMessage error:', error);
+                        throw error;
+                    }
                 }
             };
+            console.log('[WebView2] Bridge objects created successfully');
+            console.log('[WebView2] __electrobunBunBridge:', window.__electrobunBunBridge);
+            console.log('[WebView2] __electrobunInternalBridge:', window.__electrobunInternalBridge);
         )";
         
         std::wstring wBridgeScript(bridgeScript.begin(), bridgeScript.end());
