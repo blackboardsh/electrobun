@@ -3027,9 +3027,16 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Set up JavaScript bridge objects
                             view->setupJavaScriptBridges();
                             
-                            // Set bounds
+                            // Set bounds and visibility
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+                            char boundsLog[256];
+                            sprintf_s(boundsLog, "[WebView2] Setting bounds: (%d,%d,%d,%d)", bounds.left, bounds.top, bounds.right, bounds.bottom);
+                            ::log(boundsLog);
                             ctrl->put_Bounds(bounds);
+                            
+                            // Make sure the controller is visible
+                            ctrl->put_IsVisible(TRUE);
+                            ::log("[WebView2] Controller visibility set to TRUE");
                             
                             // Add views:// scheme support - TEST ADDITION
                             ::log("[WebView2] Adding views:// scheme support");
@@ -3474,7 +3481,11 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         // Create CEF browser info
         CefWindowInfo windowInfo;
-        windowInfo.SetAsChild(container->GetHwnd(), {(int)x, (int)y, (int)(x + width), (int)(y + height)});
+        RECT cefBounds = {(int)x, (int)y, (int)(x + width), (int)(y + height)};
+        char cefBoundsLog[256];
+        sprintf_s(cefBoundsLog, "[CEF] Setting child window bounds: (%d,%d,%d,%d)", cefBounds.left, cefBounds.top, cefBounds.right, cefBounds.bottom);
+        ::log(cefBoundsLog);
+        windowInfo.SetAsChild(container->GetHwnd(), cefBounds);
         
         CefBrowserSettings browserSettings;
         // Note: web_security setting for CEF would need correct API
