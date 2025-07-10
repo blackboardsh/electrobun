@@ -1231,9 +1231,7 @@ public:
     }
     
     void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
-        ::log("WebView2: evaluateJavaScriptWithNoCompletion called");
         if (webview) {
-            ::log("WebView2: webview is valid, executing JavaScript");
             // Copy string to avoid lifetime issues in lambda
             std::string jsStringCopy = jsString;
             MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
@@ -3794,14 +3792,6 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
         ::log("ERROR: Invalid parameters passed to evaluateJavaScriptWithNoCompletion");
         return;
     }
-    
-    char logMsg[512];
-    sprintf_s(logMsg, "Executing JavaScript in webview %u (type: %s): %.100s", 
-              abstractView->webviewId, 
-              (dynamic_cast<WebView2View*>(abstractView) ? "WebView2" : 
-               dynamic_cast<CEFView*>(abstractView) ? "CEF" : "Unknown"),
-              script);
-    ::log(logMsg);
     
     abstractView->evaluateJavaScriptWithNoCompletion(script);
     
