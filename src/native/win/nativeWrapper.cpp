@@ -1148,15 +1148,28 @@ public:
                     
                     ::log("[WebView2] Received web message");
                     
+                    // Debug: log the full message
+                    char logBuffer[512];
+                    sprintf_s(logBuffer, "[WebView2] Received message: %.400s", message.c_str());
+                    ::log(logBuffer);
+                    
                     // Parse message to determine if it's for bun bridge or internal bridge
                     if (message.find("\"type\":\"bunBridge\"") != std::string::npos) {
+                        ::log("[WebView2] Routing to bunBridge handler");
                         if (bunBridgeCallbackHandler) {
                             bunBridgeCallbackHandler(webviewId, message.c_str());
+                        } else {
+                            ::log("[WebView2] ERROR: bunBridgeCallbackHandler is null");
                         }
                     } else if (message.find("\"type\":\"internalBridge\"") != std::string::npos) {
+                        ::log("[WebView2] Routing to internalBridge handler");
                         if (internalBridgeCallbackHandler) {
                             internalBridgeCallbackHandler(webviewId, message.c_str());
+                        } else {
+                            ::log("[WebView2] ERROR: internalBridgeCallbackHandler is null");
                         }
+                    } else {
+                        ::log("[WebView2] Message type not recognized");
                     }
                     
                     CoTaskMemFree(messageRaw);
