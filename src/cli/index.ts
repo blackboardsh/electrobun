@@ -11,10 +11,41 @@ import {
 import { execSync } from "child_process";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
+import {platform, arch} from 'os';
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
-
 // MacOS named pipes hang at around 4KB
 const MAX_CHUNK_SIZE = 1024 * 2;
+
+// TODO: dedup with built.ts
+const OS: 'win' | 'linux' | 'macos' = getPlatform();
+const ARCH: 'arm64' | 'x64' = getArch();
+
+function getPlatform() {
+  switch (platform()) {
+      case "win32":
+          return 'win';
+      case "darwin":
+          return 'macos';
+      case 'linux':
+          return 'linux';
+      default:
+          throw 'unsupported platform';
+  }
+}
+
+function getArch() {
+  switch (arch()) {
+      case "arm64":
+          return 'arm64';
+      case "x64":
+          return 'x64';
+      default:
+          throw 'unsupported arch'
+  }
+}
+
+
+const binExt = OS === 'win' ? '.exe' : '';
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -28,31 +59,32 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
 const commandArg = process.argv[indexOfElectrobun + 1] || "launcher";
 
 const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
-// const SRC_PATH = join(ELECTROBUN_DEP_PATH, "src");
-// const ZIGOUT_BIN = join("zig-out", "bin");
 
 // When debugging electrobun with the example app use the builds (dev or release) right from the source folder
 // For developers using electrobun cli via npm use the release versions in /dist
 // This lets us not have to commit src build folders to git and provide pre-built binaries
 const PATHS = {
-  BUN_BINARY: join(ELECTROBUN_DEP_PATH, "dist", "bun"),
-  LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun"),
-  LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher"),
-  ZIG_NATIVE_WRAPPER: join(ELECTROBUN_DEP_PATH, "dist", "webview"),
+  BUN_BINARY: join(ELECTROBUN_DEP_PATH, "dist", "bun") + binExt,
+  LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun") + binExt,
+  LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher") + binExt,
+  MAIN_JS: join(ELECTROBUN_DEP_PATH, "dist", "main.js"),  
   NATIVE_WRAPPER_MACOS: join(
     ELECTROBUN_DEP_PATH,
     "dist",
-    "libObjcWrapper.dylib"
+    "libNativeWrapper.dylib"
   ),
-  BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch"),
-  EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor"),
-  BSDIFF: join(ELECTROBUN_DEP_PATH, "dist", "bsdiff"),
+  NATIVE_WRAPPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.dll"),
+  WEBVIEW2LOADER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "WebView2Loader.dll"),
+  BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch") + binExt,
+  EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor") + binExt,
+  BSDIFF: join(ELECTROBUN_DEP_PATH, "dist", "bsdiff") + binExt,
   CEF_FRAMEWORK_MACOS: join(
     ELECTROBUN_DEP_PATH,
     "dist",
     "Chromium Embedded Framework.framework"
   ),
   CEF_HELPER_MACOS: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
+  CEF_HELPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "process_helper.exe"),
 };
 
 const commandDefaults = {
@@ -133,7 +165,7 @@ const artifactFolder = join(
 );
 
 const buildIcons = (appBundleFolderResourcesPath: string) => {
-  if (config.build.mac.icons) {
+  if (OS === 'macos' && config.build.mac.icons) {
     const iconSourceFolder = join(projectRoot, config.build.mac.icons);
     const iconDestPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
     if (existsSync(iconSourceFolder)) {
@@ -207,13 +239,11 @@ if (commandArg === "init") {
   // todo (yoav): init a repo folder structure
   console.log("initializing electrobun project");
 } else if (commandArg === "build") {
-  // refresh build folder
+  // refresh build folder  
   if (existsSync(buildFolder)) {
     rmdirSync(buildFolder, { recursive: true });
-  }
-
-  mkdirSync(buildFolder, { recursive: true });
-
+  }  
+  mkdirSync(buildFolder, { recursive: true });  
   // bundle bun to build/bun
   const bunConfig = config.build.bun;
   const bunSource = join(projectRoot, bunConfig.entrypoint);
@@ -226,7 +256,6 @@ if (commandArg === "init") {
   }
 
   // build macos bundle
-
   const {
     appBundleFolderPath,
     appBundleFolderContentsPath,
@@ -270,8 +299,7 @@ if (commandArg === "init") {
   await Bun.write(
     join(appBundleFolderContentsPath, "Info.plist"),
     InfoPlistContents
-  );
-
+  );  
   // in dev builds the log file is a named pipe so we can stream it back to the terminal
   // in canary/stable builds it'll be a regular log file
   //     const LauncherContents = `#!/bin/bash
@@ -304,14 +332,13 @@ if (commandArg === "init") {
   //     mkdirSync(destLauncherFolder, {recursive: true});
   // }
   // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});
-
   const bunCliLauncherBinarySource =
     buildEnvironment === "dev"
       ? // Note: in dev use the cli as the launcher
         PATHS.LAUNCHER_DEV
       : // Note: for release use the zig launcher optimized for smol size
         PATHS.LAUNCHER_RELEASE;
-  const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher");
+  const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + binExt;
   const destLauncherFolder = dirname(bunCliLauncherDestination);
   if (!existsSync(destLauncherFolder)) {
     // console.info('creating folder: ', destFolder);
@@ -323,94 +350,176 @@ if (commandArg === "init") {
     dereference: true,
   });
 
+  cpSync(PATHS.MAIN_JS, join(appBundleMacOSPath, 'main.js'));
+
   // Bun runtime binary
   // todo (yoav): this only works for the current architecture
   const bunBinarySourcePath = PATHS.BUN_BINARY;
   // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
   // in node_modules, so we have to dereference here to get the actual binary in the bundle.
-  const bunBinaryDestInBundlePath = join(appBundleMacOSPath, "bun");
+  const bunBinaryDestInBundlePath = join(appBundleMacOSPath, "bun") + binExt;
   const destFolder2 = dirname(bunBinaryDestInBundlePath);
   if (!existsSync(destFolder2)) {
     // console.info('creating folder: ', destFolder);
     mkdirSync(destFolder2, { recursive: true });
   }
-
   cpSync(bunBinarySourcePath, bunBinaryDestInBundlePath, { dereference: true });
 
-  // Zig native wrapper binary
-  // todo (yoav): build native bindings for target
-  // copy native bindings
-  const zigNativeBinarySource = PATHS.ZIG_NATIVE_WRAPPER;
-  const zigNativeBinaryDestination = join(appBundleMacOSPath, "webview");
-  const destFolder = dirname(zigNativeBinaryDestination);
-  if (!existsSync(destFolder)) {
-    // console.info('creating folder: ', destFolder);
-    mkdirSync(destFolder, { recursive: true });
-  }
-
-  cpSync(zigNativeBinarySource, zigNativeBinaryDestination, {
-    recursive: true,
-    dereference: true,
-  });
-
-  // copy native wrapper dynamic library next to zig native binary
+  // copy native wrapper dynamic library
+  if (OS === 'macos') {
   const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;
   const nativeWrapperMacosDestination = join(
     appBundleMacOSPath,
-    "libObjcWrapper.dylib"
-  );
+    "libNativeWrapper.dylib"
+  );  
   cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
     dereference: true,
   });
+} else if (OS === 'win') {
+  const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_WIN;
+  const nativeWrapperMacosDestination = join(
+    appBundleMacOSPath,
+    "libNativeWrapper.dll"
+  );  
+  cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
+    dereference: true,
+  });
+
+  const webview2LibSource = PATHS.WEBVIEW2LOADER_WIN;
+  const webview2LibDestination = join(
+    appBundleMacOSPath,
+    "WebView2Loader.dll"
+  );  ;
+  // copy webview2 system webview library
+  cpSync(webview2LibSource, webview2LibDestination);
+  
+}
   
   // TODO: Should download binaries for arch, and then copy them in
   // for developing Electrobun itself we can assume current arch is already
   // in dist as it would have just been built from local source
   if (config.build.mac.bundleCEF) {    
-    const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
-    const cefFrameworkDestination = join(
-      appBundleFolderFrameworksPath,
-      "Chromium Embedded Framework.framework"
-    );
-
-    cpSync(cefFrameworkSource, cefFrameworkDestination, {
-      recursive: true,
-      dereference: true,
-    });
-
-    // cef helpers
-    const cefHelperNames = [
-      "webview Helper",
-      "webview Helper (Alerts)",
-      "webview Helper (GPU)",
-      "webview Helper (Plugin)",
-      "webview Helper (Renderer)",
-    ];
-
-    const helperSourcePath = PATHS.CEF_HELPER_MACOS;
-    cefHelperNames.forEach((helperName) => {
-      const destinationPath = join(
+    if (OS === 'macos') {
+      const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
+      const cefFrameworkDestination = join(
         appBundleFolderFrameworksPath,
-        `${helperName}.app`,
-        `Contents`,
-        `MacOS`,
-        `${helperName}`
+        "Chromium Embedded Framework.framework"
       );
-      const destFolder4 = basename(destinationPath);
-      if (!existsSync(destFolder4)) {
-        // console.info('creating folder: ', destFolder4);
-        mkdirSync(destFolder4, { recursive: true });
-      }
-      cpSync(helperSourcePath, destinationPath, {
+
+      cpSync(cefFrameworkSource, cefFrameworkDestination, {
         recursive: true,
         dereference: true,
       });
-    });
+    
+
+      // cef helpers
+      const cefHelperNames = [
+        "bun Helper",
+        "bun Helper (Alerts)",
+        "bun Helper (GPU)",
+        "bun Helper (Plugin)",
+        "bun Helper (Renderer)",
+      ];
+
+      const helperSourcePath = PATHS.CEF_HELPER_MACOS;
+      cefHelperNames.forEach((helperName) => {
+        const destinationPath = join(
+          appBundleFolderFrameworksPath,
+          `${helperName}.app`,
+          `Contents`,
+          `MacOS`,
+          `${helperName}`
+        );
+        
+        const destFolder4 = dirname(destinationPath);
+        if (!existsSync(destFolder4)) {
+          // console.info('creating folder: ', destFolder4);
+          mkdirSync(destFolder4, { recursive: true });
+        }
+        cpSync(helperSourcePath, destinationPath, {
+          recursive: true,
+          dereference: true,
+        });
+      });
+    } else if (OS === 'win') {
+      // Copy CEF DLLs from dist/cef/ to the main executable directory
+      const electrobunDistPath = join(ELECTROBUN_DEP_PATH, "dist");
+      const cefSourcePath = join(electrobunDistPath, "cef");
+      const cefDllFiles = [
+        'libcef.dll',
+        'chrome_elf.dll', 
+        'd3dcompiler_47.dll',
+        'libEGL.dll',
+        'libGLESv2.dll',
+        'vk_swiftshader.dll',
+        'vulkan-1.dll'
+      ];
+      
+      cefDllFiles.forEach(dllFile => {
+        const sourcePath = join(cefSourcePath, dllFile);
+        const destPath = join(appBundleMacOSPath, dllFile);
+        if (existsSync(sourcePath)) {
+          cpSync(sourcePath, destPath);
+        }
+      });
+      
+      // Copy icudtl.dat to MacOS root (same folder as libcef.dll) - required for CEF initialization
+      const icuDataSource = join(cefSourcePath, 'icudtl.dat');
+      const icuDataDest = join(appBundleMacOSPath, 'icudtl.dat');
+      if (existsSync(icuDataSource)) {
+        cpSync(icuDataSource, icuDataDest);
+      }
+      
+      // Copy essential CEF pak files to MacOS root (same folder as libcef.dll) - required for CEF resources
+      const essentialPakFiles = ['chrome_100_percent.pak', 'resources.pak', 'v8_context_snapshot.bin'];
+      essentialPakFiles.forEach(pakFile => {
+        const sourcePath = join(cefSourcePath, pakFile);
+        const destPath = join(appBundleMacOSPath, pakFile);
+
+        if (existsSync(sourcePath)) {
+          cpSync(sourcePath, destPath);
+        } else {
+          console.log(`WARNING: Missing CEF file: ${sourcePath}`);
+        }
+      });
+      
+      // Copy CEF resources to MacOS/cef/ subdirectory for other resources like locales
+      const cefResourcesSource = join(electrobunDistPath, 'cef');
+      const cefResourcesDestination = join(appBundleMacOSPath, 'cef');
+      
+      if (existsSync(cefResourcesSource)) {
+        cpSync(cefResourcesSource, cefResourcesDestination, {
+          recursive: true,
+          dereference: true,
+        });
+      }
+
+      // Copy CEF helper processes with different names
+      const cefHelperNames = [
+        "bun Helper",
+        "bun Helper (Alerts)", 
+        "bun Helper (GPU)",
+        "bun Helper (Plugin)",
+        "bun Helper (Renderer)",
+      ];
+
+      const helperSourcePath = PATHS.CEF_HELPER_WIN;
+      if (existsSync(helperSourcePath)) {
+        cefHelperNames.forEach((helperName) => {
+          const destinationPath = join(appBundleMacOSPath, `${helperName}.exe`);
+          cpSync(helperSourcePath, destinationPath);
+          console.log(`Copied CEF helper: ${helperName}.exe`);
+        });
+      } else {
+        console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
+      }
+    }
   }
+
 
   // copy native bindings
   const bsPatchSource = PATHS.BSPATCH;
-  const bsPatchDestination = join(appBundleMacOSPath, "bspatch");
+  const bsPatchDestination = join(appBundleMacOSPath, "bspatch") + binExt;
   const bsPatchDestFolder = dirname(bsPatchDestination);
   if (!existsSync(bsPatchDestFolder)) {
     mkdirSync(bsPatchDestFolder, { recursive: true });
@@ -421,6 +530,7 @@ if (commandArg === "init") {
     dereference: true,
   });
 
+  // transpile developer's bun code
   const bunDestFolder = join(appBundleAppCodePath, "bun");
   // Build bun-javascript ts files
   const buildResult = await Bun.build({
@@ -436,6 +546,7 @@ if (commandArg === "init") {
     process.exit(1);
   }
 
+  // transpile developer's view code
   // Build webview-javascript ts files
   // bundle all the bundles
   for (const viewName in config.build.views) {
@@ -474,7 +585,6 @@ if (commandArg === "init") {
       continue;
     }
   }
-
   // Copy assets like html, css, images, and other files
   for (const relSource in config.build.copy) {
     const source = join(projectRoot, relSource);
@@ -498,10 +608,11 @@ if (commandArg === "init") {
     cpSync(source, destination, { recursive: true, dereference: true });
   }
 
-  buildIcons(appBundleFolderResourcesPath);
 
+  buildIcons(appBundleFolderResourcesPath);
   // Run postBuild script
   if (config.scripts.postBuild) {
+
     Bun.spawnSync([bunBinarySourcePath, config.scripts.postBuild], {
       stdio: ["ignore", "inherit", "inherit"],
       env: {
@@ -510,7 +621,6 @@ if (commandArg === "init") {
       },
     });
   }
-
   // All the unique files are in the bundle now. Create an initial temporary tar file
   // for hashing the contents
   // tar the signed and notarized app bundle
@@ -523,7 +633,6 @@ if (commandArg === "init") {
     },
     [basename(appBundleFolderPath)]
   );
-
   const tmpTarball = Bun.file(tmpTarPath);
   const tmpTarBuffer = await tmpTarball.arrayBuffer();
   // Note: wyhash is the default in Bun.hash but that may change in the future
@@ -531,7 +640,6 @@ if (commandArg === "init") {
   const hash = Bun.hash.wyhash(tmpTarBuffer, 43770n).toString(36);
 
   unlinkSync(tmpTarPath);
-
   // const bunVersion = execSync(`${bunBinarySourcePath} --version`).toString().trim();
 
   // version.json inside the app bundle
@@ -574,32 +682,7 @@ if (commandArg === "init") {
   } else {
     console.log("skipping notarization");
   }
-
-  if (buildEnvironment === "dev") {
-    // in dev mode add a cupla named pipes for some dev debug rpc magic
-    const debugPipesFolder = join(appBundleFolderResourcesPath, "debug");
-    if (!existsSync(debugPipesFolder)) {
-      // console.info('creating folder: ', debugPipesFolder);
-      mkdirSync(debugPipesFolder, { recursive: true });
-    }
-    const toLauncherPipePath = escapePathForTerminal(
-      join(debugPipesFolder, "toLauncher")
-    );
-    const toCliPipePath = escapePathForTerminal(
-      join(debugPipesFolder, "toCli")
-    );
-    try {
-      execSync("mkfifo " + toLauncherPipePath);
-    } catch (e) {
-      console.log("pipe out already exists", e);
-    }
-
-    try {
-      execSync("mkfifo " + toCliPipePath);
-    } catch (e) {
-      console.log("pipe out already exists", e);
-    }
-  } else {
+  if (buildEnvironment !== "dev")  {
     const artifactsToUpload = [];
     // zstd wasm https://github.com/OneIdentity/zstd-js
     // tar https://github.com/isaacs/node-tar
@@ -690,7 +773,6 @@ if (commandArg === "init") {
     });
 
     buildIcons(appBundleFolderResourcesPath);
-
     await Bun.write(
       join(selfExtractingBundle.appBundleFolderContentsPath, "Info.plist"),
       InfoPlistContents
@@ -780,6 +862,7 @@ if (commandArg === "init") {
       buildEnvironment,
       `${appFileName}.app.tar.zst`
     );
+
 
     // attempt to get the previous version to create a patch file
     if (updateJsonResponse.ok) {
@@ -876,180 +959,48 @@ if (commandArg === "init") {
   // Note: we want to use the version of bun that's packaged with electrobun
   // const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
   // const mainPath = join(buildFolder, 'bun', 'index.js');
-  const mainPath = join(buildFolder, bundleFileName);
+  // const mainPath = join(buildFolder, bundleFileName);
   // console.log('running ', bunPath, mainPath);
 
   // Note: open will open the app bundle as a completely different process
   // This is critical to fully test the app (including plist configuration, etc.)
   // but also to get proper cmd+tab and dock behaviour and not run the windowed app
   // as a child of the terminal process which steels keyboard focus from any descendant nswindows.
-  Bun.spawn(["open", mainPath], {
-    env: {},
-  });
+  // Bun.spawn(["open", mainPath], {
+  //   env: {},
+  // });
 
-  if (buildEnvironment === "dev") {
-    const debugPipesFolder = join(
-      buildFolder,
-      bundleFileName,
-      "Contents",
-      "Resources",
-      "debug"
-    );
-    const toLauncherPipePath = join(debugPipesFolder, "toLauncher");
-    const toCliPipePath = join(debugPipesFolder, "toCli");
+  let mainProc;
+  const bundleExecPath = join(
+    buildFolder,
+    bundleFileName,
+    "Contents",  'MacOS');
 
-    const toCliPipeFile = Bun.file(toCliPipePath);
-    const toLauncherPipe = createWriteStream(toLauncherPipePath, {
-      flags: "r+",
-    });
-    toLauncherPipe.write("\n");
+  if (OS === 'macos') {
 
-    process.on("SIGINT", () => {
-      toLauncherPipe.write("exit command\n");
-      process.exit();
-    });
-
-    const stream = toCliPipeFile.stream();
-
-    async function readFromPipe(
-      reader: ReadableStreamDefaultReader<Uint8Array>
-    ) {
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += new TextDecoder().decode(value);
-        let eolIndex;
-
-        while ((eolIndex = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, eolIndex).trim();
-          buffer = buffer.slice(eolIndex + 1);
-          if (line) {
-            try {
-              if (line === "app exiting command") {
-                process.exit();
-              } else if (line === "subprocess exited command") {
-                // Handle subprocess exit
-              }
-
-              console.log("bun: ", line);
-            } catch (error) {
-              console.log("bun: ", line);
-            }
-          }
-        }
+    mainProc = Bun.spawn([join(bundleExecPath,'bun'), join(bundleExecPath, 'main.js')], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+      cwd: bundleExecPath
+    })
+  } else if (OS === 'win') {  
+    // Try the main process
+    mainProc =  Bun.spawn(['./bun.exe', './main.js'], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+      cwd: bundleExecPath,
+      onExit: (proc, exitCode, signalCode, error) => {
+        console.log('Bun process exited:', { exitCode, signalCode, error });
       }
-    }
-
-    // Call the async function to ensure it runs non-blocking
-    const reader = stream.getReader();
-    readFromPipe(reader);
-  } else {
-    console.log("opening", buildEnvironment, "app bundle");
-  }
-} else {
-  // no commands so run as the debug launcher inside the app bundle
-
-  // todo (yoav): as the debug launcher, get the relative path a different way, so dev builds can be shared and executed
-  // from different locations
-  const pathToLauncherBin = process.argv0;
-  const pathToMacOS = dirname(pathToLauncherBin);
-  const debugPipesFolder = join(pathToMacOS, "..", "Resources", "debug");
-  const toLauncherPipePath = join(debugPipesFolder, "toLauncher");
-  const toCliPipePath = join(debugPipesFolder, "toCli");
-
-  // If we open the dev app bundle directly without the cli, then no one will be listening to the toCliPipe
-  // and it'll hang. So we open the pipe for reading to prevent it from blocking but we don't read it here.
-  const toCliPipe = createWriteStream(toCliPipePath, {
-    // Note: open the pipe for reading and writing (r+) so that it doesn't block. If you only open it for writing (w)
-    // then it'll block until the cli starts reading. Double clicking on the bundle bypasses the cli so it'll block forever.
-    flags: "r+",
-  });
-  toCliPipe.write("\n");
-
-  const bunRuntimePath = join(pathToMacOS, "bun");
-  const appEntrypointPath = join(
-    pathToMacOS,
-    "..",
-    "Resources",
-    "app",
-    "bun",
-    "index.js"
-  );
-
-  try {
-    proc = Bun.spawn([bunRuntimePath, appEntrypointPath], {
-      cwd: pathToMacOS,
-      stderr: "pipe",
-      onExit: (code) => {
-        // todo: In cases where the bun process crashed, there's a lingering process that needs killing
-        toCliPipe.write(`subprocess exited command\n`);
-        process.kill(process.pid, "SIGINT");
-      },
-    });
-  } catch (e) {
-    toCliPipe.write(`error\n ${e}\n`);
+    })
   }
 
   process.on("SIGINT", () => {
-    toCliPipe.write("app exiting command\n");
-    process.kill(proc.pid, "SIGINT");
+    console.log('exit command')
+    // toLauncherPipe.write("exit command\n");      
+    mainProc.kill();
     process.exit();
   });
 
-  async function streamPipeToCli(stream) {
-    for await (const chunk of stream) {
-      let buffer = chunk;
-      while (buffer.length > 0) {
-        const chunkSize = Math.min(buffer.length, MAX_CHUNK_SIZE);
-        const chunkToSend = buffer.slice(0, chunkSize);
-        buffer = buffer.slice(chunkSize);
-        toCliPipe.write(chunkToSend);
-      }
-    }
-  }
-  streamPipeToCli(proc.stdout);
-  streamPipeToCli(proc.stderr);
-
-  const toLauncherPipeFile = Bun.file(toLauncherPipePath);
-
-  const stream = toLauncherPipeFile.stream();
-  async function readFromPipe(reader: ReadableStreamDefaultReader<Uint8Array>) {
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += new TextDecoder().decode(value);
-      let eolIndex;
-
-      while ((eolIndex = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, eolIndex).trim();
-        buffer = buffer.slice(eolIndex + 1);
-        if (line) {
-          try {
-            if (line === "exit command") {
-              // Receive kill command from cli (likely did cmd+c in terminal running the cli)
-              process.kill(process.pid, "SIGINT");
-            }
-            const event = JSON.parse(line);
-            // handler(event)
-          } catch (error) {
-            // Non-json things are just bubbled up to the console.
-            console.error("launcher received line from cli: ", line);
-          }
-        }
-      }
-    }
-  }
-
-  // Call the async function to ensure it runs non-blocking
-  const reader = stream.getReader();
-  readFromPipe(reader);
-  // streamPipeToCli(process.stdout);
-  // streamPipeToCli(proc.stderr);
-}
+} 
 
 function getConfig() {
   let loadedConfig = {};
@@ -1118,7 +1069,7 @@ function codesignAppBundle(
   entitlementsFilePath?: string
 ) {
   console.log("code signing...");
-  if (!config.build.mac.codesign) {
+  if (OS !== 'macos' || !config.build.mac.codesign) {
     return;
   }
 
@@ -1156,7 +1107,7 @@ function codesignAppBundle(
 }
 
 function notarizeAndStaple(appOrDmgPath: string) {
-  if (!config.build.mac.notarize) {
+  if (OS !== 'macos' || !config.build.mac.notarize) {
     return;
   }
 

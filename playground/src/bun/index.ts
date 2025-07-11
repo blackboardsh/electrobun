@@ -1,3 +1,4 @@
+console.log('some dev code')
 import Electrobun, {
   BrowserWindow,
   BrowserView,
@@ -105,7 +106,6 @@ const updateTrayMenu = () => {
 // TODO: events should be typed
 tray.on("tray-clicked", (e) => {
   const { id, action } = e.data as { id: number; action: string };
-
   if (action === "") {
     // main menu was clicked before we create a system tray menu for it.
     updateTrayMenu();
@@ -114,7 +114,7 @@ tray.on("tray-clicked", (e) => {
     // once there's a menu, we can toggle the state of the menu items
     menuState[action] = !menuState[action];
     updateTrayMenu();
-  }
+  }  
   // respond to left and right clicks on the tray icon/name
   console.log("event listener for tray clicked", e.data.action);
 });
@@ -228,6 +228,7 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
   },
 });
 
+// console.log('creating browser window')
 const win = new BrowserWindow({
   title: "my url window",
   url: "views://mainview/index.html",
@@ -362,6 +363,13 @@ wikiWindow.webview.on("will-navigate", (e) => {
 wikiWindow.webview.on("did-navigate", (e) => {
   console.log(
     "did-navigate event handler in bun for wikiWindow",
+    e.data.detail
+  );
+});
+
+wikiWindow.webview.on("dom-ready", (e) => {
+  console.log(
+    "dom-ready event handler in bun for wikiWindow",
     e.data.detail
   );
 });

@@ -10,7 +10,8 @@ import {
 import { ConfigureWebviewTags } from "./webviewtag";
 // todo: should this just be injected as a preload script?
 import { isAppRegionDrag } from "./stylesAndElements";
-import type { BuiltinBunToWebviewSchema } from "./builtinrpcSchema";
+import type { BuiltinBunToWebviewSchema, BuiltinWebviewToBunSchema } from "./builtinrpcSchema";
+import type { InternalWebviewHandlers, WebviewTagHandlers } from "./rpc/webview";
 
 interface ElectrobunWebviewRPCSChema {
   bun: RPCSchema;
@@ -21,88 +22,15 @@ const WEBVIEW_ID = window.__electrobunWebviewId;
 const WINDOW_ID = window.__electrobunWindowId;
 const RPC_SOCKET_PORT = window.__electrobunRpcSocketPort;
 
-// todo (yoav): move this stuff to browser/rpc/webview.ts
-type ZigWebviewHandlers = RPCSchema<{
-  requests: {
-    webviewTagCallAsyncJavaScript: {
-      params: {
-        messageId: string;
-        webviewId: number;
-        hostWebviewId: number;
-        script: string;
-      };
-      response: void;
-    };
-  };
-}>;
-
-type WebviewTagHandlers = RPCSchema<{
-  requests: {};
-  messages: {
-    webviewTagResize: {
-      id: number;
-      frame: {
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-      };
-      masks: string;
-    };
-    webviewTagUpdateSrc: {
-      id: number;
-      url: string;
-    };
-    webviewTagUpdateHtml: {
-      id: number;
-      html: string;
-    }
-    webviewTagGoBack: {
-      id: number;
-    };
-    webviewTagGoForward: {
-      id: number;
-    };
-    webviewTagReload: {
-      id: number;
-    };
-    webviewTagRemove: {
-      id: number;
-    };
-    startWindowMove: {
-      id: number;
-    };
-    stopWindowMove: {
-      id: number;
-    };
-    moveWindowBy: {
-      id: number;
-      x: number;
-      y: number;
-    };
-    webviewTagSetTransparent: {
-      id: number;
-      transparent: boolean;
-    };
-    webviewTagSetPassthrough: {
-      id: number;
-      enablePassthrough: boolean;
-    };
-    webviewTagSetHidden: {
-      id: number;
-      hidden: boolean;
-    };
-  };
-}>;
 
 class Electroview<T> {
   bunSocket?: WebSocket;
   // user's custom rpc browser <-> bun
   rpc?: T;
   rpcHandler?: (msg: any) => void;
-  // electrobun rpc browser <-> zig
-  zigRpc?: any;
-  zigRpcHandler?: (msg: any) => void;
+  // electrobun rpc browser <-> bun
+  internalRpc?: any;
+  internalRpcHandler?: (msg: any) => void;
   
   constructor(config: { rpc: T }) {
     this.rpc = config.rpc;
@@ -112,16 +40,16 @@ class Electroview<T> {
   init() {
     // todo (yoav): should init webviewTag by default when src is local
     // and have a setting that forces it enabled or disabled
-    this.initZigRpc();
+    this.initInternalRpc();
     this.initSocketToBun();
 
-    ConfigureWebviewTags(true, this.zigRpc, this.rpc);
+    ConfigureWebviewTags(true, this.internalRpc, this.rpc);
 
     this.initElectrobunListeners();
 
     window.__electrobun = {
       receiveMessageFromBun: this.receiveMessageFromBun.bind(this),
-      receiveMessageFromZig: this.receiveMessageFromZig.bind(this),
+      receiveInternalMessageFromBun: this.receiveInternalMessageFromBun.bind(this),
     };
 
     if (this.rpc) {
@@ -129,9 +57,9 @@ class Electroview<T> {
     }
   }
 
-  initZigRpc() {
-    this.zigRpc = createRPC<WebviewTagHandlers, ZigWebviewHandlers>({
-      transport: this.createZigTransport(),
+  initInternalRpc() {
+    this.internalRpc = createRPC<WebviewTagHandlers, InternalWebviewHandlers>({
+      transport: this.createInternalTransport(),
       // requestHandler: {
 
       // },
@@ -183,38 +111,80 @@ class Electroview<T> {
     });
   }
 
-  // This will be attached to the global object, zig can rpc reply by executingJavascript
+  // This will be attached to the global object, bun can rpc reply by executingJavascript
   // of that global reference to the function
-  receiveMessageFromZig(msg: any) {
-    if (this.zigRpcHandler) {
-      this.zigRpcHandler(msg);
+  receiveInternalMessageFromBun(msg: any) {    
+    if (this.internalRpcHandler) {
+      
+      this.internalRpcHandler(msg);
     }
   }
 
   // TODO: implement proper rpc-anywhere style rpc here
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
-  sendToZig(message: {}) {    
-    if (window.webkit?.messageHandlers?.webviewTagBridge) {
-      window.webkit.messageHandlers.webviewTagBridge.postMessage(
-        JSON.stringify(message)
-      );
-    } else {
-      window.webviewTagBridge.postMessage(
-        JSON.stringify(message)
-      );
+  isProcessingQueue = false;
+  sendToInternalQueue = [];
+  sendToBunInternal(message: {}) {   
+    try {    
+      const strMessage = JSON.stringify(message);    
+      this.sendToInternalQueue.push(strMessage);    
+
+      this.processQueue();
+    } catch (err) {
+      console.error('failed to send to bun internal', err);
     }
+  }
+
+  processQueue() {
+    const that = this;
+    if (that.isProcessingQueue) {
+
+      // This timeout is just to schedule a retry "later"
+      setTimeout(() => {
+        that.processQueue();
+      });
+      return;
+    }
+
+    if (that.sendToInternalQueue.length === 0) {
+      // that.isProcessingQueue = false;
+      return;  
+    }
+
+    that.isProcessingQueue = true;
+    
+    const batchMessage = JSON.stringify(that.sendToInternalQueue);
+    that.sendToInternalQueue = [];
+    window.__electrobunInternalBridge?.postMessage(batchMessage);
+    
+    // Note: The postmessage handler is routed via native code to a Bun JSCallback.
+    // Currently JSCallbacks are somewhat experimental and were designed for a single invocation
+    // But we have tons of resize events in this webview's thread that are sent, maybe to main thread
+    // and then the JSCallback is invoked on the Bun worker thread. JSCallbacks have a little virtual memory 
+    // or something that can segfault when called from a thread while the worker(bun) thread is still executing
+    // a previous call. The segfaults were really only triggered with multiple <electrobun-webview>s on a page
+    // all trying to resize at the same time.
+    // 
+    // To work around this we batch high frequency postMessage calls here with a timeout. While not deterministic hopefully Bun
+    // fixes the underlying FFI/JSCallback issue before we have to invest time in a more deterministic solution.
+    // 
+    // On my m4 max a 1ms delay is not long enough to let it complete and can segfault, a 2ms delay is long enough
+    // This may be different on slower hardware but not clear if it would need more or less time so leaving this for now
+    setTimeout(() => {
+      that.isProcessingQueue = false;
+    }, 2);
   }
 
   initElectrobunListeners() {
     document.addEventListener("mousedown", (e) => {
       if (isAppRegionDrag(e)) {
-        this.zigRpc?.send.startWindowMove({ id: WINDOW_ID });
+        this.internalRpc?.send.startWindowMove({ id: WINDOW_ID });
       }
     });
 
     document.addEventListener("mouseup", (e) => {
       if (isAppRegionDrag(e)) {
-        this.zigRpc?.send.stopWindowMove({ id: WINDOW_ID });
+        this.internalRpc?.send.stopWindowMove({ id: WINDOW_ID });
       }
     });
   }
@@ -236,30 +206,22 @@ class Electroview<T> {
       },
     };
   }
-
-  // todo: just use with sendToZig();
-  createZigTransport(): RPCTransport {
-    const that = this;
+  
+  createInternalTransport(): RPCTransport {
+    const that = this;    
     return {
-      send(message) {             
-        if (window.webkit?.messageHandlers?.webviewTagBridge) {
-          window.webkit.messageHandlers.webviewTagBridge.postMessage(
-            JSON.stringify(message)
-          );
-        } else {
-          window.webviewTagBridge.postMessage(
-            JSON.stringify(message)
-          );
-        }
+      send(message) {                  
+        message.hostWebviewId = WEBVIEW_ID;        
+        that.sendToBunInternal(message);      
       },
-      registerHandler(handler) {
-        that.zigRpcHandler = handler;
-        // webview tag doesn't handle any messages from zig just yet
+      registerHandler(handler) {        
+        that.internalRpcHandler = handler;
+        // webview tag doesn't handle any messages from bun just yet
       },
     };
   }
 
-  async bunBridge(msg: string) {
+  async bunBridge(msg: string) {    
     if (this.bunSocket?.readyState === WebSocket.OPEN) {
       try {
         const { encryptedData, iv, tag } = await window.__electrobun_encrypt(
@@ -294,11 +256,7 @@ class Electroview<T> {
     // repro now that other places are chunking messages and laptop restart
 
     if (true || msg.length < 8 * 1024) {      
-      if (window.webkit?.messageHandlers?.bunBridge){
-        window.webkit.messageHandlers.bunBridge.postMessage(msg);
-      } else {
-        window.bunBridge.postMessage(msg);
-      }
+      window.__electrobunBunBridge?.postMessage(msg);
     } else {
       var xhr = new XMLHttpRequest();
 
@@ -391,7 +349,7 @@ class Electroview<T> {
     };
 
     type mixedWebviewSchema = {
-      requests: BunSchema["requests"];
+      requests: BunSchema["requests"] & BuiltinWebviewToBunSchema["requests"];
       messages: WebviewSchema["messages"];
     };
 

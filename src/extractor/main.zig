@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const zstd = std.compress.zstd;
 
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "/Users/yoav/code/electrobun/example/build/canary/ElectrobunPlayground-0-0-1-canary.app/Contents/Resources/compressed.tar.zst";
@@ -224,14 +225,7 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                     try dir.makePath(dir_name);
                 }
 
-                var mode: u32 = undefined;
-
-                if (header.mode()) |_mode| {
-                    // std.debug.print("mode {any} {s}\n", .{ mode, file_name });
-                    mode = _mode;
-                } else |_| {
-                    // to nothing
-                }
+                const mode = if (builtin.os.tag == .windows) 0 else header.mode() catch undefined;
 
                 var file = try dir.createFile(file_name, .{ .mode = mode });
                 defer file.close();

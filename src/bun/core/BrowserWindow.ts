@@ -1,7 +1,8 @@
-import { zigRPC } from "../proc/zig";
+import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type RPC } from "rpc-anywhere";
+import {FFIType} from 'bun:ffi'
 
 let nextWindowId = 1;
 
@@ -42,13 +43,14 @@ const defaultOptions: WindowOptionsType = {
   navigationRules: null,
 };
 
-const BrowserWindowMap = {};
+export const BrowserWindowMap = {};
 
 // todo (yoav): do something where the type extends the default schema
 // that way we can provide built-in requests/messages and devs can extend it
 
 export class BrowserWindow<T> {
   id: number = nextWindowId++;
+  ptr: FFIType.ptr;
   title: string = "Electrobun";
   state: "creating" | "created" = "creating";
   url: string | null = null;
@@ -79,6 +81,7 @@ export class BrowserWindow<T> {
     this.preload = options.preload || null;
     this.renderer = options.renderer === 'cef' ? 'cef' : 'native';
     this.navigationRules = options.navigationRules || null;
+    
 
     this.init(options);
   }
@@ -88,7 +91,8 @@ export class BrowserWindow<T> {
     styleMask,
     titleBarStyle,
   }: Partial<WindowOptionsType<T>>) {
-    zigRPC.request.createWindow({
+    
+    this.ptr = ffi.request.createWindow({
       id: this.id,
       title: this.title,
       url: this.url || "",      
@@ -122,6 +126,10 @@ export class BrowserWindow<T> {
       titleBarStyle: titleBarStyle || "default",
     });
 
+    BrowserWindowMap[this.id] = this;
+
+    
+
     // todo (yoav): user should be able to override this and pass in their
     // own webview instance, or instances for attaching to the window.
     const webview = new BrowserView({
@@ -148,24 +156,31 @@ export class BrowserWindow<T> {
       navigationRules: this.navigationRules,
     });
 
+    console.log('setting webviewId: ', webview.id)
+
     this.webviewId = webview.id;   
 
-    BrowserWindowMap[this.id] = this;
+    
   }
 
   get webview() {
+    console.log('getting webview for window: ', this.webviewId)
     // todo (yoav): we don't want this to be undefined, so maybe we should just
     // link directly to the browserview object instead of a getter
     return BrowserView.getById(this.webviewId) as BrowserView<T>;
   }
 
+  static getById(id: number) {
+    return BrowserWindowMap[id];
+  }
+
   setTitle(title: string) {
     this.title = title;
-    return zigRPC.request.setTitle({ winId: this.id, title });
+    return ffi.request.setTitle({ winId: this.id, title });
   }
 
   close() {
-    return zigRPC.request.closeWindow({ winId: this.id });
+    return ffi.request.closeWindow({ winId: this.id });
   }
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.

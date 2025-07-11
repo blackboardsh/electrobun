@@ -1,10 +1,5 @@
 #include "include/cef_app.h"
 #include "include/cef_v8.h"
-#include "include/wrapper/cef_library_loader.h"
-
-#if defined(CEF_USE_SANDBOX)
-#include "include/cef_sandbox_mac.h"
-#endif
 
 class HelperApp : public CefApp, public CefRenderProcessHandler {
 public:
@@ -38,11 +33,11 @@ public:
         bunBridge->SetValue("postMessage", bunPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
         window->SetValue("bunBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
 
-        // Create webviewTagBridge
-        CefRefPtr<CefV8Value> webviewTagBridge = CefV8Value::CreateObject(nullptr, nullptr);
-        CefRefPtr<CefV8Value> webviewTagPostMessage = CreatePostMessageFunction(browser, "WebviewTagMessage");
-        webviewTagBridge->SetValue("postMessage", webviewTagPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
-        window->SetValue("webviewTagBridge", webviewTagBridge, V8_PROPERTY_ATTRIBUTE_NONE);
+        // Create internalBridge
+        CefRefPtr<CefV8Value> internalBridge = CefV8Value::CreateObject(nullptr, nullptr);
+        CefRefPtr<CefV8Value> internalPostMessage = CreatePostMessageFunction(browser, "internalMessage");
+        internalBridge->SetValue("postMessage", internalPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
+        window->SetValue("internalBridge", internalBridge, V8_PROPERTY_ATTRIBUTE_NONE);
 
         v8Context->Exit();
     }
@@ -86,28 +81,18 @@ private:
     IMPLEMENT_REFCOUNTING(HelperApp);
 };
 
-// Entry point function for sub-processes.
-int main(int argc, char* argv[]) {
-#if defined(CEF_USE_SANDBOX)
-    // Initialize the macOS sandbox for this helper process.
-    CefScopedSandboxContext sandbox_context;
-    if (!sandbox_context.Initialize(argc, argv)) {
-        return 1;
-    }
-#endif
-
-    // Load the CEF framework library at runtime instead of linking directly
-    // as required by the macOS sandbox implementation.
-    CefScopedLibraryLoader library_loader;
-    if (!library_loader.LoadInHelper()) {
-        return 1;
-    }
-
+// Entry point function for Windows sub-processes.
+int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     // Provide CEF with command-line arguments.
-    CefMainArgs main_args(argc, argv);
+    CefMainArgs main_args(hInstance);
 
     CefRefPtr<CefApp> app(new HelperApp);
 
     // Execute the sub-process.
     return CefExecuteProcess(main_args, app, nullptr);
+}
+
+// Alternative entry point for console applications
+int main() {
+    return wWinMain(GetModuleHandle(NULL), NULL, GetCommandLineW(), SW_HIDE);
 }

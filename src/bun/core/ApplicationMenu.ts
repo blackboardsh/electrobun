@@ -1,9 +1,9 @@
-import { zigRPC, type ApplicationMenuItemConfig } from "../proc/zig";
+import { ffi, type ApplicationMenuItemConfig } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 
 export const setApplicationMenu = (menu: Array<ApplicationMenuItemConfig>) => {
   const menuWithDefaults = menuConfigWithDefaults(menu);
-  zigRPC.request.setApplicationMenu({
+  ffi.request.setApplicationMenu({
     menuConfig: JSON.stringify(menuWithDefaults),
   });
 };

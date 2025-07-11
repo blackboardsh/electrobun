@@ -1,12 +1,12 @@
-import { zigRPC } from "../proc/zig";
+import { ffi } from "../proc/native";
 
 // TODO: move this to a more appropriate namespace
 export const moveToTrash = (path: string) => {
-  return zigRPC.request.moveToTrash({ path });
+  return ffi.request.moveToTrash({ path });
 };
 
 export const showItemInFolder = (path: string) => {
-  return zigRPC.request.showItemInFolder({ path });
+  return ffi.request.showItemInFolder({ path });
 };
 
 export const openFileDialog = async (
@@ -33,7 +33,7 @@ export const openFileDialog = async (
   // we really want it to be infinity since the open file dialog blocks everything anyway.
   // todo: there's the timeout between bun and zig, and the timeout between browser and bun since user likely requests
   // from a browser context
-  const result = await zigRPC.request.openFileDialog({
+  const result = await ffi.request.openFileDialog({
     startingFolder: optsWithDefault.startingFolder,
     allowedFileTypes: optsWithDefault.allowedFileTypes,
     canChooseFiles: optsWithDefault.canChooseFiles,
@@ -41,7 +41,7 @@ export const openFileDialog = async (
     allowsMultipleSelection: optsWithDefault.allowsMultipleSelection,
   });
 
-  const filePaths = result.openFileDialogResponse.split(",");
+  const filePaths = result.split(",");
 
   // todo: it's nested like this due to zig union types. needs a zig refactor and revisit
   return filePaths;
