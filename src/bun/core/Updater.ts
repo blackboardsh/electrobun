@@ -1,5 +1,5 @@
 import { join, dirname, resolve } from "path";
-import { homedir } from "os";
+import { homedir, platform } from "os";
 import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync } from "fs";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
@@ -153,12 +153,13 @@ const Updater = {
         mkdirSync(untarDir, { recursive: true });
 
         // extract just the version.json from the patched tar file so we can see what hash it is now
+        const resourcesDir = platform() === 'darwin' ? 'Resources' : 'resources';
         await tar.x({
           // gzip: false,
           file: tmpPatchedTarFilePath,
           cwd: untarDir,
           filter: (path, stat) => {
-            if (path.endsWith("Resources/version.json")) {
+            if (path.endsWith(`${resourcesDir}/version.json`)) {
               versionSubpath = path;
               return true;
             } else {
@@ -373,7 +374,8 @@ const Updater = {
     }
 
     try {
-      localInfo = await Bun.file("../Resources/version.json").json();
+      const resourcesDir = platform() === 'darwin' ? 'Resources' : 'resources';
+      localInfo = await Bun.file(`../${resourcesDir}/version.json`).json();
       return localInfo;
     } catch (error) {
       // Handle the error

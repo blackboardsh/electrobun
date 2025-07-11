@@ -74,6 +74,7 @@ const PATHS = {
     "libNativeWrapper.dylib"
   ),
   NATIVE_WRAPPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.dll"),
+  NATIVE_WRAPPER_LINUX: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.so"),
   WEBVIEW2LOADER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "WebView2Loader.dll"),
   BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch") + binExt,
   EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor") + binExt,
@@ -85,6 +86,8 @@ const PATHS = {
   ),
   CEF_HELPER_MACOS: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
   CEF_HELPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "process_helper.exe"),
+  CEF_HELPER_LINUX: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
+  CEF_DIR: join(ELECTROBUN_DEP_PATH, "dist", "cef"),
 };
 
 const commandDefaults = {
@@ -229,7 +232,7 @@ const appFileName = (
 )
   .replace(/\s/g, "")
   .replace(/\./g, "-");
-const bundleFileName = `${appFileName}.app`;
+const bundleFileName = OS === 'macos' ? `${appFileName}.app` : appFileName;
 
 // const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
 
@@ -393,6 +396,17 @@ if (commandArg === "init") {
   // copy webview2 system webview library
   cpSync(webview2LibSource, webview2LibDestination);
   
+} else if (OS === 'linux') {
+  const nativeWrapperLinuxSource = PATHS.NATIVE_WRAPPER_LINUX;
+  const nativeWrapperLinuxDestination = join(
+    appBundleMacOSPath,
+    "libNativeWrapper.so"
+  );
+  if (existsSync(nativeWrapperLinuxSource)) {
+    cpSync(nativeWrapperLinuxSource, nativeWrapperLinuxDestination, {
+      dereference: true,
+    });
+  }
 }
   
   // TODO: Should download binaries for arch, and then copy them in
@@ -513,6 +527,59 @@ if (commandArg === "init") {
       } else {
         console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
       }
+    } else if (OS === 'linux') {
+      // Copy CEF shared libraries from dist/cef/ to the main executable directory
+      const electrobunDistPath = join(ELECTROBUN_DEP_PATH, "dist");
+      const cefSourcePath = join(electrobunDistPath, "cef");
+      
+      if (existsSync(cefSourcePath)) {
+        const cefSoFiles = [
+          'libcef.so',
+          'libEGL.so',
+          'libGLESv2.so'
+        ];
+        
+        cefSoFiles.forEach(soFile => {
+          const sourcePath = join(cefSourcePath, soFile);
+          const destPath = join(appBundleMacOSPath, soFile);
+          if (existsSync(sourcePath)) {
+            cpSync(sourcePath, destPath);
+          }
+        });
+        
+        // Copy icudtl.dat to MacOS root (same folder as libcef.so) - required for CEF initialization
+        const icuDataSource = join(cefSourcePath, 'icudtl.dat');
+        const icuDataDest = join(appBundleMacOSPath, 'icudtl.dat');
+        if (existsSync(icuDataSource)) {
+          cpSync(icuDataSource, icuDataDest);
+        }
+        
+        // Copy .pak files to the main executable directory
+        const pakFiles = ['icudtl.dat', 'v8_context_snapshot.bin', 'resources.pak', 'locales'];
+        pakFiles.forEach(pakFile => {
+          const sourcePath = join(cefSourcePath, pakFile);
+          const destPath = join(appBundleMacOSPath, pakFile);
+          if (existsSync(sourcePath)) {
+            cpSync(sourcePath, destPath, { recursive: true });
+          }
+        });
+        
+        // Copy locales to cef subdirectory
+        const cefResourcesDestination = join(appBundleMacOSPath, 'cef');
+        if (!existsSync(cefResourcesDestination)) {
+          mkdirSync(cefResourcesDestination, { recursive: true });
+        }
+        
+        // Copy CEF helper process
+        const helperSourcePath = PATHS.CEF_HELPER_LINUX;
+        if (existsSync(helperSourcePath)) {
+          const destinationPath = join(appBundleMacOSPath, 'process_helper');
+          cpSync(helperSourcePath, destinationPath);
+          console.log(`Copied CEF helper: process_helper`);
+        } else {
+          console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
+        }
+      }
     }
   }
 
@@ -610,6 +677,16 @@ if (commandArg === "init") {
 
 
   buildIcons(appBundleFolderResourcesPath);
+  
+  // Create Resources symlink for Linux compatibility
+  if (OS === 'linux') {
+    const resourcesSymlink = join(appBundleFolderPath, 'Resources');
+    if (!existsSync(resourcesSymlink)) {
+      const symlinkSync = require('fs').symlinkSync;
+      symlinkSync('resources', resourcesSymlink);
+    }
+  }
+  
   // Run postBuild script
   if (config.scripts.postBuild) {
 
@@ -971,10 +1048,15 @@ if (commandArg === "init") {
   // });
 
   let mainProc;
-  const bundleExecPath = join(
-    buildFolder,
-    bundleFileName,
-    "Contents",  'MacOS');
+  let bundleExecPath: string;
+  
+  if (OS === 'macos') {
+    bundleExecPath = join(buildFolder, bundleFileName, "Contents", 'MacOS');
+  } else if (OS === 'linux' || OS === 'win') {
+    bundleExecPath = join(buildFolder, bundleFileName, "bin");
+  } else {
+    throw new Error(`Unsupported OS: ${OS}`);
+  }
 
   if (OS === 'macos') {
 
@@ -990,6 +1072,11 @@ if (commandArg === "init") {
       onExit: (proc, exitCode, signalCode, error) => {
         console.log('Bun process exited:', { exitCode, signalCode, error });
       }
+    })
+  } else if (OS === 'linux') {
+    mainProc = Bun.spawn([join(bundleExecPath, 'bun'), join(bundleExecPath, 'main.js')], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+      cwd: bundleExecPath
     })
   }
 
@@ -1191,30 +1278,54 @@ function notarizeAndStaple(appOrDmgPath: string) {
 // either way you can pass in the parent folder here for that flexibility.
 // for intel/arm builds on mac we'll probably have separate subfolders as well and build them in parallel.
 function createAppBundle(bundleName: string, parentFolder: string) {
-  const bundleFileName = `${bundleName}.app`;
-  const appBundleFolderPath = join(parentFolder, bundleFileName);
-  const appBundleFolderContentsPath = join(appBundleFolderPath, "Contents");
-  const appBundleMacOSPath = join(appBundleFolderContentsPath, "MacOS");
-  const appBundleFolderResourcesPath = join(
-    appBundleFolderContentsPath,
-    "Resources"
-  );
-  const appBundleFolderFrameworksPath = join(
-    appBundleFolderContentsPath,
-    "Frameworks"
-  );
+  if (OS === 'macos') {
+    // macOS bundle structure
+    const bundleFileName = `${bundleName}.app`;
+    const appBundleFolderPath = join(parentFolder, bundleFileName);
+    const appBundleFolderContentsPath = join(appBundleFolderPath, "Contents");
+    const appBundleMacOSPath = join(appBundleFolderContentsPath, "MacOS");
+    const appBundleFolderResourcesPath = join(
+      appBundleFolderContentsPath,
+      "Resources"
+    );
+    const appBundleFolderFrameworksPath = join(
+      appBundleFolderContentsPath,
+      "Frameworks"
+    );
 
-  // we don't have to make all the folders, just the deepest ones
-  // todo (yoav): check if folders exist already before creating them
-  mkdirSync(appBundleMacOSPath, { recursive: true });
-  mkdirSync(appBundleFolderResourcesPath, { recursive: true });
-  mkdirSync(appBundleFolderFrameworksPath, { recursive: true });
+    // we don't have to make all the folders, just the deepest ones
+    mkdirSync(appBundleMacOSPath, { recursive: true });
+    mkdirSync(appBundleFolderResourcesPath, { recursive: true });
+    mkdirSync(appBundleFolderFrameworksPath, { recursive: true });
 
-  return {
-    appBundleFolderPath,
-    appBundleFolderContentsPath,
-    appBundleMacOSPath,
-    appBundleFolderResourcesPath,
-    appBundleFolderFrameworksPath,
-  };
+    return {
+      appBundleFolderPath,
+      appBundleFolderContentsPath,
+      appBundleMacOSPath,
+      appBundleFolderResourcesPath,
+      appBundleFolderFrameworksPath,
+    };
+  } else if (OS === 'linux' || OS === 'win') {
+    // Linux/Windows simpler structure
+    const appBundleFolderPath = join(parentFolder, bundleName);
+    const appBundleFolderContentsPath = appBundleFolderPath; // No Contents folder needed
+    const appBundleMacOSPath = join(appBundleFolderPath, "bin"); // Use bin instead of MacOS
+    const appBundleFolderResourcesPath = join(appBundleFolderPath, "resources");
+    const appBundleFolderFrameworksPath = join(appBundleFolderPath, "lib"); // Use lib instead of Frameworks
+
+    // Create directories
+    mkdirSync(appBundleMacOSPath, { recursive: true });
+    mkdirSync(appBundleFolderResourcesPath, { recursive: true });
+    mkdirSync(appBundleFolderFrameworksPath, { recursive: true });
+
+    return {
+      appBundleFolderPath,
+      appBundleFolderContentsPath,
+      appBundleMacOSPath,
+      appBundleFolderResourcesPath,
+      appBundleFolderFrameworksPath,
+    };
+  } else {
+    throw new Error(`Unsupported OS: ${OS}`);
+  }
 }

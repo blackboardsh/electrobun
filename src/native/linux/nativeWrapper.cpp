@@ -1,0 +1,1505 @@
+#include <gtk/gtk.h>
+#include <webkit2/webkit2.h>
+#include <libayatana-appindicator/app-indicator.h>
+#include <string>
+#include <vector>
+#include <memory>
+#include <map>
+#include <iostream>
+#include <cstring>
+#include <dlfcn.h>
+#include <algorithm>
+#include <sstream>
+
+// Forward declare callback types
+typedef void (*WindowCloseCallback)(uint32_t windowId);
+typedef void (*WindowMoveCallback)(uint32_t windowId, double x, double y);
+typedef void (*WindowResizeCallback)(uint32_t windowId, double x, double y, double width, double height);
+
+// Webview callback types
+typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
+typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
+typedef uint32_t (*HandlePostMessage)(uint32_t webviewId, const char* message);
+
+// Tray callback types
+typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char* action);
+
+// Menu item structure
+struct MenuItemData {
+    uint32_t menuId;
+    std::string action;
+    std::string type;
+    ZigStatusItemHandler clickHandler;
+};
+
+// Global menu item counter and storage
+static uint32_t g_nextMenuId = 1;
+static std::map<uint32_t, std::shared_ptr<MenuItemData>> g_menuItems;
+
+// Simple JSON value structure for menu parsing
+struct MenuJsonValue {
+    std::string type;
+    std::string label;
+    std::string action; 
+    std::string role;
+    std::string tooltip;
+    bool enabled = true;
+    bool checked = false;
+    bool hidden = false;
+    std::vector<MenuJsonValue> submenu;
+};
+
+// Forward declarations
+GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId);
+
+// Parse JSON menu array (simplified parser for basic menu structure)
+std::vector<MenuJsonValue> parseMenuJson(const std::string& jsonStr) {
+    std::vector<MenuJsonValue> items;
+    
+    // This is a very basic parser - in production you'd want a proper JSON library
+    // For now, just create some test menu items if JSON parsing fails
+    
+    // Look for basic patterns in the JSON to extract menu items
+    size_t pos = 0;
+    while (pos < jsonStr.length()) {
+        size_t labelStart = jsonStr.find("\"label\":", pos);
+        if (labelStart == std::string::npos) break;
+        
+        size_t labelValueStart = jsonStr.find("\"", labelStart + 8);
+        if (labelValueStart == std::string::npos) break;
+        labelValueStart++;
+        
+        size_t labelValueEnd = jsonStr.find("\"", labelValueStart);
+        if (labelValueEnd == std::string::npos) break;
+        
+        MenuJsonValue item;
+        item.label = jsonStr.substr(labelValueStart, labelValueEnd - labelValueStart);
+        
+        // Look for action
+        size_t actionStart = jsonStr.find("\"action\":", labelStart);
+        if (actionStart != std::string::npos && actionStart < jsonStr.find("}", labelStart)) {
+            size_t actionValueStart = jsonStr.find("\"", actionStart + 9);
+            if (actionValueStart != std::string::npos) {
+                actionValueStart++;
+                size_t actionValueEnd = jsonStr.find("\"", actionValueStart);
+                if (actionValueEnd != std::string::npos) {
+                    item.action = jsonStr.substr(actionValueStart, actionValueEnd - actionValueStart);
+                }
+            }
+        }
+        
+        // Look for type
+        size_t typeStart = jsonStr.find("\"type\":", labelStart);
+        if (typeStart != std::string::npos && typeStart < jsonStr.find("}", labelStart)) {
+            size_t typeValueStart = jsonStr.find("\"", typeStart + 7);
+            if (typeValueStart != std::string::npos) {
+                typeValueStart++;
+                size_t typeValueEnd = jsonStr.find("\"", typeValueStart);
+                if (typeValueEnd != std::string::npos) {
+                    item.type = jsonStr.substr(typeValueStart, typeValueEnd - typeValueStart);
+                }
+            }
+        }
+        
+        items.push_back(item);
+        pos = labelValueEnd + 1;
+    }
+    
+    // If no items found, create a basic test menu
+    if (items.empty()) {
+        MenuJsonValue testItem;
+        testItem.label = "Test Menu Item";
+        testItem.action = "test-action";
+        testItem.type = "normal";
+        items.push_back(testItem);
+    }
+    
+    return items;
+}
+
+// AbstractView base class declaration
+class AbstractView {
+public:
+    uint32_t webviewId;
+    GtkWidget* widget = nullptr;
+    bool isMousePassthroughEnabled = false;
+    bool mirrorModeEnabled = false;
+    bool fullSize = false;
+    bool isReceivingInput = true;
+    std::string maskJSON;
+    GdkRectangle visualBounds = {};
+    bool creationFailed = false;
+
+    AbstractView(uint32_t webviewId) : webviewId(webviewId) {}
+    virtual ~AbstractView() {}
+    
+    // Pure virtual methods that must be implemented by derived classes
+    virtual void loadURL(const char* urlString) = 0;
+    virtual void goBack() = 0;
+    virtual void goForward() = 0;
+    virtual void reload() = 0;
+    virtual void remove() = 0;
+    virtual bool canGoBack() = 0;
+    virtual bool canGoForward() = 0;
+    virtual void evaluateJavaScriptWithNoCompletion(const char* jsString) = 0;
+    virtual void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) = 0;
+    virtual void addPreloadScriptToWebView(const char* jsString) = 0;
+    virtual void updateCustomPreloadScript(const char* jsString) = 0;
+    virtual void resize(const GdkRectangle& frame, const char* masksJson) = 0;
+    virtual void applyVisualMask() = 0;
+    virtual void removeMasks() = 0;
+    virtual void toggleMirrorMode(bool enable) = 0;
+    
+    // Common methods with default implementation
+    virtual void setTransparent(bool transparent) {}
+    virtual void setPassthrough(bool enable) { isMousePassthroughEnabled = enable; }
+    virtual void setHidden(bool hidden) {}
+};
+
+// WebKitGTK implementation
+class WebKitWebViewImpl : public AbstractView {
+public:
+    GtkWidget* webview;
+    WebKitUserContentManager* manager;
+    DecideNavigationCallback navigationCallback;
+    WebviewEventHandler eventHandler;
+    HandlePostMessage bunBridgeHandler;
+    HandlePostMessage internalBridgeHandler;
+    std::string electrobunPreloadScript;
+    std::string customPreloadScript;
+    std::string partition;
+    
+    WebKitWebViewImpl(uint32_t webviewId, 
+                      GtkWidget* window,
+                      const char* url,
+                      double x, double y,
+                      double width, double height,
+                      bool autoResize,
+                      const char* partitionIdentifier,
+                      DecideNavigationCallback navigationCallback,
+                      WebviewEventHandler webviewEventHandler,
+                      HandlePostMessage bunBridgeHandler,
+                      HandlePostMessage internalBridgeHandler,
+                      const char* electrobunPreloadScript,
+                      const char* customPreloadScript) 
+        : AbstractView(webviewId), navigationCallback(navigationCallback), 
+          eventHandler(webviewEventHandler), bunBridgeHandler(bunBridgeHandler),
+          internalBridgeHandler(internalBridgeHandler),
+          electrobunPreloadScript(electrobunPreloadScript ? electrobunPreloadScript : ""),
+          customPreloadScript(customPreloadScript ? customPreloadScript : ""),
+          partition(partitionIdentifier ? partitionIdentifier : "")
+    {
+        // Create the user content controller and manager
+        manager = webkit_user_content_manager_new();
+        if (!manager) {
+            fprintf(stderr, "ERROR: Failed to create WebKit user content manager\n");
+            throw std::runtime_error("Failed to create WebKit user content manager");
+        }
+        
+        // Create WebKit settings
+        WebKitSettings* settings = webkit_settings_new();
+        if (!settings) {
+            fprintf(stderr, "ERROR: Failed to create WebKit settings\n");
+            throw std::runtime_error("Failed to create WebKit settings");
+        }
+        webkit_settings_set_enable_developer_extras(settings, TRUE);
+        webkit_settings_set_enable_javascript(settings, TRUE);
+        webkit_settings_set_javascript_can_access_clipboard(settings, TRUE);
+        webkit_settings_set_javascript_can_open_windows_automatically(settings, TRUE);
+        
+        // Create web context with partition
+        WebKitWebContext* context = webkit_web_context_new();
+        if (!partition.empty()) {
+            webkit_web_context_set_web_extensions_directory(context, "/tmp"); // TODO: Use proper partition
+        }
+        
+        // Create webview
+        fprintf(stderr, "Creating WebKit webview...\n");
+        webview = webkit_web_view_new_with_user_content_manager(manager);
+        if (!webview) {
+            fprintf(stderr, "ERROR: Failed to create WebKit webview\n");
+            throw std::runtime_error("Failed to create WebKit webview");
+        }
+        fprintf(stderr, "WebKit webview created successfully\n");
+        
+        // Set the context separately if needed
+        // webkit_web_view_set_context(WEBKIT_WEB_VIEW(webview), context);
+        webkit_web_view_set_settings(WEBKIT_WEB_VIEW(webview), settings);
+        
+        // Set size
+        gtk_widget_set_size_request(webview, (int)width, (int)height);
+        
+        // Add preload scripts
+        if (!this->electrobunPreloadScript.empty()) {
+            addPreloadScriptToWebView(this->electrobunPreloadScript.c_str());
+        }
+        if (!this->customPreloadScript.empty()) {
+            addPreloadScriptToWebView(this->customPreloadScript.c_str());
+        }
+        
+        // Set up message handlers
+        if (bunBridgeHandler) {
+            g_signal_connect(manager, "script-message-received::bunBridge", 
+                           G_CALLBACK(onBunBridgeMessage), this);
+            webkit_user_content_manager_register_script_message_handler(manager, "bunBridge");
+        }
+        
+        if (internalBridgeHandler) {
+            g_signal_connect(manager, "script-message-received::internalBridge", 
+                           G_CALLBACK(onInternalBridgeMessage), this);
+            webkit_user_content_manager_register_script_message_handler(manager, "internalBridge");
+        }
+        
+        // Set up navigation callback
+        if (navigationCallback) {
+            g_signal_connect(webview, "decide-policy", G_CALLBACK(onDecidePolicy), this);
+        }
+        
+        // Set up event handlers
+        if (eventHandler) {
+            g_signal_connect(webview, "load-changed", G_CALLBACK(onLoadChanged), this);
+            g_signal_connect(webview, "load-failed", G_CALLBACK(onLoadFailed), this);
+        }
+        
+        this->widget = webview;
+        
+        // Load URL if provided
+        if (url && strlen(url) > 0) {
+            loadURL(url);
+        }
+    }
+    
+    ~WebKitWebViewImpl() {
+        if (webview) {
+            gtk_widget_destroy(webview);
+        }
+        if (manager) {
+            g_object_unref(manager);
+        }
+    }
+    
+    void loadURL(const char* urlString) override {
+        if (webview && urlString) {
+            fprintf(stderr, "Loading URL: %s\n", urlString);
+            webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview), urlString);
+        } else {
+            fprintf(stderr, "ERROR: Cannot load URL - webview=%p, urlString=%s\n", webview, urlString ? urlString : "NULL");
+        }
+    }
+    
+    void goBack() override {
+        if (webview) {
+            webkit_web_view_go_back(WEBKIT_WEB_VIEW(webview));
+        }
+    }
+    
+    void goForward() override {
+        if (webview) {
+            webkit_web_view_go_forward(WEBKIT_WEB_VIEW(webview));
+        }
+    }
+    
+    void reload() override {
+        if (webview) {
+            webkit_web_view_reload(WEBKIT_WEB_VIEW(webview));
+        }
+    }
+    
+    void remove() override {
+        if (webview && gtk_widget_get_parent(webview)) {
+            gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(webview)), webview);
+        }
+    }
+    
+    bool canGoBack() override {
+        if (webview) {
+            return webkit_web_view_can_go_back(WEBKIT_WEB_VIEW(webview));
+        }
+        return false;
+    }
+    
+    bool canGoForward() override {
+        if (webview) {
+            return webkit_web_view_can_go_forward(WEBKIT_WEB_VIEW(webview));
+        }
+        return false;
+    }
+    
+    void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
+        if (webview && jsString) {
+            webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(webview), jsString, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
+        }
+    }
+    
+    void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) override {
+        // TODO: Implement async JavaScript with completion handler
+        evaluateJavaScriptWithNoCompletion(jsString);
+    }
+    
+    void addPreloadScriptToWebView(const char* jsString) override {
+        if (manager && jsString) {
+            WebKitUserScript* script = webkit_user_script_new(jsString, 
+                                                            WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
+                                                            WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+                                                            nullptr, nullptr);
+            webkit_user_content_manager_add_script(manager, script);
+            webkit_user_script_unref(script);
+        }
+    }
+    
+    void updateCustomPreloadScript(const char* jsString) override {
+        customPreloadScript = jsString ? jsString : "";
+        
+        // Remove existing custom scripts and add new one
+        if (manager) {
+            // Remove all custom scripts (we'll track them with a prefix)
+            webkit_user_content_manager_remove_all_scripts(manager);
+            
+            // Re-add electrobun preload script
+            if (!electrobunPreloadScript.empty()) {
+                WebKitUserScript* script = webkit_user_script_new(electrobunPreloadScript.c_str(), 
+                                                                WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
+                                                                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+                                                                nullptr, nullptr);
+                webkit_user_content_manager_add_script(manager, script);
+                webkit_user_script_unref(script);
+            }
+            
+            // Add updated custom script
+            if (!customPreloadScript.empty()) {
+                WebKitUserScript* script = webkit_user_script_new(customPreloadScript.c_str(), 
+                                                                WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
+                                                                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+                                                                nullptr, nullptr);
+                webkit_user_content_manager_add_script(manager, script);
+                webkit_user_script_unref(script);
+            }
+        }
+    }
+    
+    void resize(const GdkRectangle& frame, const char* masksJson) override {
+        if (webview) {
+            gtk_widget_set_size_request(webview, frame.width, frame.height);
+            if (gtk_widget_get_parent(webview)) {
+                gtk_fixed_move(GTK_FIXED(gtk_widget_get_parent(webview)), webview, frame.x, frame.y);
+            }
+        }
+        maskJSON = masksJson ? masksJson : "";
+    }
+    
+    void applyVisualMask() override {
+        // TODO: Implement visual masking
+    }
+    
+    void removeMasks() override {
+        // TODO: Implement mask removal
+    }
+    
+    void toggleMirrorMode(bool enable) override {
+        mirrorModeEnabled = enable;
+        // TODO: Implement mirror mode
+    }
+    
+    void setHidden(bool hidden) override {
+        if (webview) {
+            if (hidden) {
+                gtk_widget_hide(webview);
+            } else {
+                gtk_widget_show(webview);
+            }
+        }
+    }
+    
+    // Static callback functions
+    static void onBunBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (impl->bunBridgeHandler) {
+            JSCValue* value = webkit_javascript_result_get_js_value(js_result);
+            gchar* str_value = jsc_value_to_string(value);
+            impl->bunBridgeHandler(impl->webviewId, str_value);
+            g_free(str_value);
+        }
+    }
+    
+    static void onInternalBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (impl->internalBridgeHandler) {
+            JSCValue* value = webkit_javascript_result_get_js_value(js_result);
+            gchar* str_value = jsc_value_to_string(value);
+            impl->internalBridgeHandler(impl->webviewId, str_value);
+            g_free(str_value);
+        }
+    }
+    
+    static gboolean onDecidePolicy(WebKitWebView* webview, WebKitPolicyDecision* decision, WebKitPolicyDecisionType type, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (impl->navigationCallback && type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION) {
+            WebKitNavigationPolicyDecision* nav_decision = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
+            WebKitNavigationAction* action = webkit_navigation_policy_decision_get_navigation_action(nav_decision);
+            WebKitURIRequest* request = webkit_navigation_action_get_request(action);
+            const char* uri = webkit_uri_request_get_uri(request);
+            
+            uint32_t result = impl->navigationCallback(impl->webviewId, uri);
+            if (result == 0) {
+                webkit_policy_decision_ignore(decision);
+                return TRUE;
+            }
+        }
+        return FALSE;
+    }
+    
+    static void onLoadChanged(WebKitWebView* webview, WebKitLoadEvent event, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (impl->eventHandler) {
+            const char* uri = webkit_web_view_get_uri(webview);
+            switch (event) {
+                case WEBKIT_LOAD_STARTED:
+                    impl->eventHandler(impl->webviewId, "load-started", uri);
+                    break;
+                case WEBKIT_LOAD_REDIRECTED:
+                    impl->eventHandler(impl->webviewId, "load-redirected", uri);
+                    break;
+                case WEBKIT_LOAD_COMMITTED:
+                    impl->eventHandler(impl->webviewId, "load-committed", uri);
+                    break;
+                case WEBKIT_LOAD_FINISHED:
+                    impl->eventHandler(impl->webviewId, "load-finished", uri);
+                    break;
+            }
+        }
+    }
+    
+    static gboolean onLoadFailed(WebKitWebView* webview, WebKitLoadEvent event, gchar* uri, GError* error, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (impl->eventHandler) {
+            impl->eventHandler(impl->webviewId, "load-failed", uri);
+        }
+        return FALSE;
+    }
+};
+
+// Container for managing multiple webviews
+class ContainerView {
+public:
+    GtkWidget* window;
+    GtkWidget* container;
+    std::vector<std::shared_ptr<AbstractView>> abstractViews;
+    AbstractView* activeWebView = nullptr;
+    
+    ContainerView(GtkWidget* window) : window(window) {
+        container = gtk_fixed_new();
+        gtk_container_add(GTK_CONTAINER(window), container);
+        gtk_widget_show(container);
+    }
+    
+    void addWebview(std::shared_ptr<AbstractView> view) {
+        abstractViews.insert(abstractViews.begin(), view);
+        if (view->widget) {
+            gtk_fixed_put(GTK_FIXED(container), view->widget, 0, 0);
+            gtk_widget_show(view->widget);
+        }
+    }
+    
+    void removeView(uint32_t webviewId) {
+        auto it = std::find_if(abstractViews.begin(), abstractViews.end(),
+            [webviewId](const std::shared_ptr<AbstractView>& view) {
+                return view->webviewId == webviewId;
+            });
+        
+        if (it != abstractViews.end()) {
+            if ((*it)->widget) {
+                gtk_widget_destroy((*it)->widget);
+            }
+            abstractViews.erase(it);
+        }
+    }
+};
+
+// Tray implementation using AppIndicator
+class TrayItem {
+public:
+    uint32_t trayId;
+    AppIndicator* indicator;
+    GtkWidget* menu;
+    ZigStatusItemHandler clickHandler;
+    std::string title;
+    std::string imagePath;
+    
+    TrayItem(uint32_t id, const char* title, const char* pathToImage, bool isTemplate, ZigStatusItemHandler handler) 
+        : trayId(id), indicator(nullptr), menu(nullptr), clickHandler(handler),
+          title(title ? title : ""), imagePath(pathToImage ? pathToImage : "") {
+        
+        // Create unique indicator ID
+        std::string indicatorId = "electrobun-tray-" + std::to_string(id);
+        
+        // Create app indicator
+        indicator = app_indicator_new(indicatorId.c_str(), 
+                                    !imagePath.empty() ? imagePath.c_str() : "application-default-icon",
+                                    APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
+        
+        if (indicator) {
+            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "AppIndicator created successfully, setting up...\n");
+                fflush(logFile);
+                fclose(logFile);
+            }
+            
+            app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);
+            
+            if (!this->title.empty()) {
+                app_indicator_set_title(indicator, title);
+            }
+            
+            // Create default menu (required for AppIndicator)
+            createDefaultMenu();
+            
+            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "TrayItem constructor completed successfully\n");
+                fflush(logFile);
+                fclose(logFile);
+            }
+        } else {
+            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "WARNING: app_indicator_new returned NULL - likely no system tray available\n");
+                fflush(logFile);
+                fclose(logFile);
+            }
+            // Don't throw exception - just continue without tray
+            // This allows the app to run even if no system tray is available
+        }
+    }
+    
+    ~TrayItem() {
+        if (indicator) {
+            app_indicator_set_status(indicator, APP_INDICATOR_STATUS_PASSIVE);
+            g_object_unref(indicator);
+        }
+        if (menu) {
+            gtk_widget_destroy(menu);
+        }
+    }
+    
+    void setTitle(const char* newTitle) {
+        title = newTitle ? newTitle : "";
+        if (indicator) {
+            app_indicator_set_title(indicator, title.c_str());
+        }
+    }
+    
+    void setImage(const char* newImage) {
+        imagePath = newImage ? newImage : "";
+        if (indicator && !imagePath.empty()) {
+            app_indicator_set_icon(indicator, imagePath.c_str());
+        }
+    }
+    
+    void setMenu(const char* jsonString) {
+        if (menu) {
+            gtk_widget_destroy(menu);
+            menu = nullptr;
+        }
+        
+        if (!jsonString || strlen(jsonString) == 0) {
+            createDefaultMenu();
+            return;
+        }
+        
+        // Parse JSON menu configuration using our simple parser
+        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "Parsing menu JSON: %s\n", jsonString);
+            fflush(logFile);
+            fclose(logFile);
+        }
+        
+        try {
+            std::vector<MenuJsonValue> menuItems = parseMenuJson(std::string(jsonString));
+            menu = createMenuFromParsedItems(menuItems, clickHandler, trayId);
+            
+            if (menu) {
+                gtk_widget_show_all(menu);
+                if (indicator) {
+                    app_indicator_set_menu(indicator, GTK_MENU(menu));
+                }
+                
+                logFile = fopen("/tmp/tray_debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "Menu created successfully with %zu items\n", menuItems.size());
+                    fflush(logFile);
+                    fclose(logFile);
+                }
+            }
+        } catch (const std::exception& e) {
+            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "Failed to parse menu JSON: %s\n", e.what());
+                fflush(logFile);
+                fclose(logFile);
+            }
+            
+            // Fallback to default menu
+            createDefaultMenu();
+        }
+    }
+    
+private:
+    void createDefaultMenu() {
+        menu = gtk_menu_new();
+        
+        GtkWidget* defaultItem = gtk_menu_item_new_with_label("Electrobun App");
+        gtk_widget_set_sensitive(defaultItem, FALSE);
+        gtk_menu_shell_append(GTK_MENU_SHELL(menu), defaultItem);
+        
+        gtk_widget_show_all(menu);
+        
+        if (indicator) {
+            app_indicator_set_menu(indicator, GTK_MENU(menu));
+        }
+    }
+    
+    static void onMenuItemClick(GtkMenuItem* menuItem, gpointer userData) {
+        TrayItem* tray = static_cast<TrayItem*>(userData);
+        if (tray->clickHandler) {
+            tray->clickHandler(tray->trayId, "menu-click");
+        }
+    }
+    
+    static void onQuitClick(GtkMenuItem* menuItem, gpointer userData) {
+        TrayItem* tray = static_cast<TrayItem*>(userData);
+        if (tray->clickHandler) {
+            tray->clickHandler(tray->trayId, "quit");
+        }
+    }
+};
+
+// Global state
+static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
+static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
+static bool g_gtkInitialized = false;
+
+// Menu item click callback
+static void onMenuItemActivate(GtkMenuItem* menuItem, gpointer userData) {
+    MenuItemData* itemData = static_cast<MenuItemData*>(userData);
+    if (itemData && itemData->clickHandler) {
+        itemData->clickHandler(itemData->menuId, itemData->action.c_str());
+    }
+}
+
+// Create GTK menu from parsed menu items
+GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId) {
+    GtkWidget* menu = gtk_menu_new();
+    
+    for (const auto& item : items) {
+        if (item.type == "divider" || item.type == "separator") {
+            // Create separator
+            GtkWidget* separator = gtk_separator_menu_item_new();
+            gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator);
+        } else {
+            // Create normal menu item
+            std::string displayLabel = !item.label.empty() ? item.label : 
+                                     (!item.role.empty() ? item.role : "Menu Item");
+            
+            GtkWidget* menuItem;
+            if (item.checked) {
+                menuItem = gtk_check_menu_item_new_with_label(displayLabel.c_str());
+                gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(menuItem), TRUE);
+            } else {
+                menuItem = gtk_menu_item_new_with_label(displayLabel.c_str());
+            }
+            
+            gtk_widget_set_sensitive(menuItem, item.enabled);
+            if (item.hidden) {
+                gtk_widget_hide(menuItem);
+            }
+            
+            // Create menu item data for callback
+            auto itemData = std::make_shared<MenuItemData>();
+            itemData->menuId = trayId;
+            itemData->action = !item.action.empty() ? item.action : 
+                              (!item.role.empty() ? item.role : "");
+            itemData->type = item.type;
+            itemData->clickHandler = clickHandler;
+            
+            uint32_t currentMenuId = g_nextMenuId++;
+            g_menuItems[currentMenuId] = itemData;
+            
+            // Connect click handler
+            g_signal_connect(menuItem, "activate", G_CALLBACK(onMenuItemActivate), itemData.get());
+            
+            // Handle submenu
+            if (!item.submenu.empty()) {
+                GtkWidget* submenu = createMenuFromParsedItems(item.submenu, clickHandler, trayId);
+                if (submenu) {
+                    gtk_menu_item_set_submenu(GTK_MENU_ITEM(menuItem), submenu);
+                }
+            }
+            
+            gtk_menu_shell_append(GTK_MENU_SHELL(menu), menuItem);
+        }
+    }
+    
+    return menu;
+}
+
+// views:// URI scheme handler callback
+static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data) {
+    const char* uri = webkit_uri_scheme_request_get_uri(request);
+    const char* scheme = webkit_uri_scheme_request_get_scheme(request);
+    const char* path = webkit_uri_scheme_request_get_path(request);
+    
+    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "views:// request: uri=%s, path=%s\n", uri, path ? path : "NULL");
+        fflush(logFile);
+        fclose(logFile);
+    }
+    
+    if (!path || strlen(path) == 0) {
+        // Default to index.html if no path specified
+        path = "/index.html";
+    }
+    
+    // Remove leading slash if present
+    if (path[0] == '/') {
+        path++;
+    }
+    
+    // Build file path: ../resources/app/views/[path]
+    char* cwd = g_get_current_dir();
+    gchar* viewsDir = g_build_filename(cwd, "..", "resources", "app", "views", nullptr);
+    gchar* filePath = g_build_filename(viewsDir, path, nullptr);
+    
+    logFile = fopen("/tmp/tray_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "Loading file: %s\n", filePath);
+        fflush(logFile);
+        fclose(logFile);
+    }
+    
+    // Check if file exists and read it
+    if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
+        gsize fileSize;
+        gchar* fileContents = nullptr;
+        GError* error = nullptr;
+        
+        if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
+            // Determine MIME type based on file extension
+            const char* mimeType = "text/plain";
+            if (g_str_has_suffix(filePath, ".html") || g_str_has_suffix(filePath, ".htm")) {
+                mimeType = "text/html";
+            } else if (g_str_has_suffix(filePath, ".css")) {
+                mimeType = "text/css";
+            } else if (g_str_has_suffix(filePath, ".js")) {
+                mimeType = "application/javascript";
+            } else if (g_str_has_suffix(filePath, ".json")) {
+                mimeType = "application/json";
+            } else if (g_str_has_suffix(filePath, ".png")) {
+                mimeType = "image/png";
+            } else if (g_str_has_suffix(filePath, ".jpg") || g_str_has_suffix(filePath, ".jpeg")) {
+                mimeType = "image/jpeg";
+            } else if (g_str_has_suffix(filePath, ".svg")) {
+                mimeType = "image/svg+xml";
+            }
+            
+            // Create response
+            GInputStream* stream = g_memory_input_stream_new_from_data(fileContents, fileSize, g_free);
+            webkit_uri_scheme_request_finish(request, stream, fileSize, mimeType);
+            g_object_unref(stream);
+            
+            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "Served file: %s (%zu bytes, %s)\n", filePath, fileSize, mimeType);
+                fflush(logFile);
+                fclose(logFile);
+            }
+        } else {
+            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "Failed to read file: %s - %s\n", filePath, error ? error->message : "unknown error");
+                fflush(logFile);
+                fclose(logFile);
+            }
+            
+            // Return 404 error
+            GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", path);
+            webkit_uri_scheme_request_finish_error(request, responseError);
+            g_error_free(responseError);
+            if (error) g_error_free(error);
+        }
+    } else {
+        logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "File not found: %s\n", filePath);
+            fflush(logFile);
+            fclose(logFile);
+        }
+        
+        // Return 404 error
+        GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", path);
+        webkit_uri_scheme_request_finish_error(request, responseError);
+        g_error_free(responseError);
+    }
+    
+    // Cleanup
+    g_free(cwd);
+    g_free(viewsDir);
+    g_free(filePath);
+}
+
+void initializeGTK() {
+    printf("initializeGTK called, g_gtkInitialized=%d\n", g_gtkInitialized);
+    fflush(stdout);
+    
+    if (!g_gtkInitialized) {
+        printf("Calling gtk_init...\n");
+        fflush(stdout);
+        gtk_init(nullptr, nullptr);
+        printf("gtk_init completed\n");
+        fflush(stdout);
+        
+        g_gtkInitialized = true;
+        
+        // Don't register WebKit URI scheme handler yet - this might be causing the crash
+        printf("GTK initialization complete\n");
+        fflush(stdout);
+        
+        /*
+        // Register the views:// URI scheme handler
+        WebKitWebContext* context = webkit_web_context_get_default();
+        webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
+        
+        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "Registered views:// URI scheme handler\n");
+            fflush(logFile);
+            fclose(logFile);
+        }
+        */
+    }
+}
+
+// Helper function to dispatch to main thread synchronously
+template<typename Func>
+auto dispatch_sync_main(Func&& func) -> decltype(func()) {
+    using ReturnType = decltype(func());
+    
+    // If already on main thread, just execute
+    if (g_main_context_is_owner(g_main_context_default())) {
+        printf("Already on main thread, executing directly\n");
+        fflush(stdout);
+        return func();
+    }
+    
+    printf("Not on main thread, dispatching to main thread\n");
+    fflush(stdout);
+    
+    // Structure to hold the function and result
+    struct DispatchData {
+        Func func;
+        ReturnType result;
+        GMutex mutex;
+        GCond cond;
+        bool completed;
+        std::exception_ptr exception;
+        
+        DispatchData(Func&& f) : func(std::forward<Func>(f)), completed(false) {
+            g_mutex_init(&mutex);
+            g_cond_init(&cond);
+        }
+        
+        ~DispatchData() {
+            g_mutex_clear(&mutex);
+            g_cond_clear(&cond);
+        }
+    };
+    
+    auto data = std::make_unique<DispatchData>(std::forward<Func>(func));
+    
+    // Lambda to run on main thread
+    auto callback = [](gpointer user_data) -> gboolean {
+        auto* dispatch_data = static_cast<DispatchData*>(user_data);
+        
+        try {
+            dispatch_data->result = dispatch_data->func();
+        } catch (...) {
+            dispatch_data->exception = std::current_exception();
+        }
+        
+        g_mutex_lock(&dispatch_data->mutex);
+        dispatch_data->completed = true;
+        g_cond_signal(&dispatch_data->cond);
+        g_mutex_unlock(&dispatch_data->mutex);
+        
+        return G_SOURCE_REMOVE;
+    };
+    
+    // Schedule on main thread
+    g_idle_add(callback, data.get());
+    
+    // Wait for completion
+    g_mutex_lock(&data->mutex);
+    while (!data->completed) {
+        g_cond_wait(&data->cond, &data->mutex);
+    }
+    g_mutex_unlock(&data->mutex);
+    
+    // Rethrow any exception that occurred
+    if (data->exception) {
+        std::rethrow_exception(data->exception);
+    }
+    
+    return data->result;
+}
+
+// Helper for void functions
+template<typename Func>
+typename std::enable_if<std::is_void<decltype(std::declval<Func>()())>::value>::type
+dispatch_sync_main_void(Func&& func) {
+    if (g_main_context_is_owner(g_main_context_default())) {
+        func();
+        return;
+    }
+    
+    struct DispatchData {
+        Func func;
+        GMutex mutex;
+        GCond cond;
+        bool completed;
+        std::exception_ptr exception;
+        
+        DispatchData(Func&& f) : func(std::forward<Func>(f)), completed(false) {
+            g_mutex_init(&mutex);
+            g_cond_init(&cond);
+        }
+        
+        ~DispatchData() {
+            g_mutex_clear(&mutex);
+            g_cond_clear(&cond);
+        }
+    };
+    
+    auto data = std::make_unique<DispatchData>(std::forward<Func>(func));
+    
+    auto callback = [](gpointer user_data) -> gboolean {
+        auto* dispatch_data = static_cast<DispatchData*>(user_data);
+        
+        try {
+            dispatch_data->func();
+        } catch (...) {
+            dispatch_data->exception = std::current_exception();
+        }
+        
+        g_mutex_lock(&dispatch_data->mutex);
+        dispatch_data->completed = true;
+        g_cond_signal(&dispatch_data->cond);
+        g_mutex_unlock(&dispatch_data->mutex);
+        
+        return G_SOURCE_REMOVE;
+    };
+    
+    g_idle_add(callback, data.get());
+    
+    g_mutex_lock(&data->mutex);
+    while (!data->completed) {
+        g_cond_wait(&data->cond, &data->mutex);
+    }
+    g_mutex_unlock(&data->mutex);
+    
+    if (data->exception) {
+        std::rethrow_exception(data->exception);
+    }
+}
+
+extern "C" {
+
+// Constructor to run when library is loaded
+__attribute__((constructor))
+void on_library_load() {
+    printf("Native library loaded!\n");
+    fflush(stdout);
+}
+
+void runEventLoop() {
+    printf("runEventLoop called - starting GTK main loop\n");
+    fflush(stdout);
+    sleep(1); // Give time for output to flush
+    gtk_main();
+}
+
+// Forward declarations
+void* createWindow(uint32_t windowId, double x, double y, double width, double height, const char* title, 
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback);
+void showWindow(void* window);
+
+// Mac-compatible function for Linux
+void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height, 
+                                             uint32_t styleMask, const char* titleBarStyle,
+                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
+    printf("createWindowWithFrameAndStyleFromWorker called: windowId=%u, x=%f, y=%f, w=%f, h=%f\n", windowId, x, y, width, height);
+    fflush(stdout);
+    
+    // On Linux, ignore styleMask and titleBarStyle for now, just create basic window
+    return createWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback);
+}
+
+void* createWindow(uint32_t windowId, double x, double y, double width, double height, const char* title, 
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
+    printf("createWindow called: windowId=%u, title=%s\n", windowId, title);
+    fflush(stdout);
+    
+    initializeGTK();
+    
+    printf("About to dispatch createWindow to main thread\n");
+    fflush(stdout);
+    
+    return dispatch_sync_main([&]() -> void* {
+        GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        gtk_window_set_title(GTK_WINDOW(window), title);
+        gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
+        
+        if (x >= 0 && y >= 0) {
+            gtk_window_move(GTK_WINDOW(window), (int)x, (int)y);
+        }
+        
+        // Create container
+        auto container = std::make_shared<ContainerView>(window);
+        g_containers[windowId] = container;
+        
+        // Store callbacks (simplified - in real implementation you'd want to store these properly)
+        // For now, just connect basic destroy signal
+        g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
+        
+        // Don't show window yet - that's handled by showWindow
+        
+        return (void*)window;
+    });
+}
+
+void setWindowTitle(void* window, const char* title) {
+    dispatch_sync_main_void([&]() {
+        gtk_window_set_title(GTK_WINDOW(window), title);
+    });
+}
+
+// Mac-compatible function for Linux
+void setNSWindowTitle(void* window, const char* title) {
+    setWindowTitle(window, title);
+}
+
+// Mac-compatible function for Linux
+void makeNSWindowKeyAndOrderFront(void* window) {
+    showWindow(window);
+}
+
+void showWindow(void* window) {
+    dispatch_sync_main_void([&]() {
+        gtk_widget_show_all(GTK_WIDGET(window));
+    });
+}
+
+// Mac-compatible function for Linux - return dummy style mask
+uint32_t getNSWindowStyleMask(bool borderless, bool titled, bool closable, bool miniaturizable, 
+                              bool resizable, bool unifiedTitleAndToolbar, bool fullScreen, 
+                              bool fullSizeContentView, bool utilityWindow, bool docModalWindow, 
+                              bool nonactivatingPanel, bool hudWindow) {
+    // Linux doesn't use style masks like macOS, so just return a dummy value
+    // The actual window styling is handled in createWindow
+    printf("getNSWindowStyleMask called (Linux - returning dummy value)\n");
+    fflush(stdout);
+    return 0;
+}
+
+
+
+// Webview functions
+AbstractView* initWebview(uint32_t webviewId,
+                         void* window,
+                         const char* renderer,
+                         const char* url,
+                         double x, double y,
+                         double width, double height,
+                         bool autoResize,
+                         const char* partitionIdentifier,
+                         DecideNavigationCallback navigationCallback,
+                         WebviewEventHandler webviewEventHandler,
+                         HandlePostMessage bunBridgeHandler,
+                         HandlePostMessage internalBridgeHandler,
+                         const char* electrobunPreloadScript,
+                         const char* customPreloadScript) {
+    
+    // For now, let's create a simple placeholder that doesn't create WebKit
+    // This will help us identify if the issue is with WebKit initialization
+    printf("initWebview called: webviewId=%u\n", webviewId);
+    fflush(stdout);
+    
+    // Create a simple GTK widget as a placeholder instead of WebKit
+    GtkWidget* placeholder_widget = gtk_label_new("WebView placeholder");
+    gtk_widget_set_size_request(placeholder_widget, (int)width, (int)height);
+    
+    // Add to container
+    for (auto& [id, container] : g_containers) {
+        if (container->window == GTK_WIDGET(window)) {
+            gtk_container_add(GTK_CONTAINER(container->container), placeholder_widget);
+            break;
+        }
+    }
+    
+    // Return a dummy pointer for now
+    return (AbstractView*)placeholder_widget;
+}
+
+void loadURLInWebView(AbstractView* abstractView, const char* urlString) {
+    if (abstractView) {
+        abstractView->loadURL(urlString);
+    }
+}
+
+void webviewGoBack(AbstractView* abstractView) {
+    if (abstractView) {
+        abstractView->goBack();
+    }
+}
+
+void webviewGoForward(AbstractView* abstractView) {
+    if (abstractView) {
+        abstractView->goForward();
+    }
+}
+
+void webviewReload(AbstractView* abstractView) {
+    if (abstractView) {
+        abstractView->reload();
+    }
+}
+
+void webviewRemove(AbstractView* abstractView) {
+    if (abstractView) {
+        abstractView->remove();
+    }
+}
+
+bool webviewCanGoBack(AbstractView* abstractView) {
+    if (abstractView) {
+        return abstractView->canGoBack();
+    }
+    return false;
+}
+
+bool webviewCanGoForward(AbstractView* abstractView) {
+    if (abstractView) {
+        return abstractView->canGoForward();
+    }
+    return false;
+}
+
+void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
+    if (abstractView) {
+        GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
+        abstractView->resize(frame, masksJson);
+    }
+}
+
+void evaluateJavaScriptWithNoCompletion(AbstractView* abstractView, const char* js) {
+    if (abstractView) {
+        abstractView->evaluateJavaScriptWithNoCompletion(js);
+    }
+}
+
+void webviewSetTransparent(AbstractView* abstractView, bool transparent) {
+    if (abstractView) {
+        abstractView->setTransparent(transparent);
+    }
+}
+
+void webviewSetPassthrough(AbstractView* abstractView, bool enablePassthrough) {
+    if (abstractView) {
+        abstractView->setPassthrough(enablePassthrough);
+    }
+}
+
+void webviewSetHidden(AbstractView* abstractView, bool hidden) {
+    if (abstractView) {
+        abstractView->setHidden(hidden);
+    }
+}
+
+void updatePreloadScriptToWebView(AbstractView* abstractView, const char* scriptIdentifier, const char* scriptContent, bool forMainFrameOnly) {
+    if (abstractView) {
+        abstractView->updateCustomPreloadScript(scriptContent);
+    }
+}
+
+void startWindowMove(void* window) {
+    // TODO: Implement window dragging for Linux
+}
+
+void stopWindowMove() {
+    // TODO: Implement window dragging for Linux
+}
+
+void addPreloadScriptToWebView(AbstractView* abstractView, const char* scriptContent, bool forMainFrameOnly) {
+    if (abstractView) {
+        abstractView->addPreloadScriptToWebView(scriptContent);
+    }
+}
+
+void callAsyncJavaScript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) {
+    // Find the webview in containers
+    for (auto& [id, container] : g_containers) {
+        for (auto& view : container->abstractViews) {
+            if (view->webviewId == webviewId) {
+                view->callAsyncJavascript(messageId, jsString, webviewId, hostWebviewId, completionHandler);
+                return;
+            }
+        }
+    }
+}
+
+void* addScriptMessageHandlerWithReply(void* webView, uint32_t webviewId, const char* name, void* callback) {
+    // TODO: Implement script message handler with reply
+    return nullptr;
+}
+
+void testFFI(void* ptr) {
+    // Test function for FFI
+}
+
+void testFFI2(void (*completionHandler)()) {
+    printf("testFFI2 called from FFI! Callback pointer: %p\n", completionHandler);
+    fflush(stdout);
+    
+    // Write to log file as well
+    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "testFFI2 called from FFI! Callback pointer: %p\n", completionHandler);
+        fflush(logFile);
+        fclose(logFile);
+    }
+    
+    if (completionHandler) {
+        completionHandler();
+    }
+}
+
+int simpleTest() {
+    printf("simpleTest called successfully\n");
+    fflush(stdout);
+    return 42;
+}
+
+const char* getUrlFromNavigationAction(void* navigationAction) {
+    // TODO: Implement URL extraction from navigation action
+    return nullptr;
+}
+
+const char* getBodyFromScriptMessage(void* message) {
+    // TODO: Implement body extraction from script message
+    return nullptr;
+}
+
+void invokeDecisionHandler(void* decisionHandler, uint32_t policy) {
+    // TODO: Implement decision handler invocation
+}
+
+bool moveToTrash(char* pathString) {
+    // TODO: Implement move to trash
+    return false;
+}
+
+void showItemInFolder(char* path) {
+    // TODO: Implement show item in folder
+}
+
+const char* openFileDialog(const char* startingFolder, const char* allowedFileTypes, bool allowMultipleSelection, const char* windowTitle, const char* buttonLabel) {
+    // TODO: Implement file dialog
+    return nullptr;
+}
+
+// NOTE: Removed deferred tray creation code - now creating TrayItem synchronously
+// The TrayItem constructor handles deferred AppIndicator creation internally
+
+void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, void* clickHandler) {
+    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "createTray called with:\n");
+        fprintf(logFile, "  trayId: %u\n", trayId);
+        fprintf(logFile, "  title: %s\n", title ? title : "NULL");
+        fprintf(logFile, "  pathToImage: %s\n", pathToImage ? pathToImage : "NULL");
+        fprintf(logFile, "  isTemplate: %s\n", isTemplate ? "true" : "false");
+        fflush(logFile);
+        fclose(logFile);
+    }
+    
+    initializeGTK();
+    
+    // Create the TrayItem immediately and return it
+    // The AppIndicator creation will be deferred if needed
+    try {
+        auto tray = std::make_unique<TrayItem>(
+            trayId,
+            title ? title : "",
+            pathToImage ? pathToImage : "",
+            isTemplate,
+            reinterpret_cast<ZigStatusItemHandler>(clickHandler)
+        );
+        
+        TrayItem* trayPtr = tray.get();
+        g_trays[trayId] = std::move(tray);
+        
+        logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "Tray item created and stored with ID %u, returning pointer %p\n", trayId, trayPtr);
+            fflush(logFile);
+            fclose(logFile);
+        }
+        
+        return trayPtr;
+    } catch (const std::exception& e) {
+        logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "Failed to create tray: %s\n", e.what());
+            fflush(logFile);
+            fclose(logFile);
+        }
+        return nullptr;
+    } catch (...) {
+        logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "Failed to create tray: unknown exception\n");
+            fflush(logFile);
+            fclose(logFile);
+        }
+        return nullptr;
+    }
+}
+
+void setTrayTitle(void* statusItem, const char* title) {
+    // Find the tray by statusItem pointer
+    for (auto& [id, tray] : g_trays) {
+        if (tray.get() == statusItem) {
+            tray->setTitle(title);
+            break;
+        }
+    }
+}
+
+void setTrayImage(void* statusItem, const char* image) {
+    // Find the tray by statusItem pointer
+    for (auto& [id, tray] : g_trays) {
+        if (tray.get() == statusItem) {
+            tray->setImage(image);
+            break;
+        }
+    }
+}
+
+void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {
+    // Find the tray by statusItem pointer
+    for (auto& [id, tray] : g_trays) {
+        if (tray.get() == statusItem) {
+            tray->setMenu(jsonString);
+            break;
+        }
+    }
+}
+
+void setTrayMenu(void* statusItem, const char* menuConfig) {
+    setTrayMenuFromJSON(statusItem, menuConfig);
+}
+
+void setApplicationMenu(const char* jsonString, void* zigTrayItemHandler) {
+    // Note: Linux typically doesn't have global application menus like macOS
+    // This would require integration with the desktop environment
+    // For now, we'll log the request and potentially implement it later
+    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "setApplicationMenu called - Linux implementation pending\n");
+        fflush(logFile);
+        fclose(logFile);
+    }
+}
+
+void showContextMenu(const char* jsonString, void* contextMenuHandler) {
+    if (!jsonString || strlen(jsonString) == 0) {
+        return;
+    }
+    
+    initializeGTK();
+    
+    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "Creating context menu from JSON: %s\n", jsonString);
+        fflush(logFile);
+        fclose(logFile);
+    }
+    
+    try {
+        std::vector<MenuJsonValue> menuItems = parseMenuJson(std::string(jsonString));
+        GtkWidget* contextMenu = createMenuFromParsedItems(menuItems, 
+                                                           reinterpret_cast<ZigStatusItemHandler>(contextMenuHandler), 
+                                                           0); // Use 0 for context menu ID
+        
+        if (contextMenu) {
+            gtk_widget_show_all(contextMenu);
+            
+            // Show context menu at mouse position
+            gtk_menu_popup_at_pointer(GTK_MENU(contextMenu), nullptr);
+            
+            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "Context menu created and shown with %zu items\n", menuItems.size());
+                fflush(logFile);
+                fclose(logFile);
+            }
+        }
+    } catch (const std::exception& e) {
+        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "Failed to create context menu: %s\n", e.what());
+            fflush(logFile);
+            fclose(logFile);
+        }
+    }
+}
+
+void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId, double x, double y, double width, double height, void* completionHandler) {
+    // TODO: Implement webview snapshot
+}
+
+void setJSUtils(void* getMimeType, void* getHTMLForWebviewSync) {
+    // TODO: Implement JS utils
+}
+
+void runNSApplication() {
+    // Linux uses runEventLoop instead
+    runEventLoop();
+}
+
+void killApp() {
+    // TODO: Implement app termination
+    exit(0);
+}
+
+void shutdownApplication() {
+    // TODO: Implement graceful shutdown
+    gtk_main_quit();
+}
+
+void* createNSRectWrapper(double x, double y, double width, double height) {
+    // TODO: Return appropriate rectangle structure
+    return nullptr;
+}
+
+
+void closeNSWindow(void* window) {
+    // TODO: Implement window closing
+    if (window) {
+        gtk_widget_destroy(GTK_WIDGET(window));
+    }
+}
+
+
+}
