@@ -678,14 +678,6 @@ if (commandArg === "init") {
 
   buildIcons(appBundleFolderResourcesPath);
   
-  // Create Resources symlink for Linux compatibility
-  if (OS === 'linux') {
-    const resourcesSymlink = join(appBundleFolderPath, 'Resources');
-    if (!existsSync(resourcesSymlink)) {
-      const symlinkSync = require('fs').symlinkSync;
-      symlinkSync('resources', resourcesSymlink);
-    }
-  }
   
   // Run postBuild script
   if (config.scripts.postBuild) {
@@ -1310,7 +1302,7 @@ function createAppBundle(bundleName: string, parentFolder: string) {
     const appBundleFolderPath = join(parentFolder, bundleName);
     const appBundleFolderContentsPath = appBundleFolderPath; // No Contents folder needed
     const appBundleMacOSPath = join(appBundleFolderPath, "bin"); // Use bin instead of MacOS
-    const appBundleFolderResourcesPath = join(appBundleFolderPath, "resources");
+    const appBundleFolderResourcesPath = join(appBundleFolderPath, "Resources");
     const appBundleFolderFrameworksPath = join(appBundleFolderPath, "lib"); // Use lib instead of Frameworks
 
     // Create directories

@@ -492,10 +492,17 @@ public:
         gtk_widget_show(container);
     }
     
-    void addWebview(std::shared_ptr<AbstractView> view) {
+    void addWebview(std::shared_ptr<AbstractView> view, double x = 0, double y = 0) {
         abstractViews.insert(abstractViews.begin(), view);
         if (view->widget) {
-            gtk_fixed_put(GTK_FIXED(container), view->widget, 0, 0);
+            // Prevent webview from affecting window size
+            g_object_set(view->widget,
+                        "expand", FALSE,
+                        "hexpand", FALSE,
+                        "vexpand", FALSE,
+                        NULL);
+            
+            gtk_fixed_put(GTK_FIXED(container), view->widget, (int)x, (int)y);
             gtk_widget_show(view->widget);
         }
     }
@@ -513,7 +520,37 @@ public:
             abstractViews.erase(it);
         }
     }
+    
+    void resizeAutoSizingViews(int width, int height) {
+        // Skip if no webviews have been added yet (timing issue during window creation)
+        if (abstractViews.empty()) {
+            return;
+        }
+        
+        GdkRectangle frame = { 0, 0, width, height };
+        for (auto& view : abstractViews) {
+            if (view->fullSize) {
+                // Auto-resize webviews should fill the entire window
+                view->resize(frame, "");
+                
+                // Force size constraint to prevent content-driven growth
+                if (view->widget) {
+                    gtk_widget_set_size_request(view->widget, width, height);
+                }
+            }
+            // OOPIFs (fullSize=false) keep their original positioning
+        }
+    }
 };
+
+// Window resize callback for auto-resizing webviews
+static gboolean onWindowConfigure(GtkWidget* widget, GdkEventConfigure* event, gpointer user_data) {
+    ContainerView* container = static_cast<ContainerView*>(user_data);
+    if (container) {
+        container->resizeAutoSizingViews(event->width, event->height);
+    }
+    return FALSE; // Let other handlers process this event too
+}
 
 // Tray implementation using AppIndicator
 class TrayItem {
@@ -747,37 +784,26 @@ GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, Zi
 // views:// URI scheme handler callback
 static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data) {
     const char* uri = webkit_uri_scheme_request_get_uri(request);
-    const char* scheme = webkit_uri_scheme_request_get_scheme(request);
-    const char* path = webkit_uri_scheme_request_get_path(request);
     
-    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-    if (logFile) {
-        fprintf(logFile, "views:// request: uri=%s, path=%s\n", uri, path ? path : "NULL");
-        fflush(logFile);
-        fclose(logFile);
+    // Parse the full URI to get everything after views://
+    // For views://webviewtag/index.html, we want "webviewtag/index.html"
+    const char* fullPath = "index.html"; // default
+    if (uri && strncmp(uri, "views://", 8) == 0) {
+        fullPath = uri + 8; // Skip "views://"
     }
     
-    if (!path || strlen(path) == 0) {
-        // Default to index.html if no path specified
-        path = "/index.html";
-    }
-    
-    // Remove leading slash if present
-    if (path[0] == '/') {
-        path++;
-    }
-    
-    // Build file path: ../resources/app/views/[path]
+    // Build file path: ../Resources/app/views/[fullPath] relative to current directory (bin)
     char* cwd = g_get_current_dir();
-    gchar* viewsDir = g_build_filename(cwd, "..", "resources", "app", "views", nullptr);
-    gchar* filePath = g_build_filename(viewsDir, path, nullptr);
+    gchar* viewsDir = g_build_filename(cwd, "..", "Resources", "app", "views", nullptr);
+    gchar* filePath = g_build_filename(viewsDir, fullPath, nullptr);
     
-    logFile = fopen("/tmp/tray_debug.log", "a");
-    if (logFile) {
-        fprintf(logFile, "Loading file: %s\n", filePath);
-        fflush(logFile);
-        fclose(logFile);
-    }
+    printf("views:// request: uri=%s, fullPath=%s\n", uri, fullPath ? fullPath : "NULL");
+    printf("DEBUG: After parsing, fullPath should be: %s\n", fullPath);
+    printf("cwd=%s\n", cwd);
+    printf("viewsDir=%s\n", viewsDir);
+    printf("Loading file: %s\n", filePath);
+    printf("Expected: webviewtag/index.html, got: %s\n", fullPath ? fullPath : "NULL");
+    fflush(stdout);
     
     // Check if file exists and read it
     if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
@@ -809,36 +835,24 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
             webkit_uri_scheme_request_finish(request, stream, fileSize, mimeType);
             g_object_unref(stream);
             
-            logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "Served file: %s (%zu bytes, %s)\n", filePath, fileSize, mimeType);
-                fflush(logFile);
-                fclose(logFile);
-            }
+            printf("Served file: %s (%zu bytes, %s)\n", filePath, fileSize, mimeType);
+            fflush(stdout);
         } else {
-            logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "Failed to read file: %s - %s\n", filePath, error ? error->message : "unknown error");
-                fflush(logFile);
-                fclose(logFile);
-            }
+            printf("Failed to read file: %s - %s\n", filePath, error ? error->message : "unknown error");
+            fflush(stdout);
             
             // Return 404 error
-            GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", path);
+            GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", fullPath);
             webkit_uri_scheme_request_finish_error(request, responseError);
             g_error_free(responseError);
             if (error) g_error_free(error);
         }
     } else {
-        logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "File not found: %s\n", filePath);
-            fflush(logFile);
-            fclose(logFile);
-        }
+        printf("File not found: %s\n", filePath);
+        fflush(stdout);
         
         // Return 404 error
-        GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", path);
+        GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", fullPath);
         webkit_uri_scheme_request_finish_error(request, responseError);
         g_error_free(responseError);
     }
@@ -863,22 +877,18 @@ void initializeGTK() {
         
         g_gtkInitialized = true;
         
-        // Don't register WebKit URI scheme handler yet - this might be causing the crash
         printf("GTK initialization complete\n");
         fflush(stdout);
         
-        /*
-        // Register the views:// URI scheme handler
+        // Register the views:// URI scheme handler AFTER GTK is initialized
         WebKitWebContext* context = webkit_web_context_get_default();
         webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
+        printf("Registered views:// URI scheme handler with context %p\n", context);
+        fflush(stdout);
         
-        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "Registered views:// URI scheme handler\n");
-            fflush(logFile);
-            fclose(logFile);
-        }
-        */
+        // Also test if our handler function is accessible
+        printf("Handler function address: %p\n", (void*)handleViewsURIScheme);
+        fflush(stdout);
     }
 }
 
@@ -1124,6 +1134,11 @@ void* createWindow(uint32_t windowId, double x, double y, double width, double h
         printf("destroy signal connected\n");
         fflush(stdout);
         
+        // Connect window resize signal for auto-resize functionality
+        g_signal_connect(window, "configure-event", G_CALLBACK(onWindowConfigure), container.get());
+        printf("configure-event signal connected\n");
+        fflush(stdout);
+        
         // Don't show window yet - that's handled by showWindow
         printf("=== createWindow dispatch_sync_main RETURNING: %p ===\n", window);
         fflush(stdout);
@@ -1211,6 +1226,9 @@ AbstractView* initWebview(uint32_t webviewId,
                 electrobunPreloadScript, customPreloadScript
             );
             
+            // Set fullSize flag for auto-resize functionality
+            webview->fullSize = autoResize;
+            
             printf("WebKit webview created successfully\n");
             fflush(stdout);
             
@@ -1221,9 +1239,9 @@ AbstractView* initWebview(uint32_t webviewId,
                 printf("Checking container id=%u, window=%p\n", id, container->window);
                 fflush(stdout);
                 if (container->window == GTK_WIDGET(window)) {
-                    printf("Found matching container, adding webview\n");
+                    printf("Found matching container, adding webview at (%f, %f)\n", x, y);
                     fflush(stdout);
-                    container->addWebview(webview);
+                    container->addWebview(webview, x, y);
                     printf("WebKit webview added to container\n");
                     fflush(stdout);
                     break;

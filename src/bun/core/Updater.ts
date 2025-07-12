@@ -153,7 +153,7 @@ const Updater = {
         mkdirSync(untarDir, { recursive: true });
 
         // extract just the version.json from the patched tar file so we can see what hash it is now
-        const resourcesDir = platform() === 'darwin' ? 'Resources' : 'resources';
+        const resourcesDir = 'Resources'; // Always use capitalized Resources
         await tar.x({
           // gzip: false,
           file: tmpPatchedTarFilePath,
@@ -374,7 +374,7 @@ const Updater = {
     }
 
     try {
-      const resourcesDir = platform() === 'darwin' ? 'Resources' : 'resources';
+      const resourcesDir = 'Resources'; // Always use capitalized Resources
       localInfo = await Bun.file(`../${resourcesDir}/version.json`).json();
       return localInfo;
     } catch (error) {
