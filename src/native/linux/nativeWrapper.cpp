@@ -661,6 +661,13 @@ static gboolean onWindowConfigure(GtkWidget* widget, GdkEventConfigure* event, g
     return FALSE; // Let other handlers process this event too
 }
 
+// Mouse move callback for debugging
+static gboolean onMouseMove(GtkWidget* widget, GdkEventMotion* event, gpointer user_data) {
+    printf("Mouse move: x=%.2f, y=%.2f\n", event->x, event->y);
+    fflush(stdout);
+    return FALSE; // Let other handlers process this event too
+}
+
 // Tray implementation using AppIndicator
 class TrayItem {
 public:
@@ -1246,6 +1253,12 @@ void* createWindow(uint32_t windowId, double x, double y, double width, double h
         // Connect window resize signal for auto-resize functionality
         g_signal_connect(window, "configure-event", G_CALLBACK(onWindowConfigure), container.get());
         printf("configure-event signal connected\n");
+        fflush(stdout);
+        
+        // Connect mouse motion event for debugging
+        gtk_widget_add_events(window, GDK_POINTER_MOTION_MASK);
+        g_signal_connect(window, "motion-notify-event", G_CALLBACK(onMouseMove), container.get());
+        printf("motion-notify-event signal connected\n");
         fflush(stdout);
         
         // Don't show window yet - that's handled by showWindow
