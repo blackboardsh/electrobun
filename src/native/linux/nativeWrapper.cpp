@@ -850,6 +850,7 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
 }
 
 void initializeGTK() {
+    
     printf("initializeGTK called, g_gtkInitialized=%d\n", g_gtkInitialized);
     fflush(stdout);
     
@@ -1018,12 +1019,28 @@ extern "C" {
 // Constructor to run when library is loaded
 __attribute__((constructor))
 void on_library_load() {
-    printf("Native library loaded!\n");
+    printf("=== ELECTROBUN LINUX NATIVE LIBRARY LOADED ===\n");
+    printf("Library constructor called\n");
     fflush(stdout);
+    
+    // Write to a file as well to make sure it's visible
+    FILE* logFile = fopen("/tmp/electrobun_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "=== ELECTROBUN LINUX NATIVE LIBRARY LOADED ===\n");
+        fprintf(logFile, "Library constructor called at startup\n");
+        fflush(logFile);
+        fclose(logFile);
+    }
 }
 
 void runEventLoop() {
-    printf("runEventLoop called - starting GTK main loop\n");
+    printf("runEventLoop called - initializing GTK on main thread\n");
+    fflush(stdout);
+    
+    // Initialize GTK on the main thread (this MUST be done here)
+    initializeGTK();
+    
+    printf("GTK initialized, starting main loop\n");
     fflush(stdout);
     sleep(1); // Give time for output to flush
     gtk_main();
@@ -1038,44 +1055,86 @@ void showWindow(void* window);
 void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height, 
                                              uint32_t styleMask, const char* titleBarStyle,
                                              WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
-    printf("createWindowWithFrameAndStyleFromWorker called: windowId=%u, x=%f, y=%f, w=%f, h=%f\n", windowId, x, y, width, height);
+    printf("=== createWindowWithFrameAndStyleFromWorker ENTRY ===\n");
+    printf("windowId=%u, x=%f, y=%f, w=%f, h=%f\n", windowId, x, y, width, height);
+    printf("styleMask=%u, titleBarStyle=%s\n", styleMask, titleBarStyle ? titleBarStyle : "NULL");
+    printf("closeCallback=%p, moveCallback=%p, resizeCallback=%p\n", closeCallback, moveCallback, resizeCallback);
     fflush(stdout);
     
     // On Linux, ignore styleMask and titleBarStyle for now, just create basic window
-    return createWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback);
+    void* result = createWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback);
+    
+    printf("=== createWindowWithFrameAndStyleFromWorker RETURN: %p ===\n", result);
+    fflush(stdout);
+    
+    return result;
 }
 
 void* createWindow(uint32_t windowId, double x, double y, double width, double height, const char* title, 
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
-    printf("createWindow called: windowId=%u, title=%s\n", windowId, title);
+    
+                    printf("=== createWindow ENTRY ===\n");
+    printf("windowId=%u, title=%s, x=%f, y=%f, w=%f, h=%f\n", windowId, title, x, y, width, height);
     fflush(stdout);
     
-    initializeGTK();
-    
-    printf("About to dispatch createWindow to main thread\n");
+    // Note: GTK is initialized on main thread by runEventLoop()
+    // Since we dispatch all GUI operations to main thread, we don't need to check here
+    printf("createWindow: proceeding (GTK init handled by main thread dispatch)\n");
     fflush(stdout);
     
-    return dispatch_sync_main([&]() -> void* {
+    
+    printf("GTK initialized, about to dispatch createWindow to main thread\n");
+    fflush(stdout);
+    
+    void* result = dispatch_sync_main([&]() -> void* {
+        printf("=== INSIDE createWindow dispatch_sync_main ===\n");
+        fflush(stdout);
+        
         GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        printf("gtk_window_new completed: %p\n", window);
+        fflush(stdout);
+        
         gtk_window_set_title(GTK_WINDOW(window), title);
+        printf("gtk_window_set_title completed\n");
+        fflush(stdout);
+        
         gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
+        printf("gtk_window_set_default_size completed\n");
+        fflush(stdout);
         
         if (x >= 0 && y >= 0) {
             gtk_window_move(GTK_WINDOW(window), (int)x, (int)y);
+            printf("gtk_window_move completed\n");
+            fflush(stdout);
         }
         
         // Create container
+        printf("Creating ContainerView...\n");
+        fflush(stdout);
         auto container = std::make_shared<ContainerView>(window);
+        printf("ContainerView created, storing in g_containers\n");
+        fflush(stdout);
         g_containers[windowId] = container;
+        printf("Container stored with windowId=%u\n", windowId);
+        fflush(stdout);
         
         // Store callbacks (simplified - in real implementation you'd want to store these properly)
         // For now, just connect basic destroy signal
         g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
+        printf("destroy signal connected\n");
+        fflush(stdout);
         
         // Don't show window yet - that's handled by showWindow
+        printf("=== createWindow dispatch_sync_main RETURNING: %p ===\n", window);
+        fflush(stdout);
         
         return (void*)window;
     });
+    
+    printf("=== createWindow RETURN: %p ===\n", result);
+    fflush(stdout);
+    
+    return result;
 }
 
 void setWindowTitle(void* window, const char* title) {
@@ -1130,54 +1189,101 @@ AbstractView* initWebview(uint32_t webviewId,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript) {
     
-    // For now, let's create a simple placeholder that doesn't create WebKit
-    // This will help us identify if the issue is with WebKit initialization
-    printf("initWebview called: webviewId=%u\n", webviewId);
+    printf("=== initWebview ENTRY ===\n");
+    printf("webviewId=%u, window=%p, renderer=%s\n", webviewId, window, renderer ? renderer : "NULL");
+    printf("url=%s, x=%f, y=%f, w=%f, h=%f\n", url ? url : "NULL", x, y, width, height);
     fflush(stdout);
     
-    // Create a simple GTK widget as a placeholder instead of WebKit
-    GtkWidget* placeholder_widget = gtk_label_new("WebView placeholder");
-    gtk_widget_set_size_request(placeholder_widget, (int)width, (int)height);
-    
-    // Add to container
-    for (auto& [id, container] : g_containers) {
-        if (container->window == GTK_WIDGET(window)) {
-            gtk_container_add(GTK_CONTAINER(container->container), placeholder_widget);
-            break;
+    AbstractView* result = dispatch_sync_main([&]() -> AbstractView* {
+        try {
+            printf("=== INSIDE initWebview dispatch_sync_main ===\n");
+            fflush(stdout);
+            
+            // Create WebKit webview implementation
+            printf("Creating WebKit webview on main thread\n");
+            fflush(stdout);
+            
+            auto webview = std::make_shared<WebKitWebViewImpl>(
+                webviewId, GTK_WIDGET(window),
+                url, x, y, width, height, autoResize,
+                partitionIdentifier, navigationCallback, webviewEventHandler,
+                bunBridgeHandler, internalBridgeHandler,
+                electrobunPreloadScript, customPreloadScript
+            );
+            
+            printf("WebKit webview created successfully\n");
+            fflush(stdout);
+            
+            // Add to container
+            printf("Looking for container with window=%p\n", window);
+            fflush(stdout);
+            for (auto& [id, container] : g_containers) {
+                printf("Checking container id=%u, window=%p\n", id, container->window);
+                fflush(stdout);
+                if (container->window == GTK_WIDGET(window)) {
+                    printf("Found matching container, adding webview\n");
+                    fflush(stdout);
+                    container->addWebview(webview);
+                    printf("WebKit webview added to container\n");
+                    fflush(stdout);
+                    break;
+                }
+            }
+            
+            printf("=== initWebview dispatch_sync_main RETURNING: %p ===\n", webview.get());
+            fflush(stdout);
+            
+            return webview.get();
+        } catch (const std::exception& e) {
+            printf("ERROR: Failed to create webview: %s\n", e.what());
+            fflush(stdout);
+            return nullptr;
         }
-    }
+    });
     
-    // Return a dummy pointer for now
-    return (AbstractView*)placeholder_widget;
+    printf("=== initWebview RETURN: %p ===\n", result);
+    fflush(stdout);
+    
+    return result;
 }
 
 void loadURLInWebView(AbstractView* abstractView, const char* urlString) {
     if (abstractView) {
-        abstractView->loadURL(urlString);
+        dispatch_sync_main_void([&]() {
+            abstractView->loadURL(urlString);
+        });
     }
 }
 
 void webviewGoBack(AbstractView* abstractView) {
     if (abstractView) {
-        abstractView->goBack();
+        dispatch_sync_main_void([&]() {
+            abstractView->goBack();
+        });
     }
 }
 
 void webviewGoForward(AbstractView* abstractView) {
     if (abstractView) {
-        abstractView->goForward();
+        dispatch_sync_main_void([&]() {
+            abstractView->goForward();
+        });
     }
 }
 
 void webviewReload(AbstractView* abstractView) {
     if (abstractView) {
-        abstractView->reload();
+        dispatch_sync_main_void([&]() {
+            abstractView->reload();
+        });
     }
 }
 
 void webviewRemove(AbstractView* abstractView) {
     if (abstractView) {
-        abstractView->remove();
+        dispatch_sync_main_void([&]() {
+            abstractView->remove();
+        });
     }
 }
 
@@ -1197,38 +1303,50 @@ bool webviewCanGoForward(AbstractView* abstractView) {
 
 void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
     if (abstractView) {
-        GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
-        abstractView->resize(frame, masksJson);
+        dispatch_sync_main_void([&]() {
+            GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
+            abstractView->resize(frame, masksJson);
+        });
     }
 }
 
 void evaluateJavaScriptWithNoCompletion(AbstractView* abstractView, const char* js) {
     if (abstractView) {
-        abstractView->evaluateJavaScriptWithNoCompletion(js);
+        dispatch_sync_main_void([&]() {
+            abstractView->evaluateJavaScriptWithNoCompletion(js);
+        });
     }
 }
 
 void webviewSetTransparent(AbstractView* abstractView, bool transparent) {
     if (abstractView) {
-        abstractView->setTransparent(transparent);
+        dispatch_sync_main_void([&]() {
+            abstractView->setTransparent(transparent);
+        });
     }
 }
 
 void webviewSetPassthrough(AbstractView* abstractView, bool enablePassthrough) {
     if (abstractView) {
-        abstractView->setPassthrough(enablePassthrough);
+        dispatch_sync_main_void([&]() {
+            abstractView->setPassthrough(enablePassthrough);
+        });
     }
 }
 
 void webviewSetHidden(AbstractView* abstractView, bool hidden) {
     if (abstractView) {
-        abstractView->setHidden(hidden);
+        dispatch_sync_main_void([&]() {
+            abstractView->setHidden(hidden);
+        });
     }
 }
 
 void updatePreloadScriptToWebView(AbstractView* abstractView, const char* scriptIdentifier, const char* scriptContent, bool forMainFrameOnly) {
     if (abstractView) {
-        abstractView->updateCustomPreloadScript(scriptContent);
+        dispatch_sync_main_void([&]() {
+            abstractView->updateCustomPreloadScript(scriptContent);
+        });
     }
 }
 
@@ -1242,7 +1360,9 @@ void stopWindowMove() {
 
 void addPreloadScriptToWebView(AbstractView* abstractView, const char* scriptContent, bool forMainFrameOnly) {
     if (abstractView) {
-        abstractView->addPreloadScriptToWebView(scriptContent);
+        dispatch_sync_main_void([&]() {
+            abstractView->addPreloadScriptToWebView(scriptContent);
+        });
     }
 }
 
@@ -1333,77 +1453,89 @@ void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bo
         fclose(logFile);
     }
     
-    initializeGTK();
-    
-    // Create the TrayItem immediately and return it
-    // The AppIndicator creation will be deferred if needed
-    try {
-        auto tray = std::make_unique<TrayItem>(
-            trayId,
-            title ? title : "",
-            pathToImage ? pathToImage : "",
-            isTemplate,
-            reinterpret_cast<ZigStatusItemHandler>(clickHandler)
-        );
-        
-        TrayItem* trayPtr = tray.get();
-        g_trays[trayId] = std::move(tray);
-        
-        logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "Tray item created and stored with ID %u, returning pointer %p\n", trayId, trayPtr);
-            fflush(logFile);
-            fclose(logFile);
-        }
-        
-        return trayPtr;
-    } catch (const std::exception& e) {
-        logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "Failed to create tray: %s\n", e.what());
-            fflush(logFile);
-            fclose(logFile);
-        }
-        return nullptr;
-    } catch (...) {
-        logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "Failed to create tray: unknown exception\n");
-            fflush(logFile);
-            fclose(logFile);
-        }
+    // GTK should already be initialized on main thread by runEventLoop()
+    if (!g_gtkInitialized) {
+        printf("ERROR: GTK not initialized for createTray! GTK must be initialized on main thread first.\n");
+        fflush(stdout);
         return nullptr;
     }
+    
+    return dispatch_sync_main([&]() -> void* {
+        // Create the TrayItem on main thread
+        try {
+            auto tray = std::make_unique<TrayItem>(
+                trayId,
+                title ? title : "",
+                pathToImage ? pathToImage : "",
+                isTemplate,
+                reinterpret_cast<ZigStatusItemHandler>(clickHandler)
+            );
+            
+            TrayItem* trayPtr = tray.get();
+            g_trays[trayId] = std::move(tray);
+            
+            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "Tray item created and stored with ID %u, returning pointer %p\n", trayId, trayPtr);
+                fflush(logFile);
+                fclose(logFile);
+            }
+            
+            return trayPtr;
+        } catch (const std::exception& e) {
+            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "Failed to create tray: %s\n", e.what());
+                fflush(logFile);
+                fclose(logFile);
+            }
+            return nullptr;
+        } catch (...) {
+            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "Failed to create tray: unknown exception\n");
+                fflush(logFile);
+                fclose(logFile);
+            }
+            return nullptr;
+        }
+    });
 }
 
 void setTrayTitle(void* statusItem, const char* title) {
-    // Find the tray by statusItem pointer
-    for (auto& [id, tray] : g_trays) {
-        if (tray.get() == statusItem) {
-            tray->setTitle(title);
-            break;
+    dispatch_sync_main_void([&]() {
+        // Find the tray by statusItem pointer
+        for (auto& [id, tray] : g_trays) {
+            if (tray.get() == statusItem) {
+                tray->setTitle(title);
+                break;
+            }
         }
-    }
+    });
 }
 
 void setTrayImage(void* statusItem, const char* image) {
-    // Find the tray by statusItem pointer
-    for (auto& [id, tray] : g_trays) {
-        if (tray.get() == statusItem) {
-            tray->setImage(image);
-            break;
+    dispatch_sync_main_void([&]() {
+        // Find the tray by statusItem pointer
+        for (auto& [id, tray] : g_trays) {
+            if (tray.get() == statusItem) {
+                tray->setImage(image);
+                break;
+            }
         }
-    }
+    });
 }
 
 void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {
-    // Find the tray by statusItem pointer
-    for (auto& [id, tray] : g_trays) {
-        if (tray.get() == statusItem) {
-            tray->setMenu(jsonString);
-            break;
+    dispatch_sync_main_void([&]() {
+        // Find the tray by statusItem pointer
+        for (auto& [id, tray] : g_trays) {
+            if (tray.get() == statusItem) {
+                tray->setMenu(jsonString);
+                break;
+            }
         }
-    }
+    });
 }
 
 void setTrayMenu(void* statusItem, const char* menuConfig) {
@@ -1427,42 +1559,49 @@ void showContextMenu(const char* jsonString, void* contextMenuHandler) {
         return;
     }
     
-    initializeGTK();
-    
-    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-    if (logFile) {
-        fprintf(logFile, "Creating context menu from JSON: %s\n", jsonString);
-        fflush(logFile);
-        fclose(logFile);
+    // GTK should already be initialized on main thread by runEventLoop()
+    if (!g_gtkInitialized) {
+        printf("ERROR: GTK not initialized for showContextMenu! GTK must be initialized on main thread first.\n");
+        fflush(stdout);
+        return;
     }
     
-    try {
-        std::vector<MenuJsonValue> menuItems = parseMenuJson(std::string(jsonString));
-        GtkWidget* contextMenu = createMenuFromParsedItems(menuItems, 
-                                                           reinterpret_cast<ZigStatusItemHandler>(contextMenuHandler), 
-                                                           0); // Use 0 for context menu ID
+    dispatch_sync_main_void([&]() {
+        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "Creating context menu from JSON: %s\n", jsonString);
+            fflush(logFile);
+            fclose(logFile);
+        }
         
-        if (contextMenu) {
-            gtk_widget_show_all(contextMenu);
+        try {
+            std::vector<MenuJsonValue> menuItems = parseMenuJson(std::string(jsonString));
+            GtkWidget* contextMenu = createMenuFromParsedItems(menuItems, 
+                                                               reinterpret_cast<ZigStatusItemHandler>(contextMenuHandler), 
+                                                               0); // Use 0 for context menu ID
             
-            // Show context menu at mouse position
-            gtk_menu_popup_at_pointer(GTK_MENU(contextMenu), nullptr);
-            
-            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (contextMenu) {
+                gtk_widget_show_all(contextMenu);
+                
+                // Show context menu at mouse position
+                gtk_menu_popup_at_pointer(GTK_MENU(contextMenu), nullptr);
+                
+                logFile = fopen("/tmp/tray_debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "Context menu created and shown with %zu items\n", menuItems.size());
+                    fflush(logFile);
+                    fclose(logFile);
+                }
+            }
+        } catch (const std::exception& e) {
+            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
             if (logFile) {
-                fprintf(logFile, "Context menu created and shown with %zu items\n", menuItems.size());
+                fprintf(logFile, "Failed to create context menu: %s\n", e.what());
                 fflush(logFile);
                 fclose(logFile);
             }
         }
-    } catch (const std::exception& e) {
-        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "Failed to create context menu: %s\n", e.what());
-            fflush(logFile);
-            fclose(logFile);
-        }
-    }
+    });
 }
 
 void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId, double x, double y, double width, double height, void* completionHandler) {
@@ -1474,6 +1613,17 @@ void setJSUtils(void* getMimeType, void* getHTMLForWebviewSync) {
 }
 
 void runNSApplication() {
+    printf("=== runNSApplication called ===\n");
+    fflush(stdout);
+    
+    // Write to log file too
+    FILE* logFile = fopen("/tmp/electrobun_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "=== runNSApplication called ===\n");
+        fflush(logFile);
+        fclose(logFile);
+    }
+    
     // Linux uses runEventLoop instead
     runEventLoop();
 }
@@ -1495,9 +1645,10 @@ void* createNSRectWrapper(double x, double y, double width, double height) {
 
 
 void closeNSWindow(void* window) {
-    // TODO: Implement window closing
     if (window) {
-        gtk_widget_destroy(GTK_WIDGET(window));
+        dispatch_sync_main_void([&]() {
+            gtk_widget_destroy(GTK_WIDGET(window));
+        });
     }
 }
 
