@@ -928,7 +928,6 @@ const bunBridgePostmessageHandler = new JSCallback((id, msg) => {
 const internalBridgeHandler = new JSCallback((id, msg) => {    
   try {    
     const batchMessage = new CString(msg); 
-
     const jsonBatch = JSON.parse(batchMessage);
 
     if (jsonBatch.id === 'webviewEvent'){

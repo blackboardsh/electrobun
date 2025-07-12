@@ -1,5 +1,6 @@
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
+#include <jsc/jsc.h>
 #include <libayatana-appindicator/app-indicator.h>
 #include <string>
 #include <vector>
@@ -10,6 +11,8 @@
 #include <dlfcn.h>
 #include <algorithm>
 #include <sstream>
+#include <thread>
+#include <chrono>
 
 // Forward declare callback types
 typedef void (*WindowCloseCallback)(uint32_t windowId);
@@ -413,21 +416,59 @@ public:
     // Static callback functions
     static void onBunBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
         WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        if (impl->bunBridgeHandler) {
+        if (impl->bunBridgeHandler && js_result) {
+            // Use the newer JSC API recommended by WebKit2GTK
             JSCValue* value = webkit_javascript_result_get_js_value(js_result);
-            gchar* str_value = jsc_value_to_string(value);
-            impl->bunBridgeHandler(impl->webviewId, str_value);
-            g_free(str_value);
+            if (value && JSC_IS_VALUE(value) && jsc_value_is_string(value)) {
+                gchar* str_value = jsc_value_to_string(value);
+                if (str_value) {
+                    // Create a copy for the callback to avoid memory issues
+                    size_t len = strlen(str_value);
+                    char* message_copy = new char[len + 1];
+                    strcpy(message_copy, str_value);
+                    
+                    // Call the callback
+                    impl->bunBridgeHandler(impl->webviewId, message_copy);
+                    
+                    // Schedule cleanup after a delay to avoid premature deallocation
+                    std::thread([message_copy, str_value]() {
+                        std::this_thread::sleep_for(std::chrono::seconds(1));
+                        delete[] message_copy;
+                        g_free(str_value);
+                    }).detach();
+                } else {
+                    g_free(str_value);
+                }
+            }
         }
     }
     
     static void onInternalBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
         WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        if (impl->internalBridgeHandler) {
+        if (impl->internalBridgeHandler && js_result) {
+            // Use the newer JSC API recommended by WebKit2GTK
             JSCValue* value = webkit_javascript_result_get_js_value(js_result);
-            gchar* str_value = jsc_value_to_string(value);
-            impl->internalBridgeHandler(impl->webviewId, str_value);
-            g_free(str_value);
+            if (value && JSC_IS_VALUE(value) && jsc_value_is_string(value)) {
+                gchar* str_value = jsc_value_to_string(value);
+                if (str_value) {
+                    // Create a copy for the callback to avoid memory issues
+                    size_t len = strlen(str_value);
+                    char* message_copy = new char[len + 1];
+                    strcpy(message_copy, str_value);
+                    
+                    // Call the callback
+                    impl->internalBridgeHandler(impl->webviewId, message_copy);
+                    
+                    // Schedule cleanup after a delay to avoid premature deallocation
+                    std::thread([message_copy, str_value]() {
+                        std::this_thread::sleep_for(std::chrono::seconds(1));
+                        delete[] message_copy;
+                        g_free(str_value);
+                    }).detach();
+                } else {
+                    g_free(str_value);
+                }
+            }
         }
     }
     

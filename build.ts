@@ -493,13 +493,19 @@ async function buildNative() {
         await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
         try {
+            // Check if required packages are available first
+            await $`pkg-config --exists webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`;
+            
             // Compile the main wrapper with WebKitGTK and AppIndicator
             await $`mkdir -p src/native/linux/build && g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
 
             // Link with WebKitGTK and AppIndicator libraries
             await $`mkdir -p src/native/build && g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -Wl,-rpath,'$ORIGIN'`;
+            
+            // console.log('Native wrapper built successfully');
         } catch (error) {
             console.log('WebKitGTK or AppIndicator not available, skipping native wrapper build');
+            console.log('Error details:', error.message);
         }
     }
 }
