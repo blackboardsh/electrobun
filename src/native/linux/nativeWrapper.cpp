@@ -385,12 +385,12 @@ public:
     void resize(const GdkRectangle& frame, const char* masksJson) override {
         if (webview) {
             gtk_widget_set_size_request(webview, frame.width, frame.height);
-            if (gtk_widget_get_parent(webview)) {
-                // Always position at the requested coordinates since we're using 
-                // separate containers for auto-resize vs OOPIF webviews
-                gtk_fixed_move(GTK_FIXED(gtk_widget_get_parent(webview)), webview, frame.x, frame.y);
-                visualBounds = frame;
-            }
+            
+            // Position using margins since we're using overlay
+            gtk_widget_set_margin_left(webview, frame.x);
+            gtk_widget_set_margin_top(webview, frame.y);
+            
+            visualBounds = frame;
         }
         maskJSON = masksJson ? masksJson : "";
     }
@@ -543,54 +543,39 @@ public:
 class ContainerView {
 public:
     GtkWidget* window;
-    GtkWidget* container;
-    GtkWidget* oopifContainer; // Separate container for OOPIF webviews
+    GtkWidget* overlay;
     std::vector<std::shared_ptr<AbstractView>> abstractViews;
     AbstractView* activeWebView = nullptr;
     
     ContainerView(GtkWidget* window) : window(window) {
-        // Create main container for auto-resize webviews
-        container = gtk_fixed_new();
-        
-        // Ensure the container doesn't affect window sizing
-        g_object_set(container,
-                    "expand", FALSE,
-                    "hexpand", FALSE,
-                    "vexpand", FALSE,
-                    NULL);
-        
-        // Create separate container for OOPIF webviews that won't affect window sizing
-        oopifContainer = gtk_fixed_new();
-        
-        // CRITICAL: Set OOPIF container to not contribute to size requests
-        g_object_set(oopifContainer,
-                    "expand", FALSE,
-                    "hexpand", FALSE,
-                    "vexpand", FALSE,
-                    NULL);
-        
-        // Override size request to always return 0,0 for OOPIF container
-        g_signal_connect(oopifContainer, "size-request", 
-                        G_CALLBACK(oopifContainerSizeRequest), NULL);
-        
-        // Create an overlay to properly layer containers
-        GtkWidget* overlay = gtk_overlay_new();
+        // Create an overlay as the main container
+        overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
         
-        // Add main container as base layer
-        gtk_container_add(GTK_CONTAINER(overlay), container);
+        // Ensure the overlay doesn't expand and affect window sizing
+        g_object_set(overlay,
+                    "expand", FALSE,
+                    "hexpand", FALSE,
+                    "vexpand", FALSE,
+                    NULL);
         
-        // Add OOPIF container as overlay layer
-        gtk_overlay_add_overlay(GTK_OVERLAY(overlay), oopifContainer);
+        // Override size request to always return 0,0 for the overlay
+        g_signal_connect(overlay, "size-request", 
+                        G_CALLBACK(webviewContainerSizeRequest), NULL);
         
         gtk_widget_show(overlay);
-        gtk_widget_show(container);
-        gtk_widget_show(oopifContainer);
     }
     
-    // Custom size request handler for OOPIF container
-    static void oopifContainerSizeRequest(GtkWidget* widget, GtkRequisition* requisition, gpointer user_data) {
-        // Always request 0,0 size so this container doesn't affect window auto-sizing
+    // Custom size request handler for webview container
+    static void webviewContainerSizeRequest(GtkWidget* widget, GtkRequisition* requisition, gpointer user_data) {
+        // Always request 0,0 size so webviews don't affect window auto-sizing
+        requisition->width = 0;
+        requisition->height = 0;
+    }
+    
+    // Custom size request handler for individual webviews
+    static void webviewSizeRequest(GtkWidget* widget, GtkRequisition* requisition, gpointer user_data) {
+        // Always request 0,0 size so webviews don't affect window auto-sizing
         requisition->width = 0;
         requisition->height = 0;
     }
@@ -605,14 +590,20 @@ public:
                         "vexpand", FALSE,
                         NULL);
             
-            // Choose container based on whether this is auto-resize or OOPIF
-            GtkWidget* targetContainer = view->fullSize ? container : oopifContainer;
+            // Override size request for each webview to return 0,0
+            g_signal_connect(view->widget, "size-request", 
+                            G_CALLBACK(webviewSizeRequest), NULL);
             
-            gtk_fixed_put(GTK_FIXED(targetContainer), view->widget, (int)x, (int)y);
+            // Add all webviews as overlays - they won't affect window sizing
+            gtk_overlay_add_overlay(GTK_OVERLAY(overlay), view->widget);
+            
+            // Position the webview
+            if (x != 0 || y != 0) {
+                gtk_widget_set_margin_left(view->widget, (int)x);
+                gtk_widget_set_margin_top(view->widget, (int)y);
+            }
+            
             gtk_widget_show(view->widget);
-            
-            // No need for mirror mode with separate containers - OOPIFs go directly 
-            // into the non-sizing container at their correct positions
         }
     }
     
@@ -642,12 +633,12 @@ public:
                 // Auto-resize webviews should fill the entire window
                 view->resize(frame, "");
             }
-            // OOPIFs (fullSize=false) are in separate container and keep their positioning
+            // OOPIFs (fullSize=false) keep their positioning and don't auto-resize
         }
         
-        // Also ensure the OOPIF container spans the entire window for proper layering
-        if (oopifContainer) {
-            gtk_widget_set_size_request(oopifContainer, width, height);
+        // Ensure the overlay spans the entire window for proper layering
+        if (overlay) {
+            gtk_widget_set_size_request(overlay, width, height);
         }
     }
 };
