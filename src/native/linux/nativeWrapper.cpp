@@ -14,6 +14,8 @@
 #include <thread>
 #include <chrono>
 
+// OOPIF positioning - GTK uses separate containers instead of offscreen positioning
+
 // Forward declare callback types
 typedef void (*WindowCloseCallback)(uint32_t windowId);
 typedef void (*WindowMoveCallback)(uint32_t windowId, double x, double y);
@@ -384,7 +386,10 @@ public:
         if (webview) {
             gtk_widget_set_size_request(webview, frame.width, frame.height);
             if (gtk_widget_get_parent(webview)) {
+                // Always position at the requested coordinates since we're using 
+                // separate containers for auto-resize vs OOPIF webviews
                 gtk_fixed_move(GTK_FIXED(gtk_widget_get_parent(webview)), webview, frame.x, frame.y);
+                visualBounds = frame;
             }
         }
         maskJSON = masksJson ? masksJson : "";
@@ -399,8 +404,23 @@ public:
     }
     
     void toggleMirrorMode(bool enable) override {
+        if (mirrorModeEnabled == enable) {
+            return;
+        }
+        
         mirrorModeEnabled = enable;
-        // TODO: Implement mirror mode
+        
+        // With separate containers, mirror mode only affects input handling
+        // No need to move webviews offscreen since OOPIFs are in non-sizing container
+        if (webview) {
+            if (enable) {
+                // Disable input events for this webview
+                gtk_widget_set_sensitive(webview, FALSE);
+            } else {
+                // Re-enable input events
+                gtk_widget_set_sensitive(webview, TRUE);
+            }
+        }
     }
     
     void setHidden(bool hidden) override {
@@ -524,13 +544,55 @@ class ContainerView {
 public:
     GtkWidget* window;
     GtkWidget* container;
+    GtkWidget* oopifContainer; // Separate container for OOPIF webviews
     std::vector<std::shared_ptr<AbstractView>> abstractViews;
     AbstractView* activeWebView = nullptr;
     
     ContainerView(GtkWidget* window) : window(window) {
+        // Create main container for auto-resize webviews
         container = gtk_fixed_new();
-        gtk_container_add(GTK_CONTAINER(window), container);
+        
+        // Ensure the container doesn't affect window sizing
+        g_object_set(container,
+                    "expand", FALSE,
+                    "hexpand", FALSE,
+                    "vexpand", FALSE,
+                    NULL);
+        
+        // Create separate container for OOPIF webviews that won't affect window sizing
+        oopifContainer = gtk_fixed_new();
+        
+        // CRITICAL: Set OOPIF container to not contribute to size requests
+        g_object_set(oopifContainer,
+                    "expand", FALSE,
+                    "hexpand", FALSE,
+                    "vexpand", FALSE,
+                    NULL);
+        
+        // Override size request to always return 0,0 for OOPIF container
+        g_signal_connect(oopifContainer, "size-request", 
+                        G_CALLBACK(oopifContainerSizeRequest), NULL);
+        
+        // Create an overlay to properly layer containers
+        GtkWidget* overlay = gtk_overlay_new();
+        gtk_container_add(GTK_CONTAINER(window), overlay);
+        
+        // Add main container as base layer
+        gtk_container_add(GTK_CONTAINER(overlay), container);
+        
+        // Add OOPIF container as overlay layer
+        gtk_overlay_add_overlay(GTK_OVERLAY(overlay), oopifContainer);
+        
+        gtk_widget_show(overlay);
         gtk_widget_show(container);
+        gtk_widget_show(oopifContainer);
+    }
+    
+    // Custom size request handler for OOPIF container
+    static void oopifContainerSizeRequest(GtkWidget* widget, GtkRequisition* requisition, gpointer user_data) {
+        // Always request 0,0 size so this container doesn't affect window auto-sizing
+        requisition->width = 0;
+        requisition->height = 0;
     }
     
     void addWebview(std::shared_ptr<AbstractView> view, double x = 0, double y = 0) {
@@ -543,8 +605,14 @@ public:
                         "vexpand", FALSE,
                         NULL);
             
-            gtk_fixed_put(GTK_FIXED(container), view->widget, (int)x, (int)y);
+            // Choose container based on whether this is auto-resize or OOPIF
+            GtkWidget* targetContainer = view->fullSize ? container : oopifContainer;
+            
+            gtk_fixed_put(GTK_FIXED(targetContainer), view->widget, (int)x, (int)y);
             gtk_widget_show(view->widget);
+            
+            // No need for mirror mode with separate containers - OOPIFs go directly 
+            // into the non-sizing container at their correct positions
         }
     }
     
@@ -573,13 +641,13 @@ public:
             if (view->fullSize) {
                 // Auto-resize webviews should fill the entire window
                 view->resize(frame, "");
-                
-                // Force size constraint to prevent content-driven growth
-                if (view->widget) {
-                    gtk_widget_set_size_request(view->widget, width, height);
-                }
             }
-            // OOPIFs (fullSize=false) keep their original positioning
+            // OOPIFs (fullSize=false) are in separate container and keep their positioning
+        }
+        
+        // Also ensure the OOPIF container spans the entire window for proper layering
+        if (oopifContainer) {
+            gtk_widget_set_size_request(oopifContainer, width, height);
         }
     }
 };
