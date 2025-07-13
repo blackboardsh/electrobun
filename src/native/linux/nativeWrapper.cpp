@@ -388,11 +388,23 @@ public:
                    webviewId, frame.x, frame.y, frame.width, frame.height, fullSize ? "true" : "false");
             fflush(stdout);
             
+            // Set webview size
             gtk_widget_set_size_request(webview, frame.width, frame.height);
             
-            // Position using gtk_fixed_move since we're using GtkFixed container
-            if (gtk_widget_get_parent(webview)) {
-                gtk_fixed_move(GTK_FIXED(gtk_widget_get_parent(webview)), webview, frame.x, frame.y);
+            // Check if this webview has a wrapper (OOPIF case)
+            GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
+            if (wrapper) {
+                // For OOPIFs with wrapper, set wrapper size and position
+                gtk_widget_set_size_request(wrapper, frame.width, frame.height);
+                gtk_widget_set_margin_left(wrapper, frame.x);
+                gtk_widget_set_margin_top(wrapper, frame.y);
+                
+                // Also ensure webview position within wrapper
+                gtk_fixed_move(GTK_FIXED(wrapper), webview, 0, 0);
+            } else {
+                // For host webview, position directly with margins
+                gtk_widget_set_margin_left(webview, frame.x);
+                gtk_widget_set_margin_top(webview, frame.y);
             }
             
             visualBounds = frame;
@@ -553,19 +565,9 @@ public:
     AbstractView* activeWebView = nullptr;
     
     ContainerView(GtkWidget* window) : window(window) {
-        // Create a fixed container as the main container
-        overlay = gtk_fixed_new();
+        // Create an overlay container as the main container
+        overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
-        
-        // Ensure the container doesn't expand and affect window sizing
-        g_object_set(overlay,
-                    "expand", FALSE,
-                    "hexpand", FALSE,
-                    "vexpand", FALSE,
-                    NULL);
-        
-        // Set a minimal size request so it doesn't grow with content
-        gtk_widget_set_size_request(overlay, 1, 1);
         
         gtk_widget_show(overlay);
     }
@@ -581,13 +583,32 @@ public:
                         "vexpand", FALSE,
                         NULL);
             
-            // Set minimal size request to prevent affecting window sizing
-            gtk_widget_set_size_request(view->widget, 1, 1);
-            
-            // Add webview to fixed container at specified position
-            gtk_fixed_put(GTK_FIXED(overlay), view->widget, (int)x, (int)y);
-            
-            // Position is handled by gtk_fixed_put above, no need for margins
+            // Add webview to overlay container
+            if (abstractViews.size() == 1) {
+                // First webview becomes the base layer (determines overlay size)
+                gtk_container_add(GTK_CONTAINER(overlay), view->widget);
+            } else {
+                // For OOPIFs, wrap in a fixed container to enforce size constraints
+                GtkWidget* wrapper = gtk_fixed_new();
+                gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
+                
+                // Add webview to wrapper at 0,0
+                gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
+                
+                // Add wrapper as overlay layer
+                gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
+                
+                // Position wrapper using margins 
+                if (x != 0 || y != 0) {
+                    gtk_widget_set_margin_left(wrapper, (int)x);
+                    gtk_widget_set_margin_top(wrapper, (int)y);
+                }
+                
+                gtk_widget_show(wrapper);
+                
+                // Store wrapper reference so we can position it later
+                g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
+            }
             
             gtk_widget_show(view->widget);
         }
