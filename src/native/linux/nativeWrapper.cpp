@@ -384,11 +384,16 @@ public:
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
         if (webview) {
+            printf("DEBUG: WebKitWebViewImpl::resize webview %u to x=%d, y=%d, w=%d, h=%d, fullSize=%s\n", 
+                   webviewId, frame.x, frame.y, frame.width, frame.height, fullSize ? "true" : "false");
+            fflush(stdout);
+            
             gtk_widget_set_size_request(webview, frame.width, frame.height);
             
-            // Position using margins since we're using overlay
-            gtk_widget_set_margin_left(webview, frame.x);
-            gtk_widget_set_margin_top(webview, frame.y);
+            // Position using gtk_fixed_move since we're using GtkFixed container
+            if (gtk_widget_get_parent(webview)) {
+                gtk_fixed_move(GTK_FIXED(gtk_widget_get_parent(webview)), webview, frame.x, frame.y);
+            }
             
             visualBounds = frame;
         }
@@ -548,37 +553,23 @@ public:
     AbstractView* activeWebView = nullptr;
     
     ContainerView(GtkWidget* window) : window(window) {
-        // Create an overlay as the main container
-        overlay = gtk_overlay_new();
+        // Create a fixed container as the main container
+        overlay = gtk_fixed_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
         
-        // Ensure the overlay doesn't expand and affect window sizing
+        // Ensure the container doesn't expand and affect window sizing
         g_object_set(overlay,
                     "expand", FALSE,
                     "hexpand", FALSE,
                     "vexpand", FALSE,
                     NULL);
         
-        // Override size request to always return 0,0 for the overlay
-        g_signal_connect(overlay, "size-request", 
-                        G_CALLBACK(webviewContainerSizeRequest), NULL);
+        // Set a minimal size request so it doesn't grow with content
+        gtk_widget_set_size_request(overlay, 1, 1);
         
         gtk_widget_show(overlay);
     }
     
-    // Custom size request handler for webview container
-    static void webviewContainerSizeRequest(GtkWidget* widget, GtkRequisition* requisition, gpointer user_data) {
-        // Always request 0,0 size so webviews don't affect window auto-sizing
-        requisition->width = 0;
-        requisition->height = 0;
-    }
-    
-    // Custom size request handler for individual webviews
-    static void webviewSizeRequest(GtkWidget* widget, GtkRequisition* requisition, gpointer user_data) {
-        // Always request 0,0 size so webviews don't affect window auto-sizing
-        requisition->width = 0;
-        requisition->height = 0;
-    }
     
     void addWebview(std::shared_ptr<AbstractView> view, double x = 0, double y = 0) {
         abstractViews.insert(abstractViews.begin(), view);
@@ -590,18 +581,13 @@ public:
                         "vexpand", FALSE,
                         NULL);
             
-            // Override size request for each webview to return 0,0
-            g_signal_connect(view->widget, "size-request", 
-                            G_CALLBACK(webviewSizeRequest), NULL);
+            // Set minimal size request to prevent affecting window sizing
+            gtk_widget_set_size_request(view->widget, 1, 1);
             
-            // Add all webviews as overlays - they won't affect window sizing
-            gtk_overlay_add_overlay(GTK_OVERLAY(overlay), view->widget);
+            // Add webview to fixed container at specified position
+            gtk_fixed_put(GTK_FIXED(overlay), view->widget, (int)x, (int)y);
             
-            // Position the webview
-            if (x != 0 || y != 0) {
-                gtk_widget_set_margin_left(view->widget, (int)x);
-                gtk_widget_set_margin_top(view->widget, (int)y);
-            }
+            // Position is handled by gtk_fixed_put above, no need for margins
             
             gtk_widget_show(view->widget);
         }
@@ -628,9 +614,17 @@ public:
         }
         
         GdkRectangle frame = { 0, 0, width, height };
+        printf("DEBUG: Window resized to %dx%d, checking %zu webviews\n", width, height, abstractViews.size());
+        fflush(stdout);
+        
         for (auto& view : abstractViews) {
+            printf("DEBUG: Webview %u has fullSize=%s\n", view->webviewId, view->fullSize ? "true" : "false");
+            fflush(stdout);
+            
             if (view->fullSize) {
                 // Auto-resize webviews should fill the entire window
+                printf("DEBUG: Auto-resizing webview %u to fill window\n", view->webviewId);
+                fflush(stdout);
                 view->resize(frame, "");
             }
             // OOPIFs (fullSize=false) keep their positioning and don't auto-resize
@@ -1341,6 +1335,9 @@ AbstractView* initWebview(uint32_t webviewId,
             
             // Set fullSize flag for auto-resize functionality
             webview->fullSize = autoResize;
+            printf("DEBUG: Created webview %u with fullSize=%s, autoResize=%s\n", 
+                   webviewId, webview->fullSize ? "true" : "false", autoResize ? "true" : "false");
+            fflush(stdout);
             
             printf("WebKit webview created successfully\n");
             fflush(stdout);
@@ -1434,6 +1431,10 @@ bool webviewCanGoForward(AbstractView* abstractView) {
 
 void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
     if (abstractView) {
+        printf("DEBUG: resizeWebview called for webview %u: x=%f, y=%f, w=%f, h=%f\n", 
+               abstractView->webviewId, x, y, width, height);
+        fflush(stdout);
+        
         dispatch_sync_main_void([&]() {
             GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
             abstractView->resize(frame, masksJson);
