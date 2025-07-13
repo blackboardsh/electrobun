@@ -14,6 +14,11 @@
 #include <thread>
 #include <chrono>
 
+// Helper macros
+#ifndef MAX
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
+
 // OOPIF positioning - GTK uses separate containers instead of offscreen positioning
 
 // Forward declare callback types
@@ -411,19 +416,26 @@ public:
                             "height-request", frame.height,
                             NULL);
                 
-                gtk_widget_set_margin_left(wrapper, frame.x);
-                gtk_widget_set_margin_top(wrapper, frame.y);
+                // For negative positions (scrolled out of view), we need to use
+                // gtk_widget_set_margin_* with clamped values and offset the webview inside
+                int clampedX = MAX(0, frame.x);
+                int clampedY = MAX(0, frame.y);
+                int offsetX = frame.x - clampedX;  // Will be negative if frame.x < 0
+                int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
                 
-                // Also ensure webview position within wrapper
-                gtk_fixed_move(GTK_FIXED(wrapper), webview, 0, 0);
+                gtk_widget_set_margin_left(wrapper, clampedX);
+                gtk_widget_set_margin_top(wrapper, clampedY);
                 
-                printf("DEBUG: Set wrapper size for webview %u to %dx%d\n", 
-                       webviewId, frame.width, frame.height);
+                // Position webview within wrapper with offset to handle negative positions
+                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY);
+                
+                printf("DEBUG: Set wrapper for webview %u: pos=(%d,%d), clamped=(%d,%d), offset=(%d,%d)\n", 
+                       webviewId, frame.x, frame.y, clampedX, clampedY, offsetX, offsetY);
                 fflush(stdout);
             } else {
-                // For host webview, position directly with margins
-                gtk_widget_set_margin_left(webview, frame.x);
-                gtk_widget_set_margin_top(webview, frame.y);
+                // For host webview, position directly with margins (can't be negative)
+                gtk_widget_set_margin_left(webview, MAX(0, frame.x));
+                gtk_widget_set_margin_top(webview, MAX(0, frame.y));
             }
             
             visualBounds = frame;
