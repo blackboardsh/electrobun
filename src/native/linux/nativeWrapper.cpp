@@ -211,6 +211,8 @@ public:
         webkit_settings_set_enable_javascript(settings, TRUE);
         webkit_settings_set_javascript_can_access_clipboard(settings, TRUE);
         webkit_settings_set_javascript_can_open_windows_automatically(settings, TRUE);
+        webkit_settings_set_enable_back_forward_navigation_gestures(settings, TRUE);
+        webkit_settings_set_enable_smooth_scrolling(settings, TRUE);
         
         // Create web context with partition
         WebKitWebContext* context = webkit_web_context_new();
@@ -265,6 +267,12 @@ public:
             g_signal_connect(webview, "load-changed", G_CALLBACK(onLoadChanged), this);
             g_signal_connect(webview, "load-failed", G_CALLBACK(onLoadFailed), this);
         }
+        
+        // Enable context menu (right-click menu)
+        g_signal_connect(webview, "context-menu", G_CALLBACK(onContextMenu), this);
+        
+        // Debug scroll events
+        g_signal_connect(webview, "scroll-event", G_CALLBACK(onScrollEvent), this);
         
         this->widget = webview;
         
@@ -394,13 +402,24 @@ public:
             // Check if this webview has a wrapper (OOPIF case)
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
             if (wrapper) {
-                // For OOPIFs with wrapper, set wrapper size and position
+                // For OOPIFs with wrapper, set wrapper size to match webview exactly
                 gtk_widget_set_size_request(wrapper, frame.width, frame.height);
+                
+                // Also try using set_size_request with -1 to unset any minimum size
+                g_object_set(wrapper,
+                            "width-request", frame.width,
+                            "height-request", frame.height,
+                            NULL);
+                
                 gtk_widget_set_margin_left(wrapper, frame.x);
                 gtk_widget_set_margin_top(wrapper, frame.y);
                 
                 // Also ensure webview position within wrapper
                 gtk_fixed_move(GTK_FIXED(wrapper), webview, 0, 0);
+                
+                printf("DEBUG: Set wrapper size for webview %u to %dx%d\n", 
+                       webviewId, frame.width, frame.height);
+                fflush(stdout);
             } else {
                 // For host webview, position directly with margins
                 gtk_widget_set_margin_left(webview, frame.x);
@@ -554,6 +573,18 @@ public:
         }
         return FALSE;
     }
+    
+    static gboolean onContextMenu(WebKitWebView* webview, WebKitContextMenu* context_menu, GdkEvent* event, WebKitHitTestResult* hit_test_result, gpointer user_data) {
+        // Allow the default context menu to be shown
+        return FALSE;
+    }
+    
+    static gboolean onScrollEvent(GtkWidget* widget, GdkEventScroll* event, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        printf("DEBUG: Scroll event on webview %u, direction=%d\n", impl->webviewId, event->direction);
+        fflush(stdout);
+        return FALSE; // Allow scroll to continue
+    }
 };
 
 // Container for managing multiple webviews
@@ -592,11 +623,18 @@ public:
                 GtkWidget* wrapper = gtk_fixed_new();
                 gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
                 
+                // Make wrapper receive no events (pass through to widgets below)
+                gtk_widget_set_events(wrapper, 0);
+                gtk_widget_set_can_focus(wrapper, FALSE);
+                
                 // Add webview to wrapper at 0,0
                 gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
                 
                 // Add wrapper as overlay layer
                 gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
+                
+                // Make the wrapper pass-through for events outside the webview
+                gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
                 
                 // Position wrapper using margins 
                 if (x != 0 || y != 0) {
