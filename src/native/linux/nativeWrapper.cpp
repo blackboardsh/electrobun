@@ -219,6 +219,9 @@ public:
         webkit_settings_set_enable_back_forward_navigation_gestures(settings, TRUE);
         webkit_settings_set_enable_smooth_scrolling(settings, TRUE);
         
+        // Try to improve offscreen rendering without breaking stability
+        webkit_settings_set_enable_accelerated_2d_canvas(settings, TRUE);
+        
         // Create web context with partition
         WebKitWebContext* context = webkit_web_context_new();
         if (!partition.empty()) {
@@ -279,7 +282,15 @@ public:
         // Debug scroll events
         g_signal_connect(webview, "scroll-event", G_CALLBACK(onScrollEvent), this);
         
+        // Note: Removed visibility override for stability
+        
         this->widget = webview;
+        
+        // Ensure webview is visible for rendering
+        gtk_widget_set_visible(webview, TRUE);
+        
+        // Force widget realization to create rendering surface immediately
+        gtk_widget_realize(webview);
         
         // Load URL if provided
         if (url && strlen(url) > 0) {
@@ -397,9 +408,7 @@ public:
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
         if (webview) {
-            printf("DEBUG: WebKitWebViewImpl::resize webview %u to x=%d, y=%d, w=%d, h=%d, fullSize=%s\n", 
-                   webviewId, frame.x, frame.y, frame.width, frame.height, fullSize ? "true" : "false");
-            fflush(stdout);
+            // Resizing webview
             
             // Set webview size
             gtk_widget_set_size_request(webview, frame.width, frame.height);
@@ -407,15 +416,6 @@ public:
             // Check if this webview has a wrapper (OOPIF case)
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
             if (wrapper) {
-                // For OOPIFs with wrapper, set wrapper size to match webview exactly
-                gtk_widget_set_size_request(wrapper, frame.width, frame.height);
-                
-                // Also try using set_size_request with -1 to unset any minimum size
-                g_object_set(wrapper,
-                            "width-request", frame.width,
-                            "height-request", frame.height,
-                            NULL);
-                
                 // For negative positions (scrolled out of view), we need to use
                 // gtk_widget_set_margin_* with clamped values and offset the webview inside
                 int clampedX = MAX(0, frame.x);
@@ -423,14 +423,15 @@ public:
                 int offsetX = frame.x - clampedX;  // Will be negative if frame.x < 0
                 int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
                 
+                gtk_widget_set_size_request(wrapper, frame.width, frame.height);
                 gtk_widget_set_margin_left(wrapper, clampedX);
                 gtk_widget_set_margin_top(wrapper, clampedY);
                 
                 // Position webview within wrapper with offset to handle negative positions
                 gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY);
                 
-                printf("DEBUG: Set wrapper for webview %u: pos=(%d,%d), clamped=(%d,%d), offset=(%d,%d)\n", 
-                       webviewId, frame.x, frame.y, clampedX, clampedY, offsetX, offsetY);
+                printf("DEBUG: OOPIF %u wrapper=(%d,%d), offset=(%d,%d), target=(%d,%d)\n",
+                       webviewId, clampedX, clampedY, offsetX, offsetY, frame.x, frame.y);
                 fflush(stdout);
             } else {
                 // For host webview, position directly with margins (can't be negative)
@@ -597,6 +598,7 @@ public:
         fflush(stdout);
         return FALSE; // Allow scroll to continue
     }
+    
 };
 
 // Container for managing multiple webviews
@@ -648,15 +650,13 @@ public:
                 // Make the wrapper pass-through for events outside the webview
                 gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
                 
-                // Position wrapper using margins 
-                if (x != 0 || y != 0) {
-                    gtk_widget_set_margin_left(wrapper, (int)x);
-                    gtk_widget_set_margin_top(wrapper, (int)y);
-                }
+                // Position wrapper using margins (will be updated in resize)
+                gtk_widget_set_margin_left(wrapper, (int)x);
+                gtk_widget_set_margin_top(wrapper, (int)y);
                 
                 gtk_widget_show(wrapper);
                 
-                // Store wrapper reference so we can position it later
+                // Store wrapper reference
                 g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
             }
             
@@ -1406,9 +1406,7 @@ AbstractView* initWebview(uint32_t webviewId,
             
             // Set fullSize flag for auto-resize functionality
             webview->fullSize = autoResize;
-            printf("DEBUG: Created webview %u with fullSize=%s, autoResize=%s\n", 
-                   webviewId, webview->fullSize ? "true" : "false", autoResize ? "true" : "false");
-            fflush(stdout);
+            // Webview created successfully
             
             printf("WebKit webview created successfully\n");
             fflush(stdout);
@@ -1502,10 +1500,6 @@ bool webviewCanGoForward(AbstractView* abstractView) {
 
 void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
     if (abstractView) {
-        printf("DEBUG: resizeWebview called for webview %u: x=%f, y=%f, w=%f, h=%f\n", 
-               abstractView->webviewId, x, y, width, height);
-        fflush(stdout);
-        
         dispatch_sync_main_void([&]() {
             GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
             abstractView->resize(frame, masksJson);
