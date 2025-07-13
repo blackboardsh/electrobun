@@ -428,7 +428,8 @@ public:
                 gtk_widget_set_margin_top(wrapper, clampedY);
                 
                 // Position webview within wrapper with offset to handle negative positions
-                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY);
+                // TODO: this / 2 is a hack to adjust for GTK's coordinate system. not really sure why it works
+                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY / 2);
                 
                 printf("DEBUG: OOPIF %u wrapper=(%d,%d), offset=(%d,%d), target=(%d,%d)\n",
                        webviewId, clampedX, clampedY, offsetX, offsetY, frame.x, frame.y);
