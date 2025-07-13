@@ -431,9 +431,7 @@ public:
                 // TODO: this / 2 is a hack to adjust for GTK's coordinate system. not really sure why it works
                 gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY / 2);
                 
-                printf("DEBUG: OOPIF %u wrapper=(%d,%d), offset=(%d,%d), target=(%d,%d)\n",
-                       webviewId, clampedX, clampedY, offsetX, offsetY, frame.x, frame.y);
-                fflush(stdout);
+                // OOPIF positioned with coordinate adjustment
             } else {
                 // For host webview, position directly with margins (can't be negative)
                 gtk_widget_set_margin_left(webview, MAX(0, frame.x));
