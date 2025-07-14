@@ -143,9 +143,29 @@ async function copyToDist() {
             await $`cp src/native/build/libNativeWrapper.so dist/libNativeWrapper.so`;
         }
         
-        // CEF binaries for Linux - copy to cef/ subdirectory if they exist
-        // TODO: Re-enable when CEF is properly integrated
-        console.log('CEF not built, skipping CEF file copying');
+        // CEF binaries for Linux - copy to cef/ subdirectory
+        if (existsSync(join(process.cwd(), 'vendors', 'cef', 'Release'))) {
+            console.log('Copying CEF files for Linux...');
+            
+            // Copy main CEF library and dependencies
+            await $`cp vendors/cef/Release/*.so dist/cef/`;
+            await $`cp vendors/cef/Release/*.bin dist/cef/`;
+            
+            // Copy chrome-sandbox (needs setuid root)
+            if (existsSync(join(process.cwd(), 'vendors', 'cef', 'Release', 'chrome-sandbox'))) {
+                await $`cp vendors/cef/Release/chrome-sandbox dist/cef/`;
+            }
+            
+            // Copy Resources
+            await $`cp vendors/cef/Resources/*.pak dist/cef/`;
+            await $`cp vendors/cef/Resources/*.dat dist/cef/`;
+            
+            // Copy locales
+            await $`mkdir -p dist/cef/locales`;
+            await $`cp vendors/cef/Resources/locales/*.pak dist/cef/locales/`;
+        } else {
+            console.log('CEF not built, skipping CEF file copying');
+        }
         
         // Copy CEF helper process if it exists
         if (existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper'))) {
@@ -399,13 +419,29 @@ async function vendorCEF() {
             await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_LINUX}%2Bchromium-${CHROMIUM_VERSION_LINUX}_${cefArch}_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;
         }
         
-        // Build CEF wrapper library for Linux (disabled for now)
-        // TODO: Re-enable when CEF is properly integrated
-        console.log('CMake not available, skipping CEF wrapper build');
+        // Build CEF wrapper library for Linux
+        if (!existsSync(join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a'))) {
+            console.log('Building CEF wrapper library for Linux...');
+            await $`cd vendors/cef && rm -rf build && mkdir -p build`;
+            await $`cd vendors/cef/build && cmake -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
+            await $`cd vendors/cef/build && make -j$(nproc) libcef_dll_wrapper`;
+        }
         
-        // Build process_helper binary for Linux (disabled for now - CEF not fully integrated)
-        // TODO: Re-enable when CEF is properly integrated
-        console.log('CEF not available, skipping process_helper build');
+        // Build process_helper binary for Linux
+        if (!existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper'))) {
+            console.log('Building CEF process helper for Linux...');
+            await $`mkdir -p src/native/build`;
+            
+            const cefInclude = `./vendors/cef`;
+            const cefLib = `./vendors/cef/Release/libcef.so`;
+            const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/libcef_dll_wrapper.a`;
+            
+            // Compile the Linux helper process
+            await $`g++ -c -std=c++17 -I"${cefInclude}" -o src/native/build/process_helper_linux.o src/native/linux/cef_process_helper_linux.cpp`;
+            
+            // Link to create the helper executable
+            await $`g++ -o src/native/build/process_helper src/native/build/process_helper_linux.o "${cefWrapperLib}" "${cefLib}" -Wl,-rpath,'$ORIGIN' -lpthread -ldl`;
+        }
     }
 }
 
@@ -496,16 +532,43 @@ async function buildNative() {
             // Check if required packages are available first
             await $`pkg-config --exists webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`;
             
-            // Compile the main wrapper with WebKitGTK and AppIndicator
-            await $`mkdir -p src/native/linux/build && g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
-
-            // Link with WebKitGTK and AppIndicator libraries
-            await $`mkdir -p src/native/build && g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -Wl,-rpath,'$ORIGIN'`;
+            // Build flags for CEF if available
+            let cefIncludeFlags = '';
+            let cefLinkFlags = '';
+            let cefLib = '';
+            let cefWrapperLib = '';
             
-            // console.log('Native wrapper built successfully');
+            if (existsSync(join(process.cwd(), 'vendors', 'cef'))) {
+                console.log('CEF found, checking if wrapper library is built');
+                const cefInclude = join(process.cwd(), 'vendors', 'cef');
+                cefLib = join(process.cwd(), 'vendors', 'cef', 'Release', 'libcef.so');
+                cefWrapperLib = join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a');
+                
+                cefIncludeFlags = `-I"${cefInclude}"`;
+                
+                if (existsSync(cefWrapperLib) && existsSync(cefLib)) {
+                    cefLinkFlags = 'yes'; // Just a flag to indicate CEF linking should happen
+                    console.log('CEF wrapper library found, building with CEF support');
+                } else {
+                    console.log('CEF wrapper library or libcef.so not found, building without CEF linking');
+                }
+            }
+            
+            // Compile the main wrapper with WebKitGTK, AppIndicator, and optionally CEF
+            await $`mkdir -p src/native/linux/build && g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefIncludeFlags} -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
+
+            // Link with WebKitGTK, AppIndicator, and optionally CEF libraries
+            await $`mkdir -p src/native/build`;
+            if (cefLinkFlags) {
+                await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefWrapperLib} ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN'`;
+            } else {
+                await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -Wl,-rpath,'$ORIGIN'`;
+            }
+            
+            console.log('Native wrapper built successfully');
         } catch (error) {
-            console.log('WebKitGTK or AppIndicator not available, skipping native wrapper build');
-            console.log('Error details:', error.message);
+            console.log('Build failed, error details:', error.message);
+            throw error;
         }
     }
 }

@@ -412,7 +412,9 @@ if (commandArg === "init") {
   // TODO: Should download binaries for arch, and then copy them in
   // for developing Electrobun itself we can assume current arch is already
   // in dist as it would have just been built from local source
-  if (config.build.mac.bundleCEF) {    
+  if ((OS === 'macos' && config.build.mac.bundleCEF) || 
+      (OS === 'win' && config.build.win?.bundleCEF) || 
+      (OS === 'linux' && config.build.linux?.bundleCEF)) {    
     if (OS === 'macos') {
       const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
       const cefFrameworkDestination = join(
@@ -570,12 +572,22 @@ if (commandArg === "init") {
           mkdirSync(cefResourcesDestination, { recursive: true });
         }
         
-        // Copy CEF helper process
+        // Copy CEF helper processes with different names
+        const cefHelperNames = [
+          "bun Helper",
+          "bun Helper (Alerts)", 
+          "bun Helper (GPU)",
+          "bun Helper (Plugin)",
+          "bun Helper (Renderer)",
+        ];
+
         const helperSourcePath = PATHS.CEF_HELPER_LINUX;
         if (existsSync(helperSourcePath)) {
-          const destinationPath = join(appBundleMacOSPath, 'process_helper');
-          cpSync(helperSourcePath, destinationPath);
-          console.log(`Copied CEF helper: process_helper`);
+          cefHelperNames.forEach((helperName) => {
+            const destinationPath = join(appBundleMacOSPath, helperName);
+            cpSync(helperSourcePath, destinationPath);
+            console.log(`Copied CEF helper: ${helperName}`);
+          });
         } else {
           console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
         }

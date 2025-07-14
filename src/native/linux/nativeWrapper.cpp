@@ -2,6 +2,7 @@
 #include <webkit2/webkit2.h>
 #include <jsc/jsc.h>
 #include <libayatana-appindicator/app-indicator.h>
+#include <gdk/gdkx.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -13,6 +14,27 @@
 #include <sstream>
 #include <thread>
 #include <chrono>
+#include <unistd.h>
+
+// CEF includes - conditionally include if available at build time
+#ifdef __has_include
+  #if __has_include("cef_app.h")
+    #define CEF_HEADERS_AVAILABLE 1
+    #include "cef_app.h"
+    #include "cef_browser.h"
+    #include "cef_client.h"
+    #include "cef_load_handler.h"
+    #include "cef_request_handler.h"
+    #include "cef_context_menu_handler.h"
+    #include "cef_keyboard_handler.h"
+    #include "cef_response_filter.h"
+    #include "wrapper/cef_helpers.h"
+  #else
+    #define CEF_HEADERS_AVAILABLE 0
+  #endif
+#else
+  #define CEF_HEADERS_AVAILABLE 0
+#endif
 
 // Helper macros
 #ifndef MAX
@@ -126,6 +148,302 @@ std::vector<MenuJsonValue> parseMenuJson(const std::string& jsonStr) {
     
     return items;
 }
+
+// CEF globals and implementation
+static bool g_cefInitialized = false;
+static bool g_useCEF = false;
+
+#if CEF_HEADERS_AVAILABLE
+CefRefPtr<class ElectrobunApp> g_app;
+#endif
+
+// Get the directory of the current executable
+std::string getExecutableDir() {
+    char path[1024];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len != -1) {
+        path[len] = '\0';
+        std::string exePath(path);
+        size_t lastSlash = exePath.find_last_of('/');
+        if (lastSlash != std::string::npos) {
+            return exePath.substr(0, lastSlash);
+        }
+    }
+    return "."; // fallback to current directory
+}
+
+// CEF availability check - runtime check for CEF files in app bundle
+bool isCEFAvailable() {
+    // Get the directory where the executable is located
+    std::string execDir = getExecutableDir();
+    
+    // Check for CEF shared library in the same directory as the executable (primary location)
+    std::string cefLibPath = execDir + "/libcef.so";
+    
+    // Check if the CEF library file exists
+    if (access(cefLibPath.c_str(), F_OK) == 0) {
+        return true;
+    }
+    
+    // Also check in cef subdirectory (alternative location)
+    cefLibPath = execDir + "/cef/libcef.so";
+    if (access(cefLibPath.c_str(), F_OK) == 0) {
+        return true;
+    }
+    
+    return false;
+}
+
+#if CEF_HEADERS_AVAILABLE
+// Preload script structure
+struct PreloadScript {
+    std::string script;
+    bool isCustom;
+};
+
+// ElectrobunApp implementation for Linux
+class ElectrobunApp : public CefApp,
+                     public CefBrowserProcessHandler,
+                     public CefRenderProcessHandler {
+public:
+    ElectrobunApp() {}
+    
+    void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
+        command_line->AppendSwitchWithValue("custom-scheme", "views");
+        command_line->AppendSwitch("use-mock-keychain");
+        // Linux-specific settings
+        command_line->AppendSwitch("disable-gpu-sandbox");
+        command_line->AppendSwitch("disable-software-rasterizer");
+    }
+    
+    void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
+        registrar->AddCustomScheme("views", 
+            CEF_SCHEME_OPTION_STANDARD | 
+            CEF_SCHEME_OPTION_CORS_ENABLED |
+            CEF_SCHEME_OPTION_SECURE |
+            CEF_SCHEME_OPTION_CSP_BYPASSING |
+            CEF_SCHEME_OPTION_FETCH_ENABLED);
+    }
+    
+    CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
+        return this;
+    }
+    
+    CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {
+        return this;
+    }
+    
+    virtual void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {
+        std::vector<CefString> args;
+        command_line->GetArguments(args);
+    }
+    
+    void OnContextInitialized() override {
+        CefRegisterSchemeHandlerFactory("views", "", nullptr);
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunApp);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunApp);
+};
+
+// ElectrobunClient implementation for Linux
+class ElectrobunClient : public CefClient,
+                        public CefLoadHandler,
+                        public CefRequestHandler,
+                        public CefContextMenuHandler,
+                        public CefKeyboardHandler,
+                        public CefResourceRequestHandler {
+private:
+    uint32_t webview_id_;
+    HandlePostMessage bun_bridge_handler_;
+    HandlePostMessage webview_tag_handler_;
+    WebviewEventHandler webview_event_handler_;
+    DecideNavigationCallback navigation_callback_;
+    
+    PreloadScript electrobun_script_;
+    PreloadScript custom_script_;
+
+public:
+    ElectrobunClient(uint32_t webviewId,
+                     HandlePostMessage bunBridgeHandler,
+                     HandlePostMessage internalBridgeHandler,
+                     WebviewEventHandler webviewEventHandler,
+                     DecideNavigationCallback navigationCallback)
+        : webview_id_(webviewId)
+        , bun_bridge_handler_(bunBridgeHandler)
+        , webview_tag_handler_(internalBridgeHandler)
+        , webview_event_handler_(webviewEventHandler)
+        , navigation_callback_(navigationCallback) {}
+
+    void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
+        electrobun_script_ = {script, false};
+    }
+
+    void UpdateCustomPreloadScript(const std::string& script) {
+        custom_script_ = {script, true};
+    }
+
+    virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override {
+        return this;
+    }
+
+    virtual CefRefPtr<CefRequestHandler> GetRequestHandler() override {
+        return this;
+    }
+
+    virtual CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override {
+        return this;
+    }
+
+    virtual CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override {
+        return this;
+    }
+
+    // Handle navigation requests
+    bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                       CefRefPtr<CefFrame> frame,
+                       CefRefPtr<CefRequest> request,
+                       bool user_gesture,
+                       bool is_redirect) override {
+        std::string url = request->GetURL().ToString();
+        bool shouldAllow = navigation_callback_(webview_id_, url.c_str());
+
+        if (webview_event_handler_) {
+            webview_event_handler_(webview_id_, "will-navigate", url.c_str());
+        }
+        return !shouldAllow;
+    }
+
+    virtual CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        bool is_navigation,
+        bool is_download,
+        const CefString& request_initiator,
+        bool& disable_default_handling) override {
+        return this;
+    }
+
+    void OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                  CefRefPtr<CefFrame> frame,
+                  int httpStatusCode) override {
+        if (frame->IsMain() && webview_event_handler_) {
+            webview_event_handler_(webview_id_, "did-navigate", frame->GetURL().ToString().c_str());
+        }
+    }
+
+    // Context menu handler (disable right-click menu for now)
+    void OnBeforeContextMenu(CefRefPtr<CefBrowser> browser,
+                            CefRefPtr<CefFrame> frame,
+                            CefRefPtr<CefContextMenuParams> params,
+                            CefRefPtr<CefMenuModel> model) override {
+        model->Clear();
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunClient);
+    DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
+};
+
+// Initialize CEF for Linux
+bool initializeCEF() {
+    if (g_cefInitialized) return true;
+    
+    if (!isCEFAvailable()) {
+        printf("CEF not available in app bundle\n");
+        return false;
+    }
+    
+#if !CEF_HEADERS_AVAILABLE
+    printf("CEF headers not available at build time\n");
+    return false;
+#endif
+    
+    // Get command line arguments
+    int argc = 0;
+    char** argv = nullptr;
+    
+    // Read /proc/self/cmdline for arguments
+    FILE* cmdline = fopen("/proc/self/cmdline", "r");
+    if (cmdline) {
+        fseek(cmdline, 0, SEEK_END);
+        long size = ftell(cmdline);
+        fseek(cmdline, 0, SEEK_SET);
+        
+        char* buffer = (char*)malloc(size + 1);
+        fread(buffer, 1, size, cmdline);
+        buffer[size] = '\0';
+        fclose(cmdline);
+        
+        // Count arguments
+        for (long i = 0; i < size; i++) {
+            if (buffer[i] == '\0') argc++;
+        }
+        
+        argv = (char**)malloc(sizeof(char*) * argc);
+        int argIndex = 0;
+        char* start = buffer;
+        
+        for (long i = 0; i <= size; i++) {
+            if (buffer[i] == '\0') {
+                argv[argIndex++] = strdup(start);
+                start = buffer + i + 1;
+            }
+        }
+        free(buffer);
+    }
+    
+    CefMainArgs main_args(argc, argv);
+    g_app = new ElectrobunApp();
+
+    CefSettings settings;
+    settings.no_sandbox = true;
+    
+    // Set the resource directory to where CEF files are located
+    std::string execDir = getExecutableDir();
+    // Resources are in the same directory as the executable for Linux
+    CefString(&settings.resources_dir_path) = execDir;
+    CefString(&settings.locales_dir_path) = execDir + "/locales";
+    
+    // Set cache path
+    char* home = getenv("HOME");
+    if (home) {
+        std::string cachePath = std::string(home) + "/.cache/Electrobun/CEF";
+        CefString(&settings.root_cache_path) = cachePath;
+    }
+    
+    // Set language
+    CefString(&settings.accept_language_list) = "en-US,en";
+    
+    bool result = CefInitialize(main_args, settings, g_app.get(), nullptr);
+
+    // Cleanup
+    if (argv) {
+        for (int i = 0; i < argc; i++) {
+            free(argv[i]);
+        }
+        free(argv);
+    }
+    
+    if (!result) {
+        printf("CEF initialization failed\n");
+        return false;
+    }
+    
+    g_cefInitialized = true;
+    printf("CEF initialized successfully\n");
+    return true;
+}
+
+#else
+// Stub implementation when CEF headers are not available
+bool initializeCEF() {
+    printf("CEF not available (headers not found at build time)\n");
+    return false;
+}
+#endif
 
 // AbstractView base class declaration
 class AbstractView {
@@ -599,6 +917,205 @@ public:
     }
     
 };
+
+#if CEF_HEADERS_AVAILABLE
+// CEF WebView implementation
+class CEFWebViewImpl : public AbstractView {
+public:
+    CefRefPtr<CefBrowser> browser;
+    CefRefPtr<ElectrobunClient> client;
+    DecideNavigationCallback navigationCallback;
+    WebviewEventHandler eventHandler;
+    HandlePostMessage bunBridgeHandler;
+    HandlePostMessage internalBridgeHandler;
+    std::string electrobunPreloadScript;
+    std::string customPreloadScript;
+    std::string partition;
+    
+    CEFWebViewImpl(uint32_t webviewId,
+                   GtkWidget* window,
+                   const char* url,
+                   double x, double y,
+                   double width, double height,
+                   bool autoResize,
+                   const char* partitionIdentifier,
+                   DecideNavigationCallback navigationCallback,
+                   WebviewEventHandler webviewEventHandler,
+                   HandlePostMessage bunBridgeHandler,
+                   HandlePostMessage internalBridgeHandler,
+                   const char* electrobunPreloadScript,
+                   const char* customPreloadScript)
+        : AbstractView(webviewId), navigationCallback(navigationCallback),
+          eventHandler(webviewEventHandler), bunBridgeHandler(bunBridgeHandler),
+          internalBridgeHandler(internalBridgeHandler),
+          electrobunPreloadScript(electrobunPreloadScript ? electrobunPreloadScript : ""),
+          customPreloadScript(customPreloadScript ? customPreloadScript : ""),
+          partition(partitionIdentifier ? partitionIdentifier : "")
+    {
+        // Initialize CEF if not already done
+        if (!g_cefInitialized && !initializeCEF()) {
+            creationFailed = true;
+            return;
+        }
+        
+        createCEFBrowser(window, url, x, y, width, height);
+        
+        if (!browser) {
+            creationFailed = true;
+        }
+    }
+    
+    void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
+        CefBrowserSettings browserSettings;
+        
+        CefWindowInfo window_info;
+        
+        // Get the GdkWindow for the GTK widget
+        GdkWindow* gdkWindow = gtk_widget_get_window(window);
+        if (!gdkWindow) {
+            gtk_widget_realize(window);
+            gdkWindow = gtk_widget_get_window(window);
+        }
+        
+        if (gdkWindow) {
+            // Get X11 window handle
+            unsigned long xwindow = gdk_x11_window_get_xid(gdkWindow);
+            
+            CefRect cefBounds((int)x, (int)y, (int)width, (int)height);
+            window_info.SetAsChild(xwindow, cefBounds);
+        } else {
+            printf("Failed to get GdkWindow for CEF browser\n");
+            return;
+        }
+        
+        // Create client
+        client = new ElectrobunClient(
+            webviewId,
+            bunBridgeHandler,
+            internalBridgeHandler,
+            eventHandler,
+            navigationCallback
+        );
+        
+        // Add preload scripts
+        client->AddPreloadScript(electrobunPreloadScript);
+        client->UpdateCustomPreloadScript(customPreloadScript);
+        
+        // Create request context for partition
+        CefRefPtr<CefRequestContext> requestContext = nullptr;
+        if (!partition.empty()) {
+            CefRequestContextSettings contextSettings;
+            CefString(&contextSettings.cache_path) = std::string(getenv("HOME") ? getenv("HOME") : "/tmp") + "/.cache/Electrobun/CEF/" + partition;
+            requestContext = CefRequestContext::CreateContext(contextSettings, nullptr);
+        }
+        
+        // Create browser
+        std::string initialUrl = url && strlen(url) > 0 ? url : "about:blank";
+        browser = CefBrowserHost::CreateBrowserSync(
+            window_info, client.get(), CefString(initialUrl), browserSettings, nullptr, requestContext);
+        
+        if (browser) {
+            printf("CEF browser created successfully for webview %u\n", webviewId);
+        } else {
+            printf("Failed to create CEF browser for webview %u\n", webviewId);
+        }
+    }
+    
+    void loadURL(const char* urlString) override {
+        if (browser) {
+            browser->GetMainFrame()->LoadURL(CefString(urlString));
+        }
+    }
+    
+    void goBack() override {
+        if (browser) {
+            browser->GoBack();
+        }
+    }
+    
+    void goForward() override {
+        if (browser) {
+            browser->GoForward();
+        }
+    }
+    
+    void reload() override {
+        if (browser) {
+            browser->Reload();
+        }
+    }
+    
+    void remove() override {
+        if (browser) {
+            browser->GetHost()->CloseBrowser(true);
+            browser = nullptr;
+        }
+    }
+    
+    bool canGoBack() override {
+        return browser ? browser->CanGoBack() : false;
+    }
+    
+    bool canGoForward() override {
+        return browser ? browser->CanGoForward() : false;
+    }
+    
+    void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
+        if (browser) {
+            browser->GetMainFrame()->ExecuteJavaScript(CefString(jsString), CefString(""), 0);
+        }
+    }
+    
+    void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) override {
+        // TODO: Implement async javascript execution with completion handler
+        evaluateJavaScriptWithNoCompletion(jsString);
+    }
+    
+    void addPreloadScriptToWebView(const char* jsString) override {
+        electrobunPreloadScript = jsString ? jsString : "";
+        if (client) {
+            client->AddPreloadScript(electrobunPreloadScript);
+        }
+    }
+    
+    void updateCustomPreloadScript(const char* jsString) override {
+        customPreloadScript = jsString ? jsString : "";
+        if (client) {
+            client->UpdateCustomPreloadScript(customPreloadScript);
+        }
+    }
+    
+    void resize(const GdkRectangle& frame, const char* masksJson) override {
+        if (browser) {
+            browser->GetHost()->WasResized();
+            // TODO: Update browser bounds
+        }
+    }
+    
+    void applyVisualMask() override {
+        // TODO: Implement visual masking for CEF
+    }
+    
+    void removeMasks() override {
+        // TODO: Implement mask removal for CEF
+    }
+    
+    void toggleMirrorMode(bool enable) override {
+        mirrorModeEnabled = enable;
+        // TODO: Implement mirror mode for CEF
+    }
+    
+    void setHidden(bool hidden) override {
+        if (browser) {
+            if (hidden) {
+                browser->GetHost()->SetWindowVisibility(false);
+            } else {
+                browser->GetHost()->SetWindowVisibility(true);
+            }
+        }
+    }
+};
+#endif
 
 // Container for managing multiple webviews
 class ContainerView {
@@ -1214,6 +1731,16 @@ void on_library_load() {
     }
 }
 
+// Timer callback to process CEF message loop
+gboolean cef_timer_callback(gpointer user_data) {
+#if CEF_HEADERS_AVAILABLE
+    if (g_cefInitialized) {
+        CefDoMessageLoopWork();
+    }
+#endif
+    return G_SOURCE_CONTINUE; // Keep the timer running
+}
+
 void runEventLoop() {
     printf("runEventLoop called - initializing GTK on main thread\n");
     fflush(stdout);
@@ -1221,10 +1748,38 @@ void runEventLoop() {
     // Initialize GTK on the main thread (this MUST be done here)
     initializeGTK();
     
+    // Check if CEF should be initialized
+    g_useCEF = isCEFAvailable();
+    if (g_useCEF) {
+        printf("CEF available, initializing CEF\n");
+        fflush(stdout);
+        if (!initializeCEF()) {
+            printf("CEF initialization failed, continuing without CEF\n");
+            g_useCEF = false;
+        } else {
+            // Set up a timer to periodically call CefDoMessageLoopWork()
+            // This integrates CEF message loop with GTK main loop
+            g_timeout_add(10, cef_timer_callback, nullptr); // 10ms interval
+            printf("CEF initialized and timer set up\n");
+        }
+    } else {
+        printf("CEF not available, using WebKit only\n");
+    }
+    fflush(stdout);
+    
     printf("GTK initialized, starting main loop\n");
     fflush(stdout);
     sleep(1); // Give time for output to flush
     gtk_main();
+    
+    // Cleanup CEF on shutdown
+#if CEF_HEADERS_AVAILABLE
+    if (g_cefInitialized) {
+        printf("Shutting down CEF\n");
+        fflush(stdout);
+        CefShutdown();
+    }
+#endif
 }
 
 // Forward declarations
@@ -1389,25 +1944,72 @@ AbstractView* initWebview(uint32_t webviewId,
     AbstractView* result = dispatch_sync_main([&]() -> AbstractView* {
         try {
             printf("=== INSIDE initWebview dispatch_sync_main ===\n");
+            printf("Renderer: %s\n", renderer ? renderer : "NULL");
             fflush(stdout);
             
-            // Create WebKit webview implementation
-            printf("Creating WebKit webview on main thread\n");
-            fflush(stdout);
+            std::shared_ptr<AbstractView> webview;
             
-            auto webview = std::make_shared<WebKitWebViewImpl>(
-                webviewId, GTK_WIDGET(window),
-                url, x, y, width, height, autoResize,
-                partitionIdentifier, navigationCallback, webviewEventHandler,
-                bunBridgeHandler, internalBridgeHandler,
-                electrobunPreloadScript, customPreloadScript
-            );
+            // Determine which renderer to use
+            bool useCEF = false;
+            if (renderer && strcmp(renderer, "cef") == 0) {
+                useCEF = isCEFAvailable();
+                if (!useCEF) {
+                    printf("CEF requested but not available, falling back to WebKit\n");
+                    fflush(stdout);
+                }
+            }
+            
+            if (useCEF) {
+#if CEF_HEADERS_AVAILABLE
+                // Create CEF webview implementation
+                printf("Creating CEF webview on main thread\n");
+                fflush(stdout);
+                
+                webview = std::make_shared<CEFWebViewImpl>(
+                    webviewId, GTK_WIDGET(window),
+                    url, x, y, width, height, autoResize,
+                    partitionIdentifier, navigationCallback, webviewEventHandler,
+                    bunBridgeHandler, internalBridgeHandler,
+                    electrobunPreloadScript, customPreloadScript
+                );
+                
+                if (webview->creationFailed) {
+                    printf("CEF webview creation failed, falling back to WebKit\n");
+                    fflush(stdout);
+                    webview = nullptr;
+                    useCEF = false;
+                }
+#else
+                printf("CEF requested but headers not available at build time, falling back to WebKit\n");
+                fflush(stdout);
+                useCEF = false;
+#endif
+            }
+            
+            if (!useCEF) {
+                // Create WebKit webview implementation
+                printf("Creating WebKit webview on main thread\n");
+                fflush(stdout);
+                
+                webview = std::make_shared<WebKitWebViewImpl>(
+                    webviewId, GTK_WIDGET(window),
+                    url, x, y, width, height, autoResize,
+                    partitionIdentifier, navigationCallback, webviewEventHandler,
+                    bunBridgeHandler, internalBridgeHandler,
+                    electrobunPreloadScript, customPreloadScript
+                );
+            }
+            
+            if (!webview || webview->creationFailed) {
+                printf("ERROR: Webview creation failed\n");
+                fflush(stdout);
+                return nullptr;
+            }
             
             // Set fullSize flag for auto-resize functionality
             webview->fullSize = autoResize;
-            // Webview created successfully
             
-            printf("WebKit webview created successfully\n");
+            printf("%s webview created successfully\n", useCEF ? "CEF" : "WebKit");
             fflush(stdout);
             
             // Add to container
@@ -1420,7 +2022,7 @@ AbstractView* initWebview(uint32_t webviewId,
                     printf("Found matching container, adding webview at (%f, %f)\n", x, y);
                     fflush(stdout);
                     container->addWebview(webview, x, y);
-                    printf("WebKit webview added to container\n");
+                    printf("%s webview added to container\n", useCEF ? "CEF" : "WebKit");
                     fflush(stdout);
                     break;
                 }
