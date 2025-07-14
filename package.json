@@ -24,7 +24,7 @@
     "check-zig-version": "vendors/zig/zig version",
     "build:dev": "bun build.ts",
     "build:release": "bun build.ts --release",
-    "dev:playground": "bun build:dev && cd playground && rm -rf node_modules && npm install && bun build:dev && bun start",
+    "dev:playground": "bun build:dev && cd playground && rm -rf node_modules/electrobun && npm install && bun build:dev && bun start",
     "dev:playground:rerun": "cd playground && bun start",
     "dev:playground:canary": "bun build:release && cd playground && npm install && bun build:canary && bun start:canary",
     "dev:docs": "cd documentation && bun start",
