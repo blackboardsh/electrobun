@@ -171,6 +171,7 @@ async function copyToDist() {
         if (existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper'))) {
             await $`cp src/native/build/process_helper dist/process_helper`;
         }
+        console.log('[done]Copying CEF files for Linux...');
     }
 }
 
@@ -532,39 +533,29 @@ async function buildNative() {
             // Check if required packages are available first
             await $`pkg-config --exists webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`;
             
-            // Build flags for CEF if available
-            let cefIncludeFlags = '';
-            let cefLinkFlags = '';
-            let cefLib = '';
-            let cefWrapperLib = '';
+            // Always include CEF headers for Linux builds
+            const cefInclude = join(process.cwd(), 'vendors', 'cef');
+            const cefLib = join(process.cwd(), 'vendors', 'cef', 'Release', 'libcef.so');
+            const cefWrapperLib = join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a');
             
-            if (existsSync(join(process.cwd(), 'vendors', 'cef'))) {
-                console.log('CEF found, checking if wrapper library is built');
-                const cefInclude = join(process.cwd(), 'vendors', 'cef');
-                cefLib = join(process.cwd(), 'vendors', 'cef', 'Release', 'libcef.so');
-                cefWrapperLib = join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a');
-                
-                cefIncludeFlags = `-I"${cefInclude}"`;
-                
-                if (existsSync(cefWrapperLib) && existsSync(cefLib)) {
-                    cefLinkFlags = 'yes'; // Just a flag to indicate CEF linking should happen
-                    console.log('CEF wrapper library found, building with CEF support');
-                } else {
-                    console.log('CEF wrapper library or libcef.so not found, building without CEF linking');
-                }
+            // Check if CEF libraries exist for linking
+            const cefLibsExist = existsSync(cefWrapperLib) && existsSync(cefLib);
+            
+            if (cefLibsExist) {
+                console.log('CEF libraries found, building with full CEF support');
+            } else {
+                console.log('CEF libraries not found, building with CEF headers only (runtime detection)');
             }
             
-            // Compile the main wrapper with WebKitGTK, AppIndicator, and optionally CEF
-            await $`mkdir -p src/native/linux/build && g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefIncludeFlags} -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
+            // Compile the main wrapper with WebKitGTK, AppIndicator, and CEF headers
+            await $`mkdir -p src/native/linux/build`;
+            await $`g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -I"${cefInclude}" -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
 
             // Link with WebKitGTK, AppIndicator, and optionally CEF libraries
             await $`mkdir -p src/native/build`;
-            if (cefLinkFlags) {
-                await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefWrapperLib} ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN'`;
-            } else {
-                await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -Wl,-rpath,'$ORIGIN'`;
-            }
-            
+            // always build with CEF. if libraries don't exist it's a fatal error
+            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefWrapperLib} ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN'`;
+           
             console.log('Native wrapper built successfully');
         } catch (error) {
             console.log('Build failed, error details:', error.message);

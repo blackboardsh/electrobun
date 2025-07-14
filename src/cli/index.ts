@@ -538,7 +538,9 @@ if (commandArg === "init") {
         const cefSoFiles = [
           'libcef.so',
           'libEGL.so',
-          'libGLESv2.so'
+          'libGLESv2.so',
+          'libvk_swiftshader.so',
+          'libvulkan.so.1'
         ];
         
         cefSoFiles.forEach(soFile => {
@@ -556,8 +558,18 @@ if (commandArg === "init") {
           cpSync(icuDataSource, icuDataDest);
         }
         
-        // Copy .pak files to the main executable directory
-        const pakFiles = ['icudtl.dat', 'v8_context_snapshot.bin', 'resources.pak', 'locales'];
+        // Copy .pak files and other CEF resources to the main executable directory
+        const pakFiles = [
+          'icudtl.dat', 
+          'v8_context_snapshot.bin', 
+          'snapshot_blob.bin',
+          'resources.pak', 
+          'chrome_100_percent.pak',
+          'chrome_200_percent.pak',
+          'locales',
+          'chrome-sandbox',
+          'vk_swiftshader_icd.json'
+        ];
         pakFiles.forEach(pakFile => {
           const sourcePath = join(cefSourcePath, pakFile);
           const destPath = join(appBundleMacOSPath, pakFile);

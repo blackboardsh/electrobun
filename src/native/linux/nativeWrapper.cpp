@@ -16,25 +16,19 @@
 #include <chrono>
 #include <unistd.h>
 
-// CEF includes - conditionally include if available at build time
-#ifdef __has_include
-  #if __has_include("cef_app.h")
-    #define CEF_HEADERS_AVAILABLE 1
-    #include "cef_app.h"
-    #include "cef_browser.h"
-    #include "cef_client.h"
-    #include "cef_load_handler.h"
-    #include "cef_request_handler.h"
-    #include "cef_context_menu_handler.h"
-    #include "cef_keyboard_handler.h"
-    #include "cef_response_filter.h"
-    #include "wrapper/cef_helpers.h"
-  #else
-    #define CEF_HEADERS_AVAILABLE 0
-  #endif
-#else
-  #define CEF_HEADERS_AVAILABLE 0
-#endif
+// CEF includes - always include them even if it marginally increases binary size
+// we want a few binaries that will work whenever an electrobun developer
+// adds CEF into their bundles
+#include "include/cef_app.h"
+#include "include/cef_browser.h"
+#include "include/cef_client.h"
+#include "include/cef_load_handler.h"
+#include "include/cef_request_handler.h"
+#include "include/cef_context_menu_handler.h"
+#include "include/cef_keyboard_handler.h"
+#include "include/cef_response_filter.h"
+#include "include/wrapper/cef_helpers.h"
+
 
 // Helper macros
 #ifndef MAX
@@ -153,9 +147,9 @@ std::vector<MenuJsonValue> parseMenuJson(const std::string& jsonStr) {
 static bool g_cefInitialized = false;
 static bool g_useCEF = false;
 
-#if CEF_HEADERS_AVAILABLE
+
 CefRefPtr<class ElectrobunApp> g_app;
-#endif
+
 
 // Get the directory of the current executable
 std::string getExecutableDir() {
@@ -174,27 +168,29 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
+    printf("isCEF Availabe\n");
+    fflush(stdout);
     // Get the directory where the executable is located
     std::string execDir = getExecutableDir();
     
     // Check for CEF shared library in the same directory as the executable (primary location)
     std::string cefLibPath = execDir + "/libcef.so";
-    
+    printf("isCEF Availabe: checking %s\n", cefLibPath.c_str());
+    fflush(stdout);
     // Check if the CEF library file exists
     if (access(cefLibPath.c_str(), F_OK) == 0) {
+        printf("isCEF Availabe: yes\n");
+    fflush(stdout);
         return true;
     }
-    
-    // Also check in cef subdirectory (alternative location)
-    cefLibPath = execDir + "/cef/libcef.so";
-    if (access(cefLibPath.c_str(), F_OK) == 0) {
-        return true;
-    }
+
+    printf("isCEF Availabe: no\n");
+    fflush(stdout);
     
     return false;
 }
 
-#if CEF_HEADERS_AVAILABLE
+
 // Preload script structure
 struct PreloadScript {
     std::string script;
@@ -356,10 +352,6 @@ bool initializeCEF() {
         return false;
     }
     
-#if !CEF_HEADERS_AVAILABLE
-    printf("CEF headers not available at build time\n");
-    return false;
-#endif
     
     // Get command line arguments
     int argc = 0;
@@ -437,13 +429,7 @@ bool initializeCEF() {
     return true;
 }
 
-#else
-// Stub implementation when CEF headers are not available
-bool initializeCEF() {
-    printf("CEF not available (headers not found at build time)\n");
-    return false;
-}
-#endif
+
 
 // AbstractView base class declaration
 class AbstractView {
@@ -918,7 +904,7 @@ public:
     
 };
 
-#if CEF_HEADERS_AVAILABLE
+
 // CEF WebView implementation
 class CEFWebViewImpl : public AbstractView {
 public:
@@ -1107,15 +1093,20 @@ public:
     
     void setHidden(bool hidden) override {
         if (browser) {
-            if (hidden) {
-                browser->GetHost()->SetWindowVisibility(false);
-            } else {
-                browser->GetHost()->SetWindowVisibility(true);
+            // SetWindowVisibility is not available in CEF Linux builds
+            // TODO: Implement visibility control for CEF on Linux
+            // For now, we'll just show/hide the widget itself
+            if (widget) {
+                if (hidden) {
+                    gtk_widget_hide(widget);
+                } else {
+                    gtk_widget_show(widget);
+                }
             }
         }
     }
 };
-#endif
+
 
 // Container for managing multiple webviews
 class ContainerView {
@@ -1733,11 +1724,11 @@ void on_library_load() {
 
 // Timer callback to process CEF message loop
 gboolean cef_timer_callback(gpointer user_data) {
-#if CEF_HEADERS_AVAILABLE
+
     if (g_cefInitialized) {
         CefDoMessageLoopWork();
     }
-#endif
+
     return G_SOURCE_CONTINUE; // Keep the timer running
 }
 
@@ -1773,13 +1764,13 @@ void runEventLoop() {
     gtk_main();
     
     // Cleanup CEF on shutdown
-#if CEF_HEADERS_AVAILABLE
+
     if (g_cefInitialized) {
         printf("Shutting down CEF\n");
         fflush(stdout);
         CefShutdown();
     }
-#endif
+
 }
 
 // Forward declarations
@@ -1960,7 +1951,7 @@ AbstractView* initWebview(uint32_t webviewId,
             }
             
             if (useCEF) {
-#if CEF_HEADERS_AVAILABLE
+
                 // Create CEF webview implementation
                 printf("Creating CEF webview on main thread\n");
                 fflush(stdout);
@@ -1979,11 +1970,7 @@ AbstractView* initWebview(uint32_t webviewId,
                     webview = nullptr;
                     useCEF = false;
                 }
-#else
-                printf("CEF requested but headers not available at build time, falling back to WebKit\n");
-                fflush(stdout);
-                useCEF = false;
-#endif
+
             }
             
             if (!useCEF) {
