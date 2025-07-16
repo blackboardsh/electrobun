@@ -584,6 +584,31 @@ if (commandArg === "init") {
           mkdirSync(cefResourcesDestination, { recursive: true });
         }
         
+        // Copy all CEF shared libraries to cef subdirectory as well (for RPATH $ORIGIN/cef)
+        cefSoFiles.forEach(soFile => {
+          const sourcePath = join(cefSourcePath, soFile);
+          const destPath = join(cefResourcesDestination, soFile);
+          if (existsSync(sourcePath)) {
+            cpSync(sourcePath, destPath);
+            console.log(`Copied CEF library to cef subdirectory: ${soFile}`);
+          } else {
+            console.log(`WARNING: Missing CEF library: ${sourcePath}`);
+          }
+        });
+        
+        // Copy essential CEF files to cef subdirectory as well (for RPATH $ORIGIN/cef)
+        const cefEssentialFiles = ['vk_swiftshader_icd.json'];
+        cefEssentialFiles.forEach(cefFile => {
+          const sourcePath = join(cefSourcePath, cefFile);
+          const destPath = join(cefResourcesDestination, cefFile);
+          if (existsSync(sourcePath)) {
+            cpSync(sourcePath, destPath);
+            console.log(`Copied CEF essential file to cef subdirectory: ${cefFile}`);
+          } else {
+            console.log(`WARNING: Missing CEF essential file: ${sourcePath}`);
+          }
+        });
+        
         // Copy CEF helper processes with different names
         const cefHelperNames = [
           "bun Helper",
