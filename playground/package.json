@@ -6,6 +6,6 @@
         "start:canary": "electrobun dev env=canary"
     },
     "dependencies": {
-        "electrobun": "file:../"
+        "electrobun": "*"
     }
 }
