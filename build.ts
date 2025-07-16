@@ -556,7 +556,8 @@ async function buildNative() {
             // Link with WebKitGTK, AppIndicator, and optionally CEF libraries
             await $`mkdir -p src/native/build`;
             // always build with CEF. if libraries don't exist it's a fatal error
-            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefWrapperLib} ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN'`;
+            // Set RPATH to look in both current directory and cef/ subdirectory
+            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefWrapperLib} ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
            
             console.log('Native wrapper built successfully');
         } catch (error) {
