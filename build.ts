@@ -149,7 +149,9 @@ async function copyToDist() {
             
             // Copy main CEF library and dependencies
             await $`cp vendors/cef/Release/*.so dist/cef/`;
+            await $`cp vendors/cef/Release/*.so.* dist/cef/`;  // For versioned libraries like libvulkan.so.1
             await $`cp vendors/cef/Release/*.bin dist/cef/`;
+            await $`cp vendors/cef/Release/*.json dist/cef/`;  // For vk_swiftshader_icd.json
             
             // Copy chrome-sandbox (needs setuid root)
             if (existsSync(join(process.cwd(), 'vendors', 'cef', 'Release', 'chrome-sandbox'))) {

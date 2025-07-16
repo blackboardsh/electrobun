@@ -412,7 +412,7 @@ if (commandArg === "init") {
   // TODO: Should download binaries for arch, and then copy them in
   // for developing Electrobun itself we can assume current arch is already
   // in dist as it would have just been built from local source
-  if ((OS === 'macos' && config.build.mac.bundleCEF) || 
+  if ((OS === 'macos' && config.build.mac?.bundleCEF) || 
       (OS === 'win' && config.build.win?.bundleCEF) || 
       (OS === 'linux' && config.build.linux?.bundleCEF)) {    
     if (OS === 'macos') {
