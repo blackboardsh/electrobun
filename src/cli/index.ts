@@ -1115,9 +1115,23 @@ if (commandArg === "init") {
       }
     })
   } else if (OS === 'linux') {
+    let env = { ...process.env };
+    
+    // Add LD_PRELOAD for CEF libraries to fix static TLS allocation issues
+    if (config.build.linux?.bundleCEF) {
+      const cefLibs = ['./libcef.so', './libvk_swiftshader.so'];
+      const existingCefLibs = cefLibs.filter(lib => existsSync(join(bundleExecPath, lib)));
+      
+      if (existingCefLibs.length > 0) {
+        env['LD_PRELOAD'] = existingCefLibs.join(':');
+        console.log(`Using LD_PRELOAD for CEF: ${env['LD_PRELOAD']}`);
+      }
+    }
+    
     mainProc = Bun.spawn([join(bundleExecPath, 'bun'), join(bundleExecPath, 'main.js')], {
       stdio: ['inherit', 'inherit', 'inherit'],
-      cwd: bundleExecPath
+      cwd: bundleExecPath,
+      env
     })
   }
 
