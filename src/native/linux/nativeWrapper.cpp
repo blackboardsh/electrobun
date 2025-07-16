@@ -3,6 +3,7 @@
 #include <jsc/jsc.h>
 #include <libayatana-appindicator/app-indicator.h>
 #include <gdk/gdkx.h>
+#include <X11/Xlib.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -249,7 +250,8 @@ class ElectrobunClient : public CefClient,
                         public CefRequestHandler,
                         public CefContextMenuHandler,
                         public CefKeyboardHandler,
-                        public CefResourceRequestHandler {
+                        public CefResourceRequestHandler,
+                        public CefRenderHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -295,6 +297,10 @@ public:
     virtual CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override {
         return this;
     }
+    
+    virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override {
+        return this;
+    }
 
     // Handle navigation requests
     bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -330,12 +336,68 @@ public:
         }
     }
 
-    // Context menu handler (disable right-click menu for now)
+    // Context menu handler with DevTools option
     void OnBeforeContextMenu(CefRefPtr<CefBrowser> browser,
                             CefRefPtr<CefFrame> frame,
                             CefRefPtr<CefContextMenuParams> params,
                             CefRefPtr<CefMenuModel> model) override {
         model->Clear();
+        
+        // Add DevTools option
+        model->AddItem(26501, "Inspect Element");
+        model->AddSeparator();
+        model->AddItem(26502, "Open DevTools");
+    }
+    
+    // Handle context menu commands
+    bool OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
+                             CefRefPtr<CefFrame> frame,
+                             CefRefPtr<CefContextMenuParams> params,
+                             int command_id,
+                             EventFlags event_flags) override {
+        switch (command_id) {
+            case 26501: // Inspect Element
+            case 26502: // Open DevTools
+                browser->GetHost()->ShowDevTools(CefWindowInfo(), this, CefBrowserSettings(), CefPoint());
+                return true;
+            default:
+                return false;
+        }
+    }
+    
+    // Handle keyboard shortcuts (F12 for DevTools)
+    bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                       const CefKeyEvent& event,
+                       CefEventHandle os_event,
+                       bool* is_keyboard_shortcut) override {
+        if (event.type == KEYEVENT_KEYDOWN && event.windows_key_code == 123) { // F12 key
+            browser->GetHost()->ShowDevTools(CefWindowInfo(), this, CefBrowserSettings(), CefPoint());
+            return true; // Consume the event
+        }
+        return false;
+    }
+    
+    // CefRenderHandler methods for windowless rendering
+    void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
+        // Return the viewport size
+        rect.x = 0;
+        rect.y = 0;
+        rect.width = 600;  // Default size, should be updated based on widget size
+        rect.height = 600;
+    }
+    
+    void OnPaint(CefRefPtr<CefBrowser> browser,
+                 PaintElementType type,
+                 const RectList& dirtyRects,
+                 const void* buffer,
+                 int width,
+                 int height) override {
+        if (type == PET_VIEW) {
+            printf("CEF: Paint called - width=%d, height=%d, dirtyRects=%zu\n", 
+                   width, height, dirtyRects.size());
+            // TODO: Paint the buffer to the GTK widget
+            // This is where we would copy the CEF render buffer to the GTK widget
+        }
     }
 
 private:
@@ -962,23 +1024,37 @@ public:
         gtk_widget_set_size_request(cefWidget, (int)width, (int)height);
         gtk_widget_set_can_focus(cefWidget, TRUE);
         
-        // Realize the widget to create its GdkWindow
-        gtk_widget_realize(cefWidget);
+        // Set the widget member first so the container can manage it
+        this->widget = cefWidget;
         
+        // Make sure the widget is visible
+        gtk_widget_set_visible(cefWidget, TRUE);
+        
+        // We need to defer CEF browser creation until after the widget is added to the container
+        // For now, let's use the parent window approach but store the widget for later positioning
         CefWindowInfo window_info;
         
-        // Get the GdkWindow for the CEF widget
-        GdkWindow* gdkWindow = gtk_widget_get_window(cefWidget);
-        if (!gdkWindow) {
-            printf("Failed to get GdkWindow for CEF widget\n");
+        // Get the parent window's GdkWindow for CEF browser creation
+        GdkWindow* parentGdkWindow = gtk_widget_get_window(window);
+        if (!parentGdkWindow) {
+            gtk_widget_realize(window);
+            parentGdkWindow = gtk_widget_get_window(window);
+        }
+        
+        if (!parentGdkWindow) {
+            printf("Failed to get parent GdkWindow for CEF browser\n");
+            gtk_widget_destroy(cefWidget);
+            this->widget = nullptr;
             return;
         }
         
-        // Get X11 window handle
-        unsigned long xwindow = gdk_x11_window_get_xid(gdkWindow);
+        // Get X11 window handle from parent window
+        unsigned long parentXWindow = gdk_x11_window_get_xid(parentGdkWindow);
+        printf("CEF: Parent X11 window ID: 0x%lx\n", parentXWindow);
         
-        CefRect cefBounds(0, 0, (int)width, (int)height);
-        window_info.SetAsChild(xwindow, cefBounds);
+        // Try windowless rendering approach for Linux
+        window_info.SetAsWindowless(parentXWindow);
+        printf("CEF: Using windowless rendering with parent window 0x%lx\n", parentXWindow);
         
         // Create client
         client = new ElectrobunClient(
@@ -1008,16 +1084,85 @@ public:
         
         if (browser) {
             printf("CEF browser created successfully for webview %u\n", webviewId);
+            printf("CEF browser URL: %s\n", initialUrl.c_str());
             
-            // Set the widget member so the container can manage it
-            this->widget = cefWidget;
+            // Get the CEF browser window handle for debugging
+            CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
+            printf("CEF: Browser window handle: 0x%lx\n", (unsigned long)cefWindow);
             
-            // Make sure the widget is visible
-            gtk_widget_set_visible(cefWidget, TRUE);
+            printf("CEF: DevTools available via right-click -> 'Open DevTools' or F12\n");
+            
+            // Position sync will happen after widget is added to container
         } else {
             printf("Failed to create CEF browser for webview %u\n", webviewId);
             // Clean up the widget if browser creation failed
             gtk_widget_destroy(cefWidget);
+            this->widget = nullptr;
+        }
+    }
+    
+    void syncCEFPositionWithFrame(const GdkRectangle& frame) {
+        if (!browser) {
+            printf("CEF: Cannot sync - no browser\n");
+            return;
+        }
+        
+        printf("CEF: Syncing with frame: x=%d, y=%d, w=%d, h=%d\n", 
+               frame.x, frame.y, frame.width, frame.height);
+        
+        // For windowless rendering, just notify CEF about the resize
+        browser->GetHost()->WasResized();
+        
+        // Update the client's view rect for the new size
+        if (client) {
+            // The client should now receive OnPaint calls with the new size
+            printf("CEF: Notified CEF about resize for windowless rendering\n");
+        }
+    }
+    
+    void syncCEFPositionWithWidget() {
+        if (!browser || !widget) {
+            printf("CEF: Cannot sync - browser=%p, widget=%p\n", browser.get(), widget);
+            return;
+        }
+        
+        // Get the GTK widget's position relative to the parent window
+        GtkWidget* parentWidget = gtk_widget_get_parent(widget);
+        if (!parentWidget) {
+            printf("CEF: Cannot sync - no parent widget\n");
+            return;
+        }
+        
+        // Get widget size first
+        GtkAllocation allocation;
+        gtk_widget_get_allocation(widget, &allocation);
+        
+        printf("CEF: Widget allocation: x=%d, y=%d, w=%d, h=%d\n", 
+               allocation.x, allocation.y, allocation.width, allocation.height);
+        
+        // Try to get absolute position on screen
+        gint absX, absY;
+        gdk_window_get_origin(gtk_widget_get_window(gtk_widget_get_toplevel(widget)), &absX, &absY);
+        
+        printf("CEF: Toplevel origin: x=%d, y=%d\n", absX, absY);
+        
+        // Use the allocation position directly
+        int finalX = allocation.x;
+        int finalY = allocation.y;
+        int finalWidth = MAX(allocation.width, 1);
+        int finalHeight = MAX(allocation.height, 1);
+        
+        printf("CEF: Moving CEF browser to x=%d, y=%d, w=%d, h=%d\n", 
+               finalX, finalY, finalWidth, finalHeight);
+        
+        // Move the CEF browser window to match the widget position
+        CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
+        if (cefWindow) {
+            Display* display = gdk_x11_get_default_xdisplay();
+            XMoveResizeWindow(display, cefWindow, finalX, finalY, finalWidth, finalHeight);
+            XFlush(display);
+        } else {
+            printf("CEF: No CEF window handle available\n");
         }
     }
     
@@ -1119,6 +1264,9 @@ public:
             // Notify CEF that the browser was resized
             browser->GetHost()->WasResized();
             
+            // Sync CEF browser window position using frame coordinates
+            syncCEFPositionWithFrame(frame);
+            
             visualBounds = frame;
         }
         maskJSON = masksJson ? masksJson : "";
@@ -1214,6 +1362,8 @@ public:
             }
             
             gtk_widget_show(view->widget);
+            
+            // CEF position sync will happen in resize method
         }
     }
     
