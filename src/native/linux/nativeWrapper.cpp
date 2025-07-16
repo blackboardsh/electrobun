@@ -399,6 +399,9 @@ bool initializeCEF() {
     CefString(&settings.resources_dir_path) = execDir;
     CefString(&settings.locales_dir_path) = execDir + "/locales";
     
+    // Set browser subprocess path to the main helper binary
+    CefString(&settings.browser_subprocess_path) = execDir + "/bun Helper";
+    
     // Set cache path
     char* home = getenv("HOME");
     if (home) {
