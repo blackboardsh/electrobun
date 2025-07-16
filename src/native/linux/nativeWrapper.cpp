@@ -261,18 +261,27 @@ private:
     
     PreloadScript electrobun_script_;
     PreloadScript custom_script_;
+    
+    GtkWidget* gtk_widget_;
+    std::vector<unsigned char> render_buffer_;
+    int render_width_;
+    int render_height_;
 
 public:
     ElectrobunClient(uint32_t webviewId,
                      HandlePostMessage bunBridgeHandler,
                      HandlePostMessage internalBridgeHandler,
                      WebviewEventHandler webviewEventHandler,
-                     DecideNavigationCallback navigationCallback)
+                     DecideNavigationCallback navigationCallback,
+                     GtkWidget* gtkWidget)
         : webview_id_(webviewId)
         , bun_bridge_handler_(bunBridgeHandler)
         , webview_tag_handler_(internalBridgeHandler)
         , webview_event_handler_(webviewEventHandler)
-        , navigation_callback_(navigationCallback) {}
+        , navigation_callback_(navigationCallback)
+        , gtk_widget_(gtkWidget)
+        , render_width_(0)
+        , render_height_(0) {}
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
         electrobun_script_ = {script, false};
@@ -281,6 +290,11 @@ public:
     void UpdateCustomPreloadScript(const std::string& script) {
         custom_script_ = {script, true};
     }
+    
+    // Public accessors for render buffer
+    const std::vector<unsigned char>& GetRenderBuffer() const { return render_buffer_; }
+    int GetRenderWidth() const { return render_width_; }
+    int GetRenderHeight() const { return render_height_; }
 
     virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override {
         return this;
@@ -392,11 +406,37 @@ public:
                  const void* buffer,
                  int width,
                  int height) override {
-        if (type == PET_VIEW) {
+        if (type == PET_VIEW && gtk_widget_ && buffer) {
             printf("CEF: Paint called - width=%d, height=%d, dirtyRects=%zu\n", 
                    width, height, dirtyRects.size());
-            // TODO: Paint the buffer to the GTK widget
-            // This is where we would copy the CEF render buffer to the GTK widget
+            
+            // Store the buffer data (CEF uses BGRA format)
+            size_t buffer_size = width * height * 4;
+            render_buffer_.resize(buffer_size);
+            
+            // Copy and convert BGRA to RGBA
+            const unsigned char* src = static_cast<const unsigned char*>(buffer);
+            unsigned char* dst = render_buffer_.data();
+            
+            for (int i = 0; i < width * height; ++i) {
+                int src_idx = i * 4;
+                int dst_idx = i * 4;
+                
+                // Convert BGRA to RGBA
+                dst[dst_idx + 0] = src[src_idx + 2]; // R
+                dst[dst_idx + 1] = src[src_idx + 1]; // G
+                dst[dst_idx + 2] = src[src_idx + 0]; // B
+                dst[dst_idx + 3] = src[src_idx + 3]; // A
+            }
+            
+            // Store dimensions for drawing
+            render_width_ = width;
+            render_height_ = height;
+            
+            // Trigger GTK widget redraw
+            if (gtk_widget_) {
+                gtk_widget_queue_draw(gtk_widget_);
+            }
         }
     }
 
@@ -970,6 +1010,9 @@ public:
 };
 
 
+// Forward declaration - callback will be defined after CEFWebViewImpl
+static gboolean onCEFDraw(GtkWidget* widget, cairo_t* cr, gpointer user_data);
+
 // CEF WebView implementation
 class CEFWebViewImpl : public AbstractView {
 public:
@@ -1030,6 +1073,9 @@ public:
         // Make sure the widget is visible
         gtk_widget_set_visible(cefWidget, TRUE);
         
+        // Store reference to this CEF instance for drawing callback
+        g_object_set_data(G_OBJECT(cefWidget), "cef_instance", this);
+        
         // We need to defer CEF browser creation until after the widget is added to the container
         // For now, let's use the parent window approach but store the widget for later positioning
         CefWindowInfo window_info;
@@ -1062,7 +1108,8 @@ public:
             bunBridgeHandler,
             internalBridgeHandler,
             eventHandler,
-            navigationCallback
+            navigationCallback,
+            cefWidget
         );
         
         // Add preload scripts
@@ -1091,6 +1138,9 @@ public:
             printf("CEF: Browser window handle: 0x%lx\n", (unsigned long)cefWindow);
             
             printf("CEF: DevTools available via right-click -> 'Open DevTools' or F12\n");
+            
+            // Connect draw signal for rendering CEF content
+            g_signal_connect(cefWidget, "draw", G_CALLBACK(onCEFDraw), this);
             
             // Position sync will happen after widget is added to container
         } else {
@@ -1300,6 +1350,43 @@ public:
         }
     }
 };
+
+// CEF drawing callback implementation
+static gboolean onCEFDraw(GtkWidget* widget, cairo_t* cr, gpointer user_data) {
+    CEFWebViewImpl* cefImpl = static_cast<CEFWebViewImpl*>(user_data);
+    
+    if (!cefImpl || !cefImpl->client) {
+        return FALSE;
+    }
+    
+    // Get the render buffer from the client
+    const std::vector<unsigned char>& buffer = cefImpl->client->GetRenderBuffer();
+    int bufferWidth = cefImpl->client->GetRenderWidth();
+    int bufferHeight = cefImpl->client->GetRenderHeight();
+    
+    if (buffer.empty() || bufferWidth <= 0 || bufferHeight <= 0) {
+        return FALSE;
+    }
+    
+    // Create Cairo surface from the CEF buffer
+    // Note: CEF buffer is already converted from BGRA to RGBA in OnPaint
+    cairo_surface_t* surface = cairo_image_surface_create_for_data(
+        const_cast<unsigned char*>(buffer.data()), 
+        CAIRO_FORMAT_RGB24, 
+        bufferWidth, 
+        bufferHeight, 
+        bufferWidth * 4
+    );
+    
+    if (surface) {
+        // Paint the CEF buffer to the widget
+        cairo_set_source_surface(cr, surface, 0, 0);
+        cairo_paint(cr);
+        cairo_surface_destroy(surface);
+    }
+    
+    return FALSE;
+}
 
 
 // Container for managing multiple webviews
