@@ -957,25 +957,28 @@ public:
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
         CefBrowserSettings browserSettings;
         
+        // Create a GTK widget to act as the container for the CEF browser
+        GtkWidget* cefWidget = gtk_drawing_area_new();
+        gtk_widget_set_size_request(cefWidget, (int)width, (int)height);
+        gtk_widget_set_can_focus(cefWidget, TRUE);
+        
+        // Realize the widget to create its GdkWindow
+        gtk_widget_realize(cefWidget);
+        
         CefWindowInfo window_info;
         
-        // Get the GdkWindow for the GTK widget
-        GdkWindow* gdkWindow = gtk_widget_get_window(window);
+        // Get the GdkWindow for the CEF widget
+        GdkWindow* gdkWindow = gtk_widget_get_window(cefWidget);
         if (!gdkWindow) {
-            gtk_widget_realize(window);
-            gdkWindow = gtk_widget_get_window(window);
-        }
-        
-        if (gdkWindow) {
-            // Get X11 window handle
-            unsigned long xwindow = gdk_x11_window_get_xid(gdkWindow);
-            
-            CefRect cefBounds((int)x, (int)y, (int)width, (int)height);
-            window_info.SetAsChild(xwindow, cefBounds);
-        } else {
-            printf("Failed to get GdkWindow for CEF browser\n");
+            printf("Failed to get GdkWindow for CEF widget\n");
             return;
         }
+        
+        // Get X11 window handle
+        unsigned long xwindow = gdk_x11_window_get_xid(gdkWindow);
+        
+        CefRect cefBounds(0, 0, (int)width, (int)height);
+        window_info.SetAsChild(xwindow, cefBounds);
         
         // Create client
         client = new ElectrobunClient(
@@ -1005,8 +1008,16 @@ public:
         
         if (browser) {
             printf("CEF browser created successfully for webview %u\n", webviewId);
+            
+            // Set the widget member so the container can manage it
+            this->widget = cefWidget;
+            
+            // Make sure the widget is visible
+            gtk_widget_set_visible(cefWidget, TRUE);
         } else {
             printf("Failed to create CEF browser for webview %u\n", webviewId);
+            // Clean up the widget if browser creation failed
+            gtk_widget_destroy(cefWidget);
         }
     }
     
@@ -1038,6 +1049,10 @@ public:
         if (browser) {
             browser->GetHost()->CloseBrowser(true);
             browser = nullptr;
+        }
+        if (widget) {
+            gtk_widget_destroy(widget);
+            widget = nullptr;
         }
     }
     
@@ -1075,10 +1090,38 @@ public:
     }
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
-        if (browser) {
+        if (browser && widget) {
+            // Set widget size
+            gtk_widget_set_size_request(widget, frame.width, frame.height);
+            
+            // Check if this webview has a wrapper (OOPIF case)
+            GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(widget), "wrapper");
+            if (wrapper) {
+                // For negative positions (scrolled out of view), we need to use
+                // gtk_widget_set_margin_* with clamped values and offset the webview inside
+                int clampedX = MAX(0, frame.x);
+                int clampedY = MAX(0, frame.y);
+                int offsetX = frame.x - clampedX;  // Will be negative if frame.x < 0
+                int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
+                
+                gtk_widget_set_size_request(wrapper, frame.width, frame.height);
+                gtk_widget_set_margin_left(wrapper, clampedX);
+                gtk_widget_set_margin_top(wrapper, clampedY);
+                
+                // Position widget within wrapper with offset to handle negative positions
+                gtk_fixed_move(GTK_FIXED(wrapper), widget, offsetX, offsetY / 2);
+            } else {
+                // For host webview, position directly with margins (can't be negative)
+                gtk_widget_set_margin_left(widget, MAX(0, frame.x));
+                gtk_widget_set_margin_top(widget, MAX(0, frame.y));
+            }
+            
+            // Notify CEF that the browser was resized
             browser->GetHost()->WasResized();
-            // TODO: Update browser bounds
+            
+            visualBounds = frame;
         }
+        maskJSON = masksJson ? masksJson : "";
     }
     
     void applyVisualMask() override {
