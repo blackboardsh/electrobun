@@ -217,6 +217,10 @@ struct PreloadScript {
     bool isCustom;
 };
 
+// Global preload script storage for CEF render process
+static std::map<uint32_t, PreloadScript> g_electrobun_preload_scripts;
+static std::map<uint32_t, PreloadScript> g_custom_preload_scripts;
+
 // CEF views:// scheme handler implementation
 class ViewsResourceHandler : public CefResourceHandler {
 public:
@@ -419,37 +423,39 @@ public:
                 window->SetValue("webviewId", webviewId, V8_PROPERTY_ATTRIBUTE_READONLY);
             }
             
-            // For now, let's inject a basic Electrobun preload script
-            std::string basicPreloadScript = R"(
-                // Basic Electrobun preload script
-                console.log('Electrobun preload script running in webview:', webviewId);
+            // Get the browser identifier to look up preload scripts
+            uint32_t browserId = browser->GetIdentifier();
+            
+            // Execute the electrobun preload script if available
+            auto electrobunScript = g_electrobun_preload_scripts.find(browserId);
+            if (electrobunScript != g_electrobun_preload_scripts.end() && !electrobunScript->second.script.empty()) {
+                CefRefPtr<CefV8Value> result;
+                CefRefPtr<CefV8Exception> exception;
                 
-                // Set up WebSocket connection
-                if (typeof webviewId !== 'undefined' && webviewId) {
-                    const wsUrl = 'ws://localhost:50000/socket?webviewId=' + webviewId;
-                    console.log('Setting up WebSocket connection to:', wsUrl);
-                    
-                    window.ElectrobunWebSocket = new WebSocket(wsUrl);
-                    window.ElectrobunWebSocket.onopen = function() {
-                        console.log('Electrobun WebSocket connected');
-                    };
-                    window.ElectrobunWebSocket.onerror = function(error) {
-                        console.error('Electrobun WebSocket error:', error);
-                    };
+                if (context->Eval(electrobunScript->second.script, "", 0, result, exception)) {
+                    printf("CEF: Electrobun preload script executed successfully for webview %u\n", browserId);
                 } else {
-                    console.error('webviewId not defined, cannot set up WebSocket');
+                    printf("CEF: Electrobun preload script execution failed for webview %u: %s\n", 
+                           browserId, exception ? exception->GetMessage().ToString().c_str() : "unknown error");
                 }
-            )";
-            
-            // Execute the preload script
-            CefRefPtr<CefV8Value> result;
-            CefRefPtr<CefV8Exception> exception;
-            
-            if (context->Eval(basicPreloadScript, "", 0, result, exception)) {
-                printf("CEF: Preload script executed successfully\n");
             } else {
-                printf("CEF: Preload script execution failed: %s\n", 
-                       exception ? exception->GetMessage().ToString().c_str() : "unknown error");
+                printf("CEF: No electrobun preload script found for webview %u\n", browserId);
+            }
+            
+            // Execute the custom preload script if available
+            auto customScript = g_custom_preload_scripts.find(browserId);
+            if (customScript != g_custom_preload_scripts.end() && !customScript->second.script.empty()) {
+                CefRefPtr<CefV8Value> result;
+                CefRefPtr<CefV8Exception> exception;
+                
+                if (context->Eval(customScript->second.script, "", 0, result, exception)) {
+                    printf("CEF: Custom preload script executed successfully for webview %u\n", browserId);
+                } else {
+                    printf("CEF: Custom preload script execution failed for webview %u: %s\n", 
+                           browserId, exception ? exception->GetMessage().ToString().c_str() : "unknown error");
+                }
+            } else {
+                printf("CEF: No custom preload script found for webview %u\n", browserId);
             }
         }
     }
@@ -497,10 +503,14 @@ public:
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
         electrobun_script_ = {script, false};
+        // Store globally for render process access
+        g_electrobun_preload_scripts[webview_id_] = {script, false};
     }
 
     void UpdateCustomPreloadScript(const std::string& script) {
         custom_script_ = {script, true};
+        // Store globally for render process access
+        g_custom_preload_scripts[webview_id_] = {script, true};
     }
     
     void SetPositioningCallback(std::function<void()> callback) {
