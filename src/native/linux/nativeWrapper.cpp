@@ -1508,50 +1508,16 @@ public:
         
         createCEFBrowser(window, url, x, y, width, height);
         
-        // Don't set creationFailed for deferred creation
-        // The browser will be created later by the timeout
-        // creationFailed will be set in createCEFBrowserDeferred if it actually fails
+        // Browser creation happens immediately in createCEFBrowser
     }
     
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
+        printf("CEF: Creating browser in X11 window\n");
         printf("CEF: DevTools available via F12 or right-click -> Inspect\n");
         
-        // NO GTK widget needed - CEF will be a direct child of the window
-        // Just store nullptr for widget since CEF manages its own window
+        // NO GTK widget needed - CEF will be a direct child of the X11 window
         this->widget = nullptr;
         
-        if (!window) {
-            printf("CEF: ERROR - Window is null\n");
-            return;
-        }
-        
-        // Store the parameters for deferred creation
-        this->gtkWindow = window;
-        this->deferredUrl = url ? url : "";
-        this->deferredX = x;
-        this->deferredY = y;
-        this->deferredWidth = width;
-        this->deferredHeight = height;
-        
-        // Always defer CEF browser creation with a small delay to ensure window is fully ready
-        printf("CEF: Deferring CEF browser creation with delay\n");
-        printf("CEF: Window state - realized: %d, visible: %d, mapped: %d\n", 
-               gtk_widget_get_realized(window), gtk_widget_get_visible(window), gtk_widget_get_mapped(window));
-        
-
-        // Create CEF browser in X11 window directly
-        createCEFBrowserInX11Window(window, url, x, y, width, height);
-
-        // Use g_timeout_add to defer creation by 100ms
-        // g_timeout_add(3000, [](gpointer data) -> gboolean {
-        //     CEFWebViewImpl* self = static_cast<CEFWebViewImpl*>(data);
-        //     printf("CEF: Timeout fired, creating deferred browser\n");
-        //     self->createCEFBrowserDeferred();
-        //     return G_SOURCE_REMOVE;
-        // }, this);
-    }
-    
-    void createCEFBrowserInX11Window(GtkWidget* window, const char* url, double x, double y, double width, double height) {
         // window parameter is actually X11Window* cast as GtkWidget*
         X11Window* x11win = reinterpret_cast<X11Window*>(window);
         if (!x11win || !x11win->window) {
@@ -1559,6 +1525,13 @@ public:
             creationFailed = true;
             return;
         }
+        
+        // Store the parameters
+        this->deferredUrl = url ? url : "";
+        this->deferredX = x;
+        this->deferredY = y;
+        this->deferredWidth = width;
+        this->deferredHeight = height;
         
         // Create CEF browser immediately as child of X11 window
         CefWindowInfo window_info;
@@ -1598,188 +1571,7 @@ public:
         }
     }
     
-    void createCEFBrowserDeferred() {
-        printf("CEF: Creating deferred CEF browser with new GTK window\n");
-        
-        CefBrowserSettings browserSettings;
-        
-        // Create a brand new GTK window for CEF browser
-        GtkWidget* cefWindow = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-        if (!cefWindow) {
-            printf("CEF: ERROR - Failed to create new GTK window for CEF\n");
-            return;
-        }
-        
-        // Configure the CEF window
-        gtk_window_set_title(GTK_WINDOW(cefWindow), "CEF Browser");
-        gtk_window_set_default_size(GTK_WINDOW(cefWindow), (int)deferredWidth, (int)deferredHeight);
-        gtk_window_move(GTK_WINDOW(cefWindow), (int)deferredX, (int)deferredY);
-        
-        // Store the CEF window for later use
-        this->gtkWindow = cefWindow;
-        
-        // Show and realize the window, then wait for it to be fully ready
-        gtk_widget_show(cefWindow);
-        gtk_widget_realize(cefWindow);
-        
-        // Force all pending X11 operations to complete
-        while (gtk_events_pending()) {
-            gtk_main_iteration();
-        }
-        
-        // Add a small delay to ensure X11 window is fully created
-        g_usleep(50000); // 50ms delay
-        
-        // Get the window's GdkWindow
-        GdkWindow* gdkWindow = gtk_widget_get_window(cefWindow);
-        if (!gdkWindow) {
-            printf("CEF: ERROR - Failed to get GdkWindow for new CEF window\n");
-            gtk_widget_destroy(cefWindow);
-            return;
-        }
-        
-        // Ensure the window is mapped
-        if (!gdk_window_is_visible(gdkWindow)) {
-            printf("CEF: GdkWindow not visible, making it visible\n");
-            gdk_window_show(gdkWindow);
-            g_usleep(25000); // Additional 25ms delay
-        }
-        
-        printf("CEF: New CEF window is realized and has GdkWindow\n");
-        
-        // Get X11 window handle from the new GTK window
-        unsigned long parentXWindow = gdk_x11_window_get_xid(gdkWindow);
-        printf("CEF: New CEF window X11 window ID: 0x%lx\n", parentXWindow);
-        
-        // Validate the X11 window handle before using it
-        Display* display = gdk_x11_get_default_xdisplay();
-        
-        // Flush X11 to ensure all operations are complete
-        XFlush(display);
-        XSync(display, False);
-        
-        XWindowAttributes attrs;
-        int retries = 0;
-        while (retries < 5 && XGetWindowAttributes(display, parentXWindow, &attrs) == 0) {
-            printf("CEF: X11 window not ready yet, retrying... (attempt %d)\n", retries + 1);
-            g_usleep(10000); // 10ms delay
-            XFlush(display);
-            XSync(display, False);
-            retries++;
-        }
-        
-        if (retries >= 5) {
-            printf("CEF: ERROR - Invalid X11 window 0x%lx after %d retries\n", parentXWindow, retries);
-            gtk_widget_destroy(cefWindow);
-            return;
-        }
-        
-        printf("CEF: New CEF window validated - size %dx%d\n", 
-               attrs.width, attrs.height);
-        
-        // Create CEF browser as a child of the new GTK window
-        CefWindowInfo window_info;
-        CefRect cefBounds;
-        cefBounds.x = 0;  // Position relative to the new window
-        cefBounds.y = 0;
-        cefBounds.width = (int)deferredWidth;
-        cefBounds.height = (int)deferredHeight;
-        
-        // Store the parent window for later reparenting
-        this->parentXWindow = parentXWindow;
-        this->targetBounds = cefBounds;
-        
-        // Use SetAsChild with the new GTK window's X11 window ID
-        // window_info.SetAsChild(parentXWindow, cefBounds);
-        printf("CEF: Creating CEF browser as child of new X11 window 0x%lx at (%d,%d) size %dx%d\n", 
-               parentXWindow, (int)cefBounds.x, (int)cefBounds.y, (int)cefBounds.width, (int)cefBounds.height);
-        
-        // Create client
-        client = new ElectrobunClient(
-            webviewId,
-            bunBridgeHandler,
-            internalBridgeHandler,
-            eventHandler,
-            navigationCallback,
-            gtkWindow  // Pass the GTK window widget
-        );
-        
-        // Set positioning callback for retrying when CEF window is ready
-        client->SetPositioningCallback([this]() {
-            if (hasPendingFrame) {
-                printf("CEF: Retrying positioning from callback\n");
-                syncCEFPositionWithFrame(pendingFrame);
-                hasPendingFrame = false;
-            }
-        });
-        
-        // Add preload scripts
-        client->AddPreloadScript(electrobunPreloadScript);
-        client->UpdateCustomPreloadScript(customPreloadScript);
-        
-        // Create request context for partition
-        CefRefPtr<CefRequestContext> requestContext = nullptr;
-        if (!partition.empty()) {
-            CefRequestContextSettings contextSettings;
-            CefString(&contextSettings.cache_path) = std::string(getenv("HOME") ? getenv("HOME") : "/tmp") + "/.cache/Electrobun/CEF/" + partition;
-            requestContext = CefRequestContext::CreateContext(contextSettings, nullptr);
-        }
-        
-        // Create browser
-        std::string initialUrl = deferredUrl.empty() ? "about:blank" : deferredUrl;
-        printf("CEF: About to create browser with URL: %s\n", initialUrl.c_str());
-        
-        browser = CefBrowserHost::CreateBrowserSync(
-            window_info, client.get(), CefString(initialUrl), browserSettings, nullptr, requestContext);
-        
-        if (browser) {
-            printf("CEF browser created successfully for webview %u\n", webviewId);
-            printf("CEF browser URL: %s\n", initialUrl.c_str());
-            
-            // Store the window widget reference
-            widget = gtkWindow;
-            
-            // Get the CEF browser window handle for debugging
-            CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
-            printf("CEF: Browser window handle: 0x%lx\n", (unsigned long)cefWindow);
-            
-            // Validate the CEF window handle immediately after creation
-            if (cefWindow) {
-                Display* display = gdk_x11_get_default_xdisplay();
-                XWindowAttributes attrs;
-                if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
-                    printf("CEF: WARNING - CEF window handle 0x%lx is invalid immediately after creation\n", 
-                           (unsigned long)cefWindow);
-                } else {
-                    printf("CEF: CEF window handle 0x%lx validated after creation - size %dx%d\n", 
-                           (unsigned long)cefWindow, attrs.width, attrs.height);
-                }
-            }
-            
-            printf("CEF: DevTools available via right-click -> 'Open DevTools' or F12\n");
-            
-            // Ensure the CEF window is properly mapped and visible
-            if (cefWindow) {
-                Display* display = gdk_x11_get_default_xdisplay();
-                XMapWindow(display, (Window)cefWindow);
-                XFlush(display);
-                printf("CEF: Mapped CEF window to display\n");
-            }
-            
-            // Force CEF to notify about resize to trigger initial paint
-            browser->GetHost()->WasResized();
-            
-            // Notify CEF that move/resize has started (helps with rendering)
-            browser->GetHost()->NotifyMoveOrResizeStarted();
-            
-            // Important: Position sync will happen after widget is added to container
-            // The container will call syncCEFPositionWithWidget() after adding the widget
-        } else {
-            printf("CEF: ERROR - Failed to create CEF browser for webview %u\n", webviewId);
-            widget = nullptr;  // Clear widget reference on failure
-            creationFailed = true;  // Mark as failed for deferred creation
-        }
-    }
+    // Removed createCEFBrowserInX11Window and createCEFBrowserDeferred - functionality moved to createCEFBrowser
     
     void syncCEFPositionWithFrame(const GdkRectangle& frame) {
         if (!browser) {
