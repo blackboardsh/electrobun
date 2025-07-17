@@ -217,6 +217,126 @@ struct PreloadScript {
     bool isCustom;
 };
 
+// CEF views:// scheme handler implementation
+class ViewsResourceHandler : public CefResourceHandler {
+public:
+    ViewsResourceHandler() : offset_(0) {}
+    
+    bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
+        std::string url = request->GetURL();
+        printf("CEF views:// request: %s\n", url.c_str());
+        
+        // Parse the URI to get everything after views://
+        std::string fullPath = "index.html"; // default
+        if (url.find("views://") == 0) {
+            fullPath = url.substr(8); // Skip "views://"
+        }
+        
+        // Build file path: ../Resources/app/views/[fullPath] relative to current directory (bin)
+        char* cwd = g_get_current_dir();
+        gchar* viewsDir = g_build_filename(cwd, "..", "Resources", "app", "views", nullptr);
+        gchar* filePath = g_build_filename(viewsDir, fullPath.c_str(), nullptr);
+        
+        printf("CEF views:// fullPath: %s\n", fullPath.c_str());
+        printf("CEF views:// loading file: %s\n", filePath);
+        
+        // Check if file exists and read it
+        if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
+            gsize fileSize;
+            gchar* fileContent;
+            GError* error = nullptr;
+            
+            if (g_file_get_contents(filePath, &fileContent, &fileSize, &error)) {
+                data_ = std::string(fileContent, fileSize);
+                g_free(fileContent);
+                
+                // Determine MIME type based on file extension
+                if (fullPath.find(".html") != std::string::npos) {
+                    mimeType_ = "text/html";
+                } else if (fullPath.find(".js") != std::string::npos) {
+                    mimeType_ = "application/javascript";
+                } else if (fullPath.find(".css") != std::string::npos) {
+                    mimeType_ = "text/css";
+                } else if (fullPath.find(".json") != std::string::npos) {
+                    mimeType_ = "application/json";
+                } else if (fullPath.find(".png") != std::string::npos) {
+                    mimeType_ = "image/png";
+                } else if (fullPath.find(".jpg") != std::string::npos || fullPath.find(".jpeg") != std::string::npos) {
+                    mimeType_ = "image/jpeg";
+                } else {
+                    mimeType_ = "text/plain";
+                }
+                
+                printf("CEF views:// loaded file successfully: %zu bytes, MIME: %s\n", fileSize, mimeType_.c_str());
+                
+                g_free(cwd);
+                g_free(viewsDir);
+                g_free(filePath);
+                
+                handle_request = true;
+                return true;
+            } else {
+                printf("CEF views:// failed to read file: %s\n", error ? error->message : "unknown error");
+                if (error) g_error_free(error);
+            }
+        } else {
+            printf("CEF views:// file not found: %s\n", filePath);
+        }
+        
+        g_free(cwd);
+        g_free(viewsDir);
+        g_free(filePath);
+        
+        handle_request = false;
+        return false;
+    }
+    
+    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override {
+        response->SetStatus(200);
+        response->SetMimeType(mimeType_);
+        response->SetStatusText("OK");
+        response_length = data_.length();
+    }
+    
+    bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override {
+        bool has_data = false;
+        bytes_read = 0;
+        
+        if (offset_ < data_.length()) {
+            int transfer_size = std::min(bytes_to_read, static_cast<int>(data_.length() - offset_));
+            memcpy(data_out, data_.c_str() + offset_, transfer_size);
+            offset_ += transfer_size;
+            bytes_read = transfer_size;
+            has_data = true;
+        }
+        
+        return has_data;
+    }
+    
+    void Cancel() override {
+        // Nothing to cancel
+    }
+    
+private:
+    std::string data_;
+    std::string mimeType_;
+    size_t offset_;
+    
+    IMPLEMENT_REFCOUNTING(ViewsResourceHandler);
+};
+
+// CEF views:// scheme handler factory
+class ViewsSchemeHandlerFactory : public CefSchemeHandlerFactory {
+public:
+    CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, 
+                                       const CefString& scheme_name, CefRefPtr<CefRequest> request) override {
+        return new ViewsResourceHandler();
+    }
+    
+private:
+    IMPLEMENT_REFCOUNTING(ViewsSchemeHandlerFactory);
+};
+
 // ElectrobunApp implementation for Linux
 class ElectrobunApp : public CefApp,
                      public CefBrowserProcessHandler,
@@ -270,13 +390,15 @@ public:
     }
     
     void OnContextInitialized() override {
-        CefRegisterSchemeHandlerFactory("views", "", nullptr);
+        CefRegisterSchemeHandlerFactory("views", "", new ViewsSchemeHandlerFactory());
+        printf("CEF: Registered views:// scheme handler factory\n");
     }
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunApp);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunApp);
 };
+
 
 // ElectrobunClient implementation for Linux
 class ElectrobunClient : public CefClient,
