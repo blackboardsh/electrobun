@@ -83,6 +83,21 @@ class CEFWebViewImpl;
 GtkWidget* getContainerViewOverlay(GtkWidget* window);
 GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId);
 
+// X11 Window structure to replace GTK windows
+struct X11Window {
+    Display* display;
+    Window window;
+    uint32_t windowId;
+    double x, y, width, height;
+    std::string title;
+    WindowCloseCallback closeCallback;
+    WindowMoveCallback moveCallback;
+    WindowResizeCallback resizeCallback;
+    std::vector<Window> childWindows;  // For managing webviews
+    
+    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600) {}
+};
+
 // Parse JSON menu array (simplified parser for basic menu structure)
 std::vector<MenuJsonValue> parseMenuJson(const std::string& jsonStr) {
     std::vector<MenuJsonValue> items;
@@ -729,118 +744,7 @@ CefRefPtr<CefClient> create_default_handler() {
   return new SimpleClient();
 }
 
-void create_cef_webview_in_window() {
-    printf("CEF DEBUG: Starting create_cef_webview_in_window - PURE X11 APPROACH v1\n");
-    
-    // Check if CEF is available first
-    if (!isCEFAvailable()) {
-        printf("CEF DEBUG: CEF not available, cannot create webview\n");
-        return;
-    }
-    printf("CEF DEBUG: CEF is available\n");
-
-    // Create a pure X11 window (no GTK)
-    Display* display = XOpenDisplay(nullptr);
-    if (!display) {
-        printf("CEF DEBUG: Failed to open X11 display\n");
-        return;
-    }
-    
-    int screen = DefaultScreen(display);
-    Window root = RootWindow(display, screen);
-    
-    // Create window attributes
-    XSetWindowAttributes attrs;
-    attrs.background_pixel = WhitePixel(display, screen);
-    attrs.border_pixel = BlackPixel(display, screen);
-    attrs.colormap = DefaultColormap(display, screen);
-    attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
-                      ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-                      FocusChangeMask | StructureNotifyMask;
-    
-    // Create the main window
-    Window main_window = XCreateWindow(
-        display, root,
-        100, 100, 800, 600, 2,
-        DefaultDepth(display, screen), InputOutput,
-        DefaultVisual(display, screen),
-        CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
-        &attrs
-    );
-    
-    if (!main_window) {
-        printf("CEF DEBUG: Failed to create X11 window\n");
-        XCloseDisplay(display);
-        return;
-    }
-    
-    // Set window title
-    XStoreName(display, main_window, "CEF Pure X11 Test");
-    
-    // Map the window
-    XMapWindow(display, main_window);
-    XSync(display, False);
-    
-    printf("CEF DEBUG: Created pure X11 window: 0x%lx\n", main_window);
-    
-    // Store window data for the timeout
-    struct WindowData {
-        Display* display;
-        Window window;
-    };
-    WindowData* window_data = new WindowData{display, main_window};
-    
-    // Use a timeout to ensure everything is fully initialized
-    g_timeout_add(1000, [](gpointer data) -> gboolean {
-        WindowData* window_data = static_cast<WindowData*>(data);
-        printf("CEF DEBUG: Timeout callback triggered - PURE X11 APPROACH\n");
-        
-        // Create CEF browser with SetAsChild directly to the X11 window
-        printf("CEF DEBUG: Creating CEF browser with SetAsChild to pure X11 window...\n");
-        CefWindowInfo window_info;
-        CefRect cef_rect(0, 0, 800, 600);
-        
-        // Use SetAsChild with our pure X11 window
-        window_info.SetAsChild(window_data->window, cef_rect);
-        
-        printf("CEF DEBUG: SetAsChild configured for pure X11 window 0x%lx, rect (0,0,800,600)\n", window_data->window);
-        
-        CefBrowserSettings browser_settings;
-        printf("CEF DEBUG: Browser settings configured\n");
-        
-        // Use simple client
-        CefRefPtr<CefClient> client = create_default_handler();
-        if (!client) {
-            printf("CEF DEBUG: Failed to create client\n");
-            return G_SOURCE_REMOVE;
-        }
-        printf("CEF DEBUG: Client created: %p\n", client.get());
-        
-        // Try a simple test URL
-        std::string test_url = "data:text/html,<html><body style='background:lime;color:black;font-size:24px;text-align:center;padding:50px;'><h1>🚀 CEF PURE X11 SUCCESS! 🚀</h1><p>This proves CEF works without GTK!</p></body></html>";
-        printf("CEF DEBUG: Using test URL with lime background\n");
-        
-        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, test_url, browser_settings, nullptr, nullptr);
-        printf("CEF DEBUG: CreateBrowser result: %s\n", create_result ? "SUCCESS" : "FAILED");
-        
-        if (!create_result) {
-            printf("CEF DEBUG: Browser creation failed!\n");
-        } else {
-            printf("CEF DEBUG: Browser creation initiated successfully - PURE X11 APPROACH\n");
-            
-            // Wait a bit and then check if CEF rendered
-            g_timeout_add(2000, [](gpointer) -> gboolean {
-                printf("CEF DEBUG: 2s check - CEF should be rendering in pure X11 window\n");
-                return G_SOURCE_REMOVE;
-            }, nullptr);
-        }
-        
-        delete window_data;
-        return G_SOURCE_REMOVE;
-    }, window_data);
-    
-    printf("CEF DEBUG: Timeout scheduled for pure X11 window, function complete\n");
-}
+// Removed create_cef_webview_in_window proof of concept - functionality moved to main window creation
     
 //     // Add a simple paint handler to show if GTK drawing works
 //     g_signal_connect(drawing_area, "draw", G_CALLBACK(+[](GtkWidget*, cairo_t* cr, gpointer) -> gboolean {
@@ -1635,7 +1539,8 @@ public:
                gtk_widget_get_realized(window), gtk_widget_get_visible(window), gtk_widget_get_mapped(window));
         
 
-        create_cef_webview_in_window();
+        // Create CEF browser in X11 window directly
+        createCEFBrowserInX11Window(window, url, x, y, width, height);
 
         // Use g_timeout_add to defer creation by 100ms
         // g_timeout_add(3000, [](gpointer data) -> gboolean {
@@ -1646,6 +1551,52 @@ public:
         // }, this);
     }
     
+    void createCEFBrowserInX11Window(GtkWidget* window, const char* url, double x, double y, double width, double height) {
+        // window parameter is actually X11Window* cast as GtkWidget*
+        X11Window* x11win = reinterpret_cast<X11Window*>(window);
+        if (!x11win || !x11win->window) {
+            printf("CEF: ERROR - X11 window is null or invalid\n");
+            creationFailed = true;
+            return;
+        }
+        
+        // Create CEF browser immediately as child of X11 window
+        CefWindowInfo window_info;
+        CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
+        
+        // Use SetAsChild with the X11 window
+        window_info.SetAsChild(x11win->window, cef_rect);
+        
+        printf("CEF: SetAsChild configured for X11 window 0x%lx, rect (%d,%d,%d,%d)\n", 
+               x11win->window, (int)x, (int)y, (int)width, (int)height);
+        
+        CefBrowserSettings browser_settings;
+        
+        // Create client
+        client = new ElectrobunClient(
+            webviewId,
+            bunBridgeHandler,
+            internalBridgeHandler,
+            eventHandler,
+            navigationCallback,
+            nullptr  // No GTK window needed
+        );
+        
+        // Create the browser
+        std::string loadUrl = deferredUrl.empty() ? "https://www.wikipedia.org" : deferredUrl;
+        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, nullptr, nullptr);
+        
+        printf("CEF: CreateBrowser result: %s\n", create_result ? "SUCCESS" : "FAILED");
+        
+        if (!create_result) {
+            printf("CEF: Browser creation failed!\n");
+            creationFailed = true;
+        } else {
+            printf("CEF: Browser creation initiated successfully\n");
+            // Add this webview to the X11 window's child list
+            x11win->childWindows.push_back(0); // Will be updated when browser is created
+        }
+    }
     
     void createCEFBrowserDeferred() {
         printf("CEF: Creating deferred CEF browser with new GTK window\n");
@@ -2373,6 +2324,10 @@ static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
 static bool g_gtkInitialized = false;
 
+// X11 window management
+static std::map<uint32_t, std::shared_ptr<X11Window>> g_x11_windows;
+static std::map<Window, uint32_t> g_x11_window_to_id;
+
 // Helper function to get ContainerView overlay for a window
 GtkWidget* getContainerViewOverlay(GtkWidget* window) {
     for (auto& [id, container] : g_containers) {
@@ -2719,6 +2674,60 @@ gboolean cef_timer_callback(gpointer user_data) {
     return G_SOURCE_CONTINUE; // Keep the timer running
 }
 
+// X11 event processing function
+gboolean process_x11_events(gpointer data) {
+    // Process events for all X11 windows
+    for (auto& [windowId, x11win] : g_x11_windows) {
+        if (!x11win->display) continue;
+        
+        while (XPending(x11win->display)) {
+            XEvent event;
+            XNextEvent(x11win->display, &event);
+            
+            // Find which window this event is for
+            auto it = g_x11_window_to_id.find(event.xany.window);
+            if (it == g_x11_window_to_id.end()) continue;
+            
+            uint32_t winId = it->second;
+            auto winIt = g_x11_windows.find(winId);
+            if (winIt == g_x11_windows.end()) continue;
+            
+            X11Window* targetWin = winIt->second.get();
+            
+            switch (event.type) {
+                case ClientMessage:
+                    if (event.xclient.data.l[0] == (long)XInternAtom(targetWin->display, "WM_DELETE_WINDOW", False)) {
+                        if (targetWin->closeCallback) {
+                            targetWin->closeCallback(targetWin->windowId);
+                        }
+                    }
+                    break;
+                    
+                case ConfigureNotify:
+                    if (event.xconfigure.width != targetWin->width || event.xconfigure.height != targetWin->height ||
+                        event.xconfigure.x != targetWin->x || event.xconfigure.y != targetWin->y) {
+                        targetWin->x = event.xconfigure.x;
+                        targetWin->y = event.xconfigure.y;
+                        targetWin->width = event.xconfigure.width;
+                        targetWin->height = event.xconfigure.height;
+                        
+                        if (targetWin->resizeCallback) {
+                            targetWin->resizeCallback(targetWin->windowId, targetWin->x, targetWin->y, 
+                                                    targetWin->width, targetWin->height);
+                        }
+                    }
+                    break;
+                    
+                case Expose:
+                    // Handle expose events if needed
+                    break;
+            }
+        }
+    }
+    
+    return G_SOURCE_CONTINUE;
+}
+
 void runEventLoop() {
     printf("runEventLoop called - initializing GTK on main thread\n");
     fflush(stdout);
@@ -2744,6 +2753,10 @@ void runEventLoop() {
         printf("CEF not available, using WebKit only\n");
     }
     fflush(stdout);
+    
+    // Set up X11 event processing
+    g_timeout_add(10, process_x11_events, nullptr); // Process X11 events every 10ms
+    printf("X11 event processing timer set up\n");
     
     printf("GTK initialized, starting main loop\n");
     fflush(stdout);
@@ -2787,73 +2800,78 @@ void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, doubl
 void* createWindow(uint32_t windowId, double x, double y, double width, double height, const char* title, 
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
     
-                    printf("=== createWindow ENTRY ===\n");
+    printf("=== createWindow ENTRY (X11) ===\n");
     printf("windowId=%u, title=%s, x=%f, y=%f, w=%f, h=%f\n", windowId, title, x, y, width, height);
     fflush(stdout);
     
-    // Note: GTK is initialized on main thread by runEventLoop()
-    // Since we dispatch all GUI operations to main thread, we don't need to check here
-    printf("createWindow: proceeding (GTK init handled by main thread dispatch)\n");
-    fflush(stdout);
-    
-    
-    printf("GTK initialized, about to dispatch createWindow to main thread\n");
-    fflush(stdout);
-    
     void* result = dispatch_sync_main([&]() -> void* {
-        printf("=== INSIDE createWindow dispatch_sync_main ===\n");
+        printf("=== INSIDE createWindow dispatch_sync_main (X11) ===\n");
         fflush(stdout);
         
-        GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-        printf("gtk_window_new completed: %p\n", window);
-        fflush(stdout);
-        
-        gtk_window_set_title(GTK_WINDOW(window), title);
-        printf("gtk_window_set_title completed\n");
-        fflush(stdout);
-        
-        gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
-        printf("gtk_window_set_default_size completed\n");
-        fflush(stdout);
-        
-        if (x >= 0 && y >= 0) {
-            gtk_window_move(GTK_WINDOW(window), (int)x, (int)y);
-            printf("gtk_window_move completed\n");
-            fflush(stdout);
+        // Create X11 window
+        Display* display = XOpenDisplay(nullptr);
+        if (!display) {
+            printf("ERROR: Failed to open X11 display\n");
+            return nullptr;
         }
         
-        // // Create container
-        // printf("Creating ContainerView...\n");
-        // fflush(stdout);
-        // auto container = std::make_shared<ContainerView>(window);
-        // printf("ContainerView created, storing in g_containers\n");
-        // fflush(stdout);
-        // g_containers[windowId] = container;
-        // printf("Container stored with windowId=%u\n", windowId);
-        // fflush(stdout);
+        int screen = DefaultScreen(display);
+        Window root = RootWindow(display, screen);
         
-        // Store callbacks (simplified - in real implementation you'd want to store these properly)
-        // For now, just connect basic destroy signal
-        g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
-        printf("destroy signal connected\n");
+        // Create window attributes
+        XSetWindowAttributes attrs;
+        attrs.background_pixel = WhitePixel(display, screen);
+        attrs.border_pixel = BlackPixel(display, screen);
+        attrs.colormap = DefaultColormap(display, screen);
+        attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
+                          ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
+                          FocusChangeMask | StructureNotifyMask | SubstructureNotifyMask;
+        
+        // Create the main window
+        Window x11_window = XCreateWindow(
+            display, root,
+            (int)x, (int)y, (int)width, (int)height, 0,
+            DefaultDepth(display, screen), InputOutput,
+            DefaultVisual(display, screen),
+            CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
+            &attrs
+        );
+        
+        if (!x11_window) {
+            printf("ERROR: Failed to create X11 window\n");
+            XCloseDisplay(display);
+            return nullptr;
+        }
+        
+        // Set window title
+        XStoreName(display, x11_window, title);
+        
+        // Set window protocols for close button
+        Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
+        XSetWMProtocols(display, x11_window, &wmDelete, 1);
+        
+        // Create X11Window structure
+        auto x11win = std::make_shared<X11Window>();
+        x11win->display = display;
+        x11win->window = x11_window;
+        x11win->windowId = windowId;
+        x11win->x = x;
+        x11win->y = y;
+        x11win->width = width;
+        x11win->height = height;
+        x11win->title = title;
+        x11win->closeCallback = closeCallback;
+        x11win->moveCallback = moveCallback;
+        x11win->resizeCallback = resizeCallback;
+        
+        // Store in global maps
+        g_x11_windows[windowId] = x11win;
+        g_x11_window_to_id[x11_window] = windowId;
+        
+        printf("Created X11 window: 0x%lx for windowId=%u\n", x11_window, windowId);
         fflush(stdout);
         
-        // // Connect window resize signal for auto-resize functionality
-        // g_signal_connect(window, "configure-event", G_CALLBACK(onWindowConfigure), container.get());
-        // printf("configure-event signal connected\n");
-        // fflush(stdout);
-        
-        // // Connect mouse motion event for debugging
-        // gtk_widget_add_events(window, GDK_POINTER_MOTION_MASK);
-        // g_signal_connect(window, "motion-notify-event", G_CALLBACK(onMouseMove), container.get());
-        // printf("motion-notify-event signal connected\n");
-        // fflush(stdout);
-        
-        // Don't show window yet - that's handled by showWindow
-        printf("=== createWindow dispatch_sync_main RETURNING: %p ===\n", window);
-        fflush(stdout);
-        
-        return (void*)window;
+        return (void*)x11win.get();
     });
     
     printf("=== createWindow RETURN: %p ===\n", result);
@@ -2864,7 +2882,12 @@ void* createWindow(uint32_t windowId, double x, double y, double width, double h
 
 void setWindowTitle(void* window, const char* title) {
     dispatch_sync_main_void([&]() {
-        gtk_window_set_title(GTK_WINDOW(window), title);
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win && x11win->display && x11win->window) {
+            XStoreName(x11win->display, x11win->window, title);
+            XFlush(x11win->display);
+            x11win->title = title;
+        }
     });
 }
 
@@ -2880,7 +2903,12 @@ void makeNSWindowKeyAndOrderFront(void* window) {
 
 void showWindow(void* window) {
     dispatch_sync_main_void([&]() {
-        gtk_widget_show_all(GTK_WIDGET(window));
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win && x11win->display && x11win->window) {
+            XMapWindow(x11win->display, x11win->window);
+            XFlush(x11win->display);
+            printf("X11 window mapped: 0x%lx\n", x11win->window);
+        }
     });
 }
 
@@ -2944,7 +2972,7 @@ AbstractView* initWebview(uint32_t webviewId,
                 fflush(stdout);
                 
                 webview = std::make_shared<CEFWebViewImpl>(
-                    webviewId, GTK_WIDGET(window),
+                    webviewId, (GtkWidget*)window,  // window is now X11Window* cast to void*
                     url, x, y, width, height, autoResize,
                     partitionIdentifier, navigationCallback, webviewEventHandler,
                     bunBridgeHandler, internalBridgeHandler,
@@ -2966,7 +2994,7 @@ AbstractView* initWebview(uint32_t webviewId,
                 fflush(stdout);
                 
                 webview = std::make_shared<WebKitWebViewImpl>(
-                    webviewId, GTK_WIDGET(window),
+                    webviewId, (GtkWidget*)window,  // window is now X11Window* cast to void*
                     url, x, y, width, height, autoResize,
                     partitionIdentifier, navigationCallback, webviewEventHandler,
                     bunBridgeHandler, internalBridgeHandler,
@@ -3430,7 +3458,17 @@ void* createNSRectWrapper(double x, double y, double width, double height) {
 void closeNSWindow(void* window) {
     if (window) {
         dispatch_sync_main_void([&]() {
-            gtk_widget_destroy(GTK_WIDGET(window));
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                XDestroyWindow(x11win->display, x11win->window);
+                XFlush(x11win->display);
+                
+                // Remove from global maps
+                g_x11_window_to_id.erase(x11win->window);
+                g_x11_windows.erase(x11win->windowId);
+                
+                // Note: Don't close display here as it might be shared
+            }
         });
     }
 }
