@@ -7,7 +7,9 @@ const rpc = Electroview.defineRPC<any>({
   },
 });
 
-const electrobun = new ElectrobunView.Electroview({ rpc });
+console.log(Electroview)
+
+const electrobun = new Electroview({ rpc });
 
 setTimeout(() => {
   console.log("updating src for webview tag");
