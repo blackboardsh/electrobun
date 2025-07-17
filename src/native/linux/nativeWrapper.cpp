@@ -77,6 +77,8 @@ struct MenuJsonValue {
 };
 
 // Forward declarations
+class ContainerView;
+GtkWidget* getContainerViewOverlay(GtkWidget* window);
 GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId);
 
 // Parse JSON menu array (simplified parser for basic menu structure)
@@ -251,7 +253,7 @@ class ElectrobunClient : public CefClient,
                         public CefContextMenuHandler,
                         public CefKeyboardHandler,
                         public CefResourceRequestHandler,
-                        public CefRenderHandler {
+                        public CefLifeSpanHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -263,9 +265,6 @@ private:
     PreloadScript custom_script_;
     
     GtkWidget* gtk_widget_;
-    std::vector<unsigned char> render_buffer_;
-    int render_width_;
-    int render_height_;
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -279,9 +278,7 @@ public:
         , webview_tag_handler_(internalBridgeHandler)
         , webview_event_handler_(webviewEventHandler)
         , navigation_callback_(navigationCallback)
-        , gtk_widget_(gtkWidget)
-        , render_width_(0)
-        , render_height_(0) {}
+        , gtk_widget_(gtkWidget) {}
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
         electrobun_script_ = {script, false};
@@ -290,11 +287,6 @@ public:
     void UpdateCustomPreloadScript(const std::string& script) {
         custom_script_ = {script, true};
     }
-    
-    // Public accessors for render buffer
-    const std::vector<unsigned char>& GetRenderBuffer() const { return render_buffer_; }
-    int GetRenderWidth() const { return render_width_; }
-    int GetRenderHeight() const { return render_height_; }
 
     virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override {
         return this;
@@ -311,8 +303,8 @@ public:
     virtual CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override {
         return this;
     }
-    
-    virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override {
+
+    virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
         return this;
     }
 
@@ -390,55 +382,84 @@ public:
         }
         return false;
     }
-    
-    // CefRenderHandler methods for windowless rendering
-    void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
-        // Return the viewport size
-        rect.x = 0;
-        rect.y = 0;
-        rect.width = 600;  // Default size, should be updated based on widget size
-        rect.height = 600;
-    }
-    
-    void OnPaint(CefRefPtr<CefBrowser> browser,
-                 PaintElementType type,
-                 const RectList& dirtyRects,
-                 const void* buffer,
-                 int width,
-                 int height) override {
-        if (type == PET_VIEW && gtk_widget_ && buffer) {
-            printf("CEF: Paint called - width=%d, height=%d, dirtyRects=%zu\n", 
-                   width, height, dirtyRects.size());
+
+    // CefLifeSpanHandler methods
+    void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+        printf("CEF: OnAfterCreated called for browser\n");
+        
+        // The CEF browser window is now fully created
+        CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
+        printf("CEF: Browser window handle in OnAfterCreated: 0x%lx\n", (unsigned long)cefWindow);
+        
+        // Validate the CEF window handle and try to understand what's happening
+        if (cefWindow) {
+            Display* display = gdk_x11_get_default_xdisplay();
+            XWindowAttributes attrs;
             
-            // Store the buffer data (CEF uses BGRA format)
-            size_t buffer_size = width * height * 4;
-            render_buffer_.resize(buffer_size);
+            printf("CEF: Checking window handle 0x%lx (decimal: %lu)\n", 
+                   (unsigned long)cefWindow, (unsigned long)cefWindow);
             
-            // Copy and convert BGRA to RGBA
-            const unsigned char* src = static_cast<const unsigned char*>(buffer);
-            unsigned char* dst = render_buffer_.data();
-            
-            for (int i = 0; i < width * height; ++i) {
-                int src_idx = i * 4;
-                int dst_idx = i * 4;
+            if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
+                printf("CEF: WARNING - CEF window handle 0x%lx is still invalid in OnAfterCreated\n", 
+                       (unsigned long)cefWindow);
                 
-                // Convert BGRA to RGBA
-                dst[dst_idx + 0] = src[src_idx + 2]; // R
-                dst[dst_idx + 1] = src[src_idx + 1]; // G
-                dst[dst_idx + 2] = src[src_idx + 0]; // B
-                dst[dst_idx + 3] = src[src_idx + 3]; // A
-            }
-            
-            // Store dimensions for drawing
-            render_width_ = width;
-            render_height_ = height;
-            
-            // Trigger GTK widget redraw
-            if (gtk_widget_) {
-                gtk_widget_queue_draw(gtk_widget_);
+                // Try to understand why - check if it's a valid window ID range
+                printf("CEF: X11 error details: %s\n", strerror(errno));
+                
+                // Try to find any valid CEF windows
+                printf("CEF: Attempting to find CEF windows...\n");
+                Window root, parent;
+                Window* children;
+                unsigned int nchildren;
+                
+                // Get the root window
+                Window rootWindow = DefaultRootWindow(display);
+                if (XQueryTree(display, rootWindow, &root, &parent, &children, &nchildren) != 0) {
+                    printf("CEF: Found %u windows total\n", nchildren);
+                    for (unsigned int i = 0; i < nchildren; i++) {
+                        XWindowAttributes childAttrs;
+                        if (XGetWindowAttributes(display, children[i], &childAttrs) != 0) {
+                            printf("CEF: Valid window found: 0x%lx (decimal: %lu)\n", 
+                                   (unsigned long)children[i], (unsigned long)children[i]);
+                        }
+                    }
+                    XFree(children);
+                }
+            } else {
+                printf("CEF: CEF window handle 0x%lx is now valid in OnAfterCreated - size %dx%d\n", 
+                       (unsigned long)cefWindow, attrs.width, attrs.height);
             }
         }
     }
+
+    // Try using OnLoadingStateChange to detect when CEF is fully ready
+    void OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
+                            bool isLoading,
+                            bool canGoBack,
+                            bool canGoForward) override {
+        if (!isLoading) {
+            printf("CEF: OnLoadingStateChange - browser finished loading\n");
+            
+            // Check if CEF window handle is valid now
+            CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
+            if (cefWindow) {
+                Display* display = gdk_x11_get_default_xdisplay();
+                XWindowAttributes attrs;
+                if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
+                    printf("CEF: WARNING - CEF window handle 0x%lx is still invalid after loading\n", 
+                           (unsigned long)cefWindow);
+                } else {
+                    printf("CEF: CEF window handle 0x%lx is now valid after loading - size %dx%d\n", 
+                           (unsigned long)cefWindow, attrs.width, attrs.height);
+                    
+                    // Try to force a position sync now that the window might be valid
+                    printf("CEF: Attempting to trigger position sync after loading\n");
+                    // TODO: Try to trigger position sync here when CEF window is ready
+                }
+            }
+        }
+    }
+    
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
@@ -1010,8 +1031,6 @@ public:
 };
 
 
-// Forward declaration - callback will be defined after CEFWebViewImpl
-static gboolean onCEFDraw(GtkWidget* widget, cairo_t* cr, gpointer user_data);
 
 // CEF WebView implementation
 class CEFWebViewImpl : public AbstractView {
@@ -1062,45 +1081,64 @@ public:
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
         CefBrowserSettings browserSettings;
         
-        // Create a GTK widget to act as the container for the CEF browser
-        GtkWidget* cefWidget = gtk_drawing_area_new();
-        gtk_widget_set_size_request(cefWidget, (int)width, (int)height);
-        gtk_widget_set_can_focus(cefWidget, TRUE);
+        // NO GTK widget needed - CEF will be a direct child of the ContainerView
+        // Just store nullptr for widget since CEF manages its own window
+        this->widget = nullptr;
         
-        // Set the widget member first so the container can manage it
-        this->widget = cefWidget;
+        // Get the ContainerView overlay widget for this window
+        GtkWidget* containerWidget = getContainerViewOverlay(window);
+        if (!containerWidget) {
+            printf("CEF: ERROR - Failed to find ContainerView overlay for window %p\n", window);
+            return;
+        }
+        printf("CEF: Found ContainerView overlay widget for window %p\n", window);
         
-        // Make sure the widget is visible
-        gtk_widget_set_visible(cefWidget, TRUE);
+        // Ensure the ContainerView overlay widget is properly realized and visible
+        if (!gtk_widget_get_realized(containerWidget)) {
+            printf("CEF: ContainerView overlay not realized, realizing now...\n");
+            gtk_widget_realize(containerWidget);
+        }
         
-        // Store reference to this CEF instance for drawing callback
-        g_object_set_data(G_OBJECT(cefWidget), "cef_instance", this);
+        if (!gtk_widget_get_visible(containerWidget)) {
+            printf("CEF: ContainerView overlay not visible, making visible...\n");
+            gtk_widget_show(containerWidget);
+        }
         
-        // We need to defer CEF browser creation until after the widget is added to the container
-        // For now, let's use the parent window approach but store the widget for later positioning
-        CefWindowInfo window_info;
-        
-        // Get the parent window's GdkWindow for CEF browser creation
-        GdkWindow* parentGdkWindow = gtk_widget_get_window(window);
+        // Get the ContainerView overlay's GdkWindow for CEF browser creation
+        GdkWindow* parentGdkWindow = gtk_widget_get_window(containerWidget);
         if (!parentGdkWindow) {
-            gtk_widget_realize(window);
-            parentGdkWindow = gtk_widget_get_window(window);
+            printf("CEF: Still no GdkWindow after realizing, trying again...\n");
+            gtk_widget_realize(containerWidget);
+            parentGdkWindow = gtk_widget_get_window(containerWidget);
         }
         
         if (!parentGdkWindow) {
-            printf("Failed to get parent GdkWindow for CEF browser\n");
-            gtk_widget_destroy(cefWidget);
-            this->widget = nullptr;
+            printf("CEF: ERROR - Failed to get ContainerView overlay GdkWindow for CEF browser\n");
             return;
         }
         
-        // Get X11 window handle from parent window
-        unsigned long parentXWindow = gdk_x11_window_get_xid(parentGdkWindow);
-        printf("CEF: Parent X11 window ID: 0x%lx\n", parentXWindow);
+        printf("CEF: ContainerView overlay widget is realized and has GdkWindow\n");
         
-        // Try windowless rendering approach for Linux
-        window_info.SetAsWindowless(parentXWindow);
-        printf("CEF: Using windowless rendering with parent window 0x%lx\n", parentXWindow);
+        // Get X11 window handle from ContainerView overlay
+        unsigned long parentXWindow = gdk_x11_window_get_xid(parentGdkWindow);
+        printf("CEF: ContainerView overlay X11 window ID: 0x%lx\n", parentXWindow);
+        
+        // Validate the X11 window handle before using it
+        Display* display = gdk_x11_get_default_xdisplay();
+        XWindowAttributes attrs;
+        if (XGetWindowAttributes(display, parentXWindow, &attrs) == 0) {
+            printf("CEF: ERROR - Invalid ContainerView overlay X11 window 0x%lx\n", parentXWindow);
+            return;
+        }
+        
+        printf("CEF: ContainerView overlay window validated - size %dx%d\n", 
+               attrs.width, attrs.height);
+        
+        // Create CEF browser as direct child of ContainerView overlay (as requested)
+        CefWindowInfo window_info;
+        window_info.SetAsChild(parentXWindow, {(int)x, (int)y, (int)(x + width), (int)(y + height)});
+        printf("CEF: Creating CEF browser as child of ContainerView overlay 0x%lx at (%d,%d) size %dx%d\n", 
+               parentXWindow, (int)x, (int)y, (int)width, (int)height);
         
         // Create client
         client = new ElectrobunClient(
@@ -1109,7 +1147,7 @@ public:
             internalBridgeHandler,
             eventHandler,
             navigationCallback,
-            cefWidget
+            nullptr  // No GTK widget - CEF manages its own window
         );
         
         // Add preload scripts
@@ -1126,6 +1164,8 @@ public:
         
         // Create browser
         std::string initialUrl = url && strlen(url) > 0 ? url : "about:blank";
+        printf("CEF: About to create browser with URL: %s\n", initialUrl.c_str());
+        
         browser = CefBrowserHost::CreateBrowserSync(
             window_info, client.get(), CefString(initialUrl), browserSettings, nullptr, requestContext);
         
@@ -1137,17 +1177,28 @@ public:
             CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
             printf("CEF: Browser window handle: 0x%lx\n", (unsigned long)cefWindow);
             
+            // Validate the CEF window handle immediately after creation
+            if (cefWindow) {
+                Display* display = gdk_x11_get_default_xdisplay();
+                XWindowAttributes attrs;
+                if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
+                    printf("CEF: WARNING - CEF window handle 0x%lx is invalid immediately after creation\n", 
+                           (unsigned long)cefWindow);
+                } else {
+                    printf("CEF: CEF window handle 0x%lx validated after creation - size %dx%d\n", 
+                           (unsigned long)cefWindow, attrs.width, attrs.height);
+                }
+            }
+            
             printf("CEF: DevTools available via right-click -> 'Open DevTools' or F12\n");
             
-            // Connect draw signal for rendering CEF content
-            g_signal_connect(cefWidget, "draw", G_CALLBACK(onCEFDraw), this);
+            // CEF will render directly to its own X11 window - no GTK drawing needed
             
-            // Position sync will happen after widget is added to container
+            // Important: Position sync will happen after widget is added to container
+            // The container will call syncCEFPositionWithWidget() after adding the widget
         } else {
-            printf("Failed to create CEF browser for webview %u\n", webviewId);
-            // Clean up the widget if browser creation failed
-            gtk_widget_destroy(cefWidget);
-            this->widget = nullptr;
+            printf("CEF: ERROR - Failed to create CEF browser for webview %u\n", webviewId);
+            // No widget to clean up since CEF manages its own window
         }
     }
     
@@ -1160,14 +1211,35 @@ public:
         printf("CEF: Syncing with frame: x=%d, y=%d, w=%d, h=%d\n", 
                frame.x, frame.y, frame.width, frame.height);
         
-        // For windowless rendering, just notify CEF about the resize
+        // Get the CEF browser's X11 window handle
+        CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
+        if (!cefWindow) {
+            printf("CEF: No window handle available for positioning\n");
+            return;
+        }
+        
+        // Validate the CEF window handle before using it
+        Display* display = gdk_x11_get_default_xdisplay();
+        XWindowAttributes attrs;
+        if (XGetWindowAttributes(display, (Window)cefWindow, &attrs) == 0) {
+            printf("CEF: ERROR - Invalid CEF window handle 0x%lx for positioning, deferring until window is ready\n", (unsigned long)cefWindow);
+            // Store the target frame for later positioning
+            // For now, just skip positioning - this is likely during initial creation
+            return;
+        }
+        
+        printf("CEF: CEF window 0x%lx validated - current size %dx%d\n", 
+               (unsigned long)cefWindow, attrs.width, attrs.height);
+        
+        // Move and resize the CEF browser window to match the frame
+        XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
+        XFlush(display);
+        
+        // Also notify CEF about the resize
         browser->GetHost()->WasResized();
         
-        // Update the client's view rect for the new size
-        if (client) {
-            // The client should now receive OnPaint calls with the new size
-            printf("CEF: Notified CEF about resize for windowless rendering\n");
-        }
+        printf("CEF: Moved CEF window 0x%lx to (%d,%d) size %dx%d\n", 
+               (unsigned long)cefWindow, frame.x, frame.y, frame.width, frame.height);
     }
     
     void syncCEFPositionWithWidget() {
@@ -1209,10 +1281,43 @@ public:
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
         if (cefWindow) {
             Display* display = gdk_x11_get_default_xdisplay();
+            
+            // Validate CEF window handle before using it
+            XWindowAttributes attrs;
+            if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
+                printf("CEF: ERROR - Invalid CEF window handle 0x%lx in syncCEFPositionWithWidget, deferring until window is ready\n", 
+                       (unsigned long)cefWindow);
+                // Skip positioning for now - this is likely during initial creation
+                return;
+            }
+            
+            printf("CEF: CEF window 0x%lx validated for widget sync - current size %dx%d\n", 
+                   (unsigned long)cefWindow, attrs.width, attrs.height);
+            
             XMoveResizeWindow(display, cefWindow, finalX, finalY, finalWidth, finalHeight);
             XFlush(display);
         } else {
             printf("CEF: No CEF window handle available\n");
+        }
+    }
+    
+    void retryPositioning() {
+        printf("CEF: Retrying positioning after window should be ready\n");
+        if (browser && widget) {
+            // Try to sync position with the current widget allocation
+            GtkAllocation allocation;
+            gtk_widget_get_allocation(widget, &allocation);
+            
+            GdkRectangle frame;
+            frame.x = allocation.x;
+            frame.y = allocation.y;
+            frame.width = allocation.width;
+            frame.height = allocation.height;
+            
+            printf("CEF: Retrying position sync with frame: x=%d, y=%d, w=%d, h=%d\n", 
+                   frame.x, frame.y, frame.width, frame.height);
+            
+            syncCEFPositionWithFrame(frame);
         }
     }
     
@@ -1351,42 +1456,6 @@ public:
     }
 };
 
-// CEF drawing callback implementation
-static gboolean onCEFDraw(GtkWidget* widget, cairo_t* cr, gpointer user_data) {
-    CEFWebViewImpl* cefImpl = static_cast<CEFWebViewImpl*>(user_data);
-    
-    if (!cefImpl || !cefImpl->client) {
-        return FALSE;
-    }
-    
-    // Get the render buffer from the client
-    const std::vector<unsigned char>& buffer = cefImpl->client->GetRenderBuffer();
-    int bufferWidth = cefImpl->client->GetRenderWidth();
-    int bufferHeight = cefImpl->client->GetRenderHeight();
-    
-    if (buffer.empty() || bufferWidth <= 0 || bufferHeight <= 0) {
-        return FALSE;
-    }
-    
-    // Create Cairo surface from the CEF buffer
-    // Note: CEF buffer is already converted from BGRA to RGBA in OnPaint
-    cairo_surface_t* surface = cairo_image_surface_create_for_data(
-        const_cast<unsigned char*>(buffer.data()), 
-        CAIRO_FORMAT_RGB24, 
-        bufferWidth, 
-        bufferHeight, 
-        bufferWidth * 4
-    );
-    
-    if (surface) {
-        // Paint the CEF buffer to the widget
-        cairo_set_source_surface(cr, surface, 0, 0);
-        cairo_paint(cr);
-        cairo_surface_destroy(surface);
-    }
-    
-    return FALSE;
-}
 
 
 // Container for managing multiple webviews
@@ -1408,6 +1477,8 @@ public:
     
     void addWebview(std::shared_ptr<AbstractView> view, double x = 0, double y = 0) {
         abstractViews.insert(abstractViews.begin(), view);
+        
+        // CEF views don't have GTK widgets - they manage their own X11 windows
         if (view->widget) {
             // Prevent webview from affecting window size
             g_object_set(view->widget,
@@ -1450,7 +1521,27 @@ public:
             
             gtk_widget_show(view->widget);
             
-            // CEF position sync will happen in resize method
+            // For CEF webviews, sync position after widget is added to container
+            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(view.get());
+            if (cefView && cefView->browser) {
+                // Use idle callback to sync position after GTK finishes layout
+                g_idle_add([](gpointer data) -> gboolean {
+                    CEFWebViewImpl* cef = static_cast<CEFWebViewImpl*>(data);
+                    if (cef && cef->browser) {
+                        cef->syncCEFPositionWithWidget();
+                    }
+                    return FALSE; // Don't repeat
+                }, cefView);
+            }
+        } else {
+            // This is a CEF view - it manages its own X11 window directly
+            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(view.get());
+            if (cefView) {
+                printf("CEF: Added CEF view without GTK widget - it manages its own window\n");
+                
+                // CEF should already be positioned correctly from initial creation
+                // Additional positioning will happen via resize() calls
+            }
         }
     }
     
@@ -1678,6 +1769,16 @@ private:
 static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
 static bool g_gtkInitialized = false;
+
+// Helper function to get ContainerView overlay for a window
+GtkWidget* getContainerViewOverlay(GtkWidget* window) {
+    for (auto& [id, container] : g_containers) {
+        if (container->window == window) {
+            return container->overlay;
+        }
+    }
+    return nullptr;
+}
 
 // Menu item click callback
 static void onMenuItemActivate(GtkMenuItem* menuItem, gpointer userData) {
