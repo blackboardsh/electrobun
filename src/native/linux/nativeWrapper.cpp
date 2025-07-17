@@ -393,6 +393,66 @@ public:
         CefRegisterSchemeHandlerFactory("views", "", new ViewsSchemeHandlerFactory());
         printf("CEF: Registered views:// scheme handler factory\n");
     }
+    
+    // Render process handler methods
+    void OnContextCreated(CefRefPtr<CefBrowser> browser,
+                         CefRefPtr<CefFrame> frame,
+                         CefRefPtr<CefV8Context> context) override {
+        printf("CEF: OnContextCreated called for frame %s\n", frame->GetURL().ToString().c_str());
+        
+        // Only inject scripts in the main frame
+        if (frame->IsMain()) {
+            // Get the global object
+            CefRefPtr<CefV8Value> global = context->GetGlobal();
+            
+            // Set up basic Electrobun globals that the preload script expects
+            CefRefPtr<CefV8Value> electrobun = CefV8Value::CreateObject(nullptr, nullptr);
+            global->SetValue("Electrobun", electrobun, V8_PROPERTY_ATTRIBUTE_READONLY);
+            
+            // Set webviewId (this is crucial for the WebSocket connection)
+            CefRefPtr<CefV8Value> webviewId = CefV8Value::CreateInt(browser->GetIdentifier());
+            global->SetValue("webviewId", webviewId, V8_PROPERTY_ATTRIBUTE_READONLY);
+            
+            // Set up basic window properties
+            CefRefPtr<CefV8Value> window = global->GetValue("window");
+            if (window->IsObject()) {
+                window->SetValue("webviewId", webviewId, V8_PROPERTY_ATTRIBUTE_READONLY);
+            }
+            
+            // For now, let's inject a basic Electrobun preload script
+            std::string basicPreloadScript = R"(
+                // Basic Electrobun preload script
+                console.log('Electrobun preload script running in webview:', webviewId);
+                
+                // Set up WebSocket connection
+                if (typeof webviewId !== 'undefined' && webviewId) {
+                    const wsUrl = 'ws://localhost:50000/socket?webviewId=' + webviewId;
+                    console.log('Setting up WebSocket connection to:', wsUrl);
+                    
+                    window.ElectrobunWebSocket = new WebSocket(wsUrl);
+                    window.ElectrobunWebSocket.onopen = function() {
+                        console.log('Electrobun WebSocket connected');
+                    };
+                    window.ElectrobunWebSocket.onerror = function(error) {
+                        console.error('Electrobun WebSocket error:', error);
+                    };
+                } else {
+                    console.error('webviewId not defined, cannot set up WebSocket');
+                }
+            )";
+            
+            // Execute the preload script
+            CefRefPtr<CefV8Value> result;
+            CefRefPtr<CefV8Exception> exception;
+            
+            if (context->Eval(basicPreloadScript, "", 0, result, exception)) {
+                printf("CEF: Preload script executed successfully\n");
+            } else {
+                printf("CEF: Preload script execution failed: %s\n", 
+                       exception ? exception->GetMessage().ToString().c_str() : "unknown error");
+            }
+        }
+    }
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunApp);
@@ -519,6 +579,77 @@ public:
         model->AddItem(26502, "Open DevTools");
         
         printf("CEF: Context menu now has %zu items\n", model->GetCount());
+    }
+    
+    // Handle context menu display
+    bool RunContextMenu(CefRefPtr<CefBrowser> browser,
+                       CefRefPtr<CefFrame> frame,
+                       CefRefPtr<CefContextMenuParams> params,
+                       CefRefPtr<CefMenuModel> model,
+                       CefRefPtr<CefRunContextMenuCallback> callback) override {
+        printf("CEF: RunContextMenu called - creating custom GTK context menu\n");
+        
+        // Create a custom GTK context menu since CEF's default won't work with X11 windows
+        GtkWidget* menu = gtk_menu_new();
+        
+        // Add menu items based on the CEF model
+        for (size_t i = 0; i < model->GetCount(); ++i) {
+            if (model->GetTypeAt(i) == MENUITEMTYPE_SEPARATOR) {
+                GtkWidget* separator = gtk_separator_menu_item_new();
+                gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator);
+            } else {
+                CefString label = model->GetLabelAt(i);
+                int command_id = model->GetCommandIdAt(i);
+                
+                GtkWidget* item = gtk_menu_item_new_with_label(label.ToString().c_str());
+                gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+                
+                // Store command ID and callback for menu item activation
+                g_object_set_data(G_OBJECT(item), "command_id", GINT_TO_POINTER(command_id));
+                g_object_set_data(G_OBJECT(item), "browser", browser.get());
+                g_object_set_data(G_OBJECT(item), "frame", frame.get());
+                g_object_set_data(G_OBJECT(item), "params", params.get());
+                g_object_set_data(G_OBJECT(item), "callback", callback.get());
+                
+                g_signal_connect(item, "activate", G_CALLBACK(+[](GtkMenuItem* item, gpointer data) {
+                    int command_id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "command_id"));
+                    CefBrowser* browser = static_cast<CefBrowser*>(g_object_get_data(G_OBJECT(item), "browser"));
+                    CefFrame* frame = static_cast<CefFrame*>(g_object_get_data(G_OBJECT(item), "frame"));
+                    CefContextMenuParams* params = static_cast<CefContextMenuParams*>(g_object_get_data(G_OBJECT(item), "params"));
+                    CefRunContextMenuCallback* callback = static_cast<CefRunContextMenuCallback*>(g_object_get_data(G_OBJECT(item), "callback"));
+                    
+                    printf("CEF: GTK Context menu item clicked: %d\n", command_id);
+                    
+                    // Handle the command
+                    if (command_id == 26501 || command_id == 26502) { // DevTools
+                        printf("CEF: Opening DevTools from GTK menu...\n");
+                        CefWindowInfo window_info;
+                        // Use empty window info to create a popup window
+                        browser->GetHost()->ShowDevTools(window_info, nullptr, CefBrowserSettings(), CefPoint());
+                    }
+                    
+                    // Complete the callback
+                    callback->Continue(command_id, EVENTFLAG_NONE);
+                }), nullptr);
+            }
+        }
+        
+        gtk_widget_show_all(menu);
+        
+        // Get the mouse position and show the menu there
+        GdkDisplay* display = gdk_display_get_default();
+        GdkSeat* seat = gdk_display_get_default_seat(display);
+        GdkDevice* pointer = gdk_seat_get_pointer(seat);
+        
+        gint x, y;
+        gdk_device_get_position(pointer, nullptr, &x, &y);
+        
+        // Use the deprecated but working gtk_menu_popup for X11 compatibility
+        gtk_menu_popup(GTK_MENU(menu), nullptr, nullptr, nullptr, nullptr, 0, gtk_get_current_event_time());
+        
+        printf("CEF: GTK context menu displayed at position (%d, %d)\n", x, y);
+        
+        return true; // We handled the context menu display
     }
     
     // Handle context menu commands
@@ -1676,6 +1807,16 @@ public:
             navigationCallback,
             nullptr  // No GTK window needed
         );
+        
+        // Add preload scripts to the client
+        if (!electrobunPreloadScript.empty()) {
+            client->AddPreloadScript(electrobunPreloadScript);
+            printf("CEF: Added Electrobun preload script (%zu chars)\n", electrobunPreloadScript.length());
+        }
+        if (!customPreloadScript.empty()) {
+            client->UpdateCustomPreloadScript(customPreloadScript);
+            printf("CEF: Added custom preload script (%zu chars)\n", customPreloadScript.length());
+        }
         
         // Create the browser
         std::string loadUrl = deferredUrl.empty() ? "https://www.wikipedia.org" : deferredUrl;
