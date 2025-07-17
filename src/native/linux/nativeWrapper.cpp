@@ -212,9 +212,24 @@ public:
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
         command_line->AppendSwitchWithValue("custom-scheme", "views");
         command_line->AppendSwitch("use-mock-keychain");
-        // Linux-specific settings
+        // Linux-specific settings - disable GPU acceleration for VM compatibility
+        command_line->AppendSwitch("disable-gpu");
+        command_line->AppendSwitch("disable-gpu-compositing");
         command_line->AppendSwitch("disable-gpu-sandbox");
-        command_line->AppendSwitch("disable-software-rasterizer");
+        command_line->AppendSwitch("enable-software-rasterizer");
+        command_line->AppendSwitch("force-software-rasterizer");
+        command_line->AppendSwitch("disable-accelerated-2d-canvas");
+        command_line->AppendSwitch("disable-accelerated-video-decode");
+        command_line->AppendSwitch("disable-accelerated-video-encode");
+        command_line->AppendSwitch("disable-gpu-memory-buffer-video-frames");
+        // Additional VM/headless flags
+        command_line->AppendSwitch("disable-dev-shm-usage");
+        command_line->AppendSwitch("disable-extensions");
+        command_line->AppendSwitch("disable-plugins");
+        command_line->AppendSwitch("disable-web-security");
+        command_line->AppendSwitch("no-sandbox");
+        command_line->AppendSwitch("single-process");
+        printf("CEF DEBUG: GPU acceleration disabled for VM compatibility with additional flags\n");
     }
     
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
@@ -649,6 +664,17 @@ bool initializeCEF() {
     CefMainArgs main_args(argc, argv);
     g_app = new ElectrobunApp();
 
+    // Set global command line flags before CEF initialization
+    CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
+    if (command_line) {
+        command_line->AppendSwitch("disable-gpu");
+        command_line->AppendSwitch("disable-gpu-compositing");
+        command_line->AppendSwitch("disable-dev-shm-usage");
+        command_line->AppendSwitch("no-sandbox");
+        command_line->AppendSwitch("single-process");
+        printf("CEF: Global command line flags set for GPU disable and VM compatibility\n");
+    }
+
     CefSettings settings;
     settings.no_sandbox = true;
     settings.remote_debugging_port = 9222;
@@ -703,8 +729,8 @@ CefRefPtr<CefClient> create_default_handler() {
   return new SimpleClient();
 }
 
-void create_cef_webview_in_gtk() {
-    printf("CEF DEBUG: Starting create_cef_webview_in_gtk - RENDER HANDLER APPROACH v9\n");
+void create_cef_webview_in_window() {
+    printf("CEF DEBUG: Starting create_cef_webview_in_window - PURE X11 APPROACH v1\n");
     
     // Check if CEF is available first
     if (!isCEFAvailable()) {
@@ -713,146 +739,86 @@ void create_cef_webview_in_gtk() {
     }
     printf("CEF DEBUG: CEF is available\n");
 
-    // Create a GTK window with a drawing area for manual CEF painting
-    GtkWidget* cef_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_default_size(GTK_WINDOW(cef_window), 800, 600);
-    gtk_window_set_title(GTK_WINDOW(cef_window), "CEF RENDER HANDLER TEST v9");
-    gtk_window_set_position(GTK_WINDOW(cef_window), GTK_WIN_POS_CENTER_ALWAYS);
-    gtk_window_set_keep_above(GTK_WINDOW(cef_window), TRUE);
+    // Create a pure X11 window (no GTK)
+    Display* display = XOpenDisplay(nullptr);
+    if (!display) {
+        printf("CEF DEBUG: Failed to open X11 display\n");
+        return;
+    }
     
-    // Create a drawing area where CEF will embed
-    GtkWidget* drawing_area = gtk_drawing_area_new();
-    gtk_widget_set_size_request(drawing_area, 800, 600);
+    int screen = DefaultScreen(display);
+    Window root = RootWindow(display, screen);
     
-    // Add a simple paint handler to show if GTK drawing works
-    g_signal_connect(drawing_area, "draw", G_CALLBACK(+[](GtkWidget*, cairo_t* cr, gpointer) -> gboolean {
-        // Paint a simple test pattern to verify GTK drawing works
-        cairo_set_source_rgb(cr, 0.9, 0.9, 0.9); // Light gray background
-        cairo_paint(cr);
-        
-        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0); // Black text
-        cairo_move_to(cr, 50, 50);
-        cairo_show_text(cr, "GTK Drawing Area - CEF should appear here");
-        
-        printf("CEF DEBUG: GTK drawing area paint event triggered\n");
-        return FALSE; // Let other handlers run
-    }), nullptr);
+    // Create window attributes
+    XSetWindowAttributes attrs;
+    attrs.background_pixel = WhitePixel(display, screen);
+    attrs.border_pixel = BlackPixel(display, screen);
+    attrs.colormap = DefaultColormap(display, screen);
+    attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
+                      ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
+                      FocusChangeMask | StructureNotifyMask;
     
-    gtk_container_add(GTK_CONTAINER(cef_window), drawing_area);
+    // Create the main window
+    Window main_window = XCreateWindow(
+        display, root,
+        100, 100, 800, 600, 2,
+        DefaultDepth(display, screen), InputOutput,
+        DefaultVisual(display, screen),
+        CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
+        &attrs
+    );
     
-    g_signal_connect(cef_window, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer) {
-        printf("CEF DEBUG: CEF test window destroyed\n");
-    }), nullptr);
+    if (!main_window) {
+        printf("CEF DEBUG: Failed to create X11 window\n");
+        XCloseDisplay(display);
+        return;
+    }
     
-    printf("CEF DEBUG: Created CEF window with drawing area: %p\n", cef_window);
+    // Set window title
+    XStoreName(display, main_window, "CEF Pure X11 Test");
     
-    // Show everything
-    gtk_widget_show_all(cef_window);
-    printf("CEF DEBUG: Window with drawing area shown\n");
+    // Map the window
+    XMapWindow(display, main_window);
+    XSync(display, False);
     
-    // Ensure both are realized
-    gtk_widget_realize(cef_window);
-    gtk_widget_realize(drawing_area);
+    printf("CEF DEBUG: Created pure X11 window: 0x%lx\n", main_window);
+    
+    // Store window data for the timeout
+    struct WindowData {
+        Display* display;
+        Window window;
+    };
+    WindowData* window_data = new WindowData{display, main_window};
     
     // Use a timeout to ensure everything is fully initialized
     g_timeout_add(1000, [](gpointer data) -> gboolean {
-        GtkWidget* cef_window = GTK_WIDGET(data);
-        printf("CEF DEBUG: Timeout callback triggered - DIRECT WINDOW RENDERING\n");
+        WindowData* window_data = static_cast<WindowData*>(data);
+        printf("CEF DEBUG: Timeout callback triggered - PURE X11 APPROACH\n");
         
-        if (!gtk_widget_get_realized(cef_window)) {
-            printf("CEF DEBUG: Window not realized, forcing realization\n");
-            gtk_widget_realize(cef_window);
-        }
-        
-        if (!gtk_widget_get_mapped(cef_window)) {
-            printf("CEF DEBUG: Window not mapped, forcing map\n");
-            gtk_widget_map(cef_window);
-        }
-        
-        GdkWindow* gdk_window = gtk_widget_get_window(cef_window);
-        if (!gdk_window) {
-            printf("CEF DEBUG: No GdkWindow available\n");
-            return G_SOURCE_REMOVE;
-        }
-        
-        printf("CEF DEBUG: GdkWindow found: %p\n", gdk_window);
-        
-        // Ensure we have a native window
-        if (!gdk_window_ensure_native(gdk_window)) {
-            printf("CEF DEBUG: Failed to ensure native window\n");
-            return G_SOURCE_REMOVE;
-        }
-        printf("CEF DEBUG: Native window ensured\n");
-        
-        Window xid = gdk_x11_window_get_xid(gdk_window);
-        printf("CEF DEBUG: Got X11 XID: 0x%lx\n", xid);
-        
-        if (!xid) {
-            printf("CEF DEBUG: Invalid XID (0), cannot create CEF browser\n");
-            return G_SOURCE_REMOVE;
-        }
-        
-        // Sync X11 to ensure window is properly created
-        Display* display = GDK_WINDOW_XDISPLAY(gdk_window);
-        XSync(display, False);
-        printf("CEF DEBUG: X11 synchronized\n");
-        
-        // Get the window allocation
-        GtkAllocation alloc;
-        gtk_widget_get_allocation(cef_window, &alloc);
-        printf("CEF DEBUG: Window allocation: %dx%d at (%d,%d)\n", 
-               alloc.width, alloc.height, alloc.x, alloc.y);
-               
-        // If allocation is too small, use full window size
-        if (alloc.width < 100 || alloc.height < 100) {
-            alloc.width = 800;
-            alloc.height = 600;
-            printf("CEF DEBUG: Using default size instead: %dx%d\n", alloc.width, alloc.height);
-        }
-        
-        // Create CEF browser with SetAsChild - SIMPLE APPROACH
-        printf("CEF DEBUG: Creating CEF browser with SIMPLE SetAsChild approach...\n");
+        // Create CEF browser with SetAsChild directly to the X11 window
+        printf("CEF DEBUG: Creating CEF browser with SetAsChild to pure X11 window...\n");
         CefWindowInfo window_info;
         CefRect cef_rect(0, 0, 800, 600);
         
-        // Get the drawing area widget from the lambda context
-        GList* children = gtk_container_get_children(GTK_CONTAINER(cef_window));
-        GtkWidget* area = children ? GTK_WIDGET(children->data) : nullptr;
-        if (children) g_list_free(children);
+        // Use SetAsChild with our pure X11 window
+        window_info.SetAsChild(window_data->window, cef_rect);
         
-        if (!area) {
-            printf("CEF DEBUG: No drawing area found\n");
-            return G_SOURCE_REMOVE;
-        }
-        
-        // Use SetAsChild with the drawing area's X11 window
-        GdkWindow* gdk_win = gtk_widget_get_window(area);
-        if (!gdk_win) {
-            printf("CEF DEBUG: No GdkWindow for drawing area\n");
-            return G_SOURCE_REMOVE;
-        }
-        
-        Window drawing_xid = gdk_x11_window_get_xid(gdk_win);
-        window_info.SetAsChild(drawing_xid, cef_rect);
-        
-        printf("CEF DEBUG: SetAsChild configured for drawing area XID 0x%lx, rect (0,0,800,600)\n", drawing_xid);
+        printf("CEF DEBUG: SetAsChild configured for pure X11 window 0x%lx, rect (0,0,800,600)\n", window_data->window);
         
         CefBrowserSettings browser_settings;
-        // Use default browser settings for now
         printf("CEF DEBUG: Browser settings configured\n");
         
-        
-        // Use simple client since we're back to SetAsChild
+        // Use simple client
         CefRefPtr<CefClient> client = create_default_handler();
         if (!client) {
-            printf("CEF DEBUG: Failed to create render handler client\n");
+            printf("CEF DEBUG: Failed to create client\n");
             return G_SOURCE_REMOVE;
         }
-        printf("CEF DEBUG: Render handler client created: %p\n", client.get());
+        printf("CEF DEBUG: Client created: %p\n", client.get());
         
-        // Try a simple local page first with very obvious styling
-        std::string test_url = "data:text/html,<html><body style='background:lime;color:black;font-size:48px;text-align:center;padding:50px;'><h1>🎉 CEF IS WORKING! 🎉</h1><p>This bright green page proves CEF is rendering!</p><p>Window v8 - Standalone Success!</p></body></html>";
-        printf("CEF DEBUG: Using test URL with bright green background\n");
+        // Try a simple test URL
+        std::string test_url = "data:text/html,<html><body style='background:lime;color:black;font-size:24px;text-align:center;padding:50px;'><h1>🚀 CEF PURE X11 SUCCESS! 🚀</h1><p>This proves CEF works without GTK!</p></body></html>";
+        printf("CEF DEBUG: Using test URL with lime background\n");
         
         bool create_result = CefBrowserHost::CreateBrowser(window_info, client, test_url, browser_settings, nullptr, nullptr);
         printf("CEF DEBUG: CreateBrowser result: %s\n", create_result ? "SUCCESS" : "FAILED");
@@ -860,91 +826,274 @@ void create_cef_webview_in_gtk() {
         if (!create_result) {
             printf("CEF DEBUG: Browser creation failed!\n");
         } else {
-            printf("CEF DEBUG: Browser creation initiated - FORCING CEF WINDOW STACKING\n");
+            printf("CEF DEBUG: Browser creation initiated successfully - PURE X11 APPROACH\n");
             
-            // Store the drawing area XID for later manipulation
-            struct CEFWindowData {
-                Window drawing_xid;
-                Display* display;
-            };
-            CEFWindowData* cef_data = new CEFWindowData{drawing_xid, GDK_WINDOW_XDISPLAY(gdk_win)};
-            
-            // Wait for CEF to create its child window, then force it visible
-            g_timeout_add(1000, [](gpointer data) -> gboolean {
-                CEFWindowData* cef_data = static_cast<CEFWindowData*>(data);
-                printf("CEF DEBUG: FORCING CEF CHILD WINDOW VISIBILITY AND STACKING...\n");
-                
-                // Find CEF child windows and make them visible
-                Window root, parent;
-                Window* children;
-                unsigned int nchildren;
-                
-                if (XQueryTree(cef_data->display, cef_data->drawing_xid, &root, &parent, &children, &nchildren)) {
-                    printf("CEF DEBUG: Found %d child windows under drawing area 0x%lx\n", nchildren, cef_data->drawing_xid);
-                    
-                    if (nchildren == 0) {
-                        printf("CEF DEBUG: CEF FAILED TO CREATE CHILD WINDOW! Searching entire window tree...\n");
-                        
-                        // Search for CEF windows under the root window
-                        Window* root_children;
-                        unsigned int root_nchildren;
-                        if (XQueryTree(cef_data->display, root, &root, &parent, &root_children, &root_nchildren)) {
-                            printf("CEF DEBUG: Searching %d root-level windows for CEF...\n", root_nchildren);
-                            
-                            for (unsigned int j = 0; j < root_nchildren; j++) {
-                                // Check if this window might be a CEF window
-                                XWindowAttributes attrs;
-                                if (XGetWindowAttributes(cef_data->display, root_children[j], &attrs)) {
-                                    // CEF windows are typically 800x600 or similar
-                                    if ((attrs.width == 800 || attrs.width == 1) && (attrs.height == 600 || attrs.height == 1)) {
-                                        printf("CEF DEBUG: FOUND POTENTIAL CEF WINDOW 0x%lx (size: %dx%d) - FORCING TO DRAWING AREA\n", 
-                                               root_children[j], attrs.width, attrs.height);
-                                        
-                                        // Try to reparent this window to our drawing area
-                                        XReparentWindow(cef_data->display, root_children[j], cef_data->drawing_xid, 0, 0);
-                                        XMapWindow(cef_data->display, root_children[j]);
-                                        XMoveResizeWindow(cef_data->display, root_children[j], 0, 0, 800, 600);
-                                        printf("CEF DEBUG: Reparented and resized window 0x%lx to drawing area\n", root_children[j]);
-                                    }
-                                }
-                            }
-                            if (root_children) XFree(root_children);
-                        }
-                    } else {
-                        for (unsigned int i = 0; i < nchildren; i++) {
-                            printf("CEF DEBUG: Processing CEF child window 0x%lx...\n", children[i]);
-                            
-                            // Force window to be visible and properly sized
-                            XMapWindow(cef_data->display, children[i]);
-                            XRaiseWindow(cef_data->display, children[i]);
-                            XMoveResizeWindow(cef_data->display, children[i], 0, 0, 800, 600);
-                            
-                            printf("CEF DEBUG: CEF child window 0x%lx forced visible and sized\n", children[i]);
-                        }
-                    }
-                    
-                    if (children) XFree(children);
-                    XFlush(cef_data->display);
-                    printf("CEF DEBUG: All CEF window operations completed\n");
-                } else {
-                    printf("CEF DEBUG: XQueryTree failed on drawing area\n");
-                }
-                
-                delete cef_data;
-                return G_SOURCE_REMOVE;
-            }, cef_data);
-            
-            g_timeout_add(3000, [](gpointer data) -> gboolean {
-                printf("CEF DEBUG: 3s check - CEF should now be forcibly visible with proper stacking\n");
+            // Wait a bit and then check if CEF rendered
+            g_timeout_add(2000, [](gpointer) -> gboolean {
+                printf("CEF DEBUG: 2s check - CEF should be rendering in pure X11 window\n");
                 return G_SOURCE_REMOVE;
             }, nullptr);
         }
         
-        return G_SOURCE_REMOVE;  // Don't repeat
-    }, cef_window);
+        delete window_data;
+        return G_SOURCE_REMOVE;
+    }, window_data);
     
-    printf("CEF DEBUG: Timeout scheduled for direct window rendering, function complete\n");
+    printf("CEF DEBUG: Timeout scheduled for pure X11 window, function complete\n");
 }
+    
+//     // Add a simple paint handler to show if GTK drawing works
+//     g_signal_connect(drawing_area, "draw", G_CALLBACK(+[](GtkWidget*, cairo_t* cr, gpointer) -> gboolean {
+//         // Paint a simple test pattern to verify GTK drawing works
+//         cairo_set_source_rgb(cr, 0.9, 0.9, 0.9); // Light gray background
+//         cairo_paint(cr);
+        
+//         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0); // Black text
+//         cairo_move_to(cr, 50, 50);
+//         cairo_show_text(cr, "GTK Drawing Area - CEF should appear here");
+        
+//         printf("CEF DEBUG: GTK drawing area paint event triggered\n");
+//         return FALSE; // Let other handlers run
+//     }), nullptr);
+    
+//     gtk_container_add(GTK_CONTAINER(cef_window), drawing_area);
+    
+//     g_signal_connect(cef_window, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer) {
+//         printf("CEF DEBUG: CEF test window destroyed\n");
+//     }), nullptr);
+    
+//     printf("CEF DEBUG: Created CEF window with drawing area: %p\n", cef_window);
+    
+//     // Show everything
+//     gtk_widget_show_all(cef_window);
+//     printf("CEF DEBUG: Window with drawing area shown\n");
+    
+//     // Ensure both are realized
+//     gtk_widget_realize(cef_window);
+//     gtk_widget_realize(drawing_area);
+    
+//     // Use a timeout to ensure everything is fully initialized
+//     g_timeout_add(1000, [](gpointer data) -> gboolean {
+//         GtkWidget* cef_window = GTK_WIDGET(data);
+//         printf("CEF DEBUG: Timeout callback triggered - DIRECT WINDOW RENDERING\n");
+        
+//         if (!gtk_widget_get_realized(cef_window)) {
+//             printf("CEF DEBUG: Window not realized, forcing realization\n");
+//             gtk_widget_realize(cef_window);
+//         }
+        
+//         if (!gtk_widget_get_mapped(cef_window)) {
+//             printf("CEF DEBUG: Window not mapped, forcing map\n");
+//             gtk_widget_map(cef_window);
+//         }
+        
+//         GdkWindow* gdk_window = gtk_widget_get_window(cef_window);
+//         if (!gdk_window) {
+//             printf("CEF DEBUG: No GdkWindow available\n");
+//             return G_SOURCE_REMOVE;
+//         }
+        
+//         printf("CEF DEBUG: GdkWindow found: %p\n", gdk_window);
+        
+//         // Ensure we have a native window
+//         if (!gdk_window_ensure_native(gdk_window)) {
+//             printf("CEF DEBUG: Failed to ensure native window\n");
+//             return G_SOURCE_REMOVE;
+//         }
+//         printf("CEF DEBUG: Native window ensured\n");
+        
+//         Window xid = gdk_x11_window_get_xid(gdk_window);
+//         printf("CEF DEBUG: Got X11 XID: 0x%lx\n", xid);
+        
+//         if (!xid) {
+//             printf("CEF DEBUG: Invalid XID (0), cannot create CEF browser\n");
+//             return G_SOURCE_REMOVE;
+//         }
+        
+//         // Sync X11 to ensure window is properly created
+//         Display* display = GDK_WINDOW_XDISPLAY(gdk_window);
+//         XSync(display, False);
+//         printf("CEF DEBUG: X11 synchronized\n");
+        
+//         // Get the window allocation
+//         GtkAllocation alloc;
+//         gtk_widget_get_allocation(cef_window, &alloc);
+//         printf("CEF DEBUG: Window allocation: %dx%d at (%d,%d)\n", 
+//                alloc.width, alloc.height, alloc.x, alloc.y);
+               
+//         // If allocation is too small, use full window size
+//         if (alloc.width < 100 || alloc.height < 100) {
+//             alloc.width = 800;
+//             alloc.height = 600;
+//             printf("CEF DEBUG: Using default size instead: %dx%d\n", alloc.width, alloc.height);
+//         }
+        
+//         // Create CEF browser with SetAsChild - SIMPLE APPROACH
+//         printf("CEF DEBUG: Creating CEF browser with SIMPLE SetAsChild approach...\n");
+//         CefWindowInfo window_info;
+//         CefRect cef_rect(0, 0, 800, 600);
+        
+//         // Get the drawing area widget from the lambda context
+//         GList* children = gtk_container_get_children(GTK_CONTAINER(cef_window));
+//         GtkWidget* area = children ? GTK_WIDGET(children->data) : nullptr;
+//         if (children) g_list_free(children);
+        
+//         if (!area) {
+//             printf("CEF DEBUG: No drawing area found\n");
+//             return G_SOURCE_REMOVE;
+//         }
+        
+//         // Create a raw X11 window for CEF, bypassing GTK's drawing area
+//         int screen = DefaultScreen(display);
+        
+//         // Create window attributes for CEF
+//         XSetWindowAttributes attrs;
+//         attrs.background_pixel = BlackPixel(display, screen);
+//         attrs.border_pixel = 0;
+//         attrs.colormap = DefaultColormap(display, screen);
+//         attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
+//                           ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
+//                           FocusChangeMask | StructureNotifyMask;
+//         attrs.backing_store = NotUseful;
+//         attrs.save_under = False;
+        
+//         // Get the drawing area's position and size
+//         GdkWindow* gdk_win = gtk_widget_get_window(area);
+//         Window drawing_xid = gdk_x11_window_get_xid(gdk_win);
+        
+//         // Create a child window of the drawing area
+//         Window cef_x11_window = XCreateWindow(
+//             display, drawing_xid,
+//             0, 0, 800, 600, 0,
+//             CopyFromParent, InputOutput, CopyFromParent,
+//             CWBackPixel | CWBorderPixel | CWColormap | CWEventMask | CWBackingStore | CWSaveUnder,
+//             &attrs
+//         );
+        
+//         if (!cef_x11_window) {
+//             printf("CEF DEBUG: Failed to create raw X11 window for CEF\n");
+//             return G_SOURCE_REMOVE;
+//         }
+        
+//         // Map the window
+//         XMapWindow(display, cef_x11_window);
+//         XSync(display, False);
+        
+//         printf("CEF DEBUG: Created raw X11 window 0x%lx for CEF\n", cef_x11_window);
+        
+//         // Use SetAsChild with our raw X11 window
+//         window_info.SetAsChild(cef_x11_window, cef_rect);
+        
+//         printf("CEF DEBUG: SetAsChild configured for raw X11 window 0x%lx, rect (0,0,800,600)\n", cef_x11_window);
+        
+//         CefBrowserSettings browser_settings;
+//         // Use default browser settings for now
+//         printf("CEF DEBUG: Browser settings configured\n");
+        
+        
+//         // Use simple client since we're back to SetAsChild
+//         CefRefPtr<CefClient> client = create_default_handler();
+//         if (!client) {
+//             printf("CEF DEBUG: Failed to create render handler client\n");
+//             return G_SOURCE_REMOVE;
+//         }
+//         printf("CEF DEBUG: Render handler client created: %p\n", client.get());
+        
+//         // Try a simple local page first with very obvious styling
+//         std::string test_url = "data:text/html,<html><body style='background:lime;color:black;font-size:48px;text-align:center;padding:50px;'><h1>🎉 CEF IS WORKING! 🎉</h1><p>This bright green page proves CEF is rendering!</p><p>Window v8 - Standalone Success!</p></body></html>";
+//         printf("CEF DEBUG: Using test URL with bright green background\n");
+        
+//         bool create_result = CefBrowserHost::CreateBrowser(window_info, client, test_url, browser_settings, nullptr, nullptr);
+//         printf("CEF DEBUG: CreateBrowser result: %s\n", create_result ? "SUCCESS" : "FAILED");
+        
+//         if (!create_result) {
+//             printf("CEF DEBUG: Browser creation failed!\n");
+//         } else {
+//             printf("CEF DEBUG: Browser creation initiated - FORCING CEF WINDOW STACKING\n");
+            
+//             // Store the drawing area XID for later manipulation
+//             struct CEFWindowData {
+//                 Window cef_xid;
+//                 Display* display;
+//             };
+//             CEFWindowData* cef_data = new CEFWindowData{cef_x11_window, display};
+            
+//             // Wait for CEF to create its child window, then force it visible
+//             g_timeout_add(1000, [](gpointer data) -> gboolean {
+//                 CEFWindowData* cef_data = static_cast<CEFWindowData*>(data);
+//                 printf("CEF DEBUG: FORCING CEF CHILD WINDOW VISIBILITY AND STACKING...\n");
+                
+//                 // Find CEF child windows and make them visible
+//                 Window root, parent;
+//                 Window* children;
+//                 unsigned int nchildren;
+                
+//                 if (XQueryTree(cef_data->display, cef_data->cef_xid, &root, &parent, &children, &nchildren)) {
+//                     printf("CEF DEBUG: Found %d child windows under CEF window 0x%lx\n", nchildren, cef_data->cef_xid);
+                    
+//                     if (nchildren == 0) {
+//                         printf("CEF DEBUG: CEF FAILED TO CREATE CHILD WINDOW! Searching entire window tree...\n");
+                        
+//                         // Search for CEF windows under the root window
+//                         Window* root_children;
+//                         unsigned int root_nchildren;
+//                         if (XQueryTree(cef_data->display, root, &root, &parent, &root_children, &root_nchildren)) {
+//                             printf("CEF DEBUG: Searching %d root-level windows for CEF...\n", root_nchildren);
+                            
+//                             for (unsigned int j = 0; j < root_nchildren; j++) {
+//                                 // Check if this window might be a CEF window
+//                                 XWindowAttributes attrs;
+//                                 if (XGetWindowAttributes(cef_data->display, root_children[j], &attrs)) {
+//                                     // CEF windows are typically 800x600 or similar
+//                                     if ((attrs.width == 800 || attrs.width == 1) && (attrs.height == 600 || attrs.height == 1)) {
+//                                         printf("CEF DEBUG: FOUND POTENTIAL CEF WINDOW 0x%lx (size: %dx%d) - FORCING TO CEF WINDOW\n", 
+//                                                root_children[j], attrs.width, attrs.height);
+                                        
+//                                         // Try to reparent this window to our CEF window
+//                                         XReparentWindow(cef_data->display, root_children[j], cef_data->cef_xid, 0, 0);
+//                                         XMapWindow(cef_data->display, root_children[j]);
+//                                         XMoveResizeWindow(cef_data->display, root_children[j], 0, 0, 800, 600);
+//                                         printf("CEF DEBUG: Reparented and resized window 0x%lx to CEF window\n", root_children[j]);
+//                                     }
+//                                 }
+//                             }
+//                             if (root_children) XFree(root_children);
+//                         }
+//                     } else {
+//                         for (unsigned int i = 0; i < nchildren; i++) {
+//                             printf("CEF DEBUG: Processing CEF child window 0x%lx...\n", children[i]);
+                            
+//                             // Force window to be visible and properly sized
+//                             XMapWindow(cef_data->display, children[i]);
+//                             XRaiseWindow(cef_data->display, children[i]);
+//                             XMoveResizeWindow(cef_data->display, children[i], 0, 0, 800, 600);
+                            
+//                             printf("CEF DEBUG: CEF child window 0x%lx forced visible and sized\n", children[i]);
+//                         }
+//                     }
+                    
+//                     if (children) XFree(children);
+//                     XFlush(cef_data->display);
+//                     printf("CEF DEBUG: All CEF window operations completed\n");
+//                 } else {
+//                     printf("CEF DEBUG: XQueryTree failed on drawing area\n");
+//                 }
+                
+//                 delete cef_data;
+//                 return G_SOURCE_REMOVE;
+//             }, cef_data);
+            
+//             g_timeout_add(3000, [](gpointer data) -> gboolean {
+//                 printf("CEF DEBUG: 3s check - CEF should now be forcibly visible with proper stacking\n");
+//                 return G_SOURCE_REMOVE;
+//             }, nullptr);
+//         }
+        
+//         return G_SOURCE_REMOVE;  // Don't repeat
+//     }, cef_window);
+    
+//     printf("CEF DEBUG: Timeout scheduled for direct window rendering, function complete\n");
+// }
 
 // AbstractView base class declaration
 class AbstractView {
@@ -1486,7 +1635,7 @@ public:
                gtk_widget_get_realized(window), gtk_widget_get_visible(window), gtk_widget_get_mapped(window));
         
 
-        create_cef_webview_in_gtk();
+        create_cef_webview_in_window();
 
         // Use g_timeout_add to defer creation by 100ms
         // g_timeout_add(3000, [](gpointer data) -> gboolean {
