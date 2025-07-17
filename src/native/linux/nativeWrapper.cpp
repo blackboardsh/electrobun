@@ -838,34 +838,14 @@ public:
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
         if (webview) {
-            // Resizing webview
-            
             // Set webview size
             gtk_widget_set_size_request(webview, frame.width, frame.height);
             
-            // Check if this webview has a wrapper (OOPIF case)
-            GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
-            if (wrapper) {
-                // For negative positions (scrolled out of view), we need to use
-                // gtk_widget_set_margin_* with clamped values and offset the webview inside
-                int clampedX = MAX(0, frame.x);
-                int clampedY = MAX(0, frame.y);
-                int offsetX = frame.x - clampedX;  // Will be negative if frame.x < 0
-                int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
-                
-                gtk_widget_set_size_request(wrapper, frame.width, frame.height);
-                gtk_widget_set_margin_left(wrapper, clampedX);
-                gtk_widget_set_margin_top(wrapper, clampedY);
-                
-                // Position webview within wrapper with offset to handle negative positions
-                // TODO: this / 2 is a hack to adjust for GTK's coordinate system. not really sure why it works
-                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY / 2);
-                
-                // OOPIF positioned with coordinate adjustment
-            } else {
-                // For host webview, position directly with margins (can't be negative)
-                gtk_widget_set_margin_left(webview, MAX(0, frame.x));
-                gtk_widget_set_margin_top(webview, MAX(0, frame.y));
+            // Get the parent container (should be our gtk_fixed container)
+            GtkWidget* parent = gtk_widget_get_parent(webview);
+            if (parent && GTK_IS_FIXED(parent)) {
+                // With gtk_fixed, we can position directly (supports negative coordinates)
+                gtk_fixed_move(GTK_FIXED(parent), webview, frame.x, frame.y);
             }
             
             visualBounds = frame;
@@ -1390,31 +1370,9 @@ public:
     }
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
-        if (browser && widget) {
-            // Set widget size
-            gtk_widget_set_size_request(widget, frame.width, frame.height);
-            
-            // Check if this webview has a wrapper (OOPIF case)
-            GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(widget), "wrapper");
-            if (wrapper) {
-                // For negative positions (scrolled out of view), we need to use
-                // gtk_widget_set_margin_* with clamped values and offset the webview inside
-                int clampedX = MAX(0, frame.x);
-                int clampedY = MAX(0, frame.y);
-                int offsetX = frame.x - clampedX;  // Will be negative if frame.x < 0
-                int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
-                
-                gtk_widget_set_size_request(wrapper, frame.width, frame.height);
-                gtk_widget_set_margin_left(wrapper, clampedX);
-                gtk_widget_set_margin_top(wrapper, clampedY);
-                
-                // Position widget within wrapper with offset to handle negative positions
-                gtk_fixed_move(GTK_FIXED(wrapper), widget, offsetX, offsetY / 2);
-            } else {
-                // For host webview, position directly with margins (can't be negative)
-                gtk_widget_set_margin_left(widget, MAX(0, frame.x));
-                gtk_widget_set_margin_top(widget, MAX(0, frame.y));
-            }
+        if (browser) {
+            // CEF webviews don't have GTK widgets (widget = nullptr)
+            // They manage their own X11 windows, so we only need to sync CEF positioning
             
             // Notify CEF that the browser was resized
             browser->GetHost()->WasResized();
@@ -1467,11 +1425,27 @@ public:
     AbstractView* activeWebView = nullptr;
     
     ContainerView(GtkWidget* window) : window(window) {
-        // Create an overlay container as the main container
-        overlay = gtk_overlay_new();
+        // Use gtk_fixed instead of overlay for a real X11 window that CEF can parent to
+        // gtk_fixed creates an actual X11 window (drawable surface) that CEF understands
+        overlay = gtk_fixed_new();
+        
+        // Ensure the fixed container has its own X11 window (not just drawing on parent)
+        gtk_widget_set_has_window(GTK_WIDGET(overlay), TRUE);
+        
         gtk_container_add(GTK_CONTAINER(window), overlay);
         
+        // Force the widget to be realized (creates the X11 window)
+        gtk_widget_realize(overlay);
         gtk_widget_show(overlay);
+        
+        // Verify we have a real X11 window
+        GdkWindow* gdkWindow = gtk_widget_get_window(overlay);
+        if (gdkWindow) {
+            unsigned long x11Window = gdk_x11_window_get_xid(gdkWindow);
+            printf("ContainerView: Created with X11 window ID: 0x%lx\n", x11Window);
+        } else {
+            printf("ContainerView: WARNING - No X11 window created for container\n");
+        }
     }
     
     
@@ -1487,37 +1461,14 @@ public:
                         "vexpand", FALSE,
                         NULL);
             
-            // Add webview to overlay container
-            if (abstractViews.size() == 1) {
-                // First webview becomes the base layer (determines overlay size)
-                gtk_container_add(GTK_CONTAINER(overlay), view->widget);
-            } else {
-                // For OOPIFs, wrap in a fixed container to enforce size constraints
-                GtkWidget* wrapper = gtk_fixed_new();
-                gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
-                
-                // Make wrapper receive no events (pass through to widgets below)
-                gtk_widget_set_events(wrapper, 0);
-                gtk_widget_set_can_focus(wrapper, FALSE);
-                
-                // Add webview to wrapper at 0,0
-                gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
-                
-                // Add wrapper as overlay layer
-                gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
-                
-                // Make the wrapper pass-through for events outside the webview
-                gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
-                
-                // Position wrapper using margins (will be updated in resize)
-                gtk_widget_set_margin_left(wrapper, (int)x);
-                gtk_widget_set_margin_top(wrapper, (int)y);
-                
-                gtk_widget_show(wrapper);
-                
-                // Store wrapper reference
-                g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
-            }
+            // Add webview to fixed container
+            // With gtk_fixed, all widgets are positioned absolutely - no special handling needed
+            gtk_fixed_put(GTK_FIXED(overlay), view->widget, (int)x, (int)y);
+            
+            // Set webview size
+            gtk_widget_set_size_request(view->widget, 
+                                       view->visualBounds.width > 0 ? view->visualBounds.width : 1, 
+                                       view->visualBounds.height > 0 ? view->visualBounds.height : 1);
             
             gtk_widget_show(view->widget);
             
