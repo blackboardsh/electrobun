@@ -82,7 +82,6 @@ export class BrowserWindow<T> {
     this.renderer = options.renderer === 'cef' ? 'cef' : 'native';
     this.navigationRules = options.navigationRules || null;
     
-
     this.init(options);
   }
 

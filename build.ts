@@ -61,6 +61,7 @@ async function setup() {
         vendorZig(),
         vendorCEF(),
         vendorWebview2(),
+        vendorLinuxDeps(),
     ]);
 }
 
@@ -99,8 +100,8 @@ async function copyToDist() {
         await $`cp -R src/browser/ dist/api`;
     } else {
         // on unix cp is more like a rename        
-        await $`cp -R src/bun/ dist/api/bun`;
-        await $`cp -R src/browser/ dist/api/browser`; 
+        await $`cp -R src/bun dist/api/`;
+        await $`cp -R src/browser dist/api/`; 
     }
     // Native code and frameworks
     if (OS === 'macos') {
@@ -137,7 +138,42 @@ async function copyToDist() {
         // Copy CEF helper process
         await $`cp src/native/build/process_helper.exe dist/process_helper.exe`;
     } else if (OS === 'linux') {
-
+        // Copy native wrapper if it exists
+        if (existsSync(join(process.cwd(), 'src', 'native', 'build', 'libNativeWrapper.so'))) {
+            await $`cp src/native/build/libNativeWrapper.so dist/libNativeWrapper.so`;
+        }
+        
+        // CEF binaries for Linux - copy to cef/ subdirectory
+        if (existsSync(join(process.cwd(), 'vendors', 'cef', 'Release'))) {
+            console.log('Copying CEF files for Linux...');
+            
+            // Copy main CEF library and dependencies
+            await $`cp vendors/cef/Release/*.so dist/cef/`;
+            await $`cp vendors/cef/Release/*.so.* dist/cef/`;  // For versioned libraries like libvulkan.so.1
+            await $`cp vendors/cef/Release/*.bin dist/cef/`;
+            await $`cp vendors/cef/Release/*.json dist/cef/`;  // For vk_swiftshader_icd.json
+            
+            // Copy chrome-sandbox (needs setuid root)
+            if (existsSync(join(process.cwd(), 'vendors', 'cef', 'Release', 'chrome-sandbox'))) {
+                await $`cp vendors/cef/Release/chrome-sandbox dist/cef/`;
+            }
+            
+            // Copy Resources
+            await $`cp vendors/cef/Resources/*.pak dist/cef/`;
+            await $`cp vendors/cef/Resources/*.dat dist/cef/`;
+            
+            // Copy locales
+            await $`mkdir -p dist/cef/locales`;
+            await $`cp vendors/cef/Resources/locales/*.pak dist/cef/locales/`;
+        } else {
+            console.log('CEF not built, skipping CEF file copying');
+        }
+        
+        // Copy CEF helper process if it exists
+        if (existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper'))) {
+            await $`cp src/native/build/process_helper dist/process_helper`;
+        }
+        console.log('[done]Copying CEF files for Linux...');
     }
 }
 
@@ -175,7 +211,7 @@ async function createDistFolder() {
     await $`mkdir -p dist/api`;
     await $`mkdir -p dist/api/bun`;
     await $`mkdir -p dist/api/browser`;
-    if (OS === 'win') {
+    if (OS === 'win' || OS === 'linux') {
         await $`mkdir -p dist/cef`;
     }
 }
@@ -190,7 +226,22 @@ async function vendorBun() {
         return;
     }
 
-    const bunUrlSegment = isWindows ? 'bun-windows-x64.zip' : 'bun-darwin-aarch64.zip';
+    let bunUrlSegment: string;
+    let bunDirName: string;
+    
+    if (OS === 'win') {
+        bunUrlSegment = 'bun-windows-x64.zip';
+        bunDirName = 'bun-windows-x64';
+    } else if (OS === 'macos') {
+        bunUrlSegment = 'bun-darwin-aarch64.zip';
+        bunDirName = 'bun-darwin-aarch64';
+    } else if (OS === 'linux') {
+        bunUrlSegment = ARCH === 'arm64' ? 'bun-linux-aarch64.zip' : 'bun-linux-x64.zip';
+        bunDirName = ARCH === 'arm64' ? 'bun-linux-aarch64' : 'bun-linux-x64';
+    } else {
+        throw new Error(`Unsupported platform: ${OS}`);
+    }
+
     const tempZipPath = join("vendors", "bun", "temp.zip");
     const extractDir = join("vendors", "bun");
     
@@ -198,21 +249,20 @@ async function vendorBun() {
     await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.2.2/${bunUrlSegment}`;
     
     // Extract zip file
-    // await $`unzip -o ${tempZipPath} -d ${join("vendors", "bun")}`;
     if (isWindows) {
         // Use PowerShell to extract zip on Windows
         await $`powershell -command "Expand-Archive -Path ${tempZipPath} -DestinationPath ${extractDir} -Force"`;
-      } else {
+    } else {
         // Use unzip on macOS/Linux
         await $`unzip -o ${tempZipPath} -d ${extractDir}`;
-      }
+    }
     
     // Move the bun binary to the correct location
     // The path inside the zip might be different depending on the platform
     if (isWindows) {
-        await $`mv ${join("vendors", "bun", "bun-windows-x64", "bun.exe")} ${PATH.bun.RUNTIME}`;
+        await $`mv ${join("vendors", "bun", bunDirName, "bun.exe")} ${PATH.bun.RUNTIME}`;
     } else {
-        await $`mv ${join("vendors", "bun", "bun-darwin-aarch64", "bun")} ${PATH.bun.RUNTIME}`;
+        await $`mv ${join("vendors", "bun", bunDirName, "bun")} ${PATH.bun.RUNTIME}`;
     }
     
     // Add execute permissions on non-Windows platforms
@@ -222,7 +272,7 @@ async function vendorBun() {
     
     // Clean up
     await $`rm ${tempZipPath}`;
-    await $`rm -rf ${join("vendors", "bun", isWindows ? "bun-windows-x64" : "bun-darwin-aarch64")}`;
+    await $`rm -rf ${join("vendors", "bun", bunDirName)}`;
 }
 
 async function vendorZig() {
@@ -234,15 +284,20 @@ async function vendorZig() {
         await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-macos-aarch64-0.13.0/zig zig-macos-aarch64-0.13.0/lib  zig-macos-aarch64-0.13.0/doc`;
     } else if (OS === 'win') {
         await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-windows-aarch64-0.13.0.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/zig-windows-aarch64-0.13.0/zig.exe vendors/zig && mv vendors/zig-temp/zig-windows-aarch64-0.13.0/lib vendors/zig/`;
+    } else if (OS === 'linux') {
+        const zigArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
+        await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-linux-${zigArch}-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-linux-${zigArch}-0.13.0/zig zig-linux-${zigArch}-0.13.0/lib zig-linux-${zigArch}-0.13.0/doc`;
     }
 }
 
 async function vendorCEF() {
-    // Use stable CEF version for macOS, current for Windows
+    // Use stable CEF version for macOS, current for Windows and Linux
     const CEF_VERSION_MAC = `125.0.22+g4b2c969`;
     const CHROMIUM_VERSION_MAC = `125.0.6422.142`;
     const CEF_VERSION_WIN = `125.0.22+gc410c95`;
     const CHROMIUM_VERSION_WIN = `125.0.6422.142`;
+    const CEF_VERSION_LINUX = `125.0.22+gc410c95`;
+    const CHROMIUM_VERSION_LINUX = `125.0.6422.142`;
     
     if (OS === 'macos') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
@@ -361,6 +416,35 @@ async function vendorCEF() {
             // Link to create the helper executable
             await $`link /OUT:src/native/build/process_helper.exe user32.lib ole32.lib shell32.lib "${cefLib}" "${cefWrapperLib}" /SUBSYSTEM:WINDOWS src/native/build/process_helper_win.obj`;
         }
+    } else if (OS === 'linux') {
+        if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {
+            const cefArch = ARCH === 'arm64' ? 'linuxarm64' : 'linux64';
+            await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_LINUX}%2Bchromium-${CHROMIUM_VERSION_LINUX}_${cefArch}_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;
+        }
+        
+        // Build CEF wrapper library for Linux
+        if (!existsSync(join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a'))) {
+            console.log('Building CEF wrapper library for Linux...');
+            await $`cd vendors/cef && rm -rf build && mkdir -p build`;
+            await $`cd vendors/cef/build && cmake -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
+            await $`cd vendors/cef/build && make -j$(nproc) libcef_dll_wrapper`;
+        }
+        
+        // Build process_helper binary for Linux
+        if (!existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper'))) {
+            console.log('Building CEF process helper for Linux...');
+            await $`mkdir -p src/native/build`;
+            
+            const cefInclude = `./vendors/cef`;
+            const cefLib = `./vendors/cef/Release/libcef.so`;
+            const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/libcef_dll_wrapper.a`;
+            
+            // Compile the Linux helper process
+            await $`g++ -c -std=c++17 -I"${cefInclude}" -o src/native/build/process_helper_linux.o src/native/linux/cef_process_helper_linux.cpp`;
+            
+            // Link to create the helper executable
+            await $`g++ -o src/native/build/process_helper src/native/build/process_helper_linux.o "${cefWrapperLib}" "${cefLib}" -Wl,-rpath,'$ORIGIN' -lpthread -ldl`;
+        }
     }
 }
 
@@ -403,6 +487,24 @@ async function vendorWebview2() {
     }
 }
 
+async function vendorLinuxDeps() {
+    if (OS === 'linux') {
+        console.log('Skipping Linux dependency installation (assuming already installed)');
+        
+        // Dependencies should already be installed:
+        // sudo apt update && sudo apt install -y build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+        
+        // TODO: Add dependency checking instead of automatic installation
+        // const requiredPackages = ['build-essential', 'cmake', 'pkg-config', 'libgtk-3-dev', 'libwebkit2gtk-4.1-dev'];
+        // for (const pkg of requiredPackages) {
+        //     const result = await $`dpkg -l | grep ${pkg}`.catch(() => null);
+        //     if (!result) {
+        //         console.log(`Warning: Required package ${pkg} may not be installed`);
+        //     }
+        // }
+    }
+}
+
 async function buildTRDiff() {
 
     if (CHANNEL === 'debug') {
@@ -429,7 +531,39 @@ async function buildNative() {
         // Link with both WebView2 and CEF libraries
         await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
+        try {
+            // Check if required packages are available first
+            await $`pkg-config --exists webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`;
+            
+            // Always include CEF headers for Linux builds
+            const cefInclude = join(process.cwd(), 'vendors', 'cef');
+            const cefLib = join(process.cwd(), 'vendors', 'cef', 'Release', 'libcef.so');
+            const cefWrapperLib = join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a');
+            
+            // Check if CEF libraries exist for linking
+            const cefLibsExist = existsSync(cefWrapperLib) && existsSync(cefLib);
+            
+            if (cefLibsExist) {
+                console.log('CEF libraries found, building with full CEF support');
+            } else {
+                console.log('CEF libraries not found, building with CEF headers only (runtime detection)');
+            }
+            
+            // Compile the main wrapper with WebKitGTK, AppIndicator, and CEF headers
+            await $`mkdir -p src/native/linux/build`;
+            await $`g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -I"${cefInclude}" -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
 
+            // Link with WebKitGTK, AppIndicator, and optionally CEF libraries
+            await $`mkdir -p src/native/build`;
+            // always build with CEF. if libraries don't exist it's a fatal error
+            // Set RPATH to look in both current directory and cef/ subdirectory
+            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefWrapperLib} ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
+           
+            console.log('Native wrapper built successfully');
+        } catch (error) {
+            console.log('Build failed, error details:', error.message);
+            throw error;
+        }
     }
 }
 

@@ -74,6 +74,7 @@ const PATHS = {
     "libNativeWrapper.dylib"
   ),
   NATIVE_WRAPPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.dll"),
+  NATIVE_WRAPPER_LINUX: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.so"),
   WEBVIEW2LOADER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "WebView2Loader.dll"),
   BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch") + binExt,
   EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor") + binExt,
@@ -85,6 +86,8 @@ const PATHS = {
   ),
   CEF_HELPER_MACOS: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
   CEF_HELPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "process_helper.exe"),
+  CEF_HELPER_LINUX: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
+  CEF_DIR: join(ELECTROBUN_DEP_PATH, "dist", "cef"),
 };
 
 const commandDefaults = {
@@ -229,7 +232,7 @@ const appFileName = (
 )
   .replace(/\s/g, "")
   .replace(/\./g, "-");
-const bundleFileName = `${appFileName}.app`;
+const bundleFileName = OS === 'macos' ? `${appFileName}.app` : appFileName;
 
 // const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
 
@@ -393,12 +396,25 @@ if (commandArg === "init") {
   // copy webview2 system webview library
   cpSync(webview2LibSource, webview2LibDestination);
   
+} else if (OS === 'linux') {
+  const nativeWrapperLinuxSource = PATHS.NATIVE_WRAPPER_LINUX;
+  const nativeWrapperLinuxDestination = join(
+    appBundleMacOSPath,
+    "libNativeWrapper.so"
+  );
+  if (existsSync(nativeWrapperLinuxSource)) {
+    cpSync(nativeWrapperLinuxSource, nativeWrapperLinuxDestination, {
+      dereference: true,
+    });
+  }
 }
   
   // TODO: Should download binaries for arch, and then copy them in
   // for developing Electrobun itself we can assume current arch is already
   // in dist as it would have just been built from local source
-  if (config.build.mac.bundleCEF) {    
+  if ((OS === 'macos' && config.build.mac?.bundleCEF) || 
+      (OS === 'win' && config.build.win?.bundleCEF) || 
+      (OS === 'linux' && config.build.linux?.bundleCEF)) {    
     if (OS === 'macos') {
       const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
       const cefFrameworkDestination = join(
@@ -508,10 +524,110 @@ if (commandArg === "init") {
         cefHelperNames.forEach((helperName) => {
           const destinationPath = join(appBundleMacOSPath, `${helperName}.exe`);
           cpSync(helperSourcePath, destinationPath);
-          console.log(`Copied CEF helper: ${helperName}.exe`);
+          
         });
       } else {
         console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
+      }
+    } else if (OS === 'linux') {
+      // Copy CEF shared libraries from dist/cef/ to the main executable directory
+      const electrobunDistPath = join(ELECTROBUN_DEP_PATH, "dist");
+      const cefSourcePath = join(electrobunDistPath, "cef");
+      
+      if (existsSync(cefSourcePath)) {
+        const cefSoFiles = [
+          'libcef.so',
+          'libEGL.so',
+          'libGLESv2.so',
+          'libvk_swiftshader.so',
+          'libvulkan.so.1'
+        ];
+        
+        cefSoFiles.forEach(soFile => {
+          const sourcePath = join(cefSourcePath, soFile);
+          const destPath = join(appBundleMacOSPath, soFile);
+          if (existsSync(sourcePath)) {
+            cpSync(sourcePath, destPath);
+          }
+        });
+        
+        // Copy icudtl.dat to MacOS root (same folder as libcef.so) - required for CEF initialization
+        const icuDataSource = join(cefSourcePath, 'icudtl.dat');
+        const icuDataDest = join(appBundleMacOSPath, 'icudtl.dat');
+        if (existsSync(icuDataSource)) {
+          cpSync(icuDataSource, icuDataDest);
+        }
+        
+        // Copy .pak files and other CEF resources to the main executable directory
+        const pakFiles = [
+          'icudtl.dat', 
+          'v8_context_snapshot.bin', 
+          'snapshot_blob.bin',
+          'resources.pak', 
+          'chrome_100_percent.pak',
+          'chrome_200_percent.pak',
+          'locales',
+          'chrome-sandbox',
+          'vk_swiftshader_icd.json'
+        ];
+        pakFiles.forEach(pakFile => {
+          const sourcePath = join(cefSourcePath, pakFile);
+          const destPath = join(appBundleMacOSPath, pakFile);
+          if (existsSync(sourcePath)) {
+            cpSync(sourcePath, destPath, { recursive: true });
+          }
+        });
+        
+        // Copy locales to cef subdirectory
+        const cefResourcesDestination = join(appBundleMacOSPath, 'cef');
+        if (!existsSync(cefResourcesDestination)) {
+          mkdirSync(cefResourcesDestination, { recursive: true });
+        }
+        
+        // Copy all CEF shared libraries to cef subdirectory as well (for RPATH $ORIGIN/cef)
+        cefSoFiles.forEach(soFile => {
+          const sourcePath = join(cefSourcePath, soFile);
+          const destPath = join(cefResourcesDestination, soFile);
+          if (existsSync(sourcePath)) {
+            cpSync(sourcePath, destPath);
+            console.log(`Copied CEF library to cef subdirectory: ${soFile}`);
+          } else {
+            console.log(`WARNING: Missing CEF library: ${sourcePath}`);
+          }
+        });
+        
+        // Copy essential CEF files to cef subdirectory as well (for RPATH $ORIGIN/cef)
+        const cefEssentialFiles = ['vk_swiftshader_icd.json'];
+        cefEssentialFiles.forEach(cefFile => {
+          const sourcePath = join(cefSourcePath, cefFile);
+          const destPath = join(cefResourcesDestination, cefFile);
+          if (existsSync(sourcePath)) {
+            cpSync(sourcePath, destPath);
+            console.log(`Copied CEF essential file to cef subdirectory: ${cefFile}`);
+          } else {
+            console.log(`WARNING: Missing CEF essential file: ${sourcePath}`);
+          }
+        });
+        
+        // Copy CEF helper processes with different names
+        const cefHelperNames = [
+          "bun Helper",
+          "bun Helper (Alerts)", 
+          "bun Helper (GPU)",
+          "bun Helper (Plugin)",
+          "bun Helper (Renderer)",
+        ];
+
+        const helperSourcePath = PATHS.CEF_HELPER_LINUX;
+        if (existsSync(helperSourcePath)) {
+          cefHelperNames.forEach((helperName) => {
+            const destinationPath = join(appBundleMacOSPath, helperName);
+            cpSync(helperSourcePath, destinationPath);
+            console.log(`Copied CEF helper: ${helperName}`);
+          });
+        } else {
+          console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
+        }
       }
     }
   }
@@ -610,6 +726,8 @@ if (commandArg === "init") {
 
 
   buildIcons(appBundleFolderResourcesPath);
+  
+  
   // Run postBuild script
   if (config.scripts.postBuild) {
 
@@ -971,10 +1089,15 @@ if (commandArg === "init") {
   // });
 
   let mainProc;
-  const bundleExecPath = join(
-    buildFolder,
-    bundleFileName,
-    "Contents",  'MacOS');
+  let bundleExecPath: string;
+  
+  if (OS === 'macos') {
+    bundleExecPath = join(buildFolder, bundleFileName, "Contents", 'MacOS');
+  } else if (OS === 'linux' || OS === 'win') {
+    bundleExecPath = join(buildFolder, bundleFileName, "bin");
+  } else {
+    throw new Error(`Unsupported OS: ${OS}`);
+  }
 
   if (OS === 'macos') {
 
@@ -990,6 +1113,25 @@ if (commandArg === "init") {
       onExit: (proc, exitCode, signalCode, error) => {
         console.log('Bun process exited:', { exitCode, signalCode, error });
       }
+    })
+  } else if (OS === 'linux') {
+    let env = { ...process.env };
+    
+    // Add LD_PRELOAD for CEF libraries to fix static TLS allocation issues
+    if (config.build.linux?.bundleCEF) {
+      const cefLibs = ['./libcef.so', './libvk_swiftshader.so'];
+      const existingCefLibs = cefLibs.filter(lib => existsSync(join(bundleExecPath, lib)));
+      
+      if (existingCefLibs.length > 0) {
+        env['LD_PRELOAD'] = existingCefLibs.join(':');
+        console.log(`Using LD_PRELOAD for CEF: ${env['LD_PRELOAD']}`);
+      }
+    }
+    
+    mainProc = Bun.spawn([join(bundleExecPath, 'bun'), join(bundleExecPath, 'main.js')], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+      cwd: bundleExecPath,
+      env
     })
   }
 
@@ -1191,30 +1333,54 @@ function notarizeAndStaple(appOrDmgPath: string) {
 // either way you can pass in the parent folder here for that flexibility.
 // for intel/arm builds on mac we'll probably have separate subfolders as well and build them in parallel.
 function createAppBundle(bundleName: string, parentFolder: string) {
-  const bundleFileName = `${bundleName}.app`;
-  const appBundleFolderPath = join(parentFolder, bundleFileName);
-  const appBundleFolderContentsPath = join(appBundleFolderPath, "Contents");
-  const appBundleMacOSPath = join(appBundleFolderContentsPath, "MacOS");
-  const appBundleFolderResourcesPath = join(
-    appBundleFolderContentsPath,
-    "Resources"
-  );
-  const appBundleFolderFrameworksPath = join(
-    appBundleFolderContentsPath,
-    "Frameworks"
-  );
+  if (OS === 'macos') {
+    // macOS bundle structure
+    const bundleFileName = `${bundleName}.app`;
+    const appBundleFolderPath = join(parentFolder, bundleFileName);
+    const appBundleFolderContentsPath = join(appBundleFolderPath, "Contents");
+    const appBundleMacOSPath = join(appBundleFolderContentsPath, "MacOS");
+    const appBundleFolderResourcesPath = join(
+      appBundleFolderContentsPath,
+      "Resources"
+    );
+    const appBundleFolderFrameworksPath = join(
+      appBundleFolderContentsPath,
+      "Frameworks"
+    );
 
-  // we don't have to make all the folders, just the deepest ones
-  // todo (yoav): check if folders exist already before creating them
-  mkdirSync(appBundleMacOSPath, { recursive: true });
-  mkdirSync(appBundleFolderResourcesPath, { recursive: true });
-  mkdirSync(appBundleFolderFrameworksPath, { recursive: true });
+    // we don't have to make all the folders, just the deepest ones
+    mkdirSync(appBundleMacOSPath, { recursive: true });
+    mkdirSync(appBundleFolderResourcesPath, { recursive: true });
+    mkdirSync(appBundleFolderFrameworksPath, { recursive: true });
 
-  return {
-    appBundleFolderPath,
-    appBundleFolderContentsPath,
-    appBundleMacOSPath,
-    appBundleFolderResourcesPath,
-    appBundleFolderFrameworksPath,
-  };
+    return {
+      appBundleFolderPath,
+      appBundleFolderContentsPath,
+      appBundleMacOSPath,
+      appBundleFolderResourcesPath,
+      appBundleFolderFrameworksPath,
+    };
+  } else if (OS === 'linux' || OS === 'win') {
+    // Linux/Windows simpler structure
+    const appBundleFolderPath = join(parentFolder, bundleName);
+    const appBundleFolderContentsPath = appBundleFolderPath; // No Contents folder needed
+    const appBundleMacOSPath = join(appBundleFolderPath, "bin"); // Use bin instead of MacOS
+    const appBundleFolderResourcesPath = join(appBundleFolderPath, "Resources");
+    const appBundleFolderFrameworksPath = join(appBundleFolderPath, "lib"); // Use lib instead of Frameworks
+
+    // Create directories
+    mkdirSync(appBundleMacOSPath, { recursive: true });
+    mkdirSync(appBundleFolderResourcesPath, { recursive: true });
+    mkdirSync(appBundleFolderFrameworksPath, { recursive: true });
+
+    return {
+      appBundleFolderPath,
+      appBundleFolderContentsPath,
+      appBundleMacOSPath,
+      appBundleFolderResourcesPath,
+      appBundleFolderFrameworksPath,
+    };
+  } else {
+    throw new Error(`Unsupported OS: ${OS}`);
+  }
 }

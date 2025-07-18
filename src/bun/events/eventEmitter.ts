@@ -2,7 +2,7 @@ import EventEmitter from "events";
 import windowEvents from "./windowEvents";
 import webviewEvents from "./webviewEvents";
 import trayEvents from "./trayEvents";
-import applicationEvents from "./applicationEvents";
+import applicationEvents from "./ApplicationEvents";
 import ElectrobunEvent from "./event";
 
 class ElectrobunEventEmitter extends EventEmitter {
