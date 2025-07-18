@@ -173,6 +173,9 @@ static bool g_useCEF = false;
 // Global webview storage to keep shared_ptr alive
 static std::map<uint32_t, std::shared_ptr<AbstractView>> g_webviewMap;
 
+// Global map to store preload scripts by browser ID (for multi-process CEF)
+static std::map<int, std::string> g_preloadScripts;
+
 CefRefPtr<class ElectrobunApp> g_app;
 
 
@@ -216,15 +219,102 @@ bool isCEFAvailable() {
 }
 
 
-// Preload script structure
-struct PreloadScript {
-    std::string script;
-    bool isCustom;
-};
 
-// Global preload script storage for CEF render process
-static std::map<uint32_t, PreloadScript> g_electrobun_preload_scripts;
-static std::map<uint32_t, PreloadScript> g_custom_preload_scripts;
+
+// CEF Response Filter for preload script injection (Mac-style clean approach)
+class ElectrobunResponseFilter : public CefResponseFilter {
+private:
+    std::string electrobun_script_;
+    std::string custom_script_;
+    std::string buffer_;
+    bool has_head_;
+    bool injected_;
+    
+public:
+    ElectrobunResponseFilter(const std::string& electrobunScript, const std::string& customScript)
+        : electrobun_script_(electrobunScript), 
+          custom_script_(customScript),
+          has_head_(false), 
+          injected_(false) {}
+    
+    virtual bool InitFilter() override {
+        return true;
+    }
+    
+    virtual FilterStatus Filter(void* data_in, size_t data_in_size,
+                               size_t& data_in_read, void* data_out,
+                               size_t data_out_size, size_t& data_out_written) override {
+        
+        // Add incoming data to buffer
+        if (data_in_size > 0) {
+            buffer_.append(static_cast<const char*>(data_in), data_in_size);
+        }
+        data_in_read = data_in_size;
+        
+        // Only inject once and if we have scripts to inject
+        if (!injected_ && (!electrobun_script_.empty() || !custom_script_.empty())) {
+            std::string combined_script = electrobun_script_;
+            if (!custom_script_.empty()) {
+                combined_script += "\n" + custom_script_;
+            }
+            
+            std::string script_tag = "<script>\n" + combined_script + "\n</script>\n";
+            
+            // Look for injection points in order of preference
+            size_t inject_pos = std::string::npos;
+            
+            // 1. Try to inject after <head>
+            size_t head_pos = buffer_.find("<head>");
+            if (head_pos != std::string::npos) {
+                inject_pos = head_pos + 6; // After <head>
+                has_head_ = true;
+            }
+            
+            // 2. Try to inject after <html> with head wrapper
+            if (inject_pos == std::string::npos) {
+                size_t html_pos = buffer_.find("<html");
+                if (html_pos != std::string::npos) {
+                    // Find the end of the <html> tag
+                    size_t html_end = buffer_.find(">", html_pos);
+                    if (html_end != std::string::npos) {
+                        inject_pos = html_end + 1;
+                        script_tag = "<head>\n" + script_tag + "</head>\n";
+                    }
+                }
+            }
+            
+            // 3. Fallback: inject at beginning
+            if (inject_pos == std::string::npos) {
+                inject_pos = 0;
+                script_tag = "<html><head>\n" + script_tag + "</head><body>\n";
+            }
+            
+            // Inject the script
+            if (inject_pos <= buffer_.size()) {
+                buffer_.insert(inject_pos, script_tag);
+                injected_ = true;
+                printf("CEF: Injected preload scripts via response filter (%zu chars)\n", combined_script.length());
+            }
+        }
+        
+        // Output buffered data
+        size_t copy_size = std::min(data_out_size, buffer_.size());
+        if (copy_size > 0) {
+            std::memcpy(data_out, buffer_.data(), copy_size);
+            buffer_.erase(0, copy_size);
+        }
+        data_out_written = copy_size;
+        
+        // Return RESPONSE_FILTER_NEED_MORE_DATA if we have more data to process
+        if (data_in_size > 0 || !buffer_.empty()) {
+            return RESPONSE_FILTER_NEED_MORE_DATA;
+        }
+        
+        return RESPONSE_FILTER_DONE;
+    }
+    
+    IMPLEMENT_REFCOUNTING(ElectrobunResponseFilter);
+};
 
 // CEF views:// scheme handler implementation
 class ViewsResourceHandler : public CefResourceHandler {
@@ -346,7 +436,6 @@ private:
     IMPLEMENT_REFCOUNTING(ViewsSchemeHandlerFactory);
 };
 
-// ElectrobunApp implementation for Linux
 // V8 Handler for postMessage functions
 class V8MessageHandler : public CefV8Handler {
 public:
@@ -381,6 +470,7 @@ private:
     IMPLEMENT_REFCOUNTING(V8MessageHandler);
 };
 
+// ElectrobunApp implementation for Linux
 class ElectrobunApp : public CefApp,
                      public CefBrowserProcessHandler,
                      public CefRenderProcessHandler {
@@ -406,7 +496,7 @@ public:
         command_line->AppendSwitch("disable-plugins");
         command_line->AppendSwitch("disable-web-security");
         command_line->AppendSwitch("no-sandbox");
-        command_line->AppendSwitch("single-process");
+        // command_line->AppendSwitch("single-process");
         printf("CEF DEBUG: GPU acceleration disabled for VM compatibility with additional flags\n");
     }
     
@@ -424,13 +514,10 @@ public:
     }
     
     CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {
-        return this;
+        // In multi-process mode, return nullptr so render process uses the helper
+        return nullptr;
     }
     
-    virtual void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {
-        std::vector<CefString> args;
-        command_line->GetArguments(args);
-    }
     
     void OnContextInitialized() override {
         CefRegisterSchemeHandlerFactory("views", "", new ViewsSchemeHandlerFactory());
@@ -465,57 +552,6 @@ public:
         global->SetValue("internalBridge", internalBridge, V8_PROPERTY_ATTRIBUTE_NONE);
         printf("CEF: Created internalBridge with postMessage function\n");
         
-        // Only inject scripts in the main frame
-        if (frame->IsMain()) {
-            // Set up basic Electrobun globals that the preload script expects
-            CefRefPtr<CefV8Value> electrobun = CefV8Value::CreateObject(nullptr, nullptr);
-            global->SetValue("Electrobun", electrobun, V8_PROPERTY_ATTRIBUTE_READONLY);
-            
-            // Set webviewId (this is crucial for the WebSocket connection)
-            CefRefPtr<CefV8Value> webviewId = CefV8Value::CreateInt(browser->GetIdentifier());
-            global->SetValue("webviewId", webviewId, V8_PROPERTY_ATTRIBUTE_READONLY);
-            
-            // Set up basic window properties
-            CefRefPtr<CefV8Value> window = global->GetValue("window");
-            if (window->IsObject()) {
-                window->SetValue("webviewId", webviewId, V8_PROPERTY_ATTRIBUTE_READONLY);
-            }
-            
-            // Get the browser identifier to look up preload scripts
-            uint32_t browserId = browser->GetIdentifier();
-            
-            // Execute the electrobun preload script if available
-            auto electrobunScript = g_electrobun_preload_scripts.find(browserId);
-            if (electrobunScript != g_electrobun_preload_scripts.end() && !electrobunScript->second.script.empty()) {
-                CefRefPtr<CefV8Value> result;
-                CefRefPtr<CefV8Exception> exception;
-                
-                if (context->Eval(electrobunScript->second.script, "", 0, result, exception)) {
-                    printf("CEF: Electrobun preload script executed successfully for webview %u\n", browserId);
-                } else {
-                    printf("CEF: Electrobun preload script execution failed for webview %u: %s\n", 
-                           browserId, exception ? exception->GetMessage().ToString().c_str() : "unknown error");
-                }
-            } else {
-                printf("CEF: No electrobun preload script found for webview %u\n", browserId);
-            }
-            
-            // Execute the custom preload script if available
-            auto customScript = g_custom_preload_scripts.find(browserId);
-            if (customScript != g_custom_preload_scripts.end() && !customScript->second.script.empty()) {
-                CefRefPtr<CefV8Value> result;
-                CefRefPtr<CefV8Exception> exception;
-                
-                if (context->Eval(customScript->second.script, "", 0, result, exception)) {
-                    printf("CEF: Custom preload script executed successfully for webview %u\n", browserId);
-                } else {
-                    printf("CEF: Custom preload script execution failed for webview %u: %s\n", 
-                           browserId, exception ? exception->GetMessage().ToString().c_str() : "unknown error");
-                }
-            } else {
-                printf("CEF: No custom preload script found for webview %u\n", browserId);
-            }
-        }
         
         // Exit the context
         context->Exit();
@@ -542,8 +578,9 @@ private:
     WebviewEventHandler webview_event_handler_;
     DecideNavigationCallback navigation_callback_;
     
-    PreloadScript electrobun_script_;
-    PreloadScript custom_script_;
+    std::string electrobun_script_;
+    std::string custom_script_;
+    CefRefPtr<CefBrowser> browser_;
     
     GtkWidget* gtk_widget_;
     std::function<void()> positioning_callback_;
@@ -563,15 +600,27 @@ public:
         , gtk_widget_(gtkWidget) {}
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
-        electrobun_script_ = {script, false};
-        // Store globally for render process access
-        g_electrobun_preload_scripts[webview_id_] = {script, false};
+        electrobun_script_ = script;
     }
 
     void UpdateCustomPreloadScript(const std::string& script) {
-        custom_script_ = {script, true};
-        // Store globally for render process access
-        g_custom_preload_scripts[webview_id_] = {script, true};
+        custom_script_ = script;
+    }
+    
+    std::string GetCombinedScript() {
+        std::string combined_script = electrobun_script_;
+        if (!custom_script_.empty()) {
+            combined_script += "\n" + custom_script_;
+        }
+        return combined_script;
+    }
+    
+    void SetBrowser(CefRefPtr<CefBrowser> browser) {
+        browser_ = browser;
+    }
+    
+    void SetBrowserPreloadScript(int browserId, const std::string& script) {
+        g_preloadScripts[browserId] = script;
     }
     
     void SetPositioningCallback(std::function<void()> callback) {
@@ -623,6 +672,27 @@ public:
         bool& disable_default_handling) override {
         return this;
     }
+    
+    // Response filter for preload script injection (Mac-style clean approach)
+    virtual CefRefPtr<CefResponseFilter> GetResourceResponseFilter(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        CefRefPtr<CefResponse> response) override {
+        
+        // Only inject scripts into HTML responses in main frame
+        if (frame->IsMain() && 
+            response->GetMimeType().ToString().find("html") != std::string::npos) {
+            
+            std::string combined_script = GetCombinedScript();
+            if (!combined_script.empty()) {
+                printf("CEF: Creating response filter for preload scripts (%zu chars)\n", combined_script.length());
+                return new ElectrobunResponseFilter(electrobun_script_, custom_script_);
+            }
+        }
+        return nullptr;
+    }
+
 
     void OnLoadEnd(CefRefPtr<CefBrowser> browser,
                   CefRefPtr<CefFrame> frame,
@@ -769,6 +839,9 @@ public:
     // CefLifeSpanHandler methods
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
         printf("CEF: OnAfterCreated called for browser\n");
+        
+        // Set the browser reference
+        SetBrowser(browser);
         
         // The CEF browser window is now fully created
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
@@ -1037,17 +1110,7 @@ bool initializeCEF() {
     CefMainArgs main_args(argc, argv);
     g_app = new ElectrobunApp();
 
-    // Set global command line flags before CEF initialization
-    CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
-    if (command_line) {
-        command_line->AppendSwitch("disable-gpu");
-        command_line->AppendSwitch("disable-gpu-compositing");
-        command_line->AppendSwitch("disable-dev-shm-usage");
-        command_line->AppendSwitch("no-sandbox");
-        command_line->AppendSwitch("single-process");
-        printf("CEF: Global command line flags set for GPU disable and VM compatibility\n");
-    }
-
+   
     CefSettings settings;
     settings.no_sandbox = true;
     settings.remote_debugging_port = 9222;
