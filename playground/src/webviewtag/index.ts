@@ -7,7 +7,6 @@ const rpc = Electroview.defineRPC<any>({
   },
 });
 
-console.log(Electroview)
 
 const electrobun = new Electroview({ rpc });
 

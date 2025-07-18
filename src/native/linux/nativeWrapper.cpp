@@ -163,10 +163,15 @@ std::vector<MenuJsonValue> parseMenuJson(const std::string& jsonStr) {
     return items;
 }
 
+// Forward declarations
+class AbstractView;
+
 // CEF globals and implementation
 static bool g_cefInitialized = false;
 static bool g_useCEF = false;
 
+// Global webview storage to keep shared_ptr alive
+static std::map<uint32_t, std::shared_ptr<AbstractView>> g_webviewMap;
 
 CefRefPtr<class ElectrobunApp> g_app;
 
@@ -342,6 +347,40 @@ private:
 };
 
 // ElectrobunApp implementation for Linux
+// V8 Handler for postMessage functions
+class V8MessageHandler : public CefV8Handler {
+public:
+    V8MessageHandler(CefRefPtr<CefBrowser> browser, const CefString& messageName)
+        : browser_(browser), message_name_(messageName) {}
+
+    virtual bool Execute(const CefString& name,
+                       CefRefPtr<CefV8Value> object,
+                       const CefV8ValueList& arguments,
+                       CefRefPtr<CefV8Value>& retval,
+                       CefString& exception) override {
+        printf("CEF: V8MessageHandler Execute called for %s with %zu arguments\n", 
+               message_name_.ToString().c_str(), arguments.size());
+        
+        if (arguments.size() > 0 && arguments[0]->IsString()) {
+            std::string msgContent = arguments[0]->GetStringValue();
+            printf("CEF: Sending %s message: %s\n", 
+                   message_name_.ToString().c_str(), msgContent.c_str());
+            
+            // Create and send process message to the browser process
+            CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(message_name_);
+            message->GetArgumentList()->SetString(0, msgContent);
+            browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, message);
+            return true;
+        }
+        return false;
+    }
+
+private:
+    CefRefPtr<CefBrowser> browser_;
+    CefString message_name_;
+    IMPLEMENT_REFCOUNTING(V8MessageHandler);
+};
+
 class ElectrobunApp : public CefApp,
                      public CefBrowserProcessHandler,
                      public CefRenderProcessHandler {
@@ -404,11 +443,30 @@ public:
                          CefRefPtr<CefV8Context> context) override {
         printf("CEF: OnContextCreated called for frame %s\n", frame->GetURL().ToString().c_str());
         
+        // Enter the context
+        context->Enter();
+        
+        // Get the global object
+        CefRefPtr<CefV8Value> global = context->GetGlobal();
+        
+        // Create bunBridge object with postMessage method
+        CefRefPtr<CefV8Value> bunBridge = CefV8Value::CreateObject(nullptr, nullptr);
+        CefRefPtr<CefV8Handler> bunHandler = new V8MessageHandler(browser, "BunBridgeMessage");
+        CefRefPtr<CefV8Value> bunPostMessage = CefV8Value::CreateFunction("postMessage", bunHandler);
+        bunBridge->SetValue("postMessage", bunPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
+        global->SetValue("bunBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
+        printf("CEF: Created bunBridge with postMessage function\n");
+        
+        // Create internalBridge object with postMessage method
+        CefRefPtr<CefV8Value> internalBridge = CefV8Value::CreateObject(nullptr, nullptr);
+        CefRefPtr<CefV8Handler> internalHandler = new V8MessageHandler(browser, "internalMessage");
+        CefRefPtr<CefV8Value> internalPostMessage = CefV8Value::CreateFunction("postMessage", internalHandler);
+        internalBridge->SetValue("postMessage", internalPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
+        global->SetValue("internalBridge", internalBridge, V8_PROPERTY_ATTRIBUTE_NONE);
+        printf("CEF: Created internalBridge with postMessage function\n");
+        
         // Only inject scripts in the main frame
         if (frame->IsMain()) {
-            // Get the global object
-            CefRefPtr<CefV8Value> global = context->GetGlobal();
-            
             // Set up basic Electrobun globals that the preload script expects
             CefRefPtr<CefV8Value> electrobun = CefV8Value::CreateObject(nullptr, nullptr);
             global->SetValue("Electrobun", electrobun, V8_PROPERTY_ATTRIBUTE_READONLY);
@@ -458,6 +516,9 @@ public:
                 printf("CEF: No custom preload script found for webview %u\n", browserId);
             }
         }
+        
+        // Exit the context
+        context->Exit();
     }
 
 private:
@@ -888,6 +949,40 @@ public:
                 }
             }
         }
+    }
+
+    // Handle process messages from render process
+    virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                        CefRefPtr<CefFrame> frame,
+                                        CefProcessId source_process,
+                                        CefRefPtr<CefProcessMessage> message) override {
+        std::string messageName = message->GetName().ToString();
+        std::string messageContent = message->GetArgumentList()->GetString(0).ToString();
+        
+        printf("CEF: OnProcessMessageReceived - name: %s, content: %s\n", 
+               messageName.c_str(), messageContent.c_str());
+        
+        char* contentCopy = strdup(messageContent.c_str());
+        bool result = false;
+        
+        if (messageName == "BunBridgeMessage") {
+            printf("CEF: Forwarding BunBridgeMessage to handler\n");
+            bun_bridge_handler_(webview_id_, contentCopy);
+            result = true;
+        } else if (messageName == "internalMessage") {
+            printf("CEF: Forwarding internalMessage to handler\n");
+            webview_tag_handler_(webview_id_, contentCopy);
+            result = true;
+        }
+
+        // Free the copied string after a delay to ensure the callback has time to process it
+        // This is necessary because the callbacks are invoked on the JS worker thread
+        g_timeout_add(1000, [](gpointer data) -> gboolean {
+            free(data);
+            return G_SOURCE_REMOVE;
+        }, contentCopy);
+        
+        return result;
     }
 
 private:
@@ -2013,9 +2108,31 @@ public:
     }
     
     void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
-        if (browser) {
-            browser->GetMainFrame()->ExecuteJavaScript(CefString(jsString), CefString(""), 0);
+        if (!browser) {
+            printf("CEF: evaluateJavaScriptWithNoCompletion called but browser is NULL\n");
+            return;
         }
+        
+        if (!jsString || strlen(jsString) == 0) {
+            printf("CEF: evaluateJavaScriptWithNoCompletion called with empty jsString\n");
+            return;
+        }
+        
+        printf("CEF: evaluateJavaScriptWithNoCompletion called, jsString length=%zu\n", strlen(jsString));
+        printf("CEF: evaluateJavaScriptWithNoCompletion, jsString preview: %.100s%s\n", 
+               jsString, strlen(jsString) > 100 ? "..." : "");
+        
+        CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+        if (!frame) {
+            printf("CEF: evaluateJavaScriptWithNoCompletion - GetMainFrame returned NULL\n");
+            return;
+        }
+        
+        // Wrap the execution in a try-catch to handle cases where __electrobun might not exist yet
+        std::string wrappedJs = "try { " + std::string(jsString) + " } catch(e) { console.error('CEF ExecuteJavaScript error:', e); }";
+        
+        frame->ExecuteJavaScript(CefString(wrappedJs), CefString(""), 0);
+        printf("CEF: evaluateJavaScriptWithNoCompletion ExecuteJavaScript called successfully\n");
     }
     
     void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) override {
@@ -3106,6 +3223,9 @@ AbstractView* initWebview(uint32_t webviewId,
                 fflush(stdout);
             }
             
+            // Store the webview in global map to keep it alive
+            g_webviewMap[webviewId] = webview;
+            
             printf("=== initWebview dispatch_sync_main RETURNING: %p ===\n", webview.get());
             fflush(stdout);
             
@@ -3124,9 +3244,10 @@ AbstractView* initWebview(uint32_t webviewId,
 }
 
 void loadURLInWebView(AbstractView* abstractView, const char* urlString) {
-    if (abstractView) {
-        dispatch_sync_main_void([&]() {
-            abstractView->loadURL(urlString);
+    if (abstractView && urlString) {
+        std::string urlStr(urlString);  // Copy the string to ensure it survives
+        dispatch_sync_main_void([abstractView, urlStr]() {  // Capture by value
+            abstractView->loadURL(urlStr.c_str());
         });
     }
 }
@@ -3179,18 +3300,36 @@ bool webviewCanGoForward(AbstractView* abstractView) {
 
 void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
     if (abstractView) {
-        dispatch_sync_main_void([&]() {
+        std::string masksStr(masksJson ? masksJson : "");  // Copy the string to ensure it survives
+        dispatch_sync_main_void([abstractView, x, y, width, height, masksStr]() {  // Capture by value
             GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
-            abstractView->resize(frame, masksJson);
+            abstractView->resize(frame, masksStr.c_str());
         });
     }
 }
 
 void evaluateJavaScriptWithNoCompletion(AbstractView* abstractView, const char* js) {
-    if (abstractView) {
-        dispatch_sync_main_void([&]() {
-            abstractView->evaluateJavaScriptWithNoCompletion(js);
+    if (abstractView && js) {
+        std::string jsString(js);  // Copy the string to ensure it survives
+        printf("evaluateJavaScriptWithNoCompletion: FFI entry, abstractView=%p, jsString length=%zu\n", abstractView, jsString.length());
+        printf("evaluateJavaScriptWithNoCompletion: FFI entry, jsString preview: %.100s%s\n", 
+               jsString.c_str(), jsString.length() > 100 ? "..." : "");
+        dispatch_sync_main_void([abstractView, jsString]() {  // Capture by value
+            printf("evaluateJavaScriptWithNoCompletion: In main thread dispatch, abstractView=%p, jsString length=%zu\n", abstractView, jsString.length());
+            printf("evaluateJavaScriptWithNoCompletion: In main thread dispatch, jsString preview: %.100s%s\n", 
+                   jsString.c_str(), jsString.length() > 100 ? "..." : "");
+            
+            // Verify the abstractView is still valid
+            if (abstractView) {
+                printf("evaluateJavaScriptWithNoCompletion: About to call virtual method on abstractView=%p\n", abstractView);
+                abstractView->evaluateJavaScriptWithNoCompletion(jsString.c_str());
+                printf("evaluateJavaScriptWithNoCompletion: Virtual method returned successfully\n");
+            } else {
+                printf("evaluateJavaScriptWithNoCompletion: abstractView became NULL in dispatch!\n");
+            }
         });
+    } else {
+        printf("evaluateJavaScriptWithNoCompletion: FFI entry, abstractView=%p, js=%p\n", abstractView, js);
     }
 }
 
