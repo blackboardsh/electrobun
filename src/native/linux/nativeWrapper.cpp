@@ -5,6 +5,7 @@
 #include <gdk/gdkx.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/shape.h>
+#include <X11/Xatom.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -176,7 +177,6 @@ struct MaskRect {
 std::vector<MaskRect> parseMaskJson(const std::string& jsonStr) {
     std::vector<MaskRect> rects;
     
-    printf("parseMaskJson: input='%s'\n", jsonStr.c_str());
     
     if (jsonStr.empty()) {
         return rects;
@@ -189,7 +189,6 @@ std::vector<MaskRect> parseMaskJson(const std::string& jsonStr) {
         unescapedJson.replace(pos, 2, "\"");
         pos += 1;
     }
-    printf("parseMaskJson: unescaped='%s'\n", unescapedJson.c_str());
     
     // Simple JSON parser for rectangle arrays
     // Looking for patterns like [{"x":10,"y":20,"width":100,"height":50}]
@@ -241,7 +240,6 @@ std::vector<MaskRect> parseMaskJson(const std::string& jsonStr) {
             }
         }
         
-        printf("parseMaskJson: parsed rect x=%d, y=%d, width=%d, height=%d\n", rect.x, rect.y, rect.width, rect.height);
         rects.push_back(rect);
         parsePos = objEnd + 1;
     }
@@ -1824,10 +1822,8 @@ public:
     }
     
     void applyVisualMask() override {
-        printf("WebKit applyVisualMask called: maskJSON='%s'\n", maskJSON.c_str());
         
         if (!webview || maskJSON.empty()) {
-            printf("WebKit applyVisualMask: early return - webview=%p, maskJSON.empty()=%d\n", webview, maskJSON.empty());
             return;
         }
         
@@ -2414,10 +2410,8 @@ public:
     }
     
     void applyVisualMask() override {
-        printf("CEF applyVisualMask called: maskJSON='%s'\n", maskJSON.c_str());
         
         if (!browser || maskJSON.empty()) {
-            printf("CEF applyVisualMask: early return - browser=%p, maskJSON.empty()=%d\n", browser.get(), maskJSON.empty());
             return;
         }
         
@@ -2430,15 +2424,12 @@ public:
         
         // Get the CEF browser's X11 window
         CefWindowHandle window = browser->GetHost()->GetWindowHandle();
-        printf("CEF applyVisualMask: window handle = %lu\n", window);
         if (!window) {
-            printf("CEF applyVisualMask: no window handle\n");
             return;
         }
         
         // Get the X11 display
         Display* display = gdk_x11_get_default_xdisplay();
-        printf("CEF applyVisualMask: display = %p\n", display);
         
         // Create X11 rectangles for the mask regions
         std::vector<XRectangle> xrects;
@@ -2449,15 +2440,12 @@ public:
                 static_cast<unsigned short>(mask.width),
                 static_cast<unsigned short>(mask.height)
             };
-            printf("CEF applyVisualMask: adding rect x=%d, y=%d, w=%d, h=%d\n", 
-                   rect.x, rect.y, rect.width, rect.height);
             xrects.push_back(rect);
         }
         
         // Apply the shape mask to the X11 window
         // This creates holes in the window where the mask rectangles are
         if (!xrects.empty()) {
-            printf("CEF applyVisualMask: calling XShapeCombineRectangles\n");
             
             // First, create the base shape (full window rectangle)
             XRectangle baseRect = {
@@ -2465,8 +2453,6 @@ public:
                 static_cast<unsigned short>(visualBounds.width),
                 static_cast<unsigned short>(visualBounds.height)
             };
-            printf("CEF applyVisualMask: setting base shape w=%d, h=%d\n", 
-                   baseRect.width, baseRect.height);
             
             // Set the base shape to the full window
             XShapeCombineRectangles(display, window, ShapeBounding, 0, 0,
@@ -2474,45 +2460,35 @@ public:
             
             // Subtract each mask rectangle individually
             for (size_t i = 0; i < xrects.size(); i++) {
-                printf("CEF applyVisualMask: subtracting rect %zu: x=%d, y=%d, w=%d, h=%d\n", 
-                       i, xrects[i].x, xrects[i].y, xrects[i].width, xrects[i].height);
                 XShapeCombineRectangles(display, window, ShapeBounding, 0, 0,
                                        &xrects[i], 1, ShapeSubtract, YXBanded);
             }
             
-            printf("CEF applyVisualMask: XShapeCombineRectangles completed\n");
             XFlush(display);
         }
     }
     
     void removeMasks() override {
-        printf("CEF removeMasks called\n");
         if (!browser) {
-            printf("CEF removeMasks: no browser\n");
             return;
         }
         
         // Get the CEF browser's X11 window
         CefWindowHandle window = browser->GetHost()->GetWindowHandle();
-        printf("CEF removeMasks: window handle = %lu\n", window);
         if (!window) {
-            printf("CEF removeMasks: no window handle\n");
             return;
         }
         
         // Get the X11 display
         Display* display = gdk_x11_get_default_xdisplay();
-        printf("CEF removeMasks: display = %p\n", display);
         
         // Reset the window shape to be fully opaque/visible
         // This removes any existing shape mask
-        printf("CEF removeMasks: calling XShapeCombineMask\n");
         XShapeCombineMask(display, window, ShapeBounding, 0, 0, None, ShapeSet);
         XFlush(display);
         
         // Clear the mask JSON
         maskJSON.clear();
-        printf("CEF removeMasks: completed\n");
     }
     
     void toggleMirrorMode(bool enable) override {
@@ -2522,15 +2498,60 @@ public:
     
     void setHidden(bool hidden) override {
         if (browser) {
-            // SetWindowVisibility is not available in CEF Linux builds
-            // TODO: Implement visibility control for CEF on Linux
-            // For now, we'll just show/hide the widget itself
-            if (widget) {
+            // Use X11 APIs to show/hide the CEF window
+            CefWindowHandle window = browser->GetHost()->GetWindowHandle();
+            if (window) {
+                Display* display = gdk_x11_get_default_xdisplay();
                 if (hidden) {
-                    gtk_widget_hide(widget);
+                    XUnmapWindow(display, window);
                 } else {
-                    gtk_widget_show(widget);
+                    XMapWindow(display, window);
                 }
+                XFlush(display);
+            }
+        }
+    }
+    
+    void setTransparent(bool transparent) override {
+        if (browser) {
+            // Use X11 APIs to set window transparency
+            CefWindowHandle window = browser->GetHost()->GetWindowHandle();
+            if (window) {
+                Display* display = gdk_x11_get_default_xdisplay();
+                if (transparent) {
+                    // Set window to be transparent
+                    Atom atom = XInternAtom(display, "_NET_WM_WINDOW_OPACITY", False);
+                    unsigned long opacity = 0xC0000000; // 75% opacity
+                    XChangeProperty(display, window, atom, XA_CARDINAL, 32,
+                                   PropModeReplace, (unsigned char*)&opacity, 1);
+                } else {
+                    // Remove transparency
+                    Atom atom = XInternAtom(display, "_NET_WM_WINDOW_OPACITY", False);
+                    XDeleteProperty(display, window, atom);
+                }
+                XFlush(display);
+            }
+        }
+    }
+    
+    void setPassthrough(bool enable) override {
+        AbstractView::setPassthrough(enable); // Set the flag
+        
+        if (browser) {
+            // Use X11 input shape extension for mouse passthrough
+            CefWindowHandle window = browser->GetHost()->GetWindowHandle();
+            if (window) {
+                Display* display = gdk_x11_get_default_xdisplay();
+                if (enable) {
+                    // Make window invisible to mouse events
+                    XRectangle rect = {0, 0, 0, 0}; // Empty rectangle
+                    XShapeCombineRectangles(display, window, ShapeInput, 0, 0,
+                                           &rect, 1, ShapeSet, YXBanded);
+                } else {
+                    // Reset input shape to allow mouse events
+                    XShapeCombineMask(display, window, ShapeInput, 0, 0, None, ShapeSet);
+                }
+                XFlush(display);
             }
         }
     }
