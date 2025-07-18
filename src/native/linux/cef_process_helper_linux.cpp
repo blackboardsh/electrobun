@@ -28,7 +28,6 @@ public:
                                 CefRefPtr<CefV8Context> context) override {
         // Log the context creation
         std::string frameUrl = frame->GetURL().ToString();
-        printf("CEF Helper: OnContextCreated called for frame %s\n", frameUrl.c_str());
         
         // Get the global window object
         CefRefPtr<CefV8Context> v8Context = frame->GetV8Context();
@@ -41,14 +40,12 @@ public:
         CefRefPtr<CefV8Value> bunPostMessage = CreatePostMessageFunction(browser, "BunBridgeMessage");
         bunBridge->SetValue("postMessage", bunPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
         window->SetValue("bunBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
-        printf("CEF Helper: Created bunBridge with postMessage function\n");
 
         // Create internalBridge
         CefRefPtr<CefV8Value> internalBridge = CefV8Value::CreateObject(nullptr, nullptr);
         CefRefPtr<CefV8Value> internalPostMessage = CreatePostMessageFunction(browser, "internalMessage");
         internalBridge->SetValue("postMessage", internalPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
         window->SetValue("internalBridge", internalBridge, V8_PROPERTY_ATTRIBUTE_NONE);
-        printf("CEF Helper: Created internalBridge with postMessage function\n");
 
 
         v8Context->Exit();
@@ -66,13 +63,11 @@ private:
                            const CefV8ValueList& arguments,
                            CefRefPtr<CefV8Value>& retval,
                            CefString& exception) override {
-            printf("CEF Helper: V8Handler Execute called for %s with %zu arguments\n", 
-                   message_name_.ToString().c_str(), arguments.size());
+
             
             if (arguments.size() > 0 && arguments[0]->IsString()) {
                 std::string msgContent = arguments[0]->GetStringValue();
-                printf("CEF Helper: Sending %s message: %s\n", 
-                       message_name_.ToString().c_str(), msgContent.c_str());
+              
                 
                 // Create and send process message to the main process
                 CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(message_name_);
