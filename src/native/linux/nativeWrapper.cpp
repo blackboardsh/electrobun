@@ -4,6 +4,7 @@
 #include <libayatana-appindicator/app-indicator.h>
 #include <gdk/gdkx.h>
 #include <X11/Xlib.h>
+#include <X11/extensions/shape.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -18,6 +19,7 @@
 #include <unistd.h>
 #include <functional>
 #include <execinfo.h>
+#include <cmath>
 
 // CEF includes - always include them even if it marginally increases binary size
 // we want a few binaries that will work whenever an electrobun developer
@@ -163,6 +165,99 @@ std::vector<MenuJsonValue> parseMenuJson(const std::string& jsonStr) {
     }
     
     return items;
+}
+
+// Mask rectangle structure for X11 regions
+struct MaskRect {
+    int x, y, width, height;
+};
+
+// Parse maskJSON string into rectangles
+std::vector<MaskRect> parseMaskJson(const std::string& jsonStr) {
+    std::vector<MaskRect> rects;
+    
+    printf("parseMaskJson: input='%s'\n", jsonStr.c_str());
+    
+    if (jsonStr.empty()) {
+        return rects;
+    }
+    
+    // Handle double-escaped JSON by unescaping quotes
+    std::string unescapedJson = jsonStr;
+    size_t pos = 0;
+    while ((pos = unescapedJson.find("\\\"", pos)) != std::string::npos) {
+        unescapedJson.replace(pos, 2, "\"");
+        pos += 1;
+    }
+    printf("parseMaskJson: unescaped='%s'\n", unescapedJson.c_str());
+    
+    // Simple JSON parser for rectangle arrays
+    // Looking for patterns like [{"x":10,"y":20,"width":100,"height":50}]
+    size_t parsePos = 0;
+    while (parsePos < unescapedJson.length()) {
+        size_t objStart = unescapedJson.find("{", parsePos);
+        if (objStart == std::string::npos) break;
+        
+        size_t objEnd = unescapedJson.find("}", objStart);
+        if (objEnd == std::string::npos) break;
+        
+        std::string obj = unescapedJson.substr(objStart, objEnd - objStart + 1);
+        
+        MaskRect rect = {};
+        
+        // Parse x
+        size_t xPos = obj.find("\"x\":");
+        if (xPos != std::string::npos) {
+            size_t valueStart = obj.find_first_of("0123456789-", xPos + 4);
+            if (valueStart != std::string::npos) {
+                rect.x = atoi(obj.substr(valueStart).c_str());
+            }
+        }
+        
+        // Parse y
+        size_t yPos = obj.find("\"y\":");
+        if (yPos != std::string::npos) {
+            size_t valueStart = obj.find_first_of("0123456789-", yPos + 4);
+            if (valueStart != std::string::npos) {
+                rect.y = atoi(obj.substr(valueStart).c_str());
+            }
+        }
+        
+        // Parse width
+        size_t widthPos = obj.find("\"width\":");
+        if (widthPos != std::string::npos) {
+            size_t valueStart = obj.find_first_of("0123456789", widthPos + 8);
+            if (valueStart != std::string::npos) {
+                rect.width = atoi(obj.substr(valueStart).c_str());
+            }
+        }
+        
+        // Parse height
+        size_t heightPos = obj.find("\"height\":");
+        if (heightPos != std::string::npos) {
+            size_t valueStart = obj.find_first_of("0123456789", heightPos + 9);
+            if (valueStart != std::string::npos) {
+                rect.height = atoi(obj.substr(valueStart).c_str());
+            }
+        }
+        
+        printf("parseMaskJson: parsed rect x=%d, y=%d, width=%d, height=%d\n", rect.x, rect.y, rect.width, rect.height);
+        rects.push_back(rect);
+        parsePos = objEnd + 1;
+    }
+    
+    return rects;
+}
+
+// Check if a point is within any of the mask rectangles
+bool isPointInMask(int x, int y, const std::vector<MaskRect>& masks) {
+    for (const auto& mask : masks) {
+        if (x >= mask.x && x < mask.x + mask.width &&
+            y >= mask.y && y < mask.y + mask.height) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Forward declarations
@@ -1718,14 +1813,75 @@ public:
             visualBounds = frame;
         }
         maskJSON = masksJson ? masksJson : "";
+        
+        // Apply visual mask if maskJSON is provided
+        if (masksJson && strlen(masksJson) > 0) {
+            applyVisualMask();
+        } else {
+            // If no masks, remove any existing masks
+            removeMasks();
+        }
     }
     
     void applyVisualMask() override {
-        // TODO: Implement visual masking
+        printf("WebKit applyVisualMask called: maskJSON='%s'\n", maskJSON.c_str());
+        
+        if (!webview || maskJSON.empty()) {
+            printf("WebKit applyVisualMask: early return - webview=%p, maskJSON.empty()=%d\n", webview, maskJSON.empty());
+            return;
+        }
+        
+        // Parse mask rectangles from JSON
+        std::vector<MaskRect> masks = parseMaskJson(maskJSON);
+        printf("WebKit applyVisualMask: parsed %zu masks\n", masks.size());
+        if (masks.empty()) {
+            return;
+        }
+        
+        // Get the GdkWindow for the webview
+        GdkWindow* window = gtk_widget_get_window(webview);
+        if (!window) {
+            return;
+        }
+        
+        // Get the X11 display and window
+        Display* display = gdk_x11_get_default_xdisplay();
+        Window xwindow = gdk_x11_window_get_xid(window);
+        
+        // Create a region that covers the entire webview
+        cairo_region_t* region = cairo_region_create_rectangle(&visualBounds);
+        
+        // Subtract mask rectangles from the region
+        for (const auto& mask : masks) {
+            cairo_rectangle_int_t maskRect = {
+                mask.x, mask.y, mask.width, mask.height
+            };
+            cairo_region_t* maskRegion = cairo_region_create_rectangle(&maskRect);
+            cairo_region_subtract(region, maskRegion);
+            cairo_region_destroy(maskRegion);
+        }
+        
+        // Apply the region to the GdkWindow
+        gdk_window_shape_combine_region(window, region, 0, 0);
+        cairo_region_destroy(region);
     }
     
     void removeMasks() override {
-        // TODO: Implement mask removal
+        if (!webview) {
+            return;
+        }
+        
+        // Get the GdkWindow for the webview
+        GdkWindow* window = gtk_widget_get_window(webview);
+        if (!window) {
+            return;
+        }
+        
+        // Remove any existing shape by setting it to NULL
+        gdk_window_shape_combine_region(window, NULL, 0, 0);
+        
+        // Clear the mask JSON
+        maskJSON.clear();
     }
     
     void toggleMirrorMode(bool enable) override {
@@ -2247,14 +2403,116 @@ public:
             visualBounds = frame;
         }
         maskJSON = masksJson ? masksJson : "";
+        
+        // Apply visual mask if maskJSON is provided
+        if (masksJson && strlen(masksJson) > 0) {
+            applyVisualMask();
+        } else {
+            // If no masks, remove any existing masks
+            removeMasks();
+        }
     }
     
     void applyVisualMask() override {
-        // TODO: Implement visual masking for CEF
+        printf("CEF applyVisualMask called: maskJSON='%s'\n", maskJSON.c_str());
+        
+        if (!browser || maskJSON.empty()) {
+            printf("CEF applyVisualMask: early return - browser=%p, maskJSON.empty()=%d\n", browser.get(), maskJSON.empty());
+            return;
+        }
+        
+        // Parse mask rectangles from JSON
+        std::vector<MaskRect> masks = parseMaskJson(maskJSON);
+        printf("CEF applyVisualMask: parsed %zu masks\n", masks.size());
+        if (masks.empty()) {
+            return;
+        }
+        
+        // Get the CEF browser's X11 window
+        CefWindowHandle window = browser->GetHost()->GetWindowHandle();
+        printf("CEF applyVisualMask: window handle = %lu\n", window);
+        if (!window) {
+            printf("CEF applyVisualMask: no window handle\n");
+            return;
+        }
+        
+        // Get the X11 display
+        Display* display = gdk_x11_get_default_xdisplay();
+        printf("CEF applyVisualMask: display = %p\n", display);
+        
+        // Create X11 rectangles for the mask regions
+        std::vector<XRectangle> xrects;
+        for (const auto& mask : masks) {
+            XRectangle rect = {
+                static_cast<short>(mask.x),
+                static_cast<short>(mask.y),
+                static_cast<unsigned short>(mask.width),
+                static_cast<unsigned short>(mask.height)
+            };
+            printf("CEF applyVisualMask: adding rect x=%d, y=%d, w=%d, h=%d\n", 
+                   rect.x, rect.y, rect.width, rect.height);
+            xrects.push_back(rect);
+        }
+        
+        // Apply the shape mask to the X11 window
+        // This creates holes in the window where the mask rectangles are
+        if (!xrects.empty()) {
+            printf("CEF applyVisualMask: calling XShapeCombineRectangles\n");
+            
+            // First, create the base shape (full window rectangle)
+            XRectangle baseRect = {
+                0, 0, 
+                static_cast<unsigned short>(visualBounds.width),
+                static_cast<unsigned short>(visualBounds.height)
+            };
+            printf("CEF applyVisualMask: setting base shape w=%d, h=%d\n", 
+                   baseRect.width, baseRect.height);
+            
+            // Set the base shape to the full window
+            XShapeCombineRectangles(display, window, ShapeBounding, 0, 0,
+                                   &baseRect, 1, ShapeSet, YXBanded);
+            
+            // Subtract each mask rectangle individually
+            for (size_t i = 0; i < xrects.size(); i++) {
+                printf("CEF applyVisualMask: subtracting rect %zu: x=%d, y=%d, w=%d, h=%d\n", 
+                       i, xrects[i].x, xrects[i].y, xrects[i].width, xrects[i].height);
+                XShapeCombineRectangles(display, window, ShapeBounding, 0, 0,
+                                       &xrects[i], 1, ShapeSubtract, YXBanded);
+            }
+            
+            printf("CEF applyVisualMask: XShapeCombineRectangles completed\n");
+            XFlush(display);
+        }
     }
     
     void removeMasks() override {
-        // TODO: Implement mask removal for CEF
+        printf("CEF removeMasks called\n");
+        if (!browser) {
+            printf("CEF removeMasks: no browser\n");
+            return;
+        }
+        
+        // Get the CEF browser's X11 window
+        CefWindowHandle window = browser->GetHost()->GetWindowHandle();
+        printf("CEF removeMasks: window handle = %lu\n", window);
+        if (!window) {
+            printf("CEF removeMasks: no window handle\n");
+            return;
+        }
+        
+        // Get the X11 display
+        Display* display = gdk_x11_get_default_xdisplay();
+        printf("CEF removeMasks: display = %p\n", display);
+        
+        // Reset the window shape to be fully opaque/visible
+        // This removes any existing shape mask
+        printf("CEF removeMasks: calling XShapeCombineMask\n");
+        XShapeCombineMask(display, window, ShapeBounding, 0, 0, None, ShapeSet);
+        XFlush(display);
+        
+        // Clear the mask JSON
+        maskJSON.clear();
+        printf("CEF removeMasks: completed\n");
     }
     
     void toggleMirrorMode(bool enable) override {
@@ -3433,6 +3691,61 @@ bool webviewCanGoForward(AbstractView* abstractView) {
         return abstractView->canGoForward();
     }
     return false;
+}
+
+void updateActiveWebviewForMousePosition(uint32_t windowId, int mouseX, int mouseY) {
+    // Find the container for this window
+    auto containerIt = g_containers.find(windowId);
+    if (containerIt == g_containers.end()) {
+        return;
+    }
+    
+    auto container = containerIt->second;
+    
+    // Iterate through webviews in reverse order (topmost webview first)
+    for (auto it = container->abstractViews.rbegin(); it != container->abstractViews.rend(); ++it) {
+        auto webview = *it;
+        
+        // Check if mouse is within the webview bounds
+        if (mouseX >= webview->visualBounds.x && 
+            mouseX < webview->visualBounds.x + webview->visualBounds.width &&
+            mouseY >= webview->visualBounds.y && 
+            mouseY < webview->visualBounds.y + webview->visualBounds.height) {
+            
+            // Check if the mouse is in a masked area
+            if (!webview->maskJSON.empty()) {
+                std::vector<MaskRect> masks = parseMaskJson(webview->maskJSON);
+                
+                // Convert mouse position to webview-relative coordinates
+                int relativeX = mouseX - webview->visualBounds.x;
+                int relativeY = mouseY - webview->visualBounds.y;
+                
+                if (isPointInMask(relativeX, relativeY, masks)) {
+                    // Mouse is in a masked area, continue to next webview
+                    continue;
+                }
+            }
+            
+            // This webview should be active
+            if (container->activeWebView != webview.get()) {
+                // Disable input for all webviews first
+                for (auto& view : container->abstractViews) {
+                    view->toggleMirrorMode(true);
+                }
+                
+                // Enable input for this webview
+                webview->toggleMirrorMode(false);
+                container->activeWebView = webview.get();
+            }
+            return;
+        }
+    }
+    
+    // Mouse is not over any webview, disable input for all
+    for (auto& view : container->abstractViews) {
+        view->toggleMirrorMode(true);
+    }
+    container->activeWebView = nullptr;
 }
 
 void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
