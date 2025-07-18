@@ -1878,8 +1878,6 @@ public:
     
     static gboolean onScrollEvent(GtkWidget* widget, GdkEventScroll* event, gpointer user_data) {
         WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        printf("DEBUG: Scroll event on webview %u, direction=%d\n", impl->webviewId, event->direction);
-        fflush(stdout);
         return FALSE; // Allow scroll to continue
     }
     
@@ -2249,13 +2247,8 @@ public:
     }
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
-        printf("DEBUG: CEF resize called for webview %u with frame: x=%d, y=%d, w=%d, h=%d, fullSize=%s\n", 
-               webviewId, frame.x, frame.y, frame.width, frame.height, fullSize ? "true" : "false");
-        fflush(stdout);
         
         if (browser) {
-            printf("DEBUG: Browser object is valid, calling syncCEFPositionWithFrame\n");
-            fflush(stdout);
             
             // CEF webviews don't have GTK widgets (widget = nullptr)
             // They manage their own X11 windows, so we only need to sync CEF positioning
@@ -2267,9 +2260,6 @@ public:
             syncCEFPositionWithFrame(frame);
             
             visualBounds = frame;
-        } else {
-            printf("DEBUG: Browser object is NULL, cannot resize CEF webview %u\n", webviewId);
-            fflush(stdout);
         }
         maskJSON = masksJson ? masksJson : "";
     }
@@ -2406,17 +2396,11 @@ public:
         }
         
         GdkRectangle frame = { 0, 0, width, height };
-        printf("DEBUG: Window resized to %dx%d, checking %zu webviews\n", width, height, abstractViews.size());
-        fflush(stdout);
         
         for (auto& view : abstractViews) {
-            printf("DEBUG: Webview %u has fullSize=%s\n", view->webviewId, view->fullSize ? "true" : "false");
-            fflush(stdout);
             
             if (view->fullSize) {
                 // Auto-resize webviews should fill the entire window
-                printf("DEBUG: Auto-resizing webview %u to fill window\n", view->webviewId);
-                fflush(stdout);
                 view->resize(frame, "");
             }
             // OOPIFs (fullSize=false) keep their positioning and don't auto-resize
@@ -2705,7 +2689,6 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     gchar* filePath = g_build_filename(viewsDir, fullPath, nullptr);
     
     printf("views:// request: uri=%s, fullPath=%s\n", uri, fullPath ? fullPath : "NULL");
-    printf("DEBUG: After parsing, fullPath should be: %s\n", fullPath);
     printf("cwd=%s\n", cwd);
     printf("viewsDir=%s\n", viewsDir);
     printf("Loading file: %s\n", filePath);
@@ -2966,18 +2949,6 @@ static std::map<uint32_t, std::pair<int, int>> g_lastResizeSize;
 
 // Auto-resize webviews in a specific window
 void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) {
-    printf("DEBUG: *** resizeAutoSizingWebviewsInWindow called for window %u with size %dx%d ***\n", 
-           windowId, width, height);
-    
-    // Print stack trace to understand where this is being called from
-    void* callstack[10];
-    int frames = backtrace(callstack, 10);
-    char** symbols = backtrace_symbols(callstack, frames);
-    printf("DEBUG: Call stack:\n");
-    for (int i = 0; i < frames; i++) {
-        printf("DEBUG:   [%d] %s\n", i, symbols[i]);
-    }
-    free(symbols);
     // Debounce rapid resize events (ignore events within 50ms of the same size)
     auto now = std::chrono::steady_clock::now();
     auto lastTime = g_lastResizeTime[windowId];
@@ -2986,8 +2957,6 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
     if (lastSize.first == width && lastSize.second == height) {
         auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTime).count();
         if (timeDiff < 50) {
-            printf("DEBUG: Debouncing resize for window %u (same size %dx%d within 50ms)\n", 
-                   windowId, width, height);
             return;
         }
     }
@@ -2998,7 +2967,6 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
     // Find the X11 window handle for this window ID
     auto windowIt = g_x11_windows.find(windowId);
     if (windowIt == g_x11_windows.end()) {
-        printf("DEBUG: Window %u not found in g_x11_windows\n", windowId);
         return;
     }
     
@@ -3014,17 +2982,9 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
                 // Check if the webview is already the right size to avoid infinite resize loops
                 GdkRectangle currentBounds = webview->visualBounds;
                 if (currentBounds.width == width && currentBounds.height == height) {
-                    printf("DEBUG: CEF webview %u already at correct size %dx%d, skipping resize\n", 
-                           webviewId, width, height);
                     continue;
                 }
                 
-                printf("DEBUG: Auto-resizing CEF webview %u in window %u to %dx%d\n", 
-                       webviewId, windowId, width, height);
-                fflush(stdout);
-                
-                printf("DEBUG: Current webview bounds: x=%d, y=%d, w=%d, h=%d\n", 
-                       currentBounds.x, currentBounds.y, currentBounds.width, currentBounds.height);
                 
                 // For auto-resize, typically want to fill the entire window starting from (0,0)
                 GdkRectangle frame = { 0, 0, width, height };
@@ -3054,14 +3014,10 @@ gboolean process_x11_events(gpointer data) {
             
             X11Window* targetWin = winIt->second.get();
             
-            printf("DEBUG: Event window=0x%lx, mapped to windowId=%u, actual main window=0x%lx\n", 
-                   event.xany.window, winId, targetWin->window);
             
             // CRITICAL FIX: Only process events from actual main windows, not CEF child windows
             // CEF child windows should NEVER be in g_x11_window_to_id, but if they are, ignore them
             if (event.xany.window != targetWin->window) {
-                printf("DEBUG: IGNORING event from child window 0x%lx (main window is 0x%lx)\n", 
-                       event.xany.window, targetWin->window);
                 continue;
             }
             
@@ -3075,21 +3031,14 @@ gboolean process_x11_events(gpointer data) {
                     break;
                     
                 case ConfigureNotify:
-                    printf("DEBUG: ConfigureNotify for window 0x%lx, size %dx%d (main window 0x%lx)\n", 
-                           event.xconfigure.window, event.xconfigure.width, event.xconfigure.height, targetWin->window);
-                    
                     // Only process ConfigureNotify events for the actual main window, not CEF child windows
                     if (event.xconfigure.window != targetWin->window) {
-                        printf("DEBUG: IGNORING ConfigureNotify for child window 0x%lx (main window is 0x%lx)\n", 
-                               event.xconfigure.window, targetWin->window);
                         break;
                     }
                     
                     if (event.xconfigure.width != targetWin->width || event.xconfigure.height != targetWin->height ||
                         event.xconfigure.x != targetWin->x || event.xconfigure.y != targetWin->y) {
                         
-                        printf("DEBUG: Main window resize detected: %dx%d -> %dx%d\n", 
-                               targetWin->width, targetWin->height, event.xconfigure.width, event.xconfigure.height);
                         
                         targetWin->x = event.xconfigure.x;
                         targetWin->y = event.xconfigure.y;
@@ -3504,8 +3453,6 @@ bool webviewCanGoForward(AbstractView* abstractView) {
 
 void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
     if (abstractView) {
-        printf("DEBUG: resizeWebview called for webview %u with size %dx%d at position (%d,%d)\n", 
-               abstractView->webviewId, (int)width, (int)height, (int)x, (int)y);
         
         std::string masksStr(masksJson ? masksJson : "");  // Copy the string to ensure it survives
         dispatch_sync_main_void([abstractView, x, y, width, height, masksStr]() {  // Capture by value
