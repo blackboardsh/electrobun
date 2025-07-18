@@ -17,6 +17,7 @@
 #include <chrono>
 #include <unistd.h>
 #include <functional>
+#include <execinfo.h>
 
 // CEF includes - always include them even if it marginally increases binary size
 // we want a few binaries that will work whenever an electrobun developer
@@ -94,6 +95,7 @@ struct X11Window {
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     std::vector<Window> childWindows;  // For managing webviews
+    ContainerView* containerView = nullptr;  // Associated container for webview management
     
     X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600) {}
 };
@@ -584,6 +586,7 @@ private:
     
     GtkWidget* gtk_widget_;
     std::function<void()> positioning_callback_;
+    std::function<void(CefRefPtr<CefBrowser>)> browser_created_callback_;
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -617,6 +620,10 @@ public:
     
     void SetBrowser(CefRefPtr<CefBrowser> browser) {
         browser_ = browser;
+    }
+    
+    void SetBrowserCreatedCallback(std::function<void(CefRefPtr<CefBrowser>)> callback) {
+        browser_created_callback_ = callback;
     }
     
     void SetBrowserPreloadScript(int browserId, const std::string& script) {
@@ -842,6 +849,11 @@ public:
         
         // Set the browser reference
         SetBrowser(browser);
+        
+        // Notify CEFWebViewImpl that browser is created
+        if (browser_created_callback_) {
+            browser_created_callback_(browser);
+        }
         
         // The CEF browser window is now fully created
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
@@ -1947,6 +1959,9 @@ public:
             return;
         }
         
+        // Store the parent X11 window handle for later window association
+        this->parentXWindow = x11win->window;
+        
         // Store the parameters
         this->deferredUrl = url ? url : "";
         this->deferredX = x;
@@ -1975,6 +1990,13 @@ public:
             navigationCallback,
             nullptr  // No GTK window needed
         );
+        
+        // Set up browser creation callback to notify CEFWebViewImpl when browser is ready
+        client->SetBrowserCreatedCallback([this](CefRefPtr<CefBrowser> browser) {
+            printf("CEF: Browser created callback fired for webview %u\n", webviewId);
+            this->browser = browser;
+            printf("CEF: Browser reference assigned to CEFWebViewImpl\n");
+        });
         
         // Add preload scripts to the client
         if (!electrobunPreloadScript.empty()) {
@@ -2030,10 +2052,13 @@ public:
             return;
         }
         
-        printf("CEF: CEF window 0x%lx validated - current size %dx%d\n", 
-               (unsigned long)cefWindow, attrs.width, attrs.height);
+        printf("CEF: CEF window 0x%lx validated - current size %dx%d, position (%d,%d)\n", 
+               (unsigned long)cefWindow, attrs.width, attrs.height, attrs.x, attrs.y);
         
         // When CEF is a direct child of the window, position it at the requested coordinates
+        printf("CEF: Calling XMoveResizeWindow with: x=%d, y=%d, w=%d, h=%d\n", 
+               frame.x, frame.y, frame.width, frame.height);
+        
         XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
         XFlush(display);
         
@@ -2044,8 +2069,14 @@ public:
         // Also notify CEF about the resize
         browser->GetHost()->WasResized();
         
-        printf("CEF: Moved CEF window 0x%lx to (%d,%d) size %dx%d\n", 
-               (unsigned long)cefWindow, frame.x, frame.y, frame.width, frame.height);
+        // Check if the resize actually took effect
+        XWindowAttributes newAttrs;
+        if (XGetWindowAttributes(display, (Window)cefWindow, &newAttrs) != 0) {
+            printf("CEF: After resize - CEF window 0x%lx now at (%d,%d) size %dx%d\n", 
+                   (unsigned long)cefWindow, newAttrs.x, newAttrs.y, newAttrs.width, newAttrs.height);
+        }
+        
+        printf("CEF: Resize operation completed for window 0x%lx\n", (unsigned long)cefWindow);
     }
     
     void syncCEFPositionWithWidget() {
@@ -2218,7 +2249,14 @@ public:
     }
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
+        printf("DEBUG: CEF resize called for webview %u with frame: x=%d, y=%d, w=%d, h=%d, fullSize=%s\n", 
+               webviewId, frame.x, frame.y, frame.width, frame.height, fullSize ? "true" : "false");
+        fflush(stdout);
+        
         if (browser) {
+            printf("DEBUG: Browser object is valid, calling syncCEFPositionWithFrame\n");
+            fflush(stdout);
+            
             // CEF webviews don't have GTK widgets (widget = nullptr)
             // They manage their own X11 windows, so we only need to sync CEF positioning
             
@@ -2229,6 +2267,9 @@ public:
             syncCEFPositionWithFrame(frame);
             
             visualBounds = frame;
+        } else {
+            printf("DEBUG: Browser object is NULL, cannot resize CEF webview %u\n", webviewId);
+            fflush(stdout);
         }
         maskJSON = masksJson ? masksJson : "";
     }
@@ -2919,6 +2960,80 @@ gboolean cef_timer_callback(gpointer user_data) {
     return G_SOURCE_CONTINUE; // Keep the timer running
 }
 
+// Global debounce state
+static std::map<uint32_t, std::chrono::steady_clock::time_point> g_lastResizeTime;
+static std::map<uint32_t, std::pair<int, int>> g_lastResizeSize;
+
+// Auto-resize webviews in a specific window
+void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) {
+    printf("DEBUG: *** resizeAutoSizingWebviewsInWindow called for window %u with size %dx%d ***\n", 
+           windowId, width, height);
+    
+    // Print stack trace to understand where this is being called from
+    void* callstack[10];
+    int frames = backtrace(callstack, 10);
+    char** symbols = backtrace_symbols(callstack, frames);
+    printf("DEBUG: Call stack:\n");
+    for (int i = 0; i < frames; i++) {
+        printf("DEBUG:   [%d] %s\n", i, symbols[i]);
+    }
+    free(symbols);
+    // Debounce rapid resize events (ignore events within 50ms of the same size)
+    auto now = std::chrono::steady_clock::now();
+    auto lastTime = g_lastResizeTime[windowId];
+    auto lastSize = g_lastResizeSize[windowId];
+    
+    if (lastSize.first == width && lastSize.second == height) {
+        auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTime).count();
+        if (timeDiff < 50) {
+            printf("DEBUG: Debouncing resize for window %u (same size %dx%d within 50ms)\n", 
+                   windowId, width, height);
+            return;
+        }
+    }
+    
+    g_lastResizeTime[windowId] = now;
+    g_lastResizeSize[windowId] = {width, height};
+    
+    // Find the X11 window handle for this window ID
+    auto windowIt = g_x11_windows.find(windowId);
+    if (windowIt == g_x11_windows.end()) {
+        printf("DEBUG: Window %u not found in g_x11_windows\n", windowId);
+        return;
+    }
+    
+    Window x11WindowHandle = windowIt->second->window;
+    
+    // Find all webviews that belong to this window and have fullSize=true
+    for (auto& [webviewId, webview] : g_webviewMap) {
+        if (webview && webview->fullSize) {
+            // Check if this webview belongs to the specified window
+            // For CEF webviews, we need to check their parent window
+            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
+            if (cefView && cefView->parentXWindow == x11WindowHandle) {
+                // Check if the webview is already the right size to avoid infinite resize loops
+                GdkRectangle currentBounds = webview->visualBounds;
+                if (currentBounds.width == width && currentBounds.height == height) {
+                    printf("DEBUG: CEF webview %u already at correct size %dx%d, skipping resize\n", 
+                           webviewId, width, height);
+                    continue;
+                }
+                
+                printf("DEBUG: Auto-resizing CEF webview %u in window %u to %dx%d\n", 
+                       webviewId, windowId, width, height);
+                fflush(stdout);
+                
+                printf("DEBUG: Current webview bounds: x=%d, y=%d, w=%d, h=%d\n", 
+                       currentBounds.x, currentBounds.y, currentBounds.width, currentBounds.height);
+                
+                // For auto-resize, typically want to fill the entire window starting from (0,0)
+                GdkRectangle frame = { 0, 0, width, height };
+                webview->resize(frame, "");
+            }
+        }
+    }
+}
+
 // X11 event processing function
 gboolean process_x11_events(gpointer data) {
     // Process events for all X11 windows
@@ -2939,6 +3054,17 @@ gboolean process_x11_events(gpointer data) {
             
             X11Window* targetWin = winIt->second.get();
             
+            printf("DEBUG: Event window=0x%lx, mapped to windowId=%u, actual main window=0x%lx\n", 
+                   event.xany.window, winId, targetWin->window);
+            
+            // CRITICAL FIX: Only process events from actual main windows, not CEF child windows
+            // CEF child windows should NEVER be in g_x11_window_to_id, but if they are, ignore them
+            if (event.xany.window != targetWin->window) {
+                printf("DEBUG: IGNORING event from child window 0x%lx (main window is 0x%lx)\n", 
+                       event.xany.window, targetWin->window);
+                continue;
+            }
+            
             switch (event.type) {
                 case ClientMessage:
                     if (event.xclient.data.l[0] == (long)XInternAtom(targetWin->display, "WM_DELETE_WINDOW", False)) {
@@ -2949,8 +3075,22 @@ gboolean process_x11_events(gpointer data) {
                     break;
                     
                 case ConfigureNotify:
+                    printf("DEBUG: ConfigureNotify for window 0x%lx, size %dx%d (main window 0x%lx)\n", 
+                           event.xconfigure.window, event.xconfigure.width, event.xconfigure.height, targetWin->window);
+                    
+                    // Only process ConfigureNotify events for the actual main window, not CEF child windows
+                    if (event.xconfigure.window != targetWin->window) {
+                        printf("DEBUG: IGNORING ConfigureNotify for child window 0x%lx (main window is 0x%lx)\n", 
+                               event.xconfigure.window, targetWin->window);
+                        break;
+                    }
+                    
                     if (event.xconfigure.width != targetWin->width || event.xconfigure.height != targetWin->height ||
                         event.xconfigure.x != targetWin->x || event.xconfigure.y != targetWin->y) {
+                        
+                        printf("DEBUG: Main window resize detected: %dx%d -> %dx%d\n", 
+                               targetWin->width, targetWin->height, event.xconfigure.width, event.xconfigure.height);
+                        
                         targetWin->x = event.xconfigure.x;
                         targetWin->y = event.xconfigure.y;
                         targetWin->width = event.xconfigure.width;
@@ -2960,6 +3100,9 @@ gboolean process_x11_events(gpointer data) {
                             targetWin->resizeCallback(targetWin->windowId, targetWin->x, targetWin->y, 
                                                     targetWin->width, targetWin->height);
                         }
+                        
+                        // Auto-resize webviews in this window
+                        resizeAutoSizingWebviewsInWindow(targetWin->windowId, targetWin->width, targetWin->height);
                     }
                     break;
                     
@@ -3169,8 +3312,6 @@ uint32_t getNSWindowStyleMask(bool borderless, bool titled, bool closable, bool 
     return 0;
 }
 
-
-
 // Webview functions
 AbstractView* initWebview(uint32_t webviewId,
                          void* window,
@@ -3363,6 +3504,9 @@ bool webviewCanGoForward(AbstractView* abstractView) {
 
 void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
     if (abstractView) {
+        printf("DEBUG: resizeWebview called for webview %u with size %dx%d at position (%d,%d)\n", 
+               abstractView->webviewId, (int)width, (int)height, (int)x, (int)y);
+        
         std::string masksStr(masksJson ? masksJson : "");  // Copy the string to ensure it survives
         dispatch_sync_main_void([abstractView, x, y, width, height, masksStr]() {  // Capture by value
             GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
