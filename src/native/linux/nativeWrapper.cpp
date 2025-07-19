@@ -291,7 +291,6 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
-    return false;
     // Get the directory where the executable is located
     std::string execDir = getExecutableDir();
     
@@ -381,7 +380,6 @@ public:
             if (inject_pos <= buffer_.size()) {
                 buffer_.insert(inject_pos, script_tag);
                 injected_ = true;
-                // printf("CEF: Injected preload scripts via response filter (%zu chars)\n", combined_script.length());
             }
         }
         
@@ -411,7 +409,6 @@ public:
     
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
         std::string url = request->GetURL();
-        printf("CEF views:// request: %s\n", url.c_str());
         
         // Parse the URI to get everything after views://
         std::string fullPath = "index.html"; // default
@@ -423,9 +420,6 @@ public:
         char* cwd = g_get_current_dir();
         gchar* viewsDir = g_build_filename(cwd, "..", "Resources", "app", "views", nullptr);
         gchar* filePath = g_build_filename(viewsDir, fullPath.c_str(), nullptr);
-        
-        printf("CEF views:// fullPath: %s\n", fullPath.c_str());
-        printf("CEF views:// loading file: %s\n", filePath);
         
         // Check if file exists and read it
         if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
@@ -454,7 +448,6 @@ public:
                     mimeType_ = "text/plain";
                 }
                 
-                printf("CEF views:// loaded file successfully: %zu bytes, MIME: %s\n", fileSize, mimeType_.c_str());
                 
                 g_free(cwd);
                 g_free(viewsDir);
@@ -538,8 +531,6 @@ public:
         
         if (arguments.size() > 0 && arguments[0]->IsString()) {
             std::string msgContent = arguments[0]->GetStringValue();
-            // printf("CEF: Sending %s message: %s\n", 
-            //        message_name_.ToString().c_str(), msgContent.c_str());
             
             // Create and send process message to the browser process
             CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(message_name_);
@@ -582,8 +573,6 @@ public:
         command_line->AppendSwitch("disable-plugins");
         command_line->AppendSwitch("disable-web-security");
         command_line->AppendSwitch("no-sandbox");
-        // command_line->AppendSwitch("single-process");
-        printf("CEF DEBUG: GPU acceleration disabled for VM compatibility with additional flags\n");
     }
     
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
@@ -607,14 +596,12 @@ public:
     
     void OnContextInitialized() override {
         CefRegisterSchemeHandlerFactory("views", "", new ViewsSchemeHandlerFactory());
-        // printf("CEF: Registered views:// scheme handler factory\n");
     }
     
     // Render process handler methods
     void OnContextCreated(CefRefPtr<CefBrowser> browser,
                          CefRefPtr<CefFrame> frame,
                          CefRefPtr<CefV8Context> context) override {
-        // printf("CEF: OnContextCreated called for frame %s\n", frame->GetURL().ToString().c_str());
         
         // Enter the context
         context->Enter();
@@ -628,7 +615,6 @@ public:
         CefRefPtr<CefV8Value> bunPostMessage = CefV8Value::CreateFunction("postMessage", bunHandler);
         bunBridge->SetValue("postMessage", bunPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
         global->SetValue("bunBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
-        // printf("CEF: Created bunBridge with postMessage function\n");
         
         // Create internalBridge object with postMessage method
         CefRefPtr<CefV8Value> internalBridge = CefV8Value::CreateObject(nullptr, nullptr);
@@ -636,7 +622,6 @@ public:
         CefRefPtr<CefV8Value> internalPostMessage = CefV8Value::CreateFunction("postMessage", internalHandler);
         internalBridge->SetValue("postMessage", internalPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
         global->SetValue("internalBridge", internalBridge, V8_PROPERTY_ATTRIBUTE_NONE);
-        // printf("CEF: Created internalBridge with postMessage function\n");
         
         
         // Exit the context
@@ -777,7 +762,6 @@ public:
             
             std::string combined_script = GetCombinedScript();
             if (!combined_script.empty()) {
-                // printf("CEF: Creating response filter for preload scripts (%zu chars)\n", combined_script.length());
                 return new ElectrobunResponseFilter(electrobun_script_, custom_script_);
             }
         }
@@ -929,7 +913,6 @@ public:
 
     // CefLifeSpanHandler methods
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
-        // printf("CEF: OnAfterCreated called for browser\n");
         
         // Set the browser reference
         SetBrowser(browser);
@@ -941,25 +924,14 @@ public:
         
         // The CEF browser window is now fully created
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
-        // printf("CEF: Browser window handle in OnAfterCreated: 0x%lx\n", (unsigned long)cefWindow);
         
         // Validate the CEF window handle and try to understand what's happening
         if (cefWindow) {
             Display* display = gdk_x11_get_default_xdisplay();
             XWindowAttributes attrs;
             
-            // printf("CEF: Checking window handle 0x%lx (decimal: %lu)\n", 
-            //        (unsigned long)cefWindow, (unsigned long)cefWindow);
             
             if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
-                // printf("CEF: WARNING - CEF window handle 0x%lx is still invalid in OnAfterCreated\n", 
-                //        (unsigned long)cefWindow);
-                
-                // Try to understand why - check if it's a valid window ID range
-                // printf("CEF: X11 error details: %s\n", strerror(errno));
-                
-                // Try to find any valid CEF windows
-                // printf("CEF: Attempting to find CEF windows...\n");
                 Window root, parent;
                 Window* children;
                 unsigned int nchildren;
@@ -967,7 +939,6 @@ public:
                 // Get the root window
                 Window rootWindow = DefaultRootWindow(display);
                 if (XQueryTree(display, rootWindow, &root, &parent, &children, &nchildren) != 0) {
-                    // printf("CEF: Found %u windows total\n", nchildren);
                     for (unsigned int i = 0; i < nchildren; i++) {
                         XWindowAttributes childAttrs;
                         if (XGetWindowAttributes(display, children[i], &childAttrs) != 0) {
@@ -978,12 +949,9 @@ public:
                     XFree(children);
                 }
             } else {
-                // printf("CEF: CEF window handle 0x%lx is now valid in OnAfterCreated - size %dx%d\n", 
-                //        (unsigned long)cefWindow, attrs.width, attrs.height);
                        
                 // Try positioning callback if window is ready
                 if (positioning_callback_) {
-                    // printf("CEF: Calling positioning callback from OnAfterCreated\n");
                     positioning_callback_();
                 }
             }
@@ -996,7 +964,6 @@ public:
                             bool canGoBack,
                             bool canGoForward) override {
         if (!isLoading) {
-            // printf("CEF: OnLoadingStateChange - browser finished loading\n");
             
             // Check if CEF window handle is valid now
             CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
@@ -1006,32 +973,20 @@ public:
                 if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
                 } else {
                     
-                    // Detailed X11 window analysis
-                    // printf("CEF: === DETAILED WINDOW ANALYSIS ===\n");
-                    // printf("CEF: Window class=%d, depth=%d, border_width=%d\n", 
-                    //        attrs.c_class, attrs.depth, attrs.border_width);
-                    // printf("CEF: Window position=(%d,%d), size=%dx%d\n", 
-                    //        attrs.x, attrs.y, attrs.width, attrs.height);
-                    // printf("CEF: Window mapped=%d, all_event_masks=0x%lx\n",
-                    //        attrs.map_state, attrs.all_event_masks);
-                    
                     // Check window class hint
                     XClassHint class_hint;
                     if (XGetClassHint(display, cefWindow, &class_hint) != 0) {
-                        // printf("CEF: Window class: res_class='%s', res_name='%s'\n", 
-                        //        class_hint.res_class ? class_hint.res_class : "null",
-                        //        class_hint.res_name ? class_hint.res_name : "null");
                         
                         // Analyze toolkit based on class names
-                        if (class_hint.res_class) {
-                            if (strstr(class_hint.res_class, "Gtk") || strstr(class_hint.res_class, "gtk")) {
-                                // printf("CEF: TOOLKIT DETECTED: GTK (based on class name)\n");
-                            } else if (strstr(class_hint.res_class, "Qt") || strstr(class_hint.res_class, "qt")) {
-                                // printf("CEF: TOOLKIT DETECTED: Qt (based on class name)\n");
-                            } else {
-                                // printf("CEF: TOOLKIT: Likely native X11 (class: %s)\n", class_hint.res_class);
-                            }
-                        }
+                        // if (class_hint.res_class) {
+                        //     if (strstr(class_hint.res_class, "Gtk") || strstr(class_hint.res_class, "gtk")) {
+                        //         // printf("CEF: TOOLKIT DETECTED: GTK (based on class name)\n");
+                        //     } else if (strstr(class_hint.res_class, "Qt") || strstr(class_hint.res_class, "qt")) {
+                        //         // printf("CEF: TOOLKIT DETECTED: Qt (based on class name)\n");
+                        //     } else {
+                        //         // printf("CEF: TOOLKIT: Likely native X11 (class: %s)\n", class_hint.res_class);
+                        //     }
+                        // }
                         
                         if (class_hint.res_class) XFree(class_hint.res_class);
                         if (class_hint.res_name) XFree(class_hint.res_name);
@@ -1040,7 +995,6 @@ public:
                     // Check window manager name
                     char *wm_name = nullptr;
                     if (XFetchName(display, cefWindow, &wm_name) && wm_name) {
-                        // printf("CEF: Window name: '%s'\n", wm_name);
                         XFree(wm_name);
                     }
                     
@@ -1049,7 +1003,6 @@ public:
                     Window* children;
                     unsigned int nchildren;
                     if (XQueryTree(display, cefWindow, &root, &parent, &children, &nchildren) != 0) {
-                        // printf("CEF: Window parent: 0x%lx, children: %u\n", parent, nchildren);
                         if (children) XFree(children);
                     }
                     
@@ -1065,12 +1018,10 @@ public:
                                          &bytes_after, &prop_data) == Success && prop_data) {
                         Atom window_type = *(Atom*)prop_data;
                         char* type_name = XGetAtomName(display, window_type);
-                        // printf("CEF: Window type: %s\n", type_name ? type_name : "unknown");
                         if (type_name) XFree(type_name);
                         XFree(prop_data);
                     }
                     // Additional toolkit detection via window properties
-                    // printf("CEF: --- ADVANCED TOOLKIT DETECTION ---\n");
                     
                     // Check for GTK-specific properties
                     Atom gtk_atom = XInternAtom(display, "_GTK_THEME_VARIANT", True);
@@ -1079,7 +1030,6 @@ public:
                         if (XGetWindowProperty(display, cefWindow, gtk_atom, 0, 1, False,
                                              AnyPropertyType, &actual_type, &actual_format, &nitems,
                                              &bytes_after, &gtk_data) == Success && gtk_data) {
-                            // printf("CEF: GTK property found - this is a GTK window\n");
                             XFree(gtk_data);
                         }
                     }
@@ -1091,26 +1041,13 @@ public:
                         if (XGetWindowProperty(display, cefWindow, qt_atom, 0, 1, False,
                                              AnyPropertyType, &actual_type, &actual_format, &nitems,
                                              &bytes_after, &qt_data) == Success && qt_data) {
-                            // printf("CEF: Qt property found - this is a Qt window\n");
                             XFree(qt_data);
                         }
                     }
                     
-                    // Check visual and colormap for toolkit hints
-                    // printf("CEF: Visual ID: 0x%lx, Colormap: 0x%lx\n", 
-                    //        (unsigned long)attrs.visual, attrs.colormap);
-                    
-                    // Check event mask pattern (different toolkits use different patterns)
-                    // printf("CEF: Event mask analysis: 0x%lx\n", attrs.all_event_masks);
-                    if (attrs.all_event_masks & 0x400000) {
-                        // printf("CEF: Event mask suggests modern toolkit (GTK3+ or Qt5+)\n");
-                    }
-                    
-                    // printf("CEF: === END WINDOW ANALYSIS ===\n");
-                    
-                    // // Try to force a position sync now that the window might be valid
-                    // printf("CEF: Attempting to trigger position sync after loading\n");
-                    // TODO: Try to trigger position sync here when CEF window is ready
+                    // if (attrs.all_event_masks & 0x400000) {
+                    //     // printf("CEF: Event mask suggests modern toolkit (GTK3+ or Qt5+)\n");
+                    // }
                 }
             }
         }
@@ -1203,8 +1140,8 @@ bool initializeCEF() {
    
     CefSettings settings;
     settings.no_sandbox = true;
-    settings.remote_debugging_port = 9222;
-    printf("CEF: Remote debugging enabled on port 9222\n");
+    // settings.remote_debugging_port = 9222;
+    // printf("CEF: Remote debugging enabled on port 9222\n");
     
     // Set the resource directory to where CEF files are located
     std::string execDir = getExecutableDir();
@@ -1241,7 +1178,7 @@ bool initializeCEF() {
     }
     
     g_cefInitialized = true;
-    printf("CEF initialized successfully\n");
+    // printf("CEF initialized successfully\n");
     return true;
 }
 
@@ -1255,260 +1192,6 @@ CefRefPtr<CefClient> create_default_handler() {
   return new SimpleClient();
 }
 
-// Removed create_cef_webview_in_window proof of concept - functionality moved to main window creation
-    
-//     // Add a simple paint handler to show if GTK drawing works
-//     g_signal_connect(drawing_area, "draw", G_CALLBACK(+[](GtkWidget*, cairo_t* cr, gpointer) -> gboolean {
-//         // Paint a simple test pattern to verify GTK drawing works
-//         cairo_set_source_rgb(cr, 0.9, 0.9, 0.9); // Light gray background
-//         cairo_paint(cr);
-        
-//         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0); // Black text
-//         cairo_move_to(cr, 50, 50);
-//         cairo_show_text(cr, "GTK Drawing Area - CEF should appear here");
-        
-//         printf("CEF DEBUG: GTK drawing area paint event triggered\n");
-//         return FALSE; // Let other handlers run
-//     }), nullptr);
-    
-//     gtk_container_add(GTK_CONTAINER(cef_window), drawing_area);
-    
-//     g_signal_connect(cef_window, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer) {
-//         printf("CEF DEBUG: CEF test window destroyed\n");
-//     }), nullptr);
-    
-//     printf("CEF DEBUG: Created CEF window with drawing area: %p\n", cef_window);
-    
-//     // Show everything
-//     gtk_widget_show_all(cef_window);
-//     printf("CEF DEBUG: Window with drawing area shown\n");
-    
-//     // Ensure both are realized
-//     gtk_widget_realize(cef_window);
-//     gtk_widget_realize(drawing_area);
-    
-//     // Use a timeout to ensure everything is fully initialized
-//     g_timeout_add(1000, [](gpointer data) -> gboolean {
-//         GtkWidget* cef_window = GTK_WIDGET(data);
-//         printf("CEF DEBUG: Timeout callback triggered - DIRECT WINDOW RENDERING\n");
-        
-//         if (!gtk_widget_get_realized(cef_window)) {
-//             printf("CEF DEBUG: Window not realized, forcing realization\n");
-//             gtk_widget_realize(cef_window);
-//         }
-        
-//         if (!gtk_widget_get_mapped(cef_window)) {
-//             printf("CEF DEBUG: Window not mapped, forcing map\n");
-//             gtk_widget_map(cef_window);
-//         }
-        
-//         GdkWindow* gdk_window = gtk_widget_get_window(cef_window);
-//         if (!gdk_window) {
-//             printf("CEF DEBUG: No GdkWindow available\n");
-//             return G_SOURCE_REMOVE;
-//         }
-        
-//         printf("CEF DEBUG: GdkWindow found: %p\n", gdk_window);
-        
-//         // Ensure we have a native window
-//         if (!gdk_window_ensure_native(gdk_window)) {
-//             printf("CEF DEBUG: Failed to ensure native window\n");
-//             return G_SOURCE_REMOVE;
-//         }
-//         printf("CEF DEBUG: Native window ensured\n");
-        
-//         Window xid = gdk_x11_window_get_xid(gdk_window);
-//         printf("CEF DEBUG: Got X11 XID: 0x%lx\n", xid);
-        
-//         if (!xid) {
-//             printf("CEF DEBUG: Invalid XID (0), cannot create CEF browser\n");
-//             return G_SOURCE_REMOVE;
-//         }
-        
-//         // Sync X11 to ensure window is properly created
-//         Display* display = GDK_WINDOW_XDISPLAY(gdk_window);
-//         XSync(display, False);
-//         printf("CEF DEBUG: X11 synchronized\n");
-        
-//         // Get the window allocation
-//         GtkAllocation alloc;
-//         gtk_widget_get_allocation(cef_window, &alloc);
-//         printf("CEF DEBUG: Window allocation: %dx%d at (%d,%d)\n", 
-//                alloc.width, alloc.height, alloc.x, alloc.y);
-               
-//         // If allocation is too small, use full window size
-//         if (alloc.width < 100 || alloc.height < 100) {
-//             alloc.width = 800;
-//             alloc.height = 600;
-//             printf("CEF DEBUG: Using default size instead: %dx%d\n", alloc.width, alloc.height);
-//         }
-        
-//         // Create CEF browser with SetAsChild - SIMPLE APPROACH
-//         printf("CEF DEBUG: Creating CEF browser with SIMPLE SetAsChild approach...\n");
-//         CefWindowInfo window_info;
-//         CefRect cef_rect(0, 0, 800, 600);
-        
-//         // Get the drawing area widget from the lambda context
-//         GList* children = gtk_container_get_children(GTK_CONTAINER(cef_window));
-//         GtkWidget* area = children ? GTK_WIDGET(children->data) : nullptr;
-//         if (children) g_list_free(children);
-        
-//         if (!area) {
-//             printf("CEF DEBUG: No drawing area found\n");
-//             return G_SOURCE_REMOVE;
-//         }
-        
-//         // Create a raw X11 window for CEF, bypassing GTK's drawing area
-//         int screen = DefaultScreen(display);
-        
-//         // Create window attributes for CEF
-//         XSetWindowAttributes attrs;
-//         attrs.background_pixel = BlackPixel(display, screen);
-//         attrs.border_pixel = 0;
-//         attrs.colormap = DefaultColormap(display, screen);
-//         attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
-//                           ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-//                           FocusChangeMask | StructureNotifyMask;
-//         attrs.backing_store = NotUseful;
-//         attrs.save_under = False;
-        
-//         // Get the drawing area's position and size
-//         GdkWindow* gdk_win = gtk_widget_get_window(area);
-//         Window drawing_xid = gdk_x11_window_get_xid(gdk_win);
-        
-//         // Create a child window of the drawing area
-//         Window cef_x11_window = XCreateWindow(
-//             display, drawing_xid,
-//             0, 0, 800, 600, 0,
-//             CopyFromParent, InputOutput, CopyFromParent,
-//             CWBackPixel | CWBorderPixel | CWColormap | CWEventMask | CWBackingStore | CWSaveUnder,
-//             &attrs
-//         );
-        
-//         if (!cef_x11_window) {
-//             printf("CEF DEBUG: Failed to create raw X11 window for CEF\n");
-//             return G_SOURCE_REMOVE;
-//         }
-        
-//         // Map the window
-//         XMapWindow(display, cef_x11_window);
-//         XSync(display, False);
-        
-//         printf("CEF DEBUG: Created raw X11 window 0x%lx for CEF\n", cef_x11_window);
-        
-//         // Use SetAsChild with our raw X11 window
-//         window_info.SetAsChild(cef_x11_window, cef_rect);
-        
-//         printf("CEF DEBUG: SetAsChild configured for raw X11 window 0x%lx, rect (0,0,800,600)\n", cef_x11_window);
-        
-//         CefBrowserSettings browser_settings;
-//         // Use default browser settings for now
-//         printf("CEF DEBUG: Browser settings configured\n");
-        
-        
-//         // Use simple client since we're back to SetAsChild
-//         CefRefPtr<CefClient> client = create_default_handler();
-//         if (!client) {
-//             printf("CEF DEBUG: Failed to create render handler client\n");
-//             return G_SOURCE_REMOVE;
-//         }
-//         printf("CEF DEBUG: Render handler client created: %p\n", client.get());
-        
-//         // Try a simple local page first with very obvious styling
-//         std::string test_url = "data:text/html,<html><body style='background:lime;color:black;font-size:48px;text-align:center;padding:50px;'><h1>🎉 CEF IS WORKING! 🎉</h1><p>This bright green page proves CEF is rendering!</p><p>Window v8 - Standalone Success!</p></body></html>";
-//         printf("CEF DEBUG: Using test URL with bright green background\n");
-        
-//         bool create_result = CefBrowserHost::CreateBrowser(window_info, client, test_url, browser_settings, nullptr, nullptr);
-//         printf("CEF DEBUG: CreateBrowser result: %s\n", create_result ? "SUCCESS" : "FAILED");
-        
-//         if (!create_result) {
-//             printf("CEF DEBUG: Browser creation failed!\n");
-//         } else {
-//             printf("CEF DEBUG: Browser creation initiated - FORCING CEF WINDOW STACKING\n");
-            
-//             // Store the drawing area XID for later manipulation
-//             struct CEFWindowData {
-//                 Window cef_xid;
-//                 Display* display;
-//             };
-//             CEFWindowData* cef_data = new CEFWindowData{cef_x11_window, display};
-            
-//             // Wait for CEF to create its child window, then force it visible
-//             g_timeout_add(1000, [](gpointer data) -> gboolean {
-//                 CEFWindowData* cef_data = static_cast<CEFWindowData*>(data);
-//                 printf("CEF DEBUG: FORCING CEF CHILD WINDOW VISIBILITY AND STACKING...\n");
-                
-//                 // Find CEF child windows and make them visible
-//                 Window root, parent;
-//                 Window* children;
-//                 unsigned int nchildren;
-                
-//                 if (XQueryTree(cef_data->display, cef_data->cef_xid, &root, &parent, &children, &nchildren)) {
-//                     printf("CEF DEBUG: Found %d child windows under CEF window 0x%lx\n", nchildren, cef_data->cef_xid);
-                    
-//                     if (nchildren == 0) {
-//                         printf("CEF DEBUG: CEF FAILED TO CREATE CHILD WINDOW! Searching entire window tree...\n");
-                        
-//                         // Search for CEF windows under the root window
-//                         Window* root_children;
-//                         unsigned int root_nchildren;
-//                         if (XQueryTree(cef_data->display, root, &root, &parent, &root_children, &root_nchildren)) {
-//                             printf("CEF DEBUG: Searching %d root-level windows for CEF...\n", root_nchildren);
-                            
-//                             for (unsigned int j = 0; j < root_nchildren; j++) {
-//                                 // Check if this window might be a CEF window
-//                                 XWindowAttributes attrs;
-//                                 if (XGetWindowAttributes(cef_data->display, root_children[j], &attrs)) {
-//                                     // CEF windows are typically 800x600 or similar
-//                                     if ((attrs.width == 800 || attrs.width == 1) && (attrs.height == 600 || attrs.height == 1)) {
-//                                         printf("CEF DEBUG: FOUND POTENTIAL CEF WINDOW 0x%lx (size: %dx%d) - FORCING TO CEF WINDOW\n", 
-//                                                root_children[j], attrs.width, attrs.height);
-                                        
-//                                         // Try to reparent this window to our CEF window
-//                                         XReparentWindow(cef_data->display, root_children[j], cef_data->cef_xid, 0, 0);
-//                                         XMapWindow(cef_data->display, root_children[j]);
-//                                         XMoveResizeWindow(cef_data->display, root_children[j], 0, 0, 800, 600);
-//                                         printf("CEF DEBUG: Reparented and resized window 0x%lx to CEF window\n", root_children[j]);
-//                                     }
-//                                 }
-//                             }
-//                             if (root_children) XFree(root_children);
-//                         }
-//                     } else {
-//                         for (unsigned int i = 0; i < nchildren; i++) {
-//                             printf("CEF DEBUG: Processing CEF child window 0x%lx...\n", children[i]);
-                            
-//                             // Force window to be visible and properly sized
-//                             XMapWindow(cef_data->display, children[i]);
-//                             XRaiseWindow(cef_data->display, children[i]);
-//                             XMoveResizeWindow(cef_data->display, children[i], 0, 0, 800, 600);
-                            
-//                             printf("CEF DEBUG: CEF child window 0x%lx forced visible and sized\n", children[i]);
-//                         }
-//                     }
-                    
-//                     if (children) XFree(children);
-//                     XFlush(cef_data->display);
-//                     printf("CEF DEBUG: All CEF window operations completed\n");
-//                 } else {
-//                     printf("CEF DEBUG: XQueryTree failed on drawing area\n");
-//                 }
-                
-//                 delete cef_data;
-//                 return G_SOURCE_REMOVE;
-//             }, cef_data);
-            
-//             g_timeout_add(3000, [](gpointer data) -> gboolean {
-//                 printf("CEF DEBUG: 3s check - CEF should now be forcibly visible with proper stacking\n");
-//                 return G_SOURCE_REMOVE;
-//             }, nullptr);
-//         }
-        
-//         return G_SOURCE_REMOVE;  // Don't repeat
-//     }, cef_window);
-    
-//     printf("CEF DEBUG: Timeout scheduled for direct window rendering, function complete\n");
-// }
 
 // AbstractView base class declaration
 class AbstractView {
@@ -1612,13 +1295,11 @@ public:
         }
         
         // Create webview
-        fprintf(stderr, "Creating WebKit webview...\n");
         webview = webkit_web_view_new_with_user_content_manager(manager);
         if (!webview) {
             fprintf(stderr, "ERROR: Failed to create WebKit webview\n");
             throw std::runtime_error("Failed to create WebKit webview");
         }
-        fprintf(stderr, "WebKit webview created successfully\n");
         
         // Set the context separately if needed
         // webkit_web_view_set_context(WEBKIT_WEB_VIEW(webview), context);
@@ -1692,7 +1373,6 @@ public:
     
     void loadURL(const char* urlString) override {
         if (webview && urlString) {
-            fprintf(stderr, "Loading URL: %s\n", urlString);
             webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview), urlString);
         } else {
             fprintf(stderr, "ERROR: Cannot load URL - webview=%p, urlString=%s\n", webview, urlString ? urlString : "NULL");
@@ -1976,7 +1656,6 @@ public:
     
     static gboolean onScrollEvent(GtkWidget* widget, GdkEventScroll* event, gpointer user_data) {
         WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        printf("DEBUG: Scroll event on webview %u, direction=%d\n", impl->webviewId, event->direction);
         fflush(stdout);
         return FALSE; // Allow scroll to continue
     }
@@ -2043,8 +1722,6 @@ public:
     }
     
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
-        // printf("CEF: Creating browser in X11 window\n");
-        // printf("CEF: DevTools available via F12 or right-click -> Inspect\n");
         
         // NO GTK widget needed - CEF will be a direct child of the X11 window
         this->widget = nullptr;
@@ -2074,8 +1751,6 @@ public:
         // Use SetAsChild with the X11 window
         window_info.SetAsChild(x11win->window, cef_rect);
         
-        // printf("CEF: SetAsChild configured for X11 window 0x%lx, rect (%d,%d,%d,%d)\n", 
-        //        x11win->window, (int)x, (int)y, (int)width, (int)height);
         
         CefBrowserSettings browser_settings;
         
@@ -2091,32 +1766,24 @@ public:
         
         // Set up browser creation callback to notify CEFWebViewImpl when browser is ready
         client->SetBrowserCreatedCallback([this](CefRefPtr<CefBrowser> browser) {
-            // printf("CEF: Browser created callback fired for webview %u\n", webviewId);
             this->browser = browser;
-            // printf("CEF: Browser reference assigned to CEFWebViewImpl\n");
         });
         
         // Add preload scripts to the client
         if (!electrobunPreloadScript.empty()) {
             client->AddPreloadScript(electrobunPreloadScript);
-            // printf("CEF: Added Electrobun preload script (%zu chars)\n", electrobunPreloadScript.length());
         }
         if (!customPreloadScript.empty()) {
             client->UpdateCustomPreloadScript(customPreloadScript);
-            // printf("CEF: Added custom preload script (%zu chars)\n", customPreloadScript.length());
         }
         
         // Create the browser
         std::string loadUrl = deferredUrl.empty() ? "https://www.wikipedia.org" : deferredUrl;
         bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, nullptr, nullptr);
         
-        // printf("CEF: CreateBrowser result: %s\n", create_result ? "SUCCESS" : "FAILED");
-        
         if (!create_result) {
-            // printf("CEF: Browser creation failed!\n");
             creationFailed = true;
         } else {
-            // printf("CEF: Browser creation initiated successfully\n");
             // Add this webview to the X11 window's child list
             x11win->childWindows.push_back(0); // Will be updated when browser is created
         }
@@ -2130,8 +1797,6 @@ public:
             return;
         }
         
-        // printf("CEF: Syncing with frame: x=%d, y=%d, w=%d, h=%d\n", 
-        //        frame.x, frame.y, frame.width, frame.height);
         
         // Get the CEF browser's X11 window handle
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
@@ -2144,18 +1809,10 @@ public:
         Display* display = gdk_x11_get_default_xdisplay();
         XWindowAttributes attrs;
         if (XGetWindowAttributes(display, (Window)cefWindow, &attrs) == 0) {
-            // printf("CEF: ERROR - Invalid CEF window handle 0x%lx for positioning, deferring until window is ready\n", (unsigned long)cefWindow);
             // Store the target frame for later positioning
             // For now, just skip positioning - this is likely during initial creation
             return;
         }
-        
-        // printf("CEF: CEF window 0x%lx validated - current size %dx%d, position (%d,%d)\n", 
-        //        (unsigned long)cefWindow, attrs.width, attrs.height, attrs.x, attrs.y);
-        
-        // // When CEF is a direct child of the window, position it at the requested coordinates
-        // printf("CEF: Calling XMoveResizeWindow with: x=%d, y=%d, w=%d, h=%d\n", 
-        //        frame.x, frame.y, frame.width, frame.height);
         
         XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
         XFlush(display);
@@ -2174,7 +1831,6 @@ public:
             //        (unsigned long)cefWindow, newAttrs.x, newAttrs.y, newAttrs.width, newAttrs.height);
         }
         
-        // printf("CEF: Resize operation completed for window 0x%lx\n", (unsigned long)cefWindow);
     }
     
     void syncCEFPositionWithWidget() {
@@ -2194,23 +1850,15 @@ public:
         GtkAllocation allocation;
         gtk_widget_get_allocation(widget, &allocation);
         
-        // printf("CEF: Widget allocation: x=%d, y=%d, w=%d, h=%d\n", 
-        //        allocation.x, allocation.y, allocation.width, allocation.height);
-        
         // Try to get absolute position on screen
         gint absX, absY;
         gdk_window_get_origin(gtk_widget_get_window(gtk_widget_get_toplevel(widget)), &absX, &absY);
-        
-        // printf("CEF: Toplevel origin: x=%d, y=%d\n", absX, absY);
         
         // Use the allocation position directly
         int finalX = allocation.x;
         int finalY = allocation.y;
         int finalWidth = MAX(allocation.width, 1);
         int finalHeight = MAX(allocation.height, 1);
-        
-        // printf("CEF: Moving CEF browser to x=%d, y=%d, w=%d, h=%d\n", 
-        //        finalX, finalY, finalWidth, finalHeight);
         
         // Move the CEF browser window to match the widget position
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
@@ -2226,9 +1874,6 @@ public:
                 return;
             }
             
-            // printf("CEF: CEF window 0x%lx validated for widget sync - current size %dx%d\n", 
-            //        (unsigned long)cefWindow, attrs.width, attrs.height);
-            
             XMoveResizeWindow(display, cefWindow, finalX, finalY, finalWidth, finalHeight);
             XFlush(display);
         } else {
@@ -2237,7 +1882,6 @@ public:
     }
     
     void retryPositioning() {
-        // printf("CEF: Retrying positioning after window should be ready\n");
         if (browser && widget) {
             // Try to sync position with the current widget allocation
             GtkAllocation allocation;
@@ -2248,9 +1892,6 @@ public:
             frame.y = allocation.y;
             frame.width = allocation.width;
             frame.height = allocation.height;
-            
-            // printf("CEF: Retrying position sync with frame: x=%d, y=%d, w=%d, h=%d\n", 
-            //        frame.x, frame.y, frame.width, frame.height);
             
             syncCEFPositionWithFrame(frame);
         }
@@ -2373,7 +2014,6 @@ public:
         
         // Parse mask rectangles from JSON
         std::vector<MaskRect> masks = parseMaskJson(maskJSON);
-        printf("CEF applyVisualMask: parsed %zu masks\n", masks.size());
         if (masks.empty()) {
             return;
         }
@@ -2599,17 +2239,11 @@ public:
         }
         
         GdkRectangle frame = { 0, 0, width, height };
-        printf("DEBUG: Window resized to %dx%d, checking %zu webviews\n", width, height, abstractViews.size());
-        fflush(stdout);
         
         for (auto& view : abstractViews) {
-            printf("DEBUG: Webview %u has fullSize=%s\n", view->webviewId, view->fullSize ? "true" : "false");
-            fflush(stdout);
             
             if (view->fullSize) {
                 // Auto-resize webviews should fill the entire window
-                printf("DEBUG: Auto-resizing webview %u to fill window\n", view->webviewId);
-                fflush(stdout);
                 view->resize(frame, "");
             }
             // OOPIFs (fullSize=false) keep their positioning and don't auto-resize
@@ -2633,8 +2267,7 @@ static gboolean onWindowConfigure(GtkWidget* widget, GdkEventConfigure* event, g
 
 // Mouse move callback for debugging
 static gboolean onMouseMove(GtkWidget* widget, GdkEventMotion* event, gpointer user_data) {
-    printf("Mouse move: x=%.2f, y=%.2f\n", event->x, event->y);
-    fflush(stdout);
+
     return FALSE; // Let other handlers process this event too
 }
 
@@ -2897,12 +2530,6 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     gchar* viewsDir = g_build_filename(cwd, "..", "Resources", "app", "views", nullptr);
     gchar* filePath = g_build_filename(viewsDir, fullPath, nullptr);
     
-    printf("views:// request: uri=%s, fullPath=%s\n", uri, fullPath ? fullPath : "NULL");
-    printf("cwd=%s\n", cwd);
-    printf("viewsDir=%s\n", viewsDir);
-    printf("Loading file: %s\n", filePath);
-    printf("Expected: webviewtag/index.html, got: %s\n", fullPath ? fullPath : "NULL");
-    fflush(stdout);
     
     // Check if file exists and read it
     if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
@@ -2934,11 +2561,7 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
             webkit_uri_scheme_request_finish(request, stream, fileSize, mimeType);
             g_object_unref(stream);
             
-            printf("Served file: %s (%zu bytes, %s)\n", filePath, fileSize, mimeType);
-            fflush(stdout);
         } else {
-            printf("Failed to read file: %s - %s\n", filePath, error ? error->message : "unknown error");
-            fflush(stdout);
             
             // Return 404 error
             GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", fullPath);
@@ -2963,31 +2586,14 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
 }
 
 void initializeGTK() {
-    
-    printf("initializeGTK called, g_gtkInitialized=%d\n", g_gtkInitialized);
-    fflush(stdout);
-    
     if (!g_gtkInitialized) {
-        printf("Calling gtk_init...\n");
-        fflush(stdout);
         gtk_init(nullptr, nullptr);
-        printf("gtk_init completed\n");
-        fflush(stdout);
         
         g_gtkInitialized = true;
-        
-        printf("GTK initialization complete\n");
-        fflush(stdout);
         
         // Register the views:// URI scheme handler AFTER GTK is initialized
         WebKitWebContext* context = webkit_web_context_get_default();
         webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
-        printf("Registered views:// URI scheme handler with context %p\n", context);
-        fflush(stdout);
-        
-        // Also test if our handler function is accessible
-        printf("Handler function address: %p\n", (void*)handleViewsURIScheme);
-        fflush(stdout);
     }
 }
 
@@ -2998,13 +2604,8 @@ auto dispatch_sync_main(Func&& func) -> decltype(func()) {
     
     // If already on main thread, just execute
     if (g_main_context_is_owner(g_main_context_default())) {
-        printf("Already on main thread, executing directly\n");
-        fflush(stdout);
         return func();
     }
-    
-    printf("Not on main thread, dispatching to main thread\n");
-    fflush(stdout);
     
     // Structure to hold the function and result
     struct DispatchData {
@@ -3128,18 +2729,6 @@ extern "C" {
 // Constructor to run when library is loaded
 __attribute__((constructor))
 void on_library_load() {
-    printf("=== ELECTROBUN LINUX NATIVE LIBRARY LOADED ===\n");
-    printf("Library constructor called\n");
-    fflush(stdout);
-    
-    // Write to a file as well to make sure it's visible
-    FILE* logFile = fopen("/tmp/electrobun_debug.log", "a");
-    if (logFile) {
-        fprintf(logFile, "=== ELECTROBUN LINUX NATIVE LIBRARY LOADED ===\n");
-        fprintf(logFile, "Library constructor called at startup\n");
-        fflush(logFile);
-        fclose(logFile);
-    }
 }
 
 // Timer callback to process CEF message loop
@@ -3292,8 +2881,6 @@ void runCEFEventLoop() {
     // Cleanup CEF on shutdown
 
     if (g_cefInitialized) {
-        printf("Shutting down CEF\n");
-        fflush(stdout);
         CefShutdown();
     }
 }
@@ -3319,13 +2906,9 @@ void showWindow(void* window);
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title, 
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
     
-   
-    
     void* result = dispatch_sync_main([&]() -> void* {
         
             // CEF mode - create pure X11 window
-            printf("=== INSIDE createWindow dispatch_sync_main (X11/CEF mode) ===\n");
-            fflush(stdout);
             
             // Create X11 window
             Display* display = XOpenDisplay(nullptr);
@@ -3390,8 +2973,6 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             // X11/CEF mode doesn't need GTK containers - CEF manages its own windows
             // CEF webviews will be direct children of the X11 window
             
-            printf("Created X11 window: 0x%lx with GTK container for windowId=%u\n", x11_window, windowId);
-            fflush(stdout);
             
             return (void*)x11win.get();
         
@@ -3509,7 +3090,6 @@ void showX11Window(void* window) {
         if (x11win && x11win->display && x11win->window) {
             XMapWindow(x11win->display, x11win->window);
             XFlush(x11win->display);
-            printf("X11 window mapped: 0x%lx\n", x11win->window);
         }
     });
 }
@@ -3535,8 +3115,6 @@ uint32_t getNSWindowStyleMask(bool borderless, bool titled, bool closable, bool 
                               bool nonactivatingPanel, bool hudWindow) {
     // Linux doesn't use style masks like macOS, so just return a dummy value
     // The actual window styling is handled in createWindow
-    printf("getNSWindowStyleMask called (Linux - returning dummy value)\n");
-    fflush(stdout);
     return 0;
 }
 
@@ -3560,22 +3138,9 @@ AbstractView* initCEFWebview(uint32_t webviewId,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript) {
     
-    printf("=== initWebview ENTRY ===\n");
-    printf("webviewId=%u, window=%p, renderer=%s\n", webviewId, window, renderer ? renderer : "NULL");
-    printf("url=%s, x=%f, y=%f, w=%f, h=%f\n", url ? url : "NULL", x, y, width, height);
-    fflush(stdout);
-    
     AbstractView* result = dispatch_sync_main([&]() -> AbstractView* {
         try {
-            printf("=== INSIDE initWebview dispatch_sync_main ===\n");
-            printf("Renderer: %s\n", renderer ? renderer : "NULL");
-            fflush(stdout);
-            
             std::shared_ptr<AbstractView> webview;
-            
-            // Create CEF webview implementation
-            printf("Creating CEF webview on main thread\n");
-            fflush(stdout);
             
             webview = std::make_shared<CEFWebViewImpl>(
                 webviewId, (GtkWidget*)window,  // window is now X11Window* cast to void*
@@ -3624,9 +3189,6 @@ AbstractView* initCEFWebview(uint32_t webviewId,
             // Store the webview in global map to keep it alive
             g_webviewMap[webviewId] = webview;
             
-            printf("=== initWebview dispatch_sync_main RETURNING: %p ===\n", webview.get());
-            fflush(stdout);
-            
             return webview.get();
         } catch (const std::exception& e) {
             printf("ERROR: Failed to create webview: %s\n", e.what());
@@ -3634,9 +3196,6 @@ AbstractView* initCEFWebview(uint32_t webviewId,
             return nullptr;
         }
     });
-    
-    printf("=== initWebview RETURN: %p ===\n", result);
-    fflush(stdout);
     
     return result;
 }
@@ -3656,19 +3215,9 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript) {
     
-      printf("=== initWebview ENTRY ===\n");
-    printf("webviewId=%u, window=%p, renderer=%s\n", webviewId, window, renderer ? renderer : "NULL");
-    printf("url=%s, x=%f, y=%f, w=%f, h=%f\n", url ? url : "NULL", x, y, width, height);
-    fflush(stdout);
     
     AbstractView* result = dispatch_sync_main([&]() -> AbstractView* {
         try {
-            printf("=== INSIDE initWebview dispatch_sync_main ===\n");
-            fflush(stdout);
-            
-            // Create WebKit webview implementation
-            printf("Creating WebKit webview on main thread\n");
-            fflush(stdout);
             
             auto webview = std::make_shared<WebKitWebViewImpl>(
                 webviewId, GTK_WIDGET(window),
@@ -3682,38 +3231,18 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
             webview->fullSize = autoResize;
             // Webview created successfully
             
-            printf("WebKit webview created successfully\n");
-            fflush(stdout);
-            
-            // Add to container
-            printf("Looking for container with window=%p\n", window);
-            fflush(stdout);
             for (auto& [id, container] : g_containers) {
-                printf("Checking container id=%u, window=%p\n", id, container->window);
-                fflush(stdout);
                 if (container->window == GTK_WIDGET(window)) {
-                    printf("Found matching container, adding webview at (%f, %f)\n", x, y);
-                    fflush(stdout);
                     container->addWebview(webview, x, y);
-                    printf("WebKit webview added to container\n");
-                    fflush(stdout);
                     break;
                 }
             }
             
-            printf("=== initWebview dispatch_sync_main RETURNING: %p ===\n", webview.get());
-            fflush(stdout);
-            
             return webview.get();
         } catch (const std::exception& e) {
-            printf("ERROR: Failed to create webview: %s\n", e.what());
-            fflush(stdout);
             return nullptr;
         }
     });
-    
-    printf("=== initWebview RETURN: %p ===\n", result);
-    fflush(stdout);
     
     return result;
 }
@@ -3872,19 +3401,11 @@ void resizeWebview(AbstractView* abstractView, double x, double y, double width,
 void evaluateJavaScriptWithNoCompletion(AbstractView* abstractView, const char* js) {
     if (abstractView && js) {
         std::string jsString(js);  // Copy the string to ensure it survives
-        // printf("evaluateJavaScriptWithNoCompletion: FFI entry, abstractView=%p, jsString length=%zu\n", abstractView, jsString.length());
-        // printf("evaluateJavaScriptWithNoCompletion: FFI entry, jsString preview: %.100s%s\n", 
-        //        jsString.c_str(), jsString.length() > 100 ? "..." : "");
         dispatch_sync_main_void([abstractView, jsString]() {  // Capture by value
-            // printf("evaluateJavaScriptWithNoCompletion: In main thread dispatch, abstractView=%p, jsString length=%zu\n", abstractView, jsString.length());
-            // printf("evaluateJavaScriptWithNoCompletion: In main thread dispatch, jsString preview: %.100s%s\n", 
-            //        jsString.c_str(), jsString.length() > 100 ? "..." : "");
             
             // Verify the abstractView is still valid
             if (abstractView) {
-                // printf("evaluateJavaScriptWithNoCompletion: About to call virtual method on abstractView=%p\n", abstractView);
                 abstractView->evaluateJavaScriptWithNoCompletion(jsString.c_str());
-                // printf("evaluateJavaScriptWithNoCompletion: Virtual method returned successfully\n");
             } else {
                 printf("evaluateJavaScriptWithNoCompletion: abstractView became NULL in dispatch!\n");
             }
@@ -4189,17 +3710,6 @@ void setJSUtils(void* getMimeType, void* getHTMLForWebviewSync) {
 }
 
 void runNSApplication() {
-    printf("=== runNSApplication called ===\n");
-    fflush(stdout);
-    
-    // Write to log file too
-    FILE* logFile = fopen("/tmp/electrobun_debug.log", "a");
-    if (logFile) {
-        fprintf(logFile, "=== runNSApplication called ===\n");
-        fflush(logFile);
-        fclose(logFile);
-    }
-    
     // Linux uses runEventLoop instead
     runEventLoop();
 }
