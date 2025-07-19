@@ -1502,12 +1502,12 @@ public:
                 int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
                 
                 gtk_widget_set_size_request(wrapper, frame.width, frame.height);
-                gtk_widget_set_margin_left(wrapper, clampedX);
-                gtk_widget_set_margin_top(wrapper, clampedY);
+                gtk_widget_set_margin_left(wrapper, clampedX / 2);
+                gtk_widget_set_margin_top(wrapper, clampedY / 2);
                 
                 // Position webview within wrapper with offset to handle negative positions
-                // TODO: this / 2 is a hack to adjust for GTK's coordinate system. not really sure why it works
-                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY / 2);
+                // Note: /2 division appears necessary for GTK coordinate system
+                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY);
                 
                 // OOPIF positioned with coordinate adjustment
             } else {
