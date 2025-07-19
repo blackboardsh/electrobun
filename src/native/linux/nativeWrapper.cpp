@@ -264,6 +264,7 @@ class AbstractView;
 // CEF globals and implementation
 static bool g_cefInitialized = false;
 static bool g_useCEF = false;
+static bool g_checkedForCEF = false;
 
 // Global webview storage to keep shared_ptr alive
 static std::map<uint32_t, std::shared_ptr<AbstractView>> g_webviewMap;
@@ -291,6 +292,12 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
+    // Return cached result if we've already checked
+    if (g_checkedForCEF) {
+        return g_useCEF;
+    }
+    
+    // Perform the check once and cache the result
     // Get the directory where the executable is located
     std::string execDir = getExecutableDir();
     
@@ -299,10 +306,15 @@ bool isCEFAvailable() {
    
     // Check if the CEF library file exists
     if (access(cefLibPath.c_str(), F_OK) == 0) {       
-        return true;
+        g_useCEF = true;
+    } else {
+        g_useCEF = false;
     }
     
-    return false;
+    // Mark that we've performed the check
+    g_checkedForCEF = true;
+    
+    return g_useCEF;
 }
 
 
