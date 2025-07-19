@@ -291,7 +291,7 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
-    return true;
+    // return false;
     // Get the directory where the executable is located
     std::string execDir = getExecutableDir();
     
@@ -1791,86 +1791,47 @@ public:
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
         if (webview) {
+            // Resizing webview
+            
             // Set webview size
             gtk_widget_set_size_request(webview, frame.width, frame.height);
             
-            // Get the parent container (should be our gtk_fixed container)
-            GtkWidget* parent = gtk_widget_get_parent(webview);
-            if (parent && GTK_IS_FIXED(parent)) {
-                // With gtk_fixed, we can position directly (supports negative coordinates)
-                gtk_fixed_move(GTK_FIXED(parent), webview, frame.x, frame.y);
+            // Check if this webview has a wrapper (OOPIF case)
+            GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
+            if (wrapper) {
+                // For negative positions (scrolled out of view), we need to use
+                // gtk_widget_set_margin_* with clamped values and offset the webview inside
+                int clampedX = MAX(0, frame.x);
+                int clampedY = MAX(0, frame.y);
+                int offsetX = frame.x - clampedX;  // Will be negative if frame.x < 0
+                int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
+                
+                gtk_widget_set_size_request(wrapper, frame.width, frame.height);
+                gtk_widget_set_margin_left(wrapper, clampedX);
+                gtk_widget_set_margin_top(wrapper, clampedY);
+                
+                // Position webview within wrapper with offset to handle negative positions
+                // TODO: this / 2 is a hack to adjust for GTK's coordinate system. not really sure why it works
+                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY / 2);
+                
+                // OOPIF positioned with coordinate adjustment
+            } else {
+                // For host webview, position directly with margins (can't be negative)
+                gtk_widget_set_margin_left(webview, MAX(0, frame.x));
+                gtk_widget_set_margin_top(webview, MAX(0, frame.y));
             }
             
             visualBounds = frame;
         }
         maskJSON = masksJson ? masksJson : "";
-        
-        // Apply visual mask if maskJSON is provided
-        if (masksJson && strlen(masksJson) > 0) {
-            applyVisualMask();
-        } else {
-            // If no masks, remove any existing masks
-            removeMasks();
-        }
     }
     
     void applyVisualMask() override {
-        
-        if (!webview || maskJSON.empty()) {
-            return;
-        }
-        
-        // Parse mask rectangles from JSON
-        std::vector<MaskRect> masks = parseMaskJson(maskJSON);
-        printf("WebKit applyVisualMask: parsed %zu masks\n", masks.size());
-        if (masks.empty()) {
-            return;
-        }
-        
-        // Get the GdkWindow for the webview
-        GdkWindow* window = gtk_widget_get_window(webview);
-        if (!window) {
-            return;
-        }
-        
-        // Get the X11 display and window
-        Display* display = gdk_x11_get_default_xdisplay();
-        Window xwindow = gdk_x11_window_get_xid(window);
-        
-        // Create a region that covers the entire webview
-        cairo_region_t* region = cairo_region_create_rectangle(&visualBounds);
-        
-        // Subtract mask rectangles from the region
-        for (const auto& mask : masks) {
-            cairo_rectangle_int_t maskRect = {
-                mask.x, mask.y, mask.width, mask.height
-            };
-            cairo_region_t* maskRegion = cairo_region_create_rectangle(&maskRect);
-            cairo_region_subtract(region, maskRegion);
-            cairo_region_destroy(maskRegion);
-        }
-        
-        // Apply the region to the GdkWindow
-        gdk_window_shape_combine_region(window, region, 0, 0);
-        cairo_region_destroy(region);
+        // TODO: Implement visual masking
     }
     
     void removeMasks() override {
-        if (!webview) {
-            return;
-        }
-        
-        // Get the GdkWindow for the webview
-        GdkWindow* window = gtk_widget_get_window(webview);
-        if (!window) {
-            return;
-        }
-        
-        // Remove any existing shape by setting it to NULL
-        gdk_window_shape_combine_region(window, NULL, 0, 0);
-        
-        // Clear the mask JSON
-        maskJSON.clear();
+        // TODO: Implement mask removal
     }
     
     void toggleMirrorMode(bool enable) override {
@@ -2015,6 +1976,8 @@ public:
     
     static gboolean onScrollEvent(GtkWidget* widget, GdkEventScroll* event, gpointer user_data) {
         WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        printf("DEBUG: Scroll event on webview %u, direction=%d\n", impl->webviewId, event->direction);
+        fflush(stdout);
         return FALSE; // Allow scroll to continue
     }
     
@@ -2561,34 +2524,16 @@ public:
     AbstractView* activeWebView = nullptr;
     
     ContainerView(GtkWidget* window) : window(window) {
-        // Use gtk_fixed instead of overlay for a real X11 window that CEF can parent to
-        // gtk_fixed creates an actual X11 window (drawable surface) that CEF understands
-        overlay = gtk_fixed_new();
-        
-        // Ensure the fixed container has its own X11 window (not just drawing on parent)
-        gtk_widget_set_has_window(GTK_WIDGET(overlay), TRUE);
-        
+        // Create an overlay container as the main container
+        overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
         
-        // Force the widget to be realized (creates the X11 window)
-        gtk_widget_realize(overlay);
         gtk_widget_show(overlay);
-        
-        // Verify we have a real X11 window
-        GdkWindow* gdkWindow = gtk_widget_get_window(overlay);
-        if (gdkWindow) {
-            unsigned long x11Window = gdk_x11_window_get_xid(gdkWindow);
-            printf("ContainerView: Created with X11 window ID: 0x%lx\n", x11Window);
-        } else {
-            printf("ContainerView: WARNING - No X11 window created for container\n");
-        }
     }
     
     
     void addWebview(std::shared_ptr<AbstractView> view, double x = 0, double y = 0) {
         abstractViews.insert(abstractViews.begin(), view);
-        
-        // CEF views don't have GTK widgets - they manage their own X11 windows
         if (view->widget) {
             // Prevent webview from affecting window size
             g_object_set(view->widget,
@@ -2597,38 +2542,39 @@ public:
                         "vexpand", FALSE,
                         NULL);
             
-            // Add webview to fixed container
-            // With gtk_fixed, all widgets are positioned absolutely - no special handling needed
-            gtk_fixed_put(GTK_FIXED(overlay), view->widget, (int)x, (int)y);
-            
-            // Set webview size
-            gtk_widget_set_size_request(view->widget, 
-                                       view->visualBounds.width > 0 ? view->visualBounds.width : 1, 
-                                       view->visualBounds.height > 0 ? view->visualBounds.height : 1);
+            // Add webview to overlay container
+            if (abstractViews.size() == 1) {
+                // First webview becomes the base layer (determines overlay size)
+                gtk_container_add(GTK_CONTAINER(overlay), view->widget);
+            } else {
+                // For OOPIFs, wrap in a fixed container to enforce size constraints
+                GtkWidget* wrapper = gtk_fixed_new();
+                gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
+                
+                // Make wrapper receive no events (pass through to widgets below)
+                gtk_widget_set_events(wrapper, 0);
+                gtk_widget_set_can_focus(wrapper, FALSE);
+                
+                // Add webview to wrapper at 0,0
+                gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
+                
+                // Add wrapper as overlay layer
+                gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
+                
+                // Make the wrapper pass-through for events outside the webview
+                gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
+                
+                // Position wrapper using margins (will be updated in resize)
+                gtk_widget_set_margin_left(wrapper, (int)x);
+                gtk_widget_set_margin_top(wrapper, (int)y);
+                
+                gtk_widget_show(wrapper);
+                
+                // Store wrapper reference
+                g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
+            }
             
             gtk_widget_show(view->widget);
-            
-            // For CEF webviews, sync position after widget is added to container
-            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(view.get());
-            if (cefView && cefView->browser) {
-                // Use idle callback to sync position after GTK finishes layout
-                g_idle_add([](gpointer data) -> gboolean {
-                    CEFWebViewImpl* cef = static_cast<CEFWebViewImpl*>(data);
-                    if (cef && cef->browser) {
-                        cef->syncCEFPositionWithWidget();
-                    }
-                    return FALSE; // Don't repeat
-                }, cefView);
-            }
-        } else {
-            // This is a CEF view - it manages its own X11 window directly
-            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(view.get());
-            if (cefView) {
-                printf("CEF: Added CEF view without GTK widget - it manages its own window\n");
-                
-                // CEF should already be positioned correctly from initial creation
-                // Additional positioning will happen via resize() calls
-            }
         }
     }
     
@@ -2653,11 +2599,17 @@ public:
         }
         
         GdkRectangle frame = { 0, 0, width, height };
+        printf("DEBUG: Window resized to %dx%d, checking %zu webviews\n", width, height, abstractViews.size());
+        fflush(stdout);
         
         for (auto& view : abstractViews) {
+            printf("DEBUG: Webview %u has fullSize=%s\n", view->webviewId, view->fullSize ? "true" : "false");
+            fflush(stdout);
             
             if (view->fullSize) {
                 // Auto-resize webviews should fill the entire window
+                printf("DEBUG: Auto-resizing webview %u to fill window\n", view->webviewId);
+                fflush(stdout);
                 view->resize(frame, "");
             }
             // OOPIFs (fullSize=false) keep their positioning and don't auto-resize
@@ -3679,7 +3631,7 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript) {
     
-    printf("=== initWebview ENTRY ===\n");
+      printf("=== initWebview ENTRY ===\n");
     printf("webviewId=%u, window=%p, renderer=%s\n", webviewId, window, renderer ? renderer : "NULL");
     printf("url=%s, x=%f, y=%f, w=%f, h=%f\n", url ? url : "NULL", x, y, width, height);
     fflush(stdout);
@@ -3687,39 +3639,42 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
     AbstractView* result = dispatch_sync_main([&]() -> AbstractView* {
         try {
             printf("=== INSIDE initWebview dispatch_sync_main ===\n");
-            printf("Renderer: %s\n", renderer ? renderer : "NULL");
             fflush(stdout);
-            
-            std::shared_ptr<AbstractView> webview;
             
             // Create WebKit webview implementation
             printf("Creating WebKit webview on main thread\n");
             fflush(stdout);
             
-            webview = std::make_shared<WebKitWebViewImpl>(
-                webviewId, (GtkWidget*)window,  // window is now X11Window* cast to void*
+            auto webview = std::make_shared<WebKitWebViewImpl>(
+                webviewId, GTK_WIDGET(window),
                 url, x, y, width, height, autoResize,
                 partitionIdentifier, navigationCallback, webviewEventHandler,
                 bunBridgeHandler, internalBridgeHandler,
                 electrobunPreloadScript, customPreloadScript
             );
             
-            
-            if (!webview || webview->creationFailed) {
-                printf("ERROR: Webview creation failed\n");
-                fflush(stdout);
-                return nullptr;
-            }
-            
             // Set fullSize flag for auto-resize functionality
             webview->fullSize = autoResize;
+            // Webview created successfully
             
-          
+            printf("WebKit webview created successfully\n");
+            fflush(stdout);
             
-           
-            
-            // Store the webview in global map to keep it alive
-            g_webviewMap[webviewId] = webview;
+            // Add to container
+            printf("Looking for container with window=%p\n", window);
+            fflush(stdout);
+            for (auto& [id, container] : g_containers) {
+                printf("Checking container id=%u, window=%p\n", id, container->window);
+                fflush(stdout);
+                if (container->window == GTK_WIDGET(window)) {
+                    printf("Found matching container, adding webview at (%f, %f)\n", x, y);
+                    fflush(stdout);
+                    container->addWebview(webview, x, y);
+                    printf("WebKit webview added to container\n");
+                    fflush(stdout);
+                    break;
+                }
+            }
             
             printf("=== initWebview dispatch_sync_main RETURNING: %p ===\n", webview.get());
             fflush(stdout);
