@@ -1494,6 +1494,10 @@ public:
             // Check if this webview has a wrapper (OOPIF case)
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
             if (wrapper) {
+                // TODO: this only sort of works, the webview ends up half height
+                // and other overlay stuff is just janky and gross
+                // so people should probably use CEF if they want OOPIFs on linux
+
                 // For negative positions (scrolled out of view), we need to use
                 // gtk_widget_set_margin_* with clamped values and offset the webview inside
                 int clampedX = MAX(0, frame.x);
@@ -1502,13 +1506,13 @@ public:
                 int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
                 
                 gtk_widget_set_size_request(wrapper, frame.width, frame.height);
-                gtk_widget_set_margin_left(wrapper, clampedX / 2);
-                gtk_widget_set_margin_top(wrapper, clampedY / 2);
+                gtk_widget_set_margin_left(wrapper, clampedX);
+                gtk_widget_set_margin_top(wrapper, clampedY);
                 
                 // Position webview within wrapper with offset to handle negative positions
                 // Note: /2 division appears necessary for GTK coordinate system
-                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY);
-                
+                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX / 2, offsetY / 2);
+               
                 // OOPIF positioned with coordinate adjustment
             } else {
                 // For host webview, position directly with margins (can't be negative)
