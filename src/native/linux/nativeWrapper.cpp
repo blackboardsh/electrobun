@@ -291,7 +291,7 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
-    // return false;
+    return false;
     // Get the directory where the executable is located
     std::string execDir = getExecutableDir();
     
@@ -3471,7 +3471,7 @@ void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, doubl
     
 }
 
-void setWindowTitle(void* window, const char* title) {
+void setX11WindowTitle(void* window, const char* title) {
     dispatch_sync_main_void([&]() {
         X11Window* x11win = static_cast<X11Window*>(window);
         if (x11win && x11win->display && x11win->window) {
@@ -3482,9 +3482,20 @@ void setWindowTitle(void* window, const char* title) {
     });
 }
 
+void setGTKWindowTitle(void* window, const char* title) {
+    dispatch_sync_main_void([&]() {
+        gtk_window_set_title(GTK_WINDOW(window), title);
+    });
+}
+
 // Mac-compatible function for Linux
 void setNSWindowTitle(void* window, const char* title) {
-    setWindowTitle(window, title);
+    if (isCEFAvailable()) {
+        setX11WindowTitle(window, title);
+    } else {
+        setGTKWindowTitle(window, title);
+    }
+    
 }
 
 // Mac-compatible function for Linux
@@ -3492,7 +3503,7 @@ void makeNSWindowKeyAndOrderFront(void* window) {
     showWindow(window);
 }
 
-void showWindow(void* window) {
+void showX11Window(void* window) {
     dispatch_sync_main_void([&]() {
         X11Window* x11win = static_cast<X11Window*>(window);
         if (x11win && x11win->display && x11win->window) {
@@ -3501,6 +3512,20 @@ void showWindow(void* window) {
             printf("X11 window mapped: 0x%lx\n", x11win->window);
         }
     });
+}
+
+void showGTKWindow(void* window) {
+    dispatch_sync_main_void([&]() {
+        gtk_widget_show_all(GTK_WIDGET(window));
+    });
+}
+
+void showWindow(void* window) {
+    if (isCEFAvailable()) {
+        showX11Window(window);
+    } else {
+        showGTKWindow(window);
+    }
 }
 
 // Mac-compatible function for Linux - return dummy style mask
