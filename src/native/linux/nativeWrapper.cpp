@@ -87,7 +87,10 @@ class CEFWebViewImpl;
 GtkWidget* getContainerViewOverlay(GtkWidget* window);
 GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId);
 
-// X11 Window structure to replace GTK windows
+// GTK Window management globals (used when CEF is not available)
+static std::map<uint32_t, std::shared_ptr<ContainerView>> g_gtk_containers;
+
+// X11 Window structure (used when CEF is available)
 struct X11Window {
     Display* display;
     Window window;
@@ -289,28 +292,37 @@ std::string getExecutableDir() {
     return "."; // fallback to current directory
 }
 
-// CEF availability check - runtime check for CEF files in app bundle
+// CEF availability check - runtime check for CEF files in app bundle (cached)
 bool isCEFAvailable() {
-    printf("isCEF Availabe\n");
-    fflush(stdout);
-    // Get the directory where the executable is located
-    std::string execDir = getExecutableDir();
+    // return false; // Test WebKit mode
+    static bool checked = false;
+    static bool available = false;
     
-    // Check for CEF shared library in the same directory as the executable (primary location)
-    std::string cefLibPath = execDir + "/libcef.so";
-    printf("isCEF Availabe: checking %s\n", cefLibPath.c_str());
-    fflush(stdout);
-    // Check if the CEF library file exists
-    if (access(cefLibPath.c_str(), F_OK) == 0) {
-        printf("isCEF Availabe: yes\n");
-    fflush(stdout);
-        return true;
+    if (!checked) {
+        printf("isCEF Available: checking for first time\n");
+        fflush(stdout);
+        
+        // Get the directory where the executable is located
+        std::string execDir = getExecutableDir();
+        
+        // Check for CEF shared library in the same directory as the executable (primary location)
+        std::string cefLibPath = execDir + "/libcef.so";
+        printf("isCEF Available: checking %s\n", cefLibPath.c_str());
+        fflush(stdout);
+        
+        // Check if the CEF library file exists
+        if (access(cefLibPath.c_str(), F_OK) == 0) {
+            printf("isCEF Available: yes\n");
+            available = true;
+        } else {
+            printf("isCEF Available: no\n");
+            available = false;
+        }
+        fflush(stdout);
+        checked = true;
     }
-
-    printf("isCEF Availabe: no\n");
-    fflush(stdout);
     
-    return false;
+    return available;
 }
 
 
@@ -1801,11 +1813,38 @@ public:
             // Set webview size
             gtk_widget_set_size_request(webview, frame.width, frame.height);
             
-            // Get the parent container (should be our gtk_fixed container)
-            GtkWidget* parent = gtk_widget_get_parent(webview);
-            if (parent && GTK_IS_FIXED(parent)) {
-                // With gtk_fixed, we can position directly (supports negative coordinates)
-                gtk_fixed_move(GTK_FIXED(parent), webview, frame.x, frame.y);
+            // Check if we have a wrapper (GTK overlay mode for OOPIFs)
+            GtkWidget* wrapper = GTK_WIDGET(g_object_get_data(G_OBJECT(webview), "wrapper"));
+            if (wrapper) {
+                // Advanced positioning for OOPIFs with negative position handling
+                // For negative positions (scrolled out of view), we need to use
+                // gtk_widget_set_margin_* with clamped values and offset the webview inside
+                int clampedX = MAX(0, frame.x);
+                int clampedY = MAX(0, frame.y);
+                int offsetX = frame.x - clampedX;  // Will be negative if frame.x < 0
+                int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
+                
+                gtk_widget_set_size_request(wrapper, frame.width, frame.height);
+                gtk_widget_set_margin_left(wrapper, clampedX);
+                gtk_widget_set_margin_top(wrapper, clampedY);
+                
+                // Position webview within wrapper with offset to handle negative positions
+                // TODO: this / 2 is a hack to adjust for GTK's coordinate system. not really sure why it works
+                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY / 2);
+                
+                printf("OOPIF positioned: frame(%d,%d %dx%d) -> clamped(%d,%d) offset(%d,%d)\n", 
+                       frame.x, frame.y, frame.width, frame.height, clampedX, clampedY, offsetX, offsetY);
+            } else {
+                // Get the parent container
+                GtkWidget* parent = gtk_widget_get_parent(webview);
+                if (parent && GTK_IS_FIXED(parent)) {
+                    // CEF mode or first webview in GTK mode - use gtk_fixed positioning
+                    gtk_fixed_move(GTK_FIXED(parent), webview, frame.x, frame.y);
+                } else {
+                    // For host webview in GTK overlay mode, position directly with margins (can't be negative)
+                    gtk_widget_set_margin_left(webview, MAX(0, frame.x));
+                    gtk_widget_set_margin_top(webview, MAX(0, frame.y));
+                }
             }
             
             visualBounds = frame;
@@ -2566,28 +2605,37 @@ public:
     GtkWidget* overlay;
     std::vector<std::shared_ptr<AbstractView>> abstractViews;
     AbstractView* activeWebView = nullptr;
+    bool useCEF;
     
-    ContainerView(GtkWidget* window) : window(window) {
-        // Use gtk_fixed instead of overlay for a real X11 window that CEF can parent to
-        // gtk_fixed creates an actual X11 window (drawable surface) that CEF understands
-        overlay = gtk_fixed_new();
-        
-        // Ensure the fixed container has its own X11 window (not just drawing on parent)
-        gtk_widget_set_has_window(GTK_WIDGET(overlay), TRUE);
-        
-        gtk_container_add(GTK_CONTAINER(window), overlay);
-        
-        // Force the widget to be realized (creates the X11 window)
-        gtk_widget_realize(overlay);
-        gtk_widget_show(overlay);
-        
-        // Verify we have a real X11 window
-        GdkWindow* gdkWindow = gtk_widget_get_window(overlay);
-        if (gdkWindow) {
-            unsigned long x11Window = gdk_x11_window_get_xid(gdkWindow);
-            printf("ContainerView: Created with X11 window ID: 0x%lx\n", x11Window);
+    ContainerView(GtkWidget* window) : window(window), useCEF(isCEFAvailable()) {
+        if (useCEF) {
+            // CEF mode - Use gtk_fixed for a real X11 window that CEF can parent to
+            // gtk_fixed creates an actual X11 window (drawable surface) that CEF understands
+            overlay = gtk_fixed_new();
+            
+            // Ensure the fixed container has its own X11 window (not just drawing on parent)
+            gtk_widget_set_has_window(GTK_WIDGET(overlay), TRUE);
+            
+            gtk_container_add(GTK_CONTAINER(window), overlay);
+            
+            // Force the widget to be realized (creates the X11 window)
+            gtk_widget_realize(overlay);
+            gtk_widget_show(overlay);
+            
+            // Verify we have a real X11 window
+            GdkWindow* gdkWindow = gtk_widget_get_window(overlay);
+            if (gdkWindow) {
+                unsigned long x11Window = gdk_x11_window_get_xid(gdkWindow);
+                printf("ContainerView: Created with X11 window ID for CEF: 0x%lx\n", x11Window);
+            } else {
+                printf("ContainerView: WARNING - No X11 window created for container\n");
+            }
         } else {
-            printf("ContainerView: WARNING - No X11 window created for container\n");
+            // GTK/WebKit mode - Use gtk_overlay for better stacking behavior
+            overlay = gtk_overlay_new();
+            gtk_container_add(GTK_CONTAINER(window), overlay);
+            gtk_widget_show(overlay);
+            printf("ContainerView: Created with GTK overlay for WebKit\n");
         }
     }
     
@@ -2595,7 +2643,6 @@ public:
     void addWebview(std::shared_ptr<AbstractView> view, double x = 0, double y = 0) {
         abstractViews.insert(abstractViews.begin(), view);
         
-        // CEF views don't have GTK widgets - they manage their own X11 windows
         if (view->widget) {
             // Prevent webview from affecting window size
             g_object_set(view->widget,
@@ -2604,31 +2651,66 @@ public:
                         "vexpand", FALSE,
                         NULL);
             
-            // Add webview to fixed container
-            // With gtk_fixed, all widgets are positioned absolutely - no special handling needed
-            gtk_fixed_put(GTK_FIXED(overlay), view->widget, (int)x, (int)y);
-            
-            // Set webview size
-            gtk_widget_set_size_request(view->widget, 
-                                       view->visualBounds.width > 0 ? view->visualBounds.width : 1, 
-                                       view->visualBounds.height > 0 ? view->visualBounds.height : 1);
-            
-            gtk_widget_show(view->widget);
-            
-            // For CEF webviews, sync position after widget is added to container
-            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(view.get());
-            if (cefView && cefView->browser) {
-                // Use idle callback to sync position after GTK finishes layout
-                g_idle_add([](gpointer data) -> gboolean {
-                    CEFWebViewImpl* cef = static_cast<CEFWebViewImpl*>(data);
-                    if (cef && cef->browser) {
-                        cef->syncCEFPositionWithWidget();
-                    }
-                    return FALSE; // Don't repeat
-                }, cefView);
+            if (useCEF) {
+                // CEF mode - use gtk_fixed for absolute positioning
+                gtk_fixed_put(GTK_FIXED(overlay), view->widget, (int)x, (int)y);
+                
+                // Set webview size
+                gtk_widget_set_size_request(view->widget, 
+                                           view->visualBounds.width > 0 ? view->visualBounds.width : 1, 
+                                           view->visualBounds.height > 0 ? view->visualBounds.height : 1);
+                
+                gtk_widget_show(view->widget);
+                
+                // For CEF webviews, sync position after widget is added to container
+                CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(view.get());
+                if (cefView && cefView->browser) {
+                    // Use idle callback to sync position after GTK finishes layout
+                    g_idle_add([](gpointer data) -> gboolean {
+                        CEFWebViewImpl* cef = static_cast<CEFWebViewImpl*>(data);
+                        if (cef && cef->browser) {
+                            cef->syncCEFPositionWithWidget();
+                        }
+                        return FALSE; // Don't repeat
+                    }, cefView);
+                }
+            } else {
+                // GTK/WebKit mode - use gtk_overlay for better stacking
+                if (abstractViews.size() == 1) {
+                    // First webview becomes the base layer (determines overlay size)
+                    gtk_container_add(GTK_CONTAINER(overlay), view->widget);
+                } else {
+                    // For OOPIFs, wrap in a fixed container to enforce size constraints
+                    GtkWidget* wrapper = gtk_fixed_new();
+                    gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
+                    
+                    // Make wrapper receive no events (pass through to widgets below)
+                    gtk_widget_set_events(wrapper, 0);
+                    gtk_widget_set_can_focus(wrapper, FALSE);
+                    
+                    // Add webview to wrapper at 0,0
+                    gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
+                    
+                    // Add wrapper as overlay layer
+                    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
+                    
+                    // Make the wrapper pass-through for events outside the webview
+                    gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
+                    
+                    // Position wrapper using margins (will be updated in resize)
+                    gtk_widget_set_margin_left(wrapper, (int)x);
+                    gtk_widget_set_margin_top(wrapper, (int)y);
+                    
+                    gtk_widget_show(wrapper);
+                    
+                    // Store wrapper reference
+                    g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
+                }
+                
+                gtk_widget_show(view->widget);
             }
         } else {
-            // This is a CEF view - it manages its own X11 window directly
+            // This is a CEF view without GTK widget - it manages its own X11 window directly
             CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(view.get());
             if (cefView) {
                 printf("CEF: Added CEF view without GTK widget - it manages its own window\n");
@@ -2647,7 +2729,13 @@ public:
         
         if (it != abstractViews.end()) {
             if ((*it)->widget) {
-                gtk_widget_destroy((*it)->widget);
+                // Check if we have a wrapper to destroy (GTK overlay mode)
+                GtkWidget* wrapper = GTK_WIDGET(g_object_get_data(G_OBJECT((*it)->widget), "wrapper"));
+                if (wrapper) {
+                    gtk_widget_destroy(wrapper); // This will also destroy the child webview
+                } else {
+                    gtk_widget_destroy((*it)->widget);
+                }
             }
             abstractViews.erase(it);
         }
@@ -2854,7 +2942,8 @@ private:
 };
 
 // Global state
-static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
+// This was moved up to the top of the file as g_gtk_containers
+// static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
 static bool g_gtkInitialized = false;
 
@@ -2864,7 +2953,7 @@ static std::map<Window, uint32_t> g_x11_window_to_id;
 
 // Helper function to get ContainerView overlay for a window
 GtkWidget* getContainerViewOverlay(GtkWidget* window) {
-    for (auto& [id, container] : g_containers) {
+    for (auto& [id, container] : g_gtk_containers) {
         if (container->window == window) {
             return container->overlay;
         }
@@ -3228,38 +3317,47 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
     g_lastResizeTime[windowId] = now;
     g_lastResizeSize[windowId] = {width, height};
     
-    // Find the X11 window handle for this window ID
-    auto windowIt = g_x11_windows.find(windowId);
-    if (windowIt == g_x11_windows.end()) {
-        return;
-    }
-    
-    Window x11WindowHandle = windowIt->second->window;
-    
-    // Find all webviews that belong to this window and have fullSize=true
-    for (auto& [webviewId, webview] : g_webviewMap) {
-        if (webview && webview->fullSize) {
-            // Check if this webview belongs to the specified window
-            // For CEF webviews, we need to check their parent window
-            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
-            if (cefView && cefView->parentXWindow == x11WindowHandle) {
-                // Check if the webview is already the right size to avoid infinite resize loops
-                GdkRectangle currentBounds = webview->visualBounds;
-                if (currentBounds.width == width && currentBounds.height == height) {
-                    continue;
+    if (isCEFAvailable()) {
+        // CEF mode - find X11 window handle
+        auto windowIt = g_x11_windows.find(windowId);
+        if (windowIt == g_x11_windows.end()) {
+            return;
+        }
+        
+        Window x11WindowHandle = windowIt->second->window;
+        
+        // Find all webviews that belong to this window and have fullSize=true
+        for (auto& [webviewId, webview] : g_webviewMap) {
+            if (webview && webview->fullSize) {
+                // Check if this webview belongs to the specified window
+                // For CEF webviews, we need to check their parent window
+                CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
+                if (cefView && cefView->parentXWindow == x11WindowHandle) {
+                    // Check if the webview is already the right size to avoid infinite resize loops
+                    GdkRectangle currentBounds = webview->visualBounds;
+                    if (currentBounds.width == width && currentBounds.height == height) {
+                        continue;
+                    }
+                    
+                    // For auto-resize, typically want to fill the entire window starting from (0,0)
+                    GdkRectangle frame = { 0, 0, width, height };
+                    webview->resize(frame, "");
                 }
-                
-                
-                // For auto-resize, typically want to fill the entire window starting from (0,0)
-                GdkRectangle frame = { 0, 0, width, height };
-                webview->resize(frame, "");
             }
         }
+    } else {
+        // GTK mode - container handles resize automatically through configure-event
+        // Nothing to do here as ContainerView::resizeAutoSizingViews is called by GTK signal
     }
 }
 
 // X11 event processing function
 gboolean process_x11_events(gpointer data) {
+    // Only process X11 events when in CEF mode
+    if (!isCEFAvailable()) {
+        return G_SOURCE_CONTINUE;
+    }
+    
     // Process events for all X11 windows
     for (auto& [windowId, x11win] : g_x11_windows) {
         if (!x11win->display) continue;
@@ -3401,78 +3499,148 @@ void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, doubl
 void* createWindow(uint32_t windowId, double x, double y, double width, double height, const char* title, 
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
     
-    printf("=== createWindow ENTRY (X11) ===\n");
+    bool useCEF = isCEFAvailable();
+    printf("=== createWindow ENTRY (mode: %s) ===\n", useCEF ? "X11/CEF" : "GTK/WebKit");
     printf("windowId=%u, title=%s, x=%f, y=%f, w=%f, h=%f\n", windowId, title, x, y, width, height);
     fflush(stdout);
     
     void* result = dispatch_sync_main([&]() -> void* {
-        printf("=== INSIDE createWindow dispatch_sync_main (X11) ===\n");
-        fflush(stdout);
-        
-        // Create X11 window
-        Display* display = XOpenDisplay(nullptr);
-        if (!display) {
-            printf("ERROR: Failed to open X11 display\n");
-            return nullptr;
+        if (useCEF) {
+            // CEF mode - create pure X11 window
+            printf("=== INSIDE createWindow dispatch_sync_main (X11/CEF mode) ===\n");
+            fflush(stdout);
+            
+            // Create X11 window
+            Display* display = XOpenDisplay(nullptr);
+            if (!display) {
+                printf("ERROR: Failed to open X11 display\n");
+                return nullptr;
+            }
+            
+            int screen = DefaultScreen(display);
+            Window root = RootWindow(display, screen);
+            
+            // Create window attributes
+            XSetWindowAttributes attrs;
+            attrs.background_pixel = WhitePixel(display, screen);
+            attrs.border_pixel = BlackPixel(display, screen);
+            attrs.colormap = DefaultColormap(display, screen);
+            attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
+                              ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
+                              FocusChangeMask | StructureNotifyMask | SubstructureNotifyMask;
+            
+            // Create the main window
+            Window x11_window = XCreateWindow(
+                display, root,
+                (int)x, (int)y, (int)width, (int)height, 0,
+                DefaultDepth(display, screen), InputOutput,
+                DefaultVisual(display, screen),
+                CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
+                &attrs
+            );
+            
+            if (!x11_window) {
+                printf("ERROR: Failed to create X11 window\n");
+                XCloseDisplay(display);
+                return nullptr;
+            }
+            
+            // Set window title
+            XStoreName(display, x11_window, title);
+            
+            // Set window protocols for close button
+            Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
+            XSetWMProtocols(display, x11_window, &wmDelete, 1);
+            
+            // Create X11Window structure
+            auto x11win = std::make_shared<X11Window>();
+            x11win->display = display;
+            x11win->window = x11_window;
+            x11win->windowId = windowId;
+            x11win->x = x;
+            x11win->y = y;
+            x11win->width = width;
+            x11win->height = height;
+            x11win->title = title;
+            x11win->closeCallback = closeCallback;
+            x11win->moveCallback = moveCallback;
+            x11win->resizeCallback = resizeCallback;
+            
+            // Store in global maps
+            g_x11_windows[windowId] = x11win;
+            g_x11_window_to_id[x11_window] = windowId;
+            
+            // X11/CEF mode doesn't need GTK containers - CEF manages its own windows
+            // CEF webviews will be direct children of the X11 window
+            
+            printf("Created X11 window: 0x%lx with GTK container for windowId=%u\n", x11_window, windowId);
+            fflush(stdout);
+            
+            return (void*)x11win.get();
+        } else {
+            // GTK/WebKit mode - create GTK window
+            printf("=== INSIDE createWindow dispatch_sync_main (GTK/WebKit mode) ===\n");
+            fflush(stdout);
+            
+            GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+            printf("gtk_window_new completed: %p\n", window);
+            fflush(stdout);
+            
+            gtk_window_set_title(GTK_WINDOW(window), title);
+            printf("gtk_window_set_title completed\n");
+            fflush(stdout);
+            
+            gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
+            printf("gtk_window_set_default_size completed\n");
+            fflush(stdout);
+            
+            if (x >= 0 && y >= 0) {
+                gtk_window_move(GTK_WINDOW(window), (int)x, (int)y);
+                printf("gtk_window_move completed\n");
+                fflush(stdout);
+            }
+            
+            // Create container
+            printf("Creating ContainerView...\n");
+            fflush(stdout);
+            auto container = std::make_shared<ContainerView>(window);
+            printf("ContainerView created, storing in g_gtk_containers\n");
+            fflush(stdout);
+            g_gtk_containers[windowId] = container;
+            printf("Container stored with windowId=%u\n", windowId);
+            fflush(stdout);
+            
+            // Store callbacks
+            if (closeCallback) {
+                g_signal_connect(window, "delete-event", G_CALLBACK(+[](GtkWidget* widget, GdkEvent* event, gpointer data) -> gboolean {
+                    WindowCloseCallback callback = (WindowCloseCallback)data;
+                    // Find window ID from widget
+                    for (auto& [id, container] : g_gtk_containers) {
+                        if (container->window == widget) {
+                            callback(id);
+                            break;
+                        }
+                    }
+                    return TRUE; // Prevent default close
+                }), (gpointer)closeCallback);
+            }
+            
+            // Connect window resize signal for auto-resize functionality
+            g_signal_connect(window, "configure-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventConfigure* event, gpointer data) -> gboolean {
+                ContainerView* container = static_cast<ContainerView*>(data);
+                if (container) {
+                    container->resizeAutoSizingViews(event->width, event->height);
+                }
+                return FALSE;
+            }), container.get());
+            printf("configure-event signal connected\n");
+            fflush(stdout);
+            
+            printf("=== createWindow dispatch_sync_main RETURNING: %p ===\n", window);
+            fflush(stdout);
+            
+            return (void*)window;
         }
-        
-        int screen = DefaultScreen(display);
-        Window root = RootWindow(display, screen);
-        
-        // Create window attributes
-        XSetWindowAttributes attrs;
-        attrs.background_pixel = WhitePixel(display, screen);
-        attrs.border_pixel = BlackPixel(display, screen);
-        attrs.colormap = DefaultColormap(display, screen);
-        attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
-                          ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-                          FocusChangeMask | StructureNotifyMask | SubstructureNotifyMask;
-        
-        // Create the main window
-        Window x11_window = XCreateWindow(
-            display, root,
-            (int)x, (int)y, (int)width, (int)height, 0,
-            DefaultDepth(display, screen), InputOutput,
-            DefaultVisual(display, screen),
-            CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
-            &attrs
-        );
-        
-        if (!x11_window) {
-            printf("ERROR: Failed to create X11 window\n");
-            XCloseDisplay(display);
-            return nullptr;
-        }
-        
-        // Set window title
-        XStoreName(display, x11_window, title);
-        
-        // Set window protocols for close button
-        Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
-        XSetWMProtocols(display, x11_window, &wmDelete, 1);
-        
-        // Create X11Window structure
-        auto x11win = std::make_shared<X11Window>();
-        x11win->display = display;
-        x11win->window = x11_window;
-        x11win->windowId = windowId;
-        x11win->x = x;
-        x11win->y = y;
-        x11win->width = width;
-        x11win->height = height;
-        x11win->title = title;
-        x11win->closeCallback = closeCallback;
-        x11win->moveCallback = moveCallback;
-        x11win->resizeCallback = resizeCallback;
-        
-        // Store in global maps
-        g_x11_windows[windowId] = x11win;
-        g_x11_window_to_id[x11_window] = windowId;
-        
-        printf("Created X11 window: 0x%lx for windowId=%u\n", x11_window, windowId);
-        fflush(stdout);
-        
-        return (void*)x11win.get();
     });
     
     printf("=== createWindow RETURN: %p ===\n", result);
@@ -3483,11 +3651,20 @@ void* createWindow(uint32_t windowId, double x, double y, double width, double h
 
 void setWindowTitle(void* window, const char* title) {
     dispatch_sync_main_void([&]() {
-        X11Window* x11win = static_cast<X11Window*>(window);
-        if (x11win && x11win->display && x11win->window) {
-            XStoreName(x11win->display, x11win->window, title);
-            XFlush(x11win->display);
-            x11win->title = title;
+        if (isCEFAvailable()) {
+            // CEF mode - X11 window
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                XStoreName(x11win->display, x11win->window, title);
+                XFlush(x11win->display);
+                x11win->title = title;
+            }
+        } else {
+            // GTK mode
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (gtkWindow && GTK_IS_WINDOW(gtkWindow)) {
+                gtk_window_set_title(GTK_WINDOW(gtkWindow), title);
+            }
         }
     });
 }
@@ -3504,11 +3681,21 @@ void makeNSWindowKeyAndOrderFront(void* window) {
 
 void showWindow(void* window) {
     dispatch_sync_main_void([&]() {
-        X11Window* x11win = static_cast<X11Window*>(window);
-        if (x11win && x11win->display && x11win->window) {
-            XMapWindow(x11win->display, x11win->window);
-            XFlush(x11win->display);
-            printf("X11 window mapped: 0x%lx\n", x11win->window);
+        if (isCEFAvailable()) {
+            // CEF mode - X11 window
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                XMapWindow(x11win->display, x11win->window);
+                XFlush(x11win->display);
+                printf("X11 window mapped: 0x%lx\n", x11win->window);
+            }
+        } else {
+            // GTK mode
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (gtkWindow && GTK_IS_WINDOW(gtkWindow)) {
+                gtk_widget_show_all(gtkWindow);
+                printf("GTK window shown: %p\n", gtkWindow);
+            }
         }
     });
 }
@@ -3564,14 +3751,37 @@ AbstractView* initWebview(uint32_t webviewId,
                 }
             }
             
+            // Get the actual GTK window widget based on how the window was actually created
+            GtkWidget* gtkWindow = nullptr;
+            
+            // The window type depends on how createWindow() created it, which depends on isCEFAvailable()
+            if (isCEFAvailable()) {
+                // Window was created as X11Window regardless of renderer choice
+                if (useCEF) {
+                    // CEF mode - window is X11Window*, pass it directly to CEF constructor
+                    // CEF constructor expects X11Window* cast as GtkWidget*
+                    gtkWindow = static_cast<GtkWidget*>(window);
+                } else {
+                    // WebKit mode but X11 window was created (CEF was available)
+                    // This means we're falling back to WebKit but have an X11 window
+                    // WebKit cannot work with pure X11 windows - this is an architecture mismatch
+                    printf("ERROR: WebKit mode requested but X11 window created (CEF available)\n");
+                    printf("WebKit requires GTK windows but CEF availability forced X11 window creation\n");
+                    fflush(stdout);
+                    gtkWindow = nullptr;
+                }
+            } else {
+                // Window was created as GtkWidget* - pure WebKit mode
+                gtkWindow = static_cast<GtkWidget*>(window);
+            }
+            
             if (useCEF) {
-
                 // Create CEF webview implementation
                 printf("Creating CEF webview on main thread\n");
                 fflush(stdout);
                 
                 webview = std::make_shared<CEFWebViewImpl>(
-                    webviewId, (GtkWidget*)window,  // window is now X11Window* cast to void*
+                    webviewId, gtkWindow,  // Will be nullptr in X11/CEF mode
                     url, x, y, width, height, autoResize,
                     partitionIdentifier, navigationCallback, webviewEventHandler,
                     bunBridgeHandler, internalBridgeHandler,
@@ -3584,7 +3794,6 @@ AbstractView* initWebview(uint32_t webviewId,
                     webview = nullptr;
                     useCEF = false;
                 }
-
             }
             
             if (!useCEF) {
@@ -3593,7 +3802,7 @@ AbstractView* initWebview(uint32_t webviewId,
                 fflush(stdout);
                 
                 webview = std::make_shared<WebKitWebViewImpl>(
-                    webviewId, (GtkWidget*)window,  // window is now X11Window* cast to void*
+                    webviewId, gtkWindow,  // Should be valid GtkWidget* in GTK mode
                     url, x, y, width, height, autoResize,
                     partitionIdentifier, navigationCallback, webviewEventHandler,
                     bunBridgeHandler, internalBridgeHandler,
@@ -3613,30 +3822,55 @@ AbstractView* initWebview(uint32_t webviewId,
             printf("%s webview created successfully\n", useCEF ? "CEF" : "WebKit");
             fflush(stdout);
             
-            // For CEF, we need to manually trigger position sync since there's no container
+            // Handle CEF and WebKit differently - no shared containers
             if (useCEF) {
+                // Pure CEF mode - manage CEF webview as X11 window sibling
+                printf("CEF mode: Managing webview as X11 window sibling\n");
+                fflush(stdout);
+                
                 CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
                 if (cefView) {
-                    // Defer positioning until CEF window is ready
+                    // Set initial positioning for CEF
                     GdkRectangle frame;
                     frame.x = (int)x;
                     frame.y = (int)y;
                     frame.width = (int)width;
                     frame.height = (int)height;
                     
-                    // Store the frame for later positioning
+                    // Store the frame for when browser is created
                     cefView->pendingFrame = frame;
                     cefView->hasPendingFrame = true;
                     
-                    // Try immediate positioning, but if it fails, the OnAfterCreated callback will retry
+                    // Try immediate positioning (will work if browser already created)
                     cefView->syncCEFPositionWithFrame(frame);
-                    
+                    printf("CEF webview positioned at (%d,%d) %dx%d\n", frame.x, frame.y, frame.width, frame.height);
+                    fflush(stdout);
                 }
             } else {
-                // For WebKit, add the widget to the window directly
-                // TODO: Handle WebKit webview without container
-                printf("WARNING: WebKit webview without container not yet implemented\n");
+                // For WebKit, add the webview to the container
+                printf("Looking for container to add WebKit webview\n");
                 fflush(stdout);
+                
+                // Find the container for this window
+                bool foundContainer = false;
+                for (auto& [id, container] : g_gtk_containers) {
+                    printf("Checking container id=%u, window=%p\n", id, container->window);
+                    fflush(stdout);
+                    if (container->window == gtkWindow) {
+                        printf("Found matching container, adding webview at (%f, %f)\n", x, y);
+                        fflush(stdout);
+                        container->addWebview(webview, x, y);
+                        printf("WebKit webview added to container\n");
+                        fflush(stdout);
+                        foundContainer = true;
+                        break;
+                    }
+                }
+                
+                if (!foundContainer) {
+                    printf("WARNING: No container found for window %p\n", gtkWindow);
+                    fflush(stdout);
+                }
             }
             
             // Store the webview in global map to keep it alive
@@ -3716,8 +3950,8 @@ bool webviewCanGoForward(AbstractView* abstractView) {
 
 void updateActiveWebviewForMousePosition(uint32_t windowId, int mouseX, int mouseY) {
     // Find the container for this window
-    auto containerIt = g_containers.find(windowId);
-    if (containerIt == g_containers.end()) {
+    auto containerIt = g_gtk_containers.find(windowId);
+    if (containerIt == g_gtk_containers.end()) {
         return;
     }
     
@@ -3855,7 +4089,7 @@ void addPreloadScriptToWebView(AbstractView* abstractView, const char* scriptCon
 
 void callAsyncJavaScript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) {
     // Find the webview in containers
-    for (auto& [id, container] : g_containers) {
+    for (auto& [id, container] : g_gtk_containers) {
         for (auto& view : container->abstractViews) {
             if (view->webviewId == webviewId) {
                 view->callAsyncJavascript(messageId, jsString, webviewId, hostWebviewId, completionHandler);
