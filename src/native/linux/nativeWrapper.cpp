@@ -258,6 +258,8 @@ bool isPointInMask(int x, int y, const std::vector<MaskRect>& masks) {
     return false;
 }
 
+// Note: X11 window extraction removed - WebKit now uses GTK-native input shape masking
+
 // Forward declarations
 class AbstractView;
 
@@ -292,6 +294,7 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
+    return false;
     // Return cached result if we've already checked
     if (g_checkedForCEF) {
         return g_useCEF;
@@ -1516,14 +1519,27 @@ public:
             visualBounds = frame;
         }
         maskJSON = masksJson ? masksJson : "";
+        
+        // Store maskJSON for potential future use, but masking is not implemented for WebKit
+        // See applyVisualMask() method for technical details on why WebKit masking isn't feasible
     }
     
     void applyVisualMask() override {
-        // TODO: Implement visual masking
+        // NOTE: WebKit masking is not implemented due to architectural limitations.
+        // WebKit webviews in GTK have their own complex rendering and event handling
+        // pipeline that doesn't support the "hole cutting" pattern used by CEF.
+        // 
+        // WebKit alternatives that were tried:
+        // 1. X11 XShape masking - Conflicts with GTK rendering, causes visual artifacts
+        // 2. GTK input shape masking - WebKit's internal event handling bypasses GTK input shapes
+        // 3. CSS clipping - Would affect visual rendering, not just mouse events
+        // 
+        // Recommendation: Use CEF for webviews that require maskJSON functionality
+        // on Linux, as CEF provides direct window management that supports masking.
     }
     
     void removeMasks() override {
-        // TODO: Implement mask removal
+        // NOTE: WebKit masking is not implemented - see applyVisualMask() for details
     }
     
     void toggleMirrorMode(bool enable) override {
