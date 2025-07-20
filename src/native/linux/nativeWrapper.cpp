@@ -297,7 +297,7 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
-    return false;
+    // return true;
     // Return cached result if we've already checked
     if (g_checkedForCEF) {
         return g_useCEF;
@@ -3494,26 +3494,39 @@ void stopWindowMove();
 
 // Window drag motion handler
 static gboolean onWindowDragMotion(GtkWidget* widget, GdkEventMotion* event, gpointer user_data) {
-    if (g_draggedWindow && widget == g_draggedWindow) {
-        // Get the current mouse position relative to the screen
-        gint rootX, rootY;
-        gdk_window_get_device_position(gdk_screen_get_root_window(gdk_window_get_screen(gtk_widget_get_window(widget))),
-                                     event->device, &rootX, &rootY, nullptr);
-        
-        // Calculate new window position
-        gint newX = rootX - g_dragStartX;
-        gint newY = rootY - g_dragStartY;
-        
-        // Move the window
-        gtk_window_move(GTK_WINDOW(widget), newX, newY);
+    if (!g_draggedWindow || widget != g_draggedWindow || !event || !event->device) {
+        return FALSE;
     }
+    
+    // Validate widget and its window
+    GdkWindow* gdkWindow = gtk_widget_get_window(widget);
+    if (!gdkWindow) {
+        return FALSE;
+    }
+    
+    // Get the current mouse position using the event data directly (more reliable)
+    gint rootX = (gint)event->x_root;
+    gint rootY = (gint)event->y_root;
+    
+    // Calculate new window position
+    gint newX = rootX - g_dragStartX;
+    gint newY = rootY - g_dragStartY;
+    
+    // Move the window
+    gtk_window_move(GTK_WINDOW(widget), newX, newY);
     
     return FALSE; // Let other handlers process the event
 }
 
 // Window drag button release handler
 static gboolean onWindowDragButtonRelease(GtkWidget* widget, GdkEventButton* event, gpointer user_data) {
+    if (!event) {
+        return FALSE;
+    }
+    
     if (event->button == 1) { // Left mouse button
+        printf("Button release detected, stopping window move\n");
+        fflush(stdout);
         stopWindowMove();
     }
     return FALSE; // Let other handlers process the event
@@ -3558,6 +3571,19 @@ void startWindowMove(void* window) {
                 return;
             }
             
+            // Check if widget is realized
+            if (!gtk_widget_get_realized(gtkWindow)) {
+                fprintf(stderr, "Window not realized, cannot start window move\n");
+                return;
+            }
+            
+            // Get the GDK window and validate it
+            GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
+            if (!gdkWindow) {
+                fprintf(stderr, "No GDK window available for startWindowMove\n");
+                return;
+            }
+            
             // Clean up any existing drag
             stopWindowMove();
             
@@ -3566,14 +3592,36 @@ void startWindowMove(void* window) {
             
             // Get current mouse position relative to window
             GdkDisplay* display = gdk_display_get_default();
-            GdkDevice* device = gdk_seat_get_pointer(gdk_display_get_default_seat(display));
+            if (!display) {
+                fprintf(stderr, "No default display available\n");
+                stopWindowMove();
+                return;
+            }
+            
+            GdkSeat* seat = gdk_display_get_default_seat(display);
+            if (!seat) {
+                fprintf(stderr, "No default seat available\n");
+                stopWindowMove();
+                return;
+            }
+            
+            GdkDevice* device = gdk_seat_get_pointer(seat);
+            if (!device) {
+                fprintf(stderr, "No pointer device available\n");
+                stopWindowMove();
+                return;
+            }
+            
             gint rootX, rootY, winX, winY;
             gdk_device_get_position(device, nullptr, &rootX, &rootY);
-            gdk_window_get_device_position(gtk_widget_get_window(gtkWindow), device, &winX, &winY, nullptr);
+            gdk_window_get_device_position(gdkWindow, device, &winX, &winY, nullptr);
             
             // Store the offset where the drag started within the window
             g_dragStartX = winX;
             g_dragStartY = winY;
+            
+            // Enable motion events on the window
+            gtk_widget_add_events(gtkWindow, GDK_POINTER_MOTION_MASK | GDK_BUTTON_RELEASE_MASK);
             
             // Connect motion and button release handlers
             g_motionHandlerId = g_signal_connect(gtkWindow, "motion-notify-event", 
@@ -3582,9 +3630,7 @@ void startWindowMove(void* window) {
                                                        G_CALLBACK(onWindowDragButtonRelease), nullptr);
             
             // Grab the pointer to ensure we get all mouse events
-            GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
-            GdkGrabStatus status = gdk_seat_grab(gdk_display_get_default_seat(display),
-                                                gdkWindow,
+            GdkGrabStatus status = gdk_seat_grab(seat, gdkWindow,
                                                 GDK_SEAT_CAPABILITY_POINTER,
                                                 FALSE, // owner_events
                                                 nullptr, // cursor
@@ -3593,8 +3639,11 @@ void startWindowMove(void* window) {
                                                 nullptr); // prepare_func_data
             
             if (status != GDK_GRAB_SUCCESS) {
-                fprintf(stderr, "Failed to grab pointer for window drag\n");
+                fprintf(stderr, "Failed to grab pointer for window drag (status: %d)\n", status);
                 stopWindowMove();
+            } else {
+                printf("Window drag started successfully\n");
+                fflush(stdout);
             }
         }
     });
@@ -3602,25 +3651,39 @@ void startWindowMove(void* window) {
 
 void stopWindowMove() {
     dispatch_sync_main_void([&]() {
+        printf("stopWindowMove called\n");
+        fflush(stdout);
+        
         if (g_draggedWindow) {
-            // Disconnect handlers
-            if (g_motionHandlerId > 0) {
+            printf("Cleaning up window drag state\n");
+            fflush(stdout);
+            
+            // Disconnect handlers safely
+            if (g_motionHandlerId > 0 && G_IS_OBJECT(g_draggedWindow)) {
                 g_signal_handler_disconnect(g_draggedWindow, g_motionHandlerId);
                 g_motionHandlerId = 0;
             }
-            if (g_buttonReleaseHandlerId > 0) {
+            if (g_buttonReleaseHandlerId > 0 && G_IS_OBJECT(g_draggedWindow)) {
                 g_signal_handler_disconnect(g_draggedWindow, g_buttonReleaseHandlerId);
                 g_buttonReleaseHandlerId = 0;
             }
             
-            // Release pointer grab
+            // Release pointer grab safely
             GdkDisplay* display = gdk_display_get_default();
-            gdk_seat_ungrab(gdk_display_get_default_seat(display));
+            if (display) {
+                GdkSeat* seat = gdk_display_get_default_seat(display);
+                if (seat) {
+                    gdk_seat_ungrab(seat);
+                }
+            }
             
             // Clear state
             g_draggedWindow = nullptr;
             g_dragStartX = 0;
             g_dragStartY = 0;
+            
+            printf("Window drag cleanup completed\n");
+            fflush(stdout);
         }
     });
 }
