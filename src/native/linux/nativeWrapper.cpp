@@ -2383,13 +2383,6 @@ public:
                                     APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
         
         if (indicator) {
-            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "AppIndicator created successfully, clickHandler=%p\n", (void*)this->clickHandler);
-                fflush(logFile);
-                fclose(logFile);
-            }
-            
             app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);
             
             if (!this->title.empty()) {
@@ -2398,22 +2391,6 @@ public:
             
             // Create default menu (required for AppIndicator)
             createDefaultMenu();
-            
-            logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "TrayItem constructor completed successfully\n");
-                fflush(logFile);
-                fclose(logFile);
-            }
-        } else {
-            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "WARNING: app_indicator_new returned NULL - likely no system tray available\n");
-                fflush(logFile);
-                fclose(logFile);
-            }
-            // Don't throw exception - just continue without tray
-            // This allows the app to run even if no system tray is available
         }
     }
     
@@ -2453,13 +2430,6 @@ public:
         }
         
         // Parse JSON menu configuration using our simple parser
-        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "Parsing menu JSON: %s\n", jsonString);
-            fflush(logFile);
-            fclose(logFile);
-        }
-        
         try {
             std::vector<MenuJsonValue> menuItems = parseMenuJson(std::string(jsonString));
             menu = createMenuFromParsedItems(menuItems, this->clickHandler, trayId);
@@ -2469,22 +2439,8 @@ public:
                 if (indicator) {
                     app_indicator_set_menu(indicator, GTK_MENU(menu));
                 }
-                
-                logFile = fopen("/tmp/tray_debug.log", "a");
-                if (logFile) {
-                    fprintf(logFile, "Menu created successfully with %zu items\n", menuItems.size());
-                    fflush(logFile);
-                    fclose(logFile);
-                }
             }
         } catch (const std::exception& e) {
-            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "Failed to parse menu JSON: %s\n", e.what());
-                fflush(logFile);
-                fclose(logFile);
-            }
-            
             // Fallback to default menu
             createDefaultMenu();
         }
@@ -2550,48 +2506,11 @@ GtkWidget* getContainerViewOverlay(GtkWidget* window) {
 static void onMenuItemActivate(GtkMenuItem* menuItem, gpointer userData) {
     MenuItemData* itemData = static_cast<MenuItemData*>(userData);
     
-    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-    if (logFile) {
-        fprintf(logFile, "Menu item clicked - menuId: %u, action: %s\n", 
-                itemData ? itemData->menuId : 0, 
-                itemData ? itemData->action.c_str() : "null");
-        fflush(logFile);
-        fclose(logFile);
-    }
-    
     if (itemData && itemData->clickHandler) {
-        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "Calling clickHandler with menuId=%u, action='%s', clickHandler=%p\n", 
-                    itemData->menuId, itemData->action.c_str(), (void*)itemData->clickHandler);
-            fflush(logFile);
-            fclose(logFile);
-        }
-        
         try {
             itemData->clickHandler(itemData->menuId, itemData->action.c_str());
-            
-            logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "clickHandler returned successfully\n");
-                fflush(logFile);
-                fclose(logFile);
-            }
         } catch (...) {
-            logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "clickHandler threw exception\n");
-                fflush(logFile);
-                fclose(logFile);
-            }
-        }
-    } else {
-        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "itemData=%p, clickHandler=%p\n", 
-                    (void*)itemData, itemData ? (void*)itemData->clickHandler : nullptr);
-            fflush(logFile);
-            fclose(logFile);
+            // Handle exception silently
         }
     }
 }
@@ -2608,30 +2527,12 @@ GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, Zi
         } else {
             // Skip hidden items entirely
             if (item.hidden) {
-                FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-                if (logFile) {
-                    fprintf(logFile, "Skipping hidden menu item: label='%s'\n", item.label.c_str());
-                    fflush(logFile);
-                    fclose(logFile);
-                }
                 continue;
             }
             
             // Create normal menu item
             std::string displayLabel = !item.label.empty() ? item.label : 
                                      (!item.role.empty() ? item.role : "Menu Item");
-                                     
-            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "Creating menu item: label='%s', enabled=%s, hidden=%s, checked=%s, action='%s'\n",
-                        displayLabel.c_str(),
-                        item.enabled ? "true" : "false",
-                        item.hidden ? "true" : "false", 
-                        item.checked ? "true" : "false",
-                        item.action.c_str());
-                fflush(logFile);
-                fclose(logFile);
-            }
             
             GtkWidget* menuItem;
             if (item.checked) {
@@ -4044,19 +3945,6 @@ void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bo
     // NOTE: width and height parameters are ignored on Linux since AppIndicator doesn't support custom sizing
     // These parameters are included for FFI consistency across platforms (macOS and Windows use them)
     
-    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-    if (logFile) {
-        fprintf(logFile, "createTray called with:\n");
-        fprintf(logFile, "  trayId: %u\n", trayId);
-        fprintf(logFile, "  title: %s\n", title ? title : "NULL");
-        fprintf(logFile, "  pathToImage: %s\n", pathToImage ? pathToImage : "NULL");
-        fprintf(logFile, "  isTemplate: %s\n", isTemplate ? "true" : "false");
-        fprintf(logFile, "  width: %u (ignored on Linux)\n", width);
-        fprintf(logFile, "  height: %u (ignored on Linux)\n", height);
-        fflush(logFile);
-        fclose(logFile);
-    }
-    
     // GTK should already be initialized on main thread by runEventLoop()
     if (!g_gtkInitialized) {
         printf("ERROR: GTK not initialized for createTray! GTK must be initialized on main thread first.\n");
@@ -4078,66 +3966,10 @@ void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bo
             TrayItem* trayPtr = tray.get();
             g_trays[trayId] = std::move(tray);
             
-            logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "Tray item created and stored with ID %u, returning pointer %p\n", trayId, trayPtr);
-                fflush(logFile);
-                fclose(logFile);
-            }
-            
-            // Test calling the JSCallback immediately to verify it works
-            if (clickHandler) {
-                logFile = fopen("/tmp/tray_debug.log", "a");
-                if (logFile) {
-                    fprintf(logFile, "Testing JSCallback immediately: clickHandler=%p\n", clickHandler);
-                    fflush(logFile);
-                    fclose(logFile);
-                }
-                
-                try {
-                    // Call the callback with test values
-                    ZigStatusItemHandler testHandler = reinterpret_cast<ZigStatusItemHandler>(clickHandler);
-                    testHandler(trayId, "test-action-immediate");
-                    
-                    logFile = fopen("/tmp/tray_debug.log", "a");
-                    if (logFile) {
-                        fprintf(logFile, "JSCallback test call succeeded!\n");
-                        fflush(logFile);
-                        fclose(logFile);
-                    }
-                } catch (...) {
-                    logFile = fopen("/tmp/tray_debug.log", "a");
-                    if (logFile) {
-                        fprintf(logFile, "JSCallback test call failed with exception!\n");
-                        fflush(logFile);
-                        fclose(logFile);
-                    }
-                }
-            } else {
-                logFile = fopen("/tmp/tray_debug.log", "a");
-                if (logFile) {
-                    fprintf(logFile, "WARNING: clickHandler is NULL, cannot test JSCallback\n");
-                    fflush(logFile);
-                    fclose(logFile);
-                }
-            }
-            
             return trayPtr;
         } catch (const std::exception& e) {
-            logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "Failed to create tray: %s\n", e.what());
-                fflush(logFile);
-                fclose(logFile);
-            }
             return nullptr;
         } catch (...) {
-            logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "Failed to create tray: unknown exception\n");
-                fflush(logFile);
-                fclose(logFile);
-            }
             return nullptr;
         }
     });
@@ -4186,13 +4018,7 @@ void setTrayMenu(void* statusItem, const char* menuConfig) {
 void setApplicationMenu(const char* jsonString, void* zigTrayItemHandler) {
     // Note: Linux typically doesn't have global application menus like macOS
     // This would require integration with the desktop environment
-    // For now, we'll log the request and potentially implement it later
-    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-    if (logFile) {
-        fprintf(logFile, "setApplicationMenu called - Linux implementation pending\n");
-        fflush(logFile);
-        fclose(logFile);
-    }
+    // For now, this is a no-op on Linux
 }
 
 void showContextMenu(const char* jsonString, void* contextMenuHandler) {
@@ -4208,13 +4034,6 @@ void showContextMenu(const char* jsonString, void* contextMenuHandler) {
     }
     
     dispatch_sync_main_void([&]() {
-        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "Creating context menu from JSON: %s\n", jsonString);
-            fflush(logFile);
-            fclose(logFile);
-        }
-        
         try {
             std::vector<MenuJsonValue> menuItems = parseMenuJson(std::string(jsonString));
             GtkWidget* contextMenu = createMenuFromParsedItems(menuItems, 
@@ -4226,21 +4045,9 @@ void showContextMenu(const char* jsonString, void* contextMenuHandler) {
                 
                 // Show context menu at mouse position
                 gtk_menu_popup_at_pointer(GTK_MENU(contextMenu), nullptr);
-                
-                logFile = fopen("/tmp/tray_debug.log", "a");
-                if (logFile) {
-                    fprintf(logFile, "Context menu created and shown with %zu items\n", menuItems.size());
-                    fflush(logFile);
-                    fclose(logFile);
-                }
             }
         } catch (const std::exception& e) {
-            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "Failed to create context menu: %s\n", e.what());
-                fflush(logFile);
-                fclose(logFile);
-            }
+            // Handle exception silently
         }
     });
 }
