@@ -8,7 +8,7 @@
 
 ## What is Electrobun?
 
-> Electrobun is in the **_very_** early stages. We currently only support development on arm macs, it has memory leaks, has no tests, and many core things are still missing. We're actively working on adding Windows and Linux support.
+> Electrobun is in the **_very_** early stages. We currently support development on macOS, Windows, and Linux, but it has memory leaks, has no tests, and many core things are still missing. We're actively working on stabilizing cross-platform support.
 
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
 Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in <a href="https://ziglang.org/">zig</a>.
@@ -43,14 +43,51 @@ Ways to get involved at this early stage:
 - Join the conversation on <a href="https://discord.gg/ueKE4tjaCE">Discord</a>
 - Create and participate in Github issues and discussions
 
-## Building
+## Development Setup
 
-### MacOS
-First make sure you have:
-- xcode tools 
-- cmake (can install via homebrew)
-- run `bun run install-zig` to install the right version of zig to vendors/zig
+### Prerequisites
 
-`bun dev:playground` and `bun dev:playground:canary` will compile everything in electrobun in either dev mode and then compile the playground app in either dev or canary modes and run it.
+**macOS:**
+- Xcode command line tools
+- cmake (install via homebrew: `brew install cmake`)
 
-Note: use `lldb <path-to-bundle>/Contents/MacOS/launcher` and then `run` to debug release builds
+**Windows:**
+- Visual Studio Build Tools or Visual Studio with C++ development tools
+- cmake
+
+**Linux:**
+- build-essential package
+- cmake
+- webkit2gtk and GTK development packages
+
+### First-time Setup
+
+```bash
+git clone <repo-url>
+cd electrobun
+bun install
+bun dev:playground:clean
+```
+
+### Development Workflow
+
+```bash
+# After making changes to source code
+bun dev:playground
+
+# If you only changed playground code (not electrobun source)
+bun dev:playground:rerun
+
+# If you need a completely fresh start
+bun dev:playground:clean
+```
+
+### Additional Commands
+
+- `bun dev:playground:canary` - Build and run playground in canary mode
+- `bun build:dev` - Build electrobun in development mode
+- `bun build:release` - Build electrobun in release mode
+
+### Debugging
+
+**macOS:** Use `lldb <path-to-bundle>/Contents/MacOS/launcher` and then `run` to debug release builds
