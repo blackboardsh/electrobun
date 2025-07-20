@@ -121,15 +121,18 @@ const updateTrayMenu = () => {
   ]);
 };
 
-// On Linux, AppIndicator requires a menu immediately, so set it right away
+// On Linux, AppIndicator doesn't send click events for the main icon
 if (process.platform === "linux") {
-  updateTrayMenu();
-  tray.setTitle("Example Tray Item (click to open menu)");
+  setTimeout(() => {
+    updateTrayMenu();
+    tray.setTitle("Example Tray Item (click to open menu)");
+  }, 1000)
 }
 
 // TODO: events should be typed
 tray.on("tray-clicked", (e) => {
   const { id, action } = e.data as { id: number; action: string };
+  console.log("tray clicked", id, action);
   if (action === "") {
     // main menu was clicked before we create a system tray menu for it.
     updateTrayMenu();
@@ -215,7 +218,7 @@ setTimeout(() => {
     { role: "delete" },
     { role: "selectAll" },
   ]);
-}, 30000);
+}, 3000);
 
 Electrobun.events.on("context-menu-clicked", (e) => {
   console.log("context event", e.data.action);

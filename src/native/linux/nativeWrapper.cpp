@@ -112,6 +112,9 @@ struct X11Window {
     X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600) {}
 };
 
+// Forward declaration for X11 menu function
+void applyApplicationMenuToX11Window(X11Window* x11win);
+
 // Parse JSON menu array (simplified parser for basic menu structure)
 std::vector<MenuJsonValue> parseMenuJson(const std::string& jsonStr) {
     std::vector<MenuJsonValue> items;
@@ -2628,53 +2631,23 @@ GtkWidget* createApplicationMenuBar(const std::vector<MenuJsonValue>& items, Zig
 }
 
 // Apply the stored application menu to a specific window
-// NOTE: On Linux GTK, application menus overlay over content rather than shifting 
-// content down like on Windows. This is due to technical limitations with GTK widget
-// hierarchy restructuring. The menu appears at the top of the window as an overlay.
+// NOTE: Application menus are not supported on Linux due to platform differences.
+// On Linux, application menus overlay over content rather than shifting content down
+// like on Windows/macOS, which interferes with OOPIF positioning and masking.
+// Developers should implement menu UI directly in their HTML instead.
 void applyApplicationMenuToWindow(GtkWidget* window) {
-    if (g_applicationMenuConfig.empty() || !g_applicationMenuHandler || !window) {
-        return;
-    }
-    
-    try {
-        std::vector<MenuJsonValue> menuItems = parseMenuJson(g_applicationMenuConfig);
-        if (menuItems.empty()) {
-            return;
-        }
-        
-        // Find the ContainerView for this window and add menu to its overlay
-        for (auto& [id, container] : g_containers) {
-            if (container && container->window == window) {
-                // Check if overlay already has a menu bar
-                GList* overlayChildren = gtk_container_get_children(GTK_CONTAINER(container->overlay));
-                bool hasMenuBar = false;
-                for (GList* iter = overlayChildren; iter != nullptr; iter = g_list_next(iter)) {
-                    if (GTK_IS_MENU_BAR(GTK_WIDGET(iter->data))) {
-                        hasMenuBar = true;
-                        break;
-                    }
-                }
-                g_list_free(overlayChildren);
-                
-                if (hasMenuBar) {
-                    return; // Already has menu bar
-                }
-                
-                // Create menu bar
-                GtkWidget* menuBar = createApplicationMenuBar(menuItems, g_applicationMenuHandler);
-                if (menuBar) {
-                    // Add menu bar as an overlay at the top
-                    gtk_overlay_add_overlay(GTK_OVERLAY(container->overlay), menuBar);
-                    gtk_widget_set_halign(menuBar, GTK_ALIGN_FILL);
-                    gtk_widget_set_valign(menuBar, GTK_ALIGN_START);
-                    gtk_widget_show_all(menuBar);
-                }
-                return;
-            }
-        }
-    } catch (const std::exception& e) {
-        // Handle exception silently
-    }
+    printf("Application menus are not supported on Linux. Implement menu UI in your webview HTML instead.\n");
+    fflush(stdout);
+}
+
+// Apply the stored application menu to a specific X11 window
+// NOTE: Application menus are not supported on Linux due to platform differences.
+// X11 application menus would require complex webview positioning adjustments
+// that could interfere with OOPIF layering and maskJSON cutout mechanisms.
+// Developers should implement menu UI directly in their HTML instead.
+void applyApplicationMenuToX11Window(X11Window* x11win) {
+    printf("Application menus are not supported on Linux. Implement menu UI in your webview HTML instead.\n");
+    fflush(stdout);
 }
 
 // views:// URI scheme handler callback
@@ -3136,6 +3109,8 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             // X11/CEF mode doesn't need GTK containers - CEF manages its own windows
             // CEF webviews will be direct children of the X11 window
             
+            // Apply application menu if one has been set
+            applyApplicationMenuToX11Window(x11win.get());
             
             return (void*)x11win.get();
         
@@ -3255,6 +3230,9 @@ void showX11Window(void* window) {
         if (x11win && x11win->display && x11win->window) {
             XMapWindow(x11win->display, x11win->window);
             XFlush(x11win->display);
+            
+            // Apply application menu when window is shown
+            applyApplicationMenuToX11Window(x11win);
         }
     });
 }
@@ -4141,11 +4119,19 @@ void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
             
             std::vector<MenuJsonValue> menuItems = parseMenuJson(g_applicationMenuConfig);
             
-            // Apply menu to all existing windows  
+            // Apply menu to all existing GTK windows  
             for (auto& containerPair : g_containers) {
                 auto container = containerPair.second;
                 if (container && container->window) {
                     applyApplicationMenuToWindow(container->window);
+                }
+            }
+            
+            // Apply menu to all existing X11 windows
+            for (auto& x11Pair : g_x11_windows) {
+                auto x11win = x11Pair.second;
+                if (x11win) {
+                    applyApplicationMenuToX11Window(x11win.get());
                 }
             }
         } catch (const std::exception& e) {
