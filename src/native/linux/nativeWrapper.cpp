@@ -155,6 +155,60 @@ std::vector<MenuJsonValue> parseMenuJson(const std::string& jsonStr) {
             }
         }
         
+        // Find the end of this menu item object
+        size_t itemEnd = jsonStr.find("},{", labelStart);
+        if (itemEnd == std::string::npos) {
+            itemEnd = jsonStr.find("}]", labelStart);  // Last item in array
+        }
+        if (itemEnd == std::string::npos) {
+            itemEnd = jsonStr.find("}", labelStart);   // Single item
+        }
+        
+        // Look for enabled boolean within this item
+        size_t enabledStart = jsonStr.find("\"enabled\":", labelStart);
+        if (enabledStart != std::string::npos && enabledStart < itemEnd) {
+            size_t enabledValueStart = enabledStart + 10;  // Skip "enabled":
+            // Skip whitespace and colon
+            while (enabledValueStart < jsonStr.length() && (isspace(jsonStr[enabledValueStart]) || jsonStr[enabledValueStart] == ':')) {
+                enabledValueStart++;
+            }
+            if (jsonStr.substr(enabledValueStart, 4) == "true") {
+                item.enabled = true;
+            } else if (jsonStr.substr(enabledValueStart, 5) == "false") {
+                item.enabled = false;
+            }
+        }
+        
+        // Look for hidden boolean within this item
+        size_t hiddenStart = jsonStr.find("\"hidden\":", labelStart);
+        if (hiddenStart != std::string::npos && hiddenStart < itemEnd) {
+            size_t hiddenValueStart = hiddenStart + 9;  // Skip "hidden":
+            // Skip whitespace and colon
+            while (hiddenValueStart < jsonStr.length() && (isspace(jsonStr[hiddenValueStart]) || jsonStr[hiddenValueStart] == ':')) {
+                hiddenValueStart++;
+            }
+            if (jsonStr.substr(hiddenValueStart, 4) == "true") {
+                item.hidden = true;
+            } else if (jsonStr.substr(hiddenValueStart, 5) == "false") {
+                item.hidden = false;
+            }
+        }
+        
+        // Look for checked boolean within this item
+        size_t checkedStart = jsonStr.find("\"checked\":", labelStart);
+        if (checkedStart != std::string::npos && checkedStart < itemEnd) {
+            size_t checkedValueStart = checkedStart + 10;  // Skip "checked":
+            // Skip whitespace and colon
+            while (checkedValueStart < jsonStr.length() && (isspace(jsonStr[checkedValueStart]) || jsonStr[checkedValueStart] == ':')) {
+                checkedValueStart++;
+            }
+            if (jsonStr.substr(checkedValueStart, 4) == "true") {
+                item.checked = true;
+            } else if (jsonStr.substr(checkedValueStart, 5) == "false") {
+                item.checked = false;
+            }
+        }
+        
         items.push_back(item);
         pos = labelValueEnd + 1;
     }
@@ -2331,7 +2385,7 @@ public:
         if (indicator) {
             FILE* logFile = fopen("/tmp/tray_debug.log", "a");
             if (logFile) {
-                fprintf(logFile, "AppIndicator created successfully, setting up...\n");
+                fprintf(logFile, "AppIndicator created successfully, clickHandler=%p\n", (void*)this->clickHandler);
                 fflush(logFile);
                 fclose(logFile);
             }
@@ -2408,7 +2462,7 @@ public:
         
         try {
             std::vector<MenuJsonValue> menuItems = parseMenuJson(std::string(jsonString));
-            menu = createMenuFromParsedItems(menuItems, clickHandler, trayId);
+            menu = createMenuFromParsedItems(menuItems, this->clickHandler, trayId);
             
             if (menu) {
                 gtk_widget_show_all(menu);
@@ -2495,8 +2549,50 @@ GtkWidget* getContainerViewOverlay(GtkWidget* window) {
 // Menu item click callback
 static void onMenuItemActivate(GtkMenuItem* menuItem, gpointer userData) {
     MenuItemData* itemData = static_cast<MenuItemData*>(userData);
+    
+    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "Menu item clicked - menuId: %u, action: %s\n", 
+                itemData ? itemData->menuId : 0, 
+                itemData ? itemData->action.c_str() : "null");
+        fflush(logFile);
+        fclose(logFile);
+    }
+    
     if (itemData && itemData->clickHandler) {
-        itemData->clickHandler(itemData->menuId, itemData->action.c_str());
+        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "Calling clickHandler with menuId=%u, action='%s', clickHandler=%p\n", 
+                    itemData->menuId, itemData->action.c_str(), (void*)itemData->clickHandler);
+            fflush(logFile);
+            fclose(logFile);
+        }
+        
+        try {
+            itemData->clickHandler(itemData->menuId, itemData->action.c_str());
+            
+            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "clickHandler returned successfully\n");
+                fflush(logFile);
+                fclose(logFile);
+            }
+        } catch (...) {
+            logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "clickHandler threw exception\n");
+                fflush(logFile);
+                fclose(logFile);
+            }
+        }
+    } else {
+        FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "itemData=%p, clickHandler=%p\n", 
+                    (void*)itemData, itemData ? (void*)itemData->clickHandler : nullptr);
+            fflush(logFile);
+            fclose(logFile);
+        }
     }
 }
 
@@ -2510,9 +2606,32 @@ GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, Zi
             GtkWidget* separator = gtk_separator_menu_item_new();
             gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator);
         } else {
+            // Skip hidden items entirely
+            if (item.hidden) {
+                FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "Skipping hidden menu item: label='%s'\n", item.label.c_str());
+                    fflush(logFile);
+                    fclose(logFile);
+                }
+                continue;
+            }
+            
             // Create normal menu item
             std::string displayLabel = !item.label.empty() ? item.label : 
                                      (!item.role.empty() ? item.role : "Menu Item");
+                                     
+            FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "Creating menu item: label='%s', enabled=%s, hidden=%s, checked=%s, action='%s'\n",
+                        displayLabel.c_str(),
+                        item.enabled ? "true" : "false",
+                        item.hidden ? "true" : "false", 
+                        item.checked ? "true" : "false",
+                        item.action.c_str());
+                fflush(logFile);
+                fclose(logFile);
+            }
             
             GtkWidget* menuItem;
             if (item.checked) {
@@ -2523,9 +2642,6 @@ GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, Zi
             }
             
             gtk_widget_set_sensitive(menuItem, item.enabled);
-            if (item.hidden) {
-                gtk_widget_hide(menuItem);
-            }
             
             // Create menu item data for callback
             auto itemData = std::make_shared<MenuItemData>();
@@ -3962,6 +4078,43 @@ void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bo
                 fprintf(logFile, "Tray item created and stored with ID %u, returning pointer %p\n", trayId, trayPtr);
                 fflush(logFile);
                 fclose(logFile);
+            }
+            
+            // Test calling the JSCallback immediately to verify it works
+            if (clickHandler) {
+                logFile = fopen("/tmp/tray_debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "Testing JSCallback immediately: clickHandler=%p\n", clickHandler);
+                    fflush(logFile);
+                    fclose(logFile);
+                }
+                
+                try {
+                    // Call the callback with test values
+                    ZigStatusItemHandler testHandler = reinterpret_cast<ZigStatusItemHandler>(clickHandler);
+                    testHandler(trayId, "test-action-immediate");
+                    
+                    logFile = fopen("/tmp/tray_debug.log", "a");
+                    if (logFile) {
+                        fprintf(logFile, "JSCallback test call succeeded!\n");
+                        fflush(logFile);
+                        fclose(logFile);
+                    }
+                } catch (...) {
+                    logFile = fopen("/tmp/tray_debug.log", "a");
+                    if (logFile) {
+                        fprintf(logFile, "JSCallback test call failed with exception!\n");
+                        fflush(logFile);
+                        fclose(logFile);
+                    }
+                }
+            } else {
+                logFile = fopen("/tmp/tray_debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "WARNING: clickHandler is NULL, cannot test JSCallback\n");
+                    fflush(logFile);
+                    fclose(logFile);
+                }
             }
             
             return trayPtr;

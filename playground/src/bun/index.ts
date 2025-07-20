@@ -16,6 +16,10 @@ import { resolve, resolveSync } from "bun";
 import { homedir } from "os";
 import { join } from "path";
 
+setTimeout(() => {
+  process.exit();
+}, 30000)
+
 // Electrobun.Updater.getLocalVersion();
 
 // Note: the Canary Playground app will always try update to the latest version
@@ -50,6 +54,27 @@ setTimeout(async () => {
 //     }
 // });
 
+// setTimeout(async () => {
+//   const files = await Electrobun.Utils.openFileDialog();
+
+//   const fileToDelete = files[0];
+
+//   console.log("----->>> openFileDialog result", fileToDelete);
+//   if (fileToDelete) {
+//     console.log("deleting file", fileToDelete);
+//     await Electrobun.Utils.moveToTrash(fileToDelete);
+//   } else {
+//     console.log("no file selected");
+//   }
+// }, 10000);
+
+// map action names to clicked state
+const menuState = {
+  "item-1": false,
+  "sub-item-1": false,
+  "sub-item-2": true,
+};
+
 const tray = new Tray({
   title: "Example Tray Item (click to create menu)",
   // Note: __dirname here will evaulate to src/bun when running in dev mode
@@ -60,13 +85,6 @@ const tray = new Tray({
   width: 32,
   height: 32,
 });
-
-// map action names to clicked state
-const menuState = {
-  "item-1": false,
-  "sub-item-1": false,
-  "sub-item-2": true,
-};
 
 const updateTrayMenu = () => {
   tray.setMenu([
@@ -102,6 +120,12 @@ const updateTrayMenu = () => {
     },
   ]);
 };
+
+// On Linux, AppIndicator requires a menu immediately, so set it right away
+if (process.platform === "linux") {
+  updateTrayMenu();
+  tray.setTitle("Example Tray Item (click to open menu)");
+}
 
 // TODO: events should be typed
 tray.on("tray-clicked", (e) => {
@@ -232,6 +256,7 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
 const win = new BrowserWindow({
   title: "my url window",
   url: "views://mainview/index.html",
+  renderer: "cef",
   frame: {
     width: 1800,
     height: 600,
