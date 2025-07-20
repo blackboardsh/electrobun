@@ -71,6 +71,10 @@ struct MenuItemData {
 static uint32_t g_nextMenuId = 1;
 static std::map<uint32_t, std::shared_ptr<MenuItemData>> g_menuItems;
 
+// Global application menu storage
+static std::string g_applicationMenuConfig;
+static ZigStatusItemHandler g_applicationMenuHandler = nullptr;
+
 // Simple JSON value structure for menu parsing
 struct MenuJsonValue {
     std::string type;
@@ -89,6 +93,8 @@ class ContainerView;
 class CEFWebViewImpl;
 GtkWidget* getContainerViewOverlay(GtkWidget* window);
 GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId);
+GtkWidget* createApplicationMenuBar(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler);
+void applyApplicationMenuToWindow(GtkWidget* window);
 
 // X11 Window structure to replace GTK windows
 struct X11Window {
@@ -351,7 +357,7 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
-    // return true;
+    return false;
     // Return cached result if we've already checked
     if (g_checkedForCEF) {
         return g_useCEF;
@@ -2573,6 +2579,104 @@ GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, Zi
     return menu;
 }
 
+// Create GTK menu bar for application menus (File, Edit, etc.)
+GtkWidget* createApplicationMenuBar(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler) {
+    GtkWidget* menuBar = gtk_menu_bar_new();
+    
+    for (const auto& item : items) {
+        if (item.type == "divider" || item.type == "separator") {
+            // Skip separators at the top level of menu bar (they don't make sense there)
+            continue;
+        } else {
+            // Skip hidden items entirely
+            if (item.hidden) {
+                continue;
+            }
+            
+            // Create top-level menu item (like "File", "Edit", etc.)
+            std::string displayLabel = !item.label.empty() ? item.label : 
+                                     (!item.role.empty() ? item.role : "Menu");
+            
+            GtkWidget* menuItem = gtk_menu_item_new_with_label(displayLabel.c_str());
+            
+            // Set enabled/disabled state
+            gtk_widget_set_sensitive(menuItem, item.enabled);
+            
+            // If this item has a submenu, create it
+            if (!item.submenu.empty()) {
+                GtkWidget* submenu = createMenuFromParsedItems(item.submenu, clickHandler, 0);
+                gtk_menu_item_set_submenu(GTK_MENU_ITEM(menuItem), submenu);
+            } else if (!item.action.empty()) {
+                // If no submenu but has an action, create a menu item data and connect signal
+                auto itemData = std::make_shared<MenuItemData>();
+                itemData->menuId = g_nextMenuId++;
+                itemData->action = item.action;
+                itemData->type = item.type;
+                itemData->clickHandler = clickHandler;
+                
+                g_menuItems[itemData->menuId] = itemData;
+                
+                g_signal_connect(menuItem, "activate", G_CALLBACK(onMenuItemActivate), itemData.get());
+            }
+            
+            gtk_menu_shell_append(GTK_MENU_SHELL(menuBar), menuItem);
+        }
+    }
+    
+    gtk_widget_show_all(menuBar);
+    return menuBar;
+}
+
+// Apply the stored application menu to a specific window
+// NOTE: On Linux GTK, application menus overlay over content rather than shifting 
+// content down like on Windows. This is due to technical limitations with GTK widget
+// hierarchy restructuring. The menu appears at the top of the window as an overlay.
+void applyApplicationMenuToWindow(GtkWidget* window) {
+    if (g_applicationMenuConfig.empty() || !g_applicationMenuHandler || !window) {
+        return;
+    }
+    
+    try {
+        std::vector<MenuJsonValue> menuItems = parseMenuJson(g_applicationMenuConfig);
+        if (menuItems.empty()) {
+            return;
+        }
+        
+        // Find the ContainerView for this window and add menu to its overlay
+        for (auto& [id, container] : g_containers) {
+            if (container && container->window == window) {
+                // Check if overlay already has a menu bar
+                GList* overlayChildren = gtk_container_get_children(GTK_CONTAINER(container->overlay));
+                bool hasMenuBar = false;
+                for (GList* iter = overlayChildren; iter != nullptr; iter = g_list_next(iter)) {
+                    if (GTK_IS_MENU_BAR(GTK_WIDGET(iter->data))) {
+                        hasMenuBar = true;
+                        break;
+                    }
+                }
+                g_list_free(overlayChildren);
+                
+                if (hasMenuBar) {
+                    return; // Already has menu bar
+                }
+                
+                // Create menu bar
+                GtkWidget* menuBar = createApplicationMenuBar(menuItems, g_applicationMenuHandler);
+                if (menuBar) {
+                    // Add menu bar as an overlay at the top
+                    gtk_overlay_add_overlay(GTK_OVERLAY(container->overlay), menuBar);
+                    gtk_widget_set_halign(menuBar, GTK_ALIGN_FILL);
+                    gtk_widget_set_valign(menuBar, GTK_ALIGN_START);
+                    gtk_widget_show_all(menuBar);
+                }
+                return;
+            }
+        }
+    } catch (const std::exception& e) {
+        // Handle exception silently
+    }
+}
+
 // views:// URI scheme handler callback
 static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data) {
     const char* uri = webkit_uri_scheme_request_get_uri(request);
@@ -3071,7 +3175,9 @@ void* createGTKWindow(uint32_t windowId, double x, double y, double width, doubl
         auto container = std::make_shared<ContainerView>(window);
         
         g_containers[windowId] = container;
-       
+        
+        // Apply application menu to new window if one is configured
+        applyApplicationMenuToWindow(window);
         
         // Store callbacks (simplified - in real implementation you'd want to store these properly)
         // For now, just connect basic destroy signal
@@ -4015,41 +4121,46 @@ void setTrayMenu(void* statusItem, const char* menuConfig) {
     setTrayMenuFromJSON(statusItem, menuConfig);
 }
 
-void setApplicationMenu(const char* jsonString, void* zigTrayItemHandler) {
-    // Note: Linux typically doesn't have global application menus like macOS
-    // This would require integration with the desktop environment
-    // For now, this is a no-op on Linux
-}
-
-void showContextMenu(const char* jsonString, void* contextMenuHandler) {
+void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
     if (!jsonString || strlen(jsonString) == 0) {
         return;
     }
     
     // GTK should already be initialized on main thread by runEventLoop()
     if (!g_gtkInitialized) {
-        printf("ERROR: GTK not initialized for showContextMenu! GTK must be initialized on main thread first.\n");
+        printf("ERROR: GTK not initialized for setApplicationMenu! GTK must be initialized on main thread first.\n");
         fflush(stdout);
         return;
     }
     
     dispatch_sync_main_void([&]() {
         try {
-            std::vector<MenuJsonValue> menuItems = parseMenuJson(std::string(jsonString));
-            GtkWidget* contextMenu = createMenuFromParsedItems(menuItems, 
-                                                               reinterpret_cast<ZigStatusItemHandler>(contextMenuHandler), 
-                                                               0); // Use 0 for context menu ID
+            // Store the menu config globally so it can be applied to future windows
+            g_applicationMenuConfig = std::string(jsonString);
+            g_applicationMenuHandler = reinterpret_cast<ZigStatusItemHandler>(applicationMenuHandler);
             
-            if (contextMenu) {
-                gtk_widget_show_all(contextMenu);
-                
-                // Show context menu at mouse position
-                gtk_menu_popup_at_pointer(GTK_MENU(contextMenu), nullptr);
+            std::vector<MenuJsonValue> menuItems = parseMenuJson(g_applicationMenuConfig);
+            
+            // Apply menu to all existing windows  
+            for (auto& containerPair : g_containers) {
+                auto container = containerPair.second;
+                if (container && container->window) {
+                    applyApplicationMenuToWindow(container->window);
+                }
             }
         } catch (const std::exception& e) {
             // Handle exception silently
         }
     });
+}
+
+// NOTE: Context menu behavior on Linux is limited compared to macOS.
+// On macOS, you can programmatically show a custom menu at the current mouse position.
+// On Linux/GTK, context menus are typically triggered by right-click events rather than
+// programmatic calls. This function is not supported on Linux.
+void showContextMenu(const char* jsonString, void* contextMenuHandler) {
+    printf("showContextMenu is not supported on Linux. Use application menus or system tray menus instead.\n");
+    fflush(stdout);
 }
 
 void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId, double x, double y, double width, double height, void* completionHandler) {
