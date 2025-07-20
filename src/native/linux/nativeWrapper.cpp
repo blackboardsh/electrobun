@@ -360,7 +360,7 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
-    return false;
+    // return false;
     // Return cached result if we've already checked
     if (g_checkedForCEF) {
         return g_useCEF;
@@ -942,7 +942,7 @@ public:
         gdk_device_get_position(pointer, nullptr, &x, &y);
         
         // Use the deprecated but working gtk_menu_popup for X11 compatibility
-        gtk_menu_popup(GTK_MENU(menu), nullptr, nullptr, nullptr, nullptr, 0, gtk_get_current_event_time());
+        gtk_menu_popup_at_pointer(GTK_MENU(menu), nullptr);
         
         printf("CEF: GTK context menu displayed at position (%d, %d)\n", x, y);
         
@@ -1367,7 +1367,7 @@ public:
         webkit_settings_set_enable_smooth_scrolling(settings, TRUE);
         
         // Try to improve offscreen rendering without breaking stability
-        webkit_settings_set_enable_accelerated_2d_canvas(settings, TRUE);
+        // webkit_settings_set_enable_accelerated_2d_canvas is deprecated - removed
         
         // Create web context with partition
         WebKitWebContext* context = webkit_web_context_new();
@@ -1572,7 +1572,7 @@ public:
                 int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
                 
                 gtk_widget_set_size_request(wrapper, frame.width, frame.height);
-                gtk_widget_set_margin_left(wrapper, clampedX);
+                gtk_widget_set_margin_start(wrapper, clampedX);
                 gtk_widget_set_margin_top(wrapper, clampedY);
                 
                 // Position webview within wrapper with offset to handle negative positions
@@ -1582,7 +1582,7 @@ public:
                 // OOPIF positioned with coordinate adjustment
             } else {
                 // For host webview, position directly with margins (can't be negative)
-                gtk_widget_set_margin_left(webview, MAX(0, frame.x));
+                gtk_widget_set_margin_start(webview, MAX(0, frame.x));
                 gtk_widget_set_margin_top(webview, MAX(0, frame.y));
             }
             
@@ -2303,7 +2303,7 @@ public:
                 gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
                 
                 // Position wrapper using margins (will be updated in resize)
-                gtk_widget_set_margin_left(wrapper, (int)x);
+                gtk_widget_set_margin_start(wrapper, (int)x);
                 gtk_widget_set_margin_top(wrapper, (int)y);
                 
                 gtk_widget_show(wrapper);
@@ -2423,7 +2423,7 @@ public:
     void setImage(const char* newImage) {
         imagePath = newImage ? newImage : "";
         if (indicator && !imagePath.empty()) {
-            app_indicator_set_icon(indicator, imagePath.c_str());
+            app_indicator_set_icon_full(indicator, imagePath.c_str(), "Electrobun Tray Icon");
         }
     }
     
