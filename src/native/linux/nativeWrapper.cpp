@@ -4040,7 +4040,10 @@ const char* openFileDialog(const char* startingFolder, const char* allowedFileTy
 // NOTE: Removed deferred tray creation code - now creating TrayItem synchronously
 // The TrayItem constructor handles deferred AppIndicator creation internally
 
-void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, void* clickHandler) {
+void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, uint32_t width, uint32_t height, void* clickHandler) {
+    // NOTE: width and height parameters are ignored on Linux since AppIndicator doesn't support custom sizing
+    // These parameters are included for FFI consistency across platforms (macOS and Windows use them)
+    
     FILE* logFile = fopen("/tmp/tray_debug.log", "a");
     if (logFile) {
         fprintf(logFile, "createTray called with:\n");
@@ -4048,6 +4051,8 @@ void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bo
         fprintf(logFile, "  title: %s\n", title ? title : "NULL");
         fprintf(logFile, "  pathToImage: %s\n", pathToImage ? pathToImage : "NULL");
         fprintf(logFile, "  isTemplate: %s\n", isTemplate ? "true" : "false");
+        fprintf(logFile, "  width: %u (ignored on Linux)\n", width);
+        fprintf(logFile, "  height: %u (ignored on Linux)\n", height);
         fflush(logFile);
         fclose(logFile);
     }
