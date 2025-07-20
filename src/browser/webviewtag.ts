@@ -288,18 +288,6 @@ const ConfigureWebviewTags = (
         this.lastRect = rect;
         this.lastMasks = masks;
         this.lastMasksJSON = masksJson;
-
-        console.log(`[WebviewTag] syncDimensions sending resize for webview ${this.webviewId}:`, {
-          frame: { x, y, width, height },
-          lastRect: this.lastRect,
-          changed: {
-            x: lastRect.x !== x,
-            y: lastRect.y !== y,
-            width: lastRect.width !== width,
-            height: lastRect.height !== height,
-            masks: this.lastMasksJSON !== masksJson
-          }
-        });
         
         this.internalRpc.send.webviewTagResize({
           id: this.webviewId,
