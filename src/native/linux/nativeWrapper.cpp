@@ -21,6 +21,9 @@
 #include <functional>
 #include <execinfo.h>
 #include <cmath>
+#include <gio/gio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 
 // CEF includes - always include them even if it marginally increases binary size
 // we want a few binaries that will work whenever an electrobun developer
@@ -2468,6 +2471,13 @@ static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
 static bool g_gtkInitialized = false;
 
+// Window dragging state
+static GtkWidget* g_draggedWindow = nullptr;
+static gint g_dragStartX = 0;
+static gint g_dragStartY = 0;
+static guint g_motionHandlerId = 0;
+static guint g_buttonReleaseHandlerId = 0;
+
 // X11 window management
 static std::map<uint32_t, std::shared_ptr<X11Window>> g_x11_windows;
 static std::map<Window, uint32_t> g_x11_window_to_id;
@@ -3479,12 +3489,140 @@ void updatePreloadScriptToWebView(AbstractView* abstractView, const char* script
     }
 }
 
+// Forward declaration
+void stopWindowMove();
+
+// Window drag motion handler
+static gboolean onWindowDragMotion(GtkWidget* widget, GdkEventMotion* event, gpointer user_data) {
+    if (g_draggedWindow && widget == g_draggedWindow) {
+        // Get the current mouse position relative to the screen
+        gint rootX, rootY;
+        gdk_window_get_device_position(gdk_screen_get_root_window(gdk_window_get_screen(gtk_widget_get_window(widget))),
+                                     event->device, &rootX, &rootY, nullptr);
+        
+        // Calculate new window position
+        gint newX = rootX - g_dragStartX;
+        gint newY = rootY - g_dragStartY;
+        
+        // Move the window
+        gtk_window_move(GTK_WINDOW(widget), newX, newY);
+    }
+    
+    return FALSE; // Let other handlers process the event
+}
+
+// Window drag button release handler
+static gboolean onWindowDragButtonRelease(GtkWidget* widget, GdkEventButton* event, gpointer user_data) {
+    if (event->button == 1) { // Left mouse button
+        stopWindowMove();
+    }
+    return FALSE; // Let other handlers process the event
+}
+
 void startWindowMove(void* window) {
-    // TODO: Implement window dragging for Linux
+    dispatch_sync_main_void([&]() {
+        // Handle both GTK and X11 windows
+        if (isCEFAvailable()) {
+            // For X11/CEF windows, we need to use X11 APIs
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                // Get current mouse position
+                Window root, child;
+                int rootX, rootY, winX, winY;
+                unsigned int mask;
+                XQueryPointer(x11win->display, x11win->window, &root, &child, 
+                            &rootX, &rootY, &winX, &winY, &mask);
+                
+                // Start window move using X11's built-in window manager support
+                XEvent xev;
+                memset(&xev, 0, sizeof(xev));
+                xev.xclient.type = ClientMessage;
+                xev.xclient.window = x11win->window;
+                xev.xclient.message_type = XInternAtom(x11win->display, "_NET_WM_MOVERESIZE", False);
+                xev.xclient.format = 32;
+                xev.xclient.data.l[0] = rootX;
+                xev.xclient.data.l[1] = rootY;
+                xev.xclient.data.l[2] = 8; // _NET_WM_MOVERESIZE_MOVE
+                xev.xclient.data.l[3] = Button1;
+                xev.xclient.data.l[4] = 1;
+                
+                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                          SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+                XFlush(x11win->display);
+            }
+        } else {
+            // For GTK windows
+            GtkWidget* gtkWindow = GTK_WIDGET(window);
+            if (!gtkWindow || !GTK_IS_WINDOW(gtkWindow)) {
+                fprintf(stderr, "Invalid window provided to startWindowMove\n");
+                return;
+            }
+            
+            // Clean up any existing drag
+            stopWindowMove();
+            
+            // Store the window being dragged
+            g_draggedWindow = gtkWindow;
+            
+            // Get current mouse position relative to window
+            GdkDisplay* display = gdk_display_get_default();
+            GdkDevice* device = gdk_seat_get_pointer(gdk_display_get_default_seat(display));
+            gint rootX, rootY, winX, winY;
+            gdk_device_get_position(device, nullptr, &rootX, &rootY);
+            gdk_window_get_device_position(gtk_widget_get_window(gtkWindow), device, &winX, &winY, nullptr);
+            
+            // Store the offset where the drag started within the window
+            g_dragStartX = winX;
+            g_dragStartY = winY;
+            
+            // Connect motion and button release handlers
+            g_motionHandlerId = g_signal_connect(gtkWindow, "motion-notify-event", 
+                                               G_CALLBACK(onWindowDragMotion), nullptr);
+            g_buttonReleaseHandlerId = g_signal_connect(gtkWindow, "button-release-event", 
+                                                       G_CALLBACK(onWindowDragButtonRelease), nullptr);
+            
+            // Grab the pointer to ensure we get all mouse events
+            GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
+            GdkGrabStatus status = gdk_seat_grab(gdk_display_get_default_seat(display),
+                                                gdkWindow,
+                                                GDK_SEAT_CAPABILITY_POINTER,
+                                                FALSE, // owner_events
+                                                nullptr, // cursor
+                                                nullptr, // event
+                                                nullptr, // prepare_func
+                                                nullptr); // prepare_func_data
+            
+            if (status != GDK_GRAB_SUCCESS) {
+                fprintf(stderr, "Failed to grab pointer for window drag\n");
+                stopWindowMove();
+            }
+        }
+    });
 }
 
 void stopWindowMove() {
-    // TODO: Implement window dragging for Linux
+    dispatch_sync_main_void([&]() {
+        if (g_draggedWindow) {
+            // Disconnect handlers
+            if (g_motionHandlerId > 0) {
+                g_signal_handler_disconnect(g_draggedWindow, g_motionHandlerId);
+                g_motionHandlerId = 0;
+            }
+            if (g_buttonReleaseHandlerId > 0) {
+                g_signal_handler_disconnect(g_draggedWindow, g_buttonReleaseHandlerId);
+                g_buttonReleaseHandlerId = 0;
+            }
+            
+            // Release pointer grab
+            GdkDisplay* display = gdk_display_get_default();
+            gdk_seat_ungrab(gdk_display_get_default_seat(display));
+            
+            // Clear state
+            g_draggedWindow = nullptr;
+            g_dragStartX = 0;
+            g_dragStartY = 0;
+        }
+    });
 }
 
 void addPreloadScriptToWebView(AbstractView* abstractView, const char* scriptContent, bool forMainFrameOnly) {
@@ -3554,17 +3692,170 @@ void invokeDecisionHandler(void* decisionHandler, uint32_t policy) {
 }
 
 bool moveToTrash(char* pathString) {
-    // TODO: Implement move to trash
-    return false;
+    if (!pathString) return false;
+    
+    // Use GIO to move file to trash
+    GFile* file = g_file_new_for_path(pathString);
+    GError* error = nullptr;
+    
+    gboolean result = g_file_trash(file, nullptr, &error);
+    
+    if (error) {
+        fprintf(stderr, "Failed to move to trash: %s\n", error->message);
+        g_error_free(error);
+    }
+    
+    g_object_unref(file);
+    return result == TRUE;
 }
 
 void showItemInFolder(char* path) {
-    // TODO: Implement show item in folder
+    if (!path) return;
+    
+    // Check if path exists
+    struct stat sb;
+    if (stat(path, &sb) != 0) {
+        fprintf(stderr, "Path does not exist: %s\n", path);
+        return;
+    }
+    
+    // Get the parent directory if it's a file
+    gchar* parentDir = nullptr;
+    if (S_ISREG(sb.st_mode)) {
+        parentDir = g_path_get_dirname(path);
+    } else {
+        parentDir = g_strdup(path);
+    }
+    
+    // Try to open with the default file manager
+    // Most Linux desktop environments support xdg-open
+    gchar* uri = g_filename_to_uri(parentDir, nullptr, nullptr);
+    if (uri) {
+        // Use xdg-open which works across different desktop environments
+        gchar* command = g_strdup_printf("xdg-open \"%s\"", uri);
+        int result = system(command);
+        
+        if (result != 0) {
+            // Fallback: try gio open
+            g_free(command);
+            command = g_strdup_printf("gio open \"%s\"", uri);
+            result = system(command);
+            
+            if (result != 0) {
+                fprintf(stderr, "Failed to open file manager for: %s\n", path);
+            }
+        }
+        
+        g_free(command);
+        g_free(uri);
+    }
+    
+    g_free(parentDir);
 }
 
-const char* openFileDialog(const char* startingFolder, const char* allowedFileTypes, bool allowMultipleSelection, const char* windowTitle, const char* buttonLabel) {
-    // TODO: Implement file dialog
-    return nullptr;
+const char* openFileDialog(const char* startingFolder, const char* allowedFileTypes, int canChooseFiles, int canChooseDirectories, int allowsMultipleSelection) {
+    // This function needs to run on the main thread
+    return dispatch_sync_main([&]() -> const char* {
+        // Determine the file chooser action based on parameters
+        GtkFileChooserAction action;
+        const char* buttonLabel;
+        
+        if (canChooseFiles && canChooseDirectories) {
+            action = GTK_FILE_CHOOSER_ACTION_OPEN;
+            buttonLabel = "_Open";
+        } else if (canChooseDirectories) {
+            action = GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER;
+            buttonLabel = "_Select";
+        } else {
+            action = GTK_FILE_CHOOSER_ACTION_OPEN;
+            buttonLabel = "_Open";
+        }
+        
+        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+            "Open File",
+            nullptr, // No parent window for now
+            action,
+            "_Cancel", GTK_RESPONSE_CANCEL,
+            buttonLabel, GTK_RESPONSE_ACCEPT,
+            nullptr
+        );
+        
+        // Set starting folder if provided
+        if (startingFolder && strlen(startingFolder) > 0) {
+            gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), startingFolder);
+        }
+        
+        // Allow multiple selection if requested
+        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), allowsMultipleSelection != 0);
+        
+        // Set up file filters if provided
+        if (allowedFileTypes && strlen(allowedFileTypes) > 0) {
+            // Parse the allowed file types string (expected format: "*.jpg,*.png" or "Images|*.jpg;*.png|Documents|*.pdf;*.doc")
+            std::string typesStr(allowedFileTypes);
+            
+            // Simple parsing - just handle comma-separated extensions for now
+            GtkFileFilter* filter = gtk_file_filter_new();
+            gtk_file_filter_set_name(filter, "Allowed files");
+            
+            // Split by comma or semicolon
+            size_t pos = 0;
+            std::string delimiter = ",";
+            while ((pos = typesStr.find(delimiter)) != std::string::npos) {
+                std::string pattern = typesStr.substr(0, pos);
+                // Trim whitespace
+                pattern.erase(0, pattern.find_first_not_of(" \t"));
+                pattern.erase(pattern.find_last_not_of(" \t") + 1);
+                
+                gtk_file_filter_add_pattern(filter, pattern.c_str());
+                typesStr.erase(0, pos + delimiter.length());
+            }
+            // Add the last pattern
+            if (!typesStr.empty()) {
+                typesStr.erase(0, typesStr.find_first_not_of(" \t"));
+                typesStr.erase(typesStr.find_last_not_of(" \t") + 1);
+                gtk_file_filter_add_pattern(filter, typesStr.c_str());
+            }
+            
+            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+            
+            // Also add "All files" filter
+            GtkFileFilter* allFilter = gtk_file_filter_new();
+            gtk_file_filter_set_name(allFilter, "All files");
+            gtk_file_filter_add_pattern(allFilter, "*");
+            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+        }
+        
+        // Run the dialog
+        static std::string resultString; // Static to persist after function returns
+        resultString.clear();
+        
+        if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+            if (allowsMultipleSelection != 0) {
+                GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
+                GSList* iter = fileList;
+                
+                while (iter != nullptr) {
+                    if (!resultString.empty()) {
+                        resultString += ","; // Separate multiple files with comma (like Mac)
+                    }
+                    resultString += (char*)iter->data;
+                    g_free(iter->data);
+                    iter = iter->next;
+                }
+                g_slist_free(fileList);
+            } else {
+                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+                if (filename) {
+                    resultString = filename;
+                    g_free(filename);
+                }
+            }
+        }
+        
+        gtk_widget_destroy(dialog);
+        
+        return resultString.empty() ? nullptr : resultString.c_str();
+    });
 }
 
 // NOTE: Removed deferred tray creation code - now creating TrayItem synchronously
