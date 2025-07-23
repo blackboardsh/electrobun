@@ -385,9 +385,18 @@ async function vendorCEF() {
         // Build process_helper binary
         if (!existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper'))) {                
             await $`mkdir -p src/native/build`;
-            // build
+            // build CEF wrapper library
+            console.log('Building CEF wrapper library...');
             await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH="arm64" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
-            // build
+            
+            // Verify the wrapper library was built
+            const wrapperPath = join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a');
+            if (!existsSync(wrapperPath)) {
+                throw new Error(`CEF wrapper library not found at ${wrapperPath}`);
+            }
+            console.log('CEF wrapper library built successfully');
+            
+            // build helper
             await $`clang++ -mmacosx-version-min=10.13 -std=c++17 -ObjC++ -fobjc-arc -I./vendors/cef -c src/native/macos/cef_process_helper_mac.cc -o src/native/build/process_helper_mac.o`;
             // link
             await $`clang++ -mmacosx-version-min=10.13 -std=c++17 src/native/build/process_helper_mac.o -o src/native/build/process_helper -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -framework "Chromium Embedded Framework" -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++`;
@@ -594,6 +603,17 @@ async function buildTRDiff() {
 
 async function buildNative() {
     if (OS === 'macos') {
+        // Ensure CEF wrapper library is built first
+        const wrapperPath = join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a');
+        if (!existsSync(wrapperPath)) {
+            console.log('CEF wrapper library not found, building it now...');
+            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH="arm64" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
+            
+            if (!existsSync(wrapperPath)) {
+                throw new Error(`Failed to build CEF wrapper library at ${wrapperPath}`);
+            }
+        }
+        
         await $`mkdir -p src/native/macos/build && clang++ -c src/native/macos/nativeWrapper.mm -o src/native/macos/build/nativeWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef -std=c++17`;
         await $`mkdir -p src/native/build && clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib`;
     } else if (OS === 'win') {
