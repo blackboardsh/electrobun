@@ -30,14 +30,9 @@ const archName = archMap[arch] || arch;
 
 console.log(`Packaging Electrobun for ${platformName}-${archName}...`);
 
-// Build in CI mode (skips CLI compilation since that happens in postinstall)
-console.log('Building with CI mode...');
-execSync('bun build.ts --release --ci', { stdio: 'inherit' });
-
-// Build the CLI as a self-contained executable
-console.log('Building CLI as self-contained executable...');
-const binExt = platformName === 'win32' ? '.exe' : '';
-execSync(`bun build src/cli/index.ts --compile --outfile dist/electrobun${binExt}`, { stdio: 'inherit' });
+// Build everything including CLI (no CI mode needed)
+console.log('Building full release...');
+execSync('bun build.ts --release', { stdio: 'inherit' });
 
 // Create the main tarball (without CEF)
 const distPath = path.join(__dirname, '..', 'dist');

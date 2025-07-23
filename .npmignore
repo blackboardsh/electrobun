@@ -19,7 +19,6 @@
 
 # Exclude heavy binaries (will be downloaded on demand)
 /dist/bun
-/dist/electrobun
 /dist/launcher
 /dist/extractor
 /dist/bsdiff
@@ -28,3 +27,7 @@
 /dist/libNativeWrapper.*
 /dist/WebView2Loader.dll
 /dist/cef/
+
+# Include the self-contained CLI
+!/dist/electrobun
+!/dist/electrobun.exe
