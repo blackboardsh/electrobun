@@ -7,8 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v0.0.19)'
+        description: 'Tag to release (e.g., v0.0.19 or v0.0.19-beta.1)'
         required: true
+      prerelease:
+        description: 'Is this a pre-release?'
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -71,3 +75,4 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: artifacts/**/*.tar.gz
           generate_release_notes: true
+          prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
