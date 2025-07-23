@@ -80,3 +80,35 @@ jobs:
             
             **Main binaries**: `electrobun-[platform]-[arch].tar.gz`
             **CEF binaries** (optional): `electrobun-cef-[platform]-[arch].tar.gz`
+  
+  npm-publish:
+    needs: release
+    runs-on: ubuntu-latest
+    if: success()
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          registry-url: 'https://registry.npmjs.org'
+      
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+      
+      - name: Install dependencies
+        run: bun install
+      
+      - name: Publish to npm
+        run: |
+          if [[ "${{ github.event.inputs.tag || github.ref_name }}" == *"beta"* ]]; then
+            echo "Publishing beta release to npm..."
+            npm publish --tag beta
+          else
+            echo "Publishing stable release to npm..."
+            npm publish
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
