@@ -52,9 +52,6 @@ const PATH = {
 
 // TODO: setup file watchers
 try {
-if (IS_CI) {
-    console.log("Running in CI mode - skipping CLI build");
-}
 await setup();
 await build();
 await copyToDist();
@@ -77,20 +74,14 @@ async function build() {
     await BunInstall();
 
     await buildNative(); // zig depends on this for linking symbols
-    
-    const buildTasks = [        
+    await Promise.all([        
         buildTRDiff(),
         buildSelfExtractor(),
         buildLauncher(),
+        buildCli(),
         buildMainJs(),
-    ];
-    
-    // Only build CLI in non-CI mode (in CI, it's built separately by package-release.js)
-    if (!IS_CI) {
-        buildTasks.push(buildCli());
-    }
-    
-    await Promise.all(buildTasks);
+      
+    ]);
 }
 
 
@@ -105,11 +96,7 @@ async function copyToDist() {
     await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;    
     // Electrobun cli and npm launcher
     await $`cp src/npmbin/index.js dist/npmbin.js`;
-    
-    // Only copy CLI in non-CI mode
-    if (!IS_CI) {
-        await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;
-    }    
+    await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;    
     // Electrobun's Typescript bun and browser apis
     if (OS === 'win') {
         // on windows the folder gets copied "into" the detination folder
