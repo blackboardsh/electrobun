@@ -296,7 +296,7 @@ async function vendorZig() {
 
 async function vendorCEF() {
     // Use stable CEF version for macOS, current for Windows and Linux
-    const CEF_VERSION_MAC = `125.0.22+g4b2c969`;
+    const CEF_VERSION_MAC = `125.0.22+gc410c95`;
     const CHROMIUM_VERSION_MAC = `125.0.6422.142`;
     const CEF_VERSION_WIN = `125.0.22+gc410c95`;
     const CHROMIUM_VERSION_WIN = `125.0.6422.142`;
@@ -307,7 +307,7 @@ async function vendorCEF() {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
             console.log('Downloading CEF for macOS ARM64...');
             // Try a different URL format - encode all + symbols
-            let cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC.replace(/\+/g, '%2B')}%2Bchromium-${CHROMIUM_VERSION_MAC}_macosarm64_minimal.tar.bz2`;
+            let cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}+chromium-${CHROMIUM_VERSION_MAC}_macosarm64_minimal.tar.bz2`;
             console.log('CEF URL:', cefUrl);
             
             // Test if URL is accessible first
