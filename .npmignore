@@ -4,7 +4,8 @@
 /docs-old
 /documentation
 /playground
-/scripts
+/scripts/*
+!/scripts/postinstall.js
 /src
 /vendors
 /.colab.json
@@ -12,3 +13,18 @@
 /.gitmodules
 /bun.lockb
 /tsconfig.json
+/build.ts
+/CLAUDE.md
+/CLAUDE.local.md
+
+# Exclude heavy binaries (will be downloaded on demand)
+/dist/bun
+/dist/electrobun
+/dist/launcher
+/dist/extractor
+/dist/bsdiff
+/dist/bspatch
+/dist/process_helper
+/dist/libNativeWrapper.*
+/dist/WebView2Loader.dll
+/dist/cef/
