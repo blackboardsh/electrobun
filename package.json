@@ -1,6 +1,6 @@
 {
   "name": "electrobun",
-  "version": "0.0.18",
+  "version": "0.0.19-beta.1",
   "description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
   "license": "MIT",
   "author": "Blackboard Technologies Inc.",
@@ -20,6 +20,7 @@
     "url": "git+https://github.com/blackboardsh/electrobun.git"
   },
   "scripts": {
+    "postinstall": "node scripts/postinstall.js",
     "start": "bun src/bun/index.ts",
     "check-zig-version": "vendors/zig/zig version",
     "build:dev": "bun build.ts",
@@ -31,7 +32,9 @@
     "dev:playground:canary": "bun build:release && cd playground && npm install && bun build:canary && bun start:canary",
     "dev:docs": "cd documentation && bun start",
     "build:docs:release": "cd documentation && bun run build",
-    "npm:publish": "bun build:release && npm publish"
+    "npm:publish": "bun build:release && npm publish",
+    "npm:publish:beta": "bun build:release && npm publish --tag beta",
+    "npm:version:beta": "npm version prerelease --preid=beta"
   },
   "devDependencies": {
     "@types/bun": "1.1.9"
