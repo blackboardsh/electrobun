@@ -65,5 +65,5 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: artifacts/**/*.tar.gz
-          generate_release_notes: true
+          generate_release_notes: false
           prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
