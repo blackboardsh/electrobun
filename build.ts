@@ -85,7 +85,7 @@ async function build() {
         buildMainJs(),
     ];
     
-    // Only build CLI in non-CI mode (in CI, it's built during npm postinstall)
+    // Only build CLI in non-CI mode (in CI, it's built separately by package-release.js)
     if (!IS_CI) {
         buildTasks.push(buildCli());
     }

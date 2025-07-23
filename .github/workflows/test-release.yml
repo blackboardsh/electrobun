@@ -1,0 +1,23 @@
+name: Test Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build from'
+        required: true
+        default: 'ci-builds'
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+      
+      - name: Trigger release workflow
+        run: |
+          echo "This is a test workflow to verify the setup"
+          echo "Building from branch: ${{ github.event.inputs.branch }}"
+          ls -la .github/workflows/

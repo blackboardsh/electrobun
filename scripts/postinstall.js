@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
-const { createWriteStream, createReadStream } = require('fs');
-const { pipeline } = require('stream');
-const { promisify } = require('util');
-const tar = require('tar');
-const { execSync } = require('child_process');
+import fs from 'fs';
+import path from 'path';
+import https from 'https';
+import { createWriteStream } from 'fs';
+import { pipeline } from 'stream';
+import { promisify } from 'util';
+import tar from 'tar';
+import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const pipelineAsync = promisify(pipeline);
 
@@ -138,31 +142,13 @@ async function main() {
     
     // Make binaries executable on Unix-like systems
     if (platform !== 'win32') {
-      const binaries = ['bun', 'launcher', 'extractor', 'bsdiff', 'bspatch', 'process_helper'];
+      const binaries = ['bun', 'electrobun', 'launcher', 'extractor', 'bsdiff', 'bspatch', 'process_helper'];
       binaries.forEach(bin => {
         const binPath = path.join(DIST_DIR, bin);
         if (fs.existsSync(binPath)) {
           fs.chmodSync(binPath, 0o755);
         }
       });
-    }
-    
-    // Build the CLI using the downloaded Bun runtime
-    console.log('Building Electrobun CLI...');
-    const bunPath = path.join(DIST_DIR, platform === 'win32' ? 'bun.exe' : 'bun');
-    const cliSource = path.join(__dirname, '..', 'src', 'cli', 'index.ts');
-    const cliOutput = path.join(DIST_DIR, platform === 'win32' ? 'electrobun.exe' : 'electrobun');
-    
-    try {
-      execSync(`"${bunPath}" build "${cliSource}" --compile --outfile "${cliOutput}"`, { stdio: 'inherit' });
-      
-      // Make CLI executable on Unix
-      if (platform !== 'win32') {
-        fs.chmodSync(cliOutput, 0o755);
-      }
-    } catch (error) {
-      console.error('Failed to build CLI:', error.message);
-      console.error('The Electrobun binaries are installed but the CLI may not work properly.');
     }
     
     console.log('Electrobun installed successfully!');
@@ -175,6 +161,5 @@ async function main() {
   }
 }
 
-if (require.main === module) {
-  main();
-}
+// Run main function
+main();
