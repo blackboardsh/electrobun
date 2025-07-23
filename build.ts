@@ -305,7 +305,17 @@ async function vendorCEF() {
     
     if (OS === 'macos') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
-            await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}%2Bchromium-${CHROMIUM_VERSION_MAC}_macosarm64_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;                                                                                                                                        
+            console.log('Downloading CEF for macOS ARM64...');
+            const cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}%2Bchromium-${CHROMIUM_VERSION_MAC}_macosarm64_minimal.tar.bz2`;
+            console.log('CEF URL:', cefUrl);
+            await $`mkdir -p vendors/cef`;
+            await $`curl -L "${cefUrl}" | tar -xj --strip-components=1 -C vendors/cef`;
+            
+            // Verify CEF was extracted properly
+            if (!existsSync(join(process.cwd(), 'vendors', 'cef', 'CMakeLists.txt'))) {
+                throw new Error('CEF download/extraction failed - CMakeLists.txt not found');
+            }
+            console.log('CEF downloaded and extracted successfully');
         }
         
         // Build process_helper binary
