@@ -319,12 +319,41 @@ async function vendorCEF() {
                 throw new Error('CEF download failed - temp file not created');
             }
             
+            console.log('CEF download completed, extracting...');
+            
             // Extract CEF
             await $`mkdir -p vendors/cef`;
-            await $`tar -xjf "${tempFile}" --strip-components=1 -C vendors/cef`;
+            try {
+                await $`tar -xjf "${tempFile}" --strip-components=1 -C vendors/cef`;
+                console.log('CEF extraction completed');
+            } catch (error) {
+                console.log('Tar extraction failed, trying alternative method...');
+                // Try without strip-components first
+                await $`tar -xjf "${tempFile}" -C vendors/`;
+                
+                // List what was extracted
+                const vendorContents = await $`ls vendors/`.text();
+                console.log('Extracted contents:', vendorContents);
+                
+                // Try to find the CEF directory and move it
+                const dirName = vendorContents.split('\n').find(line => line.startsWith('cef_binary_'));
+                if (dirName) {
+                    await $`mv vendors/${dirName.trim()}/* vendors/cef/`;
+                    await $`rmdir vendors/${dirName.trim()}`;
+                    console.log('Moved CEF contents to vendors/cef');
+                }
+            }
             
             // Clean up temp file
             await $`rm "${tempFile}"`;
+            
+            // List what's in the cef directory
+            try {
+                const cefContents = await $`ls vendors/cef/`.text();
+                console.log('CEF directory contents:', cefContents);
+            } catch (e) {
+                console.log('Could not list CEF directory contents');
+            }
             
             // Verify CEF was extracted properly
             if (!existsSync(join(process.cwd(), 'vendors', 'cef', 'CMakeLists.txt'))) {
