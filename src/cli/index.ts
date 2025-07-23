@@ -91,6 +91,74 @@ const PATHS = {
   CEF_DIR: join(ELECTROBUN_DEP_PATH, "dist", "cef"),
 };
 
+async function ensureCoreDependencies() {
+  // Check if core dependencies already exist
+  if (existsSync(PATHS.BUN_BINARY) && existsSync(PATHS.LAUNCHER_RELEASE)) {
+    return;
+  }
+
+  console.log('Core dependencies not found, downloading...');
+  
+  // Get the current Electrobun version from package.json
+  const packageJsonPath = join(ELECTROBUN_DEP_PATH, 'package.json');
+  let version = 'latest';
+  
+  if (existsSync(packageJsonPath)) {
+    try {
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+      version = `v${packageJson.version}`;
+    } catch (error) {
+      console.warn('Could not read package version, using latest');
+    }
+  }
+
+  const platformName = OS === 'macos' ? 'darwin' : OS === 'win' ? 'win32' : 'linux';
+  const archName = ARCH;
+  const mainTarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${version}/electrobun-${platformName}-${archName}.tar.gz`;
+  
+  console.log(`Downloading core binaries from: ${mainTarballUrl}`);
+  
+  try {
+    // Download main tarball
+    const response = await fetch(mainTarballUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download binaries: ${response.status} ${response.statusText}`);
+    }
+    
+    // Create temp file
+    const tempFile = join(ELECTROBUN_DEP_PATH, 'main-temp.tar.gz');
+    const fileStream = createWriteStream(tempFile);
+    
+    // Write response to file
+    if (response.body) {
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fileStream.write(Buffer.from(value));
+      }
+    }
+    fileStream.end();
+    
+    // Extract to dist directory
+    console.log('Extracting core dependencies...');
+    await tar.x({
+      file: tempFile,
+      cwd: join(ELECTROBUN_DEP_PATH, 'dist'),
+    });
+    
+    // Clean up temp file
+    unlinkSync(tempFile);
+    
+    console.log('Core dependencies downloaded and cached successfully');
+    
+  } catch (error) {
+    console.error('Failed to download core dependencies:', error.message);
+    console.error('Please ensure you have an internet connection and the release exists.');
+    process.exit(1);
+  }
+}
+
 async function ensureCEFDependencies() {
   // Check if CEF dependencies already exist
   if (existsSync(PATHS.CEF_DIR)) {
@@ -479,6 +547,9 @@ if (commandArg === "init") {
   }
 }
   
+  // Ensure core binaries are available
+  await ensureCoreDependencies();
+
   // Download CEF binaries if needed when bundleCEF is enabled
   if ((OS === 'macos' && config.build.mac?.bundleCEF) || 
       (OS === 'win' && config.build.win?.bundleCEF) || 

@@ -15,76 +15,8 @@ on:
         default: false
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - os: macos-14
-            platform: darwin
-            arch: arm64
-    
-    runs-on: ${{ matrix.os }}
-    
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-      
-      - name: Install dependencies
-        run: bun install
-      
-      - name: Build for ${{ matrix.platform }}-${{ matrix.arch }}
-        run: bun scripts/package-release.js
-      
-      - name: Upload main artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: electrobun-${{ matrix.platform }}-${{ matrix.arch }}
-          path: electrobun-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
-      
-      - name: Upload CEF artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: electrobun-cef-${{ matrix.platform }}-${{ matrix.arch }}
-          path: electrobun-cef-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
-          if-no-files-found: ignore
-  
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: |
-            artifacts/**/*.tar.gz
-          generate_release_notes: false
-          prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
-          body: |
-            Electrobun beta release
-            
-            **Main binaries**: `electrobun-[platform]-[arch].tar.gz`
-            **CEF binaries** (optional): `electrobun-cef-[platform]-[arch].tar.gz`
-  
   npm-publish:
-    needs: release
     runs-on: ubuntu-latest
-    if: success()
     
     steps:
       - uses: actions/checkout@v4

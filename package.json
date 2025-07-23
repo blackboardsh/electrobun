@@ -20,6 +20,7 @@
     "url": "git+https://github.com/blackboardsh/electrobun.git"
   },
   "scripts": {
+    "postinstall": "bun build src/cli/index.ts --compile --outfile ../../.bin/electrobun",
     "start": "bun src/bun/index.ts",
     "check-zig-version": "vendors/zig/zig version",
     "build:dev": "bun build.ts",
@@ -36,9 +37,9 @@
     "npm:version:beta": "npm version prerelease --preid=beta"
   },
   "devDependencies": {
-    "@types/bun": "1.1.9"
   },
   "dependencies": {
+    "@types/bun": "1.1.9",
     "@oneidentity/zstd-js": "^1.0.3",
     "rpc-anywhere": "1.5.0",    
     "tar": "^6.2.1"
