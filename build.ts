@@ -14,6 +14,9 @@ const {values: args} = parseArgs({
     options: {
         release: {
             type: 'boolean' 
+        },
+        ci: {
+            type: 'boolean'
         }
     },
     allowPositionals: true,
@@ -21,6 +24,7 @@ const {values: args} = parseArgs({
 
 // TODO: set via cl arg
 const CHANNEL: 'debug' | 'release' = args.release ? 'release' : 'debug';
+const IS_CI = args.ci || false;
 const OS: 'win' | 'linux' | 'macos' = getPlatform();
 const ARCH: 'arm64' | 'x64' = getArch();
 
@@ -48,6 +52,9 @@ const PATH = {
 
 // TODO: setup file watchers
 try {
+if (IS_CI) {
+    console.log("Running in CI mode - skipping CLI build");
+}
 await setup();
 await build();
 await copyToDist();
@@ -70,14 +77,20 @@ async function build() {
     await BunInstall();
 
     await buildNative(); // zig depends on this for linking symbols
-    await Promise.all([        
+    
+    const buildTasks = [        
         buildTRDiff(),
         buildSelfExtractor(),
         buildLauncher(),
-        buildCli(),
         buildMainJs(),
-      
-    ]);
+    ];
+    
+    // Only build CLI in non-CI mode (in CI, it's built during npm postinstall)
+    if (!IS_CI) {
+        buildTasks.push(buildCli());
+    }
+    
+    await Promise.all(buildTasks);
 }
 
 
@@ -92,7 +105,11 @@ async function copyToDist() {
     await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;    
     // Electrobun cli and npm launcher
     await $`cp src/npmbin/index.js dist/npmbin.js`;
-    await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;    
+    
+    // Only copy CLI in non-CI mode
+    if (!IS_CI) {
+        await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;
+    }    
     // Electrobun's Typescript bun and browser apis
     if (OS === 'win') {
         // on windows the folder gets copied "into" the detination folder

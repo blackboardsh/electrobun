@@ -43,10 +43,7 @@ jobs:
         run: bun install
       
       - name: Build for ${{ matrix.platform }}-${{ matrix.arch }}
-        run: |
-          bun run build
-          cd dist
-          tar -czf ../electrobun-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz *
+        run: node scripts/package-release.js
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4

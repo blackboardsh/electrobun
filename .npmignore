@@ -6,7 +6,8 @@
 /playground
 /scripts/*
 !/scripts/postinstall.js
-/src
+/src/*
+!/src/cli/
 /vendors
 /.colab.json
 /.gitignore

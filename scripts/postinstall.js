@@ -138,7 +138,7 @@ async function main() {
     
     // Make binaries executable on Unix-like systems
     if (platform !== 'win32') {
-      const binaries = ['electrobun', 'bun', 'launcher', 'extractor', 'bsdiff', 'bspatch', 'process_helper'];
+      const binaries = ['bun', 'launcher', 'extractor', 'bsdiff', 'bspatch', 'process_helper'];
       binaries.forEach(bin => {
         const binPath = path.join(DIST_DIR, bin);
         if (fs.existsSync(binPath)) {
@@ -147,7 +147,25 @@ async function main() {
       });
     }
     
-    console.log('Electrobun binaries installed successfully!');
+    // Build the CLI using the downloaded Bun runtime
+    console.log('Building Electrobun CLI...');
+    const bunPath = path.join(DIST_DIR, platform === 'win32' ? 'bun.exe' : 'bun');
+    const cliSource = path.join(__dirname, '..', 'src', 'cli', 'index.ts');
+    const cliOutput = path.join(DIST_DIR, platform === 'win32' ? 'electrobun.exe' : 'electrobun');
+    
+    try {
+      execSync(`"${bunPath}" build "${cliSource}" --compile --outfile "${cliOutput}"`, { stdio: 'inherit' });
+      
+      // Make CLI executable on Unix
+      if (platform !== 'win32') {
+        fs.chmodSync(cliOutput, 0o755);
+      }
+    } catch (error) {
+      console.error('Failed to build CLI:', error.message);
+      console.error('The Electrobun binaries are installed but the CLI may not work properly.');
+    }
+    
+    console.log('Electrobun installed successfully!');
     
   } catch (error) {
     console.error('Failed to download Electrobun binaries:', error.message);
