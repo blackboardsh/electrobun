@@ -82,11 +82,12 @@ const PATHS = {
   CEF_FRAMEWORK_MACOS: join(
     ELECTROBUN_DEP_PATH,
     "dist",
+    "cef",
     "Chromium Embedded Framework.framework"
   ),
-  CEF_HELPER_MACOS: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
-  CEF_HELPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "process_helper.exe"),
-  CEF_HELPER_LINUX: join(ELECTROBUN_DEP_PATH, "dist", "process_helper"),
+  CEF_HELPER_MACOS: join(ELECTROBUN_DEP_PATH, "dist", "cef", "process_helper"),
+  CEF_HELPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "cef", "process_helper.exe"),
+  CEF_HELPER_LINUX: join(ELECTROBUN_DEP_PATH, "dist", "cef", "process_helper"),
   CEF_DIR: join(ELECTROBUN_DEP_PATH, "dist", "cef"),
 };
 
