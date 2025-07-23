@@ -91,6 +91,75 @@ const PATHS = {
   CEF_DIR: join(ELECTROBUN_DEP_PATH, "dist", "cef"),
 };
 
+async function ensureCEFDependencies() {
+  // Check if CEF dependencies already exist
+  if (existsSync(PATHS.CEF_DIR)) {
+    console.log('CEF dependencies found, using cached version');
+    return;
+  }
+
+  console.log('CEF dependencies not found, downloading...');
+  
+  // Get the current Electrobun version from package.json
+  const packageJsonPath = join(ELECTROBUN_DEP_PATH, 'package.json');
+  let version = 'latest';
+  
+  if (existsSync(packageJsonPath)) {
+    try {
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+      version = `v${packageJson.version}`;
+    } catch (error) {
+      console.warn('Could not read package version, using latest');
+    }
+  }
+
+  const platformName = OS === 'macos' ? 'darwin' : OS === 'win' ? 'win32' : 'linux';
+  const archName = ARCH;
+  const cefTarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${version}/electrobun-cef-${platformName}-${archName}.tar.gz`;
+  
+  console.log(`Downloading CEF from: ${cefTarballUrl}`);
+  
+  try {
+    // Download CEF tarball
+    const response = await fetch(cefTarballUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download CEF: ${response.status} ${response.statusText}`);
+    }
+    
+    // Create temp file
+    const tempFile = join(ELECTROBUN_DEP_PATH, 'cef-temp.tar.gz');
+    const fileStream = createWriteStream(tempFile);
+    
+    // Write response to file
+    if (response.body) {
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fileStream.write(Buffer.from(value));
+      }
+    }
+    fileStream.end();
+    
+    // Extract to dist directory
+    console.log('Extracting CEF dependencies...');
+    await tar.x({
+      file: tempFile,
+      cwd: join(ELECTROBUN_DEP_PATH, 'dist'),
+    });
+    
+    // Clean up temp file
+    unlinkSync(tempFile);
+    
+    console.log('CEF dependencies downloaded and cached successfully');
+    
+  } catch (error) {
+    console.error('Failed to download CEF dependencies:', error.message);
+    console.error('Please ensure you have an internet connection and the release exists.');
+    process.exit(1);
+  }
+}
+
 const commandDefaults = {
   init: {
     projectRoot,
@@ -410,12 +479,12 @@ if (commandArg === "init") {
   }
 }
   
-  // TODO: Should download binaries for arch, and then copy them in
-  // for developing Electrobun itself we can assume current arch is already
-  // in dist as it would have just been built from local source
+  // Download CEF binaries if needed when bundleCEF is enabled
   if ((OS === 'macos' && config.build.mac?.bundleCEF) || 
       (OS === 'win' && config.build.win?.bundleCEF) || 
-      (OS === 'linux' && config.build.linux?.bundleCEF)) {    
+      (OS === 'linux' && config.build.linux?.bundleCEF)) {
+    
+    await ensureCEFDependencies();    
     if (OS === 'macos') {
       const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
       const cefFrameworkDestination = join(
