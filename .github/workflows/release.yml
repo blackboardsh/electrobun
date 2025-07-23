@@ -47,7 +47,7 @@ jobs:
         run: bun install
       
       - name: Build for ${{ matrix.platform }}-${{ matrix.arch }}
-        run: node scripts/package-release.js
+        run: bun scripts/package-release.js
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
