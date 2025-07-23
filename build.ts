@@ -308,8 +308,23 @@ async function vendorCEF() {
             console.log('Downloading CEF for macOS ARM64...');
             const cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}%2Bchromium-${CHROMIUM_VERSION_MAC}_macosarm64_minimal.tar.bz2`;
             console.log('CEF URL:', cefUrl);
+            
+            // Download to temp file first, then extract
+            await $`mkdir -p vendors`;
+            const tempFile = 'vendors/cef_temp.tar.bz2';
+            await $`curl -L "${cefUrl}" -o "${tempFile}"`;
+            
+            // Check if download succeeded
+            if (!existsSync(tempFile)) {
+                throw new Error('CEF download failed - temp file not created');
+            }
+            
+            // Extract CEF
             await $`mkdir -p vendors/cef`;
-            await $`curl -L "${cefUrl}" | tar -xj --strip-components=1 -C vendors/cef`;
+            await $`tar -xjf "${tempFile}" --strip-components=1 -C vendors/cef`;
+            
+            // Clean up temp file
+            await $`rm "${tempFile}"`;
             
             // Verify CEF was extracted properly
             if (!existsSync(join(process.cwd(), 'vendors', 'cef', 'CMakeLists.txt'))) {
