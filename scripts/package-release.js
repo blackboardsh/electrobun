@@ -39,11 +39,12 @@ console.log('Building CLI as self-contained executable...');
 const binExt = platformName === 'win32' ? '.exe' : '';
 execSync(`bun build src/cli/index.ts --compile --outfile dist/electrobun${binExt}`, { stdio: 'inherit' });
 
-// Create the tarball
+// Create the main tarball (without CEF)
 const distPath = path.join(__dirname, '..', 'dist');
-const outputFile = path.join(__dirname, '..', `electrobun-${platformName}-${archName}.tar.gz`);
+const mainOutputFile = path.join(__dirname, '..', `electrobun-${platformName}-${archName}.tar.gz`);
+const cefOutputFile = path.join(__dirname, '..', `electrobun-cef-${platformName}-${archName}.tar.gz`);
 
-console.log(`Creating tarball: ${outputFile}`);
+console.log(`Creating main tarball: ${mainOutputFile}`);
 
 // Check if dist exists
 if (!fs.existsSync(distPath)) {
@@ -51,20 +52,46 @@ if (!fs.existsSync(distPath)) {
   process.exit(1);
 }
 
-// Create tarball
+// Create list of files to include in main tarball (exclude CEF)
+const mainFiles = fs.readdirSync(distPath).filter(file => file !== 'cef');
+
+// Create main tarball
 tar.c({
   gzip: true,
-  file: outputFile,
+  file: mainOutputFile,
   cwd: distPath,
   portable: true
-}, ['.'])
+}, mainFiles)
   .then(() => {
-    console.log(`Successfully created ${outputFile}`);
+    console.log(`Successfully created ${mainOutputFile}`);
     
     // Print file size
-    const stats = fs.statSync(outputFile);
+    const stats = fs.statSync(mainOutputFile);
     const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
-    console.log(`Tarball size: ${sizeMB} MB`);
+    console.log(`Main tarball size: ${sizeMB} MB`);
+    
+    // Create CEF tarball if CEF directory exists
+    const cefPath = path.join(distPath, 'cef');
+    if (fs.existsSync(cefPath)) {
+      console.log(`Creating CEF tarball: ${cefOutputFile}`);
+      
+      return tar.c({
+        gzip: true,
+        file: cefOutputFile,
+        cwd: distPath,
+        portable: true
+      }, ['cef']);
+    } else {
+      console.log('No CEF directory found, skipping CEF tarball');
+      return Promise.resolve();
+    }
+  })
+  .then(() => {
+    if (fs.existsSync(cefOutputFile)) {
+      const stats = fs.statSync(cefOutputFile);
+      const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+      console.log(`CEF tarball size: ${sizeMB} MB`);
+    }
   })
   .catch(err => {
     console.error('Error creating tarball:', err);

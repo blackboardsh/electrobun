@@ -110,14 +110,17 @@ async function copyToDist() {
     // Native code and frameworks
     if (OS === 'macos') {
         await $`cp -R src/native/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;
-        await $`cp -R vendors/cef/Release/Chromium\ Embedded\ Framework.framework dist/Chromium\ Embedded\ Framework.framework`;
+        // Copy CEF to cef/ subdirectory for consistent organization
+        await $`mkdir -p dist/cef`;
+        await $`cp -R vendors/cef/Release/Chromium\ Embedded\ Framework.framework dist/cef/Chromium\ Embedded\ Framework.framework`;
         // CEF's helper process binary
-        await $`cp -R src/native/build/process_helper dist/process_helper`;
+        await $`cp -R src/native/build/process_helper dist/cef/process_helper`;
     } else if (OS === 'win') {
         await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
         // native system webview library
         await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll dist/WebView2Loader.dll`;
         // CEF binaries for Windows - copy ALL CEF files to cef/ subdirectory for consistent organization
+        await $`powershell -command "New-Item -ItemType Directory -Path 'dist/cef' -Force | Out-Null"`;
         // Copy main CEF DLLs to cef/ subdirectory
         await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dll') { Copy-Item 'vendors/cef/Release/*.dll' 'dist/cef/' -Force }"`;
         
@@ -150,6 +153,7 @@ async function copyToDist() {
         // CEF binaries for Linux - copy to cef/ subdirectory
         if (existsSync(join(process.cwd(), 'vendors', 'cef', 'Release'))) {
             console.log('Copying CEF files for Linux...');
+            await $`mkdir -p dist/cef`;
             
             // Copy main CEF library and dependencies
             await $`cp vendors/cef/Release/*.so dist/cef/`;

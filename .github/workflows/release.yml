@@ -40,11 +40,18 @@ jobs:
       - name: Build for ${{ matrix.platform }}-${{ matrix.arch }}
         run: bun scripts/package-release.js
       
-      - name: Upload artifact
+      - name: Upload main artifact
         uses: actions/upload-artifact@v4
         with:
           name: electrobun-${{ matrix.platform }}-${{ matrix.arch }}
           path: electrobun-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+      
+      - name: Upload CEF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: electrobun-cef-${{ matrix.platform }}-${{ matrix.arch }}
+          path: electrobun-cef-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+          if-no-files-found: ignore
   
   release:
     needs: build
@@ -64,6 +71,12 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: artifacts/**/*.tar.gz
+          files: |
+            artifacts/**/*.tar.gz
           generate_release_notes: false
           prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
+          body: |
+            Electrobun beta release
+            
+            **Main binaries**: `electrobun-[platform]-[arch].tar.gz`
+            **CEF binaries** (optional): `electrobun-cef-[platform]-[arch].tar.gz`
