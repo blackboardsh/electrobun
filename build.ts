@@ -306,8 +306,28 @@ async function vendorCEF() {
     if (OS === 'macos') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
             console.log('Downloading CEF for macOS ARM64...');
-            const cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}%2Bchromium-${CHROMIUM_VERSION_MAC}_macosarm64_minimal.tar.bz2`;
+            // Try a different URL format - encode all + symbols
+            let cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC.replace(/\+/g, '%2B')}%2Bchromium-${CHROMIUM_VERSION_MAC}_macosarm64_minimal.tar.bz2`;
             console.log('CEF URL:', cefUrl);
+            
+            // Test if URL is accessible first
+            console.log('Testing CEF URL accessibility...');
+            try {
+                await $`curl -I "${cefUrl}"`;
+                console.log('CEF URL is accessible');
+            } catch (error) {
+                console.log('CEF URL test failed, trying alternative format...');
+                // Try simpler format without the complex version encoding
+                const altUrl = `https://cef-builds.spotifycdn.com/cef_binary_125.0.22_macosarm64_minimal.tar.bz2`;
+                console.log('Alternative CEF URL:', altUrl);
+                try {
+                    await $`curl -I "${altUrl}"`;
+                    console.log('Alternative URL works, using it');
+                    cefUrl = altUrl;
+                } catch (altError) {
+                    throw new Error('Neither CEF URL format worked. Manual intervention needed.');
+                }
+            }
             
             // Download to temp file first, then extract
             await $`mkdir -p vendors`;
