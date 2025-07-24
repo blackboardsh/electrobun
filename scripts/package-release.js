@@ -38,12 +38,13 @@ execSync('bun build.ts --release', { stdio: 'inherit' });
 console.log('Building CLI binary...');
 execSync('mkdir -p bin && bun build src/cli/index.ts --compile --outfile bin/electrobun', { stdio: 'inherit' });
 
-// Create the main tarball (without CEF)
+// Create separate tarballs for CLI, core binaries, and CEF
 const distPath = path.join(__dirname, '..', 'dist');
-const mainOutputFile = path.join(__dirname, '..', `electrobun-${platformName}-${archName}.tar.gz`);
+const cliOutputFile = path.join(__dirname, '..', `electrobun-cli-${platformName}-${archName}.tar.gz`);
+const coreOutputFile = path.join(__dirname, '..', `electrobun-core-${platformName}-${archName}.tar.gz`);
 const cefOutputFile = path.join(__dirname, '..', `electrobun-cef-${platformName}-${archName}.tar.gz`);
 
-console.log(`Creating main tarball: ${mainOutputFile}`);
+console.log(`Creating CLI tarball: ${cliOutputFile}`);
 
 // Check if dist exists
 if (!fs.existsSync(distPath)) {
@@ -51,60 +52,66 @@ if (!fs.existsSync(distPath)) {
   process.exit(1);
 }
 
-// Create list of files to include in main tarball (exclude CEF but include CLI)
-const mainFiles = fs.readdirSync(distPath).filter(file => file !== 'cef');
-
-// Add CLI binary to files list
-const binPath = path.join(__dirname, '..', 'bin');
-if (fs.existsSync(binPath)) {
-  // Copy CLI binary to dist for packaging
+async function createTarballs() {
+  // 1. Create CLI-only tarball
+  const binPath = path.join(__dirname, '..', 'bin');
   const cliSrc = path.join(binPath, 'electrobun' + (platform === 'win32' ? '.exe' : ''));
-  const cliDest = path.join(distPath, 'electrobun' + (platform === 'win32' ? '.exe' : ''));
+  
   if (fs.existsSync(cliSrc)) {
-    fs.copyFileSync(cliSrc, cliDest);
-    mainFiles.push('electrobun' + (platform === 'win32' ? '.exe' : ''));
+    console.log(`Creating CLI tarball: ${cliOutputFile}`);
+    
+    // Create CLI tarball directly from bin directory
+    await tar.c({
+      gzip: true,
+      file: cliOutputFile,
+      cwd: binPath,
+      portable: true
+    }, ['electrobun' + (platform === 'win32' ? '.exe' : '')]);
+    
+    const cliStats = fs.statSync(cliOutputFile);
+    const cliSizeMB = (cliStats.size / 1024 / 1024).toFixed(2);
+    console.log(`CLI tarball size: ${cliSizeMB} MB`);
+  }
+
+  // 2. Create core binaries tarball (exclude CEF)
+  const coreFiles = fs.readdirSync(distPath).filter(file => file !== 'cef');
+  
+  if (coreFiles.length > 0) {
+    console.log(`Creating core binaries tarball: ${coreOutputFile}`);
+    
+    await tar.c({
+      gzip: true,
+      file: coreOutputFile,
+      cwd: distPath,
+      portable: true
+    }, coreFiles);
+    
+    const coreStats = fs.statSync(coreOutputFile);
+    const coreSizeMB = (coreStats.size / 1024 / 1024).toFixed(2);
+    console.log(`Core binaries tarball size: ${coreSizeMB} MB`);
+  }
+
+  // 3. Create CEF tarball if CEF directory exists
+  const cefPath = path.join(distPath, 'cef');
+  if (fs.existsSync(cefPath)) {
+    console.log(`Creating CEF tarball: ${cefOutputFile}`);
+    
+    await tar.c({
+      gzip: true,
+      file: cefOutputFile,
+      cwd: distPath,
+      portable: true
+    }, ['cef']);
+    
+    const cefStats = fs.statSync(cefOutputFile);
+    const cefSizeMB = (cefStats.size / 1024 / 1024).toFixed(2);
+    console.log(`CEF tarball size: ${cefSizeMB} MB`);
+  } else {
+    console.log('No CEF directory found, skipping CEF tarball');
   }
 }
 
-// Create main tarball
-tar.c({
-  gzip: true,
-  file: mainOutputFile,
-  cwd: distPath,
-  portable: true
-}, mainFiles)
-  .then(() => {
-    console.log(`Successfully created ${mainOutputFile}`);
-    
-    // Print file size
-    const stats = fs.statSync(mainOutputFile);
-    const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
-    console.log(`Main tarball size: ${sizeMB} MB`);
-    
-    // Create CEF tarball if CEF directory exists
-    const cefPath = path.join(distPath, 'cef');
-    if (fs.existsSync(cefPath)) {
-      console.log(`Creating CEF tarball: ${cefOutputFile}`);
-      
-      return tar.c({
-        gzip: true,
-        file: cefOutputFile,
-        cwd: distPath,
-        portable: true
-      }, ['cef']);
-    } else {
-      console.log('No CEF directory found, skipping CEF tarball');
-      return Promise.resolve();
-    }
-  })
-  .then(() => {
-    if (fs.existsSync(cefOutputFile)) {
-      const stats = fs.statSync(cefOutputFile);
-      const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
-      console.log(`CEF tarball size: ${sizeMB} MB`);
-    }
-  })
-  .catch(err => {
-    console.error('Error creating tarball:', err);
-    process.exit(1);
-  });
+createTarballs().catch(err => {
+  console.error('Error creating tarballs:', err);
+  process.exit(1);
+});

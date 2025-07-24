@@ -18,7 +18,7 @@
   },
   "type": "module",
   "bin": {
-    "electrobun": "./bin/electrobun.cjs"
+    "electrobun": "./bin/electrobun"
   },
   "homepage": "https://electrobun.dev",
   "repository": {
@@ -26,6 +26,7 @@
     "url": "git+https://github.com/blackboardsh/electrobun.git"
   },
   "scripts": {
+    "postinstall": "node bin/electrobun.cjs --install-only",
     "build:cli": "mkdir -p bin && bun build src/cli/index.ts --compile --outfile bin/electrobun",
     "start": "bun src/bun/index.ts",
     "check-zig-version": "vendors/zig/zig version",

@@ -73,7 +73,7 @@ async function ensureCliBinary() {
   const version = packageJson.version;
   const tag = `v${version}`;
   
-  const tarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${tag}/electrobun-${platform}-${arch}.tar.gz`;
+  const tarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${tag}/electrobun-cli-${platform}-${arch}.tar.gz`;
   const tarballPath = join(cacheDir, `electrobun-${platform}-${arch}.tar.gz`);
   
   try {
@@ -105,10 +105,18 @@ async function ensureCliBinary() {
 
 async function main() {
   try {
+    const args = process.argv.slice(2);
+    
+    // Handle postinstall flag - just download CLI and exit
+    if (args.includes('--install-only')) {
+      await ensureCliBinary();
+      console.log('electrobun CLI installed successfully!');
+      return;
+    }
+    
     const cliPath = await ensureCliBinary();
     
     // Replace this process with the actual CLI
-    const args = process.argv.slice(2);
     const child = spawn(cliPath, args, {
       stdio: 'inherit',
       cwd: process.cwd()
