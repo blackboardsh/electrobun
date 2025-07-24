@@ -398,6 +398,9 @@ if (commandArg === "init") {
   // todo (yoav): init a repo folder structure
   console.log("initializing electrobun project");
 } else if (commandArg === "build") {
+  // Ensure core binaries are available before starting build
+  await ensureCoreDependencies();
+  
   // refresh build folder  
   if (existsSync(buildFolder)) {
     rmdirSync(buildFolder, { recursive: true });
@@ -581,8 +584,6 @@ if (commandArg === "init") {
   }
 }
   
-  // Ensure core binaries are available
-  await ensureCoreDependencies();
 
   // Download CEF binaries if needed when bundleCEF is enabled
   if ((OS === 'macos' && config.build.mac?.bundleCEF) || 
