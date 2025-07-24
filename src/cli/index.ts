@@ -156,9 +156,12 @@ async function ensureCoreDependencies() {
     
     // Extract to dist directory
     console.log('Extracting core dependencies...');
+    const distPath = join(ELECTROBUN_DEP_PATH, 'dist');
+    mkdirSync(distPath, { recursive: true });
+    
     await tar.x({
       file: tempFile,
-      cwd: join(ELECTROBUN_DEP_PATH, 'dist'),
+      cwd: distPath,
     });
     
     // Clean up temp file
