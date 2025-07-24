@@ -143,7 +143,7 @@ async function copyToDist() {
         await $`powershell -command "if (Test-Path 'vendors/cef/Resources/locales') { Copy-Item 'vendors/cef/Resources/locales' 'dist/cef/Resources/' -Recurse -Force }"`.catch(() => {});
         
         // Copy CEF helper process
-        await $`cp src/native/build/process_helper.exe dist/process_helper.exe`;
+        await $`cp src/native/build/process_helper.exe dist/cef/process_helper.exe`;
     } else if (OS === 'linux') {
         // Copy native wrapper if it exists
         if (existsSync(join(process.cwd(), 'src', 'native', 'build', 'libNativeWrapper.so'))) {
@@ -179,7 +179,7 @@ async function copyToDist() {
         
         // Copy CEF helper process if it exists
         if (existsSync(join(process.cwd(), 'src', 'native', 'build', 'process_helper'))) {
-            await $`cp src/native/build/process_helper dist/process_helper`;
+            await $`cp src/native/build/process_helper dist/cef/process_helper`;
         }
         console.log('[done]Copying CEF files for Linux...');
     }
