@@ -114,13 +114,13 @@ async function ensureCoreDependencies() {
 
   const platformName = OS === 'macos' ? 'darwin' : OS === 'win' ? 'win32' : 'linux';
   const archName = ARCH;
-  const mainTarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${version}/electrobun-${platformName}-${archName}.tar.gz`;
+  const coreTarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${version}/electrobun-core-${platformName}-${archName}.tar.gz`;
   
-  console.log(`Downloading core binaries from: ${mainTarballUrl}`);
+  console.log(`Downloading core binaries from: ${coreTarballUrl}`);
   
   try {
-    // Download main tarball
-    const response = await fetch(mainTarballUrl);
+    // Download core binaries tarball
+    const response = await fetch(coreTarballUrl);
     if (!response.ok) {
       throw new Error(`Failed to download binaries: ${response.status} ${response.statusText}`);
     }
