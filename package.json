@@ -42,10 +42,10 @@
     "npm:publish:beta": "bun build:release && npm publish --tag beta",
     "npm:version:beta": "npm version prerelease --preid=beta"
   },
-  "devDependencies": {},
   "dependencies": {
-    "@types/bun": "1.1.9",
     "@oneidentity/zstd-js": "^1.0.3",
+    "@types/bun": "1.1.9",
+    "electrobun": "^0.0.19-beta.6",
     "rpc-anywhere": "1.5.0",
     "tar": "^6.2.1"
   }
