@@ -25,3 +25,4 @@
 # Include TypeScript APIs and CLI source
 !/dist/api/
 !/src/cli/
+/src/cli/build/
