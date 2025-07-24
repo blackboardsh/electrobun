@@ -62,8 +62,22 @@ async function downloadFile(url, filePath) {
 }
 
 async function ensureCliBinary() {
+  // Check if CLI binary exists in bin location (where npm expects it)
+  const binLocation = join(electrobunDir, 'bin', 'electrobun' + binExt);
+  if (existsSync(binLocation)) {
+    return binLocation;
+  }
+  
+  // Check if core dependencies already exist in cache
   if (existsSync(cliBinary)) {
-    return cliBinary;
+    // Copy to bin location if it exists in cache but not in bin
+    mkdirSync(dirname(binLocation), { recursive: true });
+    const fs = require('fs');
+    fs.copyFileSync(cliBinary, binLocation);
+    if (platform !== 'win') {
+      chmodSync(binLocation, '755');
+    }
+    return binLocation;
   }
 
   console.log('Downloading electrobun CLI for your platform...');
@@ -100,8 +114,21 @@ async function ensureCliBinary() {
       chmodSync(cliBinary, '755');
     }
     
+    // Copy CLI to bin location so npm scripts can find it
+    const binLocation = join(electrobunDir, 'bin', 'electrobun' + binExt);
+    mkdirSync(dirname(binLocation), { recursive: true });
+    
+    // Copy the downloaded CLI to replace this script
+    const fs = require('fs');
+    fs.copyFileSync(cliBinary, binLocation);
+    
+    // Make the bin location executable too
+    if (platform !== 'win') {
+      chmodSync(binLocation, '755');
+    }
+    
     console.log('electrobun CLI downloaded successfully!');
-    return cliBinary;
+    return binLocation;
     
   } catch (error) {
     throw new Error(`Failed to download electrobun CLI: ${error.message}`);
