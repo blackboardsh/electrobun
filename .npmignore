@@ -18,9 +18,14 @@
 /CLAUDE.md
 /CLAUDE.local.md
 
-# Exclude all binaries - CLI will download them on demand
+# Exclude all binaries - CLI download script will fetch them on demand
 /dist/
-/bin/
+/bin/electrobun
+/bin/electrobun.exe
+/.cache/
+
+# Include download script
+!/bin/electrobun.cjs
 
 # Include TypeScript APIs and CLI source
 !/dist/api/

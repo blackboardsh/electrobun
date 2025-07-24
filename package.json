@@ -1,6 +1,6 @@
 {
   "name": "electrobun",
-  "version": "0.0.19-beta.8",
+  "version": "0.0.19-beta.6",
   "description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
   "license": "MIT",
   "author": "Blackboard Technologies Inc.",
@@ -18,7 +18,7 @@
   },
   "type": "module",
   "bin": {
-    "electrobun": "./bin/electrobun"
+    "electrobun": "./bin/electrobun.cjs"
   },
   "homepage": "https://electrobun.dev",
   "repository": {
@@ -26,12 +26,12 @@
     "url": "git+https://github.com/blackboardsh/electrobun.git"
   },
   "scripts": {
-    "postinstall": "mkdir -p bin && bun build src/cli/index.ts --compile --outfile bin/electrobun",
+    "build:cli": "mkdir -p bin && bun build src/cli/index.ts --compile --outfile bin/electrobun",
     "start": "bun src/bun/index.ts",
     "check-zig-version": "vendors/zig/zig version",
     "build:dev": "bun build.ts",
     "build:release": "bun build.ts --release",
-    "dev:playground": "bun build:dev && cd playground && npm install && bun build:dev && bun start",
+    "dev:playground": "bun build:dev && bun build:cli && cd playground && npm install && bun build:dev && bun start",
     "dev:playground:linux": "bun build:dev && npm link && cd playground && npm link electrobun && bun build:dev && bun start",
     "dev:playground:clean": "cd playground && rm -rf node_modules && npm install && cd .. && bun dev:playground",
     "dev:playground:rerun": "cd playground && bun start",
@@ -45,7 +45,7 @@
   "dependencies": {
     "@oneidentity/zstd-js": "^1.0.3",
     "@types/bun": "1.1.9",
-    "electrobun": "^0.0.19-beta.6",
+    "bun": "1.1.9",
     "rpc-anywhere": "1.5.0",
     "tar": "^6.2.1"
   }

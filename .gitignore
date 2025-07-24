@@ -10,3 +10,6 @@ build
 .zig-cache
 .colab.json
 dist
+.cache
+bin/electrobun
+bin/electrobun.exe

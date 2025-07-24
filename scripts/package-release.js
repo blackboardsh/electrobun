@@ -34,6 +34,10 @@ console.log(`Packaging Electrobun for ${platformName}-${archName}...`);
 console.log('Building full release...');
 execSync('bun build.ts --release', { stdio: 'inherit' });
 
+// Build CLI binary
+console.log('Building CLI binary...');
+execSync('mkdir -p bin && bun build src/cli/index.ts --compile --outfile bin/electrobun', { stdio: 'inherit' });
+
 // Create the main tarball (without CEF)
 const distPath = path.join(__dirname, '..', 'dist');
 const mainOutputFile = path.join(__dirname, '..', `electrobun-${platformName}-${archName}.tar.gz`);
@@ -47,8 +51,20 @@ if (!fs.existsSync(distPath)) {
   process.exit(1);
 }
 
-// Create list of files to include in main tarball (exclude CEF)
+// Create list of files to include in main tarball (exclude CEF but include CLI)
 const mainFiles = fs.readdirSync(distPath).filter(file => file !== 'cef');
+
+// Add CLI binary to files list
+const binPath = path.join(__dirname, '..', 'bin');
+if (fs.existsSync(binPath)) {
+  // Copy CLI binary to dist for packaging
+  const cliSrc = path.join(binPath, 'electrobun' + (platform === 'win32' ? '.exe' : ''));
+  const cliDest = path.join(distPath, 'electrobun' + (platform === 'win32' ? '.exe' : ''));
+  if (fs.existsSync(cliSrc)) {
+    fs.copyFileSync(cliSrc, cliDest);
+    mainFiles.push('electrobun' + (platform === 'win32' ? '.exe' : ''));
+  }
+}
 
 // Create main tarball
 tar.c({
