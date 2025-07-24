@@ -80,15 +80,20 @@ async function ensureCliBinary() {
     // Download tarball
     await downloadFile(tarballUrl, tarballPath);
     
-    // Extract CLI binary
+    // Extract CLI binary  
     await tar.x({
       file: tarballPath,
-      cwd: cacheDir,
-      strip: 1 // Remove the top-level directory
+      cwd: cacheDir
+      // No strip needed - CLI tarball contains just the binary
     });
     
     // Clean up tarball
     unlinkSync(tarballPath);
+    
+    // Check if CLI binary was extracted
+    if (!existsSync(cliBinary)) {
+      throw new Error(`CLI binary not found at ${cliBinary} after extraction`);
+    }
     
     // Make executable on Unix systems
     if (platform !== 'win') {
