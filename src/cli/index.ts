@@ -92,12 +92,26 @@ const PATHS = {
 };
 
 async function ensureCoreDependencies() {
-  // Check if core dependencies already exist
-  if (existsSync(PATHS.BUN_BINARY) && existsSync(PATHS.LAUNCHER_RELEASE)) {
+  // Check if all core dependencies exist
+  const requiredFiles = [
+    PATHS.BUN_BINARY,
+    PATHS.LAUNCHER_RELEASE,
+    PATHS.MAIN_JS,
+    // Platform-specific native wrapper
+    OS === 'macos' ? PATHS.NATIVE_WRAPPER_MACOS :
+    OS === 'win' ? PATHS.NATIVE_WRAPPER_WIN :
+    PATHS.NATIVE_WRAPPER_LINUX
+  ];
+  
+  const allFilesExist = requiredFiles.every(file => existsSync(file));
+  if (allFilesExist) {
     return;
   }
 
-  console.log('Core dependencies not found, downloading...');
+  // Show which files are missing
+  const missingFiles = requiredFiles.filter(file => !existsSync(file));
+  console.log('Core dependencies not found. Missing files:', missingFiles.map(f => f.replace(ELECTROBUN_DEP_PATH, '.')).join(', '));
+  console.log('Downloading core binaries...');
   
   // Get the current Electrobun version from package.json
   const packageJsonPath = join(ELECTROBUN_DEP_PATH, 'package.json');
