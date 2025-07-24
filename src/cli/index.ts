@@ -249,6 +249,7 @@ const commandDefaults = {
 
 // todo (yoav): add types for config
 const defaultConfig = {
+  entrypoint: "src/bun/index.ts",
   app: {
     name: "MyApp",
     identifier: "com.example.myapp",
@@ -1290,7 +1291,12 @@ function getConfig() {
   if (existsSync(configPath)) {
     const configFileContents = readFileSync(configPath, "utf8");
     // Note: we want this to hard fail if there's a syntax error
-    loadedConfig = JSON.parse(configFileContents);
+    try {
+      loadedConfig = JSON.parse(configFileContents);
+    } catch (error) {
+      console.error("Failed to parse config file:", error);
+      console.error("using default config instead");
+    }
   }
 
   // todo (yoav): write a deep clone fn
