@@ -477,10 +477,26 @@ if (commandArg === "init") {
   //     mkdirSync(destLauncherFolder, {recursive: true});
   // }
   // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});
+  // For dev builds, use the actual CLI binary that's currently running
+  // It could be in .cache (npm install) or bin (local dev)
+  let devLauncherPath = PATHS.LAUNCHER_DEV;
+  if (buildEnvironment === "dev" && !existsSync(devLauncherPath)) {
+    // Check .cache location (npm installed)
+    const cachePath = join(ELECTROBUN_DEP_PATH, ".cache", "electrobun") + binExt;
+    if (existsSync(cachePath)) {
+      devLauncherPath = cachePath;
+    } else {
+      // Check bin location (local dev)
+      const binPath = join(ELECTROBUN_DEP_PATH, "bin", "electrobun") + binExt;
+      if (existsSync(binPath)) {
+        devLauncherPath = binPath;
+      }
+    }
+  }
+  
   const bunCliLauncherBinarySource =
     buildEnvironment === "dev"
-      ? // Note: in dev use the cli as the launcher
-        PATHS.LAUNCHER_DEV
+      ? devLauncherPath
       : // Note: for release use the zig launcher optimized for smol size
         PATHS.LAUNCHER_RELEASE;
   const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + binExt;
