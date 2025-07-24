@@ -249,7 +249,6 @@ const commandDefaults = {
 
 // todo (yoav): add types for config
 const defaultConfig = {
-  entrypoint: "src/bun/index.ts",
   app: {
     name: "MyApp",
     identifier: "com.example.myapp",
@@ -267,6 +266,10 @@ const defaultConfig = {
         "com.apple.security.cs.allow-jit": true,
       },
       icons: "icon.iconset",
+    },
+    bun: {
+      entrypoint: "src/bun/index.ts",
+      external: [],
     },
   },
   scripts: {
@@ -1318,6 +1321,10 @@ function getConfig() {
           ...(loadedConfig?.build?.mac?.entitlements || {}),
         },
       },
+      bun: {
+        ...defaultConfig.build.bun,
+        ...(loadedConfig?.build?.bun || {}),
+      }
     },
     scripts: {
       ...defaultConfig.scripts,
