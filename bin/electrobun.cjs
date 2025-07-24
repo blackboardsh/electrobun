@@ -138,14 +138,6 @@ async function ensureCliBinary() {
 async function main() {
   try {
     const args = process.argv.slice(2);
-    
-    // Handle postinstall flag - just download CLI and exit
-    if (args.includes('--install-only')) {
-      await ensureCliBinary();
-      console.log('electrobun CLI installed successfully!');
-      return;
-    }
-    
     const cliPath = await ensureCliBinary();
     
     // Replace this process with the actual CLI
