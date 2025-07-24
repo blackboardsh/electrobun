@@ -42,7 +42,10 @@
     "npm:publish": "bun build:release && npm publish",
     "npm:publish:beta": "bun build:release && npm publish --tag beta",
     "npm:version:beta": "npm version prerelease --preid=beta",
-    "push:beta": "bun npm:version:beta && git push origin main --tags"
+    "push:beta": "bun npm:version:beta && git push origin main --tags",
+    "push:patch": "npm version patch && git push origin main --tags",
+    "push:minor": "npm version minor && git push origin main --tags",
+    "push:major": "npm version major && git push origin main --tags"
   },
   "dependencies": {
     "@oneidentity/zstd-js": "^1.0.3",
