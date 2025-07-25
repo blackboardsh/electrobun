@@ -453,11 +453,11 @@ async function vendorCEF() {
             await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef' -Force | Out-Null"`;
             
             // Extract tar.bz2 using Windows built-in tar
-            console.log('Extracting with tar (this may take a minute)...');
+            console.log('Extracting with tar (this may take a few minutes)...');
+            console.log('Note: Windows tar extraction of bz2 files can be slow, please be patient...');
             
-            // Windows tar can be very slow with bz2 files
-            // Use --checkpoint to show progress
-            await $`tar -xjf "${tempPath}" -C vendors/cef_temp --checkpoint=.1000`;
+            // Windows tar doesn't support many options, just use basic extraction
+            await $`tar -xjf "${tempPath}" -C vendors/cef_temp`;
             
             // Check what was extracted
             const tempDir = 'vendors/cef_temp';
