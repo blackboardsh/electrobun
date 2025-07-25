@@ -25,9 +25,11 @@ jobs:
           - os: ubuntu-24.04
             platform: linux
             arch: x64
-          - os: windows-2022
-            platform: win32
-            arch: x64
+          # Windows disabled due to tar extraction timeout issues
+          # Build Windows artifacts manually using: bun build:push:artifacts
+          # - os: windows-2022
+          #   platform: win32
+          #   arch: x64
     
     runs-on: ${{ matrix.os }}
     
