@@ -238,11 +238,11 @@ async function vendorBun() {
     let bunDirName: string;
     
     if (OS === 'win') {
-        bunUrlSegment = 'bun-windows-x64.zip';
-        bunDirName = 'bun-windows-x64';
+        bunUrlSegment = ARCH === 'arm64' ? 'bun-windows-aarch64.zip' : 'bun-windows-x64.zip';
+        bunDirName = ARCH === 'arm64' ? 'bun-windows-aarch64' : 'bun-windows-x64';
     } else if (OS === 'macos') {
-        bunUrlSegment = 'bun-darwin-aarch64.zip';
-        bunDirName = 'bun-darwin-aarch64';
+        bunUrlSegment = ARCH === 'arm64' ? 'bun-darwin-aarch64.zip' : 'bun-darwin-x64.zip';
+        bunDirName = ARCH === 'arm64' ? 'bun-darwin-aarch64' : 'bun-darwin-x64';
     } else if (OS === 'linux') {
         bunUrlSegment = ARCH === 'arm64' ? 'bun-linux-aarch64.zip' : 'bun-linux-x64.zip';
         bunDirName = ARCH === 'arm64' ? 'bun-linux-aarch64' : 'bun-linux-x64';
@@ -289,9 +289,12 @@ async function vendorZig() {
     }
 
     if (OS === 'macos') {
-        await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-macos-aarch64-0.13.0/zig zig-macos-aarch64-0.13.0/lib  zig-macos-aarch64-0.13.0/doc`;
+        const zigArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
+        await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-macos-${zigArch}-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-macos-${zigArch}-0.13.0/zig zig-macos-${zigArch}-0.13.0/lib  zig-macos-${zigArch}-0.13.0/doc`;
     } else if (OS === 'win') {
-        await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-windows-aarch64-0.13.0.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/zig-windows-aarch64-0.13.0/zig.exe vendors/zig && mv vendors/zig-temp/zig-windows-aarch64-0.13.0/lib vendors/zig/`;
+        const zigArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
+        const zigFolder = `zig-windows-${zigArch}-0.13.0`;
+        await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/${zigFolder}.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/${zigFolder}/zig.exe vendors/zig && mv vendors/zig-temp/${zigFolder}/lib vendors/zig/`;
     } else if (OS === 'linux') {
         const zigArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
         await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-linux-${zigArch}-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-linux-${zigArch}-0.13.0/zig zig-linux-${zigArch}-0.13.0/lib zig-linux-${zigArch}-0.13.0/doc`;
@@ -300,6 +303,15 @@ async function vendorZig() {
 
 async function vendorCEF() {
     // Use stable CEF version for macOS, current for Windows and Linux
+    // full urls for reference:
+    // macos x64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_macosx64_minimal.tar.bz2
+    // macos arm64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_macosarm64_minimal.tar.bz2
+    // windows x64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_windows64_minimal.tar.bz2
+    // windows arm64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_windowsarm64_minimal.tar.bz2
+    // linux x64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_linux64_minimal.tar.bz2
+    // linux arm64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_linuxarm64_minimal.tar.bz2
+
+
     const CEF_VERSION_MAC = `125.0.22+gc410c95`;
     const CHROMIUM_VERSION_MAC = `125.0.6422.142`;
     const CEF_VERSION_WIN = `125.0.22+gc410c95`;
@@ -309,9 +321,10 @@ async function vendorCEF() {
     
     if (OS === 'macos') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                
-            console.log('Downloading CEF for macOS ARM64...');
+            const cefArch = ARCH === 'arm64' ? 'macosarm64' : 'macosx64';
+            console.log(`Downloading CEF for macOS ${ARCH}...`);
             // Try a different URL format - encode all + symbols
-            let cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}+chromium-${CHROMIUM_VERSION_MAC}_macosarm64_minimal.tar.bz2`;
+            let cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}+chromium-${CHROMIUM_VERSION_MAC}_${cefArch}_minimal.tar.bz2`;
             console.log('CEF URL:', cefUrl);
             
             // Test if URL is accessible first
@@ -322,7 +335,7 @@ async function vendorCEF() {
             } catch (error) {
                 console.log('CEF URL test failed, trying alternative format...');
                 // Try simpler format without the complex version encoding
-                const altUrl = `https://cef-builds.spotifycdn.com/cef_binary_125.0.22_macosarm64_minimal.tar.bz2`;
+                const altUrl = `https://cef-builds.spotifycdn.com/cef_binary_125.0.22_${cefArch}_minimal.tar.bz2`;
                 console.log('Alternative CEF URL:', altUrl);
                 try {
                     await $`curl -I "${altUrl}"`;
@@ -417,7 +430,9 @@ async function vendorCEF() {
             
             // Download CEF - using URL encoding for the + character
             console.log('Downloading CEF binaries...');
-            await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_WIN}%2Bchromium-${CHROMIUM_VERSION_WIN}_windows64_minimal.tar.bz2" -o "${tempPath}"`;
+            const cefArch = ARCH === 'arm64' ? 'windowsarm64' : 'windows64';
+            console.log(`Downloading CEF for Windows ${ARCH}...`);
+            await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_WIN}%2Bchromium-${CHROMIUM_VERSION_WIN}_${cefArch}_minimal.tar.bz2" -o "${tempPath}"`;
             
             // Verify download completed
             if (!existsSync(tempPath)) {
