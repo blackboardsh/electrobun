@@ -46,10 +46,11 @@
     "push:minor": "npm version minor && git push origin main --tags",
     "push:major": "npm version major && git push origin main --tags"
   },
+  "devDependencies": {
+    "@types/bun": "1.1.9",
+  },
   "dependencies": {
     "@oneidentity/zstd-js": "^1.0.3",
-    "@types/bun": "1.1.9",
-    "bun": "1.1.9",
     "rpc-anywhere": "1.5.0",
     "tar": "^6.2.1"
   }
