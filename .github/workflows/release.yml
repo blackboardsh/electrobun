@@ -24,7 +24,7 @@ jobs:
             arch: arm64
           - os: ubuntu-24.04
             platform: linux
-            arch: arm64
+            arch: x64
           - os: windows-2022
             platform: win32
             arch: x64
@@ -42,6 +42,18 @@ jobs:
       
       - name: Install dependencies
         run: bun install
+      
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            build-essential \
+            cmake \
+            pkg-config
       
       - name: Build for ${{ matrix.platform }}-${{ matrix.arch }}
         run: bun scripts/package-release.js
