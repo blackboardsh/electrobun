@@ -47,7 +47,7 @@
     "push:major": "npm version major && git push origin main --tags"
   },
   "devDependencies": {
-    "@types/bun": "1.1.9",
+    "@types/bun": "1.1.9"
   },
   "dependencies": {
     "@oneidentity/zstd-js": "^1.0.3",
