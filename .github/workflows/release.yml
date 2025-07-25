@@ -57,6 +57,7 @@ jobs:
       
       - name: Build for ${{ matrix.platform }}-${{ matrix.arch }}
         run: bun scripts/package-release.js
+        timeout-minutes: 30
       
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
