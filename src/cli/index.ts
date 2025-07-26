@@ -1355,6 +1355,14 @@ function getConfig() {
           ...(loadedConfig?.build?.mac?.entitlements || {}),
         },
       },
+      win: {
+        ...defaultConfig.build.win,
+        ...(loadedConfig?.build?.win || {}),
+      },
+      linux: {
+        ...defaultConfig.build.linux,
+        ...(loadedConfig?.build?.linux || {}),
+      },
       bun: {
         ...defaultConfig.build.bun,
         ...(loadedConfig?.build?.bun || {}),
