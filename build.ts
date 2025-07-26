@@ -117,8 +117,9 @@ async function copyToDist() {
         await $`cp -R src/native/build/process_helper dist/cef/process_helper`;
     } else if (OS === 'win') {
         await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
-        // native system webview library
-        await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll dist/WebView2Loader.dll`;
+        // native system webview library - use correct architecture
+        const webview2Arch = ARCH === 'arm64' ? 'arm64' : 'x64';
+        await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/${webview2Arch}/WebView2Loader.dll dist/WebView2Loader.dll`;
         // CEF binaries for Windows - copy ALL CEF files to cef/ subdirectory for consistent organization
         await $`powershell -command "New-Item -ItemType Directory -Path 'dist/cef' -Force | Out-Null"`;
         // Copy main CEF DLLs to cef/ subdirectory
@@ -640,7 +641,8 @@ async function buildNative() {
         await $`mkdir -p src/native/build && clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib`;
     } else if (OS === 'win') {
         const webview2Include = `./vendors/webview2/Microsoft.Web.WebView2/build/native/include`;
-        const webview2Lib = `./vendors/webview2/Microsoft.Web.WebView2/build/native/x64/WebView2LoaderStatic.lib`;
+        const webview2Arch = ARCH === 'arm64' ? 'arm64' : 'x64';
+        const webview2Lib = `./vendors/webview2/Microsoft.Web.WebView2/build/native/${webview2Arch}/WebView2LoaderStatic.lib`;
         const cefInclude = `./vendors/cef`;
         const cefLib = `./vendors/cef/Release/libcef.lib`;
         const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
@@ -680,7 +682,7 @@ async function buildNative() {
             await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefWrapperLib} ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
            
             console.log('Native wrapper built successfully');
-        } catch (error) {
+        } catch (error: any) {
             console.log('Build failed, error details:', error.message);
             throw error;
         }
