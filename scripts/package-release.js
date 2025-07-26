@@ -36,7 +36,10 @@ execSync('bun build.ts --release', { stdio: 'inherit' });
 
 // Build CLI binary
 console.log('Building CLI binary...');
-execSync('mkdir -p bin && bun build src/cli/index.ts --compile --outfile bin/electrobun', { stdio: 'inherit' });
+if (!fs.existsSync('bin')) {
+    fs.mkdirSync('bin', { recursive: true });
+}
+execSync('bun build src/cli/index.ts --compile --outfile bin/electrobun', { stdio: 'inherit' });
 
 // Create separate tarballs for CLI, core binaries, and CEF
 const distPath = path.join(__dirname, '..', 'dist');
