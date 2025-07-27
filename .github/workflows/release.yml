@@ -22,6 +22,9 @@ jobs:
           - os: macos-14
             platform: darwin
             arch: arm64
+          - os: macos-13
+            platform: darwin
+            arch: x64
           - os: ubuntu-24.04
             platform: linux
             arch: x64
