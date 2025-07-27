@@ -167,8 +167,9 @@ async function ensureCoreDependencies() {
       cwd: distPath,
       preservePaths: false,
       strip: 0,
-      // Add Windows-specific options for more robust extraction
+      // Windows-specific options for robust extraction (tar 7.x improvements)
       ...(OS === 'win' && {
+        win32: true,  // Enable Windows path handling
         noMtime: true,
         preserveOwner: false,
       }),
@@ -269,8 +270,9 @@ async function ensureCEFDependencies() {
       cwd: join(ELECTROBUN_DEP_PATH, 'dist'),
       preservePaths: false,
       strip: 0,
-      // Add Windows-specific options for more robust extraction
+      // Windows-specific options for robust extraction (tar 7.x improvements)
       ...(OS === 'win' && {
+        win32: true,  // Enable Windows path handling
         noMtime: true,
         preserveOwner: false,
       }),
