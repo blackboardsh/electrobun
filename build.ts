@@ -408,7 +408,8 @@ async function vendorCEF() {
             await $`mkdir -p src/native/build`;
             // build CEF wrapper library
             console.log('Building CEF wrapper library...');
-            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH="arm64" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
+            const buildArch = ARCH === 'arm64' ? 'arm64' : 'x86_64';
+            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH="${buildArch}" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
             
             // Verify the wrapper library was built
             const wrapperPath = join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a');
@@ -633,7 +634,8 @@ async function buildNative() {
         const wrapperPath = join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a');
         if (!existsSync(wrapperPath)) {
             console.log('CEF wrapper library not found, building it now...');
-            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH="arm64" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
+            const buildArch = ARCH === 'arm64' ? 'arm64' : 'x86_64';
+            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH="${buildArch}" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
             
             if (!existsSync(wrapperPath)) {
                 throw new Error(`Failed to build CEF wrapper library at ${wrapperPath}`);
