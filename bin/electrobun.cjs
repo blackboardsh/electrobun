@@ -25,7 +25,8 @@ function getArch() {
 }
 
 const platform = getPlatform();
-const arch = getArch();
+// Always use x64 for Windows since we only build x64 Windows binaries
+const arch = platform === 'win' ? 'x64' : getArch();
 const binExt = platform === 'win' ? '.exe' : '';
 
 // Paths

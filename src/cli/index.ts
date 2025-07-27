@@ -18,7 +18,8 @@ const MAX_CHUNK_SIZE = 1024 * 2;
 
 // TODO: dedup with built.ts
 const OS: 'win' | 'linux' | 'macos' = getPlatform();
-const ARCH: 'arm64' | 'x64' = getArch();
+// Always use x64 for Windows since we only build x64 Windows binaries
+const ARCH: 'arm64' | 'x64' = OS === 'win' ? 'x64' : getArch();
 
 function getPlatform() {
   switch (platform()) {
