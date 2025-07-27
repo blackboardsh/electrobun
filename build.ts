@@ -675,11 +675,14 @@ async function buildNative() {
             await $`mkdir -p src/native/linux/build`;
             await $`g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -I"${cefInclude}" -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
 
-            // Link with WebKitGTK, AppIndicator, and optionally CEF libraries
+            // Link with WebKitGTK, AppIndicator, and optionally CEF libraries using weak linking
             await $`mkdir -p src/native/build`;
-            // always build with CEF. if libraries don't exist it's a fatal error
-            // Set RPATH to look in both current directory and cef/ subdirectory
-            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) ${cefWrapperLib} ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
+            
+            // Always build without linking CEF libraries (like macOS weak framework approach)
+            console.log('Building with runtime CEF detection - no hard linking of CEF libraries');
+            // Build without linking CEF libraries at all - they will be loaded dynamically at runtime
+            // CEF headers are included for compilation but no linking occurs
+            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
            
             console.log('Native wrapper built successfully');
         } catch (error: any) {
