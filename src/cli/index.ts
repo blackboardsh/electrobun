@@ -7,6 +7,7 @@ import {
   mkdirSync,
   createWriteStream,
   unlinkSync,
+  readdirSync,
 } from "fs";
 import { execSync } from "child_process";
 import tar from "tar";
@@ -164,10 +165,30 @@ async function ensureCoreDependencies() {
     await tar.x({
       file: tempFile,
       cwd: distPath,
+      preservePaths: false,
+      strip: 0,
+      // Add Windows-specific options for more robust extraction
+      ...(OS === 'win' && {
+        noMtime: true,
+        preserveOwner: false,
+      }),
     });
     
     // Clean up temp file
     unlinkSync(tempFile);
+    
+    // Verify extraction completed successfully
+    const mainJsPath = join(ELECTROBUN_DEP_PATH, 'dist', 'main.js');
+    if (!existsSync(mainJsPath)) {
+      console.error('Warning: main.js was not extracted properly');
+      // List what was actually extracted for debugging
+      try {
+        const extractedFiles = readdirSync(join(ELECTROBUN_DEP_PATH, 'dist'));
+        console.log('Extracted files:', extractedFiles);
+      } catch (e) {
+        console.error('Could not list extracted files');
+      }
+    }
     
     console.log('Core dependencies downloaded and cached successfully');
     
@@ -233,6 +254,13 @@ async function ensureCEFDependencies() {
     await tar.x({
       file: tempFile,
       cwd: join(ELECTROBUN_DEP_PATH, 'dist'),
+      preservePaths: false,
+      strip: 0,
+      // Add Windows-specific options for more robust extraction
+      ...(OS === 'win' && {
+        noMtime: true,
+        preserveOwner: false,
+      }),
     });
     
     // Clean up temp file
