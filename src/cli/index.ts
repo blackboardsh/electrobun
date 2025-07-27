@@ -128,7 +128,7 @@ async function ensureCoreDependencies() {
     }
   }
 
-  const platformName = OS === 'macos' ? 'darwin' : OS === 'win' ? 'win32' : 'linux';
+  const platformName = OS === 'macos' ? 'darwin' : OS === 'win' ? 'win' : 'linux';
   const archName = ARCH;
   const coreTarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${version}/electrobun-core-${platformName}-${archName}.tar.gz`;
   
@@ -200,7 +200,7 @@ async function ensureCEFDependencies() {
     }
   }
 
-  const platformName = OS === 'macos' ? 'darwin' : OS === 'win' ? 'win32' : 'linux';
+  const platformName = OS === 'macos' ? 'darwin' : OS === 'win' ? 'win' : 'linux';
   const archName = ARCH;
   const cefTarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${version}/electrobun-cef-${platformName}-${archName}.tar.gz`;
   
