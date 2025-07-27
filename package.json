@@ -53,6 +53,6 @@
   "dependencies": {
     "@oneidentity/zstd-js": "^1.0.3",
     "rpc-anywhere": "1.5.0",
-    "tar": "^7.4.3"
+    "tar": "^6.2.1"
   }
 }

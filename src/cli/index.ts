@@ -162,18 +162,21 @@ async function ensureCoreDependencies() {
     const distPath = join(ELECTROBUN_DEP_PATH, 'dist');
     mkdirSync(distPath, { recursive: true });
     
-    await tar.x({
-      file: tempFile,
-      cwd: distPath,
-      preservePaths: false,
-      strip: 0,
-      // Windows-specific options for robust extraction (tar 7.x improvements)
-      ...(OS === 'win' && {
-        win32: true,  // Enable Windows path handling
-        noMtime: true,
-        preserveOwner: false,
-      }),
-    });
+    // Use Windows native tar.exe on Windows due to npm tar library issues
+    if (OS === 'win') {
+      console.log('Using Windows native tar.exe for reliable extraction...');
+      execSync(`tar -xf "${tempFile}" -C "${distPath}"`, { 
+        stdio: 'inherit',
+        cwd: distPath 
+      });
+    } else {
+      await tar.x({
+        file: tempFile,
+        cwd: distPath,
+        preservePaths: false,
+        strip: 0,
+      });
+    }
     
     // Clean up temp file
     unlinkSync(tempFile);
@@ -265,18 +268,23 @@ async function ensureCEFDependencies() {
     
     // Extract to dist directory
     console.log('Extracting CEF dependencies...');
-    await tar.x({
-      file: tempFile,
-      cwd: join(ELECTROBUN_DEP_PATH, 'dist'),
-      preservePaths: false,
-      strip: 0,
-      // Windows-specific options for robust extraction (tar 7.x improvements)
-      ...(OS === 'win' && {
-        win32: true,  // Enable Windows path handling
-        noMtime: true,
-        preserveOwner: false,
-      }),
-    });
+    const cefDistPath = join(ELECTROBUN_DEP_PATH, 'dist');
+    
+    // Use Windows native tar.exe on Windows due to npm tar library issues
+    if (OS === 'win') {
+      console.log('Using Windows native tar.exe for reliable extraction...');
+      execSync(`tar -xf "${tempFile}" -C "${cefDistPath}"`, { 
+        stdio: 'inherit',
+        cwd: cefDistPath 
+      });
+    } else {
+      await tar.x({
+        file: tempFile,
+        cwd: cefDistPath,
+        preservePaths: false,
+        strip: 0,
+      });
+    }
     
     // Clean up temp file
     unlinkSync(tempFile);
