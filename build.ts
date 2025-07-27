@@ -117,8 +117,8 @@ async function copyToDist() {
         await $`cp -R src/native/build/process_helper dist/cef/process_helper`;
     } else if (OS === 'win') {
         await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
-        // native system webview library - use correct architecture
-        const webview2Arch = ARCH === 'arm64' ? 'arm64' : 'x64';
+        // native system webview library - always use x64 for Windows
+        const webview2Arch = 'x64';
         await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/${webview2Arch}/WebView2Loader.dll dist/WebView2Loader.dll`;
         // CEF binaries for Windows - copy ALL CEF files to cef/ subdirectory for consistent organization
         await $`powershell -command "New-Item -ItemType Directory -Path 'dist/cef' -Force | Out-Null"`;
@@ -242,8 +242,9 @@ async function vendorBun() {
     let bunDirName: string;
     
     if (OS === 'win') {
-        bunUrlSegment = ARCH === 'arm64' ? 'bun-windows-aarch64.zip' : 'bun-windows-x64.zip';
-        bunDirName = ARCH === 'arm64' ? 'bun-windows-aarch64' : 'bun-windows-x64';
+        // Always use x64 for Windows since we only build x64 Windows binaries
+        bunUrlSegment = 'bun-windows-x64.zip';
+        bunDirName = 'bun-windows-x64';
     } else if (OS === 'macos') {
         bunUrlSegment = ARCH === 'arm64' ? 'bun-darwin-aarch64.zip' : 'bun-darwin-x64.zip';
         bunDirName = ARCH === 'arm64' ? 'bun-darwin-aarch64' : 'bun-darwin-x64';
@@ -296,7 +297,8 @@ async function vendorZig() {
         const zigArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
         await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-macos-${zigArch}-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-macos-${zigArch}-0.13.0/zig zig-macos-${zigArch}-0.13.0/lib  zig-macos-${zigArch}-0.13.0/doc`;
     } else if (OS === 'win') {
-        const zigArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
+        // Always use x64 for Windows since we only build x64 Windows binaries
+        const zigArch = 'x86_64';
         const zigFolder = `zig-windows-${zigArch}-0.13.0`;
         await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/${zigFolder}.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/${zigFolder}/zig.exe vendors/zig && mv vendors/zig-temp/${zigFolder}/lib vendors/zig/`;
     } else if (OS === 'linux') {
@@ -435,8 +437,9 @@ async function vendorCEF() {
             
             // Download CEF - using URL encoding for the + character
             console.log('Downloading CEF binaries...');
-            const cefArch = ARCH === 'arm64' ? 'windowsarm64' : 'windows64';
-            console.log(`Downloading CEF for Windows ${ARCH}...`);
+            // Always use x64 for Windows since we only build x64 Windows binaries
+            const cefArch = 'windows64';
+            console.log('Downloading CEF for Windows x64...');
             await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_WIN}%2Bchromium-${CHROMIUM_VERSION_WIN}_${cefArch}_minimal.tar.bz2" -o "${tempPath}"`;
             
             // Verify download completed
@@ -646,7 +649,8 @@ async function buildNative() {
         await $`mkdir -p src/native/build && clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib`;
     } else if (OS === 'win') {
         const webview2Include = `./vendors/webview2/Microsoft.Web.WebView2/build/native/include`;
-        const webview2Arch = ARCH === 'arm64' ? 'arm64' : 'x64';
+        // Always use x64 for Windows since we only build x64 Windows binaries
+        const webview2Arch = 'x64';
         const webview2Lib = `./vendors/webview2/Microsoft.Web.WebView2/build/native/${webview2Arch}/WebView2LoaderStatic.lib`;
         const cefInclude = `./vendors/cef`;
         const cefLib = `./vendors/cef/Release/libcef.lib`;
