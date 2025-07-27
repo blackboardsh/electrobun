@@ -91,6 +91,7 @@ struct MenuJsonValue {
 // Forward declarations
 class ContainerView;
 class CEFWebViewImpl;
+std::string getExecutableDir();
 GtkWidget* getContainerViewOverlay(GtkWidget* window);
 GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId);
 GtkWidget* createApplicationMenuBar(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler);
@@ -360,7 +361,6 @@ std::string getExecutableDir() {
 
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
-    // return false;
     // Return cached result if we've already checked
     if (g_checkedForCEF) {
         return g_useCEF;
@@ -370,14 +370,20 @@ bool isCEFAvailable() {
     // Get the directory where the executable is located
     std::string execDir = getExecutableDir();
     
-    // Check for CEF shared library in the same directory as the executable (primary location)
-    std::string cefLibPath = execDir + "/libcef.so";
+    // Check for CEF shared library in cef subdirectory (where it's bundled)
+    std::string cefLibPath = execDir + "/cef/libcef.so";
    
     // Check if the CEF library file exists
-    if (access(cefLibPath.c_str(), F_OK) == 0) {       
+    if (access(cefLibPath.c_str(), F_OK) == 0) {
         g_useCEF = true;
     } else {
-        g_useCEF = false;
+        // Also check for CEF in main directory (fallback)
+        cefLibPath = execDir + "/libcef.so";
+        if (access(cefLibPath.c_str(), F_OK) == 0) {
+            g_useCEF = true;
+        } else {
+            g_useCEF = false;
+        }
     }
     
     // Mark that we've performed the check

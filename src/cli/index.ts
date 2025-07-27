@@ -75,6 +75,7 @@ const PATHS = {
   ),
   NATIVE_WRAPPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.dll"),
   NATIVE_WRAPPER_LINUX: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.so"),
+  NATIVE_WRAPPER_LINUX_CEF: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper_cef.so"),
   WEBVIEW2LOADER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "WebView2Loader.dll"),
   BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch") + binExt,
   EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor") + binExt,
@@ -575,15 +576,21 @@ if (commandArg === "init") {
   cpSync(webview2LibSource, webview2LibDestination);
   
 } else if (OS === 'linux') {
-  const nativeWrapperLinuxSource = PATHS.NATIVE_WRAPPER_LINUX;
+  // Choose the appropriate native wrapper based on bundleCEF setting
+  const useCEF = config.build.linux?.bundleCEF;
+  const nativeWrapperLinuxSource = useCEF ? PATHS.NATIVE_WRAPPER_LINUX_CEF : PATHS.NATIVE_WRAPPER_LINUX;
   const nativeWrapperLinuxDestination = join(
     appBundleMacOSPath,
     "libNativeWrapper.so"
   );
+  
   if (existsSync(nativeWrapperLinuxSource)) {
     cpSync(nativeWrapperLinuxSource, nativeWrapperLinuxDestination, {
       dereference: true,
     });
+    console.log(`Using ${useCEF ? 'CEF' : 'GTK'} native wrapper for Linux`);
+  } else {
+    throw new Error(`Native wrapper not found: ${nativeWrapperLinuxSource}`);
   }
 }
   

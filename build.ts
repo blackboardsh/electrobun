@@ -146,9 +146,12 @@ async function copyToDist() {
         // Copy CEF helper process
         await $`cp src/native/build/process_helper.exe dist/cef/process_helper.exe`;
     } else if (OS === 'linux') {
-        // Copy native wrapper if it exists
+        // Copy both GTK-only and CEF native wrappers for flexible deployment
         if (existsSync(join(process.cwd(), 'src', 'native', 'build', 'libNativeWrapper.so'))) {
             await $`cp src/native/build/libNativeWrapper.so dist/libNativeWrapper.so`;
+        }
+        if (existsSync(join(process.cwd(), 'src', 'native', 'build', 'libNativeWrapper_cef.so'))) {
+            await $`cp src/native/build/libNativeWrapper_cef.so dist/libNativeWrapper_cef.so`;
         }
         
         // CEF binaries for Linux - copy to cef/ subdirectory
@@ -678,11 +681,17 @@ async function buildNative() {
             // Link with WebKitGTK, AppIndicator, and optionally CEF libraries using weak linking
             await $`mkdir -p src/native/build`;
             
-            // Always build without linking CEF libraries (like macOS weak framework approach)
-            console.log('Building with runtime CEF detection - no hard linking of CEF libraries');
-            // Build without linking CEF libraries at all - they will be loaded dynamically at runtime
-            // CEF headers are included for compilation but no linking occurs
-            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
+            // Build both GTK-only and CEF versions for Linux to allow small bundles
+            console.log('Building GTK-only version (libNativeWrapper.so)');
+            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -ldl -lpthread`;
+            
+            if (cefLibsExist) {
+                console.log('Building CEF version (libNativeWrapper_cef.so)');
+                await $`g++ -shared -o src/native/build/libNativeWrapper_cef.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -Wl,--whole-archive ${cefWrapperLib} -Wl,--no-whole-archive -Wl,--as-needed ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
+                console.log('Built both GTK-only and CEF versions for flexible deployment');
+            } else {
+                console.log('CEF libraries not found - only GTK version built');
+            }
            
             console.log('Native wrapper built successfully');
         } catch (error: any) {
