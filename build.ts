@@ -93,7 +93,14 @@ async function copyToDist() {
     await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
     await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
     await $`cp src/bsdiff/zig-out/bin/bsdiff${binExt} dist/bsdiff${binExt}`;
-    await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;    
+    await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;
+    
+    // Verify critical files were copied
+    const launcherPath = join('dist', `launcher${binExt}`);
+    if (!existsSync(launcherPath)) {
+        throw new Error(`launcher${binExt} was not copied to ${launcherPath}`);
+    }
+    console.log(`launcher${binExt} copied successfully to ${launcherPath}`);    
     // Electrobun cli and npm launcher
     await $`cp src/npmbin/index.js dist/npmbin.js`;
     await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;    
@@ -717,13 +724,22 @@ async function buildLauncher() {
 
 async function buildMainJs() {
     const bunModule = await import('bun');
-    return await bunModule.build({
+    const result = await bunModule.build({
         entrypoints: [join('src', 'launcher', 'main.ts')],
         outdir: join('dist'),
         external: [],
         // minify: true, // todo (yoav): add minify in canary and prod builds
         target: "bun",
       });
+    
+    // Verify main.js was created
+    const mainJsPath = join('dist', 'main.js');
+    if (!existsSync(mainJsPath)) {
+        throw new Error(`main.js was not created at ${mainJsPath}. Build result: ${JSON.stringify(result)}`);
+    }
+    console.log(`main.js built successfully at ${mainJsPath}`);
+    
+    return result;
 }
 
 

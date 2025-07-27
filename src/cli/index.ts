@@ -181,10 +181,23 @@ async function ensureCoreDependencies() {
     const mainJsPath = join(ELECTROBUN_DEP_PATH, 'dist', 'main.js');
     if (!existsSync(mainJsPath)) {
       console.error('Warning: main.js was not extracted properly');
+      console.error('This may be caused by Windows Defender or antivirus software quarantining .js files');
+      console.error('Try temporarily disabling real-time protection or adding an exclusion for the electrobun directory');
+      
       // List what was actually extracted for debugging
       try {
         const extractedFiles = readdirSync(join(ELECTROBUN_DEP_PATH, 'dist'));
         console.log('Extracted files:', extractedFiles);
+        
+        // Check if API directory exists but is empty
+        const apiPath = join(ELECTROBUN_DEP_PATH, 'dist', 'api');
+        if (existsSync(apiPath)) {
+          const apiFiles = readdirSync(apiPath);
+          console.log('API directory contents:', apiFiles);
+          if (apiFiles.length === 0) {
+            console.error('API directory is empty - this confirms antivirus is likely quarantining script files');
+          }
+        }
       } catch (e) {
         console.error('Could not list extracted files');
       }
