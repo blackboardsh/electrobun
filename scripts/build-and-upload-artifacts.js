@@ -76,7 +76,7 @@ const arch = process.arch;
 const platformMap = {
   'darwin': 'darwin',
   'linux': 'linux',
-  'win32': 'win32'
+  'win32': 'win'
 };
 
 const archMap = {
@@ -85,7 +85,8 @@ const archMap = {
 };
 
 const platformName = platformMap[platform] || platform;
-const archName = archMap[arch] || arch;
+// Always use x64 for Windows since we only build x64 Windows binaries
+const archName = platform === 'win32' ? 'x64' : (archMap[arch] || arch);
 
 console.log(`Platform: ${platformName}, Architecture: ${archName}`);
 
