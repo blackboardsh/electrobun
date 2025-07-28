@@ -524,8 +524,10 @@ async function vendorCEF() {
             await $`cd vendors/cef/build && cmake -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
             // Build the wrapper library only
             // await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
-            const msbuildPath = await $`"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe | head -n 1`.text();
-            await $`cd vendors/cef/build && "${msbuildPath.trim()}" cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
+            // const msbuildPath = await $`"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe | head -n 1`.text();
+            // await $`cd vendors/cef/build && "${msbuildPath.trim()}" cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
+            await $`cd vendors/cef/build && cmake --build . --config Release --target libcef_dll_wrapper`;
+
         }
         
         // Build process_helper binary for Windows
