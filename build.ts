@@ -539,8 +539,9 @@ async function vendorCEF() {
             const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
             
             // Compile the Windows helper process
-            await $`cl /c /EHsc /std:c++17 /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/build/process_helper_win.obj src/native/win/cef_process_helper_win.cpp`;
-            
+            // await $`cl /c /EHsc /std:c++17 /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/build/process_helper_win.obj src/native/win/cef_process_helper_win.cpp`;
+            await $`cmd /c ""C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\Tools\\VsDevCmd.bat" && cl /c /EHsc /std:c++17 /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/build/process_helper_win.obj src/native/win/cef_process_helper_win.cpp"`;
+
             // Link to create the helper executable
             await $`link /OUT:src/native/build/process_helper.exe user32.lib ole32.lib shell32.lib "${cefLib}" "${cefWrapperLib}" /SUBSYSTEM:WINDOWS src/native/build/process_helper_win.obj`;
         }
