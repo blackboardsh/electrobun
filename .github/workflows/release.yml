@@ -22,17 +22,21 @@ jobs:
           - os: macos-14
             platform: darwin
             arch: arm64
+            platform_name: darwin
           - os: macos-13
             platform: darwin
             arch: x64
+            platform_name: darwin
           - os: ubuntu-24.04
             platform: linux
             arch: x64
+            platform_name: linux
           # Windows disabled due to tar extraction timeout issues
           # Build Windows artifacts manually using: bun build:push:artifacts
           - os: windows-2025
             platform: win32
             arch: x64
+            platform_name: win
     
     runs-on: ${{ matrix.os }}
     
@@ -66,27 +70,27 @@ jobs:
             cmake \
             pkg-config
       
-      - name: Build for ${{ matrix.platform }}-${{ matrix.arch }}
+      - name: Build for ${{ matrix.platform_name }}-${{ matrix.arch }}
         run: bun scripts/package-release.js
         # timeout-minutes: 30
       
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: electrobun-cli-${{ matrix.platform }}-${{ matrix.arch }}
-          path: electrobun-cli-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+          name: electrobun-cli-${{ matrix.platform_name }}-${{ matrix.arch }}
+          path: electrobun-cli-${{ matrix.platform_name }}-${{ matrix.arch }}.tar.gz
       
       - name: Upload core artifact
         uses: actions/upload-artifact@v4
         with:
-          name: electrobun-core-${{ matrix.platform }}-${{ matrix.arch }}
-          path: electrobun-core-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+          name: electrobun-core-${{ matrix.platform_name }}-${{ matrix.arch }}
+          path: electrobun-core-${{ matrix.platform_name }}-${{ matrix.arch }}.tar.gz
       
       - name: Upload CEF artifact
         uses: actions/upload-artifact@v4
         with:
-          name: electrobun-cef-${{ matrix.platform }}-${{ matrix.arch }}
-          path: electrobun-cef-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+          name: electrobun-cef-${{ matrix.platform_name }}-${{ matrix.arch }}
+          path: electrobun-cef-${{ matrix.platform_name }}-${{ matrix.arch }}.tar.gz
           if-no-files-found: ignore
   
   release:
