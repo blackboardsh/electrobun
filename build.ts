@@ -472,7 +472,7 @@ async function vendorCEF() {
             console.log('Note: Windows tar extraction of bz2 files can be slow, please be patient...');
             
             // Windows tar doesn't support many options, just use basic extraction
-            await $`tar -xjvf "${tempPath}" -C vendors/cef_temp`;
+            await $`tar -xjf "${tempPath}" -C vendors/cef_temp`;
             
             // Check what was extracted
             const tempDir = 'vendors/cef_temp';
