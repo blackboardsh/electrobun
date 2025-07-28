@@ -54,6 +54,11 @@ pub fn build(b: *std.Build) void {
     });
 
     bsdiff.linkLibrary(libzstd);
+    
+    // Force static linking on Windows to avoid runtime dependency issues
+    if (target.result.os.tag == .windows) {
+        bsdiff.linkage = .static;
+    }
 
     // This is for the cImport to import the .h file
     bsdiff.addIncludePath(b.path("zstd/lib"));
@@ -68,6 +73,11 @@ pub fn build(b: *std.Build) void {
     });
 
     bspatch.linkLibrary(libzstd);
+    
+    // Force static linking on Windows to avoid runtime dependency issues
+    if (target.result.os.tag == .windows) {
+        bspatch.linkage = .static;
+    }
 
     bspatch.addIncludePath(b.path("zstd/lib"));
 
