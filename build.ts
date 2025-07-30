@@ -757,7 +757,11 @@ async function buildSelfExtractor() {
 
 async function buildCli() {
 
-    await $`bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun`;
+    // await $`bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun`;
+
+    const compileTarget = process.platform === 'win32' ? '--target=bun-windows-x64-baseline' : '';
+    await $`bun build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
+
 
 }
 
