@@ -634,11 +634,11 @@ async function vendorLinuxDeps() {
 }
 
 async function buildTRDiff() {
-    const zigTarget = OS === 'win' ? '-Dtarget=x86_64-windows -Dcpu=baseline' : '';
+    const zigArgs = OS === 'win' ? ['-Dtarget=x86_64-windows', '-Dcpu=baseline'] : [];
     if (CHANNEL === 'debug') {
-        await $`cd src/bsdiff && ../../vendors/zig/zig build ${zigTarget}`;
+        await $`cd src/bsdiff && ../../vendors/zig/zig build ${zigArgs}`;
     } else {
-        await $`cd src/bsdiff && ../../vendors/zig/zig build -Doptimize=ReleaseFast ${zigTarget}`;
+        await $`cd src/bsdiff && ../../vendors/zig/zig build -Doptimize=ReleaseFast ${zigArgs}`;
     }
 }
 
@@ -719,11 +719,11 @@ async function buildNative() {
 }
 
 async function buildLauncher() {
-    const zigTarget = OS === 'win' ? '-Dtarget=x86_64-windows -Dcpu=baseline' : '';
+    const zigArgs = OS === 'win' ? ['-Dtarget=x86_64-windows', '-Dcpu=baseline'] : [];
     if (CHANNEL === 'debug') {
-        await $`cd src/launcher && ../../vendors/zig/zig build ${zigTarget}`;
+        await $`cd src/launcher && ../../vendors/zig/zig build ${zigArgs}`;
     } else if (CHANNEL === 'release') {
-        await $`cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigTarget}`;
+        await $`cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
     }
 }
 
@@ -749,11 +749,11 @@ async function buildMainJs() {
 
 
 async function buildSelfExtractor() {
-    const zigTarget = OS === 'win' ? '-Dtarget=x86_64-windows -Dcpu=baseline' : '';
+    const zigArgs = OS === 'win' ? ['-Dtarget=x86_64-windows', '-Dcpu=baseline'] : [];
     if (CHANNEL === 'debug') {
-        await $`cd src/extractor && ../../vendors/zig/zig build ${zigTarget}`;
+        await $`cd src/extractor && ../../vendors/zig/zig build ${zigArgs}`;
     } else if (CHANNEL === 'release') {
-        await $`cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigTarget}`;
+        await $`cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
     }
 }
 
