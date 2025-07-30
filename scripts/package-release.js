@@ -40,7 +40,9 @@ console.log('Building CLI binary...');
 if (!fs.existsSync('bin')) {
     fs.mkdirSync('bin', { recursive: true });
 }
-execSync('bun build src/cli/index.ts --compile --outfile bin/electrobun', { stdio: 'inherit' });
+// Use baseline target for Windows to ensure compatibility with ARM64 emulation
+const compileTarget = platform === 'win32' ? '--target=bun-windows-x64-baseline' : '';
+execSync(`bun build src/cli/index.ts --compile ${compileTarget} --outfile bin/electrobun`, { stdio: 'inherit' });
 
 // Create separate tarballs for CLI, core binaries, and CEF
 const distPath = path.join(__dirname, '..', 'dist');
