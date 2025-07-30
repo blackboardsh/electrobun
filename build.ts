@@ -634,11 +634,11 @@ async function vendorLinuxDeps() {
 }
 
 async function buildTRDiff() {
-
+    const zigTarget = OS === 'win' ? '-Dtarget=x86_64-windows -Dcpu=baseline' : '';
     if (CHANNEL === 'debug') {
-        await $`cd src/bsdiff && ../../vendors/zig/zig build`;
+        await $`cd src/bsdiff && ../../vendors/zig/zig build ${zigTarget}`;
     } else {
-        await $`cd src/bsdiff && ../../vendors/zig/zig build -Doptimize=ReleaseFast`;
+        await $`cd src/bsdiff && ../../vendors/zig/zig build -Doptimize=ReleaseFast ${zigTarget}`;
     }
 }
 
@@ -719,10 +719,11 @@ async function buildNative() {
 }
 
 async function buildLauncher() {
+    const zigTarget = OS === 'win' ? '-Dtarget=x86_64-windows -Dcpu=baseline' : '';
     if (CHANNEL === 'debug') {
-        await $`cd src/launcher && ../../vendors/zig/zig build`;
+        await $`cd src/launcher && ../../vendors/zig/zig build ${zigTarget}`;
     } else if (CHANNEL === 'release') {
-        await $`cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall`;
+        await $`cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigTarget}`;
     }
 }
 
@@ -748,10 +749,11 @@ async function buildMainJs() {
 
 
 async function buildSelfExtractor() {
+    const zigTarget = OS === 'win' ? '-Dtarget=x86_64-windows -Dcpu=baseline' : '';
     if (CHANNEL === 'debug') {
-        await $`cd src/extractor && ../../vendors/zig/zig build`;
+        await $`cd src/extractor && ../../vendors/zig/zig build ${zigTarget}`;
     } else if (CHANNEL === 'release') {
-        await $`cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall`;
+        await $`cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigTarget}`;
     }
 }
 
