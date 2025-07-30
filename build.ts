@@ -249,9 +249,9 @@ async function vendorBun() {
     let bunDirName: string;
     
     if (OS === 'win') {
-        // Always use x64 for Windows since we only build x64 Windows binaries
-        bunUrlSegment = 'bun-windows-x64.zip';
-        bunDirName = 'bun-windows-x64';
+        // Use baseline x64 for Windows to ensure ARM64 compatibility
+        bunUrlSegment = 'bun-windows-x64-baseline.zip';
+        bunDirName = 'bun-windows-x64-baseline';
     } else if (OS === 'macos') {
         bunUrlSegment = ARCH === 'arm64' ? 'bun-darwin-aarch64.zip' : 'bun-darwin-x64.zip';
         bunDirName = ARCH === 'arm64' ? 'bun-darwin-aarch64' : 'bun-darwin-x64';
