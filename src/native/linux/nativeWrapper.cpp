@@ -890,69 +890,11 @@ public:
                        CefRefPtr<CefContextMenuParams> params,
                        CefRefPtr<CefMenuModel> model,
                        CefRefPtr<CefRunContextMenuCallback> callback) override {
-        printf("CEF: RunContextMenu called - creating custom GTK context menu\n");
+        printf("CEF: RunContextMenu called - using CEF's default implementation\n");
         
-        // Create a custom GTK context menu since CEF's default won't work with X11 windows
-        GtkWidget* menu = gtk_menu_new();
-        
-        // Add menu items based on the CEF model
-        for (size_t i = 0; i < model->GetCount(); ++i) {
-            if (model->GetTypeAt(i) == MENUITEMTYPE_SEPARATOR) {
-                GtkWidget* separator = gtk_separator_menu_item_new();
-                gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator);
-            } else {
-                CefString label = model->GetLabelAt(i);
-                int command_id = model->GetCommandIdAt(i);
-                
-                GtkWidget* item = gtk_menu_item_new_with_label(label.ToString().c_str());
-                gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-                
-                // Store command ID and callback for menu item activation
-                g_object_set_data(G_OBJECT(item), "command_id", GINT_TO_POINTER(command_id));
-                g_object_set_data(G_OBJECT(item), "browser", browser.get());
-                g_object_set_data(G_OBJECT(item), "frame", frame.get());
-                g_object_set_data(G_OBJECT(item), "params", params.get());
-                g_object_set_data(G_OBJECT(item), "callback", callback.get());
-                
-                g_signal_connect(item, "activate", G_CALLBACK(+[](GtkMenuItem* item, gpointer data) {
-                    int command_id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "command_id"));
-                    CefBrowser* browser = static_cast<CefBrowser*>(g_object_get_data(G_OBJECT(item), "browser"));
-                    CefFrame* frame = static_cast<CefFrame*>(g_object_get_data(G_OBJECT(item), "frame"));
-                    CefContextMenuParams* params = static_cast<CefContextMenuParams*>(g_object_get_data(G_OBJECT(item), "params"));
-                    CefRunContextMenuCallback* callback = static_cast<CefRunContextMenuCallback*>(g_object_get_data(G_OBJECT(item), "callback"));
-                    
-                    printf("CEF: GTK Context menu item clicked: %d\n", command_id);
-                    
-                    // Handle the command
-                    if (command_id == 26501 || command_id == 26502) { // DevTools
-                        printf("CEF: Opening DevTools from GTK menu...\n");
-                        CefWindowInfo window_info;
-                        // Use empty window info to create a popup window
-                        browser->GetHost()->ShowDevTools(window_info, nullptr, CefBrowserSettings(), CefPoint());
-                    }
-                    
-                    // Complete the callback
-                    callback->Continue(command_id, EVENTFLAG_NONE);
-                }), nullptr);
-            }
-        }
-        
-        gtk_widget_show_all(menu);
-        
-        // Get the mouse position and show the menu there
-        GdkDisplay* display = gdk_display_get_default();
-        GdkSeat* seat = gdk_display_get_default_seat(display);
-        GdkDevice* pointer = gdk_seat_get_pointer(seat);
-        
-        gint x, y;
-        gdk_device_get_position(pointer, nullptr, &x, &y);
-        
-        // Use the deprecated but working gtk_menu_popup for X11 compatibility
-        gtk_menu_popup_at_pointer(GTK_MENU(menu), nullptr);
-        
-        printf("CEF: GTK context menu displayed at position (%d, %d)\n", x, y);
-        
-        return true; // We handled the context menu display
+        // Return false to let CEF handle the context menu with its native implementation
+        // CEF will create its own X11 window for the menu that works properly
+        return false;
     }
     
     // Handle context menu commands
@@ -1229,6 +1171,11 @@ bool initializeCEF() {
     settings.no_sandbox = true;
     // settings.remote_debugging_port = 9222;
     // printf("CEF: Remote debugging enabled on port 9222\n");
+    
+    // Initialize GTK for CEF's use (needed for context menus and dialogs)
+    if (!gtk_init_check(nullptr, nullptr)) {
+        printf("CEF: Warning - Failed to initialize GTK\n");
+    }
     
     // Set the resource directory to where CEF files are located
     std::string execDir = getExecutableDir();
