@@ -861,7 +861,7 @@ if (commandArg === "init") {
           cefHelperNames.forEach((helperName) => {
             const destinationPath = join(appBundleMacOSPath, helperName);
             cpSync(helperSourcePath, destinationPath);
-            console.log(`Copied CEF helper: ${helperName}`);
+            // console.log(`Copied CEF helper: ${helperName}`);
           });
         } else {
           console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
