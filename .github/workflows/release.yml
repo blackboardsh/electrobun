@@ -31,10 +31,10 @@ jobs:
             platform: linux
             arch: x64
             platform_name: linux
-          # - os: ubuntu-24.04-arm
-          #   platform: linux
-          #   arch: arm64
-          #   platform_name: linux
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            platform_name: linux
           # Windows disabled due to tar extraction timeout issues
           # Build Windows artifacts manually using: bun build:push:artifacts
           - os: windows-2025
