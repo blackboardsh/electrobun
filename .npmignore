@@ -19,7 +19,11 @@
 /CLAUDE.local.md
 
 # Exclude all binaries - postinstall will download CLI, CLI will download others
-/dist/
+# But keep the shared JS/TS files
+/dist/*
+!/dist/api/
+!/dist/main.js
+/dist-*/
 /bin/electrobun
 /bin/electrobun.exe
 /.cache/
@@ -27,7 +31,6 @@
 # Include postinstall script
 !/bin/electrobun.cjs
 
-# Include TypeScript APIs and CLI source
-!/dist/api/
+# Include CLI source
 !/src/cli/
 /src/cli/build/
