@@ -18,12 +18,11 @@
 /CLAUDE.md
 /CLAUDE.local.md
 
-# Exclude all binaries - postinstall will download CLI, CLI will download others
-# But keep the shared JS/TS files
-/dist/*
-!/dist/api/
-!/dist/main.js
+# Exclude platform-specific dist directories
 /dist-*/
+
+# Note: dist/ contents are controlled by CI build process
+# Only main.js and api/ should be in dist/ when publishing
 /bin/electrobun
 /bin/electrobun.exe
 /.cache/

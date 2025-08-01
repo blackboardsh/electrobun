@@ -17,6 +17,9 @@ const {values: args} = parseArgs({
         },
         ci: {
             type: 'boolean'
+        },
+        npm: {
+            type: 'boolean'
         }
     },
     allowPositionals: true,
@@ -25,6 +28,7 @@ const {values: args} = parseArgs({
 // TODO: set via cl arg
 const CHANNEL: 'debug' | 'release' = args.release ? 'release' : 'debug';
 const IS_CI = args.ci || false;
+const IS_NPM_BUILD = args.npm || false;
 const OS: 'win' | 'linux' | 'macos' = getPlatform();
 const ARCH: 'arm64' | 'x64' = getArch();
 
@@ -52,9 +56,14 @@ const PATH = {
 
 // TODO: setup file watchers
 try {
-await setup();
-await build();
-await copyToDist();
+if (IS_NPM_BUILD) {
+    console.log("Building for npm (JS/TS files only)...");
+    await buildForNpm();
+} else {
+    await setup();
+    await build();
+    await copyToDist();
+}
 } catch (err) {
     console.log(err);
 }
@@ -84,6 +93,32 @@ async function build() {
     ]);
 }
 
+async function buildForNpm() {
+    console.log("Creating dist folder for npm...");
+    await createDistFolder();
+    
+    console.log("Building main.js...");
+    await buildMainJs();
+    
+    console.log("Copying API files...");
+    await copyApiFiles();
+    
+    console.log("npm build complete! dist/ contains only main.js and api/ folder.");
+}
+
+async function copyApiFiles() {
+    // Copy TypeScript APIs (src/bun and src/browser to dist/api/)
+    if (OS === 'win') {
+        // on windows the folder gets copied "into" the destination folder
+        await $`cp -R src/bun/ dist/api`;
+        await $`cp -R src/browser/ dist/api`;
+    } else {
+        // on unix cp is more like a rename        
+        await $`cp -R src/bun dist/api/`;
+        await $`cp -R src/browser dist/api/`; 
+    }
+}
+
 
 
 async function copyToDist() {
@@ -105,15 +140,7 @@ async function copyToDist() {
     await $`cp src/npmbin/index.js dist/npmbin.js`;
     await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;    
     // Electrobun's Typescript bun and browser apis
-    if (OS === 'win') {
-        // on windows the folder gets copied "into" the detination folder
-        await $`cp -R src/bun/ dist/api`;
-        await $`cp -R src/browser/ dist/api`;
-    } else {
-        // on unix cp is more like a rename        
-        await $`cp -R src/bun dist/api/`;
-        await $`cp -R src/browser dist/api/`; 
-    }
+    await copyApiFiles();
     // Native code and frameworks
     if (OS === 'macos') {
         await $`cp -R src/native/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;

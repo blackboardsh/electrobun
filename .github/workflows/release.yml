@@ -145,6 +145,14 @@ jobs:
       - name: Install dependencies
         run: bun install
       
+      - name: Build for npm (JS/TS files only)
+        run: |
+          # Use the new --npm flag to build only what's needed for npm
+          bun build.ts --npm --release
+          
+          echo "Contents of dist/ for npm (should only be main.js and api/):"
+          find dist/ -type f | sort
+      
       - name: Publish to npm
         run: |
           if [[ "${{ github.event.inputs.tag || github.ref_name }}" == *"beta"* ]]; then
