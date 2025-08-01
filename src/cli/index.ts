@@ -174,13 +174,36 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     // Write response to file
     if (response.body) {
       const reader = response.body.getReader();
+      let totalBytes = 0;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        fileStream.write(Buffer.from(value));
+        const buffer = Buffer.from(value);
+        fileStream.write(buffer);
+        totalBytes += buffer.length;
       }
+      console.log(`Downloaded ${totalBytes} bytes for ${platformOS}-${platformArch}`);
     }
-    fileStream.end();
+    
+    // Ensure file is properly closed before proceeding
+    await new Promise((resolve, reject) => {
+      fileStream.end((err) => {
+        if (err) reject(err);
+        else resolve(null);
+      });
+    });
+    
+    // Verify the downloaded file exists and has content
+    if (!existsSync(tempFile)) {
+      throw new Error(`Downloaded file not found: ${tempFile}`);
+    }
+    
+    const fileSize = require('fs').statSync(tempFile).size;
+    if (fileSize === 0) {
+      throw new Error(`Downloaded file is empty: ${tempFile}`);
+    }
+    
+    console.log(`Verified download: ${tempFile} (${fileSize} bytes)`);
     
     // Extract to platform-specific dist directory
     console.log(`Extracting core dependencies for ${platformOS}-${platformArch}...`);
@@ -1486,17 +1509,23 @@ if (commandArg === "init") {
     console.log("bucketUrl: ", config.release.bucketUrl);
 
     console.log("generating a patch from the previous version...");
-    const urlToPrevUpdateJson = join(
-      config.release.bucketUrl,
-      buildEnvironment,
-      `update${platformSuffix}.json`
-    );
-    const cacheBuster = Math.random().toString(36).substring(7);
-    const updateJsonResponse = await fetch(
-      urlToPrevUpdateJson + `?${cacheBuster}`
-    ).catch((err) => {
-      console.log("bucketURL not found: ", err);
-    });
+    
+    // Skip patch generation if bucketUrl is not configured
+    if (!config.release.bucketUrl || config.release.bucketUrl.trim() === '') {
+      console.log("No bucketUrl configured, skipping patch generation");
+      console.log("To enable patch generation, configure bucketUrl in your electrobun.config");
+    } else {
+      const urlToPrevUpdateJson = join(
+        config.release.bucketUrl,
+        buildEnvironment,
+        `update${platformSuffix}.json`
+      );
+      const cacheBuster = Math.random().toString(36).substring(7);
+      const updateJsonResponse = await fetch(
+        urlToPrevUpdateJson + `?${cacheBuster}`
+      ).catch((err) => {
+        console.log("bucketURL not found: ", err);
+      });
 
     const urlToLatestTarball = join(
       config.release.bucketUrl,
@@ -1566,6 +1595,7 @@ if (commandArg === "init") {
       console.log("prevoius version not found at: ", urlToLatestTarball);
       console.log("skipping diff generation");
     }
+    } // End of bucketUrl validation block
 
     // compress all the upload files
     console.log("copying artifacts...");
