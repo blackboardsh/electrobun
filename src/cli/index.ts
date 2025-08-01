@@ -70,12 +70,13 @@ const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
 function getPlatformPaths(targetOS: 'macos' | 'win' | 'linux', targetArch: 'arm64' | 'x64') {
   const binExt = targetOS === 'win' ? '.exe' : '';
   const platformDistDir = join(ELECTROBUN_DEP_PATH, `dist-${targetOS}-${targetArch}`);
+  const sharedDistDir = join(ELECTROBUN_DEP_PATH, "dist");
   
   return {
+    // Platform-specific binaries (from dist-OS-ARCH/)
     BUN_BINARY: join(platformDistDir, "bun") + binExt,
     LAUNCHER_DEV: join(platformDistDir, "electrobun") + binExt,
     LAUNCHER_RELEASE: join(platformDistDir, "launcher") + binExt,
-    MAIN_JS: join(ELECTROBUN_DEP_PATH, "dist", "main.js"), // Shared across platforms
     NATIVE_WRAPPER_MACOS: join(platformDistDir, "libNativeWrapper.dylib"),
     NATIVE_WRAPPER_WIN: join(platformDistDir, "libNativeWrapper.dll"),
     NATIVE_WRAPPER_LINUX: join(platformDistDir, "libNativeWrapper.so"),
@@ -89,6 +90,11 @@ function getPlatformPaths(targetOS: 'macos' | 'win' | 'linux', targetArch: 'arm6
     CEF_HELPER_WIN: join(platformDistDir, "cef", "process_helper.exe"),
     CEF_HELPER_LINUX: join(platformDistDir, "cef", "process_helper"),
     CEF_DIR: join(platformDistDir, "cef"),
+    
+    // Shared platform-independent files (from dist/)
+    // These work with existing package.json and development workflow
+    MAIN_JS: join(sharedDistDir, "main.js"),
+    API_DIR: join(sharedDistDir, "api"),
   };
 }
 
@@ -103,25 +109,36 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
   // Get platform-specific paths
   const platformPaths = getPlatformPaths(platformOS, platformArch);
   
-  // Check if all core dependencies exist
-  const requiredFiles = [
+  // Check platform-specific binaries
+  const requiredBinaries = [
     platformPaths.BUN_BINARY,
     platformPaths.LAUNCHER_RELEASE,
-    platformPaths.MAIN_JS,
     // Platform-specific native wrapper
     platformOS === 'macos' ? platformPaths.NATIVE_WRAPPER_MACOS :
     platformOS === 'win' ? platformPaths.NATIVE_WRAPPER_WIN :
     platformPaths.NATIVE_WRAPPER_LINUX
   ];
   
-  const allFilesExist = requiredFiles.every(file => existsSync(file));
-  if (allFilesExist) {
+  // Check shared files (main.js should be in shared dist/)
+  const requiredSharedFiles = [
+    platformPaths.MAIN_JS
+  ];
+  
+  const missingBinaries = requiredBinaries.filter(file => !existsSync(file));
+  const missingSharedFiles = requiredSharedFiles.filter(file => !existsSync(file));
+  
+  // If only shared files are missing, that's expected in production (they come via npm)
+  if (missingBinaries.length === 0 && missingSharedFiles.length > 0) {
+    console.log(`Shared files missing (expected in production): ${missingSharedFiles.map(f => f.replace(ELECTROBUN_DEP_PATH, '.')).join(', ')}`);
+  }
+  
+  // Only download if platform-specific binaries are missing
+  if (missingBinaries.length === 0) {
     return;
   }
 
-  // Show which files are missing
-  const missingFiles = requiredFiles.filter(file => !existsSync(file));
-  console.log(`Core dependencies not found for ${platformOS}-${platformArch}. Missing files:`, missingFiles.map(f => f.replace(ELECTROBUN_DEP_PATH, '.')).join(', '));
+  // Show which binaries are missing
+  console.log(`Core dependencies not found for ${platformOS}-${platformArch}. Missing files:`, missingBinaries.map(f => f.replace(ELECTROBUN_DEP_PATH, '.')).join(', '));
   console.log(`Downloading core binaries for ${platformOS}-${platformArch}...`);
   
   // Get the current Electrobun version from package.json
@@ -170,10 +187,6 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     const platformDistPath = join(ELECTROBUN_DEP_PATH, `dist-${platformOS}-${platformArch}`);
     mkdirSync(platformDistPath, { recursive: true });
     
-    // Also ensure shared dist directory exists for main.js
-    const sharedDistPath = join(ELECTROBUN_DEP_PATH, 'dist');
-    mkdirSync(sharedDistPath, { recursive: true });
-    
     // Use Windows native tar.exe on Windows due to npm tar library issues
     if (OS === 'win') {
       console.log('Using Windows native tar.exe for reliable extraction...');
@@ -190,12 +203,9 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
       });
     }
     
-    // Copy main.js to shared dist directory (it's platform-independent)
-    const extractedMainJs = join(platformDistPath, 'main.js');
-    const sharedMainJs = join(sharedDistPath, 'main.js');
-    if (existsSync(extractedMainJs) && !existsSync(sharedMainJs)) {
-      cpSync(extractedMainJs, sharedMainJs);
-    }
+    // NOTE: We no longer copy main.js from platform-specific downloads
+    // Platform-specific downloads should only contain native binaries
+    // main.js and api/ should be shipped via npm in the shared dist/ folder
     
     // Clean up temp file
     unlinkSync(tempFile);
@@ -218,8 +228,8 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
       console.error('Could not list extracted files:', e);
     }
     
-    // Verify extraction completed successfully
-    const requiredFiles = [
+    // Verify extraction completed successfully - check platform-specific binaries only
+    const requiredBinaries = [
       platformPaths.BUN_BINARY,
       platformPaths.LAUNCHER_RELEASE,
       platformOS === 'macos' ? platformPaths.NATIVE_WRAPPER_MACOS :
@@ -227,10 +237,21 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
       platformPaths.NATIVE_WRAPPER_LINUX
     ];
     
-    const missingFiles = requiredFiles.filter(file => !existsSync(file));
-    if (missingFiles.length > 0) {
-      console.error(`Missing files after extraction: ${missingFiles.map(f => f.replace(ELECTROBUN_DEP_PATH, '.')).join(', ')}`);
+    const missingBinaries = requiredBinaries.filter(file => !existsSync(file));
+    if (missingBinaries.length > 0) {
+      console.error(`Missing binaries after extraction: ${missingBinaries.map(f => f.replace(ELECTROBUN_DEP_PATH, '.')).join(', ')}`);
       console.error('This suggests the tarball structure is different than expected');
+    }
+    
+    // For development: if main.js doesn't exist in shared dist/, copy from platform-specific download as fallback
+    const sharedDistPath = join(ELECTROBUN_DEP_PATH, 'dist');
+    const extractedMainJs = join(platformDistPath, 'main.js');
+    const sharedMainJs = join(sharedDistPath, 'main.js');
+    
+    if (existsSync(extractedMainJs) && !existsSync(sharedMainJs)) {
+      console.log('Development fallback: copying main.js from platform-specific download to shared dist/');
+      mkdirSync(sharedDistPath, { recursive: true });
+      cpSync(extractedMainJs, sharedMainJs);
     }
     
     console.log(`Core dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`);
