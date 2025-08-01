@@ -33,7 +33,12 @@ console.log(`Packaging Electrobun for ${platformName}-${archName}...`);
 
 // Build everything including CLI (no CI mode needed)
 console.log('Building full release...');
-execSync('bun build.ts --release', { stdio: 'inherit' });
+try {
+  execSync('bun build.ts --release', { stdio: 'inherit' });
+} catch (error) {
+  console.error('Build failed:', error.message);
+  process.exit(1);
+}
 
 // Build CLI binary
 console.log('Building CLI binary...');
@@ -59,6 +64,30 @@ if (!fs.existsSync(distPath)) {
 }
 
 async function createTarballs() {
+  // Validate that we have platform-specific binaries, not just npm files
+  const expectedBinaries = [
+    platform === 'win32' ? 'electrobun.exe' : 'electrobun',
+    platform === 'win32' ? 'bun.exe' : 'bun'
+  ];
+  
+  const missingBinaries = expectedBinaries.filter(binary => 
+    !fs.existsSync(path.join(distPath, binary))
+  );
+  
+  if (missingBinaries.length > 0) {
+    console.error(`Error: Missing expected binaries in dist/: ${missingBinaries.join(', ')}`);
+    console.error('This suggests the build failed or was incomplete.');
+    console.error('Contents of dist/:');
+    if (fs.existsSync(distPath)) {
+      fs.readdirSync(distPath).forEach(file => console.error(`  ${file}`));
+    } else {
+      console.error('  (dist directory does not exist)');
+    }
+    process.exit(1);
+  }
+  
+  console.log('Validation passed: Found expected platform binaries in dist/');
+
   // 1. Create CLI-only tarball
   const binPath = path.join(__dirname, '..', 'bin');
   const cliSrc = path.join(binPath, 'electrobun' + (platform === 'win32' ? '.exe' : ''));
