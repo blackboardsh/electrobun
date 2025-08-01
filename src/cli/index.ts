@@ -401,19 +401,35 @@ function parseBuildTargets(): BuildTarget[] {
 }
 
 function parseConfigTargets(): BuildTarget[] {
-  // Use targets from config, or default to current platform
-  const configTargets = config.build.targets || [`${OS}-${ARCH}`];
-  return configTargets.map(target => {
-    if (target === 'current') {
-      return { os: OS, arch: ARCH };
-    }
-    const [os, arch] = target.split('-') as [string, string];
-    if (!['macos', 'win', 'linux'].includes(os) || !['arm64', 'x64'].includes(arch)) {
-      console.error(`Invalid target in config: ${target}. Format should be: os-arch (e.g., macos-arm64)`);
-      process.exit(1);
-    }
-    return { os, arch } as BuildTarget;
-  });
+  // If config has targets, use them
+  if (config.build.targets && config.build.targets.length > 0) {
+    return config.build.targets.map(target => {
+      if (target === 'current') {
+        return { os: OS, arch: ARCH };
+      }
+      const [os, arch] = target.split('-') as [string, string];
+      if (!['macos', 'win', 'linux'].includes(os) || !['arm64', 'x64'].includes(arch)) {
+        console.error(`Invalid target in config: ${target}. Format should be: os-arch (e.g., macos-arm64)`);
+        process.exit(1);
+      }
+      return { os, arch } as BuildTarget;
+    });
+  }
+  
+  // If no config targets and --targets=all, use all available platforms
+  if (targetsArg === 'all') {
+    console.log('No targets specified in config, using all available platforms');
+    return [
+      { os: 'macos', arch: 'arm64' },
+      { os: 'macos', arch: 'x64' },
+      { os: 'win', arch: 'x64' },
+      { os: 'linux', arch: 'x64' },
+      { os: 'linux', arch: 'arm64' }
+    ];
+  }
+  
+  // Default to current platform
+  return [{ os: OS, arch: ARCH }];
 }
 
 const buildTargets = parseBuildTargets();
