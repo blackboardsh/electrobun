@@ -3,7 +3,7 @@
 import { $ } from "bun";
 import { platform, arch } from "os";
 import { join } from 'path';
-import { existsSync, readdirSync, renameSync } from "fs";
+import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync } from "fs";
 import { parseArgs } from 'util';
 import process from 'process';
 
@@ -582,9 +582,24 @@ async function vendorCEF() {
             console.log('Building CEF wrapper library for Linux...');
             await $`cd vendors/cef && rm -rf build && mkdir -p build`;
             
-            // Set architecture-specific cmake flags
-            const archFlags = ARCH === 'arm64' ? '-DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_FLAGS=-march=armv8-a -DCMAKE_CXX_FLAGS=-march=armv8-a' : '';
-            await $`cd vendors/cef/build && cmake -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ${archFlags} ..`;
+            if (ARCH === 'arm64') {
+                // For ARM64, we need to modify CEF's cmake files to remove -m64 flags
+                console.log('Patching CEF cmake files for ARM64...');
+                
+                // Replace -m64 and -march=x86-64 with ARM64 equivalents in cef_variables.cmake
+                const cefVariablesPath = join(process.cwd(), 'vendors', 'cef', 'cmake', 'cef_variables.cmake');
+                if (existsSync(cefVariablesPath)) {
+                    let cefVariables = readFileSync(cefVariablesPath, 'utf-8');
+                    cefVariables = cefVariables.replace(/-m64/g, '');
+                    cefVariables = cefVariables.replace(/-march=x86-64/g, '-march=armv8-a');
+                    writeFileSync(cefVariablesPath, cefVariables);
+                }
+                
+                await $`cd vendors/cef/build && cmake -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release -DPROJECT_ARCH=arm64 ..`;
+            } else {
+                await $`cd vendors/cef/build && cmake -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
+            }
+            
             await $`cd vendors/cef/build && make -j$(nproc) libcef_dll_wrapper`;
         }
         
