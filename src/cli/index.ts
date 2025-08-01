@@ -200,20 +200,37 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     // Clean up temp file
     unlinkSync(tempFile);
     
-    // Verify extraction completed successfully
-    const mainJsPath = platformPaths.MAIN_JS;
-    if (!existsSync(mainJsPath)) {
-      console.error('Warning: main.js was not extracted properly');
-      console.error('This may be caused by Windows Defender or antivirus software quarantining .js files');
-      console.error('Try temporarily disabling real-time protection or adding an exclusion for the electrobun directory');
+    // Debug: List what was actually extracted
+    try {
+      const extractedFiles = readdirSync(platformDistPath);
+      console.log(`Extracted files to ${platformDistPath}:`, extractedFiles);
       
-      // List what was actually extracted for debugging
-      try {
-        const extractedFiles = readdirSync(platformDistPath);
-        console.log('Extracted files:', extractedFiles);
-      } catch (e) {
-        console.error('Could not list extracted files');
+      // Check if files are in subdirectories
+      for (const file of extractedFiles) {
+        const filePath = join(platformDistPath, file);
+        const stat = require('fs').statSync(filePath);
+        if (stat.isDirectory()) {
+          const subFiles = readdirSync(filePath);
+          console.log(`  ${file}/: ${subFiles.join(', ')}`);
+        }
       }
+    } catch (e) {
+      console.error('Could not list extracted files:', e);
+    }
+    
+    // Verify extraction completed successfully
+    const requiredFiles = [
+      platformPaths.BUN_BINARY,
+      platformPaths.LAUNCHER_RELEASE,
+      platformOS === 'macos' ? platformPaths.NATIVE_WRAPPER_MACOS :
+      platformOS === 'win' ? platformPaths.NATIVE_WRAPPER_WIN :
+      platformPaths.NATIVE_WRAPPER_LINUX
+    ];
+    
+    const missingFiles = requiredFiles.filter(file => !existsSync(file));
+    if (missingFiles.length > 0) {
+      console.error(`Missing files after extraction: ${missingFiles.map(f => f.replace(ELECTROBUN_DEP_PATH, '.')).join(', ')}`);
+      console.error('This suggests the tarball structure is different than expected');
     }
     
     console.log(`Core dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`);
@@ -305,6 +322,21 @@ async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targe
     
     // Clean up temp file
     unlinkSync(tempFile);
+    
+    // Debug: List what was actually extracted for CEF
+    try {
+      const extractedFiles = readdirSync(platformDistPath);
+      console.log(`CEF extracted files to ${platformDistPath}:`, extractedFiles);
+      
+      // Check if CEF directory was created
+      const cefDir = join(platformDistPath, 'cef');
+      if (existsSync(cefDir)) {
+        const cefFiles = readdirSync(cefDir);
+        console.log(`CEF directory contents: ${cefFiles.slice(0, 10).join(', ')}${cefFiles.length > 10 ? '...' : ''}`);
+      }
+    } catch (e) {
+      console.error('Could not list CEF extracted files:', e);
+    }
     
     console.log(`CEF dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`);
     
@@ -887,9 +919,8 @@ if (commandArg === "init") {
         });
       });
     } else if (targetOS === 'win') {
-      // Copy CEF DLLs from dist/cef/ to the main executable directory
-      const electrobunDistPath = join(ELECTROBUN_DEP_PATH, "dist");
-      const cefSourcePath = join(electrobunDistPath, "cef");
+      // Copy CEF DLLs from platform-specific dist/cef/ to the main executable directory
+      const cefSourcePath = targetPaths.CEF_DIR;
       const cefDllFiles = [
         'libcef.dll',
         'chrome_elf.dll', 
@@ -929,7 +960,7 @@ if (commandArg === "init") {
       });
       
       // Copy CEF resources to MacOS/cef/ subdirectory for other resources like locales
-      const cefResourcesSource = join(electrobunDistPath, 'cef');
+      const cefResourcesSource = targetPaths.CEF_DIR;
       const cefResourcesDestination = join(appBundleMacOSPath, 'cef');
       
       if (existsSync(cefResourcesSource)) {
@@ -959,9 +990,8 @@ if (commandArg === "init") {
         console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
       }
     } else if (targetOS === 'linux') {
-      // Copy CEF shared libraries from dist/cef/ to the main executable directory
-      const electrobunDistPath = join(ELECTROBUN_DEP_PATH, "dist");
-      const cefSourcePath = join(electrobunDistPath, "cef");
+      // Copy CEF shared libraries from platform-specific dist/cef/ to the main executable directory
+      const cefSourcePath = targetPaths.CEF_DIR;
       
       if (existsSync(cefSourcePath)) {
         const cefSoFiles = [
