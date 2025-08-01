@@ -974,6 +974,13 @@ if (commandArg === "init") {
       env: {
         ...process.env,
         ELECTROBUN_BUILD_ENV: buildEnvironment,
+        ELECTROBUN_OS: OS,
+        ELECTROBUN_ARCH: ARCH,
+        ELECTROBUN_BUILD_DIR: buildFolder,
+        ELECTROBUN_APP_NAME: appFileName,
+        ELECTROBUN_APP_VERSION: config.app.version,
+        ELECTROBUN_APP_IDENTIFIER: config.app.identifier,
+        ELECTROBUN_ARTIFACT_DIR: artifactFolder,
       },
     });
   }
