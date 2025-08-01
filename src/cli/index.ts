@@ -424,10 +424,18 @@ if (buildTargets.length === 1) {
 } else {
   const targetList = buildTargets.map(t => `${t.os}-${t.arch}`).join(', ');
   console.log(`Building for multiple targets: ${targetList} (${buildEnvironment})`);
+  console.error("Multi-target builds not yet implemented. Please build one target at a time.");
+  process.exit(1);
 }
 
 // todo (yoav): dev builds should include the branch name, and/or allow configuration via external config
-const buildSubFolder = `${buildEnvironment}`;
+// For now, assume single target build (we'll refactor for multi-target later)
+const currentTarget = buildTargets[0];
+const buildSubFolder = `${buildEnvironment}-${currentTarget.os}-${currentTarget.arch}`;
+
+// Use target OS/ARCH for build logic (instead of current machine's OS/ARCH)
+const targetOS = currentTarget.os;
+const targetARCH = currentTarget.arch;
 
 const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
 
@@ -502,7 +510,7 @@ const appFileName = (
 )
   .replace(/\s/g, "")
   .replace(/\./g, "-");
-const bundleFileName = OS === 'macos' ? `${appFileName}.app` : appFileName;
+const bundleFileName = targetOS === 'macos' ? `${appFileName}.app` : appFileName;
 
 // const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
 
@@ -538,7 +546,7 @@ if (commandArg === "init") {
     appBundleMacOSPath,
     appBundleFolderResourcesPath,
     appBundleFolderFrameworksPath,
-  } = createAppBundle(appFileName, buildFolder);
+  } = createAppBundle(appFileName, buildFolder, targetOS);
 
   const appBundleAppCodePath = join(appBundleFolderResourcesPath, "app");
 
@@ -658,7 +666,7 @@ if (commandArg === "init") {
   cpSync(bunBinarySourcePath, bunBinaryDestInBundlePath, { dereference: true });
 
   // copy native wrapper dynamic library
-  if (OS === 'macos') {
+  if (targetOS === 'macos') {
   const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;
   const nativeWrapperMacosDestination = join(
     appBundleMacOSPath,
@@ -667,7 +675,7 @@ if (commandArg === "init") {
   cpSync(nativeWrapperMacosSource, nativeWrapperMacosDestination, {
     dereference: true,
   });
-} else if (OS === 'win') {
+} else if (targetOS === 'win') {
   const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_WIN;
   const nativeWrapperMacosDestination = join(
     appBundleMacOSPath,
@@ -685,7 +693,7 @@ if (commandArg === "init") {
   // copy webview2 system webview library
   cpSync(webview2LibSource, webview2LibDestination);
   
-} else if (OS === 'linux') {
+} else if (targetOS === 'linux') {
   // Choose the appropriate native wrapper based on bundleCEF setting
   const useCEF = config.build.linux?.bundleCEF;
   const nativeWrapperLinuxSource = useCEF ? PATHS.NATIVE_WRAPPER_LINUX_CEF : PATHS.NATIVE_WRAPPER_LINUX;
@@ -706,12 +714,12 @@ if (commandArg === "init") {
   
 
   // Download CEF binaries if needed when bundleCEF is enabled
-  if ((OS === 'macos' && config.build.mac?.bundleCEF) || 
-      (OS === 'win' && config.build.win?.bundleCEF) || 
-      (OS === 'linux' && config.build.linux?.bundleCEF)) {
+  if ((targetOS === 'macos' && config.build.mac?.bundleCEF) || 
+      (targetOS === 'win' && config.build.win?.bundleCEF) || 
+      (targetOS === 'linux' && config.build.linux?.bundleCEF)) {
     
     await ensureCEFDependencies();    
-    if (OS === 'macos') {
+    if (targetOS === 'macos') {
       const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
       const cefFrameworkDestination = join(
         appBundleFolderFrameworksPath,
@@ -753,7 +761,7 @@ if (commandArg === "init") {
           dereference: true,
         });
       });
-    } else if (OS === 'win') {
+    } else if (targetOS === 'win') {
       // Copy CEF DLLs from dist/cef/ to the main executable directory
       const electrobunDistPath = join(ELECTROBUN_DEP_PATH, "dist");
       const cefSourcePath = join(electrobunDistPath, "cef");
@@ -825,7 +833,7 @@ if (commandArg === "init") {
       } else {
         console.log(`WARNING: Missing CEF helper: ${helperSourcePath}`);
       }
-    } else if (OS === 'linux') {
+    } else if (targetOS === 'linux') {
       // Copy CEF shared libraries from dist/cef/ to the main executable directory
       const electrobunDistPath = join(ELECTROBUN_DEP_PATH, "dist");
       const cefSourcePath = join(electrobunDistPath, "cef");
@@ -1082,8 +1090,9 @@ if (commandArg === "init") {
   );
 
   // todo (yoav): add these to config
+  // Only codesign/notarize when building macOS targets on macOS host
   const shouldCodesign =
-    buildEnvironment !== "dev" && config.build.mac.codesign;
+    buildEnvironment !== "dev" && targetOS === 'macos' && OS === 'macos' && config.build.mac.codesign;
   const shouldNotarize = shouldCodesign && config.build.mac.notarize;
 
   if (shouldCodesign) {
@@ -1119,7 +1128,7 @@ if (commandArg === "init") {
     // 7. copy artifacts to directory [self-extractor dmg, zstd app bundle, bsdiff patch, update.json]
 
     // Add platform suffix for all artifacts
-    const platformSuffix = `-${OS}-${ARCH}`;
+    const platformSuffix = `-${targetOS}-${targetARCH}`;
     const tarPath = `${appBundleFolderPath}.tar`;
 
     // tar the signed and notarized app bundle
@@ -1179,7 +1188,7 @@ if (commandArg === "init") {
     // now and it needs the same name as the original app bundle.
     rmdirSync(appBundleFolderPath, { recursive: true });
 
-    const selfExtractingBundle = createAppBundle(appFileName, buildFolder);
+    const selfExtractingBundle = createAppBundle(appFileName, buildFolder, targetOS);
     const compressedTarballInExtractingBundlePath = join(
       selfExtractingBundle.appBundleFolderResourcesPath,
       `${hash}.tar.zst`
@@ -1221,7 +1230,7 @@ if (commandArg === "init") {
     }
 
     // DMG creation for macOS only
-    if (OS === 'macos') {
+    if (targetOS === 'macos') {
       console.log("creating dmg...");
       // make a dmg
       const dmgPath = join(buildFolder, `${appFileName}.dmg`);
@@ -1251,13 +1260,13 @@ if (commandArg === "init") {
       cpSync(dmgPath, platformDmgPath);
     } else {
       // For Windows and Linux, add the self-extracting bundle directly
-      const platformBundlePath = join(buildFolder, `${appFileName}${platformSuffix}${OS === 'win' ? '.exe' : ''}`);
+      const platformBundlePath = join(buildFolder, `${appFileName}${platformSuffix}${targetOS === 'win' ? '.exe' : ''}`);
       // Copy the self-extracting bundle to platform-specific filename
-      if (OS === 'win') {
+      if (targetOS === 'win') {
         // On Windows, create a self-extracting exe
         // For now, just copy the bundle folder
         artifactsToUpload.push(compressedTarPath.replace('.tar.zst', `${platformSuffix}.tar.zst`));
-      } else if (OS === 'linux') {
+      } else if (targetOS === 'linux') {
         // On Linux, create a tar.gz of the bundle
         const linuxTarPath = join(buildFolder, `${appFileName}${platformSuffix}.tar.gz`);
         execSync(`tar -czf ${escapePathForTerminal(linuxTarPath)} -C ${escapePathForTerminal(buildFolder)} ${escapePathForTerminal(basename(appBundleFolderPath))}`);
@@ -1685,8 +1694,8 @@ function notarizeAndStaple(appOrDmgPath: string) {
 // have the same name but different subfolders in our build directory. or I guess delete the first one after tar/compression and then create the other one.
 // either way you can pass in the parent folder here for that flexibility.
 // for intel/arm builds on mac we'll probably have separate subfolders as well and build them in parallel.
-function createAppBundle(bundleName: string, parentFolder: string) {
-  if (OS === 'macos') {
+function createAppBundle(bundleName: string, parentFolder: string, targetOS: 'macos' | 'win' | 'linux') {
+  if (targetOS === 'macos') {
     // macOS bundle structure
     const bundleFileName = `${bundleName}.app`;
     const appBundleFolderPath = join(parentFolder, bundleFileName);
@@ -1713,7 +1722,7 @@ function createAppBundle(bundleName: string, parentFolder: string) {
       appBundleFolderResourcesPath,
       appBundleFolderFrameworksPath,
     };
-  } else if (OS === 'linux' || OS === 'win') {
+  } else if (targetOS === 'linux' || targetOS === 'win') {
     // Linux/Windows simpler structure
     const appBundleFolderPath = join(parentFolder, bundleName);
     const appBundleFolderContentsPath = appBundleFolderPath; // No Contents folder needed
@@ -1734,6 +1743,6 @@ function createAppBundle(bundleName: string, parentFolder: string) {
       appBundleFolderFrameworksPath,
     };
   } else {
-    throw new Error(`Unsupported OS: ${OS}`);
+    throw new Error(`Unsupported OS: ${targetOS}`);
   }
 }

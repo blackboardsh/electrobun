@@ -2,8 +2,8 @@
     "scripts": {        
         "start": "electrobun dev",
         "build:dev": "electrobun build",
-        "build:canary": "electrobun build env=canary",
-        "start:canary": "electrobun dev env=canary"
+        "build:canary": "electrobun build --env=canary",
+        "start:canary": "electrobun dev --env=canary"
     },
     "dependencies": {
         "electrobun": "*"
