@@ -424,8 +424,88 @@ if (buildTargets.length === 1) {
 } else {
   const targetList = buildTargets.map(t => `${t.os}-${t.arch}`).join(', ');
   console.log(`Building for multiple targets: ${targetList} (${buildEnvironment})`);
-  console.error("Multi-target builds not yet implemented. Please build one target at a time.");
-  process.exit(1);
+  console.log(`Running ${buildTargets.length} parallel builds...`);
+  
+  // Spawn parallel build processes
+  const buildPromises = buildTargets.map(async (target) => {
+    const targetString = `${target.os}-${target.arch}`;
+    const prefix = `[${targetString}]`;
+    
+    try {
+      const result = await Bun.spawn([
+        process.argv[0], // Current bun executable path
+        ...process.argv.slice(1, process.argv.findIndex(arg => arg.startsWith('--targets'))), // Original args minus --targets
+        `--env=${buildEnvironment}`,
+        `--targets=${targetString}`
+      ], {
+        stdio: ['inherit', 'pipe', 'pipe'],
+        env: process.env
+      });
+
+      // Pipe output with prefix
+      if (result.stdout) {
+        const reader = result.stdout.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = new TextDecoder().decode(value);
+          // Add prefix to each line
+          const prefixedText = text.split('\n').map(line => 
+            line ? `${prefix} ${line}` : line
+          ).join('\n');
+          process.stdout.write(prefixedText);
+        }
+      }
+
+      if (result.stderr) {
+        const reader = result.stderr.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = new TextDecoder().decode(value);
+          const prefixedText = text.split('\n').map(line => 
+            line ? `${prefix} ${line}` : line
+          ).join('\n');
+          process.stderr.write(prefixedText);
+        }
+      }
+
+      const exitCode = await result.exited;
+      return { target, exitCode, success: exitCode === 0 };
+      
+    } catch (error) {
+      console.error(`${prefix} Failed to start build:`, error);
+      return { target, exitCode: 1, success: false, error };
+    }
+  });
+
+  // Wait for all builds to complete
+  const results = await Promise.allSettled(buildPromises);
+  
+  // Report final results
+  console.log('\n=== Build Results ===');
+  let allSucceeded = true;
+  
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      const { target, success, exitCode } = result.value;
+      const status = success ? '✅ SUCCESS' : '❌ FAILED';
+      console.log(`${target.os}-${target.arch}: ${status} (exit code: ${exitCode})`);
+      if (!success) allSucceeded = false;
+    } else {
+      console.log(`Build rejected: ${result.reason}`);
+      allSucceeded = false;
+    }
+  }
+  
+  if (!allSucceeded) {
+    console.log('\nSome builds failed. Check the output above for details.');
+    process.exit(1);
+  } else {
+    console.log('\nAll builds completed successfully! 🎉');
+  }
+  
+  process.exit(0);
 }
 
 // todo (yoav): dev builds should include the branch name, and/or allow configuration via external config
