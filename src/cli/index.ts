@@ -327,6 +327,7 @@ const defaultConfig = {
   build: {
     buildFolder: "build",
     artifactFolder: "artifacts",
+    targets: undefined, // Will default to current platform if not specified
     mac: {
       codesign: false,
       notarize: false,
@@ -360,13 +361,70 @@ if (!command) {
 const config = getConfig();
 
 const envArg =
-  process.argv.find((arg) => arg.startsWith("env="))?.split("=")[1] || "";
+  process.argv.find((arg) => arg.startsWith("--env="))?.split("=")[1] || "";
+
+const targetsArg =
+  process.argv.find((arg) => arg.startsWith("--targets="))?.split("=")[1] || "";
 
 const validEnvironments = ["dev", "canary", "stable"];
 
 // todo (yoav): dev, canary, and stable;
 const buildEnvironment: "dev" | "canary" | "stable" =
   validEnvironments.includes(envArg) ? envArg : "dev";
+
+// Determine build targets
+type BuildTarget = { os: 'macos' | 'win' | 'linux', arch: 'arm64' | 'x64' };
+
+function parseBuildTargets(): BuildTarget[] {
+  // If explicit targets provided via CLI
+  if (targetsArg) {
+    if (targetsArg === 'current') {
+      return [{ os: OS, arch: ARCH }];
+    } else if (targetsArg === 'all') {
+      return parseConfigTargets();
+    } else {
+      // Parse comma-separated targets like "macos-arm64,win-x64"
+      return targetsArg.split(',').map(target => {
+        const [os, arch] = target.trim().split('-') as [string, string];
+        if (!['macos', 'win', 'linux'].includes(os) || !['arm64', 'x64'].includes(arch)) {
+          console.error(`Invalid target: ${target}. Format should be: os-arch (e.g., macos-arm64)`);
+          process.exit(1);
+        }
+        return { os, arch } as BuildTarget;
+      });
+    }
+  }
+
+  // Default behavior: always build for current platform only
+  // This ensures predictable, fast builds unless explicitly requesting multi-platform
+  return [{ os: OS, arch: ARCH }];
+}
+
+function parseConfigTargets(): BuildTarget[] {
+  // Use targets from config, or default to current platform
+  const configTargets = config.build.targets || [`${OS}-${ARCH}`];
+  return configTargets.map(target => {
+    if (target === 'current') {
+      return { os: OS, arch: ARCH };
+    }
+    const [os, arch] = target.split('-') as [string, string];
+    if (!['macos', 'win', 'linux'].includes(os) || !['arm64', 'x64'].includes(arch)) {
+      console.error(`Invalid target in config: ${target}. Format should be: os-arch (e.g., macos-arm64)`);
+      process.exit(1);
+    }
+    return { os, arch } as BuildTarget;
+  });
+}
+
+const buildTargets = parseBuildTargets();
+
+// Show build targets to user
+if (buildTargets.length === 1) {
+  console.log(`Building for ${buildTargets[0].os}-${buildTargets[0].arch} (${buildEnvironment})`);
+} else {
+  const targetList = buildTargets.map(t => `${t.os}-${t.arch}`).join(', ');
+  console.log(`Building for multiple targets: ${targetList} (${buildEnvironment})`);
+}
 
 // todo (yoav): dev builds should include the branch name, and/or allow configuration via external config
 const buildSubFolder = `${buildEnvironment}`;
