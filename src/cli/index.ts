@@ -1288,56 +1288,20 @@ if (commandArg === "init") {
     console.log("compressing tarball...");
     await ZstdInit().then(async ({ ZstdSimple, ZstdStream }) => {
       // Note: Simple is much faster than stream, but stream is better for large files
-      // Use stream for files larger than 100MB to avoid memory issues
+      // todo (yoav): consider a file size cutoff to switch to stream instead of simple.
       const useStream = tarball.size > 100 * 1024 * 1024;
       
       if (tarball.size > 0) {
-        console.log(`Compressing ${Math.round(tarball.size / 1024 / 1024)}MB tarball using ${useStream ? 'ZstdStream' : 'ZstdSimple'}...`);
+       // Uint8 array filestream of the tar file
+
+        const data = new Uint8Array(tarBuffer);
         
         const compressionLevel = 22;
-        let compressedData: Uint8Array;
-        
-        if (useStream) {
-          // Use streaming compression for large files
-          const compressor = new ZstdStream();
-          compressor.init(compressionLevel);
-          
-          // Read file in chunks to avoid memory issues
-          const chunkSize = 1024 * 1024; // 1MB chunks
-          const chunks: Uint8Array[] = [];
-          
-          for (let offset = 0; offset < tarBuffer.byteLength; offset += chunkSize) {
-            const end = Math.min(offset + chunkSize, tarBuffer.byteLength);
-            const chunk = new Uint8Array(tarBuffer, offset, end - offset);
-            const compressedChunk = compressor.compress(chunk);
-            if (compressedChunk.length > 0) {
-              chunks.push(compressedChunk);
-            }
-          }
-          
-          // Finalize compression
-          const finalChunk = compressor.flush();
-          if (finalChunk.length > 0) {
-            chunks.push(finalChunk);
-          }
-          
-          // Combine all chunks
-          const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-          compressedData = new Uint8Array(totalLength);
-          let offset = 0;
-          for (const chunk of chunks) {
-            compressedData.set(chunk, offset);
-            offset += chunk.length;
-          }
-        } else {
-          // Use simple compression for smaller files
-          const data = new Uint8Array(tarBuffer);
-          compressedData = ZstdSimple.compress(data, compressionLevel);
-        }
+        const compressedData = ZstdSimple.compress(data, compressionLevel);
 
         console.log(
           "compressed",
-          compressedData.length,
+          data.length,
           "bytes",
           "from",
           tarBuffer.byteLength,
