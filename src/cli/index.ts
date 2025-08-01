@@ -1053,6 +1053,8 @@ if (commandArg === "init") {
     // 6.5. code sign and notarize the dmg
     // 7. copy artifacts to directory [self-extractor dmg, zstd app bundle, bsdiff patch, update.json]
 
+    // Add platform suffix for all artifacts
+    const platformSuffix = `-${OS}-${ARCH}`;
     const tarPath = `${appBundleFolderPath}.tar`;
 
     // tar the signed and notarized app bundle
@@ -1076,7 +1078,8 @@ if (commandArg === "init") {
     // than saving 1 more MB of space/bandwidth.
 
     const compressedTarPath = `${tarPath}.zst`;
-    artifactsToUpload.push(compressedTarPath);
+    const platformCompressedTarPath = compressedTarPath.replace('.tar.zst', `${platformSuffix}.tar.zst`);
+    artifactsToUpload.push(platformCompressedTarPath);
 
     // zstd compress tarball
     // todo (yoav): consider using c bindings for zstd for speed instead of wasm
@@ -1102,6 +1105,8 @@ if (commandArg === "init") {
         );
 
         await Bun.write(compressedTarPath, compressedData);
+        // Copy to platform-specific filename for upload
+        cpSync(compressedTarPath, platformCompressedTarPath);
       }
     });
 
@@ -1150,28 +1155,49 @@ if (commandArg === "init") {
       console.log("skipping notarization");
     }
 
-    console.log("creating dmg...");
-    // make a dmg
-    const dmgPath = join(buildFolder, `${appFileName}.dmg`);
-    artifactsToUpload.push(dmgPath);
-    // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
-    // Note: use UDBZ for better compression vs. UDZO
-    execSync(
-      `hdiutil create -volname "${appFileName}" -srcfolder ${escapePathForTerminal(
-        appBundleFolderPath
-      )} -ov -format UDBZ ${escapePathForTerminal(dmgPath)}`
-    );
+    // DMG creation for macOS only
+    if (OS === 'macos') {
+      console.log("creating dmg...");
+      // make a dmg
+      const dmgPath = join(buildFolder, `${appFileName}.dmg`);
+      const platformDmgPath = join(buildFolder, `${appFileName}${platformSuffix}.dmg`);
+      artifactsToUpload.push(platformDmgPath);
+      // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
+      // Note: use UDBZ for better compression vs. UDZO
+      execSync(
+        `hdiutil create -volname "${appFileName}" -srcfolder ${escapePathForTerminal(
+          appBundleFolderPath
+        )} -ov -format UDBZ ${escapePathForTerminal(dmgPath)}`
+      );
 
-    if (shouldCodesign) {
-      codesignAppBundle(dmgPath);
-    } else {
-      console.log("skipping codesign");
-    }
+      if (shouldCodesign) {
+        codesignAppBundle(dmgPath);
+      } else {
+        console.log("skipping codesign");
+      }
 
-    if (shouldNotarize) {
-      notarizeAndStaple(dmgPath);
+      if (shouldNotarize) {
+        notarizeAndStaple(dmgPath);
+      } else {
+        console.log("skipping notarization");
+      }
+      
+      // Copy to platform-specific filename
+      cpSync(dmgPath, platformDmgPath);
     } else {
-      console.log("skipping notarization");
+      // For Windows and Linux, add the self-extracting bundle directly
+      const platformBundlePath = join(buildFolder, `${appFileName}${platformSuffix}${OS === 'win' ? '.exe' : ''}`);
+      // Copy the self-extracting bundle to platform-specific filename
+      if (OS === 'win') {
+        // On Windows, create a self-extracting exe
+        // For now, just copy the bundle folder
+        artifactsToUpload.push(compressedTarPath.replace('.tar.zst', `${platformSuffix}.tar.zst`));
+      } else if (OS === 'linux') {
+        // On Linux, create a tar.gz of the bundle
+        const linuxTarPath = join(buildFolder, `${appFileName}${platformSuffix}.tar.gz`);
+        execSync(`tar -czf ${escapePathForTerminal(linuxTarPath)} -C ${escapePathForTerminal(buildFolder)} ${escapePathForTerminal(basename(appBundleFolderPath))}`);
+        artifactsToUpload.push(linuxTarPath);
+      }
     }
 
     // refresh artifacts folder
@@ -1190,11 +1216,15 @@ if (commandArg === "init") {
       // the download button or display on your marketing site or in the app.
       version: config.app.version,
       hash: hash.toString(),
+      platform: OS,
+      arch: ARCH,
       // channel: buildEnvironment,
       // bucketUrl: config.release.bucketUrl
     });
 
-    await Bun.write(join(artifactFolder, "update.json"), updateJsonContent);
+    // Platform-specific update.json
+    const platformUpdateJsonName = `update${platformSuffix}.json`;
+    await Bun.write(join(artifactFolder, platformUpdateJsonName), updateJsonContent);
 
     // generate bsdiff
     // https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst
@@ -1204,7 +1234,7 @@ if (commandArg === "init") {
     const urlToPrevUpdateJson = join(
       config.release.bucketUrl,
       buildEnvironment,
-      `update.json`
+      `update${platformSuffix}.json`
     );
     const cacheBuster = Math.random().toString(36).substring(7);
     const updateJsonResponse = await fetch(
@@ -1216,13 +1246,13 @@ if (commandArg === "init") {
     const urlToLatestTarball = join(
       config.release.bucketUrl,
       buildEnvironment,
-      `${appFileName}.app.tar.zst`
+      `${appFileName}.app${platformSuffix}.tar.zst`
     );
 
 
     // attempt to get the previous version to create a patch file
-    if (updateJsonResponse.ok) {
-      const prevUpdateJson = await updateJsonResponse.json();
+    if (updateJsonResponse && updateJsonResponse.ok) {
+      const prevUpdateJson = await updateJsonResponse!.json();
 
       const prevHash = prevUpdateJson.hash;
       console.log("PREVIOUS HASH", prevHash);
@@ -1263,7 +1293,8 @@ if (commandArg === "init") {
         // especially for creating multiple diffs in parallel
         const bsdiffpath = PATHS.BSDIFF;
         const patchFilePath = join(buildFolder, `${prevHash}.patch`);
-        artifactsToUpload.push(patchFilePath);
+        const platformPatchFilePath = join(buildFolder, `${prevHash}${platformSuffix}.patch`);
+        artifactsToUpload.push(platformPatchFilePath);
         const result = Bun.spawnSync(
           [bsdiffpath, prevTarballPath, tarPath, patchFilePath, "--use-zstd"],
           { cwd: buildFolder }
@@ -1273,6 +1304,8 @@ if (commandArg === "init") {
           result.stdout.toString(),
           result.stderr.toString()
         );
+        // Copy to platform-specific filename
+        cpSync(patchFilePath, platformPatchFilePath);
       }
     } else {
       console.log("prevoius version not found at: ", urlToLatestTarball);
