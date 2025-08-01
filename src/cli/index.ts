@@ -65,45 +65,53 @@ const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
 // When debugging electrobun with the example app use the builds (dev or release) right from the source folder
 // For developers using electrobun cli via npm use the release versions in /dist
 // This lets us not have to commit src build folders to git and provide pre-built binaries
-const PATHS = {
-  BUN_BINARY: join(ELECTROBUN_DEP_PATH, "dist", "bun") + binExt,
-  LAUNCHER_DEV: join(ELECTROBUN_DEP_PATH, "dist", "electrobun") + binExt,
-  LAUNCHER_RELEASE: join(ELECTROBUN_DEP_PATH, "dist", "launcher") + binExt,
-  MAIN_JS: join(ELECTROBUN_DEP_PATH, "dist", "main.js"),  
-  NATIVE_WRAPPER_MACOS: join(
-    ELECTROBUN_DEP_PATH,
-    "dist",
-    "libNativeWrapper.dylib"
-  ),
-  NATIVE_WRAPPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.dll"),
-  NATIVE_WRAPPER_LINUX: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper.so"),
-  NATIVE_WRAPPER_LINUX_CEF: join(ELECTROBUN_DEP_PATH, "dist", "libNativeWrapper_cef.so"),
-  WEBVIEW2LOADER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "WebView2Loader.dll"),
-  BSPATCH: join(ELECTROBUN_DEP_PATH, "dist", "bspatch") + binExt,
-  EXTRACTOR: join(ELECTROBUN_DEP_PATH, "dist", "extractor") + binExt,
-  BSDIFF: join(ELECTROBUN_DEP_PATH, "dist", "bsdiff") + binExt,
-  CEF_FRAMEWORK_MACOS: join(
-    ELECTROBUN_DEP_PATH,
-    "dist",
-    "cef",
-    "Chromium Embedded Framework.framework"
-  ),
-  CEF_HELPER_MACOS: join(ELECTROBUN_DEP_PATH, "dist", "cef", "process_helper"),
-  CEF_HELPER_WIN: join(ELECTROBUN_DEP_PATH, "dist", "cef", "process_helper.exe"),
-  CEF_HELPER_LINUX: join(ELECTROBUN_DEP_PATH, "dist", "cef", "process_helper"),
-  CEF_DIR: join(ELECTROBUN_DEP_PATH, "dist", "cef"),
-};
 
-async function ensureCoreDependencies() {
+// Function to get platform-specific paths
+function getPlatformPaths(targetOS: 'macos' | 'win' | 'linux', targetArch: 'arm64' | 'x64') {
+  const binExt = targetOS === 'win' ? '.exe' : '';
+  const platformDistDir = join(ELECTROBUN_DEP_PATH, `dist-${targetOS}-${targetArch}`);
+  
+  return {
+    BUN_BINARY: join(platformDistDir, "bun") + binExt,
+    LAUNCHER_DEV: join(platformDistDir, "electrobun") + binExt,
+    LAUNCHER_RELEASE: join(platformDistDir, "launcher") + binExt,
+    MAIN_JS: join(ELECTROBUN_DEP_PATH, "dist", "main.js"), // Shared across platforms
+    NATIVE_WRAPPER_MACOS: join(platformDistDir, "libNativeWrapper.dylib"),
+    NATIVE_WRAPPER_WIN: join(platformDistDir, "libNativeWrapper.dll"),
+    NATIVE_WRAPPER_LINUX: join(platformDistDir, "libNativeWrapper.so"),
+    NATIVE_WRAPPER_LINUX_CEF: join(platformDistDir, "libNativeWrapper_cef.so"),
+    WEBVIEW2LOADER_WIN: join(platformDistDir, "WebView2Loader.dll"),
+    BSPATCH: join(platformDistDir, "bspatch") + binExt,
+    EXTRACTOR: join(platformDistDir, "extractor") + binExt,
+    BSDIFF: join(platformDistDir, "bsdiff") + binExt,
+    CEF_FRAMEWORK_MACOS: join(platformDistDir, "cef", "Chromium Embedded Framework.framework"),
+    CEF_HELPER_MACOS: join(platformDistDir, "cef", "process_helper"),
+    CEF_HELPER_WIN: join(platformDistDir, "cef", "process_helper.exe"),
+    CEF_HELPER_LINUX: join(platformDistDir, "cef", "process_helper"),
+    CEF_DIR: join(platformDistDir, "cef"),
+  };
+}
+
+// Default PATHS for host platform (backward compatibility)
+const PATHS = getPlatformPaths(OS, ARCH);
+
+async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targetArch?: 'arm64' | 'x64') {
+  // Use provided target platform or default to host platform
+  const platformOS = targetOS || OS;
+  const platformArch = targetArch || ARCH;
+  
+  // Get platform-specific paths
+  const platformPaths = getPlatformPaths(platformOS, platformArch);
+  
   // Check if all core dependencies exist
   const requiredFiles = [
-    PATHS.BUN_BINARY,
-    PATHS.LAUNCHER_RELEASE,
-    PATHS.MAIN_JS,
+    platformPaths.BUN_BINARY,
+    platformPaths.LAUNCHER_RELEASE,
+    platformPaths.MAIN_JS,
     // Platform-specific native wrapper
-    OS === 'macos' ? PATHS.NATIVE_WRAPPER_MACOS :
-    OS === 'win' ? PATHS.NATIVE_WRAPPER_WIN :
-    PATHS.NATIVE_WRAPPER_LINUX
+    platformOS === 'macos' ? platformPaths.NATIVE_WRAPPER_MACOS :
+    platformOS === 'win' ? platformPaths.NATIVE_WRAPPER_WIN :
+    platformPaths.NATIVE_WRAPPER_LINUX
   ];
   
   const allFilesExist = requiredFiles.every(file => existsSync(file));
@@ -113,8 +121,8 @@ async function ensureCoreDependencies() {
 
   // Show which files are missing
   const missingFiles = requiredFiles.filter(file => !existsSync(file));
-  console.log('Core dependencies not found. Missing files:', missingFiles.map(f => f.replace(ELECTROBUN_DEP_PATH, '.')).join(', '));
-  console.log('Downloading core binaries...');
+  console.log(`Core dependencies not found for ${platformOS}-${platformArch}. Missing files:`, missingFiles.map(f => f.replace(ELECTROBUN_DEP_PATH, '.')).join(', '));
+  console.log(`Downloading core binaries for ${platformOS}-${platformArch}...`);
   
   // Get the current Electrobun version from package.json
   const packageJsonPath = join(ELECTROBUN_DEP_PATH, 'package.json');
@@ -129,8 +137,8 @@ async function ensureCoreDependencies() {
     }
   }
 
-  const platformName = OS === 'macos' ? 'darwin' : OS === 'win' ? 'win' : 'linux';
-  const archName = ARCH;
+  const platformName = platformOS === 'macos' ? 'darwin' : platformOS === 'win' ? 'win' : 'linux';
+  const archName = platformArch;
   const coreTarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${version}/electrobun-core-${platformName}-${archName}.tar.gz`;
   
   console.log(`Downloading core binaries from: ${coreTarballUrl}`);
@@ -143,7 +151,7 @@ async function ensureCoreDependencies() {
     }
     
     // Create temp file
-    const tempFile = join(ELECTROBUN_DEP_PATH, 'main-temp.tar.gz');
+    const tempFile = join(ELECTROBUN_DEP_PATH, `core-${platformOS}-${platformArch}-temp.tar.gz`);
     const fileStream = createWriteStream(tempFile);
     
     // Write response to file
@@ -157,32 +165,43 @@ async function ensureCoreDependencies() {
     }
     fileStream.end();
     
-    // Extract to dist directory
-    console.log('Extracting core dependencies...');
-    const distPath = join(ELECTROBUN_DEP_PATH, 'dist');
-    mkdirSync(distPath, { recursive: true });
+    // Extract to platform-specific dist directory
+    console.log(`Extracting core dependencies for ${platformOS}-${platformArch}...`);
+    const platformDistPath = join(ELECTROBUN_DEP_PATH, `dist-${platformOS}-${platformArch}`);
+    mkdirSync(platformDistPath, { recursive: true });
+    
+    // Also ensure shared dist directory exists for main.js
+    const sharedDistPath = join(ELECTROBUN_DEP_PATH, 'dist');
+    mkdirSync(sharedDistPath, { recursive: true });
     
     // Use Windows native tar.exe on Windows due to npm tar library issues
     if (OS === 'win') {
       console.log('Using Windows native tar.exe for reliable extraction...');
-      execSync(`tar -xf "${tempFile}" -C "${distPath}"`, { 
+      execSync(`tar -xf "${tempFile}" -C "${platformDistPath}"`, { 
         stdio: 'inherit',
-        cwd: distPath 
+        cwd: platformDistPath 
       });
     } else {
       await tar.x({
         file: tempFile,
-        cwd: distPath,
+        cwd: platformDistPath,
         preservePaths: false,
         strip: 0,
       });
+    }
+    
+    // Copy main.js to shared dist directory (it's platform-independent)
+    const extractedMainJs = join(platformDistPath, 'main.js');
+    const sharedMainJs = join(sharedDistPath, 'main.js');
+    if (existsSync(extractedMainJs) && !existsSync(sharedMainJs)) {
+      cpSync(extractedMainJs, sharedMainJs);
     }
     
     // Clean up temp file
     unlinkSync(tempFile);
     
     // Verify extraction completed successfully
-    const mainJsPath = join(ELECTROBUN_DEP_PATH, 'dist', 'main.js');
+    const mainJsPath = platformPaths.MAIN_JS;
     if (!existsSync(mainJsPath)) {
       console.error('Warning: main.js was not extracted properly');
       console.error('This may be caused by Windows Defender or antivirus software quarantining .js files');
@@ -190,40 +209,37 @@ async function ensureCoreDependencies() {
       
       // List what was actually extracted for debugging
       try {
-        const extractedFiles = readdirSync(join(ELECTROBUN_DEP_PATH, 'dist'));
+        const extractedFiles = readdirSync(platformDistPath);
         console.log('Extracted files:', extractedFiles);
-        
-        // Check if API directory exists but is empty
-        const apiPath = join(ELECTROBUN_DEP_PATH, 'dist', 'api');
-        if (existsSync(apiPath)) {
-          const apiFiles = readdirSync(apiPath);
-          console.log('API directory contents:', apiFiles);
-          if (apiFiles.length === 0) {
-            console.error('API directory is empty - this confirms antivirus is likely quarantining script files');
-          }
-        }
       } catch (e) {
         console.error('Could not list extracted files');
       }
     }
     
-    console.log('Core dependencies downloaded and cached successfully');
+    console.log(`Core dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`);
     
-  } catch (error) {
-    console.error('Failed to download core dependencies:', error.message);
+  } catch (error: any) {
+    console.error(`Failed to download core dependencies for ${platformOS}-${platformArch}:`, error.message);
     console.error('Please ensure you have an internet connection and the release exists.');
     process.exit(1);
   }
 }
 
-async function ensureCEFDependencies() {
+async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targetArch?: 'arm64' | 'x64') {
+  // Use provided target platform or default to host platform
+  const platformOS = targetOS || OS;
+  const platformArch = targetArch || ARCH;
+  
+  // Get platform-specific paths
+  const platformPaths = getPlatformPaths(platformOS, platformArch);
+  
   // Check if CEF dependencies already exist
-  if (existsSync(PATHS.CEF_DIR)) {
-    console.log('CEF dependencies found, using cached version');
+  if (existsSync(platformPaths.CEF_DIR)) {
+    console.log(`CEF dependencies found for ${platformOS}-${platformArch}, using cached version`);
     return;
   }
 
-  console.log('CEF dependencies not found, downloading...');
+  console.log(`CEF dependencies not found for ${platformOS}-${platformArch}, downloading...`);
   
   // Get the current Electrobun version from package.json
   const packageJsonPath = join(ELECTROBUN_DEP_PATH, 'package.json');
@@ -238,8 +254,8 @@ async function ensureCEFDependencies() {
     }
   }
 
-  const platformName = OS === 'macos' ? 'darwin' : OS === 'win' ? 'win' : 'linux';
-  const archName = ARCH;
+  const platformName = platformOS === 'macos' ? 'darwin' : platformOS === 'win' ? 'win' : 'linux';
+  const archName = platformArch;
   const cefTarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${version}/electrobun-cef-${platformName}-${archName}.tar.gz`;
   
   console.log(`Downloading CEF from: ${cefTarballUrl}`);
@@ -252,7 +268,7 @@ async function ensureCEFDependencies() {
     }
     
     // Create temp file
-    const tempFile = join(ELECTROBUN_DEP_PATH, 'cef-temp.tar.gz');
+    const tempFile = join(ELECTROBUN_DEP_PATH, `cef-${platformOS}-${platformArch}-temp.tar.gz`);
     const fileStream = createWriteStream(tempFile);
     
     // Write response to file
@@ -266,21 +282,22 @@ async function ensureCEFDependencies() {
     }
     fileStream.end();
     
-    // Extract to dist directory
-    console.log('Extracting CEF dependencies...');
-    const cefDistPath = join(ELECTROBUN_DEP_PATH, 'dist');
+    // Extract to platform-specific dist directory
+    console.log(`Extracting CEF dependencies for ${platformOS}-${platformArch}...`);
+    const platformDistPath = join(ELECTROBUN_DEP_PATH, `dist-${platformOS}-${platformArch}`);
+    mkdirSync(platformDistPath, { recursive: true });
     
     // Use Windows native tar.exe on Windows due to npm tar library issues
     if (OS === 'win') {
       console.log('Using Windows native tar.exe for reliable extraction...');
-      execSync(`tar -xf "${tempFile}" -C "${cefDistPath}"`, { 
+      execSync(`tar -xf "${tempFile}" -C "${platformDistPath}"`, { 
         stdio: 'inherit',
-        cwd: cefDistPath 
+        cwd: platformDistPath 
       });
     } else {
       await tar.x({
         file: tempFile,
-        cwd: cefDistPath,
+        cwd: platformDistPath,
         preservePaths: false,
         strip: 0,
       });
@@ -289,10 +306,10 @@ async function ensureCEFDependencies() {
     // Clean up temp file
     unlinkSync(tempFile);
     
-    console.log('CEF dependencies downloaded and cached successfully');
+    console.log(`CEF dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`);
     
-  } catch (error) {
-    console.error('Failed to download CEF dependencies:', error.message);
+  } catch (error: any) {
+    console.error(`Failed to download CEF dependencies for ${platformOS}-${platformArch}:`, error.message);
     console.error('Please ensure you have an internet connection and the release exists.');
     process.exit(1);
   }
@@ -448,14 +465,23 @@ if (buildTargets.length === 1) {
     const prefix = `[${targetString}]`;
     
     try {
-      const result = await Bun.spawn([
-        process.argv[0], // Current bun executable path
-        ...process.argv.slice(1, process.argv.findIndex(arg => arg.startsWith('--targets'))), // Original args minus --targets
-        `--env=${buildEnvironment}`,
-        `--targets=${targetString}`
-      ], {
+      // Try to find the electrobun binary in node_modules/.bin or use bunx
+      const electrobunBin = join(projectRoot, 'node_modules', '.bin', 'electrobun');
+      let command: string[];
+      
+      if (existsSync(electrobunBin)) {
+        command = [electrobunBin, 'build', `--env=${buildEnvironment}`, `--targets=${targetString}`];
+      } else {
+        // Fallback to bunx which should resolve node_modules binaries
+        command = ['bunx', 'electrobun', 'build', `--env=${buildEnvironment}`, `--targets=${targetString}`];
+      }
+      
+      console.log(`${prefix} Running:`, command.join(' '));
+      
+      const result = await Bun.spawn(command, {
         stdio: ['inherit', 'pipe', 'pipe'],
-        env: process.env
+        env: process.env,
+        cwd: projectRoot // Ensure we're in the right directory
       });
 
       // Pipe output with prefix
@@ -616,8 +642,11 @@ if (commandArg === "init") {
   // todo (yoav): init a repo folder structure
   console.log("initializing electrobun project");
 } else if (commandArg === "build") {
-  // Ensure core binaries are available before starting build
-  await ensureCoreDependencies();
+  // Ensure core binaries are available for the target platform before starting build
+  await ensureCoreDependencies(currentTarget.os, currentTarget.arch);
+  
+  // Get platform-specific paths for the current target
+  const targetPaths = getPlatformPaths(currentTarget.os, currentTarget.arch);
   
   // refresh build folder  
   if (existsSync(buildFolder)) {
@@ -714,7 +743,7 @@ if (commandArg === "init") {
   // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});
   // For dev builds, use the actual CLI binary that's currently running
   // It could be in .cache (npm install) or bin (local dev)
-  let devLauncherPath = PATHS.LAUNCHER_DEV;
+  let devLauncherPath = targetPaths.LAUNCHER_DEV;
   if (buildEnvironment === "dev" && !existsSync(devLauncherPath)) {
     // Check .cache location (npm installed)
     const cachePath = join(ELECTROBUN_DEP_PATH, ".cache", "electrobun") + binExt;
@@ -733,7 +762,7 @@ if (commandArg === "init") {
     buildEnvironment === "dev"
       ? devLauncherPath
       : // Note: for release use the zig launcher optimized for smol size
-        PATHS.LAUNCHER_RELEASE;
+        targetPaths.LAUNCHER_RELEASE;
   const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + binExt;
   const destLauncherFolder = dirname(bunCliLauncherDestination);
   if (!existsSync(destLauncherFolder)) {
@@ -746,11 +775,11 @@ if (commandArg === "init") {
     dereference: true,
   });
 
-  cpSync(PATHS.MAIN_JS, join(appBundleMacOSPath, 'main.js'));
+  cpSync(targetPaths.MAIN_JS, join(appBundleMacOSPath, 'main.js'));
 
   // Bun runtime binary
   // todo (yoav): this only works for the current architecture
-  const bunBinarySourcePath = PATHS.BUN_BINARY;
+  const bunBinarySourcePath = targetPaths.BUN_BINARY;
   // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
   // in node_modules, so we have to dereference here to get the actual binary in the bundle.
   const bunBinaryDestInBundlePath = join(appBundleMacOSPath, "bun") + binExt;
@@ -763,7 +792,7 @@ if (commandArg === "init") {
 
   // copy native wrapper dynamic library
   if (targetOS === 'macos') {
-  const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_MACOS;
+  const nativeWrapperMacosSource = targetPaths.NATIVE_WRAPPER_MACOS;
   const nativeWrapperMacosDestination = join(
     appBundleMacOSPath,
     "libNativeWrapper.dylib"
@@ -772,7 +801,7 @@ if (commandArg === "init") {
     dereference: true,
   });
 } else if (targetOS === 'win') {
-  const nativeWrapperMacosSource = PATHS.NATIVE_WRAPPER_WIN;
+  const nativeWrapperMacosSource = targetPaths.NATIVE_WRAPPER_WIN;
   const nativeWrapperMacosDestination = join(
     appBundleMacOSPath,
     "libNativeWrapper.dll"
@@ -781,7 +810,7 @@ if (commandArg === "init") {
     dereference: true,
   });
 
-  const webview2LibSource = PATHS.WEBVIEW2LOADER_WIN;
+  const webview2LibSource = targetPaths.WEBVIEW2LOADER_WIN;
   const webview2LibDestination = join(
     appBundleMacOSPath,
     "WebView2Loader.dll"
@@ -792,7 +821,7 @@ if (commandArg === "init") {
 } else if (targetOS === 'linux') {
   // Choose the appropriate native wrapper based on bundleCEF setting
   const useCEF = config.build.linux?.bundleCEF;
-  const nativeWrapperLinuxSource = useCEF ? PATHS.NATIVE_WRAPPER_LINUX_CEF : PATHS.NATIVE_WRAPPER_LINUX;
+  const nativeWrapperLinuxSource = useCEF ? targetPaths.NATIVE_WRAPPER_LINUX_CEF : targetPaths.NATIVE_WRAPPER_LINUX;
   const nativeWrapperLinuxDestination = join(
     appBundleMacOSPath,
     "libNativeWrapper.so"
@@ -814,9 +843,9 @@ if (commandArg === "init") {
       (targetOS === 'win' && config.build.win?.bundleCEF) || 
       (targetOS === 'linux' && config.build.linux?.bundleCEF)) {
     
-    await ensureCEFDependencies();    
+    await ensureCEFDependencies(currentTarget.os, currentTarget.arch);    
     if (targetOS === 'macos') {
-      const cefFrameworkSource = PATHS.CEF_FRAMEWORK_MACOS;
+      const cefFrameworkSource = targetPaths.CEF_FRAMEWORK_MACOS;
       const cefFrameworkDestination = join(
         appBundleFolderFrameworksPath,
         "Chromium Embedded Framework.framework"
@@ -837,7 +866,7 @@ if (commandArg === "init") {
         "bun Helper (Renderer)",
       ];
 
-      const helperSourcePath = PATHS.CEF_HELPER_MACOS;
+      const helperSourcePath = targetPaths.CEF_HELPER_MACOS;
       cefHelperNames.forEach((helperName) => {
         const destinationPath = join(
           appBundleFolderFrameworksPath,
@@ -919,7 +948,7 @@ if (commandArg === "init") {
         "bun Helper (Renderer)",
       ];
 
-      const helperSourcePath = PATHS.CEF_HELPER_WIN;
+      const helperSourcePath = targetPaths.CEF_HELPER_WIN;
       if (existsSync(helperSourcePath)) {
         cefHelperNames.forEach((helperName) => {
           const destinationPath = join(appBundleMacOSPath, `${helperName}.exe`);
@@ -1018,7 +1047,7 @@ if (commandArg === "init") {
           "bun Helper (Renderer)",
         ];
 
-        const helperSourcePath = PATHS.CEF_HELPER_LINUX;
+        const helperSourcePath = targetPaths.CEF_HELPER_LINUX;
         if (existsSync(helperSourcePath)) {
           cefHelperNames.forEach((helperName) => {
             const destinationPath = join(appBundleMacOSPath, helperName);
@@ -1034,7 +1063,7 @@ if (commandArg === "init") {
 
 
   // copy native bindings
-  const bsPatchSource = PATHS.BSPATCH;
+  const bsPatchSource = targetPaths.BSPATCH;
   const bsPatchDestination = join(appBundleMacOSPath, "bspatch") + binExt;
   const bsPatchDestFolder = dirname(bsPatchDestination);
   if (!existsSync(bsPatchDestFolder)) {
@@ -1130,14 +1159,16 @@ if (commandArg === "init") {
   
   // Run postBuild script
   if (config.scripts.postBuild) {
-
-    Bun.spawnSync([bunBinarySourcePath, config.scripts.postBuild], {
+    // Use host platform's bun binary for running scripts, not target platform's
+    const hostPaths = getPlatformPaths(OS, ARCH);
+    
+    Bun.spawnSync([hostPaths.BUN_BINARY, config.scripts.postBuild], {
       stdio: ["ignore", "inherit", "inherit"],
       env: {
         ...process.env,
         ELECTROBUN_BUILD_ENV: buildEnvironment,
-        ELECTROBUN_OS: OS,
-        ELECTROBUN_ARCH: ARCH,
+        ELECTROBUN_OS: targetOS, // Use target OS for environment variables
+        ELECTROBUN_ARCH: targetARCH, // Use target ARCH for environment variables
         ELECTROBUN_BUILD_DIR: buildFolder,
         ELECTROBUN_APP_NAME: appFileName,
         ELECTROBUN_APP_VERSION: config.app.version,
@@ -1257,20 +1288,59 @@ if (commandArg === "init") {
     console.log("compressing tarball...");
     await ZstdInit().then(async ({ ZstdSimple, ZstdStream }) => {
       // Note: Simple is much faster than stream, but stream is better for large files
-      // todo (yoav): consider a file size cutoff to switch to stream instead of simple.
+      // Use stream for files larger than 100MB to avoid memory issues
+      const useStream = tarball.size > 100 * 1024 * 1024;
+      
       if (tarball.size > 0) {
-        // Uint8 array filestream of the tar file
-
-        const data = new Uint8Array(tarBuffer);
+        console.log(`Compressing ${Math.round(tarball.size / 1024 / 1024)}MB tarball using ${useStream ? 'ZstdStream' : 'ZstdSimple'}...`);
+        
         const compressionLevel = 22;
-        const compressedData = ZstdSimple.compress(data, compressionLevel);
+        let compressedData: Uint8Array;
+        
+        if (useStream) {
+          // Use streaming compression for large files
+          const compressor = new ZstdStream();
+          compressor.init(compressionLevel);
+          
+          // Read file in chunks to avoid memory issues
+          const chunkSize = 1024 * 1024; // 1MB chunks
+          const chunks: Uint8Array[] = [];
+          
+          for (let offset = 0; offset < tarBuffer.byteLength; offset += chunkSize) {
+            const end = Math.min(offset + chunkSize, tarBuffer.byteLength);
+            const chunk = new Uint8Array(tarBuffer, offset, end - offset);
+            const compressedChunk = compressor.compress(chunk);
+            if (compressedChunk.length > 0) {
+              chunks.push(compressedChunk);
+            }
+          }
+          
+          // Finalize compression
+          const finalChunk = compressor.flush();
+          if (finalChunk.length > 0) {
+            chunks.push(finalChunk);
+          }
+          
+          // Combine all chunks
+          const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+          compressedData = new Uint8Array(totalLength);
+          let offset = 0;
+          for (const chunk of chunks) {
+            compressedData.set(chunk, offset);
+            offset += chunk.length;
+          }
+        } else {
+          // Use simple compression for smaller files
+          const data = new Uint8Array(tarBuffer);
+          compressedData = ZstdSimple.compress(data, compressionLevel);
+        }
 
         console.log(
           "compressed",
           compressedData.length,
           "bytes",
           "from",
-          data.length,
+          tarBuffer.byteLength,
           "bytes"
         );
 
@@ -1293,7 +1363,7 @@ if (commandArg === "init") {
     // copy the zstd tarball to the self-extracting app bundle
     cpSync(compressedTarPath, compressedTarballInExtractingBundlePath);
 
-    const selfExtractorBinSourcePath = PATHS.EXTRACTOR;
+    const selfExtractorBinSourcePath = targetPaths.EXTRACTOR;
     const selfExtractorBinDestinationPath = join(
       selfExtractingBundle.appBundleMacOSPath,
       "launcher"
@@ -1461,7 +1531,7 @@ if (commandArg === "init") {
         console.log("diff previous and new tarballs...");
         // Run it as a separate process to leverage multi-threadedness
         // especially for creating multiple diffs in parallel
-        const bsdiffpath = PATHS.BSDIFF;
+        const bsdiffpath = targetPaths.BSDIFF;
         const patchFilePath = join(buildFolder, `${prevHash}.patch`);
         const platformPatchFilePath = join(buildFolder, `${prevHash}${platformSuffix}.patch`);
         artifactsToUpload.push(platformPatchFilePath);

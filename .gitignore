@@ -16,3 +16,4 @@ bin/electrobun.exe
 electrobun-cef*
 electrobun-core*
 electrobun-cli*
+dist-*
