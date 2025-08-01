@@ -581,7 +581,10 @@ async function vendorCEF() {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a'))) {
             console.log('Building CEF wrapper library for Linux...');
             await $`cd vendors/cef && rm -rf build && mkdir -p build`;
-            await $`cd vendors/cef/build && cmake -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
+            
+            // Set architecture-specific cmake flags
+            const archFlags = ARCH === 'arm64' ? '-DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_FLAGS=-march=armv8-a -DCMAKE_CXX_FLAGS=-march=armv8-a' : '';
+            await $`cd vendors/cef/build && cmake -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ${archFlags} ..`;
             await $`cd vendors/cef/build && make -j$(nproc) libcef_dll_wrapper`;
         }
         
