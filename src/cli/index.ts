@@ -1441,11 +1441,11 @@ if (commandArg === "init") {
       const platformDmgPath = join(buildFolder, `${appFileName}${platformSuffix}.dmg`);
       artifactsToUpload.push(platformDmgPath);
       // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
-      // Note: use UDBZ for better compression vs. UDZO
+      // Note: use ULFO (lzfse) for better compatibility with large CEF frameworks and modern macOS
       execSync(
         `hdiutil create -volname "${appFileName}" -srcfolder ${escapePathForTerminal(
           appBundleFolderPath
-        )} -ov -format UDBZ ${escapePathForTerminal(dmgPath)}`
+        )} -ov -format ULFO ${escapePathForTerminal(dmgPath)}`
       );
 
       if (shouldCodesign) {
