@@ -11,6 +11,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Disable assembly optimizations to avoid linking issues with missing HUF assembly functions
+    libzstd.defineCMacro("ZSTD_DISABLE_ASM", "1");
+    
     libzstd.addCSourceFiles(.{
         .files = &[_][]const u8{
             "zstd/lib/common/debug.c",
