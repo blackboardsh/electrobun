@@ -5,7 +5,22 @@ import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
 
-const appSupportDir = join(homedir(), "Library", "Application Support");
+// Cross-platform app data directory
+function getAppDataDir(): string {
+  switch (currentOS) {
+    case 'macos':
+      return join(homedir(), "Library", "Application Support");
+    case 'win':
+      // Use APPDATA environment variable or fallback to default location
+      return process.env.APPDATA || join(homedir(), "AppData", "Roaming");
+    case 'linux':
+      // Use XDG_CONFIG_HOME or fallback to ~/.config
+      return process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+    default:
+      // Fallback to home directory with .config
+      return join(homedir(), ".config");
+  }
+}
 
 // todo (yoav): share type with cli
 let localInfo: {
@@ -214,10 +229,20 @@ const Updater = {
       if (currentHash !== latestHash) {
         const cacheBuster = Math.random().toString(36).substring(7);
         const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
+        // Platform-specific tarball naming
+        let tarballName: string;
+        if (currentOS === 'macos') {
+          tarballName = `${appFileName}.app.tar.zst`;
+        } else if (currentOS === 'win') {
+          tarballName = `${appFileName}.tar.zst`;
+        } else {
+          tarballName = `${appFileName}.tar.zst`;
+        }
+        
         const urlToLatestTarball = join(
           localInfo.bucketUrl,
           platformFolder,
-          `${appFileName}.app.tar.zst`
+          tarballName
         );
         const prevVersionCompressedTarballPath = join(
           appDataFolder,
@@ -294,16 +319,24 @@ const Updater = {
           file: latestTarPath,
           cwd: extractionFolder,
           onentry: (entry) => {
-            // find the first .app bundle in the tarball
-            // Some apps may have nested .app bundles
-            if (!appBundleSubpath && entry.path.endsWith(".app/")) {
-              appBundleSubpath = entry.path;
+            if (currentOS === 'macos') {
+              // find the first .app bundle in the tarball
+              // Some apps may have nested .app bundles
+              if (!appBundleSubpath && entry.path.endsWith(".app/")) {
+                appBundleSubpath = entry.path;
+              }
+            } else {
+              // For Windows/Linux, look for the main executable
+              // This assumes the tarball contains the app at the root
+              if (!appBundleSubpath) {
+                appBundleSubpath = "./";
+              }
             }
           },
         });
 
         if (!appBundleSubpath) {
-          console.error("Failed to find app bundle in tarball");
+          console.error("Failed to find app in tarball");
           return;
         }
 
@@ -311,14 +344,22 @@ const Updater = {
         const newAppBundlePath = resolve(
           join(extractionFolder, appBundleSubpath)
         );
-        // Note: dirname(process.execPath) is the path to the running app bundle's
-        // Contents/MacOS directory
-        const runningAppBundlePath = resolve(
-          dirname(process.execPath),
-          "..",
-          ".."
-        );
-        const backupAppBundlePath = join(extractionFolder, "backup.app");
+        // Platform-specific app path calculation
+        let runningAppBundlePath: string;
+        if (currentOS === 'macos') {
+          // On macOS, executable is at Contents/MacOS/binary inside .app bundle
+          runningAppBundlePath = resolve(
+            dirname(process.execPath),
+            "..",
+            ".."
+          );
+        } else {
+          // On Windows/Linux, the executable is the app itself
+          runningAppBundlePath = process.execPath;
+        }
+        // Platform-specific backup naming
+        const backupName = currentOS === 'macos' ? "backup.app" : "backup";
+        const backupAppBundlePath = join(extractionFolder, backupName);
 
         try {
           // const backupState = statSync(backupAppBundlePath);
@@ -334,7 +375,20 @@ const Updater = {
           return;
         }
 
-        await Bun.spawn(["open", runningAppBundlePath]);
+        // Cross-platform app launch
+        switch (currentOS) {
+          case 'macos':
+            await Bun.spawn(["open", runningAppBundlePath]);
+            break;
+          case 'win':
+            // On Windows, the runningAppBundlePath would be the .exe file
+            await Bun.spawn([runningAppBundlePath]);
+            break;
+          case 'linux':
+            // On Linux, directly execute the binary
+            await Bun.spawn([runningAppBundlePath]);
+            break;
+        }
         process.exit(0);
       }
     }
@@ -349,7 +403,7 @@ const Updater = {
   appDataFolder: async () => {
     await Updater.getLocallocalInfo();
     const appDataFolder = join(
-      appSupportDir,
+      getAppDataDir(),
       localInfo.identifier,
       localInfo.name
     );
