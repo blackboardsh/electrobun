@@ -2,6 +2,7 @@ import { join, dirname, basename } from "path";
 import {
   existsSync,
   readFileSync,
+  writeFileSync,
   cpSync,
   rmdirSync,
   mkdirSync,
@@ -13,6 +14,7 @@ import { execSync } from "child_process";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS, ARCH } from '../shared/platform';
+import { getTemplate, getTemplateNames } from './templates/embedded';
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
 // MacOS named pipes hang at around 4KB
 const MAX_CHUNK_SIZE = 1024 * 2;
@@ -682,8 +684,57 @@ const bundleFileName = targetOS === 'macos' ? `${appFileName}.app` : appFileName
 let proc = null;
 
 if (commandArg === "init") {
-  // todo (yoav): init a repo folder structure
-  console.log("initializing electrobun project");
+  const projectName = process.argv[indexOfElectrobun + 2] || "my-electrobun-app";
+  const templateName = process.argv.find(arg => arg.startsWith("--template="))?.split("=")[1] || "hello-world";
+  
+  console.log(`🚀 Initializing Electrobun project: ${projectName}`);
+  
+  // Validate template name
+  const availableTemplates = getTemplateNames();
+  if (!availableTemplates.includes(templateName)) {
+    console.error(`❌ Template "${templateName}" not found.`);
+    console.log(`Available templates: ${availableTemplates.join(", ")}`);
+    process.exit(1);
+  }
+  
+  const template = getTemplate(templateName);
+  if (!template) {
+    console.error(`❌ Could not load template "${templateName}"`);
+    process.exit(1);
+  }
+  
+  // Create project directory
+  const projectPath = join(process.cwd(), projectName);
+  if (existsSync(projectPath)) {
+    console.error(`❌ Directory "${projectName}" already exists.`);
+    process.exit(1);
+  }
+  
+  mkdirSync(projectPath, { recursive: true });
+  
+  // Extract template files
+  let fileCount = 0;
+  for (const [relativePath, content] of Object.entries(template.files)) {
+    const fullPath = join(projectPath, relativePath);
+    const dir = dirname(fullPath);
+    
+    // Create directory if it doesn't exist
+    mkdirSync(dir, { recursive: true });
+    
+    // Write file
+    writeFileSync(fullPath, content, 'utf-8');
+    fileCount++;
+  }
+  
+  console.log(`✅ Created ${fileCount} files from "${templateName}" template`);
+  console.log(`📁 Project created at: ${projectPath}`);
+  console.log("");
+  console.log("📦 Next steps:");
+  console.log(`   cd ${projectName}`);
+  console.log("   bun install");
+  console.log("   bunx electrobun dev");
+  console.log("");
+  console.log("🎉 Happy building with Electrobun!");
 } else if (commandArg === "build") {
   // Ensure core binaries are available for the target platform before starting build
   await ensureCoreDependencies(currentTarget.os, currentTarget.arch);

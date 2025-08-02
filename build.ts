@@ -2,8 +2,8 @@
 
 import { $ } from "bun";
 import { platform, arch } from "os";
-import { join } from 'path';
-import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync } from "fs";
+import { join, dirname } from 'path';
+import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { parseArgs } from 'util';
 import process from 'process';
 
@@ -83,6 +83,11 @@ async function build() {
     await BunInstall();
 
     await buildNative(); // zig depends on this for linking symbols
+    
+    // Generate template embeddings before building CLI
+    console.log("Generating template embeddings...");
+    await generateTemplateEmbeddings();
+    
     await Promise.all([        
         buildTRDiff(),
         buildSelfExtractor(),
@@ -103,19 +108,21 @@ async function buildForNpm() {
     console.log("Copying API files...");
     await copyApiFiles();
     
-    console.log("npm build complete! dist/ contains only main.js and api/ folder.");
+    console.log("npm build complete! dist/ contains main.js and api/ folder (bun, browser, shared APIs).");
 }
 
 async function copyApiFiles() {
-    // Copy TypeScript APIs (src/bun and src/browser to dist/api/)
+    // Copy TypeScript APIs (src/bun, src/browser, and src/shared to dist/api/)
     if (OS === 'win') {
         // on windows the folder gets copied "into" the destination folder
         await $`cp -R src/bun/ dist/api`;
         await $`cp -R src/browser/ dist/api`;
+        await $`cp -R src/shared/ dist/api`;
     } else {
         // on unix cp is more like a rename        
         await $`cp -R src/bun dist/api/`;
-        await $`cp -R src/browser dist/api/`; 
+        await $`cp -R src/browser dist/api/`;
+        await $`cp -R src/shared dist/api/`;
     }
 }
 
@@ -810,5 +817,106 @@ async function buildCli() {
     await $`bun build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
 
 
+}
+
+async function generateTemplateEmbeddings() {
+    const TEMPLATES_DIR = join(process.cwd(), "templates");
+    const OUTPUT_FILE = join(process.cwd(), "src/cli/templates/embedded.ts");
+    
+    if (!existsSync(TEMPLATES_DIR)) {
+        console.log("No templates directory found, skipping template generation");
+        return;
+    }
+    
+    const templates: Record<string, { name: string; files: Record<string, string> }> = {};
+    
+    // Read all template directories
+    const templateNames = readdirSync(TEMPLATES_DIR, { withFileTypes: true })
+        .filter(dirent => dirent.isDirectory())
+        .map(dirent => dirent.name);
+    
+    if (templateNames.length === 0) {
+        console.log("No templates found in templates/ directory");
+        return;
+    }
+    
+    for (const templateName of templateNames) {
+        const templateDir = join(TEMPLATES_DIR, templateName);
+        const files: Record<string, string> = {};
+        
+        // Recursively read all files in the template directory
+        function readDirectory(dir: string, basePath: string = "") {
+            const entries = readdirSync(dir, { withFileTypes: true });
+            
+            for (const entry of entries) {
+                const fullPath = join(dir, entry.name);
+                const relativePath = join(basePath, entry.name).replace(/\\/g, '/');
+                
+                // Skip common directories and files that shouldn't be in templates
+                if (entry.name === 'node_modules' || 
+                    entry.name === '.git' || 
+                    entry.name === 'build' || 
+                    entry.name === 'dist' || 
+                    entry.name === '.next' || 
+                    entry.name === '.DS_Store' || 
+                    entry.name.startsWith('.') ||
+                    entry.name === 'package-lock.json' ||
+                    entry.name === 'bun.lockb' ||
+                    entry.name === 'yarn.lock') {
+                    continue;
+                }
+                
+                if (entry.isDirectory()) {
+                    readDirectory(fullPath, relativePath);
+                } else {
+                    try {
+                        const content = readFileSync(fullPath, 'utf-8');
+                        files[relativePath] = content;
+                    } catch (error) {
+                        console.warn(`Warning: Could not read ${fullPath}:`, error);
+                    }
+                }
+            }
+        }
+        
+        readDirectory(templateDir);
+        
+        templates[templateName] = {
+            name: templateName,
+            files
+        };
+    }
+    
+    // Generate TypeScript file using JSON.stringify for proper escaping
+    const output = `// Auto-generated file. Do not edit directly.
+// Generated from templates/ directory
+
+export interface Template {
+  name: string;
+  files: Record<string, string>;
+}
+
+export const templates: Record<string, Template> = ${JSON.stringify(templates, null, 2)};
+
+export function getTemplateNames(): string[] {
+  return Object.keys(templates);
+}
+
+export function getTemplate(name: string): Template | undefined {
+  return templates[name];
+}
+`;
+    
+    // Ensure the output directory exists
+    const outputDir = dirname(OUTPUT_FILE);
+    if (!existsSync(outputDir)) {
+        mkdirSync(outputDir, { recursive: true });
+    }
+    
+    // Write the output file
+    writeFileSync(OUTPUT_FILE, output);
+    
+    const totalFiles = Object.values(templates).reduce((acc, t) => acc + Object.keys(t.files).length, 0);
+    console.log(`Generated ${totalFiles} template files for ${templateNames.length} templates: ${templateNames.join(", ")}`);
 }
 

@@ -1,0 +1,124 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    margin: 0;
+    padding: 0;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #333;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 20px;
+}
+
+h1 {
+    color: white;
+    font-size: 3rem;
+    text-align: center;
+    margin-bottom: 8px;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.subtitle {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 1.25rem;
+    text-align: center;
+    margin-top: 0;
+    margin-bottom: 40px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.welcome-section {
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    margin: 30px 0;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+    line-height: 1.6;
+}
+
+h2 {
+    color: #2563eb;
+    margin-top: 30px;
+    margin-bottom: 15px;
+}
+
+ul {
+    margin: 20px 0;
+    padding-left: 20px;
+}
+
+li {
+    margin: 8px 0;
+}
+
+.links {
+    display: flex;
+    gap: 15px;
+    margin: 25px 0;
+    flex-wrap: wrap;
+}
+
+.doc-link {
+    display: inline-block;
+    background: #2563eb;
+    color: white;
+    text-decoration: none;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+}
+
+.doc-link:hover {
+    background: #1d4ed8;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(37, 99, 235, 0.3);
+}
+
+code {
+    background: #f1f5f9;
+    color: #475569;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.9em;
+}
+
+.footer {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.8);
+    margin-top: 40px;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    backdrop-filter: blur(10px);
+}
+
+.footer p {
+    margin: 8px 0;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+    .welcome-section {
+        background: #1f2937;
+        color: #f3f4f6;
+    }
+    
+    h2 {
+        color: #60a5fa;
+    }
+    
+    code {
+        background: #374151;
+        color: #d1d5db;
+    }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "electrobun-hello-world",
+  "version": "1.0.0",
+  "description": "A simple Electrobun app showcasing core features",
+  "scripts": {
+    "dev": "electrobun dev",
+    "build": "electrobun build",
+    "start": "bun run build && bun run dev"
+  },
+  "dependencies": {
+    "electrobun": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

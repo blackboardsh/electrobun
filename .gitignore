@@ -17,3 +17,4 @@ electrobun-cef*
 electrobun-core*
 electrobun-cli*
 dist-*
+src/cli/templates/embedded.ts
