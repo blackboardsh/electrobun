@@ -108,8 +108,10 @@ async function createTarballs() {
     console.log(`CLI tarball size: ${cliSizeMB} MB`);
   }
 
-  // 2. Create core binaries tarball (exclude CEF)
-  const coreFiles = fs.readdirSync(distPath).filter(file => file !== 'cef');
+  // 2. Create core binaries tarball (exclude CEF and CLI)
+  const coreFiles = fs.readdirSync(distPath).filter(file => 
+    file !== 'cef' && !file.startsWith('electrobun')
+  );
   
   if (coreFiles.length > 0) {
     console.log(`Creating core binaries tarball: ${coreOutputFile}`);
