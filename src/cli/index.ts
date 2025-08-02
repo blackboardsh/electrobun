@@ -58,7 +58,7 @@ const configPath = join(projectRoot, configName);
 const indexOfElectrobun = process.argv.findIndex((arg) =>
   arg.includes("electrobun")
 );
-const commandArg = process.argv[indexOfElectrobun + 1] || "launcher";
+const commandArg = process.argv[indexOfElectrobun + 1] || "build";
 
 const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
 
@@ -401,10 +401,6 @@ const commandDefaults = {
     config: "electrobun.config",
   },
   dev: {
-    projectRoot,
-    config: "electrobun.config",
-  },
-  launcher: {
     projectRoot,
     config: "electrobun.config",
   },
