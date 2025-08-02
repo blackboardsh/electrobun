@@ -817,39 +817,21 @@ if (commandArg === "init") {
   //     mkdirSync(destLauncherFolder, {recursive: true});
   // }
   // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});
-  // For dev builds, use the actual CLI binary that's currently running
-  // It could be in .cache (npm install) or bin (local dev)
-  let devLauncherPath = targetPaths.LAUNCHER_DEV;
-  if (buildEnvironment === "dev" && !existsSync(devLauncherPath)) {
-    // Check .cache location (npm installed)
-    const cachePath = join(ELECTROBUN_DEP_PATH, ".cache", "electrobun") + binExt;
-    if (existsSync(cachePath)) {
-      devLauncherPath = cachePath;
-    } else {
-      // Check bin location (local dev)
-      const binPath = join(ELECTROBUN_DEP_PATH, "bin", "electrobun") + binExt;
-      if (existsSync(binPath)) {
-        devLauncherPath = binPath;
-      }
+  // Only copy launcher for non-dev builds
+  if (buildEnvironment !== "dev") {
+    const bunCliLauncherBinarySource = targetPaths.LAUNCHER_RELEASE;
+    const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + binExt;
+    const destLauncherFolder = dirname(bunCliLauncherDestination);
+    if (!existsSync(destLauncherFolder)) {
+      // console.info('creating folder: ', destFolder);
+      mkdirSync(destLauncherFolder, { recursive: true });
     }
-  }
-  
-  const bunCliLauncherBinarySource =
-    buildEnvironment === "dev"
-      ? devLauncherPath
-      : // Note: for release use the zig launcher optimized for smol size
-        targetPaths.LAUNCHER_RELEASE;
-  const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + binExt;
-  const destLauncherFolder = dirname(bunCliLauncherDestination);
-  if (!existsSync(destLauncherFolder)) {
-    // console.info('creating folder: ', destFolder);
-    mkdirSync(destLauncherFolder, { recursive: true });
-  }
 
-  cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {
-    recursive: true,
-    dereference: true,
-  });
+    cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {
+      recursive: true,
+      dereference: true,
+    });
+  }
 
   cpSync(targetPaths.MAIN_JS, join(appBundleMacOSPath, 'main.js'));
 
@@ -1624,10 +1606,7 @@ if (commandArg === "init") {
   // todo (yoav): rename to start
 
   // run the project in dev mode
-  // this runs the cli in debug mode, on macos executes the app bundle,
-  // there is another copy of the cli in the app bundle that will execute the app
-  // the two cli processes communicate via named pipes and together manage the dev
-  // lifecycle and debug functionality
+  // this runs the bundled bun binary with main.js directly
 
   // Note: this cli will be a bun single-file-executable
   // Note: we want to use the version of bun that's packaged with electrobun
