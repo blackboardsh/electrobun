@@ -1,8 +1,9 @@
 import { join, dirname, resolve } from "path";
-import { homedir, platform } from "os";
+import { homedir } from "os";
 import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync } from "fs";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
+import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
 
 const appSupportDir = join(homedir(), "Library", "Application Support");
 
@@ -46,7 +47,8 @@ const Updater = {
 
     const channelBucketUrl = await Updater.channelBucketUrl();
     const cacheBuster = Math.random().toString(36).substring(7);
-    const updateInfoUrl = join(channelBucketUrl, `update.json?${cacheBuster}`);
+    const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
+    const updateInfoUrl = join(localInfo.bucketUrl, platformFolder, `update.json?${cacheBuster}`);
 
     try {
       const updateInfoResponse = await fetch(updateInfoUrl);
@@ -113,8 +115,9 @@ const Updater = {
         }
 
         // check if there's a patch file for it
+        const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
         const patchResponse = await fetch(
-          join(channelBucketUrl, `${currentHash}.patch`)
+          join(localInfo.bucketUrl, platformFolder, `${currentHash}.patch`)
         );
 
         if (!patchResponse.ok) {
@@ -210,8 +213,10 @@ const Updater = {
       // then just download it and unpack it
       if (currentHash !== latestHash) {
         const cacheBuster = Math.random().toString(36).substring(7);
+        const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
         const urlToLatestTarball = join(
-          channelBucketUrl,
+          localInfo.bucketUrl,
+          platformFolder,
           `${appFileName}.app.tar.zst`
         );
         const prevVersionCompressedTarballPath = join(
@@ -337,8 +342,8 @@ const Updater = {
 
   channelBucketUrl: async () => {
     await Updater.getLocallocalInfo();
-    // todo: tmp hardcode canary
-    return join(localInfo.bucketUrl, localInfo.channel);
+    const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
+    return join(localInfo.bucketUrl, platformFolder);
   },
 
   appDataFolder: async () => {
