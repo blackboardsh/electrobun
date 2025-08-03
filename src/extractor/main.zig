@@ -29,35 +29,42 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Get file size
     const file_size = try self_file.getEndPos();
     
-    // Read the last few KB to search for our magic marker sequence
-    const search_size: usize = @min(8192, file_size); // Search last 8KB
-    const search_start = file_size - search_size;
-    try self_file.seekTo(search_start);
     
-    var search_buffer: [8192]u8 = undefined;
-    const bytes_read = try self_file.read(search_buffer[0..search_size]);
-    if (bytes_read != search_size) {
-        return false; // Could not read search area
+    // Read file to find the SECOND occurrence of the metadata marker
+    // This avoids false positives if markers appear in the extractor binary or user code
+    const search_buffer = try allocator.alloc(u8, file_size);
+    defer allocator.free(search_buffer);
+    
+    try self_file.seekTo(0);
+    _ = try self_file.readAll(search_buffer);
+    
+    // Find first occurrence
+    const first_metadata_pos = std.mem.indexOf(u8, search_buffer, METADATA_MARKER);
+    if (first_metadata_pos == null) {
+        return false; // No metadata marker at all
     }
     
-    // Look for metadata marker first
-    const metadata_marker_pos = std.mem.lastIndexOf(u8, search_buffer[0..bytes_read], METADATA_MARKER);
-    if (metadata_marker_pos == null) {
-        return false; // Not a self-extracting exe with metadata
+    // Find second occurrence (the real one we appended)
+    const search_start = first_metadata_pos.? + METADATA_MARKER.len;
+    const remaining_after_first = search_buffer[search_start..];
+    const second_metadata_offset = std.mem.indexOf(u8, remaining_after_first, METADATA_MARKER);
+    if (second_metadata_offset == null) {
+        return false; // No second occurrence found
     }
     
-    // Calculate absolute position of metadata start
-    const metadata_start = search_start + metadata_marker_pos.? + METADATA_MARKER.len;
+    // Calculate absolute position of the second metadata marker
+    const metadata_marker_pos = search_start + second_metadata_offset.?;
+    const metadata_start = metadata_marker_pos + METADATA_MARKER.len;
     
-    // Look for archive marker after metadata marker
-    const remaining_buffer = search_buffer[metadata_marker_pos.?..bytes_read];
-    const archive_marker_pos = std.mem.indexOf(u8, remaining_buffer, ARCHIVE_MARKER);
-    if (archive_marker_pos == null) {
+    // Look for archive marker after the second metadata marker
+    const remaining_buffer = search_buffer[metadata_marker_pos..];
+    const archive_marker_offset = std.mem.indexOf(u8, remaining_buffer, ARCHIVE_MARKER);
+    if (archive_marker_offset == null) {
         return false; // Archive marker not found
     }
     
     // Calculate absolute position of archive start
-    const archive_offset = search_start + metadata_marker_pos.? + archive_marker_pos.? + ARCHIVE_MARKER.len;
+    const archive_offset = metadata_marker_pos + archive_marker_offset.? + ARCHIVE_MARKER.len;
     
     // Read metadata
     const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
@@ -338,14 +345,18 @@ pub fn main() !void {
     var exePathBuffer: [1024]u8 = undefined;
     const APPBUNDLE_MACOS_PATH = try std.fs.selfExeDirPath(exePathBuffer[0..]);
     
-    // On Windows and Linux, check if we're a self-extracting exe with appended archive
+    // Platform-specific extraction
     if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
-        // Try to extract from self first
-        if (try extractFromSelf(allocator)) {
-            return;
+        // Windows and Linux ONLY use self-extraction with magic bytes
+        const extracted = try extractFromSelf(allocator);
+        if (!extracted) {
+            std.debug.print("ERROR: Not a valid self-extracting installer\n", .{});
+            return error.InvalidInstaller;
         }
-        // If not a self-extracting exe, continue with normal flow
+        return;
     }
+    
+    // macOS uses the plist approach
     const APPBUNDLE_PATH = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, "../../" });
     const PLIST_PATH = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "Contents/Info.plist" });
 
