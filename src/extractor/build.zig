@@ -13,5 +13,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Link with libc for chmod and other system calls
+    exe.linkLibC();
+
     b.installArtifact(exe);
 }

@@ -85,7 +85,8 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     
     // Decompress using zstd
     var window_buffer: [1 << 20]u8 = undefined; // 1MB window
-    var decompressor = zstd.decompressor(.{
+    var stream = std.io.fixedBufferStream(compressed_data);
+    var decompressor = zstd.decompressor(stream.reader(), .{
         .window_buffer = &window_buffer,
     });
     
@@ -93,18 +94,11 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     defer decompressed_data.deinit();
     
     // Decompress in chunks
-    var chunk_start: usize = 0;
-    const chunk_size = 128 * 1024 * 1024; // 128MB chunks
-    
-    while (chunk_start < compressed_data.len) {
-        const chunk_end = @min(chunk_start + chunk_size, compressed_data.len);
-        const chunk = compressed_data[chunk_start..chunk_end];
-        
-        const decompressed_chunk = try decompressor.decompressAllAlloc(allocator, chunk, .{ .size_hint = chunk.len * 10 });
-        defer allocator.free(decompressed_chunk);
-        
-        try decompressed_data.appendSlice(decompressed_chunk);
-        chunk_start = chunk_end;
+    var buffer: [4096]u8 = undefined;
+    while (true) {
+        const read_size = try decompressor.reader().read(&buffer);
+        if (read_size == 0) break;
+        try decompressed_data.appendSlice(buffer[0..read_size]);
     }
     
     // Extract tar archive to current directory
