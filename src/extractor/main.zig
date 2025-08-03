@@ -6,8 +6,16 @@ const zstd = std.compress.zstd;
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "../Resources/compressed.tar.zst";
 const BUNLE_RESOURCES_REL_PATH = "../Resources/";
 
-// Magic marker to identify where the archive starts
+// Magic markers to identify where data starts
 const ARCHIVE_MARKER = "ELECTROBUN_ARCHIVE_V1";
+const METADATA_MARKER = "ELECTROBUN_METADATA_V1";
+
+// Metadata structure embedded in the binary
+const AppMetadata = struct {
+    identifier: []const u8,
+    name: []const u8,
+    channel: []const u8,
+};
 
 fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Get path to self
@@ -21,26 +29,48 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Get file size
     const file_size = try self_file.getEndPos();
     
-    // Read the last 1KB to look for marker
-    const search_size: usize = @min(1024, file_size);
+    // Read the last 2KB to look for markers (increased for metadata)
+    const search_size: usize = @min(2048, file_size);
     const search_start = file_size - search_size;
     try self_file.seekTo(search_start);
     
-    var search_buffer: [1024]u8 = undefined;
+    var search_buffer: [2048]u8 = undefined;
     const bytes_read = try self_file.read(search_buffer[0..search_size]);
     
-    // Look for marker
-    const marker_pos = std.mem.indexOf(u8, search_buffer[0..bytes_read], ARCHIVE_MARKER);
-    if (marker_pos == null) {
+    // Look for metadata marker first
+    const metadata_marker_pos = std.mem.indexOf(u8, search_buffer[0..bytes_read], METADATA_MARKER);
+    if (metadata_marker_pos == null) {
+        return false; // Not a self-extracting exe with metadata
+    }
+    
+    // Extract metadata
+    const metadata_start = search_start + metadata_marker_pos.? + METADATA_MARKER.len;
+    
+    // Look for archive marker
+    const archive_marker_pos = std.mem.indexOf(u8, search_buffer[0..bytes_read], ARCHIVE_MARKER);
+    if (archive_marker_pos == null) {
         return false; // Not a self-extracting exe
     }
     
     // Calculate archive offset
-    const archive_offset = search_start + marker_pos.? + ARCHIVE_MARKER.len;
+    const archive_offset = search_start + archive_marker_pos.? + ARCHIVE_MARKER.len;
+    
+    // Read metadata
+    const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
+    defer allocator.free(metadata.identifier);
+    defer allocator.free(metadata.name);
+    defer allocator.free(metadata.channel);
+    
     try self_file.seekTo(archive_offset);
     
-    // Extract to current directory
-    const extract_dir = try std.fs.selfExeDirPathAlloc(allocator);
+    // Build application support directory path
+    const app_data_dir = try getAppDataDir(allocator);
+    defer allocator.free(app_data_dir);
+    
+    const app_name_channel = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ metadata.name, metadata.channel });
+    defer allocator.free(app_name_channel);
+    
+    const extract_dir = try std.fs.path.join(allocator, &.{ app_data_dir, metadata.identifier, app_name_channel, "self-extraction" });
     defer allocator.free(extract_dir);
     
     std.debug.print("Self-extracting archive found at offset {d}\n", .{archive_offset});
@@ -83,12 +113,8 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Fix executable permissions on extracted binaries
     try fixExecutablePermissions(allocator, extract_dir);
     
-    // Create platform-specific shortcuts
-    if (builtin.os.tag == .windows) {
-        try createWindowsShortcut(allocator, extract_dir);
-    } else if (builtin.os.tag == .linux) {
-        try createLinuxShortcut(allocator, extract_dir);
-    }
+    // Replace self with launcher shortcut
+    try replaceSelfWithLauncher(allocator, exe_path, extract_dir);
     
     std.debug.print("Extraction complete!\n", .{});
     return true;
@@ -163,6 +189,75 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u
             }
         }
     }
+}
+
+fn readEmbeddedMetadata(allocator: std.mem.Allocator, file: std.fs.File, metadata_start: u64, archive_start: u64) !AppMetadata {
+    const metadata_size = archive_start - metadata_start;
+    if (metadata_size > 4096) return error.MetadataTooLarge; // Sanity check
+    
+    try file.seekTo(metadata_start);
+    const metadata_bytes = try allocator.alloc(u8, metadata_size);
+    defer allocator.free(metadata_bytes);
+    
+    _ = try file.read(metadata_bytes);
+    
+    // Parse JSON metadata
+    const parsed = try std.json.parseFromSlice(struct {
+        identifier: []const u8,
+        name: []const u8,
+        channel: []const u8,
+    }, allocator, metadata_bytes, .{});
+    defer parsed.deinit();
+    
+    return AppMetadata{
+        .identifier = try allocator.dupe(u8, parsed.value.identifier),
+        .name = try allocator.dupe(u8, parsed.value.name),
+        .channel = try allocator.dupe(u8, parsed.value.channel),
+    };
+}
+
+fn getAppDataDir(allocator: std.mem.Allocator) ![]const u8 {
+    return switch (builtin.os.tag) {
+        .windows => blk: {
+            // Use %LOCALAPPDATA% on Windows
+            const local_appdata = std.process.getEnvVarOwned(allocator, "LOCALAPPDATA") catch 
+                std.process.getEnvVarOwned(allocator, "APPDATA") catch {
+                    // Fallback to user profile
+                    const userprofile = try std.process.getEnvVarOwned(allocator, "USERPROFILE");
+                    defer allocator.free(userprofile);
+                    break :blk try std.fs.path.join(allocator, &.{ userprofile, "AppData", "Local" });
+                };
+            break :blk local_appdata;
+        },
+        .linux => blk: {
+            // Use XDG_DATA_HOME or ~/.local/share on Linux
+            const xdg_data_home = std.process.getEnvVarOwned(allocator, "XDG_DATA_HOME") catch {
+                const home = try std.process.getEnvVarOwned(allocator, "HOME");
+                defer allocator.free(home);
+                break :blk try std.fs.path.join(allocator, &.{ home, ".local", "share" });
+            };
+            break :blk xdg_data_home;
+        },
+        else => @compileError("Unsupported platform for app data directory"),
+    };
+}
+
+fn replaceSelfWithLauncher(allocator: std.mem.Allocator, exe_path: []const u8, extract_dir: []const u8) !void {
+    const launcher_name = if (builtin.os.tag == .windows) "launcher.exe" else "launcher";
+    const launcher_path = try std.fs.path.join(allocator, &.{ extract_dir, "bin", launcher_name });
+    defer allocator.free(launcher_path);
+    
+    // Check if launcher exists
+    const launcher_file = std.fs.cwd().openFile(launcher_path, .{}) catch |err| {
+        std.debug.print("Warning: Could not find launcher at {s}: {}\n", .{ launcher_path, err });
+        return;
+    };
+    launcher_file.close();
+    
+    // Copy launcher to replace self
+    try std.fs.copyFileAbsolute(launcher_path, exe_path, .{});
+    
+    std.debug.print("Replaced self with launcher shortcut from: {s}\n", .{launcher_path});
 }
 
 fn createLinuxShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !void {
@@ -245,8 +340,8 @@ pub fn main() !void {
     var exePathBuffer: [1024]u8 = undefined;
     const APPBUNDLE_MACOS_PATH = try std.fs.selfExeDirPath(exePathBuffer[0..]);
     
-    // On Windows, check if we're a self-extracting exe with appended archive
-    if (builtin.os.tag == .windows) {
+    // On Windows and Linux, check if we're a self-extracting exe with appended archive
+    if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
         // Try to extract from self first
         if (try extractFromSelf(allocator)) {
             return;

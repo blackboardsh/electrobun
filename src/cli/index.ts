@@ -1852,13 +1852,25 @@ async function createWindowsSelfExtractingExe(
   // Read the compressed archive
   const compressedArchive = readFileSync(compressedTarPath);
   
-  // Create marker buffer
-  const marker = Buffer.from('ELECTROBUN_ARCHIVE_V1', 'utf8');
+  // Create metadata JSON
+  const metadata = {
+    identifier: config.app.identifier,
+    name: config.app.name,
+    channel: buildEnvironment
+  };
+  const metadataJson = JSON.stringify(metadata);
+  const metadataBuffer = Buffer.from(metadataJson, 'utf8');
   
-  // Combine extractor + marker + archive
+  // Create marker buffers
+  const metadataMarker = Buffer.from('ELECTROBUN_METADATA_V1', 'utf8');
+  const archiveMarker = Buffer.from('ELECTROBUN_ARCHIVE_V1', 'utf8');
+  
+  // Combine extractor + metadata marker + metadata + archive marker + archive
   const combinedBuffer = Buffer.concat([
     extractorExe,
-    marker,
+    metadataMarker,
+    metadataBuffer,
+    archiveMarker,
     compressedArchive
   ]);
   
@@ -1897,13 +1909,25 @@ async function createLinuxSelfExtractingBinary(
   // Read the compressed archive
   const compressedArchive = readFileSync(compressedTarPath);
   
-  // Create marker buffer
-  const marker = Buffer.from('ELECTROBUN_ARCHIVE_V1', 'utf8');
+  // Create metadata JSON
+  const metadata = {
+    identifier: config.app.identifier,
+    name: config.app.name,
+    channel: buildEnvironment
+  };
+  const metadataJson = JSON.stringify(metadata);
+  const metadataBuffer = Buffer.from(metadataJson, 'utf8');
   
-  // Combine extractor + marker + archive
+  // Create marker buffers
+  const metadataMarker = Buffer.from('ELECTROBUN_METADATA_V1', 'utf8');
+  const archiveMarker = Buffer.from('ELECTROBUN_ARCHIVE_V1', 'utf8');
+  
+  // Combine extractor + metadata marker + metadata + archive marker + archive
   const combinedBuffer = Buffer.concat([
     extractorBinary,
-    marker,
+    metadataMarker,
+    metadataBuffer,
+    archiveMarker,
     compressedArchive
   ]);
   
