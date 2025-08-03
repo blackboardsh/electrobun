@@ -9,6 +9,8 @@ import {
   createWriteStream,
   unlinkSync,
   readdirSync,
+  rmSync,
+  symlinkSync,
 } from "fs";
 import { execSync } from "child_process";
 import tar from "tar";
@@ -438,7 +440,7 @@ const validEnvironments = ["dev", "canary", "stable"];
 
 // todo (yoav): dev, canary, and stable;
 const buildEnvironment: "dev" | "canary" | "stable" =
-  validEnvironments.includes(envArg) ? envArg : "dev";
+  validEnvironments.includes(envArg || "dev") ? (envArg || "dev") : "dev";
 
 // Determine build targets
 type BuildTarget = { os: 'macos' | 'win' | 'linux', arch: 'arm64' | 'x64' };
@@ -1052,11 +1054,13 @@ if (commandArg === "init") {
           'libvulkan.so.1'
         ];
         
+        // Copy CEF .so files to main directory as symlinks to cef/ subdirectory
         cefSoFiles.forEach(soFile => {
           const sourcePath = join(cefSourcePath, soFile);
           const destPath = join(appBundleMacOSPath, soFile);
           if (existsSync(sourcePath)) {
-            cpSync(sourcePath, destPath);
+            // We'll create the actual file in cef/ and symlink from main directory
+            // This will be done after the cef/ directory is populated
           }
         });
         
@@ -1115,6 +1119,30 @@ if (commandArg === "init") {
             console.log(`Copied CEF essential file to cef subdirectory: ${cefFile}`);
           } else {
             console.log(`WARNING: Missing CEF essential file: ${sourcePath}`);
+          }
+        });
+        
+        // Create symlinks from main directory to cef/ subdirectory for .so files
+        console.log('Creating symlinks for CEF libraries...');
+        cefSoFiles.forEach(soFile => {
+          const cefFilePath = join(cefResourcesDestination, soFile);
+          const mainDirPath = join(appBundleMacOSPath, soFile);
+          
+          if (existsSync(cefFilePath)) {
+            try {
+              // Remove any existing file/symlink in main directory
+              if (existsSync(mainDirPath)) {
+                rmSync(mainDirPath);
+              }
+              // Create symlink from main directory to cef/ subdirectory
+              symlinkSync(join('cef', soFile), mainDirPath);
+              console.log(`Created symlink for CEF library: ${soFile} -> cef/${soFile}`);
+            } catch (error) {
+              console.log(`WARNING: Failed to create symlink for ${soFile}: ${error}`);
+              // Fallback to copying the file
+              cpSync(cefFilePath, mainDirPath);
+              console.log(`Fallback: Copied CEF library to main directory: ${soFile}`);
+            }
           }
         });
         
