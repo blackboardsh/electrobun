@@ -95,6 +95,8 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
 }
 
 fn extractTar(allocator: std.mem.Allocator, tar_data: []const u8, extract_dir: []const u8) !void {
+    _ = allocator; // Mark as used (needed for potential path operations)
+    
     // Create extraction directory
     try std.fs.cwd().makePath(extract_dir);
     
@@ -118,10 +120,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u
         "bin/bsdiff",
     };
     
-    // Also check for scripts
-    const scripts = [_][]const u8{
-        ".sh", // Any .sh files
-    };
+    // Also check for scripts (handled in the iterator below)
     
     for (executables) |exe| {
         const exe_path = try std.fs.path.join(allocator, &.{ extract_dir, exe });
@@ -257,7 +256,7 @@ pub fn main() !void {
     const APPBUNDLE_PATH = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, "../../" });
     const PLIST_PATH = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "Contents/Info.plist" });
 
-    const plistContents = std.fs.readFileAllocAbsolute(allocator, PLIST_PATH, std.math.maxInt(usize)) catch |err| {
+    const plistContents = std.fs.cwd().readFileAlloc(allocator, PLIST_PATH, std.math.maxInt(usize)) catch |err| {
         std.debug.print("Failed to read plist at {s}: {}\n", .{ PLIST_PATH, err });
         return err;
     };
@@ -384,7 +383,6 @@ pub fn main() !void {
     try std.fs.renameAbsolute(newBundlePath, APPBUNDLE_PATH);
 
     // Platform-specific app launching
-    const builtin = @import("builtin");
     const argv = switch (builtin.os.tag) {
         .macos => &[_][]const u8{ "open", APPBUNDLE_PATH },
         .linux => blk: {
