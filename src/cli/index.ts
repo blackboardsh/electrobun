@@ -400,6 +400,12 @@ const defaultConfig = {
       },
       icons: "icon.iconset",
     },
+    win: {
+      bundleCEF: false,
+    },
+    linux: {
+      bundleCEF: false,
+    },
     bun: {
       entrypoint: "src/bun/index.ts",
       external: [],
@@ -1461,9 +1467,68 @@ if (commandArg === "init") {
       // Copy the self-extracting bundle to platform-specific filename
       if (targetOS === 'win') {
         // On Windows, create a self-extracting exe
-        // For now, just copy the bundle folder
-        artifactsToUpload.push(compressedTarPath);
+        const selfExtractingExePath = await createWindowsSelfExtractingExe(
+          buildFolder,
+          compressedTarPath,
+          appFileName,
+          targetPaths,
+          buildEnvironment
+        );
+        artifactsToUpload.push(selfExtractingExePath);
       } else if (targetOS === 'linux') {
+        // Create desktop file for Linux
+        const desktopFileContent = `[Desktop Entry]
+Version=1.0
+Type=Application
+Name=${config.package.name}
+Comment=${config.package.description || ''}
+Exec=${appFileName}
+Icon=${appFileName}
+Terminal=false
+StartupWMClass=${appFileName}
+Categories=Application;
+`;
+        
+        const desktopFilePath = join(appBundleFolderPath, `${appFileName}.desktop`);
+        writeFileSync(desktopFilePath, desktopFileContent);
+        
+        // Make desktop file executable
+        execSync(`chmod +x ${escapePathForTerminal(desktopFilePath)}`);
+        
+        // Create user-friendly launcher script
+        const launcherScriptContent = `#!/bin/bash
+# ${config.package.name} Launcher
+# This script launches the application from any location
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+
+# Find the launcher binary relative to this script
+LAUNCHER_BINARY="\$SCRIPT_DIR/bin/launcher"
+
+if [ ! -x "\$LAUNCHER_BINARY" ]; then
+    echo "Error: Could not find launcher binary at \$LAUNCHER_BINARY"
+    exit 1
+fi
+
+# Launch the application
+exec "\$LAUNCHER_BINARY" "\$@"
+`;
+        
+        const launcherScriptPath = join(appBundleFolderPath, `${appFileName}.sh`);
+        writeFileSync(launcherScriptPath, launcherScriptContent);
+        execSync(`chmod +x ${escapePathForTerminal(launcherScriptPath)}`);
+        
+        // Create self-extracting Linux binary (similar to Windows approach)
+        const selfExtractingLinuxPath = await createLinuxSelfExtractingBinary(
+          buildFolder,
+          compressedTarPath,
+          appFileName,
+          targetPaths,
+          buildEnvironment
+        );
+        artifactsToUpload.push(selfExtractingLinuxPath);
+        
         // On Linux, create a tar.gz of the bundle
         const linuxTarPath = join(buildFolder, `${appFileName}.tar.gz`);
         execSync(`tar -czf ${escapePathForTerminal(linuxTarPath)} -C ${escapePathForTerminal(buildFolder)} ${escapePathForTerminal(basename(appBundleFolderPath))}`);
@@ -1762,6 +1827,169 @@ function getEntitlementValue(value: boolean | string) {
     return `<${value.toString()}/>`;
   } else {
     return value;
+  }
+}
+
+async function createWindowsSelfExtractingExe(
+  buildFolder: string,
+  compressedTarPath: string,
+  appFileName: string,
+  targetPaths: any,
+  buildEnvironment: string
+): Promise<string> {
+  console.log("Creating self-extracting Windows exe...");
+  
+  // Format: MyApp-Setup.exe (stable) or MyApp-Setup-canary.exe (non-stable)
+  const setupFileName = buildEnvironment === "stable" 
+    ? `${config.app.name}-Setup.exe`
+    : `${config.app.name}-Setup-${buildEnvironment}.exe`;
+  
+  const outputExePath = join(buildFolder, setupFileName);
+  
+  // Read the extractor exe
+  const extractorExe = readFileSync(targetPaths.EXTRACTOR);
+  
+  // Read the compressed archive
+  const compressedArchive = readFileSync(compressedTarPath);
+  
+  // Create marker buffer
+  const marker = Buffer.from('ELECTROBUN_ARCHIVE_V1', 'utf8');
+  
+  // Combine extractor + marker + archive
+  const combinedBuffer = Buffer.concat([
+    extractorExe,
+    marker,
+    compressedArchive
+  ]);
+  
+  // Write the self-extracting exe
+  writeFileSync(outputExePath, combinedBuffer);
+  
+  // Make it executable (though Windows doesn't need chmod)
+  if (OS !== 'win') {
+    execSync(`chmod +x ${escapePathForTerminal(outputExePath)}`);
+  }
+  
+  console.log(`Created self-extracting exe: ${outputExePath} (${(combinedBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
+  
+  return outputExePath;
+}
+
+async function createLinuxSelfExtractingBinary(
+  buildFolder: string,
+  compressedTarPath: string,
+  appFileName: string,
+  targetPaths: any,
+  buildEnvironment: string
+): Promise<string> {
+  console.log("Creating self-extracting Linux binary...");
+  
+  // Format: MyApp-Setup.run (stable) or MyApp-Setup-canary.run (non-stable)
+  const setupFileName = buildEnvironment === "stable" 
+    ? `${config.app.name}-Setup.run`
+    : `${config.app.name}-Setup-${buildEnvironment}.run`;
+  
+  const outputPath = join(buildFolder, setupFileName);
+  
+  // Read the extractor binary
+  const extractorBinary = readFileSync(targetPaths.EXTRACTOR);
+  
+  // Read the compressed archive
+  const compressedArchive = readFileSync(compressedTarPath);
+  
+  // Create marker buffer
+  const marker = Buffer.from('ELECTROBUN_ARCHIVE_V1', 'utf8');
+  
+  // Combine extractor + marker + archive
+  const combinedBuffer = Buffer.concat([
+    extractorBinary,
+    marker,
+    compressedArchive
+  ]);
+  
+  // Write the self-extracting binary
+  writeFileSync(outputPath, combinedBuffer, { mode: 0o755 });
+  
+  // Ensure it's executable (redundant but explicit)
+  execSync(`chmod +x ${escapePathForTerminal(outputPath)}`);
+  
+  console.log(`Created self-extracting Linux binary: ${outputPath} (${(combinedBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
+  
+  return outputPath;
+}
+
+async function createAppImage(buildFolder: string, appBundlePath: string, appFileName: string, config: any): Promise<string | null> {
+  try {
+    console.log("Creating AppImage...");
+    
+    // Create AppDir structure
+    const appDirPath = join(buildFolder, `${appFileName}.AppDir`);
+    mkdirSync(appDirPath, { recursive: true });
+    
+    // Copy app bundle contents to AppDir
+    const appDirAppPath = join(appDirPath, "app");
+    cpSync(appBundlePath, appDirAppPath, { recursive: true });
+    
+    // Create AppRun script (main executable for AppImage)
+    const appRunContent = `#!/bin/bash
+HERE="$(dirname "$(readlink -f "\${0}")")"
+export APPDIR="\$HERE"
+cd "\$HERE"
+exec "\$HERE/app/bin/launcher" "\$@"
+`;
+    
+    const appRunPath = join(appDirPath, "AppRun");
+    writeFileSync(appRunPath, appRunContent);
+    execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
+    
+    // Create desktop file in AppDir root
+    const desktopContent = `[Desktop Entry]
+Version=1.0
+Type=Application
+Name=${config.package?.name || config.app.name}
+Comment=${config.package?.description || config.app.description || ''}
+Exec=AppRun
+Icon=${appFileName}
+Terminal=false
+StartupWMClass=${appFileName}
+Categories=Application;
+`;
+    
+    const appDirDesktopPath = join(appDirPath, `${appFileName}.desktop`);
+    writeFileSync(appDirDesktopPath, desktopContent);
+    
+    // Copy icon if it exists
+    const iconPath = config.build.linux?.appImageIcon;
+    if (iconPath && existsSync(iconPath)) {
+      const iconDestPath = join(appDirPath, `${appFileName}.png`);
+      cpSync(iconPath, iconDestPath);
+    }
+    
+    // Try to create AppImage using available tools
+    const appImagePath = join(buildFolder, `${appFileName}.AppImage`);
+    
+    // Check for appimagetool
+    try {
+      execSync('which appimagetool', { stdio: 'pipe' });
+      console.log("Using appimagetool to create AppImage...");
+      execSync(`appimagetool ${escapePathForTerminal(appDirPath)} ${escapePathForTerminal(appImagePath)}`, { stdio: 'inherit' });
+      return appImagePath;
+    } catch {
+      // Check for Docker
+      try {
+        execSync('which docker', { stdio: 'pipe' });
+        console.log("Using Docker to create AppImage...");
+        execSync(`docker run --rm -v "${buildFolder}:/workspace" linuxserver/appimagetool "/workspace/${basename(appDirPath)}" "/workspace/${basename(appImagePath)}"`, { stdio: 'inherit' });
+        return appImagePath;
+      } catch {
+        console.warn("Neither appimagetool nor Docker found. AppImage creation skipped.");
+        console.warn("To create AppImages, install appimagetool or Docker.");
+        return null;
+      }
+    }
+  } catch (error) {
+    console.error("Failed to create AppImage:", error);
+    return null;
   }
 }
 

@@ -6,6 +6,232 @@ const zstd = std.compress.zstd;
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "../Resources/compressed.tar.zst";
 const BUNLE_RESOURCES_REL_PATH = "../Resources/";
 
+// Magic marker to identify where the archive starts
+const ARCHIVE_MARKER = "ELECTROBUN_ARCHIVE_V1";
+
+fn extractFromSelf(allocator: std.mem.Allocator) !bool {
+    // Get path to self
+    const exe_path = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(exe_path);
+    
+    // Open self for reading
+    const self_file = try std.fs.openFileAbsolute(exe_path, .{});
+    defer self_file.close();
+    
+    // Get file size
+    const file_size = try self_file.getEndPos();
+    
+    // Read the last 1KB to look for marker
+    const search_size: usize = @min(1024, file_size);
+    const search_start = file_size - search_size;
+    try self_file.seekTo(search_start);
+    
+    var search_buffer: [1024]u8 = undefined;
+    const bytes_read = try self_file.read(search_buffer[0..search_size]);
+    
+    // Look for marker
+    const marker_pos = std.mem.indexOf(u8, search_buffer[0..bytes_read], ARCHIVE_MARKER);
+    if (marker_pos == null) {
+        return false; // Not a self-extracting exe
+    }
+    
+    // Calculate archive offset
+    const archive_offset = search_start + marker_pos.? + ARCHIVE_MARKER.len;
+    try self_file.seekTo(archive_offset);
+    
+    // Extract to current directory
+    const extract_dir = try std.fs.selfExeDirPathAlloc(allocator);
+    defer allocator.free(extract_dir);
+    
+    std.debug.print("Self-extracting archive found at offset {d}\n", .{archive_offset});
+    std.debug.print("Extracting to: {s}\n", .{extract_dir});
+    
+    // Read and decompress archive
+    const archive_size = file_size - archive_offset;
+    const compressed_data = try allocator.alloc(u8, archive_size);
+    defer allocator.free(compressed_data);
+    
+    _ = try self_file.read(compressed_data);
+    
+    // Decompress using zstd
+    var window_buffer: [1 << 20]u8 = undefined; // 1MB window
+    var decompressor = zstd.decompressor(.{
+        .window_buffer = &window_buffer,
+    });
+    
+    var decompressed_data = std.ArrayList(u8).init(allocator);
+    defer decompressed_data.deinit();
+    
+    // Decompress in chunks
+    var chunk_start: usize = 0;
+    const chunk_size = 128 * 1024 * 1024; // 128MB chunks
+    
+    while (chunk_start < compressed_data.len) {
+        const chunk_end = @min(chunk_start + chunk_size, compressed_data.len);
+        const chunk = compressed_data[chunk_start..chunk_end];
+        
+        const decompressed_chunk = try decompressor.decompressAllAlloc(allocator, chunk, .{ .size_hint = chunk.len * 10 });
+        defer allocator.free(decompressed_chunk);
+        
+        try decompressed_data.appendSlice(decompressed_chunk);
+        chunk_start = chunk_end;
+    }
+    
+    // Extract tar archive to current directory
+    try extractTar(allocator, decompressed_data.items, extract_dir);
+    
+    // Fix executable permissions on extracted binaries
+    try fixExecutablePermissions(allocator, extract_dir);
+    
+    // Create platform-specific shortcuts
+    if (builtin.os.tag == .windows) {
+        try createWindowsShortcut(allocator, extract_dir);
+    } else if (builtin.os.tag == .linux) {
+        try createLinuxShortcut(allocator, extract_dir);
+    }
+    
+    std.debug.print("Extraction complete!\n", .{});
+    return true;
+}
+
+fn extractTar(allocator: std.mem.Allocator, tar_data: []const u8, extract_dir: []const u8) !void {
+    // Create extraction directory
+    try std.fs.cwd().makePath(extract_dir);
+    
+    // Open extraction directory
+    const dir = try std.fs.cwd().openDir(extract_dir, .{});
+    
+    // Create a memory stream from the tar data
+    var stream = std.io.fixedBufferStream(tar_data);
+    const reader = stream.reader();
+    
+    // Use existing pipeToFileSystem function which handles file modes
+    try pipeToFileSystem(dir, reader);
+}
+
+fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u8) !void {
+    // List of files that should be executable
+    const executables = [_][]const u8{
+        "bin/launcher",
+        "bin/bun", 
+        "bin/bspatch",
+        "bin/bsdiff",
+    };
+    
+    // Also check for scripts
+    const scripts = [_][]const u8{
+        ".sh", // Any .sh files
+    };
+    
+    for (executables) |exe| {
+        const exe_path = try std.fs.path.join(allocator, &.{ extract_dir, exe });
+        defer allocator.free(exe_path);
+        
+        // Set executable permissions (ignore errors if file doesn't exist)
+        const file = std.fs.cwd().openFile(exe_path, .{}) catch continue;
+        file.close();
+        
+        // Use chmod to set executable
+        if (builtin.os.tag != .windows) {
+            const exe_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{exe_path});
+            defer allocator.free(exe_path_z);
+            
+            const result = std.c.chmod(exe_path_z.ptr, 0o755);
+            if (result != 0) {
+                std.debug.print("Warning: Could not set executable permissions on {s}\n", .{exe_path});
+            }
+        }
+    }
+    
+    // Find and fix .sh scripts
+    if (builtin.os.tag != .windows) {
+        var dir = std.fs.cwd().openDir(extract_dir, .{}) catch return;
+        defer dir.close();
+        
+        var iterator = dir.iterate();
+        while (try iterator.next()) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".sh")) {
+                const script_path = try std.fs.path.join(allocator, &.{ extract_dir, entry.name });
+                defer allocator.free(script_path);
+                
+                const script_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{script_path});
+                defer allocator.free(script_path_z);
+                
+                const result = std.c.chmod(script_path_z.ptr, 0o755);
+                if (result != 0) {
+                    std.debug.print("Warning: Could not set executable permissions on {s}\n", .{script_path});
+                }
+            }
+        }
+    }
+}
+
+fn createLinuxShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !void {
+    // Get app name from directory
+    const app_name = std.fs.path.basename(app_dir);
+    
+    // Create launcher script next to extracted folder
+    const script_name = try std.fmt.allocPrint(allocator, "{s}.sh", .{app_name});
+    defer allocator.free(script_name);
+    
+    const script_path = try std.fs.path.join(allocator, &.{ app_dir, "..", script_name });
+    defer allocator.free(script_path);
+    
+    const launcher_path = try std.fs.path.join(allocator, &.{ app_name, "bin", "launcher" });
+    defer allocator.free(launcher_path);
+    
+    const script_content = try std.fmt.allocPrint(allocator, 
+        \\#!/bin/bash
+        \\# {s} Launcher
+        \\cd "$(dirname "$0")"
+        \\exec "./{s}" "$@"
+        \\
+    , .{ app_name, launcher_path });
+    defer allocator.free(script_content);
+    
+    try std.fs.cwd().writeFile(script_path, script_content);
+    
+    // Make script executable
+    const script_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{script_path});
+    defer allocator.free(script_path_z);
+    
+    const result = std.c.chmod(script_path_z.ptr, 0o755);
+    if (result != 0) {
+        std.debug.print("Warning: Could not set executable permissions on launcher script\n", .{});
+    }
+    
+    std.debug.print("Created launcher script: {s}\n", .{script_name});
+}
+
+fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !void {
+    // Get app name from directory
+    const app_name = std.fs.path.basename(app_dir);
+    
+    // Create shortcut next to extracted folder
+    const shortcut_name = try std.fmt.allocPrint(allocator, "{s}.lnk", .{app_name});
+    defer allocator.free(shortcut_name);
+    
+    const shortcut_path = try std.fs.path.join(allocator, &.{ app_dir, "..", shortcut_name });
+    defer allocator.free(shortcut_path);
+    
+    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
+    defer allocator.free(launcher_path);
+    
+    // Create a simple batch file as a workaround for .lnk complexity
+    const batch_name = try std.fmt.allocPrint(allocator, "{s}.bat", .{app_name});
+    defer allocator.free(batch_name);
+    
+    const batch_path = try std.fs.path.join(allocator, &.{ app_dir, "..", batch_name });
+    defer allocator.free(batch_path);
+    
+    const batch_content = try std.fmt.allocPrint(allocator, "@echo off\nstart \"\" \"{s}\"\n", .{launcher_path});
+    defer allocator.free(batch_content);
+    
+    try std.fs.cwd().writeFile(batch_path, batch_content);
+    
+    std.debug.print("Created launcher shortcut: {s}\n", .{batch_name});
+}
+
 pub fn main() !void {
     var allocator = std.heap.page_allocator;
 
@@ -19,10 +245,22 @@ pub fn main() !void {
 
     var exePathBuffer: [1024]u8 = undefined;
     const APPBUNDLE_MACOS_PATH = try std.fs.selfExeDirPath(exePathBuffer[0..]);
+    
+    // On Windows, check if we're a self-extracting exe with appended archive
+    if (builtin.os.tag == .windows) {
+        // Try to extract from self first
+        if (try extractFromSelf(allocator)) {
+            return;
+        }
+        // If not a self-extracting exe, continue with normal flow
+    }
     const APPBUNDLE_PATH = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, "../../" });
     const PLIST_PATH = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "Contents/Info.plist" });
 
-    const plistContents = try std.fs.cwd().readFileAlloc(allocator, PLIST_PATH, std.math.maxInt(usize));
+    const plistContents = std.fs.readFileAllocAbsolute(allocator, PLIST_PATH, std.math.maxInt(usize)) catch |err| {
+        std.debug.print("Failed to read plist at {s}: {}\n", .{ PLIST_PATH, err });
+        return err;
+    };
     defer allocator.free(plistContents);
 
     // Note: We want to use the app name, since electrobun cli adds the "- <channel name>" which allws dev, canary, and stable
@@ -145,13 +383,25 @@ pub fn main() !void {
     try std.fs.renameAbsolute(APPBUNDLE_PATH, backupBundlePath);
     try std.fs.renameAbsolute(newBundlePath, APPBUNDLE_PATH);
 
-    const argv = &[_][]const u8{ "open", APPBUNDLE_PATH };
+    // Platform-specific app launching
+    const builtin = @import("builtin");
+    const argv = switch (builtin.os.tag) {
+        .macos => &[_][]const u8{ "open", APPBUNDLE_PATH },
+        .linux => blk: {
+            // On Linux, find the launcher binary inside the app bundle
+            const launcher_path = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "bin", "launcher" });
+            break :blk &[_][]const u8{launcher_path};
+        },
+        .windows => &[_][]const u8{ "cmd", "/c", "start", "", APPBUNDLE_PATH },
+        else => @compileError("Unsupported platform for app launching"),
+    };
+    
     var child_process = std.process.Child.init(argv, allocator);
 
-    // The open command will exit and run the opened app (the unpacked/updated app bundle in a separate process)
+    // The command will exit and run the opened app (the unpacked/updated app bundle in a separate process)
     // so we want to just spawn (so it detaches) and exit as soon as possible
     _ = child_process.spawn() catch |err| {
-        std.debug.print("Failed to wait for child process: {}\n", .{err});
+        std.debug.print("Failed to spawn child process: {}\n", .{err});
         return;
     };
 
@@ -166,7 +416,7 @@ pub fn main() !void {
 }
 
 pub fn getFilenameFromExtension(allocator: std.mem.Allocator, folderPath: []const u8, extension: []const u8) ![]const u8 {
-    const dir = try std.fs.cwd().openDir(folderPath, .{});
+    const dir = try std.fs.openDirAbsolute(folderPath, .{});
     var iterator = dir.iterate();
 
     while (try iterator.next()) |entry| {
