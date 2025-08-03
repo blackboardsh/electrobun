@@ -206,6 +206,16 @@ async function copyToDist() {
             await $`cp vendors/cef/Release/*.bin dist/cef/`;
             await $`cp vendors/cef/Release/*.json dist/cef/`;  // For vk_swiftshader_icd.json
             
+            // Strip debug symbols from CEF libraries to reduce file size
+            console.log('Stripping debug symbols from CEF libraries...');
+            await $`strip --strip-debug dist/cef/*.so dist/cef/*.so.* 2>/dev/null || true`;
+            
+            // Copy stripped CEF files to platform-specific directory
+            const platformCefDir = `dist-${OS}-${ARCH}/cef`;
+            await $`mkdir -p ${platformCefDir}`;
+            await $`cp -r dist/cef/* ${platformCefDir}/`;
+            console.log(`Copied stripped CEF files to ${platformCefDir}`);
+            
             // Copy chrome-sandbox (needs setuid root)
             if (existsSync(join(process.cwd(), 'vendors', 'cef', 'Release', 'chrome-sandbox'))) {
                 await $`cp vendors/cef/Release/chrome-sandbox dist/cef/`;

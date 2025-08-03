@@ -1386,7 +1386,7 @@ if (commandArg === "init") {
     // zstd is the clear winner here. dev iteration speed gain of 1min 15s per build is much more valubale
     // than saving 1 more MB of space/bandwidth.
 
-    const compressedTarPath = `${tarPath}.zst`;
+    let compressedTarPath = `${tarPath}.zst`;
     artifactsToUpload.push(compressedTarPath);
 
     // zstd compress tarball
@@ -1399,11 +1399,10 @@ if (commandArg === "init") {
       const useStream = tarball.size > 100 * 1024 * 1024;
       
       if (tarball.size > 0) {
-       // Uint8 array filestream of the tar file
-
+        // Uint8 array filestream of the tar file
         const data = new Uint8Array(tarBuffer);
         
-        const compressionLevel = 22;
+        const compressionLevel = 22;  // Maximum compression - now safe with stripped CEF libraries
         const compressedData = ZstdSimple.compress(data, compressionLevel);
 
         console.log(
@@ -1508,8 +1507,8 @@ if (commandArg === "init") {
         const desktopFileContent = `[Desktop Entry]
 Version=1.0
 Type=Application
-Name=${config.package.name}
-Comment=${config.package.description || ''}
+Name=${config.package?.name || config.app.name}
+Comment=${config.package?.description || config.app.description || ''}
 Exec=${appFileName}
 Icon=${appFileName}
 Terminal=false
@@ -1525,7 +1524,7 @@ Categories=Application;
         
         // Create user-friendly launcher script
         const launcherScriptContent = `#!/bin/bash
-# ${config.package.name} Launcher
+# ${config.package?.name || config.app.name} Launcher
 # This script launches the application from any location
 
 # Get the directory where this script is located
