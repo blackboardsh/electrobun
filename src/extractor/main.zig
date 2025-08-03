@@ -29,31 +29,35 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Get file size
     const file_size = try self_file.getEndPos();
     
-    // Read the last 2KB to look for markers (increased for metadata)
-    const search_size: usize = @min(2048, file_size);
+    // Read the last few KB to search for our magic marker sequence
+    const search_size: usize = @min(8192, file_size); // Search last 8KB
     const search_start = file_size - search_size;
     try self_file.seekTo(search_start);
     
-    var search_buffer: [2048]u8 = undefined;
+    var search_buffer: [8192]u8 = undefined;
     const bytes_read = try self_file.read(search_buffer[0..search_size]);
+    if (bytes_read != search_size) {
+        return false; // Could not read search area
+    }
     
     // Look for metadata marker first
-    const metadata_marker_pos = std.mem.indexOf(u8, search_buffer[0..bytes_read], METADATA_MARKER);
+    const metadata_marker_pos = std.mem.lastIndexOf(u8, search_buffer[0..bytes_read], METADATA_MARKER);
     if (metadata_marker_pos == null) {
         return false; // Not a self-extracting exe with metadata
     }
     
-    // Extract metadata
+    // Calculate absolute position of metadata start
     const metadata_start = search_start + metadata_marker_pos.? + METADATA_MARKER.len;
     
-    // Look for archive marker
-    const archive_marker_pos = std.mem.indexOf(u8, search_buffer[0..bytes_read], ARCHIVE_MARKER);
+    // Look for archive marker after metadata marker
+    const remaining_buffer = search_buffer[metadata_marker_pos.?..bytes_read];
+    const archive_marker_pos = std.mem.indexOf(u8, remaining_buffer, ARCHIVE_MARKER);
     if (archive_marker_pos == null) {
-        return false; // Not a self-extracting exe
+        return false; // Archive marker not found
     }
     
-    // Calculate archive offset
-    const archive_offset = search_start + archive_marker_pos.? + ARCHIVE_MARKER.len;
+    // Calculate absolute position of archive start
+    const archive_offset = search_start + metadata_marker_pos.? + archive_marker_pos.? + ARCHIVE_MARKER.len;
     
     // Read metadata
     const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
@@ -76,7 +80,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     std.debug.print("Self-extracting archive found at offset {d}\n", .{archive_offset});
     std.debug.print("Extracting to: {s}\n", .{extract_dir});
     
-    // Read and decompress archive
+    // Read and decompress archive (to end of file)
     const archive_size = file_size - archive_offset;
     const compressed_data = try allocator.alloc(u8, archive_size);
     defer allocator.free(compressed_data);
