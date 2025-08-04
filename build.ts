@@ -238,8 +238,29 @@ async function copyToDist() {
         }
         console.log('[done]Copying CEF files for Linux...');
     }
+    
+    // Create platform-specific dist folder and copy all files
+    await createPlatformDistFolder();
 }
 
+async function createPlatformDistFolder() {
+    // Create platform-specific dist folder (e.g., dist-linux-arm64)
+    const platformDistDir = `dist-${OS}-${ARCH}`;
+    console.log(`Creating platform-specific dist folder: ${platformDistDir}`);
+    
+    await $`mkdir -p ${platformDistDir}`;
+    
+    // Copy all files from dist/ to platform-specific folder
+    if (OS === 'win') {
+        // On Windows use PowerShell to copy all files
+        await $`powershell -command "Copy-Item -Path 'dist\\*' -Destination '${platformDistDir}\\' -Recurse -Force"`;
+    } else {
+        // On Unix systems
+        await $`cp -R dist/* ${platformDistDir}/`;
+    }
+    
+    console.log(`Successfully created and populated ${platformDistDir}`);
+}
 
 
 function getPlatform() {
