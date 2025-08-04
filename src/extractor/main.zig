@@ -41,30 +41,38 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Find first occurrence
     const first_metadata_pos = std.mem.indexOf(u8, search_buffer, METADATA_MARKER);
     if (first_metadata_pos == null) {
+        std.debug.print("DEBUG: No metadata marker found at all\n", .{});
         return false; // No metadata marker at all
     }
+    std.debug.print("DEBUG: First metadata marker at position {d}\n", .{first_metadata_pos.?});
     
     // Find second occurrence (the real one we appended)
     const search_start = first_metadata_pos.? + METADATA_MARKER.len;
     const remaining_after_first = search_buffer[search_start..];
     const second_metadata_offset = std.mem.indexOf(u8, remaining_after_first, METADATA_MARKER);
     if (second_metadata_offset == null) {
+        std.debug.print("DEBUG: No second metadata marker found\n", .{});
         return false; // No second occurrence found
     }
+    std.debug.print("DEBUG: Second metadata marker offset from search_start: {d}\n", .{second_metadata_offset.?});
     
     // Calculate absolute position of the second metadata marker
     const metadata_marker_pos = search_start + second_metadata_offset.?;
     const metadata_start = metadata_marker_pos + METADATA_MARKER.len;
+    std.debug.print("DEBUG: Second metadata marker absolute position: {d}, metadata_start: {d}\n", .{ metadata_marker_pos, metadata_start });
     
     // Look for archive marker after the metadata content (not the marker)
     const remaining_buffer = search_buffer[metadata_start..];
     const archive_marker_offset = std.mem.indexOf(u8, remaining_buffer, ARCHIVE_MARKER);
     if (archive_marker_offset == null) {
+        std.debug.print("DEBUG: Archive marker not found\n", .{});
         return false; // Archive marker not found
     }
+    std.debug.print("DEBUG: Archive marker offset from metadata_start: {d}\n", .{archive_marker_offset.?});
     
     // Calculate absolute position where archive marker starts (this marks end of metadata)
     const archive_offset = metadata_start + archive_marker_offset.?;
+    std.debug.print("DEBUG: Archive marker absolute position: {d}\n", .{archive_offset});
     
     // Read metadata
     const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
@@ -88,7 +96,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     std.debug.print("Extracting to: {s}\n", .{extract_dir});
     
     // Read and decompress archive (to end of file)
-    const archive_size = file_size - archive_offset;
+    const archive_size = file_size - (archive_offset + ARCHIVE_MARKER.len);
     const compressed_data = try allocator.alloc(u8, archive_size);
     defer allocator.free(compressed_data);
     
@@ -197,7 +205,9 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u
 }
 
 fn readEmbeddedMetadata(allocator: std.mem.Allocator, file: std.fs.File, metadata_start: u64, archive_start: u64) !AppMetadata {
+    std.debug.print("DEBUG: metadata_start={d}, archive_start={d}\n", .{ metadata_start, archive_start });
     const metadata_size = archive_start - metadata_start;
+    std.debug.print("DEBUG: calculated metadata_size={d}\n", .{metadata_size});
     if (metadata_size > 4096) return error.MetadataTooLarge; // Sanity check
     
     try file.seekTo(metadata_start);
@@ -205,6 +215,23 @@ fn readEmbeddedMetadata(allocator: std.mem.Allocator, file: std.fs.File, metadat
     defer allocator.free(metadata_bytes);
     
     _ = try file.read(metadata_bytes);
+    
+    // Debug: print the raw metadata before parsing
+    std.debug.print("DEBUG: Raw metadata bytes (size={d})\n", .{metadata_size});
+    std.debug.print("DEBUG: Raw metadata as hex: ", .{});
+    for (metadata_bytes) |byte| {
+        std.debug.print("{x:02} ", .{byte});
+    }
+    std.debug.print("\n", .{});
+    std.debug.print("DEBUG: Raw metadata as string: '", .{});
+    for (metadata_bytes) |byte| {
+        if (byte >= 32 and byte <= 126) {
+            std.debug.print("{c}", .{byte});
+        } else {
+            std.debug.print("\\x{x:02}", .{byte});
+        }
+    }
+    std.debug.print("'\n", .{});
     
     // Parse JSON metadata
     const parsed = try std.json.parseFromSlice(struct {
@@ -332,6 +359,7 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
 }
 
 pub fn main() !void {
+    std.debug.print("DEBUG: Extractor version 7 starting\n", .{});
     var allocator = std.heap.page_allocator;
 
     var startTime = std.time.nanoTimestamp();
