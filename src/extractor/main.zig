@@ -124,13 +124,19 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     }
     
     // Extract tar archive to current directory
+    std.debug.print("DEBUG: Starting tar extraction...\n", .{});
     try extractTar(allocator, decompressed_data.items, extract_dir);
+    std.debug.print("DEBUG: Tar extraction complete\n", .{});
     
     // Fix executable permissions on extracted binaries
+    std.debug.print("DEBUG: Fixing executable permissions...\n", .{});
     try fixExecutablePermissions(allocator, extract_dir);
+    std.debug.print("DEBUG: Executable permissions fixed\n", .{});
     
     // Replace self with launcher shortcut
+    std.debug.print("DEBUG: Replacing self with launcher...\n", .{});
     try replaceSelfWithLauncher(allocator, exe_path, extract_dir);
+    std.debug.print("DEBUG: Self replaced with launcher\n", .{});
     
     std.debug.print("Extraction complete!\n", .{});
     return true;
@@ -362,7 +368,7 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
 }
 
 pub fn main() !void {
-    std.debug.print("DEBUG: Extractor version 10 starting (128MB heap-allocated window buffer)\n", .{});
+    std.debug.print("DEBUG: Extractor version 12 starting (with additional debug logging)\n", .{});
     var allocator = std.heap.page_allocator;
 
     var startTime = std.time.nanoTimestamp();
@@ -647,8 +653,49 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                 if (start + rounded_file_size > end) return error.TarHeadersTooBig;
                 start = @as(usize, @intCast(start + rounded_file_size));
             },
+            .symbolic_link => {
+                if (file_size == 0 and unstripped_file_name.len == 0) return;
+                const link_name = unstripped_file_name;
+                
+                // Read the link target from the tar data
+                var link_target_buffer: [1024]u8 = undefined;
+                const bytes_to_read = @min(file_size, link_target_buffer.len);
+                
+                if (bytes_to_read > 0) {
+                    // Ensure we have enough data in buffer
+                    while (end - start < bytes_to_read) {
+                        const dest_end = end - start;
+                        @memcpy(buffer[0..dest_end], buffer[start..end]);
+                        end = dest_end;
+                        start = 0;
+                        const ask = @min(buffer.len - end, 512);
+                        end += try reader.readAtLeast(buffer[end..], ask);
+                    }
+                    
+                    @memcpy(link_target_buffer[0..bytes_to_read], buffer[start..start + bytes_to_read]);
+                    start += file_size;
+                    
+                    // Add padding
+                    const rounded_link_size = std.mem.alignForward(u64, file_size, 512);
+                    const link_pad_len = @as(usize, @intCast(rounded_link_size - file_size));
+                    start += link_pad_len;
+                    
+                    const link_target = link_target_buffer[0..bytes_to_read];
+                    
+                    // Create parent directory if needed
+                    if (std.fs.path.dirname(link_name)) |dir_name| {
+                        try dir.makePath(dir_name);
+                    }
+                    
+                    // Create the symbolic link
+                    dir.symLink(link_target, link_name, .{}) catch {
+                        // On error, try to remove existing file/link and retry
+                        dir.deleteFile(link_name) catch {};
+                        try dir.symLink(link_target, link_name, .{});
+                    };
+                }
+            },
             .hard_link => return error.TarUnsupportedFileType,
-            .symbolic_link => return error.TarUnsupportedFileType,
             else => return error.TarUnsupportedFileType,
         }
     }
