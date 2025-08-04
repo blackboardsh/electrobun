@@ -56,15 +56,15 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     const metadata_marker_pos = search_start + second_metadata_offset.?;
     const metadata_start = metadata_marker_pos + METADATA_MARKER.len;
     
-    // Look for archive marker after the second metadata marker
-    const remaining_buffer = search_buffer[metadata_marker_pos..];
+    // Look for archive marker after the metadata content (not the marker)
+    const remaining_buffer = search_buffer[metadata_start..];
     const archive_marker_offset = std.mem.indexOf(u8, remaining_buffer, ARCHIVE_MARKER);
     if (archive_marker_offset == null) {
         return false; // Archive marker not found
     }
     
-    // Calculate absolute position of archive start
-    const archive_offset = metadata_marker_pos + archive_marker_offset.? + ARCHIVE_MARKER.len;
+    // Calculate absolute position where archive marker starts (this marks end of metadata)
+    const archive_offset = metadata_start + archive_marker_offset.?;
     
     // Read metadata
     const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
@@ -72,7 +72,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     defer allocator.free(metadata.name);
     defer allocator.free(metadata.channel);
     
-    try self_file.seekTo(archive_offset);
+    try self_file.seekTo(archive_offset + ARCHIVE_MARKER.len);
     
     // Build application support directory path
     const app_data_dir = try getAppDataDir(allocator);
