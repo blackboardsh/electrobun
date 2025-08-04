@@ -103,10 +103,13 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     _ = try self_file.read(compressed_data);
     
     // Decompress using zstd
-    var window_buffer: [1 << 20]u8 = undefined; // 1MB window
+    // Note: because it's a big boy we need to allocate it on the heap (like macOS does)
+    const window_buffer = try allocator.alloc(u8, 128 * 1024 * 1024); // 128MB Buffer
+    defer allocator.free(window_buffer);
+    
     var stream = std.io.fixedBufferStream(compressed_data);
     var decompressor = zstd.decompressor(stream.reader(), .{
-        .window_buffer = &window_buffer,
+        .window_buffer = window_buffer,
     });
     
     var decompressed_data = std.ArrayList(u8).init(allocator);
@@ -359,7 +362,7 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
 }
 
 pub fn main() !void {
-    std.debug.print("DEBUG: Extractor version 7 starting\n", .{});
+    std.debug.print("DEBUG: Extractor version 10 starting (128MB heap-allocated window buffer)\n", .{});
     var allocator = std.heap.page_allocator;
 
     var startTime = std.time.nanoTimestamp();
