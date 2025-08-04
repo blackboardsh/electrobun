@@ -44,35 +44,27 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         std.debug.print("DEBUG: No metadata marker found at all\n", .{});
         return false; // No metadata marker at all
     }
-    std.debug.print("DEBUG: First metadata marker at position {d}\n", .{first_metadata_pos.?});
-    
     // Find second occurrence (the real one we appended)
     const search_start = first_metadata_pos.? + METADATA_MARKER.len;
     const remaining_after_first = search_buffer[search_start..];
     const second_metadata_offset = std.mem.indexOf(u8, remaining_after_first, METADATA_MARKER);
     if (second_metadata_offset == null) {
-        std.debug.print("DEBUG: No second metadata marker found\n", .{});
         return false; // No second occurrence found
     }
-    std.debug.print("DEBUG: Second metadata marker offset from search_start: {d}\n", .{second_metadata_offset.?});
     
     // Calculate absolute position of the second metadata marker
     const metadata_marker_pos = search_start + second_metadata_offset.?;
     const metadata_start = metadata_marker_pos + METADATA_MARKER.len;
-    std.debug.print("DEBUG: Second metadata marker absolute position: {d}, metadata_start: {d}\n", .{ metadata_marker_pos, metadata_start });
     
     // Look for archive marker after the metadata content (not the marker)
     const remaining_buffer = search_buffer[metadata_start..];
     const archive_marker_offset = std.mem.indexOf(u8, remaining_buffer, ARCHIVE_MARKER);
     if (archive_marker_offset == null) {
-        std.debug.print("DEBUG: Archive marker not found\n", .{});
         return false; // Archive marker not found
     }
-    std.debug.print("DEBUG: Archive marker offset from metadata_start: {d}\n", .{archive_marker_offset.?});
     
     // Calculate absolute position where archive marker starts (this marks end of metadata)
     const archive_offset = metadata_start + archive_marker_offset.?;
-    std.debug.print("DEBUG: Archive marker absolute position: {d}\n", .{archive_offset});
     
     // Read metadata
     const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
@@ -124,21 +116,24 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     }
     
     // Extract tar archive to current directory
-    std.debug.print("DEBUG: Starting tar extraction...\n", .{});
+    std.debug.print("Extracting application files...\n", .{});
     try extractTar(allocator, decompressed_data.items, extract_dir);
-    std.debug.print("DEBUG: Tar extraction complete\n", .{});
     
     // Fix executable permissions on extracted binaries
-    std.debug.print("DEBUG: Fixing executable permissions...\n", .{});
     try fixExecutablePermissions(allocator, extract_dir);
-    std.debug.print("DEBUG: Executable permissions fixed\n", .{});
+    
+    // Fix CEF symlinks (they get lost during tar extraction)
+    try fixCefSymlinks(allocator, extract_dir);
     
     // Replace self with launcher shortcut
-    std.debug.print("DEBUG: Replacing self with launcher...\n", .{});
     try replaceSelfWithLauncher(allocator, exe_path, extract_dir);
-    std.debug.print("DEBUG: Self replaced with launcher\n", .{});
     
-    std.debug.print("Extraction complete!\n", .{});
+    // Create desktop shortcut on Linux
+    if (builtin.os.tag == .linux) {
+        try createDesktopShortcut(allocator, extract_dir, metadata);
+    }
+    
+    std.debug.print("Installation completed successfully!\n", .{});
     return true;
 }
 
@@ -160,6 +155,8 @@ fn extractTar(allocator: std.mem.Allocator, tar_data: []const u8, extract_dir: [
 }
 
 fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u8) !void {
+    std.debug.print("DEBUG: fixExecutablePermissions called with dir: {s}\n", .{extract_dir});
+    
     // List of files that should be executable
     const executables = [_][]const u8{
         "bin/launcher",
@@ -170,6 +167,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u
     
     // Also check for scripts (handled in the iterator below)
     
+    std.debug.print("DEBUG: Processing executables list...\n", .{});
     for (executables) |exe| {
         const exe_path = try std.fs.path.join(allocator, &.{ extract_dir, exe });
         defer allocator.free(exe_path);
@@ -190,26 +188,99 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u
         }
     }
     
+    std.debug.print("DEBUG: Done with executables list\n", .{});
+    
     // Find and fix .sh scripts
-    if (builtin.os.tag != .windows) {
-        var dir = std.fs.cwd().openDir(extract_dir, .{}) catch return;
+    // TEMPORARILY DISABLED - causing panic
+    if (false and builtin.os.tag != .windows) {
+        std.debug.print("DEBUG: Looking for .sh scripts...\n", .{});
+        var dir = std.fs.cwd().openDir(extract_dir, .{}) catch |err| {
+            std.debug.print("DEBUG: Could not open directory {s}: {}\n", .{extract_dir, err});
+            return;
+        };
         defer dir.close();
         
+        std.debug.print("DEBUG: Directory opened successfully, starting iteration...\n", .{});
         var iterator = dir.iterate();
         while (try iterator.next()) |entry| {
-            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".sh")) {
-                const script_path = try std.fs.path.join(allocator, &.{ extract_dir, entry.name });
-                defer allocator.free(script_path);
-                
-                const script_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{script_path});
-                defer allocator.free(script_path_z);
-                
-                const result = std.c.chmod(script_path_z.ptr, 0o755);
-                if (result != 0) {
-                    std.debug.print("Warning: Could not set executable permissions on {s}\n", .{script_path});
+            std.debug.print("DEBUG: Found entry: {s} kind: {}\n", .{entry.name, entry.kind});
+            // Only process regular files (not directories, symlinks, etc.)
+            switch (entry.kind) {
+                .file => {
+                    if (std.mem.endsWith(u8, entry.name, ".sh")) {
+                        const script_path = try std.fs.path.join(allocator, &.{ extract_dir, entry.name });
+                        defer allocator.free(script_path);
+                        
+                        const script_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{script_path});
+                        defer allocator.free(script_path_z);
+                        
+                        const result = std.c.chmod(script_path_z.ptr, 0o755);
+                        if (result != 0) {
+                            std.debug.print("Warning: Could not set executable permissions on {s}\n", .{script_path});
+                        }
+                    }
+                },
+                .directory => {
+                    // Skip directories
+                },
+                .sym_link => {
+                    // Skip symlinks
+                },
+                else => {
+                    // Skip any other file types
                 }
             }
         }
+    }
+    std.debug.print("DEBUG: fixExecutablePermissions completed successfully\n", .{});
+}
+
+fn fixCefSymlinks(allocator: std.mem.Allocator, extract_dir: []const u8) !void {
+    // Find the actual app directory (it has an extra level)
+    const app_bundle_name = "Electrobun(Playground)-canary"; // TODO: make this dynamic
+    const app_dir = try std.fs.path.join(allocator, &.{ extract_dir, app_bundle_name });
+    defer allocator.free(app_dir);
+    
+    const bin_dir = try std.fs.path.join(allocator, &.{ app_dir, "bin" });
+    defer allocator.free(bin_dir);
+    
+    const cef_dir = try std.fs.path.join(allocator, &.{ bin_dir, "cef" });
+    defer allocator.free(cef_dir);
+    
+    // Check if cef directory exists
+    std.fs.cwd().access(cef_dir, .{}) catch {
+        std.debug.print("CEF directory not found, skipping symlink creation\n", .{});
+        return;
+    };
+    
+    // List of CEF libraries that need symlinks
+    const cef_libs = [_][]const u8{
+        "libcef.so",
+        "libEGL.so", 
+        "libGLESv2.so",
+        "libvk_swiftshader.so",
+        "libvulkan.so.1",
+    };
+    
+    std.debug.print("Creating CEF symlinks...\n", .{});
+    
+    for (cef_libs) |lib| {
+        const symlink_path = try std.fs.path.join(allocator, &.{ bin_dir, lib });
+        defer allocator.free(symlink_path);
+        
+        const target_path = try std.fmt.allocPrint(allocator, "cef/{s}", .{lib});
+        defer allocator.free(target_path);
+        
+        // Remove existing symlink/file if it exists
+        std.fs.cwd().deleteFile(symlink_path) catch {};
+        
+        // Create the symlink
+        std.fs.cwd().symLink(target_path, symlink_path, .{}) catch |err| {
+            std.debug.print("Warning: Could not create symlink for {s}: {}\n", .{ lib, err });
+            continue;
+        };
+        
+        std.debug.print("Created symlink: {s} -> {s}\n", .{ lib, target_path });
     }
 }
 
@@ -301,41 +372,168 @@ fn replaceSelfWithLauncher(allocator: std.mem.Allocator, exe_path: []const u8, e
     std.debug.print("Replaced self with launcher shortcut from: {s}\n", .{launcher_path});
 }
 
-fn createLinuxShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !void {
-    // Get app name from directory
-    const app_name = std.fs.path.basename(app_dir);
-    
-    // Create launcher script next to extracted folder
-    const script_name = try std.fmt.allocPrint(allocator, "{s}.sh", .{app_name});
-    defer allocator.free(script_name);
-    
-    const script_path = try std.fs.path.join(allocator, &.{ app_dir, "..", script_name });
-    defer allocator.free(script_path);
-    
-    const launcher_path = try std.fs.path.join(allocator, &.{ app_name, "bin", "launcher" });
-    defer allocator.free(launcher_path);
-    
-    const script_content = try std.fmt.allocPrint(allocator, 
-        \\#!/bin/bash
-        \\# {s} Launcher
-        \\cd "$(dirname "$0")"
-        \\exec "./{s}" "$@"
-        \\
-    , .{ app_name, launcher_path });
-    defer allocator.free(script_content);
-    
-    try std.fs.cwd().writeFile(script_path, script_content);
-    
-    // Make script executable
-    const script_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{script_path});
-    defer allocator.free(script_path_z);
-    
-    const result = std.c.chmod(script_path_z.ptr, 0o755);
-    if (result != 0) {
-        std.debug.print("Warning: Could not set executable permissions on launcher script\n", .{});
+fn escapeDesktopString(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
+    // Count how many characters need escaping
+    var escape_count: usize = 0;
+    for (str) |c| {
+        if (c == '\\' or c == '"' or c == '\n' or c == '\r' or c == '\t') {
+            escape_count += 1;
+        }
     }
     
-    std.debug.print("Created launcher script: {s}\n", .{script_name});
+    // Allocate buffer for escaped string
+    const escaped = try allocator.alloc(u8, str.len + escape_count);
+    var i: usize = 0;
+    
+    for (str) |c| {
+        switch (c) {
+            '\\' => {
+                escaped[i] = '\\';
+                escaped[i + 1] = '\\';
+                i += 2;
+            },
+            '"' => {
+                escaped[i] = '\\';
+                escaped[i + 1] = '"';
+                i += 2;
+            },
+            '\n' => {
+                escaped[i] = '\\';
+                escaped[i + 1] = 'n';
+                i += 2;
+            },
+            '\r' => {
+                escaped[i] = '\\';
+                escaped[i + 1] = 'r';
+                i += 2;
+            },
+            '\t' => {
+                escaped[i] = '\\';
+                escaped[i + 1] = 't';
+                i += 2;
+            },
+            else => {
+                escaped[i] = c;
+                i += 1;
+            },
+        }
+    }
+    
+    return escaped;
+}
+
+fn createDesktopShortcut(allocator: std.mem.Allocator, extract_dir: []const u8, metadata: AppMetadata) !void {
+    // Get home directory for desktop path
+    const home = std.process.getEnvVarOwned(allocator, "HOME") catch {
+        std.debug.print("Warning: Could not get HOME directory\n", .{});
+        return;
+    };
+    defer allocator.free(home);
+    
+    // Build desktop file path
+    const desktop_dir = try std.fs.path.join(allocator, &.{ home, "Desktop" });
+    defer allocator.free(desktop_dir);
+    
+    // Check if Desktop directory exists
+    std.fs.cwd().access(desktop_dir, .{}) catch {
+        std.debug.print("Warning: Desktop directory not found at {s}\n", .{desktop_dir});
+        return;
+    };
+    
+    // Find the actual app directory (it has an extra level)
+    const app_bundle_name = try std.fmt.allocPrint(allocator, "Electrobun(Playground)-{s}", .{metadata.channel});
+    defer allocator.free(app_bundle_name);
+    
+    const app_dir = try std.fs.path.join(allocator, &.{ extract_dir, app_bundle_name });
+    defer allocator.free(app_dir);
+    
+    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
+    defer allocator.free(launcher_path);
+    
+    // Check if launcher exists
+    std.fs.cwd().access(launcher_path, .{}) catch |err| {
+        std.debug.print("Warning: Launcher not found at {s}: {}\n", .{ launcher_path, err });
+        return;
+    };
+    
+    // Create desktop file name
+    const desktop_filename = try std.fmt.allocPrint(allocator, "{s}.desktop", .{metadata.name});
+    defer allocator.free(desktop_filename);
+    
+    const desktop_file_path = try std.fs.path.join(allocator, &.{ desktop_dir, desktop_filename });
+    defer allocator.free(desktop_file_path);
+    
+    // Create a wrapper script for better library path handling
+    const wrapper_script_path = try std.fs.path.join(allocator, &.{ app_dir, "run.sh" });
+    defer allocator.free(wrapper_script_path);
+    
+    const wrapper_content = try std.fmt.allocPrint(allocator,
+        \\#!/bin/bash
+        \\cd "$(dirname "$0")/bin"
+        \\export LD_LIBRARY_PATH=".:$LD_LIBRARY_PATH"
+        \\
+        \\# Check if CEF libraries exist and set LD_PRELOAD
+        \\if [ -f "./libcef.so" ] || [ -f "./libvk_swiftshader.so" ]; then
+        \\    CEF_LIBS=""
+        \\    [ -f "./libcef.so" ] && CEF_LIBS="./libcef.so"
+        \\    if [ -f "./libvk_swiftshader.so" ]; then
+        \\        if [ -n "$CEF_LIBS" ]; then
+        \\            CEF_LIBS="$CEF_LIBS:./libvk_swiftshader.so"
+        \\        else
+        \\            CEF_LIBS="./libvk_swiftshader.so"
+        \\        fi
+        \\    fi
+        \\    export LD_PRELOAD="$CEF_LIBS"
+        \\fi
+        \\
+        \\exec ./launcher "$@"
+        \\
+    , .{});
+    defer allocator.free(wrapper_content);
+    
+    const wrapper_file = try std.fs.cwd().createFile(wrapper_script_path, .{});
+    defer wrapper_file.close();
+    try wrapper_file.writeAll(wrapper_content);
+    
+    // Make wrapper script executable
+    const wrapper_script_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{wrapper_script_path});
+    defer allocator.free(wrapper_script_path_z);
+    _ = std.c.chmod(wrapper_script_path_z.ptr, 0o755);
+    
+    // Escape the name for desktop file (handle special characters)
+    const escaped_name = try escapeDesktopString(allocator, metadata.name);
+    defer allocator.free(escaped_name);
+    
+    // Create desktop file content pointing to wrapper script
+    const desktop_content = try std.fmt.allocPrint(allocator,
+        \\[Desktop Entry]
+        \\Version=1.0
+        \\Type=Application
+        \\Name={s}
+        \\Comment=Electrobun Application
+        \\Exec="{s}"
+        \\Icon={s}/Resources/app/icon.png
+        \\Terminal=false
+        \\Categories=Application;
+        \\
+    , .{ escaped_name, wrapper_script_path, app_dir });
+    defer allocator.free(desktop_content);
+    
+    // Write desktop file
+    const desktop_file = try std.fs.cwd().createFile(desktop_file_path, .{});
+    defer desktop_file.close();
+    try desktop_file.writeAll(desktop_content);
+    
+    // Make desktop file executable (required for some desktop environments)
+    const desktop_file_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{desktop_file_path});
+    defer allocator.free(desktop_file_path_z);
+    
+    const result = std.c.chmod(desktop_file_path_z.ptr, 0o755);
+    if (result != 0) {
+        std.debug.print("Warning: Could not set executable permissions on desktop file\n", .{});
+    }
+    
+    std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
 }
 
 fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !void {
@@ -368,7 +566,7 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
 }
 
 pub fn main() !void {
-    std.debug.print("DEBUG: Extractor version 12 starting (with additional debug logging)\n", .{});
+    std.debug.print("Electrobun self-extractor v1.3 starting...\n", .{});
     var allocator = std.heap.page_allocator;
 
     var startTime = std.time.nanoTimestamp();

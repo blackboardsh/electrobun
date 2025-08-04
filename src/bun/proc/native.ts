@@ -247,11 +247,14 @@ export const native = (() => {
       // },
     });
   } catch (err) {
-    console.log('FATAL Error opening native FFI', err);
+    console.log('FATAL Error opening native FFI:', err.message);
     console.log('This may be due to:');
     console.log('  - Missing libNativeWrapper.dll/so/dylib');
     console.log('  - Architecture mismatch (ARM64 vs x64)');
     console.log('  - Missing WebView2 or CEF dependencies');
+    if (suffix === 'so') {
+      console.log('  - Missing system libraries (try: ldd ./libNativeWrapper.so)');
+    }
     console.log('Check that the build process completed successfully for your architecture.');
     process.exit();
   }
