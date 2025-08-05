@@ -24,6 +24,8 @@
 #include <gio/gio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <mutex>
+#include <condition_variable>
 
 // CEF includes - always include them even if it marginally increases binary size
 // we want a few binaries that will work whenever an electrobun developer
@@ -2442,6 +2444,8 @@ private:
 static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
 static bool g_gtkInitialized = false;
+static std::mutex g_gtkInitMutex;
+static std::condition_variable g_gtkInitCondition;
 
 // Window dragging state
 static GtkWidget* g_draggedWindow = nullptr;
@@ -2675,15 +2679,26 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
 }
 
 void initializeGTK() {
-    if (!g_gtkInitialized) {
-        gtk_init(nullptr, nullptr);
-        
-        g_gtkInitialized = true;
-        
-        // Register the views:// URI scheme handler AFTER GTK is initialized
-        WebKitWebContext* context = webkit_web_context_get_default();
-        webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
+    {
+        std::unique_lock<std::mutex> lock(g_gtkInitMutex);
+        if (!g_gtkInitialized) {
+            gtk_init(nullptr, nullptr);
+            
+            g_gtkInitialized = true;
+            
+            // Register the views:// URI scheme handler AFTER GTK is initialized
+            WebKitWebContext* context = webkit_web_context_get_default();
+            webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
+        }
     }
+    // Notify all waiting threads that GTK is initialized
+    g_gtkInitCondition.notify_all();
+}
+
+// Helper function to wait for GTK initialization
+void waitForGTKInit() {
+    std::unique_lock<std::mutex> lock(g_gtkInitMutex);
+    g_gtkInitCondition.wait(lock, []{ return g_gtkInitialized; });
 }
 
 // Helper function to dispatch to main thread synchronously
@@ -3982,12 +3997,8 @@ void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bo
     // NOTE: width and height parameters are ignored on Linux since AppIndicator doesn't support custom sizing
     // These parameters are included for FFI consistency across platforms (macOS and Windows use them)
     
-    // GTK should already be initialized on main thread by runEventLoop()
-    if (!g_gtkInitialized) {
-        printf("ERROR: GTK not initialized for createTray! GTK must be initialized on main thread first.\n");
-        fflush(stdout);
-        return nullptr;
-    }
+    // Wait for GTK initialization to complete
+    waitForGTKInit();
     
     return dispatch_sync_main([&]() -> void* {
         // Create the TrayItem on main thread
@@ -4057,12 +4068,8 @@ void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
         return;
     }
     
-    // GTK should already be initialized on main thread by runEventLoop()
-    if (!g_gtkInitialized) {
-        printf("ERROR: GTK not initialized for setApplicationMenu! GTK must be initialized on main thread first.\n");
-        fflush(stdout);
-        return;
-    }
+    // Wait for GTK initialization to complete
+    waitForGTKInit();
     
     dispatch_sync_main_void([&]() {
         try {
