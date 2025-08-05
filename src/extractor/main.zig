@@ -140,6 +140,14 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
 fn extractTar(allocator: std.mem.Allocator, tar_data: []const u8, extract_dir: []const u8) !void {
     _ = allocator; // Mark as used (needed for potential path operations)
     
+    // Clean up existing directory if it exists to ensure no old files remain
+    if (std.fs.cwd().openDir(extract_dir, .{})) |existing_dir| {
+        existing_dir.close();
+        try std.fs.cwd().deleteTree(extract_dir);
+    } else |_| {
+        // Directory doesn't exist yet, nothing to clean
+    }
+    
     // Create extraction directory
     try std.fs.cwd().makePath(extract_dir);
     
