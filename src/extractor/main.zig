@@ -81,11 +81,18 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     const app_name_channel = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ metadata.name, metadata.channel });
     defer allocator.free(app_name_channel);
     
-    const extract_dir = try std.fs.path.join(allocator, &.{ app_data_dir, metadata.identifier, app_name_channel, "self-extraction" });
-    defer allocator.free(extract_dir);
+    // Build paths for new directory structure
+    const app_base_dir = try std.fs.path.join(allocator, &.{ app_data_dir, metadata.identifier, app_name_channel });
+    defer allocator.free(app_base_dir);
+    
+    const self_extraction_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "self-extraction" });
+    defer allocator.free(self_extraction_dir);
+    
+    const app_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
+    defer allocator.free(app_dir);
     
     std.debug.print("Self-extracting archive found at offset {d}\n", .{archive_offset});
-    std.debug.print("Extracting to: {s}\n", .{extract_dir});
+    std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
     
     // Read and decompress archive (to end of file)
     const archive_size = file_size - (archive_offset + ARCHIVE_MARKER.len);
@@ -115,22 +122,51 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         try decompressed_data.appendSlice(buffer[0..read_size]);
     }
     
-    // Extract tar archive to current directory
+    // Extract tar archive to self-extraction directory first
     std.debug.print("Extracting application files...\n", .{});
-    try extractTar(allocator, decompressed_data.items, extract_dir);
+    try extractTar(allocator, decompressed_data.items, self_extraction_dir);
+    
+    // Now move the extracted app to the app directory
+    // The app bundle is nested inside self-extraction, we need to find it
+    const app_bundle_name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ metadata.name, metadata.channel });
+    defer allocator.free(app_bundle_name);
+    
+    const extracted_app_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, app_bundle_name });
+    defer allocator.free(extracted_app_path);
+    
+    // Check if app directory exists and move it to backup
+    const backup_dir = try std.fs.path.join(allocator, &.{ self_extraction_dir, "backup" });
+    defer allocator.free(backup_dir);
+    
+    // Clean up old backup if it exists
+    std.fs.cwd().deleteTree(backup_dir) catch {};
+    
+    // Move existing app to backup (if it exists)
+    std.fs.cwd().rename(app_dir, backup_dir) catch |err| switch (err) {
+        error.FileNotFound => {},  // No existing app, that's fine
+        else => return err,
+    };
+    
+    // Move the extracted app to the app directory
+    std.debug.print("Moving app from {s} to {s}\n", .{ extracted_app_path, app_dir });
+    std.fs.cwd().rename(extracted_app_path, app_dir) catch |err| {
+        // If move fails, try to restore backup
+        std.fs.cwd().rename(backup_dir, app_dir) catch {};
+        return err;
+    };
     
     // Fix executable permissions on extracted binaries
-    try fixExecutablePermissions(allocator, extract_dir);
+    try fixExecutablePermissions(allocator, app_dir);
     
     // Fix CEF symlinks (they get lost during tar extraction)
-    try fixCefSymlinks(allocator, extract_dir);
+    try fixCefSymlinks(allocator, app_dir);
     
     // Replace self with launcher shortcut
-    try replaceSelfWithLauncher(allocator, exe_path, extract_dir);
+    try replaceSelfWithLauncher(allocator, exe_path, app_dir);
     
     // Create desktop shortcut on Linux
     if (builtin.os.tag == .linux) {
-        try createDesktopShortcut(allocator, extract_dir, metadata);
+        try createDesktopShortcut(allocator, app_dir, metadata);
     }
     
     std.debug.print("Installation completed successfully!\n", .{});
@@ -168,8 +204,8 @@ fn extractTar(allocator: std.mem.Allocator, tar_data: []const u8, extract_dir: [
     try pipeToFileSystem(dir, reader);
 }
 
-fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u8) !void {
-    std.debug.print("DEBUG: fixExecutablePermissions called with dir: {s}\n", .{extract_dir});
+fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !void {
+    std.debug.print("DEBUG: fixExecutablePermissions called with dir: {s}\n", .{app_dir});
     
     // List of files that should be executable
     const executables = [_][]const u8{
@@ -183,7 +219,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u
     
     std.debug.print("DEBUG: Processing executables list...\n", .{});
     for (executables) |exe| {
-        const exe_path = try std.fs.path.join(allocator, &.{ extract_dir, exe });
+        const exe_path = try std.fs.path.join(allocator, &.{ app_dir, exe });
         defer allocator.free(exe_path);
         
         // Set executable permissions (ignore errors if file doesn't exist)
@@ -208,8 +244,8 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u
     // TEMPORARILY DISABLED - causing panic
     if (false and builtin.os.tag != .windows) {
         std.debug.print("DEBUG: Looking for .sh scripts...\n", .{});
-        var dir = std.fs.cwd().openDir(extract_dir, .{}) catch |err| {
-            std.debug.print("DEBUG: Could not open directory {s}: {}\n", .{extract_dir, err});
+        var dir = std.fs.cwd().openDir(app_dir, .{}) catch |err| {
+            std.debug.print("DEBUG: Could not open directory {s}: {}\n", .{app_dir, err});
             return;
         };
         defer dir.close();
@@ -222,7 +258,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u
             switch (entry.kind) {
                 .file => {
                     if (std.mem.endsWith(u8, entry.name, ".sh")) {
-                        const script_path = try std.fs.path.join(allocator, &.{ extract_dir, entry.name });
+                        const script_path = try std.fs.path.join(allocator, &.{ app_dir, entry.name });
                         defer allocator.free(script_path);
                         
                         const script_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{script_path});
@@ -249,11 +285,8 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, extract_dir: []const u
     std.debug.print("DEBUG: fixExecutablePermissions completed successfully\n", .{});
 }
 
-fn fixCefSymlinks(allocator: std.mem.Allocator, extract_dir: []const u8) !void {
-    // Find the actual app directory (it has an extra level)
-    const app_bundle_name = "Electrobun(Playground)-canary"; // TODO: make this dynamic
-    const app_dir = try std.fs.path.join(allocator, &.{ extract_dir, app_bundle_name });
-    defer allocator.free(app_dir);
+fn fixCefSymlinks(allocator: std.mem.Allocator, app_dir: []const u8) !void {
+    // No need to find app directory anymore since it's passed directly
     
     const bin_dir = try std.fs.path.join(allocator, &.{ app_dir, "bin" });
     defer allocator.free(bin_dir);
@@ -368,9 +401,9 @@ fn getAppDataDir(allocator: std.mem.Allocator) ![]const u8 {
     };
 }
 
-fn replaceSelfWithLauncher(allocator: std.mem.Allocator, exe_path: []const u8, extract_dir: []const u8) !void {
+fn replaceSelfWithLauncher(allocator: std.mem.Allocator, exe_path: []const u8, app_dir: []const u8) !void {
     const launcher_name = if (builtin.os.tag == .windows) "launcher.exe" else "launcher";
-    const launcher_path = try std.fs.path.join(allocator, &.{ extract_dir, "bin", launcher_name });
+    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", launcher_name });
     defer allocator.free(launcher_path);
     
     // Check if launcher exists
@@ -436,7 +469,7 @@ fn escapeDesktopString(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
     return escaped;
 }
 
-fn createDesktopShortcut(allocator: std.mem.Allocator, extract_dir: []const u8, metadata: AppMetadata) !void {
+fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
     // Get home directory for desktop path
     const home = std.process.getEnvVarOwned(allocator, "HOME") catch {
         std.debug.print("Warning: Could not get HOME directory\n", .{});
@@ -453,13 +486,6 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, extract_dir: []const u8, 
         std.debug.print("Warning: Desktop directory not found at {s}\n", .{desktop_dir});
         return;
     };
-    
-    // Find the actual app directory (it has an extra level)
-    const app_bundle_name = try std.fmt.allocPrint(allocator, "Electrobun(Playground)-{s}", .{metadata.channel});
-    defer allocator.free(app_bundle_name);
-    
-    const app_dir = try std.fs.path.join(allocator, &.{ extract_dir, app_bundle_name });
-    defer allocator.free(app_dir);
     
     const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
     defer allocator.free(launcher_path);

@@ -341,9 +341,22 @@ const Updater = {
         }
 
         // Note: resolve here removes the extra trailing / that the tar file adds
-        const newAppBundlePath = resolve(
+        const extractedAppPath = resolve(
           join(extractionFolder, appBundleSubpath)
         );
+        
+        // On Linux, we need to move the app from self-extraction to the app directory
+        let newAppBundlePath: string;
+        if (currentOS === 'linux') {
+          // Get the parent directory (one level up from self-extraction)
+          const parentDir = resolve(extractionFolder, "..");
+          newAppBundlePath = join(parentDir, "app_new");
+          
+          // Move the extracted app to a temporary location
+          renameSync(extractedAppPath, newAppBundlePath);
+        } else {
+          newAppBundlePath = extractedAppPath;
+        }
         // Platform-specific app path calculation
         let runningAppBundlePath: string;
         if (currentOS === 'macos') {
@@ -353,23 +366,50 @@ const Updater = {
             "..",
             ".."
           );
+        } else if (currentOS === 'linux') {
+          // On Linux, executable is at app/bin/launcher
+          runningAppBundlePath = resolve(
+            dirname(process.execPath),
+            "..",
+            ".."
+          );
         } else {
-          // On Windows/Linux, the executable is the app itself
+          // On Windows, the executable is the app itself
           runningAppBundlePath = process.execPath;
         }
-        // Platform-specific backup naming
-        const backupName = currentOS === 'macos' ? "backup.app" : "backup";
-        const backupAppBundlePath = join(extractionFolder, backupName);
+        // Platform-specific backup naming and location
+        let backupAppBundlePath: string;
+        if (currentOS === 'linux') {
+          // On Linux, keep backup in self-extraction folder
+          backupAppBundlePath = join(extractionFolder, "backup");
+        } else {
+          // On macOS/Windows, backup in extraction folder
+          const backupName = currentOS === 'macos' ? "backup.app" : "backup";
+          backupAppBundlePath = join(extractionFolder, backupName);
+        }
 
         try {
-          // const backupState = statSync(backupAppBundlePath);
+          // Remove existing backup if it exists
           if (statSync(backupAppBundlePath, { throwIfNoEntry: false })) {
             rmdirSync(backupAppBundlePath, { recursive: true });
           } else {
             console.log("backupAppBundlePath does not exist");
           }
+          
+          // Move current running app to backup
           renameSync(runningAppBundlePath, backupAppBundlePath);
+          
+          // Move new app to running location
           renameSync(newAppBundlePath, runningAppBundlePath);
+          
+          // On Linux, clean up the temporary app_new if it wasn't already moved
+          if (currentOS === 'linux') {
+            try {
+              rmdirSync(newAppBundlePath, { recursive: true });
+            } catch {
+              // Ignore if already moved
+            }
+          }
         } catch (error) {
           console.error("Failed to replace app with new version", error);
           return;
