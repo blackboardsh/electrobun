@@ -141,12 +141,18 @@ fn extractTar(allocator: std.mem.Allocator, tar_data: []const u8, extract_dir: [
     _ = allocator; // Mark as used (needed for potential path operations)
     
     // Clean up existing directory if it exists to ensure no old files remain
-    if (std.fs.cwd().openDir(extract_dir, .{})) |existing_dir| {
-        existing_dir.close();
-        try std.fs.cwd().deleteTree(extract_dir);
-    } else |_| {
-        // Directory doesn't exist yet, nothing to clean
-    }
+    std.fs.cwd().deleteTree(extract_dir) catch |err| switch (err) {
+        error.NotDir => {
+            // Path exists but is not a directory, try to delete as file
+            std.fs.cwd().deleteFile(extract_dir) catch {
+                // If that fails too, just continue - we'll overwrite
+            };
+        },
+        else => {
+            // For any other error (including if directory doesn't exist), just continue
+            // The makePath call below will create the directory as needed
+        },
+    };
     
     // Create extraction directory
     try std.fs.cwd().makePath(extract_dir);
@@ -479,6 +485,9 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, extract_dir: []const u8, 
         \\#!/bin/bash
         \\cd "$(dirname "$0")/bin"
         \\export LD_LIBRARY_PATH=".:$LD_LIBRARY_PATH"
+        \\
+        \\# Force X11 backend for compatibility
+        \\export GDK_BACKEND=x11
         \\
         \\# Check if CEF libraries exist and set LD_PRELOAD
         \\if [ -f "./libcef.so" ] || [ -f "./libvk_swiftshader.so" ]; then

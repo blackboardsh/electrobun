@@ -40,6 +40,16 @@
 #include "include/cef_response_filter.h"
 #include "include/wrapper/cef_helpers.h"
 
+// X11 Error Handler (non-fatal errors are common in WebKit/GTK)
+static int x11_error_handler(Display* display, XErrorEvent* error) {
+    // Only log severe errors, ignore common ones like BadWindow for destroyed widgets
+    if (error->error_code != BadWindow && error->error_code != BadDrawable) {
+        char error_text[256];
+        XGetErrorText(display, error->error_code, error_text, sizeof(error_text));
+        fprintf(stderr, "X11 Error: %s (code %d)\n", error_text, error->error_code);
+    }
+    return 0; // Continue execution
+}
 
 // Helper macros
 #ifndef MAX
@@ -98,6 +108,7 @@ GtkWidget* getContainerViewOverlay(GtkWidget* window);
 GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId);
 GtkWidget* createApplicationMenuBar(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler);
 void applyApplicationMenuToWindow(GtkWidget* window);
+void initializeGTK();
 
 // X11 Window structure to replace GTK windows
 struct X11Window {
@@ -1130,6 +1141,9 @@ bool initializeCEF() {
         return false;
     }
     
+    // CRITICAL: Call gtk_disable_setlocale before any CEF operations
+    // CEF internally calls GTK initialization, so we must do this first
+    gtk_disable_setlocale();
     
     // Get command line arguments
     int argc = 0;
@@ -1174,10 +1188,8 @@ bool initializeCEF() {
     // settings.remote_debugging_port = 9222;
     // printf("CEF: Remote debugging enabled on port 9222\n");
     
-    // Initialize GTK for CEF's use (needed for context menus and dialogs)
-    if (!gtk_init_check(nullptr, nullptr)) {
-        printf("CEF: Warning - Failed to initialize GTK\n");
-    }
+    // Use centralized GTK initialization to ensure proper setlocale handling
+    initializeGTK();
     
     // Set the resource directory to where CEF files are located
     std::string execDir = getExecutableDir();
@@ -1389,8 +1401,7 @@ public:
         // Ensure webview is visible for rendering
         gtk_widget_set_visible(webview, TRUE);
         
-        // Force widget realization to create rendering surface immediately
-        gtk_widget_realize(webview);
+        // Widget will be realized after it's added to a container in addWebview()
         
         // Load URL if provided
         if (url && strlen(url) > 0) {
@@ -1820,6 +1831,12 @@ public:
         // Set up browser creation callback to notify CEFWebViewImpl when browser is ready
         client->SetBrowserCreatedCallback([this](CefRefPtr<CefBrowser> browser) {
             this->browser = browser;
+            
+            // Handle pending frame positioning now that browser is available
+            if (hasPendingFrame) {
+                syncCEFPositionWithFrame(pendingFrame);
+                hasPendingFrame = false;
+            }
         });
         
         // Add preload scripts to the client
@@ -2238,7 +2255,14 @@ public:
             // Add webview to overlay container
             if (abstractViews.size() == 1) {
                 // First webview becomes the base layer (determines overlay size)
+                printf("DEBUG: Adding first webview (ID: %u) to container\n", view->webviewId);
+                fflush(stdout);
                 gtk_container_add(GTK_CONTAINER(overlay), view->widget);
+                
+                // Now that widget is anchored, realize it for rendering
+                gtk_widget_realize(view->widget);
+                printf("DEBUG: First webview (ID: %u) realized successfully\n", view->webviewId);
+                fflush(stdout);
             } else {
                 // For OOPIFs, wrap in a fixed container to enforce size constraints
                 GtkWidget* wrapper = gtk_fixed_new();
@@ -2249,7 +2273,14 @@ public:
                 gtk_widget_set_can_focus(wrapper, FALSE);
                 
                 // Add webview to wrapper at 0,0
+                printf("DEBUG: Adding subsequent webview (ID: %u) to wrapper\n", view->webviewId);
+                fflush(stdout);
                 gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
+                
+                // Now that widget is anchored, realize it for rendering
+                gtk_widget_realize(view->widget);
+                printf("DEBUG: Subsequent webview (ID: %u) realized successfully\n", view->webviewId);
+                fflush(stdout);
                 
                 // Add wrapper as overlay layer
                 gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
@@ -2682,7 +2713,15 @@ void initializeGTK() {
     {
         std::unique_lock<std::mutex> lock(g_gtkInitMutex);
         if (!g_gtkInitialized) {
+            // Force X11 backend on Wayland systems
+            setenv("GDK_BACKEND", "x11", 1);
+            
+            // Disable setlocale before gtk_init to prevent CEF conflicts
+            gtk_disable_setlocale();
             gtk_init(nullptr, nullptr);
+            
+            // Install X11 error handler for debugging
+            XSetErrorHandler(x11_error_handler);
             
             g_gtkInitialized = true;
             
@@ -2970,6 +3009,8 @@ gboolean process_x11_events(gpointer data) {
 void runCEFEventLoop() {
     // Initialize GTK on the main thread (this MUST be done here)
     initializeGTK();
+    printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === CEF EVENT LOOP STARTED ===\n");
+    fflush(stdout);
         
     // Set up a timer to periodically call CefDoMessageLoopWork()
     // This integrates CEF message loop with GTK main loop
@@ -2992,6 +3033,10 @@ void runCEFEventLoop() {
 void runGTKEventLoop() {
     // Initialize GTK on the main thread (this MUST be done here)
     initializeGTK();
+    printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === GTK EVENT LOOP STARTED ===\n");
+    
+    // Note: GDK_BACKEND=x11 forced for Wayland compatibility
+    
     gtk_main();
 }
 
@@ -3373,6 +3418,14 @@ AbstractView* initWebview(uint32_t webviewId,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript) {
     
+    // Null pointer checks
+    if (!window) {
+        fprintf(stderr, "ERROR: initWebview called with null window pointer\n");
+        return nullptr;
+    }
+    
+    // Wait for GTK initialization to complete before creating any webviews
+    waitForGTKInit();
     
     if (isCEFAvailable()) {
         return initCEFWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
