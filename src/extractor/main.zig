@@ -169,6 +169,11 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         try createDesktopShortcut(allocator, app_dir, metadata);
     }
     
+    // Create desktop shortcut on Windows
+    if (builtin.os.tag == .windows) {
+        try createWindowsShortcut(allocator, app_dir, metadata);
+    }
+    
     std.debug.print("Installation completed successfully!\n", .{});
     return true;
 }
@@ -579,33 +584,116 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
 }
 
-fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !void {
-    // Get app name from directory
-    const app_name = std.fs.path.basename(app_dir);
+fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8) !void {
+    // For now, create a batch file as a reliable fallback
+    // TODO: Implement proper .lnk creation with Windows APIs
+    const batch_name = try std.fmt.allocPrint(allocator, "{s}.bat", .{app_name});
+    defer allocator.free(batch_name);
     
-    // Create shortcut next to extracted folder
-    const shortcut_name = try std.fmt.allocPrint(allocator, "{s}.lnk", .{app_name});
-    defer allocator.free(shortcut_name);
+    const batch_path = try std.fs.path.join(allocator, &.{ shortcut_dir, batch_name });
+    defer allocator.free(batch_path);
     
-    const shortcut_path = try std.fs.path.join(allocator, &.{ app_dir, "..", shortcut_name });
-    defer allocator.free(shortcut_path);
+    // Create batch file that changes to working directory and runs launcher
+    const batch_content = try std.fmt.allocPrint(allocator,
+        \\@echo off
+        \\cd /d "{s}"
+        \\start "" "{s}"
+        \\
+    , .{ working_dir, target_path });
+    defer allocator.free(batch_content);
+    
+    std.fs.cwd().writeFile(batch_path, batch_content) catch |err| {
+        std.debug.print("Warning: Could not create shortcut at {s}: {}\n", .{ batch_path, err });
+        return;
+    };
+    
+    std.debug.print("Created shortcut: {s}\n", .{batch_path});
+}
+
+fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
+    // Get user directories
+    const userprofile = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch {
+        std.debug.print("Warning: Could not get USERPROFILE directory\n", .{});
+        return;
+    };
+    defer allocator.free(userprofile);
+    
+    const desktop_dir = try std.fs.path.join(allocator, &.{ userprofile, "Desktop" });
+    defer allocator.free(desktop_dir);
+    
+    const start_menu_dir = try std.fs.path.join(allocator, &.{ userprofile, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs" });
+    defer allocator.free(start_menu_dir);
+    
+    // Check if Desktop directory exists
+    std.fs.cwd().access(desktop_dir, .{}) catch {
+        std.debug.print("Warning: Desktop directory not found at {s}\n", .{desktop_dir});
+        // Continue anyway, might work
+    };
     
     const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
     defer allocator.free(launcher_path);
     
-    // Create a simple batch file as a workaround for .lnk complexity
-    const batch_name = try std.fmt.allocPrint(allocator, "{s}.bat", .{app_name});
-    defer allocator.free(batch_name);
+    // Check if launcher exists
+    std.fs.cwd().access(launcher_path, .{}) catch |err| {
+        std.debug.print("Warning: Could not find launcher at {s}: {}\n", .{ launcher_path, err });
+        return;
+    };
     
-    const batch_path = try std.fs.path.join(allocator, &.{ app_dir, "..", batch_name });
-    defer allocator.free(batch_path);
+    const bin_dir = try std.fs.path.join(allocator, &.{ app_dir, "bin" });
+    defer allocator.free(bin_dir);
     
-    const batch_content = try std.fmt.allocPrint(allocator, "@echo off\nstart \"\" \"{s}\"\n", .{launcher_path});
-    defer allocator.free(batch_content);
+    // Create desktop shortcut
+    try createWindowsShortcutFile(allocator, desktop_dir, metadata.name, launcher_path, bin_dir);
     
-    try std.fs.cwd().writeFile(batch_path, batch_content);
+    // Create Start Menu shortcut
+    // Make sure Start Menu directory exists
+    std.fs.cwd().makePath(start_menu_dir) catch {
+        std.debug.print("Warning: Could not create Start Menu directory\n", .{});
+    };
+    try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, launcher_path, bin_dir);
     
-    std.debug.print("Created launcher shortcut: {s}\n", .{batch_name});
+    std.debug.print("Created Windows shortcuts for: {s}\n", .{metadata.name});
+    
+    // Add uninstall registry entry for better Windows integration
+    try addWindowsUninstallEntry(allocator, metadata, app_dir);
+}
+
+fn addWindowsUninstallEntry(allocator: std.mem.Allocator, metadata: AppMetadata, app_dir: []const u8) !void {
+    // Create a simple registry file that users can double-click to install uninstall info
+    // This is a safer approach than directly modifying the registry from our code
+    const reg_name = try std.fmt.allocPrint(allocator, "{s}_uninstall.reg", .{metadata.name});
+    defer allocator.free(reg_name);
+    
+    const reg_path = try std.fs.path.join(allocator, &.{ app_dir, reg_name });
+    defer allocator.free(reg_path);
+    
+    const app_display_name = try std.fmt.allocPrint(allocator, "{s} ({s})", .{ metadata.name, metadata.channel });
+    defer allocator.free(app_display_name);
+    
+    // Create registry content for Windows uninstall entry
+    const reg_content = try std.fmt.allocPrint(allocator,
+        \\Windows Registry Editor Version 5.00
+        \\
+        \\[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Uninstall\{s}]
+        \\@="{s}"
+        \\"DisplayName"="{s}"
+        \\"DisplayVersion"="1.0"
+        \\"Publisher"="Electrobun"
+        \\"InstallLocation"="{s}"
+        \\"UninstallString"="cmd.exe /c rmdir /s /q \"{s}\""
+        \\"NoModify"=dword:00000001
+        \\"NoRepair"=dword:00000001
+        \\
+    , .{ metadata.identifier, app_display_name, app_display_name, app_dir, app_dir });
+    defer allocator.free(reg_content);
+    
+    std.fs.cwd().writeFile(reg_path, reg_content) catch |err| {
+        std.debug.print("Warning: Could not create uninstall registry file: {}\n", .{err});
+        return;
+    };
+    
+    std.debug.print("Created uninstall registry file: {s}\n", .{reg_path});
+    std.debug.print("Note: Users can double-click {s} to add uninstall info to Windows\n", .{reg_name});
 }
 
 pub fn main() !void {
