@@ -181,6 +181,9 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
 fn extractTar(allocator: std.mem.Allocator, tar_data: []const u8, extract_dir: []const u8) !void {
     _ = allocator; // Mark as used (needed for potential path operations)
     
+    std.debug.print("DEBUG: Starting tar extraction to: {s}\n", .{extract_dir});
+    std.debug.print("DEBUG: Tar data size: {} bytes\n", .{tar_data.len});
+    
     // Clean up existing directory if it exists to ensure no old files remain
     std.fs.cwd().deleteTree(extract_dir) catch |err| switch (err) {
         error.NotDir => {
@@ -1031,11 +1034,20 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                     }
                     
                     // Create the symbolic link
-                    dir.symLink(link_target, link_name, .{}) catch {
-                        // On error, try to remove existing file/link and retry
-                        dir.deleteFile(link_name) catch {};
-                        try dir.symLink(link_target, link_name, .{});
-                    };
+                    if (builtin.os.tag == .windows) {
+                        // On Windows, symlinks require special privileges, so skip them
+                        // TODO: Consider copying the target file instead for Windows
+                        std.debug.print("Skipping symlink creation on Windows: {s} -> {s}\n", .{ link_name, link_target });
+                    } else {
+                        dir.symLink(link_target, link_name, .{}) catch {
+                            // On error, try to remove existing file/link and retry
+                            dir.deleteFile(link_name) catch {};
+                            dir.symLink(link_target, link_name, .{}) catch |err| {
+                                std.debug.print("Warning: Could not create symlink {s} -> {s}: {}\n", .{ link_name, link_target, err });
+                                // Continue extraction even if symlink fails
+                            };
+                        };
+                    }
                 }
             },
             .hard_link => return error.TarUnsupportedFileType,
