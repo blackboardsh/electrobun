@@ -602,8 +602,15 @@ fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const
     , .{ working_dir, target_path });
     defer allocator.free(batch_content);
     
-    std.fs.cwd().writeFile(batch_path, batch_content) catch |err| {
+    // Create and write batch file
+    const batch_file = std.fs.cwd().createFile(batch_path, .{}) catch |err| {
         std.debug.print("Warning: Could not create shortcut at {s}: {}\n", .{ batch_path, err });
+        return;
+    };
+    defer batch_file.close();
+    
+    batch_file.writeAll(batch_content) catch |err| {
+        std.debug.print("Warning: Could not write shortcut content: {}\n", .{err});
         return;
     };
     
@@ -687,8 +694,15 @@ fn addWindowsUninstallEntry(allocator: std.mem.Allocator, metadata: AppMetadata,
     , .{ metadata.identifier, app_display_name, app_display_name, app_dir, app_dir });
     defer allocator.free(reg_content);
     
-    std.fs.cwd().writeFile(reg_path, reg_content) catch |err| {
+    // Create and write registry file
+    const reg_file = std.fs.cwd().createFile(reg_path, .{}) catch |err| {
         std.debug.print("Warning: Could not create uninstall registry file: {}\n", .{err});
+        return;
+    };
+    defer reg_file.close();
+    
+    reg_file.writeAll(reg_content) catch |err| {
+        std.debug.print("Warning: Could not write registry content: {}\n", .{err});
         return;
     };
     
