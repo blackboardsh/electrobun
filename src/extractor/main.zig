@@ -128,7 +128,12 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     
     // Now move the extracted app to the app directory
     // The app bundle is nested inside self-extraction, we need to find it
-    const app_bundle_name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ metadata.name, metadata.channel });
+    // Use same sanitization as build process: remove spaces and dots
+    const sanitized_name = try std.mem.replaceOwned(u8, allocator, metadata.name, " ", "");
+    defer allocator.free(sanitized_name);
+    const dots_removed = try std.mem.replaceOwned(u8, allocator, sanitized_name, ".", "-");
+    defer allocator.free(dots_removed);
+    const app_bundle_name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ dots_removed, metadata.channel });
     defer allocator.free(app_bundle_name);
     
     const extracted_app_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, app_bundle_name });
