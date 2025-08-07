@@ -166,15 +166,17 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Fix CEF symlinks (they get lost during tar extraction)
     try fixCefSymlinks(allocator, app_dir);
     
-    // Replace self with launcher shortcut
-    try replaceSelfWithLauncher(allocator, exe_path, app_dir);
+    // On macOS, replace self with launcher shortcut (due to .app bundle structure)
+    // On Windows/Linux, keep the self-extractor and create desktop shortcuts
+    if (builtin.os.tag == .macos) {
+        try replaceSelfWithLauncher(allocator, exe_path, app_dir);
+    }
     
-    // Create desktop shortcut on Linux
+    // Create desktop shortcuts on Linux and Windows
     if (builtin.os.tag == .linux) {
         try createDesktopShortcut(allocator, app_dir, metadata);
     }
     
-    // Create desktop shortcut on Windows
     if (builtin.os.tag == .windows) {
         try createWindowsShortcut(allocator, app_dir, metadata);
     }
