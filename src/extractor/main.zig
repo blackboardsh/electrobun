@@ -604,12 +604,12 @@ fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const
     defer allocator.free(batch_path);
     
     // Create batch file that changes to working directory and runs launcher
+    // Use powershell to run without console window
     const batch_content = try std.fmt.allocPrint(allocator,
         \\@echo off
-        \\cd /d "{s}"
-        \\start "" "{s}"
+        \\powershell -WindowStyle Hidden -Command "& {{ Start-Process -FilePath '{s}' -WorkingDirectory '{s}' -WindowStyle Hidden }}"
         \\
-    , .{ working_dir, target_path });
+    , .{ target_path, working_dir });
     defer allocator.free(batch_content);
     
     // Create and write batch file
