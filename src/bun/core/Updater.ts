@@ -11,8 +11,8 @@ function getAppDataDir(): string {
     case 'macos':
       return join(homedir(), "Library", "Application Support");
     case 'win':
-      // Use APPDATA environment variable or fallback to default location
-      return process.env.APPDATA || join(homedir(), "AppData", "Roaming");
+      // Use LOCALAPPDATA to match extractor location
+      return process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
     case 'linux':
       // Use XDG_CONFIG_HOME or fallback to ~/.config
       return process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -374,18 +374,21 @@ const Updater = {
             ".."
           );
         } else {
-          // On Windows, the executable is the app itself
-          runningAppBundlePath = process.execPath;
+          // On Windows, executable is at app/bin/launcher.exe (same as Linux)
+          runningAppBundlePath = resolve(
+            dirname(process.execPath),
+            "..",
+            ".."
+          );
         }
         // Platform-specific backup naming and location
         let backupAppBundlePath: string;
-        if (currentOS === 'linux') {
-          // On Linux, keep backup in self-extraction folder
-          backupAppBundlePath = join(extractionFolder, "backup");
+        if (currentOS === 'macos') {
+          // On macOS, backup in extraction folder with .app extension
+          backupAppBundlePath = join(extractionFolder, "backup.app");
         } else {
-          // On macOS/Windows, backup in extraction folder
-          const backupName = currentOS === 'macos' ? "backup.app" : "backup";
-          backupAppBundlePath = join(extractionFolder, backupName);
+          // On Linux/Windows, keep backup in self-extraction folder
+          backupAppBundlePath = join(extractionFolder, "backup");
         }
 
         try {
@@ -421,12 +424,14 @@ const Updater = {
             await Bun.spawn(["open", runningAppBundlePath]);
             break;
           case 'win':
-            // On Windows, the runningAppBundlePath would be the .exe file
-            await Bun.spawn([runningAppBundlePath]);
+            // On Windows, launch the launcher.exe inside the app directory
+            const windowsLauncher = join(runningAppBundlePath, "bin", "launcher.exe");
+            await Bun.spawn([windowsLauncher]);
             break;
           case 'linux':
-            // On Linux, directly execute the binary
-            await Bun.spawn([runningAppBundlePath]);
+            // On Linux, launch the launcher inside the app directory  
+            const linuxLauncher = join(runningAppBundlePath, "bin", "launcher");
+            await Bun.spawn([linuxLauncher]);
             break;
         }
         process.exit(0);
