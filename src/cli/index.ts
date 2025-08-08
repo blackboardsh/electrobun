@@ -22,7 +22,7 @@ import { getTemplate, getTemplateNames } from './templates/embedded';
 const MAX_CHUNK_SIZE = 1024 * 2;
 
 
-const binExt = OS === 'win' ? '.exe' : '';
+// const binExt = OS === 'win' ? '.exe' : '';
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -611,6 +611,7 @@ const buildSubFolder = `${buildEnvironment}-${currentTarget.os}-${currentTarget.
 // Use target OS/ARCH for build logic (instead of current machine's OS/ARCH)
 const targetOS = currentTarget.os;
 const targetARCH = currentTarget.arch;
+const targetBinExt = targetOS === 'win' ? '.exe' : '';
 
 const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
 
@@ -846,7 +847,7 @@ if (commandArg === "init") {
   // Only copy launcher for non-dev builds
   if (buildEnvironment !== "dev") {
     const bunCliLauncherBinarySource = targetPaths.LAUNCHER_RELEASE;
-    const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + binExt;
+    const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + targetBinExt;
     const destLauncherFolder = dirname(bunCliLauncherDestination);
     if (!existsSync(destLauncherFolder)) {
       // console.info('creating folder: ', destFolder);
@@ -866,7 +867,7 @@ if (commandArg === "init") {
   const bunBinarySourcePath = targetPaths.BUN_BINARY;
   // Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
   // in node_modules, so we have to dereference here to get the actual binary in the bundle.
-  const bunBinaryDestInBundlePath = join(appBundleMacOSPath, "bun") + binExt;
+  const bunBinaryDestInBundlePath = join(appBundleMacOSPath, "bun") + targetBinExt;
   const destFolder2 = dirname(bunBinaryDestInBundlePath);
   if (!existsSync(destFolder2)) {
     // console.info('creating folder: ', destFolder);
@@ -1172,7 +1173,7 @@ if (commandArg === "init") {
 
   // copy native bindings
   const bsPatchSource = targetPaths.BSPATCH;
-  const bsPatchDestination = join(appBundleMacOSPath, "bspatch") + binExt;
+  const bsPatchDestination = join(appBundleMacOSPath, "bspatch") + targetBinExt;
   const bsPatchDestFolder = dirname(bsPatchDestination);
   if (!existsSync(bsPatchDestFolder)) {
     mkdirSync(bsPatchDestFolder, { recursive: true });
