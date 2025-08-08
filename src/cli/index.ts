@@ -14,6 +14,7 @@ import {
 } from "fs";
 import { execSync } from "child_process";
 import tar from "tar";
+import archiver from "archiver";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS, ARCH } from '../shared/platform';
 import { getTemplate, getTemplateNames } from './templates/embedded';
@@ -1502,7 +1503,13 @@ if (commandArg === "init") {
           targetPaths,
           buildEnvironment
         );
-        artifactsToUpload.push(selfExtractingExePath);
+        
+        // Wrap Windows exe in zip for native Windows support
+        const wrappedExePath = await wrapInArchive(selfExtractingExePath, buildFolder, 'zip');
+        artifactsToUpload.push(wrappedExePath);
+        
+        // Also keep the raw exe for backwards compatibility (optional)
+        // artifactsToUpload.push(selfExtractingExePath);
       } else if (targetOS === 'linux') {
         // Create desktop file for Linux
         const desktopFileContent = `[Desktop Entry]
@@ -1555,7 +1562,13 @@ exec "\$LAUNCHER_BINARY" "\$@"
           targetPaths,
           buildEnvironment
         );
-        artifactsToUpload.push(selfExtractingLinuxPath);
+        
+        // Wrap Linux .run file in tar.gz to preserve permissions
+        const wrappedRunPath = await wrapInArchive(selfExtractingLinuxPath, buildFolder, 'tar.gz');
+        artifactsToUpload.push(wrappedRunPath);
+        
+        // Also keep the raw .run for backwards compatibility (optional)
+        // artifactsToUpload.push(selfExtractingLinuxPath);
         
         // On Linux, create a tar.gz of the bundle
         const linuxTarPath = join(buildFolder, `${appFileName}.tar.gz`);
@@ -1968,6 +1981,70 @@ async function createLinuxSelfExtractingBinary(
   console.log(`Created self-extracting Linux binary: ${outputPath} (${(combinedBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
   
   return outputPath;
+}
+
+async function wrapInArchive(filePath: string, buildFolder: string, archiveType: 'tar.gz' | 'zip'): Promise<string> {
+  const fileName = basename(filePath);
+  const fileDir = dirname(filePath);
+  
+  if (archiveType === 'tar.gz') {
+    // Output filename: Setup.exe -> Setup.exe.tar.gz or Setup.run -> Setup.run.tar.gz
+    const archivePath = filePath + '.tar.gz';
+    
+    // For Linux files, ensure they have executable permissions before archiving
+    if (fileName.endsWith('.run')) {
+      try {
+        // Try to set executable permissions (will only work on Unix-like systems)
+        execSync(`chmod +x ${escapePathForTerminal(filePath)}`, { stdio: 'ignore' });
+      } catch {
+        // Ignore errors on Windows hosts
+      }
+    }
+    
+    // Create tar.gz archive preserving permissions
+    // Using the tar package for cross-platform compatibility
+    await tar.c(
+      {
+        gzip: true,
+        file: archivePath,
+        cwd: fileDir,
+        portable: true,  // Ensures consistent behavior across platforms
+        preservePaths: false,
+        // The tar package should preserve file modes when creating archives
+      },
+      [fileName]
+    );
+    
+    console.log(`Created archive: ${archivePath} (preserving executable permissions)`);
+    return archivePath;
+  } else if (archiveType === 'zip') {
+    // Output filename: Setup.exe -> Setup.zip
+    const archivePath = filePath.replace(/\.[^.]+$/, '.zip');
+    
+    // Create zip archive
+    const output = createWriteStream(archivePath);
+    const archive = archiver('zip', {
+      zlib: { level: 9 } // Maximum compression
+    });
+    
+    return new Promise((resolve, reject) => {
+      output.on('close', () => {
+        console.log(`Created archive: ${archivePath} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`);
+        resolve(archivePath);
+      });
+      
+      archive.on('error', (err) => {
+        reject(err);
+      });
+      
+      archive.pipe(output);
+      
+      // Add the file to the archive
+      archive.file(filePath, { name: fileName });
+      
+      archive.finalize();
+    });
+  }
 }
 
 async function createAppImage(buildFolder: string, appBundlePath: string, appFileName: string, config: any): Promise<string | null> {

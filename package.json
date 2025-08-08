@@ -48,10 +48,12 @@
     "build:push:artifacts": "bun scripts/build-and-upload-artifacts.js"
   },
   "devDependencies": {
+    "@types/archiver": "^6.0.3",
     "@types/bun": "1.1.9"
   },
   "dependencies": {
     "@oneidentity/zstd-js": "^1.0.3",
+    "archiver": "^7.0.1",
     "rpc-anywhere": "1.5.0",
     "tar": "^6.2.1"
   }
