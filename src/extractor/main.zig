@@ -56,13 +56,15 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
                 identifier: []const u8,
                 name: []const u8,
                 channel: []const u8,
-            }, allocator, metadata_contents, .{});
+                hash: []const u8,
+            }, allocator, metadata_contents, .{ .ignore_unknown_fields = true });
             defer parsed.deinit();
             
             const metadata = AppMetadata{
                 .identifier = try allocator.dupe(u8, parsed.value.identifier),
                 .name = try allocator.dupe(u8, parsed.value.name),
                 .channel = try allocator.dupe(u8, parsed.value.channel),
+                .hash = try allocator.dupe(u8, parsed.value.hash),
             };
             defer allocator.free(metadata.identifier);
             defer allocator.free(metadata.name);
