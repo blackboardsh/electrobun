@@ -66,6 +66,8 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
                 .channel = try allocator.dupe(u8, parsed.value.channel),
                 .hash = try allocator.dupe(u8, parsed.value.hash),
             };
+            
+            std.debug.print("DEBUG: Parsed metadata hash: {s}\n", .{parsed.value.hash});
             defer allocator.free(metadata.identifier);
             defer allocator.free(metadata.name);
             defer allocator.free(metadata.channel);
@@ -274,10 +276,10 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     
     // On Windows, we need to create the parent directory first, then copy contents
     if (builtin.os.tag == .windows) {
-        // Create the app directory
-        std.fs.cwd().makeDir(app_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
+        // Create the app directory and all parent directories
+        std.fs.cwd().makePath(app_dir) catch |err| {
+            std.debug.print("Failed to create app directory {s}: {}\n", .{ app_dir, err });
+            return err;
         };
         
         // Copy contents from extracted path to app directory
