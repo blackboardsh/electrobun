@@ -94,10 +94,16 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
                 const self_extraction_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "self-extraction" });
                 defer allocator.free(self_extraction_dir);
                 
-                const app_dir = if (builtin.os.tag == .windows) 
-                    if (metadata.hash) |hash| try std.fs.path.join(allocator, &.{ app_base_dir, try std.fmt.allocPrint(allocator, "app-{s}", .{hash}) }) else try std.fs.path.join(allocator, &.{ app_base_dir, "app" })
-                else 
-                    try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
+                // Handle Windows versioned app directories
+                const app_dir = if (builtin.os.tag == .windows) blk: {
+                    if (metadata.hash) |hash| {
+                        const app_folder_name = try std.fmt.allocPrint(allocator, "app-{s}", .{hash});
+                        defer allocator.free(app_folder_name);
+                        break :blk try std.fs.path.join(allocator, &.{ app_base_dir, app_folder_name });
+                    } else {
+                        break :blk try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
+                    }
+                } else try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
                 defer allocator.free(app_dir);
                 
                 std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
@@ -1071,7 +1077,15 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
             .directory => {
                 const file_name = unstripped_file_name;
                 if (file_name.len != 0) {
-                    try dir.makePath(file_name);
+                    if (builtin.os.tag == .windows) {
+                        std.debug.print("DEBUG: Creating directory: '{s}'\n", .{file_name});
+                    }
+                    dir.makePath(file_name) catch |err| {
+                        if (builtin.os.tag == .windows) {
+                            std.debug.print("ERROR: Failed to create directory '{s}': {}\n", .{ file_name, err });
+                        }
+                        return err;
+                    };
                 }
             },
             .normal => {
@@ -1079,12 +1093,28 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                 const file_name = unstripped_file_name;
 
                 if (std.fs.path.dirname(file_name)) |dir_name| {
-                    try dir.makePath(dir_name);
+                    if (builtin.os.tag == .windows) {
+                        std.debug.print("DEBUG: Creating parent dir: '{s}'\n", .{dir_name});
+                    }
+                    dir.makePath(dir_name) catch |err| {
+                        if (builtin.os.tag == .windows) {
+                            std.debug.print("ERROR: Failed to create parent dir '{s}': {}\n", .{ dir_name, err });
+                        }
+                        return err;
+                    };
                 }
 
                 const mode = if (builtin.os.tag == .windows) 0 else header.mode() catch undefined;
 
-                var file = try dir.createFile(file_name, .{ .mode = mode });
+                if (builtin.os.tag == .windows) {
+                    std.debug.print("DEBUG: Creating file: '{s}'\n", .{file_name});
+                }
+                var file = dir.createFile(file_name, .{ .mode = mode }) catch |err| {
+                    if (builtin.os.tag == .windows) {
+                        std.debug.print("ERROR: Failed to create file '{s}': {}\n", .{ file_name, err });
+                    }
+                    return err;
+                };
                 defer file.close();
 
                 var file_off: usize = 0;
@@ -1312,4 +1342,33 @@ fn createWindowsLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8
     try run_bat_file.writeAll(launcher_content);
     
     std.debug.print("Created Windows launcher script: {s}\n", .{run_bat_path});
+}
+fn sanitizeWindowsPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    // Windows invalid characters: < > : " | ? * and control chars (0-31)
+    var sanitized = try allocator.alloc(u8, path.len);
+    var write_pos: usize = 0;
+    
+    for (path) |char| {
+        switch (char) {
+            // Replace invalid characters with underscore
+            '<', '>', ':', '"', '|', '?', '*' => {
+                sanitized[write_pos] = '_';
+                write_pos += 1;
+            },
+            // Skip control characters (0-31)
+            0...31 => {},
+            // Keep valid characters
+            else => {
+                sanitized[write_pos] = char;
+                write_pos += 1;
+            },
+        }
+    }
+    
+    // Resize to actual length
+    const result = try allocator.alloc(u8, write_pos);
+    @memcpy(result, sanitized[0..write_pos]);
+    allocator.free(sanitized);
+    
+    return result;
 }
