@@ -349,10 +349,9 @@ const Updater = {
         let newAppBundlePath: string;
         if (currentOS === 'linux' || currentOS === 'win') {
           // On Linux/Windows, the actual app is inside a subdirectory
-          // named <appname>-<channel> (e.g., "test1-canary")
           // Use same sanitization as extractor: remove spaces and dots
-          const sanitizedName = localInfo.name.replace(/ /g, "").replace(/\./g, "-");
-          const appBundleName = `${sanitizedName}-${localInfo.channel}`;
+          // Note: localInfo.name already includes the channel (e.g., "test1-canary")
+          const appBundleName = localInfo.name.replace(/ /g, "").replace(/\./g, "-");
           newAppBundlePath = join(extractionFolder, appBundleName);
           
           // Verify the extracted app exists
