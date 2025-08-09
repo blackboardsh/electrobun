@@ -107,6 +107,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
                 defer allocator.free(app_dir);
                 
                 std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
+                std.debug.print("App will be installed to: {s}\n", .{app_dir});
                 
                 // Read compressed data from archive file
                 const file_size = try archive_file.getEndPos();
@@ -270,11 +271,28 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     
     // Move the extracted app to the app directory
     std.debug.print("Moving app from {s} to {s}\n", .{ extracted_app_path, app_dir });
-    std.fs.cwd().rename(extracted_app_path, app_dir) catch |err| {
-        // If move fails, try to restore backup
-        std.fs.cwd().rename(backup_dir, app_dir) catch {};
-        return err;
-    };
+    
+    // On Windows, we need to create the parent directory first, then copy contents
+    if (builtin.os.tag == .windows) {
+        // Create the app directory
+        std.fs.cwd().makeDir(app_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+        
+        // Copy contents from extracted path to app directory
+        try copyDirectory(allocator, extracted_app_path, app_dir);
+        
+        // Remove the extracted directory after successful copy
+        std.fs.cwd().deleteTree(extracted_app_path) catch {};
+    } else {
+        // On Unix systems, rename works across directories
+        std.fs.cwd().rename(extracted_app_path, app_dir) catch |err| {
+            // If move fails, try to restore backup
+            std.fs.cwd().rename(backup_dir, app_dir) catch {};
+            return err;
+        };
+    }
     
     // Fix executable permissions on extracted binaries
     try fixExecutablePermissions(allocator, app_dir);
@@ -1343,6 +1361,42 @@ fn createWindowsLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8
     
     std.debug.print("Created Windows launcher script: {s}\n", .{run_bat_path});
 }
+fn copyDirectory(allocator: std.mem.Allocator, src_path: []const u8, dest_path: []const u8) !void {
+    var src_dir = std.fs.cwd().openDir(src_path, .{ .iterate = true }) catch |err| {
+        std.debug.print("Failed to open source directory {s}: {}\n", .{ src_path, err });
+        return err;
+    };
+    defer src_dir.close();
+    
+    var iterator = src_dir.iterate();
+    while (try iterator.next()) |entry| {
+        const src_item_path = try std.fs.path.join(allocator, &.{ src_path, entry.name });
+        defer allocator.free(src_item_path);
+        
+        const dest_item_path = try std.fs.path.join(allocator, &.{ dest_path, entry.name });
+        defer allocator.free(dest_item_path);
+        
+        switch (entry.kind) {
+            .directory => {
+                // Create directory and recursively copy contents
+                std.fs.cwd().makeDir(dest_item_path) catch |err| switch (err) {
+                    error.PathAlreadyExists => {},
+                    else => return err,
+                };
+                try copyDirectory(allocator, src_item_path, dest_item_path);
+            },
+            .file => {
+                // Copy file
+                try std.fs.cwd().copyFile(src_item_path, std.fs.cwd(), dest_item_path, .{});
+            },
+            else => {
+                // Skip other file types (symlinks, etc.)
+                std.debug.print("Skipping file type for: {s}\n", .{entry.name});
+            },
+        }
+    }
+}
+
 fn sanitizeWindowsPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     // Windows invalid characters: < > : " | ? * and control chars (0-31)
     var sanitized = try allocator.alloc(u8, path.len);
