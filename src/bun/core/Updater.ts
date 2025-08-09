@@ -482,9 +482,9 @@ start "" launcher.exe
             await Bun.spawn(["cmd", "/c", runBatPath], { detached: true });
             break;
           case 'linux':
-            // On Linux, launch the launcher inside the app directory using nohup to detach
+            // On Linux, use 'at now' to detach the new process completely
             const linuxLauncher = join(runningAppBundlePath, "bin", "launcher");
-            Bun.spawn(["nohup", linuxLauncher], { detached: true});
+            Bun.spawn(["sh", "-c", `echo '${linuxLauncher}' | at now`], { detached: true });
             break;
         }
         process.exit(0);
