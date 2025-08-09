@@ -372,21 +372,16 @@ const Updater = {
             "..",
             ".."
           );
-        } else if (currentOS === 'linux') {
-          // On Linux, executable is at app/bin/launcher
-          runningAppBundlePath = resolve(
-            dirname(process.execPath),
-            "..",
-            ".."
-          );
         } else {
-          // On Windows, handle versioned app folders
-          // Current executable is at app-<hash>/bin/launcher.exe
-          runningAppBundlePath = resolve(
-            dirname(process.execPath),
-            "..",
-            ".."
-          );
+          // On Linux/Windows, calculate app path using app data directory structure
+          const appDataFolder = await Updater.appDataFolder();
+          if (currentOS === 'linux') {
+            runningAppBundlePath = join(appDataFolder, "app");
+          } else {
+            // On Windows, use versioned app folders
+            const currentHash = (await Updater.getLocallocalInfo()).hash;
+            runningAppBundlePath = join(appDataFolder, `app-${currentHash}`);
+          }
         }
         // Platform-specific backup handling
         let backupPath: string;
