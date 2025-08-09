@@ -4176,7 +4176,8 @@ void runNSApplication() {
 }
 
 void killApp() {
-    // TODO: Implement app termination
+    // Properly shutdown GTK and then exit
+    gtk_main_quit();
     exit(0);
 }
 

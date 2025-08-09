@@ -4,6 +4,13 @@ import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync } f
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
+import { native } from '../proc/native';
+
+// setTimeout(async () => {
+//   console.log('killing')
+//   const { native } = await import('../proc/native');
+//             native.symbols.killApp();
+// }, 1000)
 
 // Cross-platform app data directory
 function getAppDataDir(): string {
@@ -482,12 +489,25 @@ start "" launcher.exe
             await Bun.spawn(["cmd", "/c", runBatPath], { detached: true });
             break;
           case 'linux':
-            // On Linux, use 'at now' to detach the new process completely
+            // On Linux, use shell backgrounding to detach the process
             const linuxLauncher = join(runningAppBundlePath, "bin", "launcher");
-            Bun.spawn(["sh", "-c", `echo '${linuxLauncher}' | at now`], { detached: true });
+            Bun.spawn(["sh", "-c", `${linuxLauncher} &`], { detached: true});
             break;
         }
-        process.exit(0);
+        // Use native killApp to properly clean up all resources on Linux
+        // On other platforms, process.exit works fine
+        if (currentOS === 'linux') {
+          try {
+            
+            native.symbols.killApp();
+            process.exit(0);
+          } catch (e) {
+            // Fallback if native binding fails
+            process.exit(0);
+          }
+        } else {
+          process.exit(0);
+        }
       }
     }
   },
