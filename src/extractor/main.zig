@@ -1428,19 +1428,21 @@ fn createWindowsLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8
     const launcher_content = try std.fmt.allocPrint(allocator,
         \\@echo off
         \\:: Electrobun App Launcher
-        \\:: This file launches the current version and cleans up old versions
+        \\:: This file launches the current version
         \\
         \\:: Set current version
         \\set CURRENT_HASH={s}
         \\set APP_DIR=%~dp0app-%CURRENT_HASH%
         \\
-        \\:: Clean up old app versions (keep current only)
-        \\for /d %%D in ("%~dp0app-*") do (
-        \\    if not "%%~nxD"=="app-%CURRENT_HASH%" (
-        \\        echo Removing old version: %%~nxD
-        \\        rmdir /s /q "%%D" 2>nul
-        \\    )
-        \\)
+        \\:: TODO: Implement proper cleanup mechanism that checks for running processes
+        \\:: For now, old versions are kept to avoid race conditions during updates
+        \\:: :: Clean up old app versions (keep current only)
+        \\:: for /d %%D in ("%~dp0app-*") do (
+        \\::     if not "%%~nxD"=="app-%CURRENT_HASH%" (
+        \\::         echo Removing old version: %%~nxD
+        \\::         rmdir /s /q "%%D" 2>nul
+        \\::     )
+        \\:: )
         \\
         \\:: Launch the app
         \\cd /d "%APP_DIR%\bin"
