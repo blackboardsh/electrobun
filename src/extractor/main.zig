@@ -97,19 +97,34 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
                 defer allocator.free(self_extraction_dir);
                 
                 // Handle Windows versioned app directories
+                std.debug.print("\nDEBUG: Building app_dir path...\n", .{});
+                std.debug.print("DEBUG: builtin.os.tag = {}\n", .{builtin.os.tag});
+                std.debug.print("DEBUG: metadata.hash = {s}\n", .{metadata.hash orelse "null"});
+                std.debug.print("DEBUG: app_base_dir = '{s}'\n", .{app_base_dir});
+                
                 const app_dir = if (builtin.os.tag == .windows) blk: {
                     if (metadata.hash) |hash| {
+                        std.debug.print("DEBUG: Creating app folder name with hash: {s}\n", .{hash});
                         const app_folder_name = try std.fmt.allocPrint(allocator, "app-{s}", .{hash});
                         defer allocator.free(app_folder_name);
-                        break :blk try std.fs.path.join(allocator, &.{ app_base_dir, app_folder_name });
+                        std.debug.print("DEBUG: app_folder_name = '{s}'\n", .{app_folder_name});
+                        const joined_path = try std.fs.path.join(allocator, &.{ app_base_dir, app_folder_name });
+                        std.debug.print("DEBUG: joined app_dir = '{s}'\n", .{joined_path});
+                        break :blk joined_path;
                     } else {
+                        std.debug.print("DEBUG: No hash, using 'app' folder\n", .{});
                         break :blk try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
                     }
                 } else try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
                 defer allocator.free(app_dir);
                 
+                std.debug.print("DEBUG: Final app_dir = '{s}'\n", .{app_dir});
+                std.debug.print("DEBUG: app_dir length = {}\n", .{app_dir.len});
+                
                 std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
                 std.debug.print("App will be installed to: {s}\n", .{app_dir});
+                std.debug.print("DEBUG: app_base_dir = {s}\n", .{app_base_dir});
+                std.debug.print("DEBUG: metadata.hash = {s}\n", .{metadata.hash orelse "null"});
                 
                 // Read compressed data from archive file
                 const file_size = try archive_file.getEndPos();
@@ -248,15 +263,25 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     // Now move the extracted app to the app directory
     // The app bundle is nested inside self-extraction, we need to find it
     // Use same sanitization as build process: remove spaces and dots
+    std.debug.print("\nDEBUG: Building extracted app path...\n", .{});
+    std.debug.print("DEBUG: metadata.name = '{s}'\n", .{metadata.name});
+    std.debug.print("DEBUG: metadata.channel = '{s}'\n", .{metadata.channel});
+    
     const sanitized_name = try std.mem.replaceOwned(u8, allocator, metadata.name, " ", "");
     defer allocator.free(sanitized_name);
+    std.debug.print("DEBUG: sanitized_name = '{s}'\n", .{sanitized_name});
+    
     const dots_removed = try std.mem.replaceOwned(u8, allocator, sanitized_name, ".", "-");
     defer allocator.free(dots_removed);
+    std.debug.print("DEBUG: dots_removed = '{s}'\n", .{dots_removed});
+    
     const app_bundle_name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ dots_removed, metadata.channel });
     defer allocator.free(app_bundle_name);
+    std.debug.print("DEBUG: app_bundle_name = '{s}'\n", .{app_bundle_name});
     
     const extracted_app_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, app_bundle_name });
     defer allocator.free(extracted_app_path);
+    std.debug.print("DEBUG: extracted_app_path = '{s}'\n", .{extracted_app_path});
     
     // Check if app directory exists and move it to backup
     const backup_dir = try std.fs.path.join(allocator, &.{ self_extraction_dir, "backup" });
@@ -272,15 +297,67 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     };
     
     // Move the extracted app to the app directory
-    std.debug.print("Moving app from {s} to {s}\n", .{ extracted_app_path, app_dir });
+    std.debug.print("\nDEBUG: Preparing to move app...\n", .{});
+    std.debug.print("DEBUG: Source (extracted_app_path) = '{s}'\n", .{ extracted_app_path });
+    std.debug.print("DEBUG: Destination (app_dir) = '{s}'\n", .{ app_dir });
+    
+    // Check if source exists
+    std.fs.cwd().access(extracted_app_path, .{}) catch |err| {
+        std.debug.print("ERROR: Source directory does not exist: '{s}' - {}\n", .{ extracted_app_path, err });
+        // List what's actually in the extraction directory
+        std.debug.print("DEBUG: Listing contents of extraction directory '{s}':\n", .{self_extraction_dir});
+        var iter_dir = try std.fs.cwd().openDir(self_extraction_dir, .{ .iterate = true });
+        defer iter_dir.close();
+        var iterator = iter_dir.iterate();
+        while (try iterator.next()) |entry| {
+            std.debug.print("  - {s} ({s})\n", .{ entry.name, @tagName(entry.kind) });
+        }
+        return err;
+    };
+    std.debug.print("DEBUG: Source directory exists\n", .{});
     
     // On Windows, we need to create the parent directory first, then copy contents
     if (builtin.os.tag == .windows) {
         // Create the app directory and all parent directories
+        std.debug.print("\nDEBUG: Windows directory creation...\n", .{});
+        std.debug.print("DEBUG: Current working directory = {s}\n", .{try std.fs.cwd().realpathAlloc(allocator, ".")});
+        std.debug.print("DEBUG: About to create Windows app directory: '{s}'\n", .{app_dir});
+        std.debug.print("DEBUG: app_dir length = {}\n", .{app_dir.len});
+        
+        // Check if parent directory exists
+        if (std.fs.path.dirname(app_dir)) |parent| {
+            std.debug.print("DEBUG: Parent directory = '{s}'\n", .{parent});
+            std.fs.cwd().access(parent, .{}) catch |err| {
+                std.debug.print("DEBUG: Parent directory does not exist, will create it. Error: {}\n", .{err});
+            };
+        }
+        
+        // Print each character to debug the string
+        std.debug.print("DEBUG: app_dir bytes: ", .{});
+        for (app_dir) |byte| {
+            if (byte >= 32 and byte <= 126) {
+                std.debug.print("'{c}' ", .{byte});
+            } else {
+                std.debug.print("0x{x:02} ", .{byte});
+            }
+        }
+        std.debug.print("\n", .{});
+        
+        std.debug.print("DEBUG: Calling makePath...\n", .{});
         std.fs.cwd().makePath(app_dir) catch |err| {
-            std.debug.print("Failed to create app directory {s}: {}\n", .{ app_dir, err });
+            std.debug.print("ERROR: Failed to create app directory '{s}': {}\n", .{ app_dir, err });
+            
+            // Try to create parent directory first
+            if (std.fs.path.dirname(app_dir)) |parent| {
+                std.debug.print("DEBUG: Trying to create parent directory first: '{s}'\n", .{parent});
+                std.fs.cwd().makePath(parent) catch |parent_err| {
+                    std.debug.print("ERROR: Failed to create parent directory: {}\n", .{parent_err});
+                };
+            }
+            
             return err;
         };
+        std.debug.print("DEBUG: Successfully created app directory\n", .{});
         
         // Copy contents from extracted path to app directory
         try copyDirectory(allocator, extracted_app_path, app_dir);
@@ -1364,8 +1441,10 @@ fn createWindowsLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8
     std.debug.print("Created Windows launcher script: {s}\n", .{run_bat_path});
 }
 fn copyDirectory(allocator: std.mem.Allocator, src_path: []const u8, dest_path: []const u8) !void {
+    std.debug.print("\nDEBUG copyDirectory: src='{s}' dest='{s}'\n", .{ src_path, dest_path });
+    
     var src_dir = std.fs.cwd().openDir(src_path, .{ .iterate = true }) catch |err| {
-        std.debug.print("Failed to open source directory {s}: {}\n", .{ src_path, err });
+        std.debug.print("ERROR: Failed to open source directory '{s}': {}\n", .{ src_path, err });
         return err;
     };
     defer src_dir.close();
