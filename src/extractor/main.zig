@@ -68,12 +68,9 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
             };
             
             std.debug.print("DEBUG: Parsed metadata hash: {s}\n", .{parsed.value.hash});
-            defer allocator.free(metadata.identifier);
-            defer allocator.free(metadata.name);
-            defer allocator.free(metadata.channel);
-            if (metadata.hash) |hash| {
-                defer allocator.free(hash);
-            }
+            
+            // Don't free metadata fields here - they need to persist through extractAndInstall
+            // They will be freed at the end of this function
             
             // Try to open the archive file
             if (std.fs.cwd().openFile(archive_path, .{})) |archive_file| {
@@ -135,7 +132,17 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
                 _ = try archive_file.read(compressed_data);
                 
                 // Continue with decompression (shared code path)
-                return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
+                const result = try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
+                
+                // Clean up metadata fields
+                allocator.free(metadata.identifier);
+                allocator.free(metadata.name);
+                allocator.free(metadata.channel);
+                if (metadata.hash) |hash| {
+                    allocator.free(hash);
+                }
+                
+                return result;
             } else |_| {}
         } else |_| {}
     }
