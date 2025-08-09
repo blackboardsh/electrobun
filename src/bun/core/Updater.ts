@@ -1,6 +1,6 @@
-import { join, dirname, resolve } from "path";
+import { join, dirname, resolve, basename } from "path";
 import { homedir } from "os";
-import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync } from "fs";
+import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync } from "fs";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
@@ -345,23 +345,23 @@ const Updater = {
           join(extractionFolder, appBundleSubpath)
         );
         
-        // On Linux, we need to move the app from self-extraction to the app directory
+        // Platform-specific path handling
         let newAppBundlePath: string;
-        if (currentOS === 'linux') {
-          // Get the parent directory (one level up from self-extraction)
-          const parentDir = resolve(extractionFolder, "..");
-          newAppBundlePath = join(parentDir, "app_new");
+        if (currentOS === 'linux' || currentOS === 'win') {
+          // On Linux/Windows, the actual app is inside a subdirectory
+          // named <appname>-<channel> (e.g., "test1-canary")
+          // Use same sanitization as extractor: remove spaces and dots
+          const sanitizedName = localInfo.name.replace(/ /g, "").replace(/\./g, "-");
+          const appBundleName = `${sanitizedName}-${localInfo.channel}`;
+          newAppBundlePath = join(extractionFolder, appBundleName);
           
-          // Remove app_new if it already exists
-          try {
-            rmdirSync(newAppBundlePath, { recursive: true });
-          } catch {
-            // Ignore if it doesn't exist
+          // Verify the extracted app exists
+          if (!statSync(newAppBundlePath, { throwIfNoEntry: false })) {
+            console.error(`Extracted app not found at: ${newAppBundlePath}`);
+            return;
           }
-          
-          // Move the extracted app to a temporary location
-          renameSync(extractedAppPath, newAppBundlePath);
         } else {
+          // On macOS, use the extracted app path directly
           newAppBundlePath = extractedAppPath;
         }
         // Platform-specific app path calculation
@@ -388,37 +388,50 @@ const Updater = {
             ".."
           );
         }
-        // Platform-specific backup naming and location
-        let backupAppBundlePath: string;
+        // Platform-specific backup handling
+        let backupPath: string;
         if (currentOS === 'macos') {
           // On macOS, backup in extraction folder with .app extension
-          backupAppBundlePath = join(extractionFolder, "backup.app");
+          backupPath = join(extractionFolder, "backup.app");
         } else {
-          // On Linux/Windows, keep backup in self-extraction folder
-          backupAppBundlePath = join(extractionFolder, "backup");
+          // On Linux/Windows, create a tar backup of the current app
+          backupPath = join(extractionFolder, "backup.tar");
         }
 
         try {
-          // Remove existing backup if it exists
-          if (statSync(backupAppBundlePath, { throwIfNoEntry: false })) {
-            rmdirSync(backupAppBundlePath, { recursive: true });
-          } else {
-            console.log("backupAppBundlePath does not exist");
-          }
-          
-          // Move current running app to backup
-          renameSync(runningAppBundlePath, backupAppBundlePath);
-          
-          // Move new app to running location
-          renameSync(newAppBundlePath, runningAppBundlePath);
-          
-          // On Linux, clean up the temporary app_new if it wasn't already moved
-          if (currentOS === 'linux') {
-            try {
-              rmdirSync(newAppBundlePath, { recursive: true });
-            } catch {
-              // Ignore if already moved
+          if (currentOS === 'macos') {
+            // On macOS, use rename approach
+            // Remove existing backup if it exists
+            if (statSync(backupPath, { throwIfNoEntry: false })) {
+              rmdirSync(backupPath, { recursive: true });
             }
+            
+            // Move current running app to backup
+            renameSync(runningAppBundlePath, backupPath);
+            
+            // Move new app to running location
+            renameSync(newAppBundlePath, runningAppBundlePath);
+          } else {
+            // On Linux/Windows, create tar backup and replace
+            // Remove existing backup.tar if it exists
+            if (statSync(backupPath, { throwIfNoEntry: false })) {
+              unlinkSync(backupPath);
+            }
+            
+            // Create tar backup of current app
+            await tar.c(
+              {
+                file: backupPath,
+                cwd: dirname(runningAppBundlePath),
+              },
+              [basename(runningAppBundlePath)]
+            );
+            
+            // Remove current app
+            rmdirSync(runningAppBundlePath, { recursive: true });
+            
+            // Move new app to app location
+            renameSync(newAppBundlePath, runningAppBundlePath);
           }
         } catch (error) {
           console.error("Failed to replace app with new version", error);
