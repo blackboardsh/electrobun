@@ -14,8 +14,8 @@ function getAppDataDir(): string {
       // Use LOCALAPPDATA to match extractor location
       return process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
     case 'linux':
-      // Use XDG_CONFIG_HOME or fallback to ~/.config
-      return process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+      // Use XDG_DATA_HOME or fallback to ~/.local/share to match extractor
+      return process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
     default:
       // Fallback to home directory with .config
       return join(homedir(), ".config");
@@ -351,6 +351,13 @@ const Updater = {
           // Get the parent directory (one level up from self-extraction)
           const parentDir = resolve(extractionFolder, "..");
           newAppBundlePath = join(parentDir, "app_new");
+          
+          // Remove app_new if it already exists
+          try {
+            rmdirSync(newAppBundlePath, { recursive: true });
+          } catch {
+            // Ignore if it doesn't exist
+          }
           
           // Move the extracted app to a temporary location
           renameSync(extractedAppPath, newAppBundlePath);
