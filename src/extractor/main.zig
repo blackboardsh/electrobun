@@ -22,6 +22,92 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     const exe_path = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(exe_path);
     
+    // For Windows, check for adjacent archive file first
+    if (builtin.os.tag == .windows) {
+        // Try to read from adjacent .tar.zst file
+        const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidPath;
+        const exe_name = std.fs.path.basename(exe_path);
+        const exe_stem = std.fs.path.stem(exe_name);
+        
+        // Look for adjacent archive file with pattern: <exe_stem>.tar.zst
+        const archive_name = try std.fmt.allocPrint(allocator, "{s}.tar.zst", .{exe_stem});
+        defer allocator.free(archive_name);
+        
+        const archive_path = try std.fs.path.join(allocator, &.{ exe_dir, archive_name });
+        defer allocator.free(archive_path);
+        
+        // Also check for metadata file
+        const metadata_name = try std.fmt.allocPrint(allocator, "{s}.metadata.json", .{exe_stem});
+        defer allocator.free(metadata_name);
+        
+        const metadata_path = try std.fs.path.join(allocator, &.{ exe_dir, metadata_name });
+        defer allocator.free(metadata_path);
+        
+        // Try to open the metadata file
+        if (std.fs.cwd().openFile(metadata_path, .{})) |metadata_file| {
+            defer metadata_file.close();
+            
+            // Read metadata
+            const metadata_contents = try metadata_file.readToEndAlloc(allocator, 4096);
+            defer allocator.free(metadata_contents);
+            
+            const parsed = try std.json.parseFromSlice(struct {
+                identifier: []const u8,
+                name: []const u8,
+                channel: []const u8,
+            }, allocator, metadata_contents, .{});
+            defer parsed.deinit();
+            
+            const metadata = AppMetadata{
+                .identifier = try allocator.dupe(u8, parsed.value.identifier),
+                .name = try allocator.dupe(u8, parsed.value.name),
+                .channel = try allocator.dupe(u8, parsed.value.channel),
+            };
+            defer allocator.free(metadata.identifier);
+            defer allocator.free(metadata.name);
+            defer allocator.free(metadata.channel);
+            
+            // Try to open the archive file
+            if (std.fs.cwd().openFile(archive_path, .{})) |archive_file| {
+                defer archive_file.close();
+                
+                std.debug.print("Found adjacent archive file: {s}\n", .{archive_path});
+                std.debug.print("Using metadata: identifier={s}, name={s}, channel={s}\n", .{ metadata.identifier, metadata.name, metadata.channel });
+                
+                // Build application support directory path
+                const app_data_dir = try getAppDataDir(allocator);
+                defer allocator.free(app_data_dir);
+                
+                const app_name_channel = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ metadata.name, metadata.channel });
+                defer allocator.free(app_name_channel);
+                
+                // Build paths for new directory structure
+                const app_base_dir = try std.fs.path.join(allocator, &.{ app_data_dir, metadata.identifier, app_name_channel });
+                defer allocator.free(app_base_dir);
+                
+                const self_extraction_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "self-extraction" });
+                defer allocator.free(self_extraction_dir);
+                
+                const app_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
+                defer allocator.free(app_dir);
+                
+                std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
+                
+                // Read compressed data from archive file
+                const file_size = try archive_file.getEndPos();
+                const compressed_data = try allocator.alloc(u8, file_size);
+                defer allocator.free(compressed_data);
+                
+                try archive_file.seekTo(0);
+                _ = try archive_file.read(compressed_data);
+                
+                // Continue with decompression (shared code path)
+                return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
+            } else |_| {}
+        } else |_| {}
+    }
+    
+    // Fall back to embedded archive approach (for Linux or if adjacent files not found on Windows)
     // Open self for reading
     const self_file = try std.fs.openFileAbsolute(exe_path, .{});
     defer self_file.close();
@@ -100,6 +186,15 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     defer allocator.free(compressed_data);
     
     _ = try self_file.read(compressed_data);
+    
+    // Continue with decompression (shared code path)
+    return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
+}
+
+fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, metadata: AppMetadata, self_extraction_dir: []const u8, app_dir: []const u8) !bool {
+    // Get exe path for shortcuts
+    const exe_path = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(exe_path);
     
     // Decompress using zstd
     // Note: because it's a big boy we need to allocate it on the heap (like macOS does)

@@ -11,6 +11,8 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  statSync,
+  copyFileSync,
 } from "fs";
 import { execSync } from "child_process";
 import tar from "tar";
@@ -1504,8 +1506,8 @@ if (commandArg === "init") {
           buildEnvironment
         );
         
-        // Wrap Windows exe in zip for native Windows support
-        const wrappedExePath = await wrapInArchive(selfExtractingExePath, buildFolder, 'zip');
+        // Wrap Windows installer files in zip for distribution
+        const wrappedExePath = await wrapWindowsInstallerInZip(selfExtractingExePath, buildFolder);
         artifactsToUpload.push(wrappedExePath);
         
         // Also keep the raw exe for backwards compatibility (optional)
@@ -1878,7 +1880,7 @@ async function createWindowsSelfExtractingExe(
   targetPaths: any,
   buildEnvironment: string
 ): Promise<string> {
-  console.log("Creating self-extracting Windows exe...");
+  console.log("Creating Windows installer with separate archive...");
   
   // Format: MyApp-Setup.exe (stable) or MyApp-Setup-canary.exe (non-stable)
   const setupFileName = buildEnvironment === "stable" 
@@ -1887,43 +1889,40 @@ async function createWindowsSelfExtractingExe(
   
   const outputExePath = join(buildFolder, setupFileName);
   
-  // Read the extractor exe
+  // Copy the extractor exe
   const extractorExe = readFileSync(targetPaths.EXTRACTOR);
+  writeFileSync(outputExePath, extractorExe);
   
-  // Read the compressed archive
-  const compressedArchive = readFileSync(compressedTarPath);
-  
-  // Create metadata JSON
+  // Create metadata JSON file
   const metadata = {
     identifier: config.app.identifier,
     name: config.app.name,
     channel: buildEnvironment
   };
-  const metadataJson = JSON.stringify(metadata);
-  const metadataBuffer = Buffer.from(metadataJson, 'utf8');
+  const metadataJson = JSON.stringify(metadata, null, 2);
+  const metadataFileName = setupFileName.replace('.exe', '.metadata.json');
+  const metadataPath = join(buildFolder, metadataFileName);
+  writeFileSync(metadataPath, metadataJson);
   
-  // Create marker buffers
-  const metadataMarker = Buffer.from('ELECTROBUN_METADATA_V1', 'utf8');
-  const archiveMarker = Buffer.from('ELECTROBUN_ARCHIVE_V1', 'utf8');
+  // Copy the compressed archive with matching name
+  const archiveFileName = setupFileName.replace('.exe', '.tar.zst');
+  const archivePath = join(buildFolder, archiveFileName);
+  copyFileSync(compressedTarPath, archivePath);
   
-  // Combine extractor + metadata marker + metadata + archive marker + archive
-  const combinedBuffer = Buffer.concat([
-    extractorExe,
-    metadataMarker,
-    metadataBuffer,
-    archiveMarker,
-    compressedArchive
-  ]);
-  
-  // Write the self-extracting exe
-  writeFileSync(outputExePath, combinedBuffer);
-  
-  // Make it executable (though Windows doesn't need chmod)
+  // Make the exe executable (though Windows doesn't need chmod)
   if (OS !== 'win') {
     execSync(`chmod +x ${escapePathForTerminal(outputExePath)}`);
   }
   
-  console.log(`Created self-extracting exe: ${outputExePath} (${(combinedBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
+  const exeSize = statSync(outputExePath).size;
+  const archiveSize = statSync(archivePath).size;
+  const totalSize = exeSize + archiveSize;
+  
+  console.log(`Created Windows installer:`);
+  console.log(`  - Extractor: ${outputExePath} (${(exeSize / 1024 / 1024).toFixed(2)} MB)`);
+  console.log(`  - Archive: ${archivePath} (${(archiveSize / 1024 / 1024).toFixed(2)} MB)`);
+  console.log(`  - Metadata: ${metadataPath}`);
+  console.log(`  - Total size: ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
   
   return outputExePath;
 }
@@ -1981,6 +1980,53 @@ async function createLinuxSelfExtractingBinary(
   console.log(`Created self-extracting Linux binary: ${outputPath} (${(combinedBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
   
   return outputPath;
+}
+
+async function wrapWindowsInstallerInZip(exePath: string, buildFolder: string): Promise<string> {
+  const exeName = basename(exePath);
+  const exeStem = exeName.replace('.exe', '');
+  
+  // Derive the paths for metadata and archive files
+  const metadataPath = join(buildFolder, `${exeStem}.metadata.json`);
+  const archivePath = join(buildFolder, `${exeStem}.tar.zst`);
+  const zipPath = join(buildFolder, `${exeStem}.zip`);
+  
+  // Verify all files exist
+  if (!existsSync(exePath)) {
+    throw new Error(`Installer exe not found: ${exePath}`);
+  }
+  if (!existsSync(metadataPath)) {
+    throw new Error(`Metadata file not found: ${metadataPath}`);
+  }
+  if (!existsSync(archivePath)) {
+    throw new Error(`Archive file not found: ${archivePath}`);
+  }
+  
+  // Create zip archive
+  const output = createWriteStream(zipPath);
+  const archive = archiver('zip', {
+    zlib: { level: 9 } // Maximum compression
+  });
+  
+  return new Promise((resolve, reject) => {
+    output.on('close', () => {
+      console.log(`Created Windows installer package: ${zipPath} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`);
+      resolve(zipPath);
+    });
+    
+    archive.on('error', (err) => {
+      reject(err);
+    });
+    
+    archive.pipe(output);
+    
+    // Add all three files to the archive
+    archive.file(exePath, { name: basename(exePath) });
+    archive.file(metadataPath, { name: basename(metadataPath) });
+    archive.file(archivePath, { name: basename(archivePath) });
+    
+    archive.finalize();
+  });
 }
 
 async function wrapInArchive(filePath: string, buildFolder: string, archiveType: 'tar.gz' | 'zip'): Promise<string> {
