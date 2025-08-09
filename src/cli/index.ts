@@ -1503,7 +1503,8 @@ if (commandArg === "init") {
           compressedTarPath,
           appFileName,
           targetPaths,
-          buildEnvironment
+          buildEnvironment,
+          hash
         );
         
         // Wrap Windows installer files in zip for distribution
@@ -1878,7 +1879,8 @@ async function createWindowsSelfExtractingExe(
   compressedTarPath: string,
   appFileName: string,
   targetPaths: any,
-  buildEnvironment: string
+  buildEnvironment: string,
+  hash: string
 ): Promise<string> {
   console.log("Creating Windows installer with separate archive...");
   
@@ -1897,7 +1899,8 @@ async function createWindowsSelfExtractingExe(
   const metadata = {
     identifier: config.app.identifier,
     name: config.app.name,
-    channel: buildEnvironment
+    channel: buildEnvironment,
+    hash: hash
   };
   const metadataJson = JSON.stringify(metadata, null, 2);
   const metadataFileName = setupFileName.replace('.exe', '.metadata.json');

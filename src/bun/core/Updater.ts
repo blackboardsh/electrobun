@@ -381,7 +381,8 @@ const Updater = {
             ".."
           );
         } else {
-          // On Windows, executable is at app/bin/launcher.exe (same as Linux)
+          // On Windows, handle versioned app folders
+          // Current executable is at app-<hash>/bin/launcher.exe
           runningAppBundlePath = resolve(
             dirname(process.execPath),
             "..",
@@ -411,8 +412,8 @@ const Updater = {
             
             // Move new app to running location
             renameSync(newAppBundlePath, runningAppBundlePath);
-          } else {
-            // On Linux/Windows, create tar backup and replace
+          } else if (currentOS === 'linux') {
+            // On Linux, create tar backup and replace
             // Remove existing backup.tar if it exists
             if (statSync(backupPath, { throwIfNoEntry: false })) {
               unlinkSync(backupPath);
@@ -432,6 +433,43 @@ const Updater = {
             
             // Move new app to app location
             renameSync(newAppBundlePath, runningAppBundlePath);
+          } else {
+            // On Windows, use versioned app folders
+            const parentDir = dirname(runningAppBundlePath);
+            const newVersionDir = join(parentDir, `app-${latestHash}`);
+            
+            // Move new app to versioned directory
+            renameSync(newAppBundlePath, newVersionDir);
+            
+            // Create/update the launcher batch file
+            const launcherPath = join(parentDir, "run.bat");
+            const launcherContent = `@echo off
+:: Electrobun App Launcher
+:: This file launches the current version and cleans up old versions
+
+:: Set current version
+set CURRENT_HASH=${latestHash}
+set APP_DIR=%~dp0app-%CURRENT_HASH%
+
+:: Clean up old app versions (keep current and one backup)
+for /d %%D in ("%~dp0app-*") do (
+    if not "%%~nxD"=="app-%CURRENT_HASH%" (
+        echo Removing old version: %%~nxD
+        rmdir /s /q "%%D" 2>nul
+    )
+)
+
+:: Launch the app
+cd /d "%APP_DIR%\\bin"
+start "" launcher.exe
+`;
+            
+            await Bun.write(launcherPath, launcherContent);
+            
+            // Update desktop shortcuts to point to run.bat
+            // This is handled by the running app, not the updater
+            
+            runningAppBundlePath = newVersionDir;
           }
         } catch (error) {
           console.error("Failed to replace app with new version", error);
@@ -444,9 +482,10 @@ const Updater = {
             await Bun.spawn(["open", runningAppBundlePath]);
             break;
           case 'win':
-            // On Windows, launch the launcher.exe inside the app directory
-            const windowsLauncher = join(runningAppBundlePath, "bin", "launcher.exe");
-            await Bun.spawn([windowsLauncher]);
+            // On Windows, launch the run.bat file which handles versioning
+            const parentDir = dirname(runningAppBundlePath);
+            const runBatPath = join(parentDir, "run.bat");
+            await Bun.spawn(["cmd", "/c", runBatPath], { detached: true });
             break;
           case 'linux':
             // On Linux, launch the launcher inside the app directory  

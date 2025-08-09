@@ -15,6 +15,7 @@ const AppMetadata = struct {
     identifier: []const u8,
     name: []const u8,
     channel: []const u8,
+    hash: ?[]const u8 = null,
 };
 
 fn extractFromSelf(allocator: std.mem.Allocator) !bool {
@@ -65,7 +66,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
             };
             defer allocator.free(metadata.identifier);
             defer allocator.free(metadata.name);
-            defer allocator.free(metadata.channel);
+            defer allocator.free(metadata.channel);\n    if (metadata.hash) |hash| {\n        defer allocator.free(hash);\n    }
             
             // Try to open the archive file
             if (std.fs.cwd().openFile(archive_path, .{})) |archive_file| {
@@ -88,7 +89,10 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
                 const self_extraction_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "self-extraction" });
                 defer allocator.free(self_extraction_dir);
                 
-                const app_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
+                const app_dir = if (builtin.os.tag == .windows) 
+                    if (metadata.hash) |hash| try std.fs.path.join(allocator, &.{ app_base_dir, try std.fmt.allocPrint(allocator, "app-{s}", .{hash}) }) else try std.fs.path.join(allocator, &.{ app_base_dir, "app" })
+                else 
+                    try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
                 defer allocator.free(app_dir);
                 
                 std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
@@ -156,7 +160,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
     defer allocator.free(metadata.identifier);
     defer allocator.free(metadata.name);
-    defer allocator.free(metadata.channel);
+    defer allocator.free(metadata.channel);\n    if (metadata.hash) |hash| {\n        defer allocator.free(hash);\n    }
     
     try self_file.seekTo(archive_offset + ARCHIVE_MARKER.len);
     
@@ -174,7 +178,10 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     const self_extraction_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "self-extraction" });
     defer allocator.free(self_extraction_dir);
     
-    const app_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
+    const app_dir = if (builtin.os.tag == .windows) 
+        if (metadata.hash) |hash| try std.fs.path.join(allocator, &.{ app_base_dir, try std.fmt.allocPrint(allocator, "app-{s}", .{hash}) }) else try std.fs.path.join(allocator, &.{ app_base_dir, "app" })
+    else 
+        try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
     defer allocator.free(app_dir);
     
     std.debug.print("Self-extracting archive found at offset {d}\n", .{archive_offset});
@@ -273,7 +280,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     }
     
     if (builtin.os.tag == .windows) {
-        try createWindowsShortcut(allocator, app_dir, metadata);
+        try createWindowsShortcut(allocator, app_dir, metadata);\n        if (metadata.hash != null) {\n            try createWindowsLauncherScript(allocator, app_dir, metadata);\n        }
     }
     
     std.debug.print("Installation completed successfully!\n", .{});
@@ -475,6 +482,7 @@ fn readEmbeddedMetadata(allocator: std.mem.Allocator, file: std.fs.File, metadat
         identifier: []const u8,
         name: []const u8,
         channel: []const u8,
+        hash: ?[]const u8 = null,
     }, allocator, metadata_bytes, .{});
     defer parsed.deinit();
     
@@ -482,6 +490,7 @@ fn readEmbeddedMetadata(allocator: std.mem.Allocator, file: std.fs.File, metadat
         .identifier = try allocator.dupe(u8, parsed.value.identifier),
         .name = try allocator.dupe(u8, parsed.value.name),
         .channel = try allocator.dupe(u8, parsed.value.channel),
+        .hash = if (parsed.value.hash) |h| try allocator.dupe(u8, h) else null,
     };
 }
 
@@ -1253,4 +1262,43 @@ fn getPlistStringValue(plistContents: []const u8, key: []const u8) !?[]const u8 
         return trimmedValue;
     }
     return null; // Key not found or malformed plist
+}
+
+fn createWindowsLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) \!void {
+    // Get the parent directory (contains app-<hash> and where run.bat should go)
+    const parent_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidPath;
+    const run_bat_path = try std.fs.path.join(allocator, &.{ parent_dir, "run.bat" });
+    defer allocator.free(run_bat_path);
+    
+    // Create launcher batch file content
+    const launcher_content = try std.fmt.allocPrint(allocator,
+        \\@echo off
+        \\:: Electrobun App Launcher
+        \\:: This file launches the current version and cleans up old versions
+        \\
+        \\:: Set current version
+        \\set CURRENT_HASH={s}
+        \\set APP_DIR=%~dp0app-%CURRENT_HASH%
+        \\
+        \\:: Clean up old app versions (keep current only)
+        \\for /d %%D in ("%~dp0app-*") do (
+        \\    if not "%%~nxD"=="app-%CURRENT_HASH%" (
+        \\        echo Removing old version: %%~nxD
+        \\        rmdir /s /q "%%D" 2>nul
+        \\    )
+        \\)
+        \\
+        \\:: Launch the app
+        \\cd /d "%APP_DIR%\bin"
+        \\start "" launcher.exe
+        \\
+    , .{metadata.hash orelse "unknown"});
+    defer allocator.free(launcher_content);
+    
+    // Write the launcher batch file
+    const run_bat_file = try std.fs.cwd().createFile(run_bat_path, .{});
+    defer run_bat_file.close();
+    try run_bat_file.writeAll(launcher_content);
+    
+    std.debug.print("Created Windows launcher script: {s}\n", .{run_bat_path});
 }
