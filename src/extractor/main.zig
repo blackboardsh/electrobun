@@ -66,7 +66,10 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
             };
             defer allocator.free(metadata.identifier);
             defer allocator.free(metadata.name);
-            defer allocator.free(metadata.channel);\n    if (metadata.hash) |hash| {\n        defer allocator.free(hash);\n    }
+            defer allocator.free(metadata.channel);
+            if (metadata.hash) |hash| {
+                defer allocator.free(hash);
+            }
             
             // Try to open the archive file
             if (std.fs.cwd().openFile(archive_path, .{})) |archive_file| {
@@ -160,7 +163,10 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
     defer allocator.free(metadata.identifier);
     defer allocator.free(metadata.name);
-    defer allocator.free(metadata.channel);\n    if (metadata.hash) |hash| {\n        defer allocator.free(hash);\n    }
+    defer allocator.free(metadata.channel);
+    if (metadata.hash) |hash| {
+        defer allocator.free(hash);
+    }
     
     try self_file.seekTo(archive_offset + ARCHIVE_MARKER.len);
     
@@ -280,7 +286,10 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     }
     
     if (builtin.os.tag == .windows) {
-        try createWindowsShortcut(allocator, app_dir, metadata);\n        if (metadata.hash != null) {\n            try createWindowsLauncherScript(allocator, app_dir, metadata);\n        }
+        try createWindowsShortcut(allocator, app_dir, metadata);
+        if (metadata.hash != null) {
+            try createWindowsLauncherScript(allocator, app_dir, metadata);
+        }
     }
     
     std.debug.print("Installation completed successfully!\n", .{});
@@ -1264,7 +1273,7 @@ fn getPlistStringValue(plistContents: []const u8, key: []const u8) !?[]const u8 
     return null; // Key not found or malformed plist
 }
 
-fn createWindowsLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) \!void {
+fn createWindowsLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
     // Get the parent directory (contains app-<hash> and where run.bat should go)
     const parent_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidPath;
     const run_bat_path = try std.fs.path.join(allocator, &.{ parent_dir, "run.bat" });
