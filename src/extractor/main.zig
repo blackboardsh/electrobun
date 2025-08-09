@@ -872,27 +872,36 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
         // Continue anyway, might work
     };
     
-    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
-    defer allocator.free(launcher_path);
+    // For versioned app folders, point to run.bat instead of launcher.exe
+    const parent_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidPath;
+    const target_path = if (metadata.hash != null) 
+        try std.fs.path.join(allocator, &.{ parent_dir, "run.bat" })
+    else 
+        try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
+    defer allocator.free(target_path);
     
-    // Check if launcher exists
-    std.fs.cwd().access(launcher_path, .{}) catch |err| {
-        std.debug.print("Warning: Could not find launcher at {s}: {}\n", .{ launcher_path, err });
+    // Check if target exists
+    std.fs.cwd().access(target_path, .{}) catch |err| {
+        std.debug.print("Warning: Could not find target at {s}: {}\n", .{ target_path, err });
         return;
     };
     
-    const bin_dir = try std.fs.path.join(allocator, &.{ app_dir, "bin" });
-    defer allocator.free(bin_dir);
+    // Working directory should be the parent directory for run.bat or bin directory for launcher.exe
+    const working_dir = if (metadata.hash != null)
+        parent_dir
+    else
+        try std.fs.path.join(allocator, &.{ app_dir, "bin" });
+    defer if (metadata.hash == null) allocator.free(working_dir);
     
     // Create desktop shortcut
-    try createWindowsShortcutFile(allocator, desktop_dir, metadata.name, launcher_path, bin_dir);
+    try createWindowsShortcutFile(allocator, desktop_dir, metadata.name, target_path, working_dir);
     
     // Create Start Menu shortcut
     // Make sure Start Menu directory exists
     std.fs.cwd().makePath(start_menu_dir) catch {
         std.debug.print("Warning: Could not create Start Menu directory\n", .{});
     };
-    try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, launcher_path, bin_dir);
+    try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, target_path, working_dir);
     
     std.debug.print("Created Windows shortcuts for: {s}\n", .{metadata.name});
     

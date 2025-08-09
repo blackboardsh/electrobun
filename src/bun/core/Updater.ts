@@ -1,6 +1,6 @@
 import { join, dirname, resolve, basename } from "path";
 import { homedir } from "os";
-import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync } from "fs";
+import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync, cpSync } from "fs";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
@@ -439,8 +439,27 @@ const Updater = {
             const parentDir = dirname(runningAppBundlePath);
             const newVersionDir = join(parentDir, `app-${latestHash}`);
             
-            // Move new app to versioned directory
-            renameSync(newAppBundlePath, newVersionDir);
+            // Create the versioned directory
+            mkdirSync(newVersionDir, { recursive: true });
+            
+            // Copy all contents from the extracted app to the versioned directory
+            const files = readdirSync(newAppBundlePath);
+            for (const file of files) {
+              const srcPath = join(newAppBundlePath, file);
+              const destPath = join(newVersionDir, file);
+              const stats = statSync(srcPath);
+              
+              if (stats.isDirectory()) {
+                // Recursively copy directories
+                cpSync(srcPath, destPath, { recursive: true });
+              } else {
+                // Copy files
+                cpSync(srcPath, destPath);
+              }
+            }
+            
+            // Remove the extracted app directory
+            rmdirSync(newAppBundlePath, { recursive: true });
             
             // Create/update the launcher batch file
             const launcherPath = join(parentDir, "run.bat");
