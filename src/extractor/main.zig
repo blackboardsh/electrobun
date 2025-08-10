@@ -744,12 +744,21 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     defer allocator.free(desktop_file_path);
     
     // Create a wrapper script for better library path handling
-    const wrapper_script_path = try std.fs.path.join(allocator, &.{ app_dir, "run.sh" });
+    // Place it as a sibling to the app directory so it persists across updates
+    const parent_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidPath;
+    const wrapper_script_path = try std.fs.path.join(allocator, &.{ parent_dir, "run.sh" });
     defer allocator.free(wrapper_script_path);
     
     const wrapper_content = try std.fmt.allocPrint(allocator,
         \\#!/bin/bash
-        \\cd "$(dirname "$0")/bin"
+        \\# Electrobun App Launcher
+        \\# This script sets up the environment and launches the app
+        \\
+        \\# Get the directory where this script is located
+        \\SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}})" && pwd)"
+        \\APP_DIR="$SCRIPT_DIR/app"
+        \\
+        \\cd "$APP_DIR/bin"
         \\export LD_LIBRARY_PATH=".:$LD_LIBRARY_PATH"
         \\
         \\# Force X11 backend for compatibility

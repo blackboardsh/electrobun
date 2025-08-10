@@ -13,6 +13,50 @@ import { native } from '../proc/native';
 //             native.symbols.killApp();
 // }, 1000)
 
+// Create or update run.sh launcher script for Linux
+async function createLinuxLauncherScript(appDir: string): Promise<void> {
+  const parentDir = dirname(appDir);
+  const launcherPath = join(parentDir, "run.sh");
+  
+  const launcherContent = `#!/bin/bash
+# Electrobun App Launcher
+# This script sets up the environment and launches the app
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$SCRIPT_DIR/app"
+
+cd "$APP_DIR/bin"
+export LD_LIBRARY_PATH=".:$LD_LIBRARY_PATH"
+
+# Force X11 backend for compatibility
+export GDK_BACKEND=x11
+
+# Check if CEF libraries exist and set LD_PRELOAD
+if [ -f "./libcef.so" ] || [ -f "./libvk_swiftshader.so" ]; then
+    CEF_LIBS=""
+    [ -f "./libcef.so" ] && CEF_LIBS="./libcef.so"
+    if [ -f "./libvk_swiftshader.so" ]; then
+        if [ -n "$CEF_LIBS" ]; then
+            CEF_LIBS="$CEF_LIBS:./libvk_swiftshader.so"
+        else
+            CEF_LIBS="./libvk_swiftshader.so"
+        fi
+    fi
+    export LD_PRELOAD="$CEF_LIBS"
+fi
+
+exec ./launcher "$@"
+`;
+
+  await Bun.write(launcherPath, launcherContent);
+  
+  // Make it executable
+  execSync(`chmod +x "${launcherPath}"`);
+  
+  console.log(`Created/updated Linux launcher script: ${launcherPath}`);
+}
+
 // Cross-platform app data directory
 function getAppDataDir(): string {
   switch (currentOS) {
@@ -473,6 +517,9 @@ const Updater = {
             
             // Move new app to app location
             renameSync(newAppBundlePath, runningAppBundlePath);
+            
+            // Recreate run.sh launcher script
+            await createLinuxLauncherScript(runningAppBundlePath);
           } else {
             // On Windows, use versioned app folders
             const parentDir = dirname(runningAppBundlePath);
