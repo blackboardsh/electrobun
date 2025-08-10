@@ -825,7 +825,17 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
         std.debug.print("Warning: Could not set executable permissions on desktop file\n", .{});
     }
     
+    // Try to mark as trusted for GNOME/Ubuntu using gio
+    const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
+    _ = std.ChildProcess.exec(.{
+        .allocator = allocator,
+        .argv = &gio_argv,
+    }) catch |err| {
+        std.debug.print("Note: Could not mark desktop file as trusted with gio: {}\n", .{err});
+    };
+    
     std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
+    std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
 }
 
 fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8) !void {
