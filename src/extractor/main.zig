@@ -827,7 +827,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     
     // Try to mark as trusted for GNOME/Ubuntu using gio
     const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
-    _ = std.ChildProcess.exec(.{
+    _ = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &gio_argv,
     }) catch |err| {
