@@ -1,6 +1,7 @@
 import { join, dirname, resolve, basename } from "path";
 import { homedir } from "os";
 import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync, cpSync } from "fs";
+import { execSync } from "child_process";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
@@ -321,26 +322,55 @@ const Updater = {
       let appBundleSubpath: string = "";
 
       if (await Bun.file(latestTarPath).exists()) {
-        await tar.x({
-          // gzip: false,
-          file: latestTarPath,
-          cwd: extractionFolder,
-          onentry: (entry) => {
-            if (currentOS === 'macos') {
-              // find the first .app bundle in the tarball
-              // Some apps may have nested .app bundles
-              if (!appBundleSubpath && entry.path.endsWith(".app/")) {
-                appBundleSubpath = entry.path;
+        // Windows needs a temporary directory to avoid file locking issues
+        const extractionDir = currentOS === 'win' 
+          ? join(extractionFolder, `temp-${latestHash}`)
+          : extractionFolder;
+        
+        if (currentOS === 'win') {
+          mkdirSync(extractionDir, { recursive: true });
+        }
+        
+        // Use Windows native tar.exe on Windows due to npm tar library issues (same as CLI)
+        if (currentOS === 'win') {
+          console.log(`Using Windows native tar.exe to extract ${latestTarPath} to ${extractionDir}...`);
+          try {
+            execSync(`tar -xf "${latestTarPath}" -C "${extractionDir}"`, { 
+              stdio: 'inherit',
+              cwd: extractionDir 
+            });
+            console.log('Windows tar.exe extraction completed successfully');
+            
+            // For Windows/Linux, the app bundle is at root level
+            appBundleSubpath = "./";
+          } catch (error) {
+            console.error('Windows tar.exe extraction failed:', error);
+            throw error;
+          }
+        } else {
+          // Use npm tar library on macOS/Linux (keep original behavior)
+          await tar.x({
+            // gzip: false,
+            file: latestTarPath,
+            cwd: extractionDir,
+            onentry: (entry) => {
+              if (currentOS === 'macos') {
+                // find the first .app bundle in the tarball
+                // Some apps may have nested .app bundles
+                if (!appBundleSubpath && entry.path.endsWith(".app/")) {
+                  appBundleSubpath = entry.path;
+                }
+              } else {
+                // For Linux, look for the main executable
+                if (!appBundleSubpath) {
+                  appBundleSubpath = "./";
+                }
               }
-            } else {
-              // For Windows/Linux, look for the main executable
-              // This assumes the tarball contains the app at the root
-              if (!appBundleSubpath) {
-                appBundleSubpath = "./";
-              }
-            }
-          },
-        });
+            },
+          });
+        }
+        
+        console.log(`Tar extraction completed. Found appBundleSubpath: ${appBundleSubpath}`);
 
         if (!appBundleSubpath) {
           console.error("Failed to find app in tarball");
@@ -349,7 +379,7 @@ const Updater = {
 
         // Note: resolve here removes the extra trailing / that the tar file adds
         const extractedAppPath = resolve(
-          join(extractionFolder, appBundleSubpath)
+          join(extractionDir, appBundleSubpath)
         );
         
         // Platform-specific path handling
@@ -359,11 +389,20 @@ const Updater = {
           // Use same sanitization as extractor: remove spaces and dots
           // Note: localInfo.name already includes the channel (e.g., "test1-canary")
           const appBundleName = localInfo.name.replace(/ /g, "").replace(/\./g, "-");
-          newAppBundlePath = join(extractionFolder, appBundleName);
+          newAppBundlePath = join(extractionDir, appBundleName);
           
           // Verify the extracted app exists
           if (!statSync(newAppBundlePath, { throwIfNoEntry: false })) {
             console.error(`Extracted app not found at: ${newAppBundlePath}`);
+            console.log("Contents of extraction directory:");
+            try {
+              const files = readdirSync(extractionDir);
+              for (const file of files) {
+                console.log(`  - ${file}`);
+              }
+            } catch (e) {
+              console.log("Could not list directory contents:", e);
+            }
             return;
           }
         } else {
@@ -458,8 +497,10 @@ const Updater = {
               }
             }
             
-            // Remove the extracted app directory
-            rmdirSync(newAppBundlePath, { recursive: true });
+            // Clean up the temporary extraction directory on Windows
+            if (currentOS === 'win') {
+              rmdirSync(extractionDir, { recursive: true });
+            }
             
             // Create/update the launcher batch file
             const launcherPath = join(parentDir, "run.bat");
@@ -507,6 +548,8 @@ start "" launcher.exe
             // On Windows, launch the run.bat file which handles versioning
             const parentDir = dirname(runningAppBundlePath);
             const runBatPath = join(parentDir, "run.bat");
+            
+            
             await Bun.spawn(["cmd", "/c", runBatPath], { detached: true });
             break;
           case 'linux':
