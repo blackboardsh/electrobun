@@ -839,36 +839,36 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
 }
 
 fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8) !void {
-    // For now, create a batch file as a reliable fallback
-    // TODO: Implement proper .lnk creation with Windows APIs
-    const batch_name = try std.fmt.allocPrint(allocator, "{s}.bat", .{app_name});
-    defer allocator.free(batch_name);
+    // Create a VBS script that launches without showing any console windows
+    const vbs_name = try std.fmt.allocPrint(allocator, "{s}.vbs", .{app_name});
+    defer allocator.free(vbs_name);
     
-    const batch_path = try std.fs.path.join(allocator, &.{ shortcut_dir, batch_name });
-    defer allocator.free(batch_path);
+    const vbs_path = try std.fs.path.join(allocator, &.{ shortcut_dir, vbs_name });
+    defer allocator.free(vbs_path);
     
-    // Create batch file that changes to working directory and runs launcher
-    // Use powershell to run without console window
-    const batch_content = try std.fmt.allocPrint(allocator,
-        \\@echo off
-        \\powershell -WindowStyle Hidden -Command "& {{ Start-Process -FilePath '{s}' -WorkingDirectory '{s}' -WindowStyle Hidden }}"
+    // VBS script to launch without console windows
+    const vbs_content = try std.fmt.allocPrint(allocator,
+        \\' Electrobun App Launcher - No Console Windows
+        \\Set objShell = CreateObject("WScript.Shell")
+        \\objShell.CurrentDirectory = "{s}"
+        \\objShell.Run """{s}""", 0, False
         \\
-    , .{ target_path, working_dir });
-    defer allocator.free(batch_content);
+    , .{ working_dir, target_path });
+    defer allocator.free(vbs_content);
     
-    // Create and write batch file
-    const batch_file = std.fs.cwd().createFile(batch_path, .{}) catch |err| {
-        std.debug.print("Warning: Could not create shortcut at {s}: {}\n", .{ batch_path, err });
+    // Create and write VBS file
+    const vbs_file = std.fs.cwd().createFile(vbs_path, .{}) catch |err| {
+        std.debug.print("Warning: Could not create shortcut at {s}: {}\n", .{ vbs_path, err });
         return;
     };
-    defer batch_file.close();
+    defer vbs_file.close();
     
-    batch_file.writeAll(batch_content) catch |err| {
+    vbs_file.writeAll(vbs_content) catch |err| {
         std.debug.print("Warning: Could not write shortcut content: {}\n", .{err});
         return;
     };
     
-    std.debug.print("Created shortcut: {s}\n", .{batch_path});
+    std.debug.print("Created Windows shortcut: {s}\n", .{vbs_path});
 }
 
 fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
