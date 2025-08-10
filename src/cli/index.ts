@@ -1445,7 +1445,7 @@ if (commandArg === "init") {
       dereference: true,
     });
 
-    buildIcons(appBundleFolderResourcesPath);
+    buildIcons(selfExtractingBundle.appBundleFolderResourcesPath);
     await Bun.write(
       join(selfExtractingBundle.appBundleFolderContentsPath, "Info.plist"),
       InfoPlistContents
@@ -1477,7 +1477,7 @@ if (commandArg === "init") {
       // Note: use ULFO (lzfse) for better compatibility with large CEF frameworks and modern macOS
       execSync(
         `hdiutil create -volname "${appFileName}" -srcfolder ${escapePathForTerminal(
-          appBundleFolderPath
+          selfExtractingBundle.appBundleFolderPath
         )} -ov -format ULFO ${escapePathForTerminal(dmgPath)}`
       );
 
