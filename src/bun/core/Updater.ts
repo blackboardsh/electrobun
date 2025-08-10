@@ -558,18 +558,20 @@ start "" launcher.exe
             Bun.spawn(["sh", "-c", `${linuxLauncher} &`], { detached: true});
             break;
         }
-        // Use native killApp to properly clean up all resources on Linux
-        // On other platforms, process.exit works fine
-        if (currentOS === 'linux') {
+        // Use native killApp to properly clean up all resources on Windows/Linux
+        // macOS handles process.exit correctly
+        if (currentOS === 'linux' || currentOS === 'win') {
           try {
-            
             native.symbols.killApp();
+            // Still call process.exit as a fallback
             process.exit(0);
           } catch (e) {
             // Fallback if native binding fails
+            console.error('Failed to call native killApp:', e);
             process.exit(0);
           }
         } else {
+          // macOS handles cleanup properly with process.exit
           process.exit(0);
         }
       }
