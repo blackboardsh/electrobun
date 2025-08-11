@@ -383,6 +383,11 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     // Fix executable permissions on extracted binaries
     try fixExecutablePermissions(allocator, app_dir);
     
+    // On macOS, remove quarantine attributes to allow signed apps to run
+    if (builtin.os.tag == .macos) {
+        try removeQuarantine(allocator, app_dir);
+    }
+    
     // Fix CEF symlinks (they get lost during tar extraction)
     try fixCefSymlinks(allocator, app_dir);
     
@@ -464,8 +469,14 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !
         const file = std.fs.cwd().openFile(exe_path, .{}) catch continue;
         file.close();
         
-        // Use chmod to set executable
+        // Use chmod to set executable (skip on macOS app bundles to preserve code signatures)
         if (builtin.os.tag != .windows) {
+            // On macOS, skip chmod for app bundles as it breaks code signatures
+            if (builtin.os.tag == .macos and std.mem.indexOf(u8, app_dir, ".app") != null) {
+                std.debug.print("DEBUG: Skipping chmod on macOS app bundle to preserve code signature: {s}\n", .{exe_path});
+                continue;
+            }
+            
             const exe_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{exe_path});
             defer allocator.free(exe_path_z);
             
@@ -566,6 +577,35 @@ fn fixCefSymlinks(allocator: std.mem.Allocator, app_dir: []const u8) !void {
         };
         
         std.debug.print("Created symlink: {s} -> {s}\n", .{ lib, target_path });
+    }
+}
+
+fn removeQuarantine(allocator: std.mem.Allocator, app_dir: []const u8) !void {
+    std.debug.print("Removing quarantine attributes from: {s}\n", .{app_dir});
+    
+    // Use xattr to remove com.apple.quarantine from the entire app bundle
+    const args = [_][]const u8{ "xattr", "-r", "-d", "com.apple.quarantine", app_dir };
+    
+    var child_process = std.process.Child.init(&args, allocator);
+    child_process.stdout_behavior = .Ignore;
+    child_process.stderr_behavior = .Ignore;
+    
+    const result = child_process.spawnAndWait() catch |err| {
+        std.debug.print("Warning: Failed to run xattr to remove quarantine: {}\n", .{err});
+        return;
+    };
+    
+    switch (result) {
+        .Exited => |code| {
+            if (code == 0) {
+                std.debug.print("Successfully removed quarantine attributes\n", .{});
+            } else {
+                std.debug.print("Warning: xattr returned exit code {d} (quarantine might not have been set)\n", .{code});
+            }
+        },
+        else => {
+            std.debug.print("Warning: xattr process terminated unexpectedly\n", .{});
+        },
     }
 }
 
