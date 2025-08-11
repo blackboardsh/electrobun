@@ -802,7 +802,21 @@ async function buildNative() {
 }
 
 async function buildLauncher() {
-    const zigArgs = OS === 'win' ? ['-Dtarget=x86_64-windows', '-Dcpu=baseline'] : [];
+    let zigArgs: string[] = [];
+    
+    // Set target architecture based on platform
+    if (OS === 'win') {
+        zigArgs = ['-Dtarget=x86_64-windows', '-Dcpu=baseline'];
+    } else if (OS === 'macos') {
+        // Build universal binary or native architecture
+        if (ARCH === 'arm64') {
+            zigArgs = ['-Dtarget=aarch64-macos'];
+        } else {
+            zigArgs = ['-Dtarget=x86_64-macos'];
+        }
+    }
+    // Linux builds native by default
+    
     if (CHANNEL === 'debug') {
         await $`cd src/launcher && ../../vendors/zig/zig build ${zigArgs}`;
     } else if (CHANNEL === 'release') {
