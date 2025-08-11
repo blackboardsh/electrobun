@@ -2248,14 +2248,31 @@ function codesignAppBundle(
     }
   }
 
-  // Sign the main executable (launcher) last, using the app's bundle identifier
+  // Sign main.js (required before signing launcher since launcher executes it)
+  const mainJsPath = join(macosPath, 'main.js');
+  if (existsSync(mainJsPath)) {
+    console.log("Signing main.js");
+    execSync(
+      `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${escapePathForTerminal(mainJsPath)}`
+    );
+  }
+
+  // Sign the main executable (launcher) - this should use the app's bundle identifier, not "launcher"
   const launcherPath = join(macosPath, 'launcher');
   if (existsSync(launcherPath)) {
     console.log("Signing main executable (launcher)");
     const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
-    execSync(
-      `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`
-    );
+    try {
+      execSync(
+        `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`
+      );
+    } catch (error) {
+      console.error("Failed to sign launcher:", error.message);
+      console.log("Attempting to sign launcher without runtime hardening...");
+      execSync(
+        `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`
+      );
+    }
   }
 
   // Finally, sign the app bundle itself (without --deep)
