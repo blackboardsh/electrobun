@@ -2,14 +2,16 @@ import { join, dirname, resolve } from "path";
 import { dlopen, suffix } from "bun:ffi";
 import { existsSync } from "fs";
 
-const libPath = `./libNativeWrapper.${suffix}`;
+// Since main.js now runs from Resources, we need to find libraries in the MacOS directory
+const pathToMacOS = dirname(process.argv0); // bun is still in MacOS/bin directory
+const libPath = join(pathToMacOS, `libNativeWrapper.${suffix}`);
 const absoluteLibPath = resolve(libPath);
 
 // Wrap main logic in a function to avoid top-level return
 function main() {
     // Check for CEF libraries and warn if LD_PRELOAD not set (Linux only)
     if (process.platform === 'linux') {
-        const cefLibs = ['./libcef.so', './libvk_swiftshader.so'];
+        const cefLibs = [join(pathToMacOS, 'libcef.so'), join(pathToMacOS, 'libvk_swiftshader.so')];
         const existingCefLibs = cefLibs.filter(lib => existsSync(lib));
         
         if (existingCefLibs.length > 0 && !process.env.LD_PRELOAD) {
@@ -56,10 +58,10 @@ function main() {
     // todo (yoav): as the debug launcher, get the relative path a different way, so dev builds can be shared and executed
     // from different locations
     const pathToLauncherBin = process.argv0;
-    const pathToMacOS = dirname(pathToLauncherBin);
+    const pathToBinDir = dirname(pathToLauncherBin);
 
     const appEntrypointPath = join(
-        pathToMacOS,
+        pathToBinDir,
         "..",
         "Resources",
         "app",

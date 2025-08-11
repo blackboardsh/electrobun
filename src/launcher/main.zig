@@ -8,7 +8,7 @@ pub fn main() !void {
 
     // TODO XX: you probably need to set the cwd since now we're forking and piping instead of spawning
     // Create an instance of ChildProcess
-    const argv = &[_][]const u8{ "./bun", "./main.js" };
+    const argv = &[_][]const u8{ "./bun", "../Resources/main.js" };
     var child_process = std.process.Child.init(argv, alloc);
 
     child_process.cwd = APPBUNDLE_MACOS_PATH;

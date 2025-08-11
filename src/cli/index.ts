@@ -863,7 +863,7 @@ if (commandArg === "init") {
     });
   }
 
-  cpSync(targetPaths.MAIN_JS, join(appBundleMacOSPath, 'main.js'));
+  cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, 'main.js'));
 
   // Bun runtime binary
   // todo (yoav): this only works for the current architecture
@@ -1741,24 +1741,27 @@ exec "\$LAUNCHER_BINARY" "\$@"
 
   let mainProc;
   let bundleExecPath: string;
+  let bundleResourcesPath: string;
   
   if (OS === 'macos') {
     bundleExecPath = join(buildFolder, bundleFileName, "Contents", 'MacOS');
+    bundleResourcesPath = join(buildFolder, bundleFileName, "Contents", 'Resources');
   } else if (OS === 'linux' || OS === 'win') {
     bundleExecPath = join(buildFolder, bundleFileName, "bin");
+    bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
   } else {
     throw new Error(`Unsupported OS: ${OS}`);
   }
 
   if (OS === 'macos') {
 
-    mainProc = Bun.spawn([join(bundleExecPath,'bun'), join(bundleExecPath, 'main.js')], {
+    mainProc = Bun.spawn([join(bundleExecPath,'bun'), join(bundleResourcesPath, 'main.js')], {
       stdio: ['inherit', 'inherit', 'inherit'],
       cwd: bundleExecPath
     })
   } else if (OS === 'win') {  
-    // Try the main process
-    mainProc =  Bun.spawn(['./bun.exe', './main.js'], {
+    // Try the main process - use relative path to Resources folder
+    mainProc =  Bun.spawn(['./bun.exe', '../Resources/main.js'], {
       stdio: ['inherit', 'inherit', 'inherit'],
       cwd: bundleExecPath,
       onExit: (proc, exitCode, signalCode, error) => {
@@ -1779,7 +1782,7 @@ exec "\$LAUNCHER_BINARY" "\$@"
       }
     }
     
-    mainProc = Bun.spawn([join(bundleExecPath, 'bun'), join(bundleExecPath, 'main.js')], {
+    mainProc = Bun.spawn([join(bundleExecPath, 'bun'), join(bundleResourcesPath, 'main.js')], {
       stdio: ['inherit', 'inherit', 'inherit'],
       cwd: bundleExecPath,
       env
@@ -2248,15 +2251,8 @@ function codesignAppBundle(
     }
   }
 
-  // Sign main.js (required before signing launcher since launcher executes it)
-  const mainJsPath = join(macosPath, 'main.js');
-  if (existsSync(mainJsPath)) {
-    console.log("Signing main.js");
-    execSync(
-      `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${escapePathForTerminal(mainJsPath)}`
-    );
-  }
-
+  // Note: main.js is now in Resources and will be automatically sealed when signing the app bundle
+  
   // Sign the main executable (launcher) - this should use the app's bundle identifier, not "launcher"
   const launcherPath = join(macosPath, 'launcher');
   if (existsSync(launcherPath)) {
