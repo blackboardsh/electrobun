@@ -2187,30 +2187,83 @@ function codesignAppBundle(
     process.exit(1);
   }
 
-  // list of entitlements https://developer.apple.com/documentation/security/hardened_runtime?language=objc
-  // todo (yoav): consider allowing separate entitlements config for each binary
-  // const entitlementsFilePath = join(buildFolder, 'entitlements.plist');
+  // If this is a DMG file, sign it directly
+  if (appBundleOrDmgPath.endsWith('.dmg')) {
+    execSync(
+      `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${escapePathForTerminal(
+        appBundleOrDmgPath
+      )}`
+    );
+    return;
+  }
 
-  // codesign --deep --force --verbose --timestamp --sign "ELECTROBUN_DEVELOPER_ID" --options runtime --entitlements entitlementsFilePath appBundleOrDmgPath`
-
+  // For app bundles, sign binaries individually to avoid --deep issues with notarization
+  const contentsPath = join(appBundleOrDmgPath, 'Contents');
+  const macosPath = join(contentsPath, 'MacOS');
+  
+  // Prepare entitlements if provided
   if (entitlementsFilePath) {
     const entitlementsFileContents = buildEntitlementsFile(
       config.build.mac.entitlements
     );
     Bun.write(entitlementsFilePath, entitlementsFileContents);
+  }
 
+  // Sign frameworks first (CEF framework if it exists)
+  const frameworksPath = join(contentsPath, 'Frameworks');
+  if (existsSync(frameworksPath)) {
+    try {
+      const frameworks = readdirSync(frameworksPath);
+      for (const framework of frameworks) {
+        if (framework.endsWith('.framework')) {
+          const frameworkPath = join(frameworksPath, framework);
+          console.log(`Signing framework: ${framework}`);
+          execSync(
+            `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${escapePathForTerminal(frameworkPath)}`
+          );
+        }
+      }
+    } catch (err) {
+      console.log("No frameworks to sign or error signing frameworks:", err);
+    }
+  }
+
+  // Sign individual binaries in MacOS folder with their proper identifiers
+  const binariesToSign = [
+    { file: 'bun', identifier: 'bun' },
+    { file: 'extractor', identifier: 'extractor' },
+    { file: 'bsdiff', identifier: 'bsdiff' },
+    { file: 'bspatch', identifier: 'bspatch' },
+    { file: 'libNativeWrapper.dylib', identifier: 'libNativeWrapper.dylib' }
+  ];
+
+  for (const binary of binariesToSign) {
+    const binaryPath = join(macosPath, binary.file);
+    if (existsSync(binaryPath)) {
+      console.log(`Signing ${binary.file} with identifier ${binary.identifier}`);
+      const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
+      execSync(
+        `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --identifier ${binary.identifier} ${entitlementFlag} ${escapePathForTerminal(binaryPath)}`
+      );
+    }
+  }
+
+  // Sign the main executable (launcher) last, using the app's bundle identifier
+  const launcherPath = join(macosPath, 'launcher');
+  if (existsSync(launcherPath)) {
+    console.log("Signing main executable (launcher)");
+    const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
     execSync(
-      `codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --entitlements ${entitlementsFilePath} ${escapePathForTerminal(
-        appBundleOrDmgPath
-      )}`
-    );
-  } else {
-    execSync(
-      `codesign --deep --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${escapePathForTerminal(
-        appBundleOrDmgPath
-      )}`
+      `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`
     );
   }
+
+  // Finally, sign the app bundle itself (without --deep)
+  console.log("Signing app bundle");
+  const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
+  execSync(
+    `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(appBundleOrDmgPath)}`
+  );
 }
 
 function notarizeAndStaple(appOrDmgPath: string) {
