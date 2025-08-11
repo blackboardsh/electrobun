@@ -69,12 +69,27 @@ function main() {
         "index.js"
     );
 
+    console.log(`[LAUNCHER] Debug info:
+        process.argv0: ${process.argv0}
+        pathToBinDir: ${pathToBinDir}
+        appEntrypointPath: ${appEntrypointPath}
+        cwd: ${process.cwd()}
+        appEntrypointPath exists: ${existsSync(appEntrypointPath)}
+    `);
+
     // NOTE: No point adding any event listeners here because this is the main
     // ui thread which is about to be blocked by the native event loop below.
-    new Worker(appEntrypointPath, {
-        // consider adding a preload with error handling
-        // preload: [''];
-    });
+    try {
+        console.log(`[LAUNCHER] Creating worker with: ${appEntrypointPath}`);
+        new Worker(appEntrypointPath, {
+            // consider adding a preload with error handling
+            // preload: [''];
+        });
+        console.log(`[LAUNCHER] Worker created successfully`);
+    } catch (error) {
+        console.error(`[LAUNCHER] Failed to create worker:`, error);
+        throw error;
+    }
 
     lib.symbols.runNSApplication();
 }
