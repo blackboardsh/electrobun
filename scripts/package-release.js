@@ -50,7 +50,8 @@ const compileTarget = platform === 'win32' ? '--target=bun-windows-x64-baseline'
 execSync(`bun build src/cli/index.ts --compile ${compileTarget} --outfile bin/electrobun`, { stdio: 'inherit' });
 
 // Create separate tarballs for CLI, core binaries, and CEF
-const distPath = path.join(__dirname, '..', 'dist');
+// Use platform-specific dist folder to ensure we're using binaries with signatures removed
+const distPath = path.join(__dirname, '..', `dist-${platformName}-${archName}`);
 const cliOutputFile = path.join(__dirname, '..', `electrobun-cli-${platformName}-${archName}.tar.gz`);
 const coreOutputFile = path.join(__dirname, '..', `electrobun-core-${platformName}-${archName}.tar.gz`);
 const cefOutputFile = path.join(__dirname, '..', `electrobun-cef-${platformName}-${archName}.tar.gz`);
