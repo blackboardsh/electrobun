@@ -261,7 +261,8 @@ async function createPlatformDistFolder() {
     
     // NOTE: CI adds adhoc code signatures to binaries which breaks notarization of electrobun apps
     // Remove adhoc signatures from macOS binaries to prevent those notarization issues
-    if (OS === 'macos') {
+    // Only needed for release builds (canary/stable) that will be notarized
+    if (OS === 'macos' && CHANNEL === 'release') {
         console.log('Removing adhoc signatures from macOS binaries...');
         const binariesToUnsign = [
             'launcher',

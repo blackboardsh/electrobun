@@ -847,19 +847,21 @@ if (commandArg === "init") {
   //     mkdirSync(destLauncherFolder, {recursive: true});
   // }
   // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});
-  // Copy launcher for all builds (dev, canary, stable) since main.js is now in Resources
-  const bunCliLauncherBinarySource = targetPaths.LAUNCHER_RELEASE;
-  const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + targetBinExt;
-  const destLauncherFolder = dirname(bunCliLauncherDestination);
-  if (!existsSync(destLauncherFolder)) {
-    // console.info('creating folder: ', destFolder);
-    mkdirSync(destLauncherFolder, { recursive: true });
-  }
+  // Only copy launcher for production builds (canary, stable) since dev mode runs bun directly
+  if (buildEnvironment !== "dev") {
+    const bunCliLauncherBinarySource = targetPaths.LAUNCHER_RELEASE;
+    const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + targetBinExt;
+    const destLauncherFolder = dirname(bunCliLauncherDestination);
+    if (!existsSync(destLauncherFolder)) {
+      // console.info('creating folder: ', destFolder);
+      mkdirSync(destLauncherFolder, { recursive: true });
+    }
 
-  cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {
-    recursive: true,
-    dereference: true,
-  });
+    cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {
+      recursive: true,
+      dereference: true,
+    });
+  }
 
   cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, 'main.js'));
 
@@ -1752,8 +1754,8 @@ exec "\$LAUNCHER_BINARY" "\$@"
   }
 
   if (OS === 'macos') {
-    // Use the launcher binary which handles the main.js path correctly
-    mainProc = Bun.spawn([join(bundleExecPath, 'launcher')], {
+    // In dev mode, run bun directly with main.js from Resources folder
+    mainProc = Bun.spawn([join(bundleExecPath,'bun'), join(bundleResourcesPath, 'main.js')], {
       stdio: ['inherit', 'inherit', 'inherit'],
       cwd: bundleExecPath
     })
