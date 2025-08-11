@@ -274,15 +274,18 @@ async function createPlatformDistFolder() {
             'cef/process_helper'
         ];
         
-        for (const binary of binariesToUnsign) {
-            const binaryPath = join(platformDistDir, binary);
-            if (existsSync(binaryPath)) {
-                try {
-                    await $`codesign --remove-signature ${binaryPath}`;
-                    console.log(`  Removed signature from ${binary}`);
-                } catch (err) {
-                    // It's okay if there's no signature to remove
-                    console.log(`  No signature to remove from ${binary}`);
+        // Remove signatures from both dist and platform-specific dist folders
+        for (const baseDir of ['dist', platformDistDir]) {
+            for (const binary of binariesToUnsign) {
+                const binaryPath = join(baseDir, binary);
+                if (existsSync(binaryPath)) {
+                    try {
+                        await $`codesign --remove-signature ${binaryPath}`;
+                        console.log(`  Removed signature from ${baseDir}/${binary}`);
+                    } catch (err) {
+                        // It's okay if there's no signature to remove
+                        console.log(`  No signature to remove from ${baseDir}/${binary}`);
+                    }
                 }
             }
         }
