@@ -2240,34 +2240,8 @@ function codesignAppBundle(
               }
             }
             
-            // Sign CEF helper apps
-            const cefHelperApps = [
-              'bun Helper.app',
-              'bun Helper (GPU).app', 
-              'bun Helper (Plugin).app',
-              'bun Helper (Alerts).app',
-              'bun Helper (Renderer).app'
-            ];
-            
-            for (const helperApp of cefHelperApps) {
-              const helperPath = join(frameworkPath, helperApp);
-              if (existsSync(helperPath)) {
-                const helperExecutablePath = join(helperPath, 'Contents', 'MacOS', helperApp.replace('.app', ''));
-                if (existsSync(helperExecutablePath)) {
-                  console.log(`Signing CEF helper executable: ${helperApp}`);
-                  const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
-                  execSync(
-                    `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(helperExecutablePath)}`
-                  );
-                }
-                
-                console.log(`Signing CEF helper bundle: ${helperApp}`);
-                const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
-                execSync(
-                  `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(helperPath)}`
-                );
-              }
-            }
+            // CEF helper apps are in the main Frameworks directory, not inside the CEF framework
+            // We'll sign them after signing all frameworks
           }
           
           // Sign the framework bundle itself (for CEF and any other frameworks)
@@ -2280,6 +2254,35 @@ function codesignAppBundle(
     } catch (err) {
       console.log("Error signing frameworks:", err);
       throw err; // Re-throw to fail the build since framework signing is critical
+    }
+    
+    // Sign CEF helper apps (they're in the main Frameworks directory, not inside CEF framework)
+    const cefHelperApps = [
+      'bun Helper.app',
+      'bun Helper (GPU).app', 
+      'bun Helper (Plugin).app',
+      'bun Helper (Alerts).app',
+      'bun Helper (Renderer).app'
+    ];
+    
+    for (const helperApp of cefHelperApps) {
+      const helperPath = join(frameworksPath, helperApp);
+      if (existsSync(helperPath)) {
+        const helperExecutablePath = join(helperPath, 'Contents', 'MacOS', helperApp.replace('.app', ''));
+        if (existsSync(helperExecutablePath)) {
+          console.log(`Signing CEF helper executable: ${helperApp}`);
+          const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
+          execSync(
+            `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(helperExecutablePath)}`
+          );
+        }
+        
+        console.log(`Signing CEF helper bundle: ${helperApp}`);
+        const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
+        execSync(
+          `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(helperPath)}`
+        );
+      }
     }
   }
 
