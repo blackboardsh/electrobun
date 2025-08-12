@@ -402,6 +402,9 @@ const defaultConfig = {
       entitlements: {
         // This entitlement is required for Electrobun apps with a hardened runtime (required for notarization) to run on macos
         "com.apple.security.cs.allow-jit": true,
+        // Required for bun runtime to work with dynamic code execution and JIT compilation when signed
+        "com.apple.security.cs.allow-unsigned-executable-memory": true,
+        "com.apple.security.cs.disable-library-validation": true,
       },
       icons: "icon.iconset",
     },
