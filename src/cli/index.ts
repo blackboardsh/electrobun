@@ -2213,7 +2213,7 @@ function codesignAppBundle(
     Bun.write(entitlementsFilePath, entitlementsFileContents);
   }
 
-  // Sign frameworks first (CEF framework if it exists)
+  // Sign frameworks first (CEF framework requires special handling)
   const frameworksPath = join(contentsPath, 'Frameworks');
   if (existsSync(frameworksPath)) {
     try {
@@ -2221,14 +2221,65 @@ function codesignAppBundle(
       for (const framework of frameworks) {
         if (framework.endsWith('.framework')) {
           const frameworkPath = join(frameworksPath, framework);
-          console.log(`Signing framework: ${framework}`);
+          
+          if (framework === 'Chromium Embedded Framework.framework') {
+            console.log(`Signing CEF framework components: ${framework}`);
+            
+            // Sign CEF libraries first
+            const librariesPath = join(frameworkPath, 'Libraries');
+            if (existsSync(librariesPath)) {
+              const libraries = readdirSync(librariesPath);
+              for (const library of libraries) {
+                if (library.endsWith('.dylib')) {
+                  const libraryPath = join(librariesPath, library);
+                  console.log(`Signing CEF library: ${library}`);
+                  execSync(
+                    `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${escapePathForTerminal(libraryPath)}`
+                  );
+                }
+              }
+            }
+            
+            // Sign CEF helper apps
+            const cefHelperApps = [
+              'bun Helper.app',
+              'bun Helper (GPU).app', 
+              'bun Helper (Plugin).app',
+              'bun Helper (Alerts).app',
+              'bun Helper (Renderer).app'
+            ];
+            
+            for (const helperApp of cefHelperApps) {
+              const helperPath = join(frameworkPath, helperApp);
+              if (existsSync(helperPath)) {
+                const helperExecutablePath = join(helperPath, 'Contents', 'MacOS', helperApp.replace('.app', ''));
+                if (existsSync(helperExecutablePath)) {
+                  console.log(`Signing CEF helper executable: ${helperApp}`);
+                  const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
+                  execSync(
+                    `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(helperExecutablePath)}`
+                  );
+                }
+                
+                console.log(`Signing CEF helper bundle: ${helperApp}`);
+                const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
+                execSync(
+                  `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(helperPath)}`
+                );
+              }
+            }
+          }
+          
+          // Sign the framework bundle itself (for CEF and any other frameworks)
+          console.log(`Signing framework bundle: ${framework}`);
           execSync(
             `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${escapePathForTerminal(frameworkPath)}`
           );
         }
       }
     } catch (err) {
-      console.log("No frameworks to sign or error signing frameworks:", err);
+      console.log("Error signing frameworks:", err);
+      throw err; // Re-throw to fail the build since framework signing is critical
     }
   }
 
