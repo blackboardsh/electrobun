@@ -1278,6 +1278,7 @@ if (commandArg === "init") {
     
     const result = Bun.spawnSync([hostPaths.BUN_BINARY, config.scripts.postBuild], {
       stdio: ["ignore", "inherit", "inherit"],
+      cwd: projectRoot, // Add cwd to ensure script runs from project root
       env: {
         ...process.env,
         ELECTROBUN_BUILD_ENV: buildEnvironment,
@@ -1293,6 +1294,13 @@ if (commandArg === "init") {
     
     if (result.exitCode !== 0) {
       console.error("postBuild script failed with exit code:", result.exitCode);
+      if (result.stderr) {
+        console.error("stderr:", result.stderr.toString());
+      }
+      // Also log which bun binary we're trying to use
+      console.error("Tried to run with bun at:", hostPaths.BUN_BINARY);
+      console.error("Script path:", config.scripts.postBuild);
+      console.error("Working directory:", projectRoot);
       process.exit(1);
     }
   }
