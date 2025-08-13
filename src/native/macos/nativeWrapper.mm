@@ -1127,17 +1127,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
                 [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
                 
-                // Enable media capture and getUserMedia support
-                configuration.allowsInlineMediaPlayback = YES;
-                configuration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
-                configuration.allowsAirPlayForMediaPlayback = YES;
-                configuration.allowsPictureInPictureMediaPlayback = YES;
-                
-                // Enable media capture APIs
-                [configuration.preferences setValue:@YES forKey:@"mockCaptureDevicesEnabled"];
-                [configuration.preferences setValue:@YES forKey:@"mediaCaptureRequiresSecureConnection"];
-                [configuration.preferences setValue:@YES forKey:@"allowsInlineMediaPlayback"];
-                
                 // Add scheme handler
                 MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
                 // TODO: Consider storing views handler globally and not on each AbstractView                
