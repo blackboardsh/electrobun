@@ -292,7 +292,23 @@ class PhotoBooth {
             this.stream = await navigator.mediaDevices.getUserMedia(constraints);
             this.video.srcObject = this.stream;
 
+            // Wait for video to be ready after switching
+            await new Promise<void>((resolve) => {
+                const onLoadedData = () => {
+                    this.video.removeEventListener('loadeddata', onLoadedData);
+                    resolve();
+                };
+                
+                if (this.video.readyState >= 2) {
+                    // Video is already loaded
+                    resolve();
+                } else {
+                    this.video.addEventListener('loadeddata', onLoadedData);
+                }
+            });
+
             this.setStatus('Camera switched', true);
+            this.showStatus('Camera switched successfully!', 'success');
 
         } catch (error) {
             console.error('Error switching camera:', error);
