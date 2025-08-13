@@ -1,0 +1,16 @@
+{
+  "name": "electrobun-photo-booth",
+  "version": "1.0.0",
+  "description": "A photo booth app demonstrating getUserMedia with Electrobun",
+  "scripts": {
+    "dev": "electrobun dev",
+    "build:dev": "electrobun build",
+    "start": "bun run build:dev && bun run dev"
+  },
+  "dependencies": {
+    "electrobun": "file:../../"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

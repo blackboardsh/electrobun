@@ -38,6 +38,7 @@
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_keyboard_handler.h"
 #include "include/cef_response_filter.h"
+#include "include/cef_permission_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
 // X11 Error Handler (non-fatal errors are common in WebKit/GTK)
@@ -86,6 +87,61 @@ static std::map<uint32_t, std::shared_ptr<MenuItemData>> g_menuItems;
 // Global application menu storage
 static std::string g_applicationMenuConfig;
 static ZigStatusItemHandler g_applicationMenuHandler = nullptr;
+
+// Permission cache for user media requests
+enum class PermissionType {
+    USER_MEDIA,
+    GEOLOCATION,
+    NOTIFICATIONS,
+    OTHER
+};
+
+enum class PermissionStatus {
+    UNKNOWN,
+    ALLOWED,
+    DENIED
+};
+
+struct PermissionCacheEntry {
+    PermissionStatus status;
+    std::chrono::system_clock::time_point expiry;
+};
+
+static std::map<std::pair<std::string, PermissionType>, PermissionCacheEntry> g_permissionCache;
+
+// Helper functions for permission management
+std::string getOriginFromPermissionRequest(WebKitPermissionRequest* request) {
+    // For views:// scheme, use a constant origin since these are local files
+    // For other schemes, you would use webkit_permission_request_get_requesting_origin() when available
+    return "views://";
+}
+
+PermissionStatus getPermissionFromCache(const std::string& origin, PermissionType type) {
+    auto key = std::make_pair(origin, type);
+    auto it = g_permissionCache.find(key);
+    
+    if (it != g_permissionCache.end()) {
+        // Check if permission hasn't expired
+        auto now = std::chrono::system_clock::now();
+        if (now < it->second.expiry) {
+            return it->second.status;
+        } else {
+            // Permission expired, remove from cache
+            g_permissionCache.erase(it);
+        }
+    }
+    
+    return PermissionStatus::UNKNOWN;
+}
+
+void cachePermission(const std::string& origin, PermissionType type, PermissionStatus status) {
+    auto key = std::make_pair(origin, type);
+    
+    // Cache permission for 24 hours
+    auto expiry = std::chrono::system_clock::now() + std::chrono::hours(24);
+    
+    g_permissionCache[key] = {status, expiry};
+}
 
 // Simple JSON value structure for menu parsing
 struct MenuJsonValue {
@@ -741,7 +797,8 @@ class ElectrobunClient : public CefClient,
                         public CefContextMenuHandler,
                         public CefKeyboardHandler,
                         public CefResourceRequestHandler,
-                        public CefLifeSpanHandler {
+                        public CefLifeSpanHandler,
+                        public CefPermissionHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -820,6 +877,10 @@ public:
     }
 
     virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
+        return this;
+    }
+    
+    virtual CefRefPtr<CefPermissionHandler> GetPermissionHandler() override {
         return this;
     }
 
@@ -1126,6 +1187,175 @@ public:
         
         return result;
     }
+    
+    // Permission Handler methods for CEF
+    virtual bool OnRequestMediaAccessPermission(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefMediaAccessCallback> callback) override {
+        
+        std::string origin = requesting_origin.ToString();
+        printf("CEF: Media access permission requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
+        
+        // Check cache first
+        PermissionStatus cachedStatus = getPermissionFromCache(origin, PermissionType::USER_MEDIA);
+        
+        if (cachedStatus == PermissionStatus::ALLOWED) {
+            printf("CEF: Using cached permission: User previously allowed media access for %s\n", origin.c_str());
+            callback->Continue(requested_permissions); // Allow all requested permissions
+            return true;
+        } else if (cachedStatus == PermissionStatus::DENIED) {
+            printf("CEF: Using cached permission: User previously blocked media access for %s\n", origin.c_str());
+            callback->Cancel();
+            return true;
+        }
+        
+        // No cached permission, show dialog
+        printf("CEF: No cached permission found for %s, showing dialog\n", origin.c_str());
+        
+        // Create camera/microphone permission dialog
+        std::string message = "This page wants to access your camera and/or microphone.\n\nDo you want to allow this?";
+        std::string title = "Camera & Microphone Access";
+        
+        // Create permission dialog with custom buttons
+        GtkWidget* dialog = gtk_dialog_new_with_buttons(
+            title.c_str(),
+            nullptr,
+            GTK_DIALOG_MODAL,
+            "Allow", GTK_RESPONSE_YES,
+            "Block", GTK_RESPONSE_NO,
+            nullptr
+        );
+        
+        // Add message label
+        GtkWidget* content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+        GtkWidget* label = gtk_label_new(message.c_str());
+        gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+        gtk_widget_set_margin_top(label, 10);
+        gtk_widget_set_margin_bottom(label, 10);
+        gtk_widget_set_margin_start(label, 10);
+        gtk_widget_set_margin_end(label, 10);
+        gtk_container_add(GTK_CONTAINER(content_area), label);
+        gtk_widget_show_all(dialog);
+        
+        gtk_window_set_position(GTK_WINDOW(dialog), GTK_WIN_POS_CENTER);
+        
+        // Show dialog and get response
+        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        gtk_widget_destroy(dialog);
+        
+        // Handle response and cache the decision
+        if (response == GTK_RESPONSE_YES) {
+            callback->Continue(requested_permissions); // Allow all requested permissions
+            cachePermission(origin, PermissionType::USER_MEDIA, PermissionStatus::ALLOWED);
+            printf("CEF: User allowed media access for %s (cached)\n", origin.c_str());
+        } else {
+            callback->Cancel();
+            cachePermission(origin, PermissionType::USER_MEDIA, PermissionStatus::DENIED);
+            printf("CEF: User blocked media access for %s (cached)\n", origin.c_str());
+        }
+        
+        return true; // We handled the permission request
+    }
+    
+    virtual bool OnShowPermissionPrompt(
+        CefRefPtr<CefBrowser> browser,
+        uint64_t prompt_id,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefPermissionPromptCallback> callback) override {
+        
+        std::string origin = requesting_origin.ToString();
+        printf("CEF: Permission prompt requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
+        
+        // Handle different permission types
+        PermissionType permType = PermissionType::OTHER;
+        std::string message = "This page is requesting additional permissions.\n\nDo you want to allow this?";
+        std::string title = "Permission Request";
+        
+        // Check for specific permission types
+        if (requested_permissions & CEF_PERMISSION_TYPE_CAMERA_STREAM ||
+            requested_permissions & CEF_PERMISSION_TYPE_MIC_STREAM) {
+            permType = PermissionType::USER_MEDIA;
+            message = "This page wants to access your camera and/or microphone.\n\nDo you want to allow this?";
+            title = "Camera & Microphone Access";
+        } else if (requested_permissions & CEF_PERMISSION_TYPE_GEOLOCATION) {
+            permType = PermissionType::GEOLOCATION;
+            message = "This page wants to access your location.\n\nDo you want to allow this?";
+            title = "Location Access";
+        } else if (requested_permissions & CEF_PERMISSION_TYPE_NOTIFICATIONS) {
+            permType = PermissionType::NOTIFICATIONS;
+            message = "This page wants to show notifications.\n\nDo you want to allow this?";
+            title = "Notification Permission";
+        }
+        
+        // Check cache first
+        PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
+        
+        if (cachedStatus == PermissionStatus::ALLOWED) {
+            printf("CEF: Using cached permission: User previously allowed %s for %s\n", title.c_str(), origin.c_str());
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            return true;
+        } else if (cachedStatus == PermissionStatus::DENIED) {
+            printf("CEF: Using cached permission: User previously blocked %s for %s\n", title.c_str(), origin.c_str());
+            callback->Continue(CEF_PERMISSION_RESULT_DENY);
+            return true;
+        }
+        
+        // No cached permission, show dialog
+        printf("CEF: No cached permission found for %s, showing dialog\n", origin.c_str());
+        
+        // Create permission dialog with custom buttons
+        GtkWidget* dialog = gtk_dialog_new_with_buttons(
+            title.c_str(),
+            nullptr,
+            GTK_DIALOG_MODAL,
+            "Allow", GTK_RESPONSE_YES,
+            "Block", GTK_RESPONSE_NO,
+            nullptr
+        );
+        
+        // Add message label
+        GtkWidget* content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+        GtkWidget* label = gtk_label_new(message.c_str());
+        gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+        gtk_widget_set_margin_top(label, 10);
+        gtk_widget_set_margin_bottom(label, 10);
+        gtk_widget_set_margin_start(label, 10);
+        gtk_widget_set_margin_end(label, 10);
+        gtk_container_add(GTK_CONTAINER(content_area), label);
+        gtk_widget_show_all(dialog);
+        
+        gtk_window_set_position(GTK_WINDOW(dialog), GTK_WIN_POS_CENTER);
+        
+        // Show dialog and get response
+        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        gtk_widget_destroy(dialog);
+        
+        // Handle response and cache the decision
+        if (response == GTK_RESPONSE_YES) {
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            cachePermission(origin, permType, PermissionStatus::ALLOWED);
+            printf("CEF: User allowed %s for %s (cached)\n", title.c_str(), origin.c_str());
+        } else {
+            callback->Continue(CEF_PERMISSION_RESULT_DENY);
+            cachePermission(origin, permType, PermissionStatus::DENIED);
+            printf("CEF: User blocked %s for %s (cached)\n", title.c_str(), origin.c_str());
+        }
+        
+        return true; // We handled the permission request
+    }
+    
+    virtual void OnDismissPermissionPrompt(
+        CefRefPtr<CefBrowser> browser,
+        uint64_t prompt_id,
+        cef_permission_request_result_t result) override {
+        
+        printf("CEF: Permission prompt %llu dismissed with result %d\n", prompt_id, result);
+        // Optional: Handle prompt dismissal if needed
+    }
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
@@ -1333,6 +1563,11 @@ public:
         webkit_settings_set_enable_back_forward_navigation_gestures(settings, TRUE);
         webkit_settings_set_enable_smooth_scrolling(settings, TRUE);
         
+        // Enable media stream and WebRTC for camera/microphone access
+        webkit_settings_set_enable_media_stream(settings, TRUE);
+        webkit_settings_set_enable_webrtc(settings, TRUE);
+        webkit_settings_set_enable_media(settings, TRUE);
+        
         // Try to improve offscreen rendering without breaking stability
         // webkit_settings_set_enable_accelerated_2d_canvas is deprecated - removed
         
@@ -1393,6 +1628,9 @@ public:
         
         // Debug scroll events
         g_signal_connect(webview, "scroll-event", G_CALLBACK(onScrollEvent), this);
+        
+        // Handle permission requests for getUserMedia
+        g_signal_connect(webview, "permission-request", G_CALLBACK(onPermissionRequest), this);
         
         // Note: Removed visibility override for stability
         
@@ -1722,6 +1960,115 @@ public:
         WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
         fflush(stdout);
         return FALSE; // Allow scroll to continue
+    }
+    
+    static gboolean onPermissionRequest(WebKitWebView* webview, WebKitPermissionRequest* request, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        
+        // Check if this is a user media permission request (camera/microphone)
+        if (WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request)) {
+            std::string origin = getOriginFromPermissionRequest(request);
+            
+            // Check cache first
+            PermissionStatus cachedStatus = getPermissionFromCache(origin, PermissionType::USER_MEDIA);
+            
+            if (cachedStatus == PermissionStatus::ALLOWED) {
+                printf("Using cached permission: User previously allowed camera/microphone access for %s\n", origin.c_str());
+                webkit_permission_request_allow(request);
+                return TRUE;
+            } else if (cachedStatus == PermissionStatus::DENIED) {
+                printf("Using cached permission: User previously blocked camera/microphone access for %s\n", origin.c_str());
+                webkit_permission_request_deny(request);
+                return TRUE;
+            }
+            
+            // No cached permission, show dialog
+            printf("No cached permission found for %s, showing dialog\n", origin.c_str());
+            
+            // Create camera/microphone permission dialog
+            std::string message = "This page wants to access your camera and/or microphone.\n\nDo you want to allow this?";
+            std::string title = "Camera & Microphone Access";
+            
+            // Create permission dialog with custom buttons
+            GtkWidget* dialog = gtk_dialog_new_with_buttons(
+                title.c_str(),
+                nullptr,
+                GTK_DIALOG_MODAL,
+                "Allow", GTK_RESPONSE_YES,
+                "Block", GTK_RESPONSE_NO,
+                nullptr
+            );
+            
+            // Add message label
+            GtkWidget* content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+            GtkWidget* label = gtk_label_new(message.c_str());
+            gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+            gtk_widget_set_margin_top(label, 10);
+            gtk_widget_set_margin_bottom(label, 10);
+            gtk_widget_set_margin_start(label, 10);
+            gtk_widget_set_margin_end(label, 10);
+            gtk_container_add(GTK_CONTAINER(content_area), label);
+            gtk_widget_show_all(dialog);
+            
+            gtk_window_set_position(GTK_WINDOW(dialog), GTK_WIN_POS_CENTER);
+            
+            // Show dialog and get response
+            gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+            gtk_widget_destroy(dialog);
+            
+            // Handle response and cache the decision
+            if (response == GTK_RESPONSE_YES) {
+                webkit_permission_request_allow(request);
+                cachePermission(origin, PermissionType::USER_MEDIA, PermissionStatus::ALLOWED);
+                printf("User allowed camera/microphone access for %s (cached)\n", origin.c_str());
+            } else {
+                webkit_permission_request_deny(request);
+                cachePermission(origin, PermissionType::USER_MEDIA, PermissionStatus::DENIED);
+                printf("User blocked camera/microphone access for %s (cached)\n", origin.c_str());
+            }
+            
+            return TRUE;
+        }
+        
+        // For other permission types (geolocation, notifications, etc.)
+        std::string message = "This page is requesting additional permissions.\n\nDo you want to allow this?";
+        std::string title = "Permission Request";
+        
+        // Create permission dialog with custom buttons
+        GtkWidget* dialog = gtk_dialog_new_with_buttons(
+            title.c_str(),
+            nullptr,
+            GTK_DIALOG_MODAL,
+            "Allow", GTK_RESPONSE_YES,
+            "Block", GTK_RESPONSE_NO,
+            nullptr
+        );
+        
+        // Add message label
+        GtkWidget* content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+        GtkWidget* label = gtk_label_new(message.c_str());
+        gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+        gtk_widget_set_margin_top(label, 10);
+        gtk_widget_set_margin_bottom(label, 10);
+        gtk_widget_set_margin_start(label, 10);
+        gtk_widget_set_margin_end(label, 10);
+        gtk_container_add(GTK_CONTAINER(content_area), label);
+        gtk_widget_show_all(dialog);
+        
+        gtk_window_set_position(GTK_WINDOW(dialog), GTK_WIN_POS_CENTER);
+        
+        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        gtk_widget_destroy(dialog);
+        
+        if (response == GTK_RESPONSE_YES) {
+            webkit_permission_request_allow(request);
+            printf("User allowed permission request\n");
+        } else {
+            webkit_permission_request_deny(request);
+            printf("User blocked permission request\n");
+        }
+        
+        return TRUE;
     }
     
 };

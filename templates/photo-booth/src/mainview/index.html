@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photo Booth</title>
+    <link rel="stylesheet" href="./index.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Photo Booth / Screenshot Tool</h1>
+            <div class="status" id="status">
+                <span class="status-dot"></span>
+                <span class="status-text">Initializing media...</span>
+            </div>
+        </header>
+
+        <main>
+            <div class="camera-section">
+                <div class="video-container">
+                    <video id="video" autoplay playsinline></video>
+                    <canvas id="canvas" style="display: none;"></canvas>
+                    <div class="countdown" id="countdown"></div>
+                </div>
+                
+                <div class="controls">
+                    <button id="captureBtn" class="capture-btn" disabled>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <circle cx="12" cy="12" r="7"/>
+                        </svg>
+                        Take Photo
+                    </button>
+                    
+                    <div class="settings">
+                        <label>
+                            <input type="checkbox" id="timerToggle">
+                            <span>3s Timer</span>
+                        </label>
+                        
+                        <select id="cameraSelect" class="camera-select">
+                            <option value="">Select Camera</option>
+                        </select>
+                        
+                        <button id="changeSourceBtn" class="change-source-btn" style="display: none;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                            Change Source
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="gallery-section">
+                <h2>Captured Photos</h2>
+                <div class="gallery" id="gallery">
+                    <div class="empty-state">
+                        No photos/screenshots yet. Click the capture button to get started!
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="photo-modal" id="photoModal">
+        <div class="modal-content">
+            <button class="modal-close" id="modalClose">&times;</button>
+            <img id="modalImage" src="" alt="Full size photo">
+            <div class="modal-actions">
+                <button id="downloadBtn" class="action-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Save
+                </button>
+                <button id="deleteBtn" class="action-btn danger">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 6h18"/>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
+                        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                    Delete
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="./index.js"></script>
+</body>
+</html>
