@@ -1272,10 +1272,11 @@ if (commandArg === "init") {
   
   // Run postBuild script
   if (config.scripts.postBuild) {
+    console.log("Running postBuild script:", config.scripts.postBuild);
     // Use host platform's bun binary for running scripts, not target platform's
     const hostPaths = getPlatformPaths(OS, ARCH);
     
-    Bun.spawnSync([hostPaths.BUN_BINARY, config.scripts.postBuild], {
+    const result = Bun.spawnSync([hostPaths.BUN_BINARY, config.scripts.postBuild], {
       stdio: ["ignore", "inherit", "inherit"],
       env: {
         ...process.env,
@@ -1289,6 +1290,11 @@ if (commandArg === "init") {
         ELECTROBUN_ARTIFACT_DIR: artifactFolder,
       },
     });
+    
+    if (result.exitCode !== 0) {
+      console.error("postBuild script failed with exit code:", result.exitCode);
+      process.exit(1);
+    }
   }
   // All the unique files are in the bundle now. Create an initial temporary tar file
   // for hashing the contents
