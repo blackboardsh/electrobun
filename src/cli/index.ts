@@ -2303,23 +2303,65 @@ function codesignAppBundle(
     }
   }
 
-  // Sign individual binaries in MacOS folder with their proper identifiers
-  const binariesToSign = [
-    { file: 'bun', identifier: 'bun' },
-    { file: 'extractor', identifier: 'extractor' },
-    { file: 'bsdiff', identifier: 'bsdiff' },
-    { file: 'bspatch', identifier: 'bspatch' },
-    { file: 'libNativeWrapper.dylib', identifier: 'libNativeWrapper.dylib' }
-  ];
-
-  for (const binary of binariesToSign) {
-    const binaryPath = join(macosPath, binary.file);
-    if (existsSync(binaryPath)) {
-      console.log(`Signing ${binary.file} with identifier ${binary.identifier}`);
-      const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
+  // Sign all binaries and libraries in MacOS folder and subdirectories
+  console.log("Signing all binaries in MacOS folder...");
+  
+  // Recursively find all executables and libraries in MacOS folder
+  function findExecutables(dir: string): string[] {
+    let executables: string[] = [];
+    
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        
+        if (entry.isDirectory()) {
+          // Recursively search subdirectories
+          executables = executables.concat(findExecutables(fullPath));
+        } else if (entry.isFile()) {
+          // Check if it's an executable or library
+          try {
+            const fileInfo = execSync(`file -b "${fullPath}"`, { encoding: 'utf8' }).trim();
+            if (fileInfo.includes('Mach-O') || entry.name.endsWith('.dylib')) {
+              executables.push(fullPath);
+            }
+          } catch {
+            // If file command fails, check by extension
+            if (entry.name.endsWith('.dylib') || !entry.name.includes('.')) {
+              // No extension often means executable
+              executables.push(fullPath);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`Error scanning directory ${dir}:`, err);
+    }
+    
+    return executables;
+  }
+  
+  const executablesInMacOS = findExecutables(macosPath);
+  
+  // Sign each found executable
+  for (const execPath of executablesInMacOS) {
+    const fileName = basename(execPath);
+    const relativePath = execPath.replace(macosPath + '/', '');
+    
+    // Use filename as identifier (without extension)
+    const identifier = fileName.replace(/\.[^.]+$/, '');
+    
+    console.log(`Signing ${relativePath} with identifier ${identifier}`);
+    const entitlementFlag = entitlementsFilePath ? `--entitlements ${entitlementsFilePath}` : '';
+    
+    try {
       execSync(
-        `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --identifier ${binary.identifier} ${entitlementFlag} ${escapePathForTerminal(binaryPath)}`
+        `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --identifier ${identifier} ${entitlementFlag} ${escapePathForTerminal(execPath)}`
       );
+    } catch (err) {
+      console.error(`Failed to sign ${relativePath}:`, err.message);
+      // Continue signing other files even if one fails
     }
   }
 
