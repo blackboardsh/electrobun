@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <ctime>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <memory>
@@ -41,6 +42,7 @@
 #include "include/cef_command_line.h"
 #include "include/cef_scheme.h"
 #include "include/cef_context_menu_handler.h"
+#include "include/cef_permission_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
 // Restore macro definitions
@@ -122,6 +124,75 @@ static std::map<HWND, std::string> g_pendingUrls;
 // Global WebView2 instances - moved to global scope
 static ComPtr<ICoreWebView2Controller> g_controller;
 static ComPtr<ICoreWebView2> g_webview;
+
+// Permission cache for user media requests
+enum class PermissionType {
+    USER_MEDIA,
+    GEOLOCATION,
+    NOTIFICATIONS,
+    OTHER
+};
+
+enum class PermissionStatus {
+    UNKNOWN,
+    ALLOWED,
+    DENIED
+};
+
+struct PermissionCacheEntry {
+    PermissionStatus status;
+    std::chrono::system_clock::time_point expiry;
+};
+
+static std::map<std::pair<std::string, PermissionType>, PermissionCacheEntry> g_permissionCache;
+
+// Helper functions for permission management
+std::string getOriginFromUrl(const std::string& url) {
+    // For views:// scheme, use a constant origin since these are local files
+    if (url.find("views://") == 0) {
+        return "views://";
+    }
+    
+    // For other schemes, extract origin from URL
+    size_t protocolEnd = url.find("://");
+    if (protocolEnd == std::string::npos) return url;
+    
+    size_t domainStart = protocolEnd + 3;
+    size_t pathStart = url.find('/', domainStart);
+    
+    if (pathStart == std::string::npos) {
+        return url;
+    }
+    
+    return url.substr(0, pathStart);
+}
+
+PermissionStatus getPermissionFromCache(const std::string& origin, PermissionType type) {
+    auto key = std::make_pair(origin, type);
+    auto it = g_permissionCache.find(key);
+    
+    if (it != g_permissionCache.end()) {
+        // Check if permission hasn't expired
+        auto now = std::chrono::system_clock::now();
+        if (now < it->second.expiry) {
+            return it->second.status;
+        } else {
+            // Permission expired, remove from cache
+            g_permissionCache.erase(it);
+        }
+    }
+    
+    return PermissionStatus::UNKNOWN;
+}
+
+void cachePermission(const std::string& origin, PermissionType type, PermissionStatus status) {
+    auto key = std::make_pair(origin, type);
+    
+    // Cache permission for 24 hours
+    auto expiry = std::chrono::system_clock::now() + std::chrono::hours(24);
+    
+    g_permissionCache[key] = {status, expiry};
+}
 static ComPtr<ICoreWebView2Environment> g_environment;  // Add global environment
 static ComPtr<ICoreWebView2CustomSchemeRegistration> g_customScheme;
 static ComPtr<ICoreWebView2EnvironmentOptions> g_envOptions;
@@ -432,6 +503,142 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunContextMenuHandler);
 };
 
+// CEF Permission Handler for user media and other permissions
+class ElectrobunPermissionHandler : public CefPermissionHandler {
+public:
+    bool OnRequestMediaAccessPermission(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefMediaAccessCallback> callback) override {
+        
+        std::string origin = requesting_origin.ToString();
+        printf("CEF: Media access permission requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
+        
+        // Check cache first
+        PermissionStatus cachedStatus = getPermissionFromCache(origin, PermissionType::USER_MEDIA);
+        
+        if (cachedStatus == PermissionStatus::ALLOWED) {
+            printf("CEF: Using cached permission: User previously allowed media access for %s\n", origin.c_str());
+            callback->Continue(requested_permissions); // Allow all requested permissions
+            return true;
+        } else if (cachedStatus == PermissionStatus::DENIED) {
+            printf("CEF: Using cached permission: User previously blocked media access for %s\n", origin.c_str());
+            callback->Cancel();
+            return true;
+        }
+        
+        // No cached permission, show dialog
+        printf("CEF: No cached permission found for %s, showing dialog\n", origin.c_str());
+        
+        // Show Windows message box
+        std::string message = "This page wants to access your camera and/or microphone.\n\nDo you want to allow this?";
+        std::string title = "Camera & Microphone Access";
+        
+        int result = MessageBoxA(
+            nullptr,
+            message.c_str(),
+            title.c_str(),
+            MB_YESNO | MB_ICONQUESTION | MB_TOPMOST
+        );
+        
+        // Handle response and cache the decision
+        if (result == IDYES) {
+            callback->Continue(requested_permissions); // Allow all requested permissions
+            cachePermission(origin, PermissionType::USER_MEDIA, PermissionStatus::ALLOWED);
+            printf("CEF: User allowed media access for %s (cached)\n", origin.c_str());
+        } else {
+            callback->Cancel();
+            cachePermission(origin, PermissionType::USER_MEDIA, PermissionStatus::DENIED);
+            printf("CEF: User blocked media access for %s (cached)\n", origin.c_str());
+        }
+        
+        return true; // We handled the permission request
+    }
+    
+    bool OnShowPermissionPrompt(
+        CefRefPtr<CefBrowser> browser,
+        uint64_t prompt_id,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefPermissionPromptCallback> callback) override {
+        
+        std::string origin = requesting_origin.ToString();
+        printf("CEF: Permission prompt requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
+        
+        // Handle different permission types
+        PermissionType permType = PermissionType::OTHER;
+        std::string message = "This page is requesting additional permissions.\n\nDo you want to allow this?";
+        std::string title = "Permission Request";
+        
+        // Check for specific permission types
+        if (requested_permissions & CEF_PERMISSION_TYPE_CAMERA_STREAM ||
+            requested_permissions & CEF_PERMISSION_TYPE_MIC_STREAM) {
+            permType = PermissionType::USER_MEDIA;
+            message = "This page wants to access your camera and/or microphone.\n\nDo you want to allow this?";
+            title = "Camera & Microphone Access";
+        } else if (requested_permissions & CEF_PERMISSION_TYPE_GEOLOCATION) {
+            permType = PermissionType::GEOLOCATION;
+            message = "This page wants to access your location.\n\nDo you want to allow this?";
+            title = "Location Access";
+        } else if (requested_permissions & CEF_PERMISSION_TYPE_NOTIFICATIONS) {
+            permType = PermissionType::NOTIFICATIONS;
+            message = "This page wants to show notifications.\n\nDo you want to allow this?";
+            title = "Notification Permission";
+        }
+        
+        // Check cache first
+        PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
+        
+        if (cachedStatus == PermissionStatus::ALLOWED) {
+            printf("CEF: Using cached permission: User previously allowed %s for %s\n", title.c_str(), origin.c_str());
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            return true;
+        } else if (cachedStatus == PermissionStatus::DENIED) {
+            printf("CEF: Using cached permission: User previously blocked %s for %s\n", title.c_str(), origin.c_str());
+            callback->Continue(CEF_PERMISSION_RESULT_DENY);
+            return true;
+        }
+        
+        // No cached permission, show dialog
+        printf("CEF: No cached permission found for %s, showing dialog\n", origin.c_str());
+        
+        // Show Windows message box
+        int result = MessageBoxA(
+            nullptr,
+            message.c_str(),
+            title.c_str(),
+            MB_YESNO | MB_ICONQUESTION | MB_TOPMOST
+        );
+        
+        // Handle response and cache the decision
+        if (result == IDYES) {
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            cachePermission(origin, permType, PermissionStatus::ALLOWED);
+            printf("CEF: User allowed %s for %s (cached)\n", title.c_str(), origin.c_str());
+        } else {
+            callback->Continue(CEF_PERMISSION_RESULT_DENY);
+            cachePermission(origin, permType, PermissionStatus::DENIED);
+            printf("CEF: User blocked %s for %s (cached)\n", title.c_str(), origin.c_str());
+        }
+        
+        return true; // We handled the permission request
+    }
+    
+    void OnDismissPermissionPrompt(
+        CefRefPtr<CefBrowser> browser,
+        uint64_t prompt_id,
+        cef_permission_request_result_t result) override {
+        
+        printf("CEF: Permission prompt %I64u dismissed with result %d\n", prompt_id, result);
+        // Optional: Handle prompt dismissal if needed
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunPermissionHandler);
+};
+
 // CEF Client class with load and life span handlers
 class ElectrobunCefClient : public CefClient {
 public:
@@ -445,6 +652,7 @@ public:
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
         m_requestHandler = new ElectrobunRequestHandler();
         m_contextMenuHandler = new ElectrobunContextMenuHandler();
+        m_permissionHandler = new ElectrobunPermissionHandler();
     }
 
     void AddPreloadScript(const std::string& script) {
@@ -469,6 +677,10 @@ public:
     
     CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override {
         return m_contextMenuHandler;
+    }
+    
+    CefRefPtr<CefPermissionHandler> GetPermissionHandler() override {
+        return m_permissionHandler;
     }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -529,6 +741,7 @@ private:
     CefRefPtr<ElectrobunLifeSpanHandler> m_lifeSpanHandler;
     CefRefPtr<ElectrobunRequestHandler> m_requestHandler;
     CefRefPtr<ElectrobunContextMenuHandler> m_contextMenuHandler;
+    CefRefPtr<ElectrobunPermissionHandler> m_permissionHandler;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
 
@@ -3319,6 +3532,111 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         [combinedScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
                                             std::wstring wScript(combinedScript.begin(), combinedScript.end());
                                             sender->ExecuteScript(wScript.c_str(), nullptr);
+                                            return S_OK;
+                                        }).Get(),
+                                    nullptr);
+                                
+                                // Add permission request handler
+                                webview->add_PermissionRequested(
+                                    Callback<ICoreWebView2PermissionRequestedEventHandler>(
+                                        [](ICoreWebView2* sender, ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT {
+                                            COREWEBVIEW2_PERMISSION_KIND kind;
+                                            args->get_PermissionKind(&kind);
+                                            
+                                            wchar_t* uriWStr = nullptr;
+                                            args->get_Uri(&uriWStr);
+                                            
+                                            std::string uri;
+                                            if (uriWStr) {
+                                                int size = WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, nullptr, 0, nullptr, nullptr);
+                                                if (size > 0) {
+                                                    uri.resize(size - 1);
+                                                    WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, &uri[0], size, nullptr, nullptr);
+                                                }
+                                                CoTaskMemFree(uriWStr);
+                                            }
+                                            
+                                            std::string origin = getOriginFromUrl(uri);
+                                            PermissionType permType = PermissionType::OTHER;
+                                            std::string permissionName = "Permission";
+                                            
+                                            // Determine permission type
+                                            switch (kind) {
+                                                case COREWEBVIEW2_PERMISSION_KIND_CAMERA:
+                                                case COREWEBVIEW2_PERMISSION_KIND_MICROPHONE:
+                                                    permType = PermissionType::USER_MEDIA;
+                                                    permissionName = "Camera & Microphone Access";
+                                                    break;
+                                                case COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION:
+                                                    permType = PermissionType::GEOLOCATION;
+                                                    permissionName = "Location Access";
+                                                    break;
+                                                case COREWEBVIEW2_PERMISSION_KIND_NOTIFICATIONS:
+                                                    permType = PermissionType::NOTIFICATIONS;
+                                                    permissionName = "Notification Permission";
+                                                    break;
+                                                default:
+                                                    permType = PermissionType::OTHER;
+                                                    permissionName = "Permission Request";
+                                                    break;
+                                            }
+                                            
+                                            printf("WebView2: %s requested for %s\n", permissionName.c_str(), origin.c_str());
+                                            
+                                            // Check cache first
+                                            PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
+                                            
+                                            if (cachedStatus == PermissionStatus::ALLOWED) {
+                                                printf("WebView2: Using cached permission: User previously allowed %s for %s\n", permissionName.c_str(), origin.c_str());
+                                                args->put_State(COREWEBVIEW2_PERMISSION_STATE_ALLOW);
+                                                return S_OK;
+                                            } else if (cachedStatus == PermissionStatus::DENIED) {
+                                                printf("WebView2: Using cached permission: User previously blocked %s for %s\n", permissionName.c_str(), origin.c_str());
+                                                args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+                                                return S_OK;
+                                            }
+                                            
+                                            // No cached permission, show dialog
+                                            printf("WebView2: No cached permission found for %s, showing dialog\n", origin.c_str());
+                                            
+                                            std::string message = "This page wants to access ";
+                                            switch (kind) {
+                                                case COREWEBVIEW2_PERMISSION_KIND_CAMERA:
+                                                    message += "your camera.\n\nDo you want to allow this?";
+                                                    break;
+                                                case COREWEBVIEW2_PERMISSION_KIND_MICROPHONE:
+                                                    message += "your microphone.\n\nDo you want to allow this?";
+                                                    break;
+                                                case COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION:
+                                                    message += "your location.\n\nDo you want to allow this?";
+                                                    break;
+                                                case COREWEBVIEW2_PERMISSION_KIND_NOTIFICATIONS:
+                                                    message += "show notifications.\n\nDo you want to allow this?";
+                                                    break;
+                                                default:
+                                                    message += "additional permissions.\n\nDo you want to allow this?";
+                                                    break;
+                                            }
+                                            
+                                            // Show Windows message box
+                                            int result = MessageBoxA(
+                                                nullptr,
+                                                message.c_str(),
+                                                permissionName.c_str(),
+                                                MB_YESNO | MB_ICONQUESTION | MB_TOPMOST
+                                            );
+                                            
+                                            // Handle response and cache the decision
+                                            if (result == IDYES) {
+                                                args->put_State(COREWEBVIEW2_PERMISSION_STATE_ALLOW);
+                                                cachePermission(origin, permType, PermissionStatus::ALLOWED);
+                                                printf("WebView2: User allowed %s for %s (cached)\n", permissionName.c_str(), origin.c_str());
+                                            } else {
+                                                args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+                                                cachePermission(origin, permType, PermissionStatus::DENIED);
+                                                printf("WebView2: User blocked %s for %s (cached)\n", permissionName.c_str(), origin.c_str());
+                                            }
+                                            
                                             return S_OK;
                                         }).Get(),
                                     nullptr);

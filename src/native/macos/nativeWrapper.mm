@@ -26,10 +26,13 @@
 #include "include/cef_scheme.h"
 #include "include/cef_resource_handler.h"
 #include "include/cef_command_line.h"
+#include "include/cef_permission_handler.h"
 #include <string>
 #include <vector>
 #include <list>
 #include <cstdint>
+#include <chrono>
+#include <map>
 
 /*
  * =============================================================================
@@ -138,6 +141,74 @@ typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const c
 typedef struct {    
 } MenuItemConfig;
 
+// Permission cache for user media requests
+enum class PermissionType {
+    USER_MEDIA,
+    GEOLOCATION,
+    NOTIFICATIONS,
+    OTHER
+};
+
+enum class PermissionStatus {
+    UNKNOWN,
+    ALLOWED,
+    DENIED
+};
+
+struct PermissionCacheEntry {
+    PermissionStatus status;
+    std::chrono::system_clock::time_point expiry;
+};
+
+static std::map<std::pair<std::string, PermissionType>, PermissionCacheEntry> g_permissionCache;
+
+// Helper functions for permission management
+std::string getOriginFromUrl(const std::string& url) {
+    // For views:// scheme, use a constant origin since these are local files
+    if (url.find("views://") == 0) {
+        return "views://";
+    }
+    
+    // For other schemes, extract origin from URL
+    size_t protocolEnd = url.find("://");
+    if (protocolEnd == std::string::npos) return url;
+    
+    size_t domainStart = protocolEnd + 3;
+    size_t pathStart = url.find('/', domainStart);
+    
+    if (pathStart == std::string::npos) {
+        return url;
+    }
+    
+    return url.substr(0, pathStart);
+}
+
+PermissionStatus getPermissionFromCache(const std::string& origin, PermissionType type) {
+    auto key = std::make_pair(origin, type);
+    auto it = g_permissionCache.find(key);
+    
+    if (it != g_permissionCache.end()) {
+        // Check if permission hasn't expired
+        auto now = std::chrono::system_clock::now();
+        if (now < it->second.expiry) {
+            return it->second.status;
+        } else {
+            // Permission expired, remove from cache
+            g_permissionCache.erase(it);
+        }
+    }
+    
+    return PermissionStatus::UNKNOWN;
+}
+
+void cachePermission(const std::string& origin, PermissionType type, PermissionStatus status) {
+    auto key = std::make_pair(origin, type);
+    
+    // Cache permission for 24 hours
+    auto expiry = std::chrono::system_clock::now() + std::chrono::hours(24);
+    
+    g_permissionCache[key] = {status, expiry};
+}
 
 /*
  * =============================================================================
@@ -868,6 +939,128 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         }
         return nil;
     }
+    
+    - (void)webView:(WKWebView *)webView
+    requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
+    initiatedByFrame:(WKFrameInfo *)frame
+    type:(WKMediaCaptureType)type
+    decisionHandler:(void (^)(WKPermissionDecision decision))decisionHandler {
+        
+        NSString *originString = [NSString stringWithFormat:@"%@://%@", origin.protocol, origin.host];
+        std::string originStd = [originString UTF8String];
+        
+        NSLog(@"WKWebView: Media capture permission requested for %@ (type: %ld)", originString, (long)type);
+        
+        // Check cache first
+        PermissionStatus cachedStatus = getPermissionFromCache(originStd, PermissionType::USER_MEDIA);
+        
+        if (cachedStatus == PermissionStatus::ALLOWED) {
+            NSLog(@"WKWebView: Using cached permission: User previously allowed media access for %@", originString);
+            decisionHandler(WKPermissionDecisionGrant);
+            return;
+        } else if (cachedStatus == PermissionStatus::DENIED) {
+            NSLog(@"WKWebView: Using cached permission: User previously blocked media access for %@", originString);
+            decisionHandler(WKPermissionDecisionDeny);
+            return;
+        }
+        
+        // No cached permission, show dialog
+        NSLog(@"WKWebView: No cached permission found for %@, showing dialog", originString);
+        
+        NSString *message;
+        NSString *title;
+        
+        switch (type) {
+            case WKMediaCaptureTypeCamera:
+                message = @"This page wants to access your camera.\n\nDo you want to allow this?";
+                title = @"Camera Access";
+                break;
+            case WKMediaCaptureTypeMicrophone:
+                message = @"This page wants to access your microphone.\n\nDo you want to allow this?";
+                title = @"Microphone Access";
+                break;
+            case WKMediaCaptureTypeCameraAndMicrophone:
+                message = @"This page wants to access your camera and microphone.\n\nDo you want to allow this?";
+                title = @"Camera & Microphone Access";
+                break;
+            default:
+                message = @"This page wants to access your media devices.\n\nDo you want to allow this?";
+                title = @"Media Access";
+                break;
+        }
+        
+        // Show macOS native alert
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:title];
+        [alert setInformativeText:message];
+        [alert addButtonWithTitle:@"Allow"];
+        [alert addButtonWithTitle:@"Block"];
+        [alert setAlertStyle:NSAlertStyleInformational];
+        
+        NSModalResponse response = [alert runModal];
+        
+        // Handle response and cache the decision
+        if (response == NSAlertFirstButtonReturn) { // Allow
+            decisionHandler(WKPermissionDecisionGrant);
+            cachePermission(originStd, PermissionType::USER_MEDIA, PermissionStatus::ALLOWED);
+            NSLog(@"WKWebView: User allowed media access for %@ (cached)", originString);
+        } else { // Block
+            decisionHandler(WKPermissionDecisionDeny);
+            cachePermission(originStd, PermissionType::USER_MEDIA, PermissionStatus::DENIED);
+            NSLog(@"WKWebView: User blocked media access for %@ (cached)", originString);
+        }
+    }
+    
+    - (void)webView:(WKWebView *)webView
+    requestGeolocationPermissionForOrigin:(WKSecurityOrigin *)origin
+    initiatedByFrame:(WKFrameInfo *)frame
+    decisionHandler:(void (^)(WKPermissionDecision decision))decisionHandler {
+        
+        NSString *originString = [NSString stringWithFormat:@"%@://%@", origin.protocol, origin.host];
+        std::string originStd = [originString UTF8String];
+        
+        NSLog(@"WKWebView: Geolocation permission requested for %@", originString);
+        
+        // Check cache first
+        PermissionStatus cachedStatus = getPermissionFromCache(originStd, PermissionType::GEOLOCATION);
+        
+        if (cachedStatus == PermissionStatus::ALLOWED) {
+            NSLog(@"WKWebView: Using cached permission: User previously allowed location access for %@", originString);
+            decisionHandler(WKPermissionDecisionGrant);
+            return;
+        } else if (cachedStatus == PermissionStatus::DENIED) {
+            NSLog(@"WKWebView: Using cached permission: User previously blocked location access for %@", originString);
+            decisionHandler(WKPermissionDecisionDeny);
+            return;
+        }
+        
+        // No cached permission, show dialog
+        NSLog(@"WKWebView: No cached permission found for %@, showing dialog", originString);
+        
+        NSString *message = @"This page wants to access your location.\n\nDo you want to allow this?";
+        NSString *title = @"Location Access";
+        
+        // Show macOS native alert
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:title];
+        [alert setInformativeText:message];
+        [alert addButtonWithTitle:@"Allow"];
+        [alert addButtonWithTitle:@"Block"];
+        [alert setAlertStyle:NSAlertStyleInformational];
+        
+        NSModalResponse response = [alert runModal];
+        
+        // Handle response and cache the decision
+        if (response == NSAlertFirstButtonReturn) { // Allow
+            decisionHandler(WKPermissionDecisionGrant);
+            cachePermission(originStd, PermissionType::GEOLOCATION, PermissionStatus::ALLOWED);
+            NSLog(@"WKWebView: User allowed location access for %@ (cached)", originString);
+        } else { // Block
+            decisionHandler(WKPermissionDecisionDeny);
+            cachePermission(originStd, PermissionType::GEOLOCATION, PermissionStatus::DENIED);
+            NSLog(@"WKWebView: User blocked location access for %@ (cached)", originString);
+        }
+    }
 @end
 
 @implementation MyScriptMessageHandlerWithReply
@@ -1459,7 +1652,8 @@ class ElectrobunClient : public CefClient,
                         public CefRequestHandler,
                         public CefContextMenuHandler,
                         public CefKeyboardHandler,
-                        public CefResourceRequestHandler  {
+                        public CefResourceRequestHandler,
+                        public CefPermissionHandler  {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -1534,6 +1728,10 @@ public:
 
     virtual CefRefPtr<CefRequestHandler> GetRequestHandler() override { 
         return this; 
+    }
+    
+    virtual CefRefPtr<CefPermissionHandler> GetPermissionHandler() override {
+        return this;
     }
 
     // Required CefRenderHandler methods
@@ -1733,8 +1931,140 @@ public:
         }
         return false;
     }
-
     
+    // Permission Handler methods for CEF
+    virtual bool OnRequestMediaAccessPermission(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefMediaAccessCallback> callback) override {
+        
+        std::string origin = requesting_origin.ToString();
+        NSLog(@"CEF: Media access permission requested for %s (permissions: %u)", origin.c_str(), requested_permissions);
+        
+        // Check cache first
+        PermissionStatus cachedStatus = getPermissionFromCache(origin, PermissionType::USER_MEDIA);
+        
+        if (cachedStatus == PermissionStatus::ALLOWED) {
+            NSLog(@"CEF: Using cached permission: User previously allowed media access for %s", origin.c_str());
+            callback->Continue(requested_permissions); // Allow all requested permissions
+            return true;
+        } else if (cachedStatus == PermissionStatus::DENIED) {
+            NSLog(@"CEF: Using cached permission: User previously blocked media access for %s", origin.c_str());
+            callback->Cancel();
+            return true;
+        }
+        
+        // No cached permission, show dialog
+        NSLog(@"CEF: No cached permission found for %s, showing dialog", origin.c_str());
+        
+        // Show macOS native alert
+        NSString *message = @"This page wants to access your camera and/or microphone.\n\nDo you want to allow this?";
+        NSString *title = @"Camera & Microphone Access";
+        
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:title];
+        [alert setInformativeText:message];
+        [alert addButtonWithTitle:@"Allow"];
+        [alert addButtonWithTitle:@"Block"];
+        [alert setAlertStyle:NSAlertStyleInformational];
+        
+        NSModalResponse response = [alert runModal];
+        
+        // Handle response and cache the decision
+        if (response == NSAlertFirstButtonReturn) { // Allow
+            callback->Continue(requested_permissions); // Allow all requested permissions
+            cachePermission(origin, PermissionType::USER_MEDIA, PermissionStatus::ALLOWED);
+            NSLog(@"CEF: User allowed media access for %s (cached)", origin.c_str());
+        } else { // Block
+            callback->Cancel();
+            cachePermission(origin, PermissionType::USER_MEDIA, PermissionStatus::DENIED);
+            NSLog(@"CEF: User blocked media access for %s (cached)", origin.c_str());
+        }
+        
+        return true; // We handled the permission request
+    }
+    
+    virtual bool OnShowPermissionPrompt(
+        CefRefPtr<CefBrowser> browser,
+        uint64_t prompt_id,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefPermissionPromptCallback> callback) override {
+        
+        std::string origin = requesting_origin.ToString();
+        NSLog(@"CEF: Permission prompt requested for %s (permissions: %u)", origin.c_str(), requested_permissions);
+        
+        // Handle different permission types
+        PermissionType permType = PermissionType::OTHER;
+        NSString *message = @"This page is requesting additional permissions.\n\nDo you want to allow this?";
+        NSString *title = @"Permission Request";
+        
+        // Check for specific permission types
+        if (requested_permissions & CEF_PERMISSION_TYPE_CAMERA_STREAM ||
+            requested_permissions & CEF_PERMISSION_TYPE_MIC_STREAM) {
+            permType = PermissionType::USER_MEDIA;
+            message = @"This page wants to access your camera and/or microphone.\n\nDo you want to allow this?";
+            title = @"Camera & Microphone Access";
+        } else if (requested_permissions & CEF_PERMISSION_TYPE_GEOLOCATION) {
+            permType = PermissionType::GEOLOCATION;
+            message = @"This page wants to access your location.\n\nDo you want to allow this?";
+            title = @"Location Access";
+        } else if (requested_permissions & CEF_PERMISSION_TYPE_NOTIFICATIONS) {
+            permType = PermissionType::NOTIFICATIONS;
+            message = @"This page wants to show notifications.\n\nDo you want to allow this?";
+            title = @"Notification Permission";
+        }
+        
+        // Check cache first
+        PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
+        
+        if (cachedStatus == PermissionStatus::ALLOWED) {
+            NSLog(@"CEF: Using cached permission: User previously allowed %@ for %s", title, origin.c_str());
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            return true;
+        } else if (cachedStatus == PermissionStatus::DENIED) {
+            NSLog(@"CEF: Using cached permission: User previously blocked %@ for %s", title, origin.c_str());
+            callback->Continue(CEF_PERMISSION_RESULT_DENY);
+            return true;
+        }
+        
+        // No cached permission, show dialog
+        NSLog(@"CEF: No cached permission found for %s, showing dialog", origin.c_str());
+        
+        // Show macOS native alert
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:title];
+        [alert setInformativeText:message];
+        [alert addButtonWithTitle:@"Allow"];
+        [alert addButtonWithTitle:@"Block"];
+        [alert setAlertStyle:NSAlertStyleInformational];
+        
+        NSModalResponse response = [alert runModal];
+        
+        // Handle response and cache the decision
+        if (response == NSAlertFirstButtonReturn) { // Allow
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            cachePermission(origin, permType, PermissionStatus::ALLOWED);
+            NSLog(@"CEF: User allowed %@ for %s (cached)", title, origin.c_str());
+        } else { // Block
+            callback->Continue(CEF_PERMISSION_RESULT_DENY);
+            cachePermission(origin, permType, PermissionStatus::DENIED);
+            NSLog(@"CEF: User blocked %@ for %s (cached)", title, origin.c_str());
+        }
+        
+        return true; // We handled the permission request
+    }
+    
+    virtual void OnDismissPermissionPrompt(
+        CefRefPtr<CefBrowser> browser,
+        uint64_t prompt_id,
+        cef_permission_request_result_t result) override {
+        
+        NSLog(@"CEF: Permission prompt %llu dismissed with result %d", prompt_id, result);
+        // Optional: Handle prompt dismissal if needed
+    }
 
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
