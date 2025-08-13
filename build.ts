@@ -259,39 +259,9 @@ async function createPlatformDistFolder() {
         await $`cp -R dist/* ${platformDistDir}/`;
     }
     
-    // NOTE: CI adds adhoc code signatures to binaries which breaks notarization of electrobun apps
-    // Remove adhoc signatures from macOS binaries to prevent those notarization issues
-    // Only needed for release builds (canary/stable) that will be notarized
-    if (OS === 'macos' && CHANNEL === 'release') {
-        console.log('Removing adhoc signatures from macOS binaries...');
-        const binariesToUnsign = [
-            'launcher',
-            'extractor',
-            'bsdiff',
-            'bspatch',
-            'bun',
-            'electrobun',
-            'libNativeWrapper.dylib',
-            'cef/process_helper'
-        ];
-        
-        // Remove signatures from both dist and platform-specific dist folders
-        for (const baseDir of ['dist', platformDistDir]) {
-            for (const binary of binariesToUnsign) {
-                const binaryPath = join(baseDir, binary);
-                if (existsSync(binaryPath)) {
-                    try {
-                        await $`codesign --remove-signature ${binaryPath}`;
-                        console.log(`  Removed signature from ${baseDir}/${binary}`);
-                    } catch (err) {
-                        // It's okay if there's no signature to remove
-                        console.log(`  No signature to remove from ${baseDir}/${binary}`);
-                    }
-                }
-            }
-        }
-        console.log('Finished removing adhoc signatures');
-    }
+    // NOTE: We no longer remove adhoc signatures from binaries
+    // These signatures are actually required for the binaries to run on macOS
+    // The notarization issues were fixed by using proper entitlements and not using --deep
     
     console.log(`Successfully created and populated ${platformDistDir}`);
 }

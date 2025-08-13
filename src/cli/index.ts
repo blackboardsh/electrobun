@@ -244,6 +244,9 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
       console.error('This suggests the tarball structure is different than expected');
     }
     
+    // Note: We no longer need to remove or re-add signatures from downloaded binaries
+    // The CI-added adhoc signatures are actually required for macOS to run the binaries
+    
     // For development: if main.js doesn't exist in shared dist/, copy from platform-specific download as fallback
     const sharedDistPath = join(ELECTROBUN_DEP_PATH, 'dist');
     const extractedMainJs = join(platformDistPath, 'main.js');
