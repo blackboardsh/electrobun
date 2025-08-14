@@ -4,7 +4,7 @@
     "": {
       "name": "electrobun-photo-booth",
       "dependencies": {
-        "electrobun": "0.0.19-beta.110",
+        "electrobun": "^0.0.19-beta.110",
       },
       "devDependencies": {
         "@types/bun": "latest",
