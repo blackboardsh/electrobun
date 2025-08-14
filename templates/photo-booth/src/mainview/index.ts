@@ -10,8 +10,8 @@ const rpc = Electroview.defineRPC<PhotoBoothRPC>({
   }
 });
 
-// Initialize Electrobun (not used directly but may be needed for future features)
-// const electrobun = new Electrobun.Electroview({ rpc });
+// Initialize Electrobun with RPC
+const electrobun = new Electrobun.Electroview({ rpc });
 
 interface Photo {
     id: string;
@@ -132,13 +132,20 @@ class PhotoBooth {
         this.stopStream();
         this.captureBtn.disabled = true;
         
+        // Reset video display and hide any placeholders
+        this.video.style.display = 'block';
+        const placeholder = this.video.parentElement?.querySelector('.native-capture-placeholder') as HTMLElement;
+        if (placeholder) {
+            placeholder.style.display = 'none';
+        }
+        
         // Update status based on mode
         if (mode === 'camera') {
             this.setStatus('Click "Start Camera" to begin', false);
             this.startCameraBtn.style.display = 'flex';
             this.selectScreenBtn.style.display = 'none';
         } else {
-            this.setStatus('Click "Select Screen" to choose what to capture', false);
+            this.setStatus('Screen capture mode - tests getDisplayMedia browser API', false);
             this.selectScreenBtn.style.display = 'flex';
             this.startCameraBtn.style.display = 'none';
         }
@@ -236,34 +243,48 @@ class PhotoBooth {
 
     private async selectScreen() {
         try {
-            // Check if getDisplayMedia is available (for CEF/Chrome)
+            // Log what's available for debugging
+            console.log('Browser capabilities:');
+            console.log('  navigator.mediaDevices:', !!navigator.mediaDevices);
+            console.log('  getDisplayMedia:', !!(navigator.mediaDevices && (navigator.mediaDevices as any).getDisplayMedia));
+            console.log('  getUserMedia:', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+            console.log('  User agent:', navigator.userAgent);
+            
+            // Check if getDisplayMedia is available
             if (navigator.mediaDevices && (navigator.mediaDevices as any).getDisplayMedia) {
-                console.log('Using getDisplayMedia for screen capture');
-                this.stream = await (navigator.mediaDevices as any).getDisplayMedia({
-                    video: true,
-                    audio: false
-                });
+                console.log('getDisplayMedia is available, attempting screen capture');
                 
-                this.video.srcObject = this.stream;
-                this.setStatus('Screen capture active - ready to take screenshots', true);
-                this.captureBtn.disabled = false;
-                this.selectScreenBtn.style.display = 'none';
-
-                // Listen for when the user stops sharing
-                const videoTrack = this.stream.getVideoTracks()[0];
-                if (videoTrack) {
-                    videoTrack.addEventListener('ended', () => {
-                        this.setStatus('Screen sharing stopped', false);
-                        this.captureBtn.disabled = true;
-                        this.selectScreenBtn.style.display = 'flex';
+                try {
+                    this.stream = await (navigator.mediaDevices as any).getDisplayMedia({
+                        video: true,
+                        audio: false
                     });
+                    
+                    this.video.srcObject = this.stream;
+                    this.setStatus('Screen capture active - ready to take screenshots', true);
+                    this.captureBtn.disabled = false;
+                    this.selectScreenBtn.style.display = 'none';
+
+                    // Listen for when the user stops sharing
+                    if (this.stream) {
+                        const videoTracks = this.stream.getVideoTracks();
+                        if (videoTracks.length > 0) {
+                            videoTracks[0].addEventListener('ended', () => {
+                                this.setStatus('Screen sharing stopped', false);
+                                this.captureBtn.disabled = true;
+                                this.selectScreenBtn.style.display = 'flex';
+                            });
+                        }
+                    }
+                } catch (permissionError) {
+                    // Handle permission denial or other getDisplayMedia errors
+                    console.log('getDisplayMedia failed:', permissionError);
+                    throw new Error(`Screen capture failed: ${(permissionError as Error).message}`);
                 }
             } else {
-                // Fallback to native screen capture for WKWebView
-                console.log('getDisplayMedia not available, using native screen capture');
-                this.setStatus('Using native screen capture - ready to take screenshots', true);
-                this.captureBtn.disabled = false;
-                this.selectScreenBtn.style.display = 'none';
+                // getDisplayMedia not available
+                console.log('getDisplayMedia not available in this browser');
+                throw new Error('getDisplayMedia API is not available in this browser. This may be due to:\n• WKWebView limitations\n• Browser version\n• Security restrictions\n• Platform limitations');
             }
         } catch (error) {
             console.error('Error selecting screen:', error);
@@ -324,28 +345,11 @@ class PhotoBooth {
     private async captureScreenshot() {
         try {
             if (this.stream) {
-                // We have a screen share stream from getDisplayMedia
-                await this.captureCameraPhoto(); // Same capture logic
+                // We have a screen share stream from getDisplayMedia - capture it
+                await this.captureCameraPhoto(); // Same capture logic, but from screen stream
             } else {
-                // Use native screen capture
-                console.log('Using native screen capture fallback');
-                const result = await rpc.request.captureScreen({});
-                
-                if (result.success && result.dataUrl) {
-                    const photo: Photo = {
-                        id: Date.now().toString(),
-                        dataUrl: result.dataUrl,
-                        timestamp: new Date(),
-                        type: 'screen'
-                    };
-                    
-                    this.photos.push(photo);
-                    this.addPhotoToGallery(photo);
-                    this.setStatus('Screenshot captured!', true);
-                    this.playCaptureFeedback();
-                } else {
-                    throw new Error(result.error || 'Failed to capture screen');
-                }
+                // No stream available - this shouldn't happen if selectScreen worked
+                throw new Error('No screen capture stream available. Make sure to select a screen first.');
             }
         } catch (error) {
             console.error('Error capturing screenshot:', error);
@@ -417,7 +421,7 @@ class PhotoBooth {
 
         try {
             const filename = `${photo.type}-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.png`;
-            const result = await rpc.request.savePhoto({
+            const result = await electrobun.rpc!.request.savePhoto({
                 dataUrl: photo.dataUrl,
                 filename: filename
             });
