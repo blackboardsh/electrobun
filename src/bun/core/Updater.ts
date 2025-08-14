@@ -1,10 +1,10 @@
-import { join, dirname, resolve, basename } from "path";
-import { homedir } from "os";
-import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync, cpSync } from "fs";
-import { execSync } from "child_process";
-import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
-import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
+import { execSync } from "child_process";
+import { cpSync, mkdirSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync } from "fs";
+import { homedir } from "os";
+import { basename, dirname, join, relative, resolve } from "path";
+import tar from "tar";
+import { ARCH as currentArch, OS as currentOS } from '../../shared/platform';
 import { native } from '../proc/native';
 
 // setTimeout(async () => {
@@ -379,9 +379,10 @@ const Updater = {
         if (currentOS === 'win') {
           console.log(`Using Windows native tar.exe to extract ${latestTarPath} to ${extractionDir}...`);
           try {
-            execSync(`tar -xf "${latestTarPath}" -C "${extractionDir}"`, { 
+            const relativeTarPath = relative(extractionDir, latestTarPath);
+            execSync(`tar -xf "${relativeTarPath}"`, { 
               stdio: 'inherit',
-              cwd: extractionDir 
+              cwd: extractionDir,
             });
             console.log('Windows tar.exe extraction completed successfully');
             
@@ -678,3 +679,4 @@ start "" launcher.exe
 };
 
 export { Updater };
+
