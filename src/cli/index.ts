@@ -15,6 +15,7 @@ import {
   copyFileSync,
 } from "fs";
 import { execSync } from "child_process";
+import * as readline from "readline";
 import tar from "tar";
 import archiver from "archiver";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
@@ -702,57 +703,117 @@ const bundleFileName = targetOS === 'macos' ? `${appFileName}.app` : appFileName
 let proc = null;
 
 if (commandArg === "init") {
-  const projectName = process.argv[indexOfElectrobun + 2] || "my-electrobun-app";
-  const templateName = process.argv.find(arg => arg.startsWith("--template="))?.split("=")[1] || "hello-world";
-  
-  console.log(`🚀 Initializing Electrobun project: ${projectName}`);
-  
-  // Validate template name
-  const availableTemplates = getTemplateNames();
-  if (!availableTemplates.includes(templateName)) {
-    console.error(`❌ Template "${templateName}" not found.`);
-    console.log(`Available templates: ${availableTemplates.join(", ")}`);
-    process.exit(1);
-  }
-  
-  const template = getTemplate(templateName);
-  if (!template) {
-    console.error(`❌ Could not load template "${templateName}"`);
-    process.exit(1);
-  }
-  
-  // Create project directory
-  const projectPath = join(process.cwd(), projectName);
-  if (existsSync(projectPath)) {
-    console.error(`❌ Directory "${projectName}" already exists.`);
-    process.exit(1);
-  }
-  
-  mkdirSync(projectPath, { recursive: true });
-  
-  // Extract template files
-  let fileCount = 0;
-  for (const [relativePath, content] of Object.entries(template.files)) {
-    const fullPath = join(projectPath, relativePath);
-    const dir = dirname(fullPath);
+  await (async () => {
+    const secondArg = process.argv[indexOfElectrobun + 2];
+    const availableTemplates = getTemplateNames();
     
-    // Create directory if it doesn't exist
-    mkdirSync(dir, { recursive: true });
+    let projectName: string;
+    let templateName: string;
     
-    // Write file
-    writeFileSync(fullPath, content, 'utf-8');
-    fileCount++;
-  }
-  
-  console.log(`✅ Created ${fileCount} files from "${templateName}" template`);
-  console.log(`📁 Project created at: ${projectPath}`);
-  console.log("");
-  console.log("📦 Next steps:");
-  console.log(`   cd ${projectName}`);
-  console.log("   bun install");
-  console.log("   bunx electrobun dev");
-  console.log("");
-  console.log("🎉 Happy building with Electrobun!");
+    // Check if --template= flag is used
+    const templateFlag = process.argv.find(arg => arg.startsWith("--template="));
+    if (templateFlag) {
+      // Traditional usage: electrobun init my-project --template=photo-booth
+      projectName = secondArg || "my-electrobun-app";
+      templateName = templateFlag.split("=")[1];
+    } else if (secondArg && availableTemplates.includes(secondArg)) {
+      // New intuitive usage: electrobun init photo-booth
+      projectName = secondArg; // Use template name as project name
+      templateName = secondArg;
+    } else {
+      // Interactive menu when no template specified
+      console.log("🚀 Welcome to Electrobun!");
+      console.log("");
+      console.log("Available templates:");
+      availableTemplates.forEach((template, index) => {
+        console.log(`  ${index + 1}. ${template}`);
+      });
+      console.log("");
+      
+      // Simple CLI selection using readline
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+      
+      const choice = await new Promise<string>((resolve) => {
+        rl.question('Select a template (enter number): ', (answer) => {
+          rl.close();
+          resolve(answer.trim());
+        });
+      });
+      
+      const templateIndex = parseInt(choice) - 1;
+      if (templateIndex < 0 || templateIndex >= availableTemplates.length) {
+        console.error(`❌ Invalid selection. Please enter a number between 1 and ${availableTemplates.length}.`);
+        process.exit(1);
+      }
+      
+      templateName = availableTemplates[templateIndex];
+      
+      // Ask for project name
+      const rl2 = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+      
+      projectName = await new Promise<string>((resolve) => {
+        rl2.question(`Enter project name (default: my-${templateName}-app): `, (answer) => {
+          rl2.close();
+          resolve(answer.trim() || `my-${templateName}-app`);
+        });
+      });
+    }
+    
+    console.log(`🚀 Initializing Electrobun project: ${projectName}`);
+    console.log(`📋 Using template: ${templateName}`);
+    
+    // Validate template name
+    if (!availableTemplates.includes(templateName)) {
+      console.error(`❌ Template "${templateName}" not found.`);
+      console.log(`Available templates: ${availableTemplates.join(", ")}`);
+      process.exit(1);
+    }
+    
+    const template = getTemplate(templateName);
+    if (!template) {
+      console.error(`❌ Could not load template "${templateName}"`);
+      process.exit(1);
+    }
+    
+    // Create project directory
+    const projectPath = join(process.cwd(), projectName);
+    if (existsSync(projectPath)) {
+      console.error(`❌ Directory "${projectName}" already exists.`);
+      process.exit(1);
+    }
+    
+    mkdirSync(projectPath, { recursive: true });
+    
+    // Extract template files
+    let fileCount = 0;
+    for (const [relativePath, content] of Object.entries(template.files)) {
+      const fullPath = join(projectPath, relativePath);
+      const dir = dirname(fullPath);
+      
+      // Create directory if it doesn't exist
+      mkdirSync(dir, { recursive: true });
+      
+      // Write file
+      writeFileSync(fullPath, content, 'utf-8');
+      fileCount++;
+    }
+    
+    console.log(`✅ Created ${fileCount} files from "${templateName}" template`);
+    console.log(`📁 Project created at: ${projectPath}`);
+    console.log("");
+    console.log("📦 Next steps:");
+    console.log(`   cd ${projectName}`);
+    console.log("   bun install");
+    console.log("   bunx electrobun dev");
+    console.log("");
+    console.log("🎉 Happy building with Electrobun!");
+  })();
 } else if (commandArg === "build") {
   // Ensure core binaries are available for the target platform before starting build
   await ensureCoreDependencies(currentTarget.os, currentTarget.arch);
