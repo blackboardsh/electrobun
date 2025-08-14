@@ -68,7 +68,134 @@ if (IS_NPM_BUILD) {
     console.log(err);
 }
 
+// Global variable to store cmake path
+var CMAKE_BIN = 'cmake';
+
+async function vendorCmake() {
+    if (OS !== 'macos') return;
+    
+    // On macOS, cmake is distributed as an app bundle
+    const vendoredCmakePath = join(process.cwd(), 'vendors', 'cmake', 'CMake.app', 'Contents', 'bin', 'cmake');
+    
+    // Check if cmake is already available (system or vendored)
+    try {
+        await $`which cmake`.quiet();
+        console.log('✓ cmake found in system PATH');
+        CMAKE_BIN = 'cmake';
+        return;
+    } catch {
+        // Not in system PATH, check if vendored
+        if (existsSync(vendoredCmakePath)) {
+            CMAKE_BIN = vendoredCmakePath;
+            console.log('✓ Using vendored cmake');
+            return;
+        }
+    }
+    
+    console.log('cmake not found, downloading...');
+    
+    try {
+        const cmakeVersion = '3.30.2';
+        const cmakeUrl = `https://github.com/Kitware/CMake/releases/download/v${cmakeVersion}/cmake-${cmakeVersion}-macos-universal.tar.gz`;
+        
+        await $`mkdir -p vendors`;
+        console.log(`Downloading cmake ${cmakeVersion} for macOS...`);
+        
+        // Download and extract in vendors directory
+        const tempFile = 'vendors/cmake_temp.tar.gz';
+        await $`curl -L "${cmakeUrl}" -o "${tempFile}"`;
+        
+        // Extract in vendors directory
+        await $`cd vendors && tar -xzf cmake_temp.tar.gz`;
+        
+        // Always clean up the temp file
+        await $`rm -f vendors/cmake_temp.tar.gz`;
+        
+        // Rename to simple 'cmake' directory if needed
+        const extractedDir = `vendors/cmake-${cmakeVersion}-macos-universal`;
+        if (existsSync(extractedDir)) {
+            await $`rm -rf vendors/cmake`; // Remove old cmake if exists
+            await $`mv "${extractedDir}" vendors/cmake`;
+        }
+        
+        // Set the cmake binary path
+        CMAKE_BIN = vendoredCmakePath;
+        
+        // Verify it works
+        await $`"${CMAKE_BIN}" --version`;
+        console.log('✓ cmake vendored successfully');
+    } catch (error) {
+        console.error('Failed to vendor cmake:', error);
+        throw new Error('Could not vendor cmake. Please install it manually.');
+    }
+}
+
+async function checkDependencies() {
+    const missingDeps = [];
+    
+    if (OS === 'macos') {
+        // Try to vendor cmake if not available
+        await vendorCmake();
+        
+        // Check for make (should be available with Xcode command line tools)
+        try {
+            await $`which make`.quiet();
+        } catch {
+            missingDeps.push('make (install Xcode Command Line Tools: xcode-select --install)');
+        }
+    } else if (OS === 'win') {
+        // Check for Visual Studio / MSBuild
+        try {
+            await $`where cmake`.quiet();
+            CMAKE_BIN = 'cmake';
+        } catch {
+            missingDeps.push('cmake');
+        }
+    } else if (OS === 'linux') {
+        // Check for build essentials
+        try {
+            await $`which cmake`.quiet();
+            CMAKE_BIN = 'cmake';
+        } catch {
+            missingDeps.push('cmake');
+        }
+        try {
+            await $`which make`.quiet();
+        } catch {
+            missingDeps.push('make');
+        }
+        try {
+            await $`which gcc`.quiet();
+        } catch {
+            missingDeps.push('build-essential');
+        }
+    }
+    
+    if (missingDeps.length > 0) {
+        console.error('\n⚠️  Missing required dependencies:');
+        missingDeps.forEach(dep => console.error(`  • ${dep}`));
+        
+        if (OS === 'macos') {
+            console.error('\nTo install missing dependencies on macOS:');
+            console.error('• For make: Install Xcode Command Line Tools');
+            console.error('   xcode-select --install');
+        } else if (OS === 'win') {
+            console.error('\nTo install missing dependencies on Windows:');
+            console.error('1. Install Visual Studio 2022 with C++ development tools');
+            console.error('2. Install cmake from: https://cmake.org/download/');
+        } else if (OS === 'linux') {
+            console.error('\nTo install missing dependencies on Linux:');
+            console.error('   sudo apt update && sudo apt install -y build-essential cmake');
+        }
+        
+        throw new Error('Missing required dependencies. Please install them and try again.');
+    }
+    
+    console.log('✓ All required dependencies found');
+}
+
 async function setup() {
+    await checkDependencies();
     await Promise.all([
         vendorBun(),
         vendorZig(),
@@ -487,7 +614,7 @@ async function vendorCEF() {
             // build CEF wrapper library
             console.log('Building CEF wrapper library...');
             const buildArch = ARCH === 'arm64' ? 'arm64' : 'x86_64';
-            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH="${buildArch}" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
+            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && "${CMAKE_BIN}" -DPROJECT_ARCH="${buildArch}" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
             
             // Verify the wrapper library was built
             const wrapperPath = join(process.cwd(), 'vendors', 'cef', 'build', 'libcef_dll_wrapper', 'libcef_dll_wrapper.a');
@@ -590,12 +717,12 @@ async function vendorCEF() {
             await $`cd vendors/cef && powershell -command "if (Test-Path build) { Remove-Item -Recurse -Force build }"`;
             await $`cd vendors/cef && mkdir build`;
             // Generate Visual Studio project with sandbox disabled
-            await $`cd vendors/cef/build && cmake -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
+            await $`cd vendors/cef/build && "${CMAKE_BIN}" -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
             // Build the wrapper library only
             // await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
             // const msbuildPath = await $`"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe | head -n 1`.text();
             // await $`cd vendors/cef/build && "${msbuildPath.trim()}" cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
-            await $`cd vendors/cef/build && cmake --build . --config Release --target libcef_dll_wrapper`;
+            await $`cd vendors/cef/build && "${CMAKE_BIN}" --build . --config Release --target libcef_dll_wrapper`;
 
         }
         
@@ -637,9 +764,9 @@ async function vendorCEF() {
                     writeFileSync(cefVariablesPath, cefVariables);
                 }
                 
-                await $`cd vendors/cef/build && cmake -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release -DPROJECT_ARCH=arm64 ..`;
+                await $`cd vendors/cef/build && "${CMAKE_BIN}" -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release -DPROJECT_ARCH=arm64 ..`;
             } else {
-                await $`cd vendors/cef/build && cmake -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
+                await $`cd vendors/cef/build && "${CMAKE_BIN}" -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
             }
             
             await $`cd vendors/cef/build && make -j$(nproc) libcef_dll_wrapper`;
@@ -736,7 +863,7 @@ async function buildNative() {
         if (!existsSync(wrapperPath)) {
             console.log('CEF wrapper library not found, building it now...');
             const buildArch = ARCH === 'arm64' ? 'arm64' : 'x86_64';
-            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && cmake -DPROJECT_ARCH="${buildArch}" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
+            await $`cd vendors/cef && rm -rf build && mkdir -p build && cd build && "${CMAKE_BIN}" -DPROJECT_ARCH="${buildArch}" -DCMAKE_BUILD_TYPE=Release .. && make -j8 libcef_dll_wrapper`;
             
             if (!existsSync(wrapperPath)) {
                 throw new Error(`Failed to build CEF wrapper library at ${wrapperPath}`);
