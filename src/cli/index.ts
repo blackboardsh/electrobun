@@ -810,7 +810,7 @@ if (commandArg === "init") {
     console.log("📦 Next steps:");
     console.log(`   cd ${projectName}`);
     console.log("   bun install");
-    console.log("   bunx electrobun dev");
+    console.log("   bun start");
     console.log("");
     console.log("🎉 Happy building with Electrobun!");
   })();
