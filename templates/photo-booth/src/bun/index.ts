@@ -1,6 +1,6 @@
 import Electrobun, { BrowserWindow, BrowserView, createRPC, Utils, type RPCSchema } from "electrobun/bun";
 
-// Define RPC schema for photo saving
+// Define RPC schema for photo saving and screen capture
 export type PhotoBoothRPC = {
   bun: RPCSchema<{
     requests: {
@@ -13,6 +13,14 @@ export type PhotoBoothRPC = {
           success: boolean;
           path?: string;
           reason?: string;
+          error?: string;
+        };
+      };
+      captureScreen: {
+        params: {};
+        response: {
+          success: boolean;
+          dataUrl?: string;
           error?: string;
         };
       };
@@ -68,6 +76,34 @@ const photoBoothRPC = BrowserView.defineRPC<PhotoBoothRPC>({
             error: error.message 
           };
         }
+      },
+      captureScreen: async () => {
+        try {
+          // For now, we'll use the mainWindow's snapshot API
+          // This captures the current window content
+          // In a real implementation, you might want to use native screen capture APIs
+          
+          // Take a snapshot of the main window
+          const snapshot = await mainWindow.snapshot();
+          
+          if (snapshot) {
+            return {
+              success: true,
+              dataUrl: snapshot
+            };
+          } else {
+            return {
+              success: false,
+              error: "Failed to capture screen"
+            };
+          }
+        } catch (error) {
+          console.error("Error capturing screen:", error);
+          return {
+            success: false,
+            error: error.message
+          };
+        }
       }
     },
     messages: {}
@@ -75,10 +111,11 @@ const photoBoothRPC = BrowserView.defineRPC<PhotoBoothRPC>({
 });
 
 // Create the main window
+// Use native renderer (WKWebView) by default, but allow overriding with CEF
 const mainWindow = new BrowserWindow({
   title: "Photo Booth",
   url: "views://mainview/index.html",
-  renderer: "cef",
+  // Don't specify renderer to use the default (native WKWebView on macOS)
   frame: {
     width: 1000,
     height: 700,

@@ -24,6 +24,45 @@ header {
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid #3a3a3a;
+    gap: 2rem;
+}
+
+.mode-selector {
+    display: flex;
+    gap: 0.5rem;
+    background: #1a1a1a;
+    padding: 0.25rem;
+    border-radius: 8px;
+    border: 1px solid #3a3a3a;
+}
+
+.mode-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: transparent;
+    color: #999;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.mode-btn:hover {
+    background: #333;
+    color: #fff;
+}
+
+.mode-btn.active {
+    background: #007aff;
+    color: white;
+}
+
+.mode-btn.active:hover {
+    background: #0056b3;
 }
 
 h1 {
@@ -167,6 +206,42 @@ main {
     border: 1px solid #3a3a3a;
     border-radius: 4px;
     cursor: pointer;
+}
+
+.camera-only-control {
+    display: flex;
+}
+
+.screen-only-control {
+    display: none;
+}
+
+.mode-screen .camera-only-control {
+    display: none;
+}
+
+.mode-screen .screen-only-control {
+    display: flex;
+}
+
+.start-camera-btn,
+.select-screen-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: #007aff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.start-camera-btn:hover,
+.select-screen-btn:hover {
+    background: #0056b3;
 }
 
 .change-source-btn {

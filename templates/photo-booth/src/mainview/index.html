@@ -10,9 +10,26 @@
     <div class="container">
         <header>
             <h1>Photo Booth / Screenshot Tool</h1>
+            <div class="mode-selector">
+                <button id="cameraModeBtn" class="mode-btn active">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                        <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                    Camera
+                </button>
+                <button id="screenModeBtn" class="mode-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                        <line x1="8" y1="21" x2="16" y2="21"/>
+                        <line x1="12" y1="17" x2="12" y2="21"/>
+                    </svg>
+                    Screen Capture
+                </button>
+            </div>
             <div class="status" id="status">
                 <span class="status-dot"></span>
-                <span class="status-text">Initializing media...</span>
+                <span class="status-text">Initializing...</span>
             </div>
         </header>
 
@@ -26,29 +43,41 @@
                 
                 <div class="controls">
                     <button id="captureBtn" class="capture-btn" disabled>
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="capture-icon-camera">
                             <circle cx="12" cy="12" r="10"/>
                             <circle cx="12" cy="12" r="7"/>
                         </svg>
-                        Take Photo
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="capture-icon-screen" style="display: none;">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                            <circle cx="12" cy="10" r="2"/>
+                        </svg>
+                        <span class="capture-btn-text">Take Photo</span>
                     </button>
                     
                     <div class="settings">
-                        <label>
+                        <label class="timer-setting">
                             <input type="checkbox" id="timerToggle">
                             <span>3s Timer</span>
                         </label>
                         
-                        <select id="cameraSelect" class="camera-select">
+                        <select id="cameraSelect" class="camera-select camera-only-control">
                             <option value="">Select Camera</option>
                         </select>
                         
-                        <button id="changeSourceBtn" class="change-source-btn" style="display: none;">
+                        <button id="startCameraBtn" class="start-camera-btn camera-only-control" style="display: none;">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                <circle cx="12" cy="12" r="3"/>
+                                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                                <circle cx="12" cy="13" r="4"/>
                             </svg>
-                            Change Source
+                            Start Camera
+                        </button>
+                        
+                        <button id="selectScreenBtn" class="select-screen-btn screen-only-control" style="display: none;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                                <polyline points="8 17 12 21 16 17"/>
+                            </svg>
+                            Select Screen
                         </button>
                     </div>
                 </div>
