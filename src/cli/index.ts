@@ -1,4 +1,4 @@
-import { join, dirname, basename } from "path";
+import { join, dirname, basename, relative } from "path";
 import {
   existsSync,
   readFileSync,
@@ -192,7 +192,8 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     // Use Windows native tar.exe on Windows due to npm tar library issues
     if (OS === 'win') {
       console.log('Using Windows native tar.exe for reliable extraction...');
-      execSync(`tar -xf "${tempFile}" -C "${platformDistPath}"`, { 
+      const relativeTempFile = relative(platformDistPath, tempFile);
+      execSync(`tar -xf "${relativeTempFile}"`, { 
         stdio: 'inherit',
         cwd: platformDistPath 
       });
@@ -333,7 +334,8 @@ async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targe
     // Use Windows native tar.exe on Windows due to npm tar library issues
     if (OS === 'win') {
       console.log('Using Windows native tar.exe for reliable extraction...');
-      execSync(`tar -xf "${tempFile}" -C "${platformDistPath}"`, { 
+      const relativeTempFile = relative(platformDistPath, tempFile);
+      execSync(`tar -xf "${relativeTempFile}"`, { 
         stdio: 'inherit',
         cwd: platformDistPath 
       });

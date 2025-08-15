@@ -2,7 +2,7 @@
 
 import { $ } from "bun";
 import { platform, arch } from "os";
-import { join, dirname } from 'path';
+import { join, dirname, relative } from 'path';
 import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { parseArgs } from 'util';
 import process from 'process';
@@ -668,7 +668,8 @@ async function vendorCEF() {
             console.log('Note: Windows tar extraction of bz2 files can be slow, please be patient...');
             
             // Windows tar doesn't support many options, just use basic extraction
-            await $`tar -xjf "${tempPath}" -C vendors/cef_temp`;
+            const relativeTempPath = relative('vendors/cef_temp', tempPath);
+            await $`cd vendors/cef_temp && tar -xjf "${relativeTempPath}"`;
             
             // Check what was extracted
             const tempDir = 'vendors/cef_temp';

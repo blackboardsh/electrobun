@@ -1,4 +1,4 @@
-import { join, dirname, resolve, basename } from "path";
+import { join, dirname, resolve, basename, relative } from "path";
 import { homedir } from "os";
 import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync, cpSync } from "fs";
 import { execSync } from "child_process";
@@ -379,9 +379,10 @@ const Updater = {
         if (currentOS === 'win') {
           console.log(`Using Windows native tar.exe to extract ${latestTarPath} to ${extractionDir}...`);
           try {
-            execSync(`tar -xf "${latestTarPath}" -C "${extractionDir}"`, { 
+            const relativeTarPath = relative(extractionDir, latestTarPath);
+            execSync(`tar -xf "${relativeTarPath}"`, { 
               stdio: 'inherit',
-              cwd: extractionDir 
+              cwd: extractionDir
             });
             console.log('Windows tar.exe extraction completed successfully');
             
