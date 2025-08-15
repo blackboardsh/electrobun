@@ -8,7 +8,7 @@
     "start": "bun run build:dev && bun run dev"
   },
   "dependencies": {
-    "electrobun": "0.0.19-beta.114"
+    "electrobun": "0.0.19-beta.115"
   },
   "devDependencies": {
     "@types/bun": "latest"
