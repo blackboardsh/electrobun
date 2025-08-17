@@ -270,6 +270,15 @@ const win = new BrowserWindow({
   
 });
 
+  win.webview.on("dom-ready", () => {
+    console.log('---->:::2 main window dom-ready')
+    // We never want the main window to navigate or reload once it's loaded
+    win.webview.on("will-navigate", (e) => {
+      console.log('---->:::3 main window will navigate')
+      e.response = { allow: false };
+    });
+  });
+
 win.setTitle("url browserwindow");
 
 setTimeout(async () => {

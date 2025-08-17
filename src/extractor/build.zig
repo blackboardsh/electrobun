@@ -5,7 +5,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // todo: should probably rename webview to something else
     const exe = b.addExecutable(.{
         .name = "extractor",
         .root_source_file = b.path("main.zig"),
