@@ -900,7 +900,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             [urlSchemeTask didReceiveData:data];
             [urlSchemeTask didFinish];
         } else {
-            NSLog(@"============== ERROR ========== empty response");
+            NSLog(@"============== ERROR ========== empty response for URL: %@", urlString);         
             // Optionally, you might notify failure:
             // NSError *error = [NSError errorWithDomain:@"MyURLSchemeHandler" code:404 userInfo:nil];
             // [urlSchemeTask didFailWithError:error];
