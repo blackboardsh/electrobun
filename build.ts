@@ -382,8 +382,10 @@ async function createPlatformDistFolder() {
         // On Windows use PowerShell to copy all files
         await $`powershell -command "Copy-Item -Path 'dist\\*' -Destination '${platformDistDir}\\' -Recurse -Force"`;
     } else {
-        // On Unix systems
-        await $`cp -R dist/* ${platformDistDir}/`;
+        // On Unix systems - use rsync with delete to ensure clean copy
+        // The --delete flag removes files in destination that don't exist in source
+        // This handles read-only files that might prevent overwriting
+        await $`rsync -a --delete dist/ ${platformDistDir}/`;
     }
     
     // NOTE: We no longer remove adhoc signatures from binaries
