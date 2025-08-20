@@ -698,9 +698,6 @@ public:
                       const std::vector<CefString>& accept_filters,
                       CefRefPtr<CefFileDialogCallback> callback) override {
         
-#if defined(IFileOpenDialog) && defined(COMDLG_FILTERSPEC)
-        // Full implementation available
-        
         printf("CEF Windows: File dialog requested - mode: %d\n", static_cast<int>(mode));
         
         // Run file dialog on main thread using Windows native dialog
@@ -834,13 +831,6 @@ public:
         
         printf("CEF Windows: File dialog completed with %zu files selected\n", file_paths.size());
         return true; // We handled the dialog
-        
-#else
-        // Fallback for older Windows SDKs - use default CEF behavior
-        printf("CEF Windows: File dialog not supported on this Windows SDK version\n");
-        callback->Continue(std::vector<CefString>());
-        return false; // Let CEF handle it
-#endif // IFileOpenDialog && COMDLG_FILTERSPEC
     }
     
 private:
