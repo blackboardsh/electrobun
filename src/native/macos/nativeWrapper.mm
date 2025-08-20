@@ -27,6 +27,7 @@
 #include "include/cef_resource_handler.h"
 #include "include/cef_command_line.h"
 #include "include/cef_permission_handler.h"
+#include "include/cef_dialog_handler.h"
 #include <string>
 #include <vector>
 #include <list>
@@ -940,6 +941,32 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         return nil;
     }
     
+    // Handle file input elements (<input type="file">)
+    - (void)webView:(WKWebView *)webView
+runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
+  initiatedByFrame:(WKFrameInfo *)frame
+ completionHandler:(void (^)(NSArray<NSURL *> * _Nullable URLs))completionHandler {
+        
+        NSOpenPanel *openPanel = [NSOpenPanel openPanel];
+        
+        // Configure the panel based on parameters
+        [openPanel setAllowsMultipleSelection:parameters.allowsMultipleSelection];
+        [openPanel setCanChooseDirectories:parameters.allowsDirectories];
+        [openPanel setCanChooseFiles:YES];
+        
+        // Note: WKOpenPanelParameters doesn't expose acceptedMIMETypes in older versions
+        // The file filtering will be handled by the web page's input element accept attribute
+        // For now, we'll keep the dialog open to all file types and let the web page handle filtering
+        
+        // Run the panel synchronously to avoid block capture issues
+        NSInteger response = [openPanel runModal];
+        if (response == NSModalResponseOK) {
+            completionHandler(openPanel.URLs);
+        } else {
+            completionHandler(nil);
+        }
+    }
+    
     - (void)webView:(WKWebView *)webView
     requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     initiatedByFrame:(WKFrameInfo *)frame
@@ -1737,6 +1764,11 @@ public:
     virtual CefRefPtr<CefPermissionHandler> GetPermissionHandler() override {
         return this;
     }
+    
+    // Commented out for now to prevent crashes - file dialogs will use default CEF behavior
+    // virtual CefRefPtr<CefDialogHandler> GetDialogHandler() override {
+    //     return this;
+    // }
 
     // Required CefRenderHandler methods
     virtual void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
@@ -2069,6 +2101,20 @@ public:
         NSLog(@"CEF: Permission prompt %llu dismissed with result %d", prompt_id, result);
         // Optional: Handle prompt dismissal if needed
     }
+    
+    // CefDialogHandler methods - commented out for now to prevent crashes
+    // TODO: Fix CEF reference counting issues in Objective-C blocks
+    /*
+    virtual bool OnFileDialog(CefRefPtr<CefBrowser> browser,
+                            FileDialogMode mode,
+                            const CefString& title,
+                            const CefString& default_file_path,
+                            const std::vector<CefString>& accept_filters,
+                            CefRefPtr<CefFileDialogCallback> callback) override {
+        // Implementation commented out - needs proper reference handling
+        return false; // Let CEF handle with default behavior
+    }
+    */
 
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
@@ -2139,6 +2185,13 @@ bool initializeCEF() {
     // Make CEF aware of the custom scheme
     // CefCommandLine::GetGlobalCommandLine()->AppendSwitch("register-scheme-handler");
     // CefCommandLine::GetGlobalCommandLine()->AppendSwitchWithValue("custom-scheme", "views");
+    
+    // Enable file access and modern web APIs
+    // Note: Some command line switches can cause CEF crashes, commenting out for now
+    // CefRefPtr<CefCommandLine> commandLine = CefCommandLine::GetGlobalCommandLine();
+    // commandLine->AppendSwitch("allow-file-access-from-files");
+    // commandLine->AppendSwitch("allow-universal-access-from-files");
+    // commandLine->AppendSwitch("disable-web-security");
     
     // Enable required packaged services
     // settings.packaged_services = cef_services_t::CEF_SERVICE_ALL;    
@@ -2360,7 +2413,8 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
             void (^createCEFBrowser)(void) = ^{                
                 [window makeKeyAndOrderFront:nil];
-                CefBrowserSettings browserSettings;               
+                CefBrowserSettings browserSettings;
+                // Using default settings for now to avoid crashes               
 
                 CefWindowInfo window_info;
                 

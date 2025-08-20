@@ -39,6 +39,7 @@
 #include "include/cef_keyboard_handler.h"
 #include "include/cef_response_filter.h"
 #include "include/cef_permission_handler.h"
+#include "include/cef_dialog_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
 // X11 Error Handler (non-fatal errors are common in WebKit/GTK)
@@ -798,7 +799,8 @@ class ElectrobunClient : public CefClient,
                         public CefKeyboardHandler,
                         public CefResourceRequestHandler,
                         public CefLifeSpanHandler,
-                        public CefPermissionHandler {
+                        public CefPermissionHandler,
+                        public CefDialogHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -881,6 +883,10 @@ public:
     }
     
     virtual CefRefPtr<CefPermissionHandler> GetPermissionHandler() override {
+        return this;
+    }
+    
+    virtual CefRefPtr<CefDialogHandler> GetDialogHandler() override {
         return this;
     }
 
@@ -1356,6 +1362,127 @@ public:
         printf("CEF: Permission prompt %llu dismissed with result %d\n", prompt_id, result);
         // Optional: Handle prompt dismissal if needed
     }
+    
+    // CefDialogHandler methods
+    virtual bool OnFileDialog(CefRefPtr<CefBrowser> browser,
+                            FileDialogMode mode,
+                            const CefString& title,
+                            const CefString& default_file_path,
+                            const std::vector<CefString>& accept_filters,
+                            CefRefPtr<CefFileDialogCallback> callback) override {
+        
+        printf("CEF Linux: File dialog requested - mode: %d\n", static_cast<int>(mode));
+        
+        // Run the file dialog using GTK on the main thread
+        // Since this is Linux, we can use GTK dialogs directly
+        GtkWidget* dialog = nullptr;
+        GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
+        const char* buttonText = "_Open";
+        
+        // Configure dialog based on mode
+        switch (mode) {
+            case FILE_DIALOG_OPEN:
+                action = GTK_FILE_CHOOSER_ACTION_OPEN;
+                buttonText = "_Open";
+                break;
+            case FILE_DIALOG_OPEN_MULTIPLE:
+                action = GTK_FILE_CHOOSER_ACTION_OPEN;
+                buttonText = "_Open";
+                break;
+            case FILE_DIALOG_OPEN_FOLDER:
+                action = GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER;
+                buttonText = "_Select";
+                break;
+            case FILE_DIALOG_SAVE:
+                action = GTK_FILE_CHOOSER_ACTION_SAVE;
+                buttonText = "_Save";
+                break;
+        }
+        
+        dialog = gtk_file_chooser_dialog_new(
+            title.empty() ? "Select File" : title.ToString().c_str(),
+            nullptr, // No parent window
+            action,
+            "_Cancel", GTK_RESPONSE_CANCEL,
+            buttonText, GTK_RESPONSE_ACCEPT,
+            nullptr
+        );
+        
+        // Set multiple selection for OPEN_MULTIPLE mode
+        if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
+            gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), TRUE);
+        }
+        
+        // Set default file path if provided
+        if (!default_file_path.empty()) {
+            std::string path = default_file_path.ToString();
+            if (mode == FILE_DIALOG_SAVE) {
+                // For save dialogs, set the filename
+                gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), path.c_str());
+            } else {
+                // For open dialogs, set the folder
+                gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), path.c_str());
+            }
+        }
+        
+        // Set file filters
+        if (!accept_filters.empty()) {
+            for (const auto& filter : accept_filters) {
+                std::string filterStr = filter.ToString();
+                
+                GtkFileFilter* gtkFilter = gtk_file_filter_new();
+                gtk_file_filter_set_name(gtkFilter, filterStr.c_str());
+                
+                // Handle common patterns
+                if (filterStr == "*.*" || filterStr == "*") {
+                    gtk_file_filter_add_pattern(gtkFilter, "*");
+                } else if (filterStr.find("*.") == 0) {
+                    gtk_file_filter_add_pattern(gtkFilter, filterStr.c_str());
+                } else {
+                    // Assume it's a file extension
+                    std::string pattern = "*." + filterStr;
+                    gtk_file_filter_add_pattern(gtkFilter, pattern.c_str());
+                }
+                
+                gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), gtkFilter);
+            }
+            
+            // Always add an "All files" filter
+            GtkFileFilter* allFilter = gtk_file_filter_new();
+            gtk_file_filter_set_name(allFilter, "All files");
+            gtk_file_filter_add_pattern(allFilter, "*");
+            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+        }
+        
+        // Show the dialog
+        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        
+        std::vector<CefString> file_paths;
+        if (response == GTK_RESPONSE_ACCEPT) {
+            if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
+                GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
+                for (GSList* iter = filenames; iter != nullptr; iter = iter->next) {
+                    file_paths.push_back((char*)iter->data);
+                    g_free(iter->data);
+                }
+                g_slist_free(filenames);
+            } else {
+                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+                if (filename) {
+                    file_paths.push_back(filename);
+                    g_free(filename);
+                }
+            }
+        }
+        
+        gtk_widget_destroy(dialog);
+        
+        // Call the callback with results
+        callback->Continue(file_paths);
+        
+        printf("CEF Linux: File dialog completed with %zu files selected\n", file_paths.size());
+        return true; // We handled the dialog
+    }
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
@@ -1631,6 +1758,9 @@ public:
         
         // Handle permission requests for getUserMedia
         g_signal_connect(webview, "permission-request", G_CALLBACK(onPermissionRequest), this);
+        
+        // Handle file chooser requests for <input type="file">
+        g_signal_connect(webview, "run-file-chooser", G_CALLBACK(onRunFileChooser), this);
         
         // Note: Removed visibility override for stability
         
@@ -2069,6 +2199,97 @@ public:
         }
         
         return TRUE;
+    }
+    
+    static gboolean onRunFileChooser(WebKitWebView* webview, WebKitFileChooserRequest* request, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        
+        // Get file chooser details
+        gboolean allowsMultipleSelection = webkit_file_chooser_request_get_select_multiple(request);
+        const gchar* const* acceptedMimeTypes = webkit_file_chooser_request_get_mime_types(request);
+        
+        // Create the file chooser dialog
+        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+            "Select File(s)",
+            nullptr, // No parent window for now
+            GTK_FILE_CHOOSER_ACTION_OPEN,
+            "_Cancel", GTK_RESPONSE_CANCEL,
+            "_Open", GTK_RESPONSE_ACCEPT,
+            nullptr
+        );
+        
+        // Set multiple selection
+        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), allowsMultipleSelection);
+        
+        // Set up MIME type filters if provided
+        if (acceptedMimeTypes && acceptedMimeTypes[0] != nullptr) {
+            GtkFileFilter* filter = gtk_file_filter_new();
+            gtk_file_filter_set_name(filter, "Allowed file types");
+            
+            for (int i = 0; acceptedMimeTypes[i] != nullptr; i++) {
+                const char* mimeType = acceptedMimeTypes[i];
+                
+                // Add MIME type to filter
+                if (strlen(mimeType) > 0) {
+                    gtk_file_filter_add_mime_type(filter, mimeType);
+                    
+                    // Also add common patterns for known MIME types
+                    if (strcmp(mimeType, "image/*") == 0) {
+                        gtk_file_filter_add_pattern(filter, "*.jpg");
+                        gtk_file_filter_add_pattern(filter, "*.jpeg");
+                        gtk_file_filter_add_pattern(filter, "*.png");
+                        gtk_file_filter_add_pattern(filter, "*.gif");
+                        gtk_file_filter_add_pattern(filter, "*.bmp");
+                        gtk_file_filter_add_pattern(filter, "*.webp");
+                    } else if (strcmp(mimeType, "text/*") == 0) {
+                        gtk_file_filter_add_pattern(filter, "*.txt");
+                        gtk_file_filter_add_pattern(filter, "*.html");
+                        gtk_file_filter_add_pattern(filter, "*.css");
+                        gtk_file_filter_add_pattern(filter, "*.js");
+                        gtk_file_filter_add_pattern(filter, "*.json");
+                    }
+                }
+            }
+            
+            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+        }
+        
+        // Always add "All files" filter as fallback
+        GtkFileFilter* allFilter = gtk_file_filter_new();
+        gtk_file_filter_set_name(allFilter, "All files");
+        gtk_file_filter_add_pattern(allFilter, "*");
+        gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+        
+        // Run the dialog and handle the response
+        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        
+        if (response == GTK_RESPONSE_ACCEPT) {
+            GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
+            
+            // Convert GSList to array of strings
+            guint length = g_slist_length(filenames);
+            gchar** files = g_new(gchar*, length + 1);
+            
+            GSList* iter = filenames;
+            for (guint i = 0; i < length; i++) {
+                files[i] = (gchar*)iter->data;
+                iter = iter->next;
+            }
+            files[length] = nullptr;
+            
+            // Select the files in the request
+            webkit_file_chooser_request_select_files(request, (const gchar* const*)files);
+            
+            // Clean up
+            g_slist_free_full(filenames, g_free);
+            g_free(files);
+        } else {
+            // User cancelled - WebKit will handle this automatically
+            webkit_file_chooser_request_cancel(request);
+        }
+        
+        gtk_widget_destroy(dialog);
+        return TRUE; // We handled the request
     }
     
 };

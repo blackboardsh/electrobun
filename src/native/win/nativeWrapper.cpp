@@ -43,6 +43,7 @@
 #include "include/cef_scheme.h"
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_permission_handler.h"
+#include "include/cef_dialog_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
 // Restore macro definitions
@@ -639,6 +640,159 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunPermissionHandler);
 };
 
+// CEF Dialog Handler for file dialogs
+class ElectrobunDialogHandler : public CefDialogHandler {
+public:
+    bool OnFileDialog(CefRefPtr<CefBrowser> browser,
+                      FileDialogMode mode,
+                      const CefString& title,
+                      const CefString& default_file_path,
+                      const std::vector<CefString>& accept_filters,
+                      CefRefPtr<CefFileDialogCallback> callback) override {
+        
+        printf("CEF Windows: File dialog requested - mode: %d\n", static_cast<int>(mode));
+        
+        // Run file dialog on main thread using Windows native dialog
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        if (FAILED(hr)) {
+            callback->Continue(std::vector<CefString>());
+            return true;
+        }
+        
+        IFileOpenDialog* pFileDialog = nullptr;
+        hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_ALL, IID_IFileOpenDialog, (void**)&pFileDialog);
+        if (FAILED(hr)) {
+            CoUninitialize();
+            callback->Continue(std::vector<CefString>());
+            return true;
+        }
+        
+        // Set dialog options based on mode
+        DWORD dwFlags = 0;
+        pFileDialog->GetOptions(&dwFlags);
+        
+        if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
+            dwFlags |= FOS_ALLOWMULTISELECT;
+        } else if (mode == FILE_DIALOG_OPEN_FOLDER) {
+            dwFlags |= FOS_PICKFOLDERS;
+        }
+        
+        pFileDialog->SetOptions(dwFlags);
+        
+        // Set title if provided
+        if (!title.empty()) {
+            std::wstring wTitle = std::wstring(title.ToString().begin(), title.ToString().end());
+            pFileDialog->SetTitle(wTitle.c_str());
+        }
+        
+        // Set default file path if provided
+        if (!default_file_path.empty()) {
+            std::string path = default_file_path.ToString();
+            std::wstring wPath = std::wstring(path.begin(), path.end());
+            
+            IShellItem* pDefaultFolder = nullptr;
+            hr = SHCreateItemFromParsingName(wPath.c_str(), nullptr, IID_IShellItem, (void**)&pDefaultFolder);
+            if (SUCCEEDED(hr)) {
+                if (mode == FILE_DIALOG_SAVE) {
+                    pFileDialog->SetDefaultFolder(pDefaultFolder);
+                } else {
+                    pFileDialog->SetFolder(pDefaultFolder);
+                }
+                pDefaultFolder->Release();
+            }
+        }
+        
+        // Set file filters
+        if (!accept_filters.empty()) {
+            std::vector<COMDLG_FILTERSPEC> filterSpecs;
+            std::vector<std::wstring> filterNames;
+            std::vector<std::wstring> filterPatterns;
+            
+            for (const auto& filter : accept_filters) {
+                std::string filterStr = filter.ToString();
+                std::wstring wFilter = std::wstring(filterStr.begin(), filterStr.end());
+                
+                if (wFilter.find(L".") != 0 && wFilter != L"*" && wFilter != L"*.*") {
+                    wFilter = L"." + wFilter;
+                }
+                
+                std::wstring pattern = (wFilter == L"*" || wFilter == L"*.*") ? L"*.*" : L"*" + wFilter;
+                std::wstring name = (wFilter == L"*" || wFilter == L"*.*") ? L"All files" : wFilter.substr(1) + L" files";
+                
+                filterNames.push_back(name);
+                filterPatterns.push_back(pattern);
+                
+                COMDLG_FILTERSPEC spec;
+                spec.pszName = filterNames.back().c_str();
+                spec.pszSpec = filterPatterns.back().c_str();
+                filterSpecs.push_back(spec);
+            }
+            
+            pFileDialog->SetFileTypes(static_cast<UINT>(filterSpecs.size()), filterSpecs.data());
+        }
+        
+        // Show the dialog
+        hr = pFileDialog->Show(nullptr);
+        
+        std::vector<CefString> file_paths;
+        if (SUCCEEDED(hr)) {
+            if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
+                IShellItemArray* pShellItemArray = nullptr;
+                hr = pFileDialog->GetResults(&pShellItemArray);
+                if (SUCCEEDED(hr)) {
+                    DWORD count = 0;
+                    pShellItemArray->GetCount(&count);
+                    
+                    for (DWORD i = 0; i < count; i++) {
+                        IShellItem* pShellItem = nullptr;
+                        hr = pShellItemArray->GetItemAt(i, &pShellItem);
+                        if (SUCCEEDED(hr)) {
+                            PWSTR pszFilePath = nullptr;
+                            hr = pShellItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath);
+                            if (SUCCEEDED(hr)) {
+                                // Convert wide string to regular string
+                                std::wstring wPath(pszFilePath);
+                                std::string path(wPath.begin(), wPath.end());
+                                file_paths.push_back(path);
+                                CoTaskMemFree(pszFilePath);
+                            }
+                            pShellItem->Release();
+                        }
+                    }
+                    pShellItemArray->Release();
+                }
+            } else {
+                IShellItem* pShellItem = nullptr;
+                hr = pFileDialog->GetResult(&pShellItem);
+                if (SUCCEEDED(hr)) {
+                    PWSTR pszFilePath = nullptr;
+                    hr = pShellItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath);
+                    if (SUCCEEDED(hr)) {
+                        // Convert wide string to regular string
+                        std::wstring wPath(pszFilePath);
+                        std::string path(wPath.begin(), wPath.end());
+                        file_paths.push_back(path);
+                        CoTaskMemFree(pszFilePath);
+                    }
+                    pShellItem->Release();
+                }
+            }
+        }
+        
+        pFileDialog->Release();
+        CoUninitialize();
+        
+        // Call the callback with results
+        callback->Continue(file_paths);
+        
+        printf("CEF Windows: File dialog completed with %zu files selected\n", file_paths.size());
+        return true; // We handled the dialog
+    }
+    
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunDialogHandler);
+};
+
 // CEF Client class with load and life span handlers
 class ElectrobunCefClient : public CefClient {
 public:
@@ -653,6 +807,7 @@ public:
         m_requestHandler = new ElectrobunRequestHandler();
         m_contextMenuHandler = new ElectrobunContextMenuHandler();
         m_permissionHandler = new ElectrobunPermissionHandler();
+        m_dialogHandler = new ElectrobunDialogHandler();
     }
 
     void AddPreloadScript(const std::string& script) {
@@ -681,6 +836,10 @@ public:
     
     CefRefPtr<CefPermissionHandler> GetPermissionHandler() override {
         return m_permissionHandler;
+    }
+    
+    CefRefPtr<CefDialogHandler> GetDialogHandler() override {
+        return m_dialogHandler;
     }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -742,6 +901,7 @@ private:
     CefRefPtr<ElectrobunRequestHandler> m_requestHandler;
     CefRefPtr<ElectrobunContextMenuHandler> m_contextMenuHandler;
     CefRefPtr<ElectrobunPermissionHandler> m_permissionHandler;
+    CefRefPtr<ElectrobunDialogHandler> m_dialogHandler;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
 
@@ -3640,6 +3800,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                             return S_OK;
                                         }).Get(),
                                     nullptr);
+                                
+                                // Add file dialog handler for <input type="file">
+                                // Note: WebView2 generally handles file dialogs automatically,
+                                // but we can enhance support by enabling the necessary permissions
+                                // in the AdditionalBrowserArguments (already done above with --disable-web-security)
+                                
                             } else {
                             }
                             

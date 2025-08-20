@@ -10,6 +10,9 @@
 ondragover="document.getElementById('draginfo').innerHTML = 'clientX: '+event.clientX+' | clientY: '+event.clientY;">    
     <div class="electrobun-webkit-app-region-drag" style=" cursor:move; -webkit-user-select: none; position:absolute; top: 0; right: 0; left: 80px; background: #222; padding: 3px 10px; color: #eee;">draggable area: move the window by adding .electrobun-webkit-app-region-drag class to any html element</div>
     <h1>Webview Tag Test</h1>
+    
+    
+    
     <button onclick="document.querySelector('electrobun-webview').goBack()">Go Back</button>
     <button onclick="document.querySelector('electrobun-webview').goForward()">Go Forward</button>
     <button onclick="document.querySelector('electrobun-webview').reload()">Reload</button>
@@ -29,9 +32,23 @@ ondragover="document.getElementById('draginfo').innerHTML = 'clientX: '+event.cl
     <span id="draginfo"></span>
     <electrobun-webview preload="window.onload = () => {document.body.innerHTML += 'hello from preload';}"  html="<html><body><h1>webview tag with html</h1></body></html>" ></electrobun-webview>    
 
+    <!-- File Chooser Test -->
+    <div style="background: #f0f0f0; padding: 10px; margin: 10px 0; border: 2px solid #333;">
+        <h3>File Chooser Test (runs in webview context)</h3>
+        <button onclick="testFileChooser()" style="background: #4CAF50; color: white; padding: 10px 20px; border: none; cursor: pointer; font-size: 16px;">
+            🗂️ Test File Chooser
+        </button>
+        <input type="file" id="hiddenFileInput" style="display: none;" onchange="handleFileSelected(event)" />
+        <button onclick="document.getElementById('hiddenFileInput').click()" style="background: #2196F3; color: white; padding: 10px 20px; border: none; cursor: pointer; font-size: 16px; margin-left: 10px;">
+            📁 Test with Hidden Input
+        </button>
+        <span id="fileResult" style="margin-left: 10px; font-weight: bold;"></span>
+    </div>
 
     <h2>Test loading a bundled png via views:// scheme</h2>
     <img src="views://webviewtag/electrobun.png" />
+
+    
 
     <h2>parition test</h2>
     <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="" ></electrobun-webview>    
@@ -46,7 +63,69 @@ ondragover="document.getElementById('draginfo').innerHTML = 'clientX: '+event.cl
     
     
 
-    <script>        
+    <script>
+        // File Chooser Test Functions
+        function testFileChooser() {
+            // Test the File System Access API if available
+            if ('showOpenFilePicker' in window) {
+                window.showOpenFilePicker({
+                    multiple: false,
+                    types: [
+                        {
+                            description: 'Text Files',
+                            accept: {
+                                'text/plain': ['.txt', '.md'],
+                                'text/html': ['.html', '.htm'],
+                                'application/json': ['.json']
+                            }
+                        },
+                        {
+                            description: 'Images',
+                            accept: {
+                                'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp']
+                            }
+                        }
+                    ]
+                }).then(fileHandles => {
+                    if (fileHandles.length > 0) {
+                        fileHandles[0].getFile().then(file => {
+                            document.getElementById('fileResult').textContent = 
+                                `✅ Selected: ${file.name} (${file.size} bytes)`;
+                            document.getElementById('fileResult').style.color = 'green';
+                            console.log('File selected via File System Access API:', file);
+                        });
+                    }
+                }).catch(err => {
+                    if (err.name !== 'AbortError') {
+                        document.getElementById('fileResult').textContent = 
+                            `❌ File System Access API error: ${err.message}`;
+                        document.getElementById('fileResult').style.color = 'red';
+                        console.error('File System Access API error:', err);
+                        
+                        // Fallback to file input
+                        console.log('Falling back to file input element...');
+                        document.getElementById('hiddenFileInput').click();
+                    }
+                });
+            } else {
+                // Fallback for browsers that don't support File System Access API
+                document.getElementById('fileResult').textContent = 
+                    '⚠️ File System Access API not available, using file input';
+                document.getElementById('fileResult').style.color = 'orange';
+                document.getElementById('hiddenFileInput').click();
+            }
+        }
+        
+        function handleFileSelected(event) {
+            const file = event.target.files[0];
+            if (file) {
+                document.getElementById('fileResult').textContent = 
+                    `✅ Selected via input: ${file.name} (${file.size} bytes)`;
+                document.getElementById('fileResult').style.color = 'green';
+                console.log('File selected via input element:', file);
+            }
+        }
+        
         document.querySelector('electrobun-webview').on('did-navigate', () => {
             console.log('did-navigate');
         });
