@@ -25,7 +25,10 @@
 #include <winrt/base.h>
 #include <shobjidl.h>  // For IFileOpenDialog
 #include <shlguid.h>   // For CLSID_FileOpenDialog
+#include <commdlg.h>   // For COMDLG_FILTERSPEC
 #include <dcomp.h>     // For DirectComposition
+#include <locale>      // For string conversion
+#include <codecvt>     // For UTF-8 to wide string conversion
 #include <d2d1.h>      // For Direct2D
 #include <direct.h>    // For _getcwd
 
@@ -640,6 +643,51 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunPermissionHandler);
 };
 
+// Helper functions for string conversion
+std::wstring StringToWString(const std::string& str) {
+    if (str.empty()) return std::wstring();
+    
+    int sizeRequired = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
+    if (sizeRequired <= 0) {
+        // Fallback to simple conversion (ASCII safe)
+        std::wstring result;
+        result.reserve(str.length());
+        for (char c : str) {
+            result.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+        }
+        return result;
+    }
+    
+    std::wstring wstr(sizeRequired, 0);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], sizeRequired);
+    wstr.pop_back(); // Remove null terminator
+    return wstr;
+}
+
+std::string WStringToString(const std::wstring& wstr) {
+    if (wstr.empty()) return std::string();
+    
+    int sizeRequired = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (sizeRequired <= 0) {
+        // Fallback to simple conversion (ASCII safe)
+        std::string result;
+        result.reserve(wstr.length());
+        for (wchar_t wc : wstr) {
+            if (wc <= 127) { // ASCII range
+                result.push_back(static_cast<char>(wc));
+            } else {
+                result.push_back('?'); // Replace non-ASCII with ?
+            }
+        }
+        return result;
+    }
+    
+    std::string str(sizeRequired, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &str[0], sizeRequired, nullptr, nullptr);
+    str.pop_back(); // Remove null terminator
+    return str;
+}
+
 // CEF Dialog Handler for file dialogs
 class ElectrobunDialogHandler : public CefDialogHandler {
 public:
@@ -649,6 +697,9 @@ public:
                       const CefString& default_file_path,
                       const std::vector<CefString>& accept_filters,
                       CefRefPtr<CefFileDialogCallback> callback) override {
+        
+#if defined(IFileOpenDialog) && defined(COMDLG_FILTERSPEC)
+        // Full implementation available
         
         printf("CEF Windows: File dialog requested - mode: %d\n", static_cast<int>(mode));
         
@@ -681,14 +732,13 @@ public:
         
         // Set title if provided
         if (!title.empty()) {
-            std::wstring wTitle = std::wstring(title.ToString().begin(), title.ToString().end());
+            std::wstring wTitle = StringToWString(title.ToString());
             pFileDialog->SetTitle(wTitle.c_str());
         }
         
         // Set default file path if provided
         if (!default_file_path.empty()) {
-            std::string path = default_file_path.ToString();
-            std::wstring wPath = std::wstring(path.begin(), path.end());
+            std::wstring wPath = StringToWString(default_file_path.ToString());
             
             IShellItem* pDefaultFolder = nullptr;
             hr = SHCreateItemFromParsingName(wPath.c_str(), nullptr, IID_IShellItem, (void**)&pDefaultFolder);
@@ -709,8 +759,7 @@ public:
             std::vector<std::wstring> filterPatterns;
             
             for (const auto& filter : accept_filters) {
-                std::string filterStr = filter.ToString();
-                std::wstring wFilter = std::wstring(filterStr.begin(), filterStr.end());
+                std::wstring wFilter = StringToWString(filter.ToString());
                 
                 if (wFilter.find(L".") != 0 && wFilter != L"*" && wFilter != L"*.*") {
                     wFilter = L"." + wFilter;
@@ -751,8 +800,7 @@ public:
                             hr = pShellItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath);
                             if (SUCCEEDED(hr)) {
                                 // Convert wide string to regular string
-                                std::wstring wPath(pszFilePath);
-                                std::string path(wPath.begin(), wPath.end());
+                                std::string path = WStringToString(pszFilePath);
                                 file_paths.push_back(path);
                                 CoTaskMemFree(pszFilePath);
                             }
@@ -769,8 +817,7 @@ public:
                     hr = pShellItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath);
                     if (SUCCEEDED(hr)) {
                         // Convert wide string to regular string
-                        std::wstring wPath(pszFilePath);
-                        std::string path(wPath.begin(), wPath.end());
+                        std::string path = WStringToString(pszFilePath);
                         file_paths.push_back(path);
                         CoTaskMemFree(pszFilePath);
                     }
@@ -787,6 +834,13 @@ public:
         
         printf("CEF Windows: File dialog completed with %zu files selected\n", file_paths.size());
         return true; // We handled the dialog
+        
+#else
+        // Fallback for older Windows SDKs - use default CEF behavior
+        printf("CEF Windows: File dialog not supported on this Windows SDK version\n");
+        callback->Continue(std::vector<CefString>());
+        return false; // Let CEF handle it
+#endif // IFileOpenDialog && COMDLG_FILTERSPEC
     }
     
 private:
