@@ -49,6 +49,12 @@ export const native = (() => {
         ],
         returns: FFIType.void,
       },
+      closeNSWindow: {
+        args: [
+          FFIType.ptr, // window ptr
+        ],
+        returns: FFIType.void,
+      },
       // webview
       initWebview: {
         args: [
@@ -359,6 +365,18 @@ export const ffi = {
         }
         
         native.symbols.setNSWindowTitle(windowPtr, toCString(title));        
+      },
+      
+      closeWindow: (params: {winId: number}) => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+        
+        if (!windowPtr) {
+          throw `Can't close window. Window no longer exists`;
+        }
+        
+        native.symbols.closeNSWindow(windowPtr);
+        // Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
       },
 
       createWebview: (params: {
