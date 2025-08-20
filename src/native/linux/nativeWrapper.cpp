@@ -3589,6 +3589,13 @@ void showX11Window(void* window) {
         X11Window* x11win = static_cast<X11Window*>(window);
         if (x11win && x11win->display && x11win->window) {
             XMapWindow(x11win->display, x11win->window);
+            
+            // Raise the window to the front
+            XRaiseWindow(x11win->display, x11win->window);
+            
+            // Set input focus to the window
+            XSetInputFocus(x11win->display, x11win->window, RevertToParent, CurrentTime);
+            
             XFlush(x11win->display);
             
             // Apply application menu when window is shown
@@ -3600,6 +3607,9 @@ void showX11Window(void* window) {
 void showGTKWindow(void* window) {
     dispatch_sync_main_void([&]() {
         gtk_widget_show_all(GTK_WIDGET(window));
+        
+        // Bring the window to the front and give it focus
+        gtk_window_present(GTK_WINDOW(window));
     });
 }
 

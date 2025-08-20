@@ -2923,8 +2923,15 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
 }
 
 extern "C" void makeNSWindowKeyAndOrderFront(NSWindow *window) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        // First ensure the window is visible
+        [window orderFront:nil];
+        
+        // Make the window key and bring to front
         [window makeKeyAndOrderFront:nil];
+        
+        // Activate the application to ensure it can receive focus
+        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];    
     });
 }
 
