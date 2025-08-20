@@ -37,10 +37,10 @@ jobs:
             platform_name: linux
           # Windows disabled due to tar extraction timeout issues
           # Build Windows artifacts manually using: bun build:push:artifacts
-          - os: windows-2025
-            platform: win32
-            arch: x64
-            platform_name: win
+          # - os: windows-2025
+          #   platform: win32
+          #   arch: x64
+          #   platform_name: win
     
     runs-on: ${{ matrix.os }}
     
