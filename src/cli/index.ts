@@ -1871,10 +1871,24 @@ exec "\$LAUNCHER_BINARY" "\$@"
   }
 
   process.on("SIGINT", () => {
-    console.log('exit command')
-    // toLauncherPipe.write("exit command\n");      
-    mainProc.kill();
-    process.exit();
+    console.log('[electrobun dev] Received SIGINT, initiating graceful shutdown...')
+    
+    if (mainProc) {
+      // First attempt graceful shutdown by sending SIGINT to child
+      console.log('[electrobun dev] Requesting graceful shutdown from app...')
+      mainProc.kill("SIGINT");
+      
+      // Give the app time to clean up (e.g., call killApp())
+      setTimeout(() => {
+        if (mainProc && !mainProc.killed) {
+          console.log('[electrobun dev] App did not exit gracefully, forcing termination...')
+          mainProc.kill("SIGKILL");
+        }
+        process.exit(0);
+      }, 2000); // 2 second timeout for graceful shutdown
+    } else {
+      process.exit(0);
+    }
   });
 
 } 

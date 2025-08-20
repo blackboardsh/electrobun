@@ -351,7 +351,10 @@ export const ffi = {
         }
         
         native.symbols.setNSWindowTitle(windowPtr, toCString(title));        
+        // setTimeout(() => {
+          // console.log('calling makeNSWindowKeyAndOrderFront', windowPtr)
         native.symbols.makeNSWindowKeyAndOrderFront(windowPtr);
+        // }, 1000)
 
         return windowPtr;
       },
@@ -741,6 +744,16 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled rejection in worker:', reason);
+});
+
+process.on('SIGINT', () => {
+  console.log('[electrobun] Received SIGINT, calling killApp() for graceful shutdown...');
+  native.symbols.killApp();
+});
+
+process.on('SIGTERM', () => {
+  console.log('[electrobun] Received SIGTERM, calling killApp() for graceful shutdown...');
+  native.symbols.killApp();
 });
 
 

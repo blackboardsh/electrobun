@@ -2652,10 +2652,20 @@ extern "C" void runNSApplication() {
 }
 
 extern "C" void killApp() {
-    // Execute on main thread
+    // Execute on main thread for graceful shutdown
     dispatch_async(dispatch_get_main_queue(), ^{
-        // This will terminate the entire process, including Bun and all its threads
-        exit(1); 
+        NSLog(@"[killApp] Initiating graceful shutdown");
+        
+        // Clean up WebKit resources first
+        NSApplication *app = [NSApplication sharedApplication];
+        if (app) {
+            // Terminate the app gracefully, which will trigger proper cleanup
+            [app terminate:nil];
+        } else {
+            // Fallback to direct exit if NSApplication isn't available
+            NSLog(@"[killApp] NSApplication not available, forcing exit");
+            exit(0);
+        }
     });
 }
 
