@@ -182,6 +182,10 @@ export class BrowserWindow<T> {
     return ffi.request.closeWindow({ winId: this.id });
   }
 
+  focus() {
+    return ffi.request.focusWindow({ winId: this.id });
+  }
+
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserWindow events
   on(name, handler) {

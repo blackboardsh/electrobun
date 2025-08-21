@@ -371,7 +371,12 @@ const ConfigureWebviewTags = (
       // this.mutationObserver?.disconnect();
       window.removeEventListener("resize", this.boundForceSyncDimensions);
       window.removeEventListener("scroll", this.boundSyncDimensions);
-      this.internalRpc.send.webviewTagRemove({ id: this.webviewId });
+      
+      if (this.webviewId) {
+        this.internalRpc.send.webviewTagRemove({ id: this.webviewId });
+        // Mark webview as removed to prevent further method calls
+        this.webviewId = undefined;
+      }
     }
 
     static get observedAttributes() {
@@ -393,6 +398,7 @@ const ConfigureWebviewTags = (
 
     updateIFrameSrc(src: string) {
       if (!this.webviewId) {
+        console.warn('updateIFrameSrc called on removed webview');
         return;
       }
       this.internalRpc.send.webviewTagUpdateSrc({
@@ -403,6 +409,7 @@ const ConfigureWebviewTags = (
 
     updateIFrameHtml(html: string) {
       if (!this.webviewId) {
+        console.warn('updateIFrameHtml called on removed webview');
         return;
       }
       
@@ -414,6 +421,7 @@ const ConfigureWebviewTags = (
 
     updateIFramePreload(preload: string) {
       if (!this.webviewId) {
+        console.warn('updateIFramePreload called on removed webview');
         return;
       }
       this.internalRpc.send.webviewTagUpdatePreload({
@@ -423,17 +431,33 @@ const ConfigureWebviewTags = (
     }
 
     goBack() {
+      if (!this.webviewId) {
+        console.warn('goBack called on removed webview');
+        return;
+      }
       this.internalRpc.send.webviewTagGoBack({ id: this.webviewId });
     }
 
     goForward() {
+      if (!this.webviewId) {
+        console.warn('goForward called on removed webview');
+        return;
+      }
       this.internalRpc.send.webviewTagGoForward({ id: this.webviewId });
     }
 
     reload() {
+      if (!this.webviewId) {
+        console.warn('reload called on removed webview');
+        return;
+      }
       this.internalRpc.send.webviewTagReload({ id: this.webviewId });
     }
     loadURL(url: string) {
+      if (!this.webviewId) {
+        console.warn('loadURL called on removed webview');
+        return;
+      }
       this.setAttribute("src", url);
       this.internalRpc.send.webviewTagUpdateSrc({
         id: this.webviewId,
@@ -441,6 +465,10 @@ const ConfigureWebviewTags = (
       });
     }
     loadHTML(html: string) {
+      if (!this.webviewId) {
+        console.warn('loadHTML called on removed webview');
+        return;
+      }
       this.setAttribute("html", html);
       this.internalRpc.send.webviewTagUpdateHtml({
         id: this.webviewId,
@@ -450,6 +478,11 @@ const ConfigureWebviewTags = (
 
     // This sets the native webview hovering over the dom to be transparent
     toggleTransparent(transparent?: boolean, bypassState?: boolean) {
+      if (!this.webviewId) {
+        console.warn('toggleTransparent called on removed webview');
+        return;
+      }
+
       if (!bypassState) {
         if (typeof transparent === "undefined") {
           this.transparent = !this.transparent;
@@ -464,6 +497,11 @@ const ConfigureWebviewTags = (
       });
     }
     togglePassthrough(enablePassthrough?: boolean, bypassState?: boolean) {
+      if (!this.webviewId) {
+        console.warn('togglePassthrough called on removed webview');
+        return;
+      }
+
       if (!bypassState) {
         if (typeof enablePassthrough === "undefined") {
           this.passthroughEnabled = !this.passthroughEnabled;
@@ -480,6 +518,11 @@ const ConfigureWebviewTags = (
     }
 
     toggleHidden(hidden?: boolean, bypassState?: boolean) {
+      if (!this.webviewId) {
+        console.warn('toggleHidden called on removed webview');
+        return;
+      }
+
       if (!bypassState) {
         if (typeof hidden === "undefined") {
           this.hidden = !this.hidden;

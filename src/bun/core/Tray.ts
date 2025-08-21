@@ -73,12 +73,26 @@ export class Tray {
     electrobunEventEmitter.on(specificName, handler);
   }
 
+  remove() {
+    console.log('Tray.remove() called for id:', this.id);
+    ffi.request.removeTray({ id: this.id });
+    delete TrayMap[this.id];
+    console.log('Tray removed from TrayMap');
+  }
+
   static getById(id: number) {
     return TrayMap[id];
   }
 
   static getAll() {
     return Object.values(TrayMap);
+  }
+
+  static removeById(id: number) {
+    const tray = TrayMap[id];
+    if (tray) {
+      tray.remove();
+    }
   }
 }
 

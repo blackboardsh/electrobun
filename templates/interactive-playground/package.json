@@ -1,0 +1,15 @@
+{
+  "name": "electrobun-interactive-playground",
+  "version": "0.0.1",
+  "description": "Interactive playground for exploring Electrobun features",
+  "type": "module",
+  "scripts": {
+    "build:dev": "electrobun build",
+    "build:canary": "electrobun build --canary",
+    "start": "electrobun dev",
+    "start:canary": "electrobun dev --canary"
+  },
+  "dependencies": {
+    "electrobun": "file:../../"
+  }
+}

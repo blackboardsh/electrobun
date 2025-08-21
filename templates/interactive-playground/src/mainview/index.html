@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electrobun Interactive Playground</title>
+    <link rel="stylesheet" href="views://mainview/index.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="header-title">
+                    <span class="logo">⚡</span>
+                    Electrobun Interactive Playground
+                </h1>
+                <div class="header-actions">
+                    <div class="search-container">
+                        <input type="text" id="search" placeholder="Search features..." class="search-input">
+                        <span class="search-icon">🔍</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <nav class="nav">
+                    <div class="nav-section">
+                        <h3 class="nav-section-title">Core Features</h3>
+                        <ul class="nav-list">
+                            <li class="nav-item active" data-demo="windows">
+                                <span class="nav-icon">🪟</span>
+                                <span class="nav-label">Windows</span>
+                            </li>
+                            <li class="nav-item" data-demo="webviews">
+                                <span class="nav-icon">🌐</span>
+                                <span class="nav-label">WebViews</span>
+                            </li>
+                            <li class="nav-item" data-demo="rpc">
+                                <span class="nav-icon">📡</span>
+                                <span class="nav-label">RPC</span>
+                            </li>
+                            <li class="nav-item" data-demo="menus">
+                                <span class="nav-icon">🎛️</span>
+                                <span class="nav-label">Menus</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="nav-section">
+                        <h3 class="nav-section-title">System Integration</h3>
+                        <ul class="nav-list">
+                            <li class="nav-item" data-demo="tray">
+                                <span class="nav-icon">🔔</span>
+                                <span class="nav-label">System Tray</span>
+                            </li>
+                            <li class="nav-item" data-demo="files">
+                                <span class="nav-icon">🗂️</span>
+                                <span class="nav-label">File Operations</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                </nav>
+            </aside>
+
+            <!-- Content Area -->
+            <main class="content">
+                <div id="demo-content" class="demo-content">
+                    <!-- Demo content will be dynamically loaded here -->
+                </div>
+            </main>
+        </div>
+
+        <!-- Toast notifications -->
+        <div id="toast-container" class="toast-container"></div>
+
+        <!-- Event log sidebar (collapsible) -->
+        <div class="event-log" id="event-log">
+            <div class="event-log-header">
+                <h3>Event Log</h3>
+                <button class="event-log-toggle" id="event-log-toggle">📋</button>
+            </div>
+            <div class="event-log-content" id="event-log-content">
+                <div class="event-log-filters">
+                    <label><input type="checkbox" checked data-level="info"> Info</label>
+                    <label><input type="checkbox" checked data-level="warn"> Warn</label>
+                    <label><input type="checkbox" checked data-level="error"> Error</label>
+                    <button id="clear-log">Clear</button>
+                </div>
+                <div class="event-log-list" id="event-log-list">
+                    <!-- Event log entries will be added here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="views://mainview/index.js"></script>
+</body>
+</html>

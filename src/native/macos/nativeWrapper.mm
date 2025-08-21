@@ -344,6 +344,7 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL isMousePassthroughEnabled;
     @property (nonatomic, assign) BOOL mirrorModeEnabled;
     @property (nonatomic, assign) BOOL fullSize;
+    @property (nonatomic, assign) BOOL isRemoved;
 
     - (void)loadURL:(const char *)urlString;
     - (void)goBack;
@@ -369,6 +370,9 @@ void releaseObjCObject(id objcObject) {
 
     - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson;
 @end
+
+// Global map to track all AbstractView instances by their webviewId
+static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = nil;
 
 @interface ContainerView : NSView
     /// An reverse ordered array of abstractViews (newest first)
@@ -621,6 +625,14 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
 @implementation AbstractView
 
+    - (instancetype)init {
+        self = [super init];
+        if (self) {
+            self.isRemoved = NO;
+        }
+        return self;
+    }
+
     - (void)loadURL:(const char *)urlString { [self doesNotRecognizeSelector:_cmd]; }
     - (void)goBack { [self doesNotRecognizeSelector:_cmd]; }
     - (void)goForward { [self doesNotRecognizeSelector:_cmd]; }
@@ -825,14 +837,27 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
     - (void)removeAbstractViewWithId:(uint32_t)webviewId {
-        NSInteger indexToRemove = -1;
+        NSLog(@"ContainerView removeAbstractViewWithId: ENTRY - searching for webviewId %u in %lu views", 
+              webviewId, (unsigned long)self.abstractViews.count);
+        
+        BOOL found = NO;
         for (NSInteger i = 0; i < self.abstractViews.count; i++) {
             AbstractView * candidate = self.abstractViews[i];
+            NSLog(@"ContainerView removeAbstractViewWithId: checking index %ld, webviewId %u (looking for %u)", 
+                  (long)i, candidate.webviewId, webviewId);
             if (candidate.webviewId == webviewId) {
+                NSLog(@"ContainerView removeAbstractViewWithId: found match at index %ld, removing", (long)i);
                 [self.abstractViews removeObjectAtIndex:i];
+                NSLog(@"ContainerView removeAbstractViewWithId: removed webviewId %u, remaining count: %lu", 
+                      webviewId, (unsigned long)self.abstractViews.count);
+                found = YES;
                 break;
             }
         }   
+        
+        if (!found) {
+            NSLog(@"ContainerView removeAbstractViewWithId: WARNING - webviewId %u not found in tracking array", webviewId);
+        }
     }
 @end
 
@@ -1247,6 +1272,15 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 objc_setAssociatedObject(self.webView, "WKWebViewImpl", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             });
         }
+        
+        // Add to global tracking map
+        if (globalAbstractViews) {
+            globalAbstractViews[@(self.webviewId)] = self;
+            NSLog(@"WKWebViewImpl: Added webview %u to global tracking (total: %lu)", self.webviewId, (unsigned long)globalAbstractViews.count);
+        } else {
+            NSLog(@"WKWebViewImpl: ERROR - globalAbstractViews is nil when trying to add webview %u", self.webviewId);
+        }
+        
         return self;
     }
 
@@ -1269,13 +1303,72 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     }
 
     - (void)remove {
-        [self.webView stopLoading];
-        [self.webView removeFromSuperview];
-        self.webView.navigationDelegate = nil;
-        self.webView.UIDelegate = nil;
-        [self.webView evaluateJavaScript:@"document.body.innerHTML='';" completionHandler:nil];
-        releaseObjCObject(self.webView);
-        self.webView = nil;
+        NSLog(@"WKWebViewImpl remove: ENTRY - cleaning up webview %u, webView=%p", self.webviewId, self.webView);
+        
+        if (self.webView) {
+            NSLog(@"WKWebViewImpl remove: calling stopLoading on webview %u", self.webviewId);
+            [self.webView stopLoading];
+            
+            NSLog(@"WKWebViewImpl remove: checking superview for webview %u, superview=%p, class=%@", 
+                  self.webviewId, self.webView.superview, NSStringFromClass([self.webView.superview class]));
+            
+            // Remove from ContainerView's tracking array first
+            if (self.webView.superview && [self.webView.superview isKindOfClass:[ContainerView class]]) {
+                ContainerView *containerView = (ContainerView *)self.webView.superview;
+                NSLog(@"WKWebViewImpl remove: calling removeAbstractViewWithId for webview %u", self.webviewId);
+                [containerView removeAbstractViewWithId:self.webviewId];
+                NSLog(@"WKWebViewImpl remove: removed from ContainerView tracking");
+            } else {
+                NSLog(@"WKWebViewImpl remove: superview is not ContainerView or is nil");
+            }
+            
+            // Keep a weak reference to the view for delayed removal
+            WKWebView *webViewToRemove = self.webView;
+            uint32_t webviewIdForLogging = self.webviewId;
+            
+            // Set delegates to nil and clean up immediately
+            NSLog(@"WKWebViewImpl remove: setting delegates to nil for webview %u", self.webviewId);
+            self.webView.navigationDelegate = nil;
+            self.webView.UIDelegate = nil;
+            
+            NSLog(@"WKWebViewImpl remove: evaluating cleanup JavaScript for webview %u", self.webviewId);
+            [self.webView evaluateJavaScript:@"document.body.innerHTML='';" completionHandler:nil];
+            
+            NSLog(@"WKWebViewImpl remove: releasing webView object for webview %u", self.webviewId);
+            releaseObjCObject(self.webView);
+            self.webView = nil;
+            NSLog(@"WKWebViewImpl remove: webView set to nil for webview %u", self.webviewId);
+            
+            // Check if the view is still in a superview before trying to remove it
+            if (webViewToRemove.superview != nil) {
+                NSLog(@"WKWebViewImpl remove: scheduling delayed removeFromSuperview for webview %u", webviewIdForLogging);
+                
+                // Delay the removeFromSuperview call to allow WebKit to finish cleanup
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSLog(@"WKWebViewImpl remove: executing delayed removeFromSuperview for webview %u", webviewIdForLogging);
+                    
+                    @try {
+                        // Double-check superview still exists at execution time
+                        if (webViewToRemove.superview != nil) {
+                            [webViewToRemove removeFromSuperview];
+                            NSLog(@"WKWebViewImpl remove: delayed removeFromSuperview completed for webview %u", webviewIdForLogging);
+                        } else {
+                            NSLog(@"WKWebViewImpl remove: superview became nil before delayed removal for webview %u", webviewIdForLogging);
+                        }
+                    } @catch (NSException *exception) {
+                        NSLog(@"WKWebViewImpl remove: EXCEPTION during delayed removeFromSuperview for webview %u: %@", webviewIdForLogging, exception);
+                    } @finally {
+                        NSLog(@"WKWebViewImpl remove: delayed removeFromSuperview attempt finished for webview %u", webviewIdForLogging);
+                    }
+                });
+            } else {
+                NSLog(@"WKWebViewImpl remove: webView has no superview, skipping removeFromSuperview");
+            }
+        } else {
+            NSLog(@"WKWebViewImpl remove: webView is already nil for webview %u", self.webviewId);
+        }
+        
+        NSLog(@"WKWebViewImpl remove: COMPLETED cleanup for webview %u", self.webviewId);
     }
 
 
@@ -2523,6 +2616,15 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
             
         }
+        
+        // Add to global tracking map
+        if (globalAbstractViews) {
+            globalAbstractViews[@(self.webviewId)] = self;
+            NSLog(@"CEFWebViewImpl: Added webview %u to global tracking (total: %lu)", self.webviewId, (unsigned long)globalAbstractViews.count);
+        } else {
+            NSLog(@"CEFWebViewImpl: ERROR - globalAbstractViews is nil when trying to add webview %u", self.webviewId);
+        }
+        
         return self;
     }
 
@@ -2551,17 +2653,71 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     }
 
     - (void)remove {
-        NSLog(@"REMOVE >>>>>>>>>>>>>>");
+        NSLog(@"CEFWebViewImpl remove: ENTRY - cleaning up webview %u, browser=%p, nsView=%p", self.webviewId, self.browser.get(), self.nsView);
+        
         // Stop loading, close the browser, remove from superview, etc.
         if (self.browser) {
+            NSLog(@"CEFWebViewImpl remove: closing CEF browser for webview %u", self.webviewId);
             // Tells CEF to close the browser window
             self.browser->GetHost()->CloseBrowser(false);
             self.browser = nullptr;
+            NSLog(@"CEFWebViewImpl remove: CEF browser closed and set to nullptr for webview %u", self.webviewId);
+        } else {
+            NSLog(@"CEFWebViewImpl remove: browser is already null for webview %u", self.webviewId);
         }
+        
         if (self.nsView) {
-            [self.nsView removeFromSuperview];
+            NSLog(@"CEFWebViewImpl remove: checking superview for webview %u, superview=%p, class=%@", 
+                  self.webviewId, self.nsView.superview, NSStringFromClass([self.nsView.superview class]));
+            
+            // Remove from ContainerView's tracking array first
+            if (self.nsView.superview && [self.nsView.superview isKindOfClass:[ContainerView class]]) {
+                ContainerView *containerView = (ContainerView *)self.nsView.superview;
+                NSLog(@"CEFWebViewImpl remove: calling removeAbstractViewWithId for webview %u", self.webviewId);
+                [containerView removeAbstractViewWithId:self.webviewId];
+                NSLog(@"CEFWebViewImpl remove: removed from ContainerView tracking");
+            } else {
+                NSLog(@"CEFWebViewImpl remove: superview is not ContainerView or is nil");
+            }
+            
+            // Keep a weak reference to the view for delayed removal
+            NSView *viewToRemove = self.nsView;
+            uint32_t webviewIdForLogging = self.webviewId;
+            
+            // Set nsView to nil immediately to prevent further operations
+            NSLog(@"CEFWebViewImpl remove: setting nsView to nil for webview %u", self.webviewId);
             self.nsView = nil;
+            
+            // Check if the view is still in a superview before trying to remove it
+            if (viewToRemove.superview != nil) {
+                NSLog(@"CEFWebViewImpl remove: scheduling delayed removeFromSuperview for webview %u", webviewIdForLogging);
+                
+                // Delay the removeFromSuperview call to allow CEF to finish cleanup
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSLog(@"CEFWebViewImpl remove: executing delayed removeFromSuperview for webview %u", webviewIdForLogging);
+                    
+                    @try {
+                        // Double-check superview still exists at execution time
+                        if (viewToRemove.superview != nil) {
+                            [viewToRemove removeFromSuperview];
+                            NSLog(@"CEFWebViewImpl remove: delayed removeFromSuperview completed for webview %u", webviewIdForLogging);
+                        } else {
+                            NSLog(@"CEFWebViewImpl remove: superview became nil before delayed removal for webview %u", webviewIdForLogging);
+                        }
+                    } @catch (NSException *exception) {
+                        NSLog(@"CEFWebViewImpl remove: EXCEPTION during delayed removeFromSuperview for webview %u: %@", webviewIdForLogging, exception);
+                    } @finally {
+                        NSLog(@"CEFWebViewImpl remove: delayed removeFromSuperview attempt finished for webview %u", webviewIdForLogging);
+                    }
+                });
+            } else {
+                NSLog(@"CEFWebViewImpl remove: nsView has no superview, skipping removeFromSuperview");
+            }
+        } else {
+            NSLog(@"CEFWebViewImpl remove: nsView is already nil for webview %u", self.webviewId);
         }
+        
+        NSLog(@"CEFWebViewImpl remove: COMPLETED cleanup for webview %u", self.webviewId);
     }
 
 
@@ -2683,6 +2839,12 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 extern "C" void runNSApplication() {      
     useCEF = isCEFAvailable();    
     
+    // Initialize the global AbstractView tracking map
+    if (!globalAbstractViews) {
+        globalAbstractViews = [[NSMutableDictionary alloc] init];
+        NSLog(@"Initialized global AbstractView tracking map");
+    }
+    
     if (useCEF) {
         @autoreleasepool {
             if (!initializeCEF()) {                
@@ -2791,27 +2953,112 @@ extern "C" void loadURLInWebView(AbstractView *abstractView, const char *urlStri
     [abstractView loadURL:urlString];
 }
 
-extern "C" void webviewGoBack(AbstractView *abstractView) {    
+extern "C" void webviewGoBack(AbstractView *abstractView) {
+    if (!abstractView) {
+        NSLog(@"webviewGoBack: abstractView is null");
+        return;
+    }
+    
+    // Check if webview still exists in global tracking
+    if (!globalAbstractViews[@(abstractView.webviewId)]) {
+        NSLog(@"webviewGoBack: webview %u not in tracking, skipping", abstractView.webviewId);
+        return;
+    }
+    
     [abstractView goBack];
 }
 
 extern "C" void webviewGoForward(AbstractView *abstractView) {
+    if (!abstractView) {
+        NSLog(@"webviewGoForward: abstractView is null");
+        return;
+    }
+    
+    // Check if webview still exists in global tracking
+    if (!globalAbstractViews[@(abstractView.webviewId)]) {
+        NSLog(@"webviewGoForward: webview %u not in tracking, skipping", abstractView.webviewId);
+        return;
+    }
+    
     [abstractView goForward];
 }
 
 extern "C" void webviewReload(AbstractView *abstractView) {
+    if (!abstractView) {
+        NSLog(@"webviewReload: abstractView is null");
+        return;
+    }
+    
+    // Check if webview still exists in global tracking
+    if (!globalAbstractViews[@(abstractView.webviewId)]) {
+        NSLog(@"webviewReload: webview %u not in tracking, skipping", abstractView.webviewId);
+        return;
+    }
+    
     [abstractView reload];
 }
 
-extern "C" void webviewRemove(AbstractView *abstractView) {    
+extern "C" void webviewRemove(AbstractView *abstractView) {
+    NSLog(@"webviewRemove: ENTRY - abstractView=%p", abstractView);
+    
+    if (!abstractView) {
+        NSLog(@"webviewRemove: abstractView is null - EXITING");
+        return;
+    }
+    
+    NSLog(@"webviewRemove: webviewId=%u, globalAbstractViews=%p, count=%lu", 
+          abstractView.webviewId, globalAbstractViews, globalAbstractViews ? (unsigned long)globalAbstractViews.count : 0);
+    
+    // Check global tracking map instead of individual flag
+    NSNumber *webviewKey = @(abstractView.webviewId);
+    AbstractView *trackedView = globalAbstractViews[webviewKey];
+    
+    if (!trackedView) {
+        NSLog(@"webviewRemove: webview %u not found in global tracking, already removed - EXITING", abstractView.webviewId);
+        return;
+    }
+    
+    if (trackedView != abstractView) {
+        NSLog(@"webviewRemove: WARNING - tracked view %p != passed view %p for webviewId %u", trackedView, abstractView, abstractView.webviewId);
+    }
+    
+    // Remove from global tracking immediately to prevent re-entry
+    [globalAbstractViews removeObjectForKey:webviewKey];
+    NSLog(@"webviewRemove: Removed webview %u from global tracking (remaining: %lu)", 
+          abstractView.webviewId, (unsigned long)globalAbstractViews.count);
+    
+    NSLog(@"webviewRemove: About to call [abstractView remove] for webview %u", abstractView.webviewId);
     [abstractView remove];
+    NSLog(@"webviewRemove: COMPLETED for webview %u", abstractView.webviewId);
 }
 
-extern "C" BOOL webviewCanGoBack(AbstractView *abstractView) {        
+extern "C" BOOL webviewCanGoBack(AbstractView *abstractView) {
+    if (!abstractView) {
+        NSLog(@"webviewCanGoBack: abstractView is null");
+        return NO;
+    }
+    
+    // Check if webview still exists in global tracking
+    if (!globalAbstractViews[@(abstractView.webviewId)]) {
+        NSLog(@"webviewCanGoBack: webview %u not in tracking, returning NO", abstractView.webviewId);
+        return NO;
+    }
+    
     return [abstractView canGoBack];
 }
 
-extern "C" BOOL webviewCanGoForward(AbstractView *abstractView) {    
+extern "C" BOOL webviewCanGoForward(AbstractView *abstractView) {
+    if (!abstractView) {
+        NSLog(@"webviewCanGoForward: abstractView is null");
+        return NO;
+    }
+    
+    // Check if webview still exists in global tracking
+    if (!globalAbstractViews[@(abstractView.webviewId)]) {
+        NSLog(@"webviewCanGoForward: webview %u not in tracking, returning NO", abstractView.webviewId);
+        return NO;
+    }
+    
     return [abstractView canGoForward];
 }
 
@@ -2887,15 +3134,21 @@ extern "C" const char* getBodyFromScriptMessage(WKScriptMessage *message) {
 }
 
 extern "C" void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {    
+    dispatch_async(dispatch_get_main_queue(), ^{
         [abstractView setTransparent:transparent];    
+    });
 }
 
 extern "C" void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
+    dispatch_async(dispatch_get_main_queue(), ^{
         [abstractView setPassthrough:enablePassthrough];    
+    });
 }
 
 extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {   
+    dispatch_async(dispatch_get_main_queue(), ^{
         [abstractView setHidden:hidden];    
+    });
 }
 
 extern "C" NSRect createNSRectWrapper(double x, double y, double width, double height) {
@@ -3210,6 +3463,14 @@ extern "C" void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonSt
 extern "C" void setTrayMenu(NSStatusItem *statusItem, const char *menuConfig) {
     if (statusItem) {
         setTrayMenuFromJSON(statusItem, menuConfig);
+    }
+}
+
+extern "C" void removeTray(NSStatusItem *statusItem) {
+    if (statusItem) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
+        });
     }
 }
 

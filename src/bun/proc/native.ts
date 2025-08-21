@@ -186,6 +186,10 @@ export const native = (() => {
         args: [FFIType.ptr, FFIType.cstring],
         returns: FFIType.void
       },
+      removeTray: {
+        args: [FFIType.ptr],
+        returns: FFIType.void
+      },
       setApplicationMenu: {
         args: [FFIType.cstring, FFIType.function],
         returns: FFIType.void
@@ -380,6 +384,17 @@ export const ffi = {
         
         native.symbols.closeNSWindow(windowPtr);
         // Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
+      },
+
+      focusWindow: (params: {winId: number}) => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+        
+        if (!windowPtr) {
+          throw `Can't focus window. Window no longer exists`;
+        }
+        
+        native.symbols.makeNSWindowKeyAndOrderFront(windowPtr);
       },
 
       createWebview: (params: {
@@ -673,6 +688,22 @@ export const ffi = {
           tray.ptr,
           toCString(menuConfig)
         );
+      },
+
+      removeTray: (params: { id: number }): void => {
+        const { id } = params;
+        console.log('removeTray called with id:', id);
+        const tray = Tray.getById(id);
+        console.log('Found tray:', tray);
+        
+        if (!tray) {
+          throw `Can't remove tray. Tray no longer exists`;
+        }
+        
+        console.log('Calling native.symbols.removeTray with ptr:', tray.ptr);
+        native.symbols.removeTray(tray.ptr);
+        console.log('Native removeTray called successfully');
+        // The Tray class will handle removing from TrayMap
       },
       setApplicationMenu: (params: {menuConfig: string}): void => {
         const {
@@ -1141,6 +1172,7 @@ export const internalRpcHandlers = {
     },  
     webviewTagCallAsyncJavaScript: (params) => {
       console.log('-----------+ request: ', 'webviewTagCallAsyncJavaScript', params)
+      // Not implemented - users can use RPC for JavaScript execution if needed
     }
   },
   message: {
@@ -1157,33 +1189,60 @@ export const internalRpcHandlers = {
       native.symbols.resizeWebview(webviewPtr, x, y, width, height, toCString(params.masks))
     },      
     webviewTagUpdateSrc: (params) => {
-      const webviewPtr = BrowserView.getById(params.id)?.ptr;
-      native.symbols.loadURLInWebView(webviewPtr, toCString(params.url))      
+      const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagUpdateSrc: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
+      native.symbols.loadURLInWebView(webview.ptr, toCString(params.url));      
     },
     webviewTagUpdateHtml: (params) => {      
-      const webview = BrowserView.getById(params.id);   
-      webview.loadHTML(params.html) 
+      const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagUpdateHtml: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }   
+      webview.loadHTML(params.html);
       webview.html = params.html;
-      
     },
     webviewTagUpdatePreload: (params) => {
       const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagUpdatePreload: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
       native.symbols.updatePreloadScriptToWebView(webview.ptr, toCString('electrobun_custom_preload_script'), toCString(params.preload), true);
     },
     webviewTagGoBack: (params) => {
       const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagGoBack: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
       native.symbols.webviewGoBack(webview.ptr);
     },
     webviewTagGoForward: (params) => {
       const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagGoForward: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
       native.symbols.webviewGoForward(webview.ptr);
     },
     webviewTagReload: (params) => {
       const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagReload: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
       native.symbols.webviewReload(webview.ptr);
     },
     webviewTagRemove: (params) => {
       const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagRemove: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
       native.symbols.webviewRemove(webview.ptr);
     },
     startWindowMove: (params) => {
@@ -1195,14 +1254,26 @@ export const internalRpcHandlers = {
     },
     webviewTagSetTransparent: (params) => {
       const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagSetTransparent: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
       native.symbols.webviewSetTransparent(webview.ptr, params.transparent);
     },
     webviewTagSetPassthrough: (params) => {
       const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagSetPassthrough: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
       native.symbols.webviewSetPassthrough(webview.ptr, params.enablePassthrough);
     },
     webviewTagSetHidden: (params) => {
       const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagSetHidden: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
       native.symbols.webviewSetHidden(webview.ptr, params.hidden);
     },
     webviewEvent: (params) => {
