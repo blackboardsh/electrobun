@@ -51,14 +51,14 @@ export class WebViewDemo {
 
         <div class="demo-results" style="position: relative;">
           <!-- Main webview container with mask overlay elements -->
-          <div style="position: relative; width: 100%; height: 500px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem; overflow: hidden;">
+          <div style="position: relative; width: 100%; height: 500px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;">
             
             <!-- Overlay squares for mask testing -->
-            <div class="element-to-mask" style="position: absolute; z-index: 10; top: 30px; right: 40px; width: 120px; height: 120px; background: black; color: white; padding: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold;">
+            <div class="element-to-mask" style="position: absolute; z-index: 10; top: -30px; right: 50px; width: 120px; height: 110px; background: black; color: white; padding: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 10px solid firebrick">
               Mask Layer 1
             </div>
             
-            <div class="element-to-mask" style="position: absolute; z-index: 10; top: 20px; right: 160px; width: 120px; height: 120px; background: green; color: white; padding: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold;">
+            <div class="element-to-mask" style="position: absolute; z-index: 10; top: -20px; right: 160px; width: 120px; height: 130px; background: green; color: white; padding: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 5px solid cadetblue;">
               Mask Layer 2
             </div>
 
