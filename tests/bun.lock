@@ -1,0 +1,14 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "electrobun-tests",
+      "dependencies": {
+        "electrobun": "file:..",
+      },
+    },
+  },
+  "packages": {
+    "electrobun": ["..@file:..", { "bin": { "electrobun": "bin/electrobun.cjs" } }],
+  }
+}

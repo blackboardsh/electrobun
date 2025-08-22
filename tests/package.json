@@ -1,0 +1,13 @@
+{
+  "name": "electrobun-tests",
+  "version": "1.0.0",
+  "description": "Interactive test harness for Electrobun",
+  "type": "module",
+  "scripts": {
+    "start": "electrobun dev",
+    "build:dev": "electrobun build"
+  },
+  "dependencies": {
+    "electrobun": "file:../"
+  }
+}

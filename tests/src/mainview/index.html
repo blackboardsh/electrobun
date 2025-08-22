@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electrobun Test Harness</title>
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="header">
+            <h1>🧪 Electrobun Test Harness</h1>
+            <div class="header-actions">
+                <button id="run-all-btn" class="btn btn-primary">Run All Tests</button>
+                <button id="cleanup-btn" class="btn btn-secondary">Cleanup</button>
+                <div class="platform-info">
+                    <span id="platform-name">Platform: Loading...</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <aside class="sidebar">
+                <div class="test-categories">
+                    <h3>Test Categories</h3>
+                    <div id="category-filters">
+                        <label class="filter-item">
+                            <input type="checkbox" value="Windows" checked> Windows
+                        </label>
+                        <label class="filter-item">
+                            <input type="checkbox" value="WebViews" checked> WebViews
+                        </label>
+                        <label class="filter-item">
+                            <input type="checkbox" value="System" checked> System
+                        </label>
+                    </div>
+                </div>
+
+                <div class="test-status-summary">
+                    <h3>Status Summary</h3>
+                    <div class="status-counts">
+                        <div class="count-item">
+                            <span class="count" id="passed-count">0</span>
+                            <span class="label">Passed</span>
+                        </div>
+                        <div class="count-item">
+                            <span class="count" id="failed-count">0</span>
+                            <span class="label">Failed</span>
+                        </div>
+                        <div class="count-item">
+                            <span class="count" id="pending-count">0</span>
+                            <span class="label">Pending</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <main class="test-area">
+                <div class="auto-tests-section">
+                    <h2>🤖 Auto-Detected Tests</h2>
+                    <p class="section-description">These tests can automatically detect success/failure</p>
+                    <div id="auto-tests-container" class="tests-container">
+                        <!-- Auto tests will be populated here -->
+                    </div>
+                </div>
+
+                <div class="manual-tests-section">
+                    <h2>👁️ Manual Verification Tests</h2>
+                    <p class="section-description">These tests require human verification - follow instructions carefully</p>
+                    <div id="manual-tests-container" class="tests-container">
+                        <!-- Manual tests will be populated here -->
+                    </div>
+                </div>
+
+                <div class="hybrid-tests-section">
+                    <h2>🔄 Hybrid Tests</h2>
+                    <p class="section-description">These tests have both automatic detection and manual verification components</p>
+                    <div id="hybrid-tests-container" class="tests-container">
+                        <!-- Hybrid tests will be populated here -->
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <div class="event-log">
+            <h3>Event Log</h3>
+            <div id="event-log-content" class="log-content">
+                <div class="log-entry">
+                    <span class="timestamp">Starting test harness...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for detailed test results -->
+    <div id="test-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Test Details</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Test details will be shown here -->
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="index.js"></script>
+</body>
+</html>

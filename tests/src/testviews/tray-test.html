@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Tray Test Instructions</title>
+    <style>
+        body {
+            padding: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        .instructions-box {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .instructions-box ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .instructions-box li {
+            margin: 5px 0;
+        }
+        #tray-events {
+            background: #f0f0f0;
+            padding: 15px;
+            border-radius: 8px;
+            min-height: 100px;
+        }
+        .event-item {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h2>System Tray Test</h2>
+    <p><strong>Look for the tray icon in your system tray/menu bar</strong></p>
+    
+    <div class="instructions-box">
+        <h3>Instructions:</h3>
+        <ol>
+            <li>Find the test tray icon (usually in top-right on macOS, bottom-right on Windows)</li>
+            <li>Click the tray icon</li>
+            <li>Click "Test Item 1" and "Test Item 2"</li>
+            <li>Try the submenu items</li>
+            <li>When done testing, click "Mark Tray Test as Passed" in the tray menu</li>
+        </ol>
+    </div>
+    
+    <div>
+        <h3>Tray Events:</h3>
+        <div id="tray-events">
+            No events yet - try clicking tray menu items...
+        </div>
+    </div>
+</body>
+</html>

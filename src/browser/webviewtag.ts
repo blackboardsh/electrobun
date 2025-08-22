@@ -83,7 +83,15 @@ const ConfigureWebviewTags = (
       this.lastRect = rect;
 
       const url = this.src || this.getAttribute("src");
-      const html = this.html || this.getAttribute("html");      
+      const html = this.html || this.getAttribute("html");   
+      
+      const maskSelectors = this.masks || this.getAttribute("masks");
+
+      if (maskSelectors) {
+        maskSelectors.split(',').forEach(s => {
+          this.maskSelectors.add(s);
+        })
+      }
 
       const webviewId = await this.internalRpc.request.webviewTagInit({        
         hostWebviewId: window.__electrobunWebviewId,

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WebView Mask Test</title>
+    <script src="views://webviewtag/index.js"></script>
+    <style>
+        body {
+            height: 2000px;
+            padding: 20px;
+            background: linear-gradient(to bottom, white, #e0e0e0);
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        h2 {
+            color: #333;
+        }
+        .instructions {
+            font-size: 16px;
+            line-height: 1.5;
+        }
+        .spacer {
+            height: 600px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.8);
+            border: 2px dashed #999;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        electrobun-webview {
+            width: 100%;
+            height: 400px;
+            border: 2px solid #666;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <script>
+        function addMask() {
+            const webview = document.querySelector('electrobun-webview');
+            if (webview) {
+                webview.addMaskSelector('#overlay-button');
+                console.log('Added mask selector for #overlay-button');
+            }
+        }
+        
+        function removeMask() {
+            const webview = document.querySelector('electrobun-webview');
+            if (webview) {
+                webview.removeMaskSelector('#overlay-button');
+                console.log('Removed mask selector for #overlay-button');
+            }
+        }
+    </script>
+    <h2>WebView Mask Layer Test</h2>
+    <p class="instructions">
+        <strong>Instructions:</strong><br>
+        1. Scroll down to see the WebView below<br>
+        2. Continue scrolling up and down<br>
+        3. Watch the RED button - it should ALWAYS stay on top
+    </p>
+    
+    <div style="margin-top: 300px; position: relative; border: 3px dashed #666; padding: 20px;">
+        <h3>WebView with Overlay Test</h3>
+        <div style="margin-bottom: 10px;">
+            <button onclick="addMask()" style="padding: 8px 16px; margin-right: 10px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Add Mask
+            </button>
+            <button onclick="removeMask()" style="padding: 8px 16px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Remove Mask
+            </button>
+        </div>
+        <electrobun-webview 
+            src="https://electrobun.dev"
+            renderer="cef"
+            partition=""
+            masks="#overlay-button"
+            style="width: 600px; height: 350px; border: 2px solid blue;">
+        </electrobun-webview>
+        
+        <!-- Critical: This button MUST stay on top -->
+        <button id="overlay-button" style="
+            position: absolute;
+            top: 80px;
+            left: 350px;
+            padding: 15px 30px;
+            background: #ff0000;
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            z-index: 9999;
+            border: 3px solid #cc0000;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        " onclick="this.style.background = this.style.background === 'green' ? '#ff0000' : 'green'">
+            I MUST STAY ON TOP!<br>
+            <small>Click me to change color</small>
+        </button>
+    </div>
+    
+    <div style="margin-top: 200px; padding: 20px; background: #f9f9f9; border: 2px solid #ddd;">
+        <h3>Keep scrolling...</h3>
+        <p>The red button above should remain visible above the WebView at all times.</p>
+        <p>If it disappears behind the WebView content, that's a mask layer bug.</p>
+    </div>
+    
+    <div style="margin-top: 200px;">
+        <p>End of content - scroll back up to test more</p>
+    </div>
+</body>
+</html>
