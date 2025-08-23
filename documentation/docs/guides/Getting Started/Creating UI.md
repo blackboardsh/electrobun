@@ -2,10 +2,11 @@
 sidebar_position: 3
 title: Creating UI
 sidebar_label: 3. Creating UI
+slug: /guides/creating-ui
 ---
 
 :::info
-Continuing on from the [Hello World](/docs/guides/Getting%20Started/Hello%20World) Guide we're going to add some UI.
+Continuing on from the [Hello World](/docs/guides/hello-world) Guide we're going to add some UI.
 :::
 
 Currently our app is opening a browser window and just loading a url. Let's make a simple web browser.

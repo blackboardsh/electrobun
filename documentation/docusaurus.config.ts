@@ -98,15 +98,15 @@ const config: Config = {
           items: [
             {
               label: "Getting Started",
-              to: "/docs/guides/Getting%20Started/",
+              to: "/docs/guides/getting-started",
             },
             {
               label: "What is Electrobun?",
-              to: "/docs/guides/Getting%20Started/What%20is%20Electrobun",
+              to: "/docs/guides/what-is-electrobun",
             },
             {
               label: "Hello World",
-              to: "/docs/guides/Getting%20Started/Hello%20World",
+              to: "/docs/guides/hello-world",
             },
           ],
         },

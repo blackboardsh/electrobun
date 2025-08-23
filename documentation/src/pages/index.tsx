@@ -169,7 +169,7 @@ export default function Home(): JSX.Element {
               <div className={styles.featureIcon}>📦</div>
               <h3 className={styles.featureTitle}>Incredibly Small</h3>
               <p className={styles.featureDescription}>
-                Self-extracting bundles ~14MB. Ship updates as small as 4KB. Save bandwidth, update frequently.
+                Self-extracting bundles ~14MB. Ship updates as small as 14KB. Save bandwidth, update frequently.
               </p>
             </div>
 
@@ -212,7 +212,7 @@ export default function Home(): JSX.Element {
               <a href="/docs/guides/getting-started" className={styles.primaryButton}>
                 Get Started
               </a>
-              <a href="/docs" className={styles.secondaryButton}>
+              <a href="/docs/apis/bun/" className={styles.secondaryButton}>
                 Read the Docs
               </a>
             </div>

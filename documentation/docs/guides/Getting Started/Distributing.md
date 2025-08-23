@@ -2,10 +2,11 @@
 sidebar_position: 4
 title: Distributing
 sidebar_label: 4. Distributing
+slug: /guides/distributing
 ---
 
 :::info
-Continuing on from the [Creating UI](/docs/guides/Getting%20Started/Creating%20UI) Guide.
+Continuing on from the [Creating UI](/docs/guides/creating-ui) Guide.
 :::
 
 Let's add two more scripts to our `package.json` file to get our app ready for distribution. `build:canary` and `build:stable`:

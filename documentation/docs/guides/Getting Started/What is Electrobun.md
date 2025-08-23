@@ -2,6 +2,7 @@
 sidebar_position: 1
 title: What is Electrobun
 sidebar_label: 1. What is Electrobun
+slug: /guides/what-is-electrobun
 ---
 
 Electrobun aims to be a batteries included framework for building desktop apps with Typescript.

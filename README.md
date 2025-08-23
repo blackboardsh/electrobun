@@ -20,7 +20,7 @@ Visit <a href="https://www.electrobun.dev/">Electrobun.dev</a> to see api docume
 - Write typescript for the main process and webviews without having to think about it.
 - Isolation between main and webview processes with fast, typed, easy to implement RPC between them.
 - Small self-extracting app bundles ~12MB (when using system webview, most of this is the bun runtime)
-- Even smaller app updates as small as 4KB (using bsdiff it only downloads tiny patches between versions)
+- Even smaller app updates as small as 14KB (using bsdiff it only downloads tiny patches between versions)
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
 ## Architecture

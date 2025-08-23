@@ -2,6 +2,7 @@
 sidebar_position: 2
 title: Hello World
 sidebar_label: 2. Hello World
+slug: /guides/hello-world
 ---
 
 :::info

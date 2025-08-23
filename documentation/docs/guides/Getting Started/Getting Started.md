@@ -1,5 +1,6 @@
 ---
 sidebar_position: 1
+slug: /guides/getting-started
 ---
 
 This Getting Started guide will give you an overview of Electrobun.
