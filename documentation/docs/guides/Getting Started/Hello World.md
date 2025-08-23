@@ -69,21 +69,21 @@ const win = new BrowserWindow({
 
 ## Step 5: Configure Electrobun
 
-One last thing, we need to a way to let the Electrobun cli know where our bun entrypoint file is and how to build it. We do that by creating an electrobun.config file in the root of the project.
+One last thing, we need to a way to let the Electrobun cli know where our bun entrypoint file is and how to build it. We do that by creating an `electrobun.config.ts` file in the root of the project.
 
-```json title="electrobun.config"
-{
-  "app": {
-    "name": "My App",
-    "identifier": "dev.my.app",
-    "version": "0.0.1"
+```typescript title="electrobun.config.ts"
+export default {
+  app: {
+    name: "My App",
+    identifier: "dev.my.app",
+    version: "0.0.1",
   },
-  "build": {
-    "bun": {
-      "entrypoint": "src/bun/index.ts"
-    }
-  }
-}
+  build: {
+    bun: {
+      entrypoint: "src/bun/index.ts",
+    },
+  },
+};
 ```
 
 ## Step 6: Run your app

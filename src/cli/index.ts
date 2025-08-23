@@ -30,8 +30,12 @@ const MAX_CHUNK_SIZE = 1024 * 2;
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
-const configName = "electrobun.config";
-const configPath = join(projectRoot, configName);
+
+// Find TypeScript ESM config file
+function findConfigFile(): string | null {
+  const configFile = join(projectRoot, 'electrobun.config.ts');
+  return existsSync(configFile) ? configFile : null;
+}
 
 // Note: cli args can be called via npm bun /path/to/electorbun/binary arg1 arg2
 const indexOfElectrobun = process.argv.findIndex((arg) =>
@@ -440,19 +444,21 @@ if (!command) {
   process.exit(1);
 }
 
-const config = getConfig();
+// Main execution function
+async function main() {
+  const config = await getConfig();
 
-const envArg =
-  process.argv.find((arg) => arg.startsWith("--env="))?.split("=")[1] || "";
+  const envArg =
+    process.argv.find((arg) => arg.startsWith("--env="))?.split("=")[1] || "";
 
-const targetsArg =
-  process.argv.find((arg) => arg.startsWith("--targets="))?.split("=")[1] || "";
+  const targetsArg =
+    process.argv.find((arg) => arg.startsWith("--targets="))?.split("=")[1] || "";
 
-const validEnvironments = ["dev", "canary", "stable"];
+  const validEnvironments = ["dev", "canary", "stable"];
 
-// todo (yoav): dev, canary, and stable;
-const buildEnvironment: "dev" | "canary" | "stable" =
-  validEnvironments.includes(envArg || "dev") ? (envArg || "dev") : "dev";
+  // todo (yoav): dev, canary, and stable;
+  const buildEnvironment: "dev" | "canary" | "stable" =
+    validEnvironments.includes(envArg || "dev") ? (envArg || "dev") : "dev";
 
 // Determine build targets
 type BuildTarget = { os: 'macos' | 'win' | 'linux', arch: 'arm64' | 'x64' };
@@ -1893,15 +1899,27 @@ exec "\$LAUNCHER_BINARY" "\$@"
 
 } 
 
-function getConfig() {
+async function getConfig() {
   let loadedConfig = {};
-  if (existsSync(configPath)) {
-    const configFileContents = readFileSync(configPath, "utf8");
-    // Note: we want this to hard fail if there's a syntax error
+  const foundConfigPath = findConfigFile();
+  
+  if (foundConfigPath) {
+    console.log(`Using config file: ${basename(foundConfigPath)}`);
+    
     try {
-      loadedConfig = JSON.parse(configFileContents);
+      // Use dynamic import for TypeScript ESM files
+      // Bun handles TypeScript natively, no transpilation needed
+      const configModule = await import(foundConfigPath);
+      loadedConfig = configModule.default || configModule;
+      
+      // Validate that we got a valid config object
+      if (!loadedConfig || typeof loadedConfig !== 'object') {
+        console.error("Config file must export a default object");
+        console.error("using default config instead");
+        loadedConfig = {};
+      }
     } catch (error) {
-      console.error("Failed to parse config file:", error);
+      console.error("Failed to load config file:", error);
       console.error("using default config instead");
     }
   }
@@ -2606,3 +2624,11 @@ function createAppBundle(bundleName: string, parentFolder: string, targetOS: 'ma
     throw new Error(`Unsupported OS: ${targetOS}`);
   }
 }
+
+} // End of main() function
+
+// Run the main function
+main().catch((error) => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});

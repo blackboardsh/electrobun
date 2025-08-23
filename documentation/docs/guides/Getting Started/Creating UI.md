@@ -60,29 +60,29 @@ Let's create an html file to load into the BrowserView that will load the transp
 </html>
 ```
 
-Now let's update our `electrobun.config` file so that it knows to transpile the new typescript and html files for our main-ui:
+Now let's update our `electrobun.config.ts` file so that it knows to transpile the new typescript and html files for our main-ui:
 
-```javascript title="electrobun.config"
-{
-  "app": {
-    "name": "My App",
-    "identifier": "dev.my.app",
-    "version": "0.0.1"
+```typescript title="electrobun.config.ts"
+export default {
+  app: {
+    name: "My App",
+    identifier: "dev.my.app",
+    version: "0.0.1",
   },
-  "build": {
-    "bun": {
-      "entrypoint": "src/bun/index.ts"
+  build: {
+    bun: {
+      entrypoint: "src/bun/index.ts",
     },
-    "views": {
-        "main-ui": {
-            "entrypoint": "src/main-ui/index.ts"
-        }
+    views: {
+      "main-ui": {
+        entrypoint: "src/main-ui/index.ts",
+      },
     },
-    "copy": {
-        "src/main-ui/index.html": "views/main-ui/index.html"
-    }
-  }
-}
+    copy: {
+      "src/main-ui/index.html": "views/main-ui/index.html",
+    },
+  },
+};
 ```
 
 And finally let's update our bun process code to load the new html file:

@@ -56,6 +56,24 @@ export default function Home(): JSX.Element {
             <span style={{ color: "#777", padding: "0 8px" }}>$</span>
             <span style={{ color: "#aaa" }}>bun install electrobun</span>
           </div>
+          <h2>Quick Start</h2>
+          <div
+            style={{
+              display: "flex",
+              border: "4px solid #e263a9",
+              borderRadius: 8,
+              padding: 8,
+              background: "#000",
+              fontSize: 20,
+              fontWeight: "bold",
+              width: 300,
+              alignSelf: "center",
+              margin: "auto",
+            }}
+          >
+            <span style={{ color: "#777", padding: "0 8px" }}>$</span>
+            <span style={{ color: "#aaa" }}>bunx electrobun init</span>
+          </div>
           <hr style={{ margin: "35px 0" }} />
           <div
             style={{
@@ -107,7 +125,7 @@ export default function Home(): JSX.Element {
             >
               <h3>Tiny</h3>
               <p>
-                Small self-extracting app bundles ~12MB and tiny app updates as
+                Small self-extracting app bundles ~14MB and tiny app updates as
                 small as 4KB. Ship often while saving bandwidth costs.
               </p>
             </div>

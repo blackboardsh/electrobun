@@ -52,32 +52,32 @@ Both of these non-dev builds will:
 All you need to distribute your app is a static file host like S3 or Google Cloud Storage. There's no need to run a server beyond that.
 :::
 
-Let's assume you've set up a Google Cloud Storage bucket with a subfolder for this application and add it to `electrobun.config`:
+Let's assume you've set up a Google Cloud Storage bucket with a subfolder for this application and add it to `electrobun.config.ts`:
 
-```json title="electrobun.config"
-{
-  "app": {
-    "name": "My App",
-    "identifier": "dev.my.app",
-    "version": "0.0.1"
+```typescript title="electrobun.config.ts"
+export default {
+  app: {
+    name: "My App",
+    identifier: "dev.my.app",
+    version: "0.0.1",
   },
-  "build": {
-    "bun": {
-      "entrypoint": "src/bun/index.ts"
+  build: {
+    bun: {
+      entrypoint: "src/bun/index.ts",
     },
-    "views": {
+    views: {
       "main-ui": {
-        "entrypoint": "src/main-ui/index.ts"
-      }
+        entrypoint: "src/main-ui/index.ts",
+      },
     },
-    "copy": {
-      "src/main-ui/index.html": "views/main-ui/index.html"
-    }
+    copy: {
+      "src/main-ui/index.html": "views/main-ui/index.html",
+    },
   },
-  "release": {
-    "bucketUrl": "https://storage.googleapis.com/mybucketname/myapp/"
-  }
-}
+  release: {
+    bucketUrl: "https://storage.googleapis.com/mybucketname/myapp/",
+  },
+};
 ```
 
 You can make your app available by simply uploading the contents of the `artifacts` folder into the `myapp` folder of your bucket. The artifacts folder will have two subfolders, one for `canary` and one for `stable`.
