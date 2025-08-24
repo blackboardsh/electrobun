@@ -693,6 +693,13 @@ function escapePathForTerminal(filePath: string) {
 
   return escapedPath;
 }
+
+function sanitizeVolumeNameForHdiutil(volumeName: string) {
+  // Remove or replace characters that cause issues with hdiutil volume mounting
+  // Parentheses and other special characters can cause "Operation not permitted" errors
+  return volumeName.replace(/[()]/g, '');
+}
+
 // MyApp
 
 // const appName = config.app.name.replace(/\s/g, '-').toLowerCase();
@@ -1563,7 +1570,7 @@ if (commandArg === "init") {
       // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
       // Note: use ULFO (lzfse) for better compatibility with large CEF frameworks and modern macOS
       execSync(
-        `hdiutil create -volname "${appFileName}" -srcfolder ${escapePathForTerminal(
+        `hdiutil create -volname "${sanitizeVolumeNameForHdiutil(appFileName)}" -srcfolder ${escapePathForTerminal(
           selfExtractingBundle.appBundleFolderPath
         )} -ov -format ULFO ${escapePathForTerminal(dmgPath)}`
       );
