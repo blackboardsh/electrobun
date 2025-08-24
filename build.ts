@@ -994,7 +994,7 @@ async function buildCli() {
 
     const compileTarget = process.platform === 'win32' ? '--target=bun-windows-x64-baseline' : '';
 
-    await $`bun build src/cli/index.ts --compile ${compileTarget} --no-cache --outfile src/cli/build/electrobun`;
+    await $`BUN_INSTALL_CACHE_DIR=/tmp/bun-cache bun build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
 
 
 }
