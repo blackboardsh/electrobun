@@ -281,6 +281,13 @@ const win = new BrowserWindow({
 
 win.setTitle("url browserwindow");
 
+// Handle window close events
+win.on("close", () => {
+  console.log("Main window closed");
+  // For the playground app, exit when the main window is closed
+  process.exit(0);
+});
+
 setTimeout(async () => {
   const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
     // script: `document.body.textContent`,
@@ -351,6 +358,10 @@ const webviewTagWindow = new BrowserWindow({
     y: 100,
   },
   titleBarStyle: "hiddenInset",
+});
+
+webviewTagWindow.on("close", () => {
+  console.log("Webview tag window closed");
 });
 
 // TODO: make this a unit test

@@ -134,4 +134,11 @@ const mainWindow = new BrowserWindow({
 // Store reference to mainWindow RPC for sending messages
 mainRPC = mainWindow.webview.rpc;
 
+// Listen for window close event and exit the app
+// For this browser app, we want to exit when the main window is closed
+mainWindow.on("close", () => {
+  console.log("🚪 Main window closed - exiting app");
+  process.exit(0);
+});
+
 console.log("✅ Multitab Browser initialized");

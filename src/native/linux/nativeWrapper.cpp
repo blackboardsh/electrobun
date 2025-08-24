@@ -2800,8 +2800,21 @@ public:
     GtkWidget* overlay;
     std::vector<std::shared_ptr<AbstractView>> abstractViews;
     AbstractView* activeWebView = nullptr;
+    uint32_t windowId;
+    WindowCloseCallback closeCallback;
+    WindowMoveCallback moveCallback;
+    WindowResizeCallback resizeCallback;
     
-    ContainerView(GtkWidget* window) : window(window) {
+    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr) {
+        // Create an overlay container as the main container
+        overlay = gtk_overlay_new();
+        gtk_container_add(GTK_CONTAINER(window), overlay);
+        
+        gtk_widget_show(overlay);
+    }
+    
+    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) 
+        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
@@ -2921,6 +2934,39 @@ static gboolean onWindowConfigure(GtkWidget* widget, GdkEventConfigure* event, g
 static gboolean onMouseMove(GtkWidget* widget, GdkEventMotion* event, gpointer user_data) {
 
     return FALSE; // Let other handlers process this event too
+}
+
+// Window delete event callback - handles X button clicks
+static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
+    printf("DEBUG: Window delete event triggered\n");
+    ContainerView* container = static_cast<ContainerView*>(user_data);
+    if (container) {
+        printf("DEBUG: Container found for window ID: %u\n", container->windowId);
+        if (container->closeCallback) {
+            printf("DEBUG: Calling close callback for window ID: %u\n", container->windowId);
+            container->closeCallback(container->windowId);
+        } else {
+            printf("DEBUG: No close callback set for window ID: %u\n", container->windowId);
+        }
+    } else {
+        printf("DEBUG: No container found in delete event handler\n");
+    }
+    
+    // Hide the window immediately to give user feedback
+    gtk_widget_hide(widget);
+    
+    // Schedule the window destruction on the next iteration of the main loop
+    // This allows the callback to complete before destroying the window
+    g_idle_add_full(G_PRIORITY_HIGH, [](gpointer data) -> gboolean {
+        GtkWidget* window = GTK_WIDGET(data);
+        printf("DEBUG: Destroying window from idle callback\n");
+        gtk_widget_destroy(window);
+        return G_SOURCE_REMOVE;
+    }, widget, nullptr);
+    
+    // Return TRUE to prevent the default handler from running
+    // We're handling the destruction ourselves
+    return TRUE;
 }
 
 // Tray implementation using AppIndicator
@@ -3533,9 +3579,20 @@ gboolean process_x11_events(gpointer data) {
             switch (event.type) {
                 case ClientMessage:
                     if (event.xclient.data.l[0] == (long)XInternAtom(targetWin->display, "WM_DELETE_WINDOW", False)) {
+                        printf("DEBUG: X11 WM_DELETE_WINDOW received for window ID: %u\n", targetWin->windowId);
                         if (targetWin->closeCallback) {
+                            printf("DEBUG: Calling close callback for X11 window ID: %u\n", targetWin->windowId);
                             targetWin->closeCallback(targetWin->windowId);
                         }
+                        
+                        // Destroy the window after notifying Bun
+                        printf("DEBUG: Destroying X11 window ID: %u\n", targetWin->windowId);
+                        XDestroyWindow(targetWin->display, targetWin->window);
+                        XFlush(targetWin->display);
+                        
+                        // Remove from global maps
+                        g_x11_window_to_id.erase(targetWin->window);
+                        g_x11_windows.erase(targetWin->windowId);
                     }
                     break;
                     
@@ -3726,18 +3783,27 @@ void* createGTKWindow(uint32_t windowId, double x, double y, double width, doubl
            
         }
         
-        // Create container
-       
-        auto container = std::make_shared<ContainerView>(window);
+        // Create container with callbacks
+        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback);
         
         g_containers[windowId] = container;
         
         // Apply application menu to new window if one is configured
         applyApplicationMenuToWindow(window);
         
-        // Store callbacks (simplified - in real implementation you'd want to store these properly)
-        // For now, just connect basic destroy signal
-        g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
+        // Connect window delete event to handle X button clicks properly
+        g_signal_connect(window, "delete-event", G_CALLBACK(onWindowDeleteEvent), container.get());
+        
+        // Connect destroy signal to clean up the container
+        g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget* widget, gpointer user_data) {
+            ContainerView* container = static_cast<ContainerView*>(user_data);
+            if (container) {
+                printf("DEBUG: Window destroyed, cleaning up container for window ID: %u\n", container->windowId);
+                g_containers.erase(container->windowId);
+            }
+        }), container.get());
+        
+        // Note: Removed gtk_main_quit as default behavior - let the app decide whether to exit
        
         
         // Connect window resize signal for auto-resize functionality
@@ -4785,16 +4851,25 @@ void* createNSRectWrapper(double x, double y, double width, double height) {
 void closeNSWindow(void* window) {
     if (window) {
         dispatch_sync_main_void([&]() {
-            X11Window* x11win = static_cast<X11Window*>(window);
-            if (x11win && x11win->display && x11win->window) {
-                XDestroyWindow(x11win->display, x11win->window);
-                XFlush(x11win->display);
-                
-                // Remove from global maps
-                g_x11_window_to_id.erase(x11win->window);
-                g_x11_windows.erase(x11win->windowId);
-                
-                // Note: Don't close display here as it might be shared
+            // Check if it's a GTK window first
+            if (GTK_IS_WIDGET(window)) {
+                GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+                printf("DEBUG: Destroying GTK window\n");
+                gtk_widget_destroy(gtkWindow);
+            } else {
+                // It's an X11 window
+                X11Window* x11win = static_cast<X11Window*>(window);
+                if (x11win && x11win->display && x11win->window) {
+                    printf("DEBUG: Destroying X11 window\n");
+                    XDestroyWindow(x11win->display, x11win->window);
+                    XFlush(x11win->display);
+                    
+                    // Remove from global maps
+                    g_x11_window_to_id.erase(x11win->window);
+                    g_x11_windows.erase(x11win->windowId);
+                    
+                    // Note: Don't close display here as it might be shared
+                }
             }
         });
     }
