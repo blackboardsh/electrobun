@@ -44,8 +44,8 @@ bun run build:stable
 
 Both of these non-dev builds will:
 
-- build an optimized MacOS app bundle
-- tar and compress it using state of the art compression
+- build an optimized app bundle
+- tar and compress it using state of the art ZSTD compression
 - generate another self-extracting app bundle
 - create an `artifacts` folder for distribution
 
@@ -81,37 +81,55 @@ export default {
 };
 ```
 
-You can make your app available by simply uploading the contents of the `artifacts` folder into the `myapp` folder of your bucket. The artifacts folder will have two subfolders, one for `canary` and one for `stable`.
+You can make your app available by simply uploading the contents of the `artifacts` folder into the `myapp` folder of your bucket. 
 
-Once you've uploaded the artifacts to your bucket when your run a non-dev build command again like `bun run build:canary` the Electrobun cli will automatically download the current version of your app, use our custom optimize BSDIFF implementation to generate a patch file and add the patch file to your artifacts folder.
+The artifacts folder will create a subfolder for each `channel-build-target` for example `canary-macos-arm64`.
+
+By default the Electrobun CLI will build for the current machine's target and automatically download the core/cef files for the targets you're building for as part of the bundling process.
+
+If you would like to cross-bundle for multiple targets just update your package.json scripts with the `targets` option like this
+
+```json
+ "build:canary": "electrobun build env=canary targets=macos-x64",
+```
+
+or
+
+```json
+ "build:canary": "electrobun build env=canary targets=all",
+```
+
+Once you've uploaded the artifacts to your bucket when your run a non-dev build command again like `bun run build:canary` the Electrobun cli will automatically download the current version of your app using the `release.bucketUrl` setting in your `electrobun.config.ts`, and use our custom optimized BSDIFF implementation to generate a patch file and add the patch file to your artifacts folder.
+
+It's recommended to just simply drag and drop upload new artifacts to your file storage leaving old patch files, as that gives users on an older version of your app a series of patch files to upgrade to the latest version, each one as small as 14KB. If downloading successive patch files can't get your user to the latest version Electrobun's Updater will automatically fall back to just downloading the latest version.
 
 Visit the [Updater API docs](/docs/apis/bun/Updater) to learn how to make your app check for and install updates.
 
 ### What are all the files in the artifacts folder
 
 ```
-// Assuming your app's name is MyApp and you did a canary build you'll have the following files:
+// Assuming your app's name is MyApp and you did a canary build on an ARM mac you'll have the following files:
 
 // This file contains metadata for the version of your app you just built
-/artifacts/canary/update.json
+/artifacts/canary-macos-arm64/update.json
 
 // This is the file you would link to on your marketing site for users to download
 // when first installing your app. It's a dmg that contains your app in its
 // self-extracting form
-/artifacts/canary/MyApp-canary.dmg
+/artifacts/canary-macos-arm64/MyApp-canary.dmg
 
 // This is a copy of the compressed tar file of your app bundle. There's a copy
 // of this inside the self-extracting bundle. When your app updates itself if there
 // are no patch files available it will download this to update your app.
-/artifacts/canary/MyApp-canary.app.tar.zst
+/artifacts/canary-macos-arm64/MyApp-canary.app.tar.zst
 
-// These files are named <hash>.patch. The Electrobun cli generates patch files
-// from the current version on your static cloud hosting to the version your just
+// The patch files are named <hash>.patch. The Electrobun cli generates patch files
+// from the previous version on your static cloud hosting to the version you just
 // built.
 
 // When replacing the contents of your static file host you can keep as many old
-// patch files as you like. Users with older versions of your app will keep downloading
-// the next patch automatically when updating.
-/artifacts/canary/jsf87yasf.patch
+// patch files as you like. Users with older versions of your app will successively download
+// patches automatically when updating to get to the latest version.
+/artifacts/canary-macos-arm64/jsf87yasf.patch
 
 ```

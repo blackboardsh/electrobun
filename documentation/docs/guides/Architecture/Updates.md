@@ -4,4 +4,4 @@ We've implemented a batteries included update mechanism. All you need is to brin
 
 - [Update API](/docs/apis/bun/Updater) to check for, download, and update your apps.
 - [CLI](/docs/apis/cli/cli%20args) to build your app bundle, codesign, and generate artifacts.
-- A custom BSDIFF implementation in zig that lets you distribute updates as small as 14KB
+- A custom BSDIFF implementation in zig that takes advantage of SIMD operations for performance and lets you distribute updates as small as 14KB

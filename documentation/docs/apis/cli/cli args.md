@@ -1,76 +1,170 @@
-## CLI Tool Integration
+---
+title: CLI Commands
+sidebar_label: CLI Commands
+---
 
-When you execute `bun install electrobun`, it installs the Electrobun CLI tool into the `node_modules/bin` folder. This setup enables your npm scripts to simply invoke `electrobun <args>` directly, utilizing the CLI seamlessly.
+# Electrobun CLI Commands
 
-The CLI leverages the `electrobun.config` file to manage commands and handle processes associated with building and running the application efficiently.
+The Electrobun CLI provides commands for initializing new projects and building your applications for different environments.
 
-### Installation
+## Installation
 
-To install the CLI tool, use the following command:
+When you install Electrobun, the CLI tool is added to your `node_modules/bin` folder:
 
 ```bash
 bun install electrobun
 ```
 
-This command integrates the Electrobun CLI into your project's `node_modules` directory, making it accessible for npm scripts or direct command-line usage within the project environment.
+This makes the `electrobun` command available in your npm scripts or via `bunx`/`npx`.
 
 ## Commands
 
-### init
+### `electrobun init`
 
-**Description**: Initializes a new Electrobun project structure.  
-**Status**: Not yet implemented.
+Initializes a new Electrobun project with starter templates.
 
-### build
+#### Usage
 
-**Description**: Compiles the project according to configurations specified in the `electrobun.config`.
+```bash
+# Interactive template selection
+electrobun init
 
-### dev
+# Direct template selection
+electrobun init [template-name]
+```
 
-**Description**: Facilitates the project running in a development environment with live reloading, providing real-time feedback during development phases.
+#### Available Templates
 
-### launcher
+- `hello-world` - Basic single-window application
+- `photo-booth` - Camera app with photo capture functionality  
+- `web-browser` - Multi-tabbed browser with webview tags
 
-**Description**: Manages application launching, adapting to different settings for development and production environments to ensure appropriate resource utilization.
+#### Examples
 
-## Environments
+```bash
+# Choose template interactively
+bunx electrobun init
 
-### env
+# Initialize with photo-booth template directly
+bunx electrobun init photo-booth
 
-**Description**: Specifies the build environment, which can be set to `dev`, `canary`, or `stable`. Non-dev environments like `canary` and `stable` lead to the generation of an `artifacts` folder, containing all necessary distribution files. These files can be hosted on static file services for application distribution.
+# Initialize with web-browser template
+bunx electrobun init web-browser
+```
 
-## Example Build Scripts
+### `electrobun build`
 
-Incorporating Electrobun into your `package.json` scripts can streamline both development and build processes:
+Builds your Electrobun application according to the configuration in `electrobun.config.ts`.
 
-```json
-"scripts": {
-"build:dev": "electrobun build",
-"start:dev": "electrobun dev",
-"dev": "bun install && npm run build:dev && npm run start:dev",
-"build:canary": "electrobun build env=canary",
-"build:stable": "electrobun build env=stable"
+#### Usage
+
+```bash
+electrobun build [options]
+```
+
+#### Options
+
+| Option | Description | Values | Default |
+|--------|-------------|---------|---------|
+| `--env` | Build environment | `dev`, `canary`, `stable` | `dev` |
+| `--targets` | Platform targets to build | `current`, `all`, or comma-separated list | `current` |
+
+#### Target Formats
+
+- `current` - Build for current platform/architecture only
+- `all` - Build for all configured platforms
+- `macos-arm64` - macOS Apple Silicon
+- `macos-x64` - macOS Intel
+- `win-x64` - Windows 64-bit
+- `linux-x64` - Linux 64-bit
+
+#### Examples
+
+```bash
+# Development build for current platform
+electrobun build
+
+# Development build with environment flag
+electrobun build --env=dev
+
+# Canary build for current platform
+electrobun build --env=canary
+
+# Stable build for all platforms
+electrobun build --env=stable --targets=all
+
+# Build for specific platforms
+electrobun build --env=stable --targets=macos-arm64,win-x64
+
+# Build for macOS Universal (both architectures)
+electrobun build --env=stable --targets=macos-arm64,macos-x64
+```
+
+## Build Environments
+
+### Development (`dev`)
+
+- Outputs logs and errors to terminal
+- No code signing or notarization
+- Creates build in `build/` folder
+- No artifacts generated
+- Fast iteration for testing
+
+### Canary
+
+- Pre-release/beta builds
+- Optional code signing and notarization
+- Generates distribution artifacts
+- Creates update manifests for auto-updates
+- Suitable for testing with limited users
+
+### Stable
+
+- Production-ready builds
+- Full code signing and notarization (if configured)
+- Optimized and compressed artifacts
+- Ready for distribution to end users
+- Generates all update files
+
+## Build Script Examples
+
+### Basic Setup
+
+```json title="package.json"
+{
+  "scripts": {
+    "dev": "electrobun build && electrobun dev",
+    "build": "electrobun build --env=canary",
+    "build:stable": "electrobun build --env=stable"
+  }
 }
 ```
 
-## Development vs. Production Builds
+### Development Workflow
 
-### Development Build (`dev`)
+```json title="package.json"
+{
+  "scripts": {
+    "dev": "electrobun build --env=dev && electrobun dev",
+    "dev:watch": "nodemon --watch src --exec 'bun run dev'",
+    "test": "bun test && bun run build"
+  }
+}
+```
 
-In the development environment, the build configuration is designed to output logs and errors directly to the terminal window, ensuring immediate feedback and error reporting for enhanced developer intervention.
+### Multi-Platform Builds
 
-### Canary and Stable Builds
-
-For environments marked as `canary` and `stable`, the CLI employs an optimized launcher binary better suited for production deployments. This launcher is optimized for performance and stability, ensuring efficient application execution.
-
-#### Canary
-
-Typically utilized for pre-release versions or testing new features in conditions that closely mimic production.
-
-#### Stable
-
-Used for releasing final, production-ready builds that are distributed to end-users.
-
-### Optimized Launcher Binary
-
-The optimized launcher binary is not merely for launching the application; it is also engineered to handle updates, system integration, and other critical runtime operations more reliably than the development-based launcher. This optimization ensures peak performance in environments where direct developer oversight is minimized.
+```json title="package.json"
+{
+  "scripts": {
+    "build:dev": "electrobun build",
+    "build:canary": "electrobun build --env=canary",
+    "build:canary:all": "electrobun build --env=canary --targets=all",
+    "build:stable": "electrobun build --env=stable",
+    "build:stable:mac": "electrobun build --env=stable --targets=macos-arm64,macos-x64",
+    "build:stable:win": "electrobun build --env=stable --targets=win-x64",
+    "build:stable:linux": "electrobun build --env=stable --targets=linux-x64",
+    "build:stable:all": "electrobun build --env=stable --targets=all"
+  }
+}
+```

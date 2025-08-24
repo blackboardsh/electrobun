@@ -15,7 +15,9 @@ Electrobun uses `electrobun.config.ts` in your project root to control how your 
 ### Basic Structure
 
 ```typescript title="electrobun.config.ts"
-export default {
+import { type ElectrobunConfig } from "electrobun";
+
+const config: ElectrobunConfig = {
   app: {
     name: "MyApp",
     identifier: "com.example.myapp",
@@ -27,6 +29,8 @@ export default {
     },
   },
 };
+
+export default config;
 ```
 
 ### Dynamic Configuration
@@ -34,15 +38,16 @@ export default {
 TypeScript config files support dynamic configuration with full type safety:
 
 ```typescript title="electrobun.config.ts"
+import { type ElectrobunConfig } from "electrobun";
 import { readFileSync } from 'fs';
 
 // Read version from package.json
 const packageJson = JSON.parse(readFileSync('./package.json', 'utf8'));
 
-export default {
+const config: ElectrobunConfig = {
   app: {
     name: "MyApp",
-    identifier: process.env.APP_ID,
+    identifier: process.env.APP_ID || "com.example.myapp",
     version: packageJson.version,
   },
   build: {
@@ -55,12 +60,16 @@ export default {
     bucketUrl: process.env.RELEASE_BUCKET_URL || "",
   },
 };
+
+export default config;
 ```
 
-### Fully example from the Electrobun Playground app
+### Full example from the Electrobun Playground app
 
 ```typescript title="electrobun.config.ts"
-export default {
+import { type ElectrobunConfig } from "electrobun";
+
+const config: ElectrobunConfig = {
     app: {
         name: "Electrobun (Playground)",
         identifier: "dev.electrobun.playground",
@@ -112,4 +121,6 @@ export default {
         bucketUrl: "https://static.electrobun.dev/playground/",
     },
 };
+
+export default config;
 ```

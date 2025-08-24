@@ -161,7 +161,7 @@ export default function Home(): JSX.Element {
               <div className={styles.featureIcon}>⚡</div>
               <h3 className={styles.featureTitle}>Lightning Fast</h3>
               <p className={styles.featureDescription}>
-                Powered by Bun runtime and native Zig bindings. Apps start instantly with minimal memory footprint.
+                Powered by Bun runtime and native bindings. Apps start instantly with minimal memory footprint.
               </p>
             </div>
 
@@ -185,7 +185,7 @@ export default function Home(): JSX.Element {
               <div className={styles.featureIcon}>🔐</div>
               <h3 className={styles.featureTitle}>Secure by Design</h3>
               <p className={styles.featureDescription}>
-                Process isolation with fast, typed RPC. Built-in security best practices from day one.
+                Process isolation with fast, typed RPC. Built-in security best practices from line one.
               </p>
             </div>
 
@@ -193,7 +193,7 @@ export default function Home(): JSX.Element {
               <div className={styles.featureIcon}>🚀</div>
               <h3 className={styles.featureTitle}>Ship in Minutes</h3>
               <p className={styles.featureDescription}>
-                Complete build toolchain included. Code signing, auto-updates, and distribution built-in.
+                Batteries included. Code signing, auto-updates, and distribution built-in.
               </p>
             </div>
 

@@ -31,8 +31,8 @@ export default {
             "assets/electrobun-logo-32-template.png": "views/assets/electrobun-logo-32-template.png",
         },
         mac: {
-            codesign: true,
-            notarize: true,
+            codesign: false,
+            notarize: false,
             bundleCEF: true,
             entitlements: {},
         },

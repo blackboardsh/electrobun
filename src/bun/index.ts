@@ -10,11 +10,13 @@ import { type RPCSchema, createRPC } from "rpc-anywhere";
 import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
 import * as Socket from "./core/Socket";
+import type { ElectrobunConfig } from "./ElectrobunConfig";
 
 // Named Exports
 export {
   type RPCSchema,
   type ElectrobunEvent,
+  type ElectrobunConfig,
   createRPC,
   BrowserWindow,
   BrowserView,

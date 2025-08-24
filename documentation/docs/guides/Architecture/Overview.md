@@ -2,6 +2,9 @@
 sidebar_position: 1
 ---
 
+## High Level App Architecture
+An Electrobun app is essentially a Bun app. A tiny launcher (typically a zig binary) will run a Bun app. Since native GUI's require a blocking event loop on the main thread the main Bun thread will create a webworker with your code and then use Bun's FFI to init the native GUI event loop. Your Bun code running in the worker can then use Electrobun's apis, many of which also call Electrobun's native wrapper code via Bun's FFI to open windows, create system trays, relay events and RPC, and so on.
+
 ## Application Bundles
 
 ### MacOS
@@ -11,7 +14,7 @@ sidebar_position: 1
 On MacOS an application bundle is really just a folder with a .app file extension. The key subfolders inside are
 
 ```
-// electrobun places several binaries here
+// electrobun places several binaries here. If bundling additional binaries on Mac and code-signing you must place them here
 /Contents/MacOS
 
 // An optimized zig implementation of bspatch used to generate and apply diffs during updates
@@ -24,9 +27,9 @@ On MacOS an application bundle is really just a folder with a .app file extensio
 // to run your compiled bun entrypoint file.
 /Contents/MacOS/launcher
 
-// A folder containing native code layer for the platform, on MacOS this these are
-// objc binaries for interfacing with MacOS apis like NSWindow and WKWebkit
-/Contents/MacOS/native/
+// A library containing Electrobun's native code layer for the platform, on MacOS this these are
+// objc/c++ code for interfacing with MacOS apis like NSWindow and WKWebkit
+/Contents/MacOS/libNativeWrapper.dylib
 
 // electrobun compiles your application's custom code here
 /Contents/MacOS/Resources
@@ -42,7 +45,7 @@ On MacOS an application bundle is really just a folder with a .app file extensio
 // define external dependencies
 /Contents/MacOS/Resources/app/bun/
 
-// This is where your views defined in electrobun.config are transpiled to
+// This is where your views defined in electrobun.config.ts are transpiled to
 // Browserviews can also use the views:// url schema anywhere urls are loaded
 // to load bundled static content from here.
 /Contents/MacOS/Resources/app/views
@@ -50,11 +53,11 @@ On MacOS an application bundle is really just a folder with a .app file extensio
 
 #### IPC
 
-In order to communicate between bun, zig, and browser contexts Electrobun has several mechanisms for establishing IPC between the processes involved. For the most part Electrobun uses efficient named pipes and serializes json rpc over the pipes.
+In order to communicate between bun and browser contexts Electrobun has several mechanisms for establishing IPC between the processes involved. For the most part Electrobun uses postmessage and FFI but will also use more efficient encrypted web sockets.
 
 #### Self-Extracting Bundle
 
-Because zip file compression is not the best and we want apps you build with Electrobun to be as tiny as possible Electron automatically bundles your application into a self-extracting bundle. Electrobun takes your entire app bundle, tars it, compresses it with zlib which is fast best-in-class modern compression and creates a second app bundle for distribution.
+Because zip file compression is not the best and we want apps you build with Electrobun to be as tiny as possible Electron automatically bundles your application into a self-extracting ZSTD bundle. Electrobun takes your entire app bundle, tars it, compresses it with zlib which is fast best-in-class modern compression and creates a second wrapper app bundle for distribution.
 
 :::info
 The current Electrobun Playground app is **50.4MB** in size (most of this is the bun runtime), but when compressed and distributed as the self-extracting bundle it's only **13.1MB which is almost 5 times smaller**.
@@ -137,4 +140,4 @@ Dev builds are not meant to be distributed and so the cli does not generate arti
 
 ### Distribution
 
-Whne building `canary` and `stable` builds of your app Electrobun will generate an `artifacts` folder that contains everything you need to upload to a static host for distribution and updates.
+When building `canary` and `stable` builds of your app Electrobun will generate an `artifacts` folder that contains everything you need to upload to a static host for distribution and updates.

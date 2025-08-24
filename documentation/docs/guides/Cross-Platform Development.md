@@ -30,14 +30,14 @@ When building your app, you can target different platforms using the electrobun 
 `electrobun build`
 
 # Platform-specific builds
-electrobun build --targets=darwin-x64
-electrobun build --targets=darwin-arm64
+electrobun build --targets=macos-x64
+electrobun build --targets=macos-arm64
 electrobun build --targets=win32-x64
 electrobun build --targets=linux-x64
 electrobun build --targets=linux-arm64
 
 # cross compiling multiple targets
-electrobun build --targets=darwin-arm64,linux-arm64,win32-x64
+electrobun build --targets=macos-arm64,linux-arm64,win32-x64
 
 # all targets
 electrobun build --targets=all

@@ -11,9 +11,9 @@ Continuing on from the [Hello World](/docs/guides/hello-world) Guide we're going
 
 Currently our app is opening a browser window and just loading a url. Let's make a simple web browser.
 
-Let's create a new folder `src/main-ui/` and add an index file. This is where our browser code will go. The Electrobun cli will automatically transpile this into javascript and make it available at the url `views://main-ui/index.js`
+Let's create a new folder `src/main-ui/` and add an `index.ts` file. This is where our browser code will go. The Electrobun cli will automatically transpile this into javascript and make it available at the url `views://main-ui/index.js`
 
-```typescript title="src/main-ui/index.ts
+```typescript title="src/main-ui/index.ts"
 import { Electroview } from "electrobun/view";
 
 // Instantiate the electrobun browser api
@@ -39,7 +39,7 @@ window.goForward = () => {
 
 Let's create an html file to load into the BrowserView that will load the transpiled javascript above:
 
-```html title="src/main-ui/index.html
+```html title="src/main-ui/index.html"
 <!DOCTYPE html>
 <html lang="en">
 <head>

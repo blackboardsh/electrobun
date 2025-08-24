@@ -13,6 +13,13 @@ Electrobun will install a specific version of bun as a dependency in `node_modul
 This guide assumes you have bun installed globally, if you're using node.js or another package manager then you may need to adjust the terminal commands and package.json scripts accordingly.
 :::
 
+## Step 0: Init templates
+This guide will walk you through building a hello world from scratch. 
+
+If you'd prefer to be up and running in seconds we offer starter templates including a `hello-world`, `photo-booth`, and multi-tabbed `web-browser`. If you have bun installed and want to get started in a few clicks. 
+
+Just run **`bunx electrobun init`** and choose the starter template you want to explore.
+
 ## Step 1: Initialize your project folder
 
 Create a new folder for your project. Let's call it `/electrobun-test`.

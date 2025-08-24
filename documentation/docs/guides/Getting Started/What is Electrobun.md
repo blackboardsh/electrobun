@@ -30,11 +30,11 @@ What makes electrobun different, aside from our approach to achitecture are our 
 ### Flexible
 
 - Use any modern framework for UI (from plain HTML, to Preact, SolidJS, and more)
-- Use the built-in system Webview (or bundle a 3rd party webview like Chromium: _coming soon..._)
+- Use the system Webview on each platform or easily bundle CEF from cross-platform consistency.
 
 ### Security and Performance
 
 - Bun and Zig under the hood
 - The main process and browser processes are isolated from each other
-- Opt-in to enable fast, typed, and easy to extend RPC between main and browser processes
-- A custom webview tag implementation for OOPIFs so you can build a web browser
+- Add fast, typed, and easy to extend RPC between main and browser processes
+- A custom webview html tag implementation for OOPIFs so you can build a multi-tabbed web browser with just Html, CSS, and Typescript
