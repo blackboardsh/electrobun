@@ -994,19 +994,7 @@ async function buildCli() {
 
     const compileTarget = process.platform === 'win32' ? '--target=bun-windows-x64-baseline' : '';
 
-    // Note: on windows in ci there's a bug where it fails to do xyz with the cache directory on the first try
-    // so on windows in ci we just do it again here
-    if (process.platform === 'win32') {
-        console.log('running extra cli build to handle windows ci bug')
-        try {
-             await $`bun build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
-        } catch (err) {
-            console.log('Windows CI error still happening, trying a second time')
-            await $`bun build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
-        }
-    } else {
-        await $`bun build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
-    }
+    await $`bun build src/cli/index.ts --compile ${compileTarget} --no-cache --outfile src/cli/build/electrobun`;
 
 
 }
