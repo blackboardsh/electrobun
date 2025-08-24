@@ -4694,6 +4694,18 @@ void setTrayMenu(void* statusItem, const char* menuConfig) {
     setTrayMenuFromJSON(statusItem, menuConfig);
 }
 
+void removeTray(void* statusItem) {
+    dispatch_sync_main_void([&]() {
+        // Find the tray by statusItem pointer and remove it
+        for (auto it = g_trays.begin(); it != g_trays.end(); ++it) {
+            if (it->second.get() == statusItem) {
+                g_trays.erase(it);
+                break;
+            }
+        }
+    });
+}
+
 void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
     if (!jsonString || strlen(jsonString) == 0) {
         return;

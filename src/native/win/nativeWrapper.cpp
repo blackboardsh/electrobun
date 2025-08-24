@@ -5269,6 +5269,18 @@ ELECTROBUN_EXPORT void setTrayMenu(NSStatusItem *statusItem, const char *menuCon
     setTrayMenuFromJSON(statusItem, menuConfig);
 }
 
+ELECTROBUN_EXPORT void removeTray(NSStatusItem *statusItem) {
+    if (!statusItem) return;
+    
+    MainThreadDispatcher::dispatch_sync([=]() {
+        // Remove from global map first
+        g_trayItems.erase(statusItem->hwnd);
+        
+        // Clean up the tray item
+        delete statusItem;
+    });
+}
+
 ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
     if (!jsonString) {
         ::log("ERROR: NULL JSON string passed to setApplicationMenu");
