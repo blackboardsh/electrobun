@@ -10,6 +10,6 @@
     "start:canary": "electrobun dev --canary"
   },
   "dependencies": {
-    "electrobun": "file:../../"
+    "electrobun": "latest"
   }
 }

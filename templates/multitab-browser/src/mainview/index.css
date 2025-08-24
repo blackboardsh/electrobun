@@ -1,0 +1,487 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: #f5f5f5;
+  overflow: hidden;
+  user-select: none;
+}
+
+#browser-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* Tab Bar */
+#tab-bar {
+  display: flex;
+  background: #e0e0e0;
+  border-bottom: 1px solid #ccc;
+  padding: 4px 4px 0;
+  min-height: 36px;
+  -webkit-app-region: drag;
+}
+
+#tabs-container {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  background: #f0f0f0;
+  border: 1px solid #d0d0d0;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 6px 12px;
+  min-width: 120px;
+  max-width: 240px;
+  cursor: pointer;
+  transition: background 0.2s;
+  -webkit-app-region: no-drag;
+}
+
+.tab:hover {
+  background: #f8f8f8;
+}
+
+.tab.active {
+  background: white;
+  border-color: #ccc;
+}
+
+.tab-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.tab-close {
+  margin-left: 8px;
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 16px;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.tab-close:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+#new-tab-btn {
+  background: none;
+  border: none;
+  font-size: 20px;
+  padding: 0 12px;
+  cursor: pointer;
+  color: #666;
+  transition: background 0.2s;
+  border-radius: 4px;
+  -webkit-app-region: no-drag;
+}
+
+#new-tab-btn:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* Navigation Bar */
+#nav-bar {
+  display: flex;
+  align-items: center;
+  background: white;
+  border-bottom: 1px solid #ddd;
+  padding: 8px 12px;
+  gap: 12px;
+}
+
+.nav-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.nav-btn {
+  background: none;
+  border: 1px solid transparent;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  color: #333;
+}
+
+.nav-btn:hover:not(:disabled) {
+  background: #f0f0f0;
+  border-color: #ddd;
+}
+
+.nav-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.nav-btn.bookmarked {
+  color: #f39c12;
+  background: rgba(243, 156, 18, 0.1);
+  border-color: #f39c12;
+}
+
+.nav-btn.bookmarked svg {
+  fill: currentColor;
+}
+
+.url-container {
+  flex: 1;
+}
+
+#url-bar {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 20px;
+  font-size: 14px;
+  background: #f8f8f8;
+  transition: all 0.2s;
+}
+
+#url-bar:focus {
+  outline: none;
+  background: white;
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+}
+
+.nav-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* Bookmarks Dropdown */
+#bookmarks-dropdown {
+  position: absolute;
+  top: 108px;
+  right: 12px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  width: 320px;
+  max-height: 400px;
+  overflow-y: auto;
+  z-index: 1000;
+}
+
+#bookmarks-dropdown.hidden {
+  display: none;
+}
+
+.bookmarks-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.bookmarks-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin: 0;
+}
+
+.reset-btn {
+  background: #4a90e2;
+  color: white;
+  border: 1px solid #4a90e2;
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 500;
+}
+
+.reset-btn:hover {
+  background: #357abd;
+  border-color: #357abd;
+}
+
+#bookmarks-list {
+  padding: 8px;
+}
+
+.bookmark-item {
+  display: flex;
+  align-items: center;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.bookmark-item:hover {
+  background: #f8f8f8;
+}
+
+.bookmark-info {
+  flex: 1;
+  overflow: hidden;
+}
+
+.bookmark-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-url {
+  font-size: 11px;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.bookmark-delete {
+  background: none;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  font-size: 18px;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.bookmark-delete:hover {
+  background: rgba(255, 0, 0, 0.1);
+  color: #e74c3c;
+}
+
+.no-bookmarks {
+  padding: 24px;
+  text-align: center;
+  color: #999;
+  font-size: 13px;
+}
+
+/* Content Area */
+#content-area {
+  flex: 1;
+  position: relative;
+  background: white;
+}
+
+#webview-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: none;
+}
+
+/* Style for electrobun-webview elements */
+electrobun-webview {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: none;
+}
+
+electrobun-webview.active {
+  display: block;
+}
+
+#welcome-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 48px;
+}
+
+#welcome-screen h1 {
+  font-size: 32px;
+  font-weight: 300;
+  color: #333;
+  margin-bottom: 16px;
+}
+
+#welcome-screen p {
+  font-size: 16px;
+  color: #666;
+  margin-bottom: 48px;
+}
+
+.keyboard-shortcut {
+  background: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 14px;
+  border: 1px solid #ddd;
+}
+
+.quick-links {
+  width: 100%;
+  max-width: 600px;
+}
+
+.quick-links h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#quick-links-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 16px;
+}
+
+.quick-link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 8px;
+  background: #f8f8f8;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.quick-link:hover {
+  background: white;
+  border-color: #4a90e2;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.quick-link-favicon {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.quick-link-title {
+  font-size: 12px;
+  color: #333;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.reset-bookmarks-quick {
+  background: #4a90e2 !important;
+  color: white !important;
+  border-color: #4a90e2 !important;
+}
+
+.reset-bookmarks-quick:hover {
+  background: #357abd !important;
+  border-color: #357abd !important;
+}
+
+.reset-bookmarks-quick .quick-link-title {
+  color: white !important;
+}
+
+.reset-fallback-btn {
+  background: #4a90e2;
+  color: white;
+  border: 1px solid #4a90e2;
+  border-radius: 6px;
+  padding: 10px 20px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 500;
+}
+
+.reset-fallback-btn:hover {
+  background: #357abd;
+  border-color: #357abd;
+}
+
+/* Loading Indicator */
+#loading-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+}
+
+#loading-indicator.hidden {
+  display: none;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #4a90e2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}

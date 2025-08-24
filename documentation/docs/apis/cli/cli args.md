@@ -37,7 +37,8 @@ electrobun init [template-name]
 
 - `hello-world` - Basic single-window application
 - `photo-booth` - Camera app with photo capture functionality  
-- `web-browser` - Multi-tabbed browser with webview tags
+- `interactive-playground` - An interactive playground of Electrobun apis
+- `multitab-browser` - Multi-tabbed web browser
 
 #### Examples
 
@@ -48,8 +49,8 @@ bunx electrobun init
 # Initialize with photo-booth template directly
 bunx electrobun init photo-booth
 
-# Initialize with web-browser template
-bunx electrobun init web-browser
+# Initialize with multitab-browser template
+bunx electrobun init multitab-browser
 ```
 
 ### `electrobun build`

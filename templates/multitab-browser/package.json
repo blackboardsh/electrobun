@@ -1,0 +1,12 @@
+{
+  "name": "multitab-browser",
+  "version": "0.0.1",
+  "description": "A multi-tab browser demo for Electrobun",
+  "type": "module",
+  "scripts": {
+    "dev": "electrobun build && electrobun dev"    
+  },
+  "dependencies": {
+    "electrobun": "0.0.19-beta.119"
+  }
+}

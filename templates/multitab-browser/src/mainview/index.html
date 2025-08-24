@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multitab Browser</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div id="browser-container">
+        <!-- Tab Bar -->
+        <div id="tab-bar">
+            <div id="tabs-container"></div>
+            <button id="new-tab-btn" title="New Tab">+</button>
+        </div>
+
+        <!-- Navigation Bar -->
+        <div id="nav-bar">
+            <div class="nav-controls">
+                <button id="back-btn" class="nav-btn" disabled title="Go Back">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                </button>
+                <button id="forward-btn" class="nav-btn" disabled title="Go Forward">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M5 12h14M12 5l7 7-7 7"/>
+                    </svg>
+                </button>
+                <button id="reload-btn" class="nav-btn" title="Reload">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                    </svg>
+                </button>
+                <button id="home-btn" class="nav-btn" title="Home">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <div class="url-container">
+                <input type="text" id="url-bar" placeholder="Enter URL or search..." />
+            </div>
+            
+            <div class="nav-actions">
+                <button id="bookmark-btn" class="nav-btn" title="Bookmark this page">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                    </svg>
+                </button>
+                <button id="bookmarks-menu-btn" class="nav-btn" title="Show bookmarks">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="1"/>
+                        <circle cx="12" cy="5" r="1"/>
+                        <circle cx="12" cy="19" r="1"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Bookmarks Dropdown -->
+        <div id="bookmarks-dropdown" class="hidden">
+            <div class="bookmarks-header">
+                <h3>Bookmarks</h3>
+                <button id="reset-bookmarks-btn" class="reset-btn" title="Reset to default bookmarks">Reset</button>
+            </div>
+            <div id="bookmarks-list"></div>
+        </div>
+
+        <!-- Content Area -->
+        <div id="content-area">
+            <div id="webview-container">
+                <!-- Webviews for each tab will be added here dynamically -->
+            </div>
+            <div id="welcome-screen">
+                <h1>Welcome to Multitab Browser</h1>
+                <p>Click the + button or press <span class="keyboard-shortcut">Cmd/Ctrl+T</span> to open a new tab</p>
+                <div class="quick-links">
+                    <h3>Bookmarks</h3>
+                    <div id="quick-links-container"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loading-indicator" class="hidden">
+            <div class="spinner"></div>
+        </div>
+    </div>
+
+    <script src="index.js" type="module"></script>
+</body>
+</html>

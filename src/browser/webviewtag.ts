@@ -54,6 +54,7 @@ const ConfigureWebviewTags = (
     hiddenMirrorMode: boolean = false;
     wasZeroRect: boolean = false;
     isMirroring: boolean = false;
+    masks: string = '';
 
     partition: string | null = null;
 
