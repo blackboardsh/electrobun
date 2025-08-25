@@ -4408,7 +4408,7 @@ ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden)
     if (abstractView) {
         // UI operations must be performed on the main thread
         MainThreadDispatcher::dispatch_sync([abstractView, hidden]() {
-            abstractView->setTransparent(transparent);
+            abstractView->setTransparent(hidden);
         });
     }
 }
