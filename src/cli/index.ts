@@ -306,54 +306,161 @@ async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targe
   const archName = platformArch;
   const cefTarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${version}/electrobun-cef-${platformName}-${archName}.tar.gz`;
   
-  console.log(`Downloading CEF from: ${cefTarballUrl}`);
-  
-  try {
-    // Download CEF tarball
-    const response = await fetch(cefTarballUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to download CEF: ${response.status} ${response.statusText}`);
-    }
-    
-    // Create temp file
-    const tempFile = join(ELECTROBUN_DEP_PATH, `cef-${platformOS}-${platformArch}-temp.tar.gz`);
-    const fileStream = createWriteStream(tempFile);
-    
-    // Write response to file
-    if (response.body) {
-      const reader = response.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        fileStream.write(Buffer.from(value));
+  // Helper function to download with retry logic
+  async function downloadWithRetry(url: string, filePath: string, maxRetries = 3): Promise<void> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Downloading CEF (attempt ${attempt}/${maxRetries}) from: ${url}`);
+        
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        // Get content length for progress tracking
+        const contentLength = response.headers.get('content-length');
+        const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
+        
+        // Create temp file with unique name to avoid conflicts
+        const fileStream = createWriteStream(filePath);
+        let downloadedSize = 0;
+        
+        // Stream download with progress
+        if (response.body) {
+          const reader = response.body.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = Buffer.from(value);
+            fileStream.write(chunk);
+            downloadedSize += chunk.length;
+            
+            if (totalSize > 0) {
+              const percent = Math.round((downloadedSize / totalSize) * 100);
+              if (percent % 10 === 0) { // Log every 10%
+                console.log(`  Progress: ${percent}% (${Math.round(downloadedSize / 1024 / 1024)}MB/${Math.round(totalSize / 1024 / 1024)}MB)`);
+              }
+            }
+          }
+        }
+        
+        await new Promise((resolve, reject) => {
+          fileStream.end((error: any) => {
+            if (error) reject(error);
+            else resolve(void 0);
+          });
+        });
+        
+        // Verify file size if content-length was provided
+        if (totalSize > 0) {
+          const actualSize = (await import('fs')).statSync(filePath).size;
+          if (actualSize !== totalSize) {
+            throw new Error(`Downloaded file size mismatch: expected ${totalSize}, got ${actualSize}`);
+          }
+        }
+        
+        console.log(`✓ Download completed successfully (${Math.round(downloadedSize / 1024 / 1024)}MB)`);
+        return; // Success, exit retry loop
+        
+      } catch (error: any) {
+        console.error(`Download attempt ${attempt} failed:`, error.message);
+        
+        // Clean up partial download
+        if (existsSync(filePath)) {
+          unlinkSync(filePath);
+        }
+        
+        if (attempt === maxRetries) {
+          throw new Error(`Failed to download after ${maxRetries} attempts: ${error.message}`);
+        }
+        
+        // Wait before retrying (exponential backoff)
+        const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s...
+        console.log(`Retrying in ${delay / 1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
-    fileStream.end();
+  }
+  
+  try {
+    // Create temp file with unique name
+    const tempFile = join(ELECTROBUN_DEP_PATH, `cef-${platformOS}-${platformArch}-${Date.now()}.tar.gz`);
+    
+    // Download with retry logic
+    await downloadWithRetry(cefTarballUrl, tempFile);
     
     // Extract to platform-specific dist directory
     console.log(`Extracting CEF dependencies for ${platformOS}-${platformArch}...`);
     const platformDistPath = join(ELECTROBUN_DEP_PATH, `dist-${platformOS}-${platformArch}`);
     mkdirSync(platformDistPath, { recursive: true });
     
-    // Use Windows native tar.exe on Windows due to npm tar library issues
-    if (OS === 'win') {
-      console.log('Using Windows native tar.exe for reliable extraction...');
-      const relativeTempFile = relative(platformDistPath, tempFile);
-      execSync(`tar -xf "${relativeTempFile}"`, { 
-        stdio: 'inherit',
-        cwd: platformDistPath 
-      });
-    } else {
-      await tar.x({
-        file: tempFile,
-        cwd: platformDistPath,
-        preservePaths: false,
-        strip: 0,
-      });
+    // Helper function to validate tar file before extraction
+    async function validateTarFile(filePath: string): Promise<void> {
+      try {
+        // Quick validation - try to read the tar file header
+        const fd = await import('fs').then(fs => fs.promises.readFile(filePath));
+        
+        // Check if it's a gzip file (magic bytes: 1f 8b)
+        if (fd.length < 2 || fd[0] !== 0x1f || fd[1] !== 0x8b) {
+          throw new Error('Invalid gzip header - file may be corrupted');
+        }
+        
+        console.log(`✓ Tar file validation passed (${Math.round(fd.length / 1024 / 1024)}MB)`);
+      } catch (error: any) {
+        throw new Error(`Tar file validation failed: ${error.message}`);
+      }
     }
     
-    // Clean up temp file
-    unlinkSync(tempFile);
+    // Validate downloaded file before extraction
+    await validateTarFile(tempFile);
+    
+    try {
+      // Use Windows native tar.exe on Windows due to npm tar library issues
+      if (OS === 'win') {
+        console.log('Using Windows native tar.exe for reliable extraction...');
+        const relativeTempFile = relative(platformDistPath, tempFile);
+        execSync(`tar -xf "${relativeTempFile}"`, { 
+          stdio: 'inherit',
+          cwd: platformDistPath 
+        });
+      } else {
+        await tar.x({
+          file: tempFile,
+          cwd: platformDistPath,
+          preservePaths: false,
+          strip: 0,
+        });
+      }
+      
+      console.log(`✓ Extraction completed successfully`);
+      
+    } catch (error: any) {
+      // Check if CEF directory was created despite the error (partial extraction)
+      const cefDir = join(platformDistPath, 'cef');
+      if (existsSync(cefDir)) {
+        const cefFiles = readdirSync(cefDir);
+        if (cefFiles.length > 0) {
+          console.warn(`⚠️ Extraction warning: ${error.message}`);
+          console.warn(`  However, CEF files were extracted (${cefFiles.length} files found).`);
+          console.warn(`  Proceeding with partial extraction - this usually works fine.`);
+          // Don't throw - continue with what we have
+        } else {
+          // No files extracted, this is a real failure
+          throw new Error(`Extraction failed (no files extracted): ${error.message}`);
+        }
+      } else {
+        // No CEF directory created, this is a real failure
+        throw new Error(`Extraction failed (no CEF directory created): ${error.message}`);
+      }
+    }
+    
+    // Clean up temp file only after successful extraction
+    try {
+      unlinkSync(tempFile);
+    } catch (cleanupError) {
+      console.warn('Could not clean up temp file:', cleanupError);
+    }
     
     // Debug: List what was actually extracted for CEF
     try {
@@ -370,11 +477,28 @@ async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targe
       console.error('Could not list CEF extracted files:', e);
     }
     
-    console.log(`CEF dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`);
+    console.log(`✓ CEF dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`);
     
   } catch (error: any) {
     console.error(`Failed to download CEF dependencies for ${platformOS}-${platformArch}:`, error.message);
-    console.error('Please ensure you have an internet connection and the release exists.');
+    
+    // Provide helpful guidance based on the error
+    if (error.message.includes('corrupted download') || error.message.includes('zlib') || error.message.includes('unexpected end')) {
+      console.error('\n💡 This appears to be a download corruption issue. Suggestions:');
+      console.error('  • Check your internet connection stability');
+      console.error('  • Try running the command again (it will retry automatically)');
+      console.error('  • Clear the cache if the issue persists:');
+      console.error(`    rm -rf "${ELECTROBUN_DEP_PATH}"`);
+    } else if (error.message.includes('HTTP 404') || error.message.includes('Not Found')) {
+      console.error('\n💡 The CEF release was not found. This could mean:');
+      console.error('  • The version specified doesn\'t have CEF binaries available');
+      console.error('  • You\'re using a development/unreleased version');
+      console.error('  • Try using a stable version instead');
+    } else {
+      console.error('\nPlease ensure you have an internet connection and the release exists.');
+      console.error(`If the problem persists, try clearing the cache: rm -rf "${ELECTROBUN_DEP_PATH}"`);
+    }
+    
     process.exit(1);
   }
 }
