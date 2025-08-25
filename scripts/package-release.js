@@ -46,20 +46,24 @@ if (!fs.existsSync('bin')) {
     fs.mkdirSync('bin', { recursive: true });
 }
 
+// Use baseline target for Windows to ensure compatibility with ARM64 emulation
+const compileTarget = platform === 'win32' ? '--target=bun-windows-x64-baseline' : '';
+
 // Workaround for Windows 2025 runner cross-drive issues with Bun cache
 if (platform === 'win32' && process.env.GITHUB_ACTIONS) {
     // Set Bun cache to same drive as workspace
     const workspaceDrive = process.cwd().substring(0, 2);
-    process.env.BUN_INSTALL_CACHE_DIR = `${workspaceDrive}\\temp\\bun-cache`;
-    console.log(`Setting BUN_INSTALL_CACHE_DIR to: ${process.env.BUN_INSTALL_CACHE_DIR}`);
+    const bunCacheDir = `${workspaceDrive}\\temp\\bun-cache`;
+    console.log(`Setting BUN_INSTALL_CACHE_DIR to: ${bunCacheDir}`);
     
     // Ensure cache directory exists
-    fs.mkdirSync(process.env.BUN_INSTALL_CACHE_DIR, { recursive: true });
+    fs.mkdirSync(bunCacheDir, { recursive: true });
+    
+    // Set environment variable directly in the command for Windows
+    execSync(`set "BUN_INSTALL_CACHE_DIR=${bunCacheDir}" && bun build src/cli/index.ts --compile ${compileTarget} --outfile bin/electrobun`, { stdio: 'inherit', shell: true });
+} else {
+    execSync(`bun build src/cli/index.ts --compile ${compileTarget} --outfile bin/electrobun`, { stdio: 'inherit' });
 }
-
-// Use baseline target for Windows to ensure compatibility with ARM64 emulation
-const compileTarget = platform === 'win32' ? '--target=bun-windows-x64-baseline' : '';
-execSync(`bun build src/cli/index.ts --compile ${compileTarget} --outfile bin/electrobun`, { stdio: 'inherit' });
 
 // Create separate tarballs for CLI, core binaries, and CEF
 const distPath = path.join(__dirname, '..', 'dist');
