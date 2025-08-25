@@ -2215,31 +2215,49 @@ public:
     // Override transparency implementation for CEF
     void setTransparent(bool transparent) override {
         if (!browser) {
+            ::log("CEF setTransparent: No browser instance");
             return;
         }
         
         HWND browserHwnd = browser->GetHost()->GetWindowHandle();
         if (!browserHwnd) {
+            ::log("CEF setTransparent: No browser window handle");
             return;
         }
+        
+        char logMsg[256];
+        sprintf_s(logMsg, "CEF setTransparent: Setting transparency to %s for HWND=%p", 
+                  transparent ? "true" : "false", browserHwnd);
+        ::log(logMsg);
         
         if (transparent) {
             // Set window as layered to enable transparency
             LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
             if (!(exStyle & WS_EX_LAYERED)) {
                 SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+                ::log("CEF setTransparent: Added WS_EX_LAYERED style");
             }
             
             // Set transparency (0 = fully transparent, 255 = fully opaque)
             // Using 0 for fully transparent to match macOS behavior
-            SetLayeredWindowAttributes(browserHwnd, 0, 0, LWA_ALPHA);
+            BOOL result = SetLayeredWindowAttributes(browserHwnd, 0, 0, LWA_ALPHA);
+            if (!result) {
+                ::log("CEF setTransparent: SetLayeredWindowAttributes failed");
+            } else {
+                ::log("CEF setTransparent: Successfully set transparency to 0");
+            }
         } else {
-            // Remove layered style to restore opacity
+            // Set to fully opaque instead of removing layered style
             LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
-            if (exStyle & WS_EX_LAYERED) {
-                SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
-                // Redraw the window to apply changes
-                RedrawWindow(browserHwnd, NULL, NULL, RDW_ERASE | RDW_INVALIDATE | RDW_FRAME);
+            if (!(exStyle & WS_EX_LAYERED)) {
+                SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+            }
+            
+            BOOL result = SetLayeredWindowAttributes(browserHwnd, 0, 255, LWA_ALPHA);
+            if (!result) {
+                ::log("CEF setTransparent: SetLayeredWindowAttributes failed for opaque");
+            } else {
+                ::log("CEF setTransparent: Successfully set transparency to 255 (opaque)");
             }
         }
     }
@@ -2249,27 +2267,39 @@ public:
         AbstractView::setPassthrough(enable); // Call base implementation to set the flag
         
         if (!browser) {
+            ::log("CEF setPassthrough: No browser instance");
             return;
         }
         
         HWND browserHwnd = browser->GetHost()->GetWindowHandle();
         if (!browserHwnd) {
+            ::log("CEF setPassthrough: No browser window handle");
             return;
         }
         
+        char logMsg[256];
+        sprintf_s(logMsg, "CEF setPassthrough: Setting passthrough to %s for HWND=%p", 
+                  enable ? "true" : "false", browserHwnd);
+        ::log(logMsg);
+        
+        LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
         if (enable) {
             // Make the window transparent to mouse clicks
-            LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
             SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT);
+            ::log("CEF setPassthrough: Added WS_EX_TRANSPARENT style");
         } else {
             // Remove mouse transparency
-            LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
             SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
+            ::log("CEF setPassthrough: Removed WS_EX_TRANSPARENT style");
         }
     }
     
     // Override hidden implementation for CEF
     void setHidden(bool hidden) override {
+        char logMsg[256];
+        sprintf_s(logMsg, "CEF setHidden: Setting hidden to %s", hidden ? "true" : "false");
+        ::log(logMsg);
+        
         // First call the base implementation to handle the container window
         AbstractView::setHidden(hidden);
         
@@ -2278,7 +2308,14 @@ public:
             HWND browserHwnd = browser->GetHost()->GetWindowHandle();
             if (browserHwnd) {
                 ShowWindow(browserHwnd, hidden ? SW_HIDE : SW_SHOW);
+                sprintf_s(logMsg, "CEF setHidden: %s browser window HWND=%p", 
+                         hidden ? "Hid" : "Showed", browserHwnd);
+                ::log(logMsg);
+            } else {
+                ::log("CEF setHidden: No browser window handle");
             }
+        } else {
+            ::log("CEF setHidden: No browser instance");
         }
     }
 };
@@ -4403,20 +4440,50 @@ ELECTROBUN_EXPORT const char* getBodyFromScriptMessage(void *message) {
 }
 
 ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {
+    char logMsg[256];
+    sprintf_s(logMsg, "webviewSetTransparent called: abstractView=%p, transparent=%s", 
+              abstractView, transparent ? "true" : "false");
+    ::log(logMsg);
+    
     if (abstractView) {
-        abstractView->setTransparent(transparent);
+        // UI operations must be performed on the main thread
+        MainThreadDispatcher::dispatch_sync([abstractView, transparent]() {
+            abstractView->setTransparent(transparent);
+        });
+    } else {
+        ::log("webviewSetTransparent: abstractView is NULL");
     }
 }
 
 ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
+    char logMsg[256];
+    sprintf_s(logMsg, "webviewSetPassthrough called: abstractView=%p, enablePassthrough=%s", 
+              abstractView, enablePassthrough ? "true" : "false");
+    ::log(logMsg);
+    
     if (abstractView) {
-        abstractView->setPassthrough(enablePassthrough);
+        // UI operations must be performed on the main thread
+        MainThreadDispatcher::dispatch_sync([abstractView, enablePassthrough]() {
+            abstractView->setPassthrough(enablePassthrough);
+        });
+    } else {
+        ::log("webviewSetPassthrough: abstractView is NULL");
     }
 }
 
 ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
+    char logMsg[256];
+    sprintf_s(logMsg, "webviewSetHidden called: abstractView=%p, hidden=%s", 
+              abstractView, hidden ? "true" : "false");
+    ::log(logMsg);
+    
     if (abstractView) {
-        abstractView->setHidden(hidden);
+        // UI operations must be performed on the main thread
+        MainThreadDispatcher::dispatch_sync([abstractView, hidden]() {
+            abstractView->setHidden(hidden);
+        });
+    } else {
+        ::log("webviewSetHidden: abstractView is NULL");
     }
 }
 
