@@ -31,6 +31,7 @@
 #include <codecvt>     // For UTF-8 to wide string conversion
 #include <d2d1.h>      // For Direct2D
 #include <direct.h>    // For _getcwd
+#include <tlhelp32.h>  // For process enumeration
 
 // Push macro definitions to avoid conflicts with Windows headers
 #pragma push_macro("GetNextSibling")
@@ -220,6 +221,7 @@ static const int OFFSCREEN_OFFSET = -20000;
 // CEF global variables
 static bool g_cef_initialized = false;
 static CefRefPtr<CefApp> g_cef_app;
+static HANDLE g_job_object = nullptr;  // Job object to track all child processes
 
 // Simple CEF App class for minimal implementation
 class ElectrobunCefApp : public CefApp, public CefBrowserProcessHandler {
@@ -3490,9 +3492,53 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
 
 
 
+// Helper function to terminate all CEF helper processes
+void TerminateCEFHelperProcesses() {
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshot == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    
+    PROCESSENTRY32W pe32;
+    pe32.dwSize = sizeof(PROCESSENTRY32W);
+    
+    if (Process32FirstW(hSnapshot, &pe32)) {
+        do {
+            // Check if this is a "bun Helper.exe" process
+            if (wcsstr(pe32.szExeFile, L"bun Helper.exe") != nullptr) {
+                HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pe32.th32ProcessID);
+                if (hProcess != nullptr) {
+                    std::wcout << L"[CEF] Terminating helper process: " << pe32.szExeFile 
+                              << L" (PID: " << pe32.th32ProcessID << L")" << std::endl;
+                    TerminateProcess(hProcess, 0);
+                    CloseHandle(hProcess);
+                }
+            }
+        } while (Process32NextW(hSnapshot, &pe32));
+    }
+    
+    CloseHandle(hSnapshot);
+}
+
 ELECTROBUN_EXPORT bool initCEF() {
     if (g_cef_initialized) {
         return true; // Already initialized
+    }
+    
+    // Create a job object to track all child processes
+    if (!g_job_object) {
+        g_job_object = CreateJobObject(nullptr, nullptr);
+        if (g_job_object) {
+            // Configure the job object to terminate all child processes when the main process exits
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {0};
+            jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(g_job_object, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+            
+            // Assign the current process to the job object
+            // This ensures all child processes (CEF helpers) are part of this job
+            AssignProcessToJobObject(g_job_object, GetCurrentProcess());
+            std::cout << "[CEF] Created job object for process tracking" << std::endl;
+        }
     }
 
     // Get the directory where the current executable is located
@@ -4122,14 +4168,25 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
                 
                 // Give browsers time to close gracefully
                 // OnBeforeClose will call CefQuitMessageLoop() when last browser closes
-                Sleep(3000);
+                Sleep(1000);  // Reduced from 3000ms for faster response
                 
                 // If browsers didn't close properly, force quit
                 if (g_browser_count > 0) {
                     std::cout << "[CEF] Browsers didn't close, forcing CEF shutdown" << std::endl;
                     CefQuitMessageLoop();
-                    Sleep(1000);
+                    Sleep(500);  // Brief wait
                 }
+                
+                // Explicitly terminate any remaining CEF helper processes
+                std::cout << "[CEF] Terminating any remaining helper processes..." << std::endl;
+                TerminateCEFHelperProcesses();
+            }
+            
+            // Close the job object to terminate any remaining child processes
+            if (g_job_object) {
+                std::cout << "[CEF] Closing job object to terminate all child processes" << std::endl;
+                CloseHandle(g_job_object);
+                g_job_object = nullptr;
             }
             
             // Force termination if still running
@@ -4173,6 +4230,17 @@ ELECTROBUN_EXPORT void runNSApplication() {
     if (isCEFAvailable()) {
         if (initCEF()) {
             CefRunMessageLoop(); // Use CEF's message loop like macOS
+            
+            // Clean up after CEF shutdown
+            std::cout << "[CEF] CEF message loop ended, performing cleanup..." << std::endl;
+            TerminateCEFHelperProcesses();
+            
+            // Close job object
+            if (g_job_object) {
+                CloseHandle(g_job_object);
+                g_job_object = nullptr;
+            }
+            
             CefShutdown();
         } else {
             // Fall back to Windows message loop if CEF init fails
@@ -4196,11 +4264,42 @@ ELECTROBUN_EXPORT void runNSApplication() {
 ELECTROBUN_EXPORT void killApp() {
     if (isCEFAvailable() && g_cef_initialized) {
         std::cout << "[CEF] Initiating graceful shutdown via CefQuitMessageLoop()" << std::endl;
-        // Use CefQuitMessageLoop() for graceful shutdown, which will trigger OnBeforeClose handlers
+        
+        // Close all browsers first
+        auto browsers_copy = g_cefBrowsers;
+        for (auto& pair : browsers_copy) {
+            if (pair.second) {
+                pair.second->GetHost()->CloseBrowser(true);
+            }
+        }
+        
+        // Brief wait for browsers to close
+        Sleep(500);
+        
+        // Quit CEF message loop
         CefQuitMessageLoop();
+        
+        // Terminate any remaining helper processes
+        TerminateCEFHelperProcesses();
+        
+        // Close job object to ensure all child processes are terminated
+        if (g_job_object) {
+            CloseHandle(g_job_object);
+            g_job_object = nullptr;
+        }
+        
         ::log("CEF shutdown initiated");
     } else {
-        // If CEF is not running, exit directly
+        // If CEF is not running, still check for helper processes
+        TerminateCEFHelperProcesses();
+        
+        // Close job object if it exists
+        if (g_job_object) {
+            CloseHandle(g_job_object);
+            g_job_object = nullptr;
+        }
+        
+        // Exit directly
         ExitProcess(1);
     }
 }
