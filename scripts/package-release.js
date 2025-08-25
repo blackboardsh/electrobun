@@ -45,6 +45,18 @@ console.log('Building CLI binary...');
 if (!fs.existsSync('bin')) {
     fs.mkdirSync('bin', { recursive: true });
 }
+
+// Workaround for Windows 2025 runner cross-drive issues with Bun cache
+if (platform === 'win32' && process.env.GITHUB_ACTIONS) {
+    // Set Bun cache to same drive as workspace
+    const workspaceDrive = process.cwd().substring(0, 2);
+    process.env.BUN_INSTALL_CACHE_DIR = `${workspaceDrive}\\temp\\bun-cache`;
+    console.log(`Setting BUN_INSTALL_CACHE_DIR to: ${process.env.BUN_INSTALL_CACHE_DIR}`);
+    
+    // Ensure cache directory exists
+    fs.mkdirSync(process.env.BUN_INSTALL_CACHE_DIR, { recursive: true });
+}
+
 // Use baseline target for Windows to ensure compatibility with ARM64 emulation
 const compileTarget = platform === 'win32' ? '--target=bun-windows-x64-baseline' : '';
 execSync(`bun build src/cli/index.ts --compile ${compileTarget} --outfile bin/electrobun`, { stdio: 'inherit' });
