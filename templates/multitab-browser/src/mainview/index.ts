@@ -289,13 +289,17 @@ class MultitabBrowser {
 
       // Hide all webviews
       this.webviews.forEach((webview) => {
-        webview.classList.remove('active');
+        // webview.classList.remove('active');
+        webview.toggleTransparent(true)
+        webview.togglePassthrough(true)
       });
       
       // Show the selected webview
       const selectedWebview = this.webviews.get(tabId);
       if (selectedWebview) {
         selectedWebview.classList.add('active');
+        selectedWebview.toggleTransparent(false)
+        selectedWebview.togglePassthrough(false)
       }
 
       this.activeTabId = tabId;

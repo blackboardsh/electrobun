@@ -2211,6 +2211,76 @@ public:
             }
         }
     }
+    
+    // Override transparency implementation for CEF
+    void setTransparent(bool transparent) override {
+        if (!browser) {
+            return;
+        }
+        
+        HWND browserHwnd = browser->GetHost()->GetWindowHandle();
+        if (!browserHwnd) {
+            return;
+        }
+        
+        if (transparent) {
+            // Set window as layered to enable transparency
+            LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
+            if (!(exStyle & WS_EX_LAYERED)) {
+                SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+            }
+            
+            // Set transparency (0 = fully transparent, 255 = fully opaque)
+            // Using 0 for fully transparent to match macOS behavior
+            SetLayeredWindowAttributes(browserHwnd, 0, 0, LWA_ALPHA);
+        } else {
+            // Remove layered style to restore opacity
+            LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
+            if (exStyle & WS_EX_LAYERED) {
+                SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+                // Redraw the window to apply changes
+                RedrawWindow(browserHwnd, NULL, NULL, RDW_ERASE | RDW_INVALIDATE | RDW_FRAME);
+            }
+        }
+    }
+    
+    // Override passthrough implementation for CEF
+    void setPassthrough(bool enable) override {
+        AbstractView::setPassthrough(enable); // Call base implementation to set the flag
+        
+        if (!browser) {
+            return;
+        }
+        
+        HWND browserHwnd = browser->GetHost()->GetWindowHandle();
+        if (!browserHwnd) {
+            return;
+        }
+        
+        if (enable) {
+            // Make the window transparent to mouse clicks
+            LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
+            SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT);
+        } else {
+            // Remove mouse transparency
+            LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
+            SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
+        }
+    }
+    
+    // Override hidden implementation for CEF
+    void setHidden(bool hidden) override {
+        // First call the base implementation to handle the container window
+        AbstractView::setHidden(hidden);
+        
+        // Also handle the CEF browser window if it exists
+        if (browser) {
+            HWND browserHwnd = browser->GetHost()->GetWindowHandle();
+            if (browserHwnd) {
+                ShowWindow(browserHwnd, hidden ? SW_HIDE : SW_SHOW);
+            }
+        }
+    }
 };
 
 // Helper function to set browser on CEFView (defined after CEFView class)
@@ -4333,15 +4403,21 @@ ELECTROBUN_EXPORT const char* getBodyFromScriptMessage(void *message) {
 }
 
 ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {
-    // Stub implementation
+    if (abstractView) {
+        abstractView->setTransparent(transparent);
+    }
 }
 
 ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
-    // Stub implementation
+    if (abstractView) {
+        abstractView->setPassthrough(enablePassthrough);
+    }
 }
 
 ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
-    // Stub implementation
+    if (abstractView) {
+        abstractView->setHidden(hidden);
+    }
 }
 
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {
