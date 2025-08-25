@@ -2275,56 +2275,16 @@ public:
     }
     
     // Override hidden implementation for CEF
+    // On Windows, setHidden is an alias for setTransparent since transparency provides the desired hide + passthrough behavior
     void setHidden(bool hidden) override {
         char logMsg[256];
-        sprintf_s(logMsg, "CEF setHidden: Setting hidden to %s", hidden ? "true" : "false");
+        sprintf_s(logMsg, "CEF setHidden: Setting hidden to %s (using setTransparent)", hidden ? "true" : "false");
         ::log(logMsg);
         
-        if (browser) {
-            HWND browserHwnd = browser->GetHost()->GetWindowHandle();
-            if (browserHwnd) {
-                sprintf_s(logMsg, "CEF setHidden: Browser hwnd=%p", browserHwnd);
-                ::log(logMsg);
-                
-                // Multiple approaches to ensure hiding/showing works
-                if (hidden) {
-                    // Method 1: Standard hide
-                    ShowWindow(browserHwnd, SW_HIDE);
-                    
-                    // Method 2: Move off-screen as backup (some CEF windows might ignore SW_HIDE)
-                    SetWindowPos(browserHwnd, NULL, -32000, -32000, 0, 0, 
-                               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_HIDEWINDOW);
-                    
-                    ::log("CEF setHidden: Applied hide methods");
-                } else {
-                    // Show the window
-                    ShowWindow(browserHwnd, SW_SHOW);
-                    
-                    // Restore to proper position if we have visual bounds
-                    if (visualBounds.right > visualBounds.left && visualBounds.bottom > visualBounds.top) {
-                        SetWindowPos(browserHwnd, HWND_TOP, 
-                                   visualBounds.left, visualBounds.top,
-                                   visualBounds.right - visualBounds.left,
-                                   visualBounds.bottom - visualBounds.top,
-                                   SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                        ::log("CEF setHidden: Restored to visual bounds");
-                    } else {
-                        ::log("CEF setHidden: Showed window (no bounds to restore)");
-                    }
-                }
-                
-                // Verify final state
-                BOOL isVisible = IsWindowVisible(browserHwnd);
-                sprintf_s(logMsg, "CEF setHidden: Final visible state=%s", isVisible ? "true" : "false");
-                ::log(logMsg);
-            } else {
-                ::log("CEF setHidden: No browser window handle");
-            }
-        } else {
-            ::log("CEF setHidden: No browser instance");
-        }
+        // Use the working transparency implementation which provides hide + passthrough behavior
+        setTransparent(hidden);
         
-        // Also handle the container window
+        // Also handle the container window using base implementation
         AbstractView::setHidden(hidden);
     }
 };

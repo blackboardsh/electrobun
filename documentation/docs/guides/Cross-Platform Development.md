@@ -12,6 +12,24 @@ Electrobun enables you to build desktop applications that run on macOS, Windows,
 ### Window Management
 Some window options like frameless windows work differently on different OSes.
 
+### Webview Behavior
+
+Webview hiding and passthrough behavior varies between platforms:
+
+- **macOS**: Webviews can be set to hidden and passthrough separately. These are independent settings.
+- **Windows & Linux**: Setting a webview to hidden using also automatically enables passthrough behavior. There is no separate passthrough setting - clicks will pass through hidden webviews to underlying content.
+
+```javascript
+// Hide a webview (behavior differs by platform)
+webviewSetHidden(webviewId, true);
+
+// On macOS: webview is hidden but still intercepts clicks (unless passthrough is also enabled)
+// On Windows/Linux: webview is hidden AND clicks pass through automatically
+
+// Enable click passthrough (macOS only - no effect on Windows/Linux)
+webviewSetPassthrough(webviewId, true);
+```
+
 ### Linux
 By defalt on Linux we use GTK windows and GTKWebkit webviews. This is as close to a "system" webview on Linux that's managed/updated by the OS. Some distros don't have this installed by default so you will need to ask your end users to install those dependencies. 
 
