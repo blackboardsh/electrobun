@@ -218,6 +218,7 @@ class MultitabBrowser {
       webview.setAttribute('src', tab.url);
       webview.setAttribute('id', `webview-${tab.id}`);
       webview.setAttribute('masks', '#bookmarks-dropdown');
+      webview.setAttribute('renderer', 'cef');
       webview.classList.add('tab-webview');
       
       // Add webview to container
