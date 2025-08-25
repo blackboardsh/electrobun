@@ -324,6 +324,7 @@ async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targe
         // Create temp file with unique name to avoid conflicts
         const fileStream = createWriteStream(filePath);
         let downloadedSize = 0;
+        let lastReportedPercent = -1;
         
         // Stream download with progress
         if (response.body) {
@@ -338,8 +339,10 @@ async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targe
             
             if (totalSize > 0) {
               const percent = Math.round((downloadedSize / totalSize) * 100);
-              if (percent % 10 === 0) { // Log every 10%
-                console.log(`  Progress: ${percent}% (${Math.round(downloadedSize / 1024 / 1024)}MB/${Math.round(totalSize / 1024 / 1024)}MB)`);
+              const percentTier = Math.floor(percent / 10) * 10;
+              if (percentTier > lastReportedPercent && percentTier <= 100) {
+                console.log(`  Progress: ${percentTier}% (${Math.round(downloadedSize / 1024 / 1024)}MB/${Math.round(totalSize / 1024 / 1024)}MB)`);
+                lastReportedPercent = percentTier;
               }
             }
           }
