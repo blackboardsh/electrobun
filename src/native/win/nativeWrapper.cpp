@@ -2213,6 +2213,7 @@ public:
     }
     
     // Override transparency implementation for CEF
+    // On Windows, transparency for CEF is implemented as hiding/showing since SetLayeredWindowAttributes often fails on child windows
     void setTransparent(bool transparent) override {
         if (!browser) {
             ::log("CEF setTransparent: No browser instance");
@@ -2226,39 +2227,18 @@ public:
         }
         
         char logMsg[256];
-        sprintf_s(logMsg, "CEF setTransparent: Setting transparency to %s for HWND=%p", 
+        sprintf_s(logMsg, "CEF setTransparent: Setting transparency to %s for HWND=%p (using hide/show approach)", 
                   transparent ? "true" : "false", browserHwnd);
         ::log(logMsg);
         
         if (transparent) {
-            // Set window as layered to enable transparency
-            LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
-            if (!(exStyle & WS_EX_LAYERED)) {
-                SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
-                ::log("CEF setTransparent: Added WS_EX_LAYERED style");
-            }
-            
-            // Set transparency (0 = fully transparent, 255 = fully opaque)
-            // Using 0 for fully transparent to match macOS behavior
-            BOOL result = SetLayeredWindowAttributes(browserHwnd, 0, 0, LWA_ALPHA);
-            if (!result) {
-                ::log("CEF setTransparent: SetLayeredWindowAttributes failed");
-            } else {
-                ::log("CEF setTransparent: Successfully set transparency to 0");
-            }
+            // For transparency, hide the window completely
+            ShowWindow(browserHwnd, SW_HIDE);
+            ::log("CEF setTransparent: Hid window for transparency");
         } else {
-            // Set to fully opaque instead of removing layered style
-            LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
-            if (!(exStyle & WS_EX_LAYERED)) {
-                SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
-            }
-            
-            BOOL result = SetLayeredWindowAttributes(browserHwnd, 0, 255, LWA_ALPHA);
-            if (!result) {
-                ::log("CEF setTransparent: SetLayeredWindowAttributes failed for opaque");
-            } else {
-                ::log("CEF setTransparent: Successfully set transparency to 255 (opaque)");
-            }
+            // For opacity, show the window
+            ShowWindow(browserHwnd, SW_SHOW);
+            ::log("CEF setTransparent: Showed window for opacity");
         }
     }
     
@@ -2300,16 +2280,42 @@ public:
         sprintf_s(logMsg, "CEF setHidden: Setting hidden to %s", hidden ? "true" : "false");
         ::log(logMsg);
         
-        // First call the base implementation to handle the container window
-        AbstractView::setHidden(hidden);
-        
-        // Also handle the CEF browser window if it exists
         if (browser) {
             HWND browserHwnd = browser->GetHost()->GetWindowHandle();
             if (browserHwnd) {
-                ShowWindow(browserHwnd, hidden ? SW_HIDE : SW_SHOW);
-                sprintf_s(logMsg, "CEF setHidden: %s browser window HWND=%p", 
-                         hidden ? "Hid" : "Showed", browserHwnd);
+                sprintf_s(logMsg, "CEF setHidden: Browser hwnd=%p", browserHwnd);
+                ::log(logMsg);
+                
+                // Multiple approaches to ensure hiding/showing works
+                if (hidden) {
+                    // Method 1: Standard hide
+                    ShowWindow(browserHwnd, SW_HIDE);
+                    
+                    // Method 2: Move off-screen as backup (some CEF windows might ignore SW_HIDE)
+                    SetWindowPos(browserHwnd, NULL, -32000, -32000, 0, 0, 
+                               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_HIDEWINDOW);
+                    
+                    ::log("CEF setHidden: Applied hide methods");
+                } else {
+                    // Show the window
+                    ShowWindow(browserHwnd, SW_SHOW);
+                    
+                    // Restore to proper position if we have visual bounds
+                    if (visualBounds.right > visualBounds.left && visualBounds.bottom > visualBounds.top) {
+                        SetWindowPos(browserHwnd, HWND_TOP, 
+                                   visualBounds.left, visualBounds.top,
+                                   visualBounds.right - visualBounds.left,
+                                   visualBounds.bottom - visualBounds.top,
+                                   SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                        ::log("CEF setHidden: Restored to visual bounds");
+                    } else {
+                        ::log("CEF setHidden: Showed window (no bounds to restore)");
+                    }
+                }
+                
+                // Verify final state
+                BOOL isVisible = IsWindowVisible(browserHwnd);
+                sprintf_s(logMsg, "CEF setHidden: Final visible state=%s", isVisible ? "true" : "false");
                 ::log(logMsg);
             } else {
                 ::log("CEF setHidden: No browser window handle");
@@ -2317,6 +2323,9 @@ public:
         } else {
             ::log("CEF setHidden: No browser instance");
         }
+        
+        // Also handle the container window
+        AbstractView::setHidden(hidden);
     }
 };
 
