@@ -564,6 +564,55 @@ const defaultConfig = {
   },
 };
 
+// Mapping of entitlements to their corresponding Info.plist usage description keys
+const ENTITLEMENT_TO_PLIST_KEY: Record<string, string> = {
+  "com.apple.security.device.camera": "NSCameraUsageDescription",
+  "com.apple.security.device.microphone": "NSMicrophoneUsageDescription",
+  "com.apple.security.device.audio-input": "NSMicrophoneUsageDescription",
+  "com.apple.security.personal-information.location": "NSLocationUsageDescription",
+  "com.apple.security.personal-information.location-when-in-use": "NSLocationWhenInUseUsageDescription",
+  "com.apple.security.personal-information.contacts": "NSContactsUsageDescription",
+  "com.apple.security.personal-information.calendars": "NSCalendarsUsageDescription",
+  "com.apple.security.personal-information.reminders": "NSRemindersUsageDescription",
+  "com.apple.security.personal-information.photos-library": "NSPhotoLibraryUsageDescription",
+  "com.apple.security.personal-information.apple-music-library": "NSAppleMusicUsageDescription",
+  "com.apple.security.personal-information.motion": "NSMotionUsageDescription",
+  "com.apple.security.personal-information.speech-recognition": "NSSpeechRecognitionUsageDescription",
+  "com.apple.security.device.bluetooth": "NSBluetoothAlwaysUsageDescription",
+  "com.apple.security.files.user-selected.read-write": "NSDocumentsFolderUsageDescription",
+  "com.apple.security.files.downloads.read-write": "NSDownloadsFolderUsageDescription",
+  "com.apple.security.files.desktop.read-write": "NSDesktopFolderUsageDescription",
+};
+
+// Helper function to escape XML special characters
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+// Helper function to generate usage description entries for Info.plist
+function generateUsageDescriptions(entitlements: Record<string, boolean | string>): string {
+  const usageEntries: string[] = [];
+  
+  for (const [entitlement, value] of Object.entries(entitlements)) {
+    const plistKey = ENTITLEMENT_TO_PLIST_KEY[entitlement];
+    if (plistKey && value) {
+      // Use the string value as description, or a default if it's just true
+      const description = typeof value === "string" 
+        ? escapeXml(value)
+        : `This app requires access for ${entitlement.split('.').pop()?.replace('-', ' ')}`;
+      
+      usageEntries.push(`    <key>${plistKey}</key>\n    <string>${description}</string>`);
+    }
+  }
+  
+  return usageEntries.join('\n');
+}
+
 const command = commandDefaults[commandArg];
 
 if (!command) {
@@ -1001,6 +1050,9 @@ if (commandArg === "init") {
 
   // We likely want to let users configure this for different environments (eg: dev, canary, stable) and/or
   // provide methods to help segment data in those folders based on channel/environment
+  // Generate usage descriptions from entitlements
+  const usageDescriptions = generateUsageDescriptions(config.build.mac.entitlements || {});
+  
   const InfoPlistContents = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -1016,7 +1068,7 @@ if (commandArg === "init") {
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
+    <string>AppIcon</string>${usageDescriptions ? '\n' + usageDescriptions : ''}
 </dict>
 </plist>`;
 
@@ -2101,7 +2153,7 @@ async function getConfig() {
   };
 }
 
-function buildEntitlementsFile(entitlements) {
+function buildEntitlementsFile(entitlements: Record<string, boolean | string>) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -2120,7 +2172,8 @@ function getEntitlementValue(value: boolean | string) {
   if (typeof value === "boolean") {
     return `<${value.toString()}/>`;
   } else {
-    return value;
+    // For string values (usage descriptions), still return boolean true for the entitlement
+    return `<true/>`;
   }
 }
 
