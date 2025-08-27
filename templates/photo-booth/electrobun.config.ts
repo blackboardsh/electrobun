@@ -17,6 +17,10 @@ export default {
         },
         mac: {
             bundleCEF: false,
+            codesign: true,
+            entitlements: {
+                "com.apple.security.device.camera": "This app needs camera access to take photos for your photo booth",
+            },
         },
         linux: {
             bundleCEF: true,
