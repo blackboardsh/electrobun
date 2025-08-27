@@ -105,7 +105,10 @@ const config: ElectrobunConfig = {
             codesign: true,
             notarize: true,
             bundleCEF: true,
-            entitlements: {},
+            entitlements: {
+                "com.apple.security.device.camera": "This app needs camera access for video features",
+                "com.apple.security.device.microphone": "This app needs microphone access for audio features",
+            },
         },
         linux: {
             bundleCEF: true,
