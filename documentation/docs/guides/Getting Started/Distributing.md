@@ -26,8 +26,8 @@ Let's add two more scripts to our `package.json` file to get our app ready for d
   "scripts": {
     "start": "bun run build:dev && electrobun dev",
     "build:dev": "bun install && electrobun build",
-    "build:canary": "electrobun build env=canary",
-    "build:stable": "electrobun build env=stable"
+    "build:canary": "electrobun build --env=canary",
+    "build:stable": "electrobun build --env=stable"
   }
 }
 ```
@@ -90,13 +90,13 @@ By default the Electrobun CLI will build for the current machine's target and au
 If you would like to cross-bundle for multiple targets just update your package.json scripts with the `targets` option like this
 
 ```json
- "build:canary": "electrobun build env=canary targets=macos-x64",
+ "build:canary": "electrobun build --env=canary --targets=macos-x64",
 ```
 
 or
 
 ```json
- "build:canary": "electrobun build env=canary targets=all",
+ "build:canary": "electrobun build --env=canary --targets=all",
 ```
 
 Once you've uploaded the artifacts to your bucket when your run a non-dev build command again like `bun run build:canary` the Electrobun cli will automatically download the current version of your app using the `release.bucketUrl` setting in your `electrobun.config.ts`, and use our custom optimized BSDIFF implementation to generate a patch file and add the patch file to your artifacts folder.
