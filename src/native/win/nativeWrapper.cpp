@@ -71,6 +71,7 @@ using namespace Microsoft::WRL;
 // Ensure the exported functions have appropriate visibility
 #define ELECTROBUN_EXPORT __declspec(dllexport)
 #define WM_EXECUTE_SYNC_BLOCK (WM_USER + 1)
+#define WM_EXECUTE_ASYNC_BLOCK (WM_USER + 2)
 
 // Forward declarations
 class AbstractView;
@@ -1340,6 +1341,12 @@ public:
         (*task)();
         delete task;
     }
+    
+    template<typename Func>
+    static void dispatch_async(Func&& func) {
+        auto task = new std::function<void()>(std::forward<Func>(func));
+        PostMessage(g_messageWindow, WM_EXECUTE_ASYNC_BLOCK, 0, (LPARAM)task);
+    }
 };
 
 HWND MainThreadDispatcher::g_messageWindow = NULL;
@@ -1621,7 +1628,7 @@ public:
         
         if (controller) {
             // WebView2 operations must be called from main thread to avoid TYPE_E_BADVARTYPE
-            MainThreadDispatcher::dispatch_sync([this, frame]() {
+            MainThreadDispatcher::dispatch_async([this, frame]() {
                 HRESULT result = controller->put_Bounds(frame);
                 if (FAILED(result)) {
                     char errorLog[256];
@@ -2953,6 +2960,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 LRESULT CALLBACK MessageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_EXECUTE_SYNC_BLOCK:
+            MainThreadDispatcher::handleSyncTask(lParam);
+            return 0;
+        case WM_EXECUTE_ASYNC_BLOCK:
             MainThreadDispatcher::handleSyncTask(lParam);
             return 0;
         default:
