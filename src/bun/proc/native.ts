@@ -1056,10 +1056,13 @@ const internalBridgeHandler = new JSCallback((id, msg) => {
   threadsafe: true
 });
 
-const trayItemHandler = new JSCallback((id, action) => {      
+const trayItemHandler = new JSCallback((id, action) => {
+  // Note: Some invisible character that doesn't appear in .length
+  // is causing issues      
+  const actionString = (new CString(action).toString() || "").trim();
   const event = electrobunEventEmitter.events.tray.trayClicked({
     id,
-    action: new CString(action),
+    action: actionString,
   });
 
   let result;
