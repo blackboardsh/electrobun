@@ -1,4 +1,4 @@
-import { ffi } from "../proc/native";
+import { ffi, native } from "../proc/native";
 
 // TODO: move this to a more appropriate namespace
 export const moveToTrash = (path: string) => {
@@ -7,6 +7,11 @@ export const moveToTrash = (path: string) => {
 
 export const showItemInFolder = (path: string) => {
   return ffi.request.showItemInFolder({ path });
+};
+
+export const quit = () => {
+  // Use native killApp for graceful shutdown
+  native.symbols.killApp();
 };
 
 export const openFileDialog = async (

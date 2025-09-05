@@ -2872,16 +2872,42 @@ extern "C" void killApp() {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSLog(@"[killApp] Initiating graceful shutdown");
         
-        // Clean up WebKit resources first
-        NSApplication *app = [NSApplication sharedApplication];
-        if (app) {
-            // Terminate the app gracefully, which will trigger proper cleanup
-            [app terminate:nil];
-        } else {
-            // Fallback to direct exit if NSApplication isn't available
-            NSLog(@"[killApp] NSApplication not available, forcing exit");
-            exit(0);
+        // Clean up all webviews first
+        if (globalAbstractViews) {
+            NSLog(@"[killApp] Cleaning up %lu webviews", (unsigned long)[globalAbstractViews count]);
+            NSArray *webviewIds = [globalAbstractViews allKeys];
+            for (NSNumber *webviewId in webviewIds) {
+                AbstractView *view = globalAbstractViews[webviewId];
+                if (view && !view.isRemoved) {
+                    // Call remove to trigger cleanup
+                    [view remove];
+                }
+            }
+            [globalAbstractViews removeAllObjects];
         }
+        
+        // Close all windows
+        NSArray *windows = [[NSApplication sharedApplication] windows];
+        NSLog(@"[killApp] Closing %lu windows", (unsigned long)[windows count]);
+        for (NSWindow *window in windows) {
+            [window close];
+        }
+        
+        // Brief delay to allow cleanup
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            // Terminate any child processes by sending SIGTERM to process group
+            kill(0, SIGTERM);
+            
+            NSApplication *app = [NSApplication sharedApplication];
+            if (app) {
+                // Terminate the app gracefully, which will trigger proper cleanup
+                [app terminate:nil];
+            } else {
+                // Fallback to direct exit if NSApplication isn't available
+                NSLog(@"[killApp] NSApplication not available, forcing exit");
+                exit(0);
+            }
+        });
     });
 }
 
