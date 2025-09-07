@@ -544,7 +544,13 @@ async function vendorZig() {
     // Always use x64 for Windows since we only build x64 Windows binaries
     const zigArch = 'x86_64';
     const zigFolder = `zig-windows-${zigArch}-0.13.0`;
-    await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/${zigFolder}.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/${zigFolder}/zig.exe vendors/zig && mv vendors/zig-temp/${zigFolder}/lib vendors/zig/`;
+    await $`mkdir -p vendors/zig`;
+    await $`curl -L https://ziglang.org/download/0.13.0/${zigFolder}.zip -o vendors/zig.zip`;
+    await $`powershell -ExecutionPolicy Bypass -Command "Expand-Archive -Path 'vendors/zig.zip' -DestinationPath 'vendors/zig-temp' -Force"`;
+    await $`powershell -ExecutionPolicy Bypass -Command "Copy-Item 'vendors/zig-temp/${zigFolder}/zig.exe' 'vendors/zig/' -Force"`;
+    await $`powershell -ExecutionPolicy Bypass -Command "Copy-Item 'vendors/zig-temp/${zigFolder}/lib' 'vendors/zig/' -Recurse -Force"`;
+    await $`powershell -ExecutionPolicy Bypass -Command "Remove-Item 'vendors/zig-temp' -Recurse -Force"`;
+    await $`powershell -ExecutionPolicy Bypass -Command "Remove-Item 'vendors/zig.zip' -Force"`;
   } else if (OS === 'linux') {
     const zigArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
     await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-linux-${zigArch}-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-linux-${zigArch}-0.13.0/zig zig-linux-${zigArch}-0.13.0/lib zig-linux-${zigArch}-0.13.0/doc`;
@@ -819,11 +825,9 @@ async function vendorCEF() {
       const cefLib = `./vendors/cef/Release/libcef.lib`;
       const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
 
-      // Compile the Windows helper process
-      await $`cl /c /EHsc /std:c++17 /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/build/process_helper_win.obj src/native/win/cef_process_helper_win.cpp`;
-
-      // Link to create the helper executable
-      await $`link /OUT:src/native/build/process_helper.exe user32.lib ole32.lib shell32.lib "${cefLib}" "${cefWrapperLib}" /SUBSYSTEM:WINDOWS src/native/build/process_helper_win.obj`;
+      // Compile and link the Windows helper process
+      const helperCmd = `cl /c /EHsc /std:c++17 /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fo"src/native/build/process_helper_win.obj" "src/native/win/cef_process_helper_win.cpp" && link /OUT:"src/native/build/process_helper.exe" user32.lib ole32.lib shell32.lib "${cefLib}" "${cefWrapperLib}" /SUBSYSTEM:WINDOWS "src/native/build/process_helper_win.obj"`;
+      await executeWithVisualStudio(helperCmd, 'CEF helper');
     }
   } else if (OS === 'linux') {
     if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {
@@ -978,6 +982,56 @@ async function buildTRDiff() {
   }
 }
 
+/**
+ * Sets up Visual Studio environment and executes a compile/link command on Windows.
+ * Uses vswhere.exe to find Visual Studio installation dynamically.
+ */
+async function executeWithVisualStudio(
+  command: string,
+  description: string
+): Promise<void> {
+  if (OS !== 'win') {
+    throw new Error('executeWithVisualStudio should only be called on Windows');
+  }
+
+  // Check if Visual Studio environment is already set up
+  let needsVsSetup = false;
+  try {
+    await $`where cl`.quiet();
+    console.log('✓ Visual Studio environment already configured');
+  } catch {
+    needsVsSetup = true;
+    console.log(`Setting up Visual Studio environment for ${description}...`);
+  }
+
+  if (needsVsSetup) {
+    // Find Visual Studio installation using vswhere.exe
+    let vcvarsPath: string;
+    const vswherePath =
+      'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe';
+    const vsInstallPath = execSync(
+      `"${vswherePath}" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`,
+      { encoding: 'utf8', shell: 'cmd.exe' }
+    ).trim();
+
+    if (!vsInstallPath) {
+      throw new Error(
+        'No Visual Studio installation found with C++ tools. Please install Visual Studio with C++ development tools.'
+      );
+    }
+
+    vcvarsPath = `${vsInstallPath}\\VC\\Auxiliary\\Build\\vcvarsall.bat`;
+    console.log(`Found Visual Studio at: ${vsInstallPath}`);
+
+    // Execute command with Visual Studio environment
+    const fullCommand = `"${vcvarsPath}" x64 && ${command}`;
+    execSync(fullCommand, { shell: 'cmd.exe', stdio: 'inherit' });
+  } else {
+    // Environment already set up, execute command directly
+    execSync(command, { shell: 'cmd.exe', stdio: 'inherit' });
+  }
+}
+
 async function buildNative() {
   if (OS === 'macos') {
     // Ensure CEF wrapper library is built first
@@ -1012,54 +1066,14 @@ async function buildNative() {
     const cefLib = `./vendors/cef/Release/libcef.lib`;
     const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
 
-    // Check if Visual Studio environment is already set up
-    let needsVsSetup = false;
-    try {
-      await $`where cl`.quiet();
-      console.log('✓ Visual Studio environment already configured');
-    } catch {
-      needsVsSetup = true;
-      console.log('Setting up Visual Studio environment...');
-    }
-
     // Compile the main wrapper with both WebView2 and CEF support (runtime detection)
     await $`mkdir -p src/native/win/build`;
 
-    if (needsVsSetup) {
-      // Find Visual Studio installation using vswhere.exe
-      let vcvarsPath: string;
-      try {
-        // Use vswhere to find the latest Visual Studio installation
-        const vswherePath =
-          'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe';
-        const vsInstallPath = execSync(
-          `"${vswherePath}" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`,
-          { encoding: 'utf8', shell: 'cmd.exe' }
-        ).trim();
-
-        if (vsInstallPath) {
-          vcvarsPath = `${vsInstallPath}\\VC\\Auxiliary\\Build\\vcvarsall.bat`;
-          console.log(`Found Visual Studio at: ${vsInstallPath}`);
-        } else {
-          throw new Error('No Visual Studio installation found');
-        }
-      } catch (error) {
-        // Fallback to hardcoded path for Visual Studio 2022 Community
-        console.log(
-          'vswhere.exe not found or failed, falling back to default path'
-        );
-        vcvarsPath =
-          'C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvarsall.bat';
-      }
-
-      // Use execSync with cmd.exe to set up VS environment once and run both compile and link
-      const compileAndLinkCmd = `"${vcvarsPath}" x64 && cl /c /EHsc /std:c++17 /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fo"src/native/win/build/nativeWrapper.obj" "src/native/win/nativeWrapper.cpp" && link /DLL /OUT:"src/native/win/build/libNativeWrapper.dll" user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll /IMPLIB:"src/native/win/build/libNativeWrapper.lib" "src/native/win/build/nativeWrapper.obj"`;
-      execSync(compileAndLinkCmd, { shell: 'cmd.exe', stdio: 'inherit' });
-    } else {
-      // Environment already set up, just compile and link
-      await $`cl /c /EHsc /std:c++17 /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
-      await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
-    }
+    const compileAndLinkCmd = `cl /c /EHsc /std:c++17 /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fo"src/native/win/build/nativeWrapper.obj" "src/native/win/nativeWrapper.cpp" && link /DLL /OUT:"src/native/win/build/libNativeWrapper.dll" user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll /IMPLIB:"src/native/win/build/libNativeWrapper.lib" "src/native/win/build/nativeWrapper.obj"`;
+    await executeWithVisualStudio(
+      compileAndLinkCmd,
+      'native wrapper compilation'
+    );
   } else if (OS === 'linux') {
     try {
       // Check if required packages are available first
