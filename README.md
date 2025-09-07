@@ -64,19 +64,17 @@ Ways to get involved at this early stage:
 
 **⚠️ Important: Initialize Git Submodules**
 
-After cloning the repository, you **must** initialize git submodules to avoid build failures:
+After cloning the repository, initialize submodules before installing dependencies, then do a clean first run:
 
 ```bash
 git clone https://github.com/blackboardsh/electrobun.git
 cd electrobun
 git submodule update --init --recursive
 bun install
+bun dev:playground:clean
 ```
 
-**Why this is required:** The `src/bsdiff/zstd` directory contains a git submodule that is not automatically initialized when cloning. Without this step, you'll encounter build errors like:
-```
-error: unable to check cache: stat file 'src/bsdiff/zstd/lib/common/debug.c' failed: FileNotFound
-```
+The `src/bsdiff/zstd` directory is a git submodule and is required for builds.
 
 ### Development Workflow
 
