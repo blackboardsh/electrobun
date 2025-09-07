@@ -196,7 +196,7 @@ async function checkDependencies() {
       console.error('   xcode-select --install');
     } else if (OS === 'win') {
       console.error('\nTo install missing dependencies on Windows:');
-      console.error('1. Install Visual Studio 2022 with C++ development tools');
+      console.error('1. Install Visual Studio (or Build Tools) with C++ development tools');
       console.error('2. Install cmake from: https://cmake.org/download/');
     } else if (OS === 'linux') {
       console.error('\nTo install missing dependencies on Linux:');
@@ -801,16 +801,38 @@ async function vendorCEF() {
         )
       )
     ) {
-      // Clean and create build directory
-      await $`cd vendors/cef && powershell -command "if (Test-Path build) { Remove-Item -Recurse -Force build }"`;
-      await $`cd vendors/cef && mkdir build`;
+      // Clean and create build directory (Windows cmd semantics)
+      execSync('if exist build rmdir /s /q build', {
+        cwd: join(process.cwd(), 'vendors', 'cef'),
+        shell: 'cmd.exe',
+        stdio: 'inherit',
+      });
+      execSync('mkdir build', {
+        cwd: join(process.cwd(), 'vendors', 'cef'),
+        shell: 'cmd.exe',
+        stdio: 'inherit',
+      });
       // Generate Visual Studio project with sandbox disabled
-      await $`cd vendors/cef/build && "${CMAKE_BIN}" -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
+      execSync(
+        `"${CMAKE_BIN}" -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`,
+        {
+          cwd: join(process.cwd(), 'vendors', 'cef', 'build'),
+          shell: 'cmd.exe',
+          stdio: 'inherit',
+        }
+      );
       // Build the wrapper library only
       // await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
       // const msbuildPath = await $`"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe | head -n 1`.text();
       // await $`cd vendors/cef/build && "${msbuildPath.trim()}" cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
-      await $`cd vendors/cef/build && "${CMAKE_BIN}" --build . --config Release --target libcef_dll_wrapper`;
+      execSync(
+        `"${CMAKE_BIN}" --build . --config Release --target libcef_dll_wrapper`,
+        {
+          cwd: join(process.cwd(), 'vendors', 'cef', 'build'),
+          shell: 'cmd.exe',
+          stdio: 'inherit',
+        }
+      );
     }
 
     // Build process_helper binary for Windows
@@ -997,7 +1019,8 @@ async function executeWithVisualStudio(
   // Check if Visual Studio environment is already set up
   let needsVsSetup = false;
   try {
-    await $`where cl`.quiet();
+    // Ensure we use cmd.exe where.exe semantics on Windows
+    execSync('where cl', { shell: 'cmd.exe', stdio: 'ignore' });
     console.log('✓ Visual Studio environment already configured');
   } catch {
     needsVsSetup = true;
@@ -1009,14 +1032,19 @@ async function executeWithVisualStudio(
     let vcvarsPath: string;
     const vswherePath =
       'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe';
-    const vsInstallPath = execSync(
-      `"${vswherePath}" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`,
-      { encoding: 'utf8', shell: 'cmd.exe' }
-    ).trim();
+    let vsInstallPath = '';
+    try {
+      vsInstallPath = execSync(
+        `"${vswherePath}" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`,
+        { encoding: 'utf8', shell: 'cmd.exe' }
+      ).trim();
+    } catch (e) {
+      // vswhere not found or failed — fall through to generic error
+    }
 
     if (!vsInstallPath) {
       throw new Error(
-        'No Visual Studio installation found with C++ tools. Please install Visual Studio with C++ development tools.'
+        'Visual Studio C++ build tools not found. Install Visual Studio (or Build Tools) with C++ tools, or run from a Developer command prompt where cl is available.'
       );
     }
 
