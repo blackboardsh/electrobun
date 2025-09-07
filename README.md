@@ -62,14 +62,25 @@ Ways to get involved at this early stage:
 
 ### First-time Setup
 
+**⚠️ Important: Initialize Git Submodules**
+
+After cloning the repository, you **must** initialize git submodules to avoid build failures:
+
 ```bash
-git clone <repo-url>
+git clone https://github.com/blackboardsh/electrobun.git
 cd electrobun
+git submodule update --init --recursive
 bun install
-bun dev:playground:clean
+ ACTUAL```
+
+**Why this is required:** The `src/bsdiff/zstd` directory contains a git submodule that is not automatically initialized when cloning. Without this step, you'll encounter build errors like:
+```
+error: unable to check cache: stat file 'src/bsdiff/zstd/lib/common/debug.c' failed: FileNotFound
 ```
 
 ### Development Workflow
+
+All development commands now use cross-platform TypeScript scripts that work identically on Windows, macOS, and Linux:
 
 ```bash
 # After making changes to source code
@@ -82,11 +93,36 @@ bun dev:playground:rerun
 bun dev:playground:clean
 ```
 
-### Additional Commands
+### Development Commands
 
+**Playground Development:**
+- `bun dev:playground` - Build and run playground
 - `bun dev:playground:canary` - Build and run playground in canary mode
+- `bun dev:playground:linux` - Build and run playground with npm link (Linux/macOS)
+- `bun dev:playground:clean` - Clean and rebuild everything
+- `bun dev:playground:rerun` - Just run playground without rebuilding
+- `bun run:playground` - Build and run interactive-playground template
+
+**Build Commands:**
 - `bun build:dev` - Build electrobun in development mode
 - `bun build:release` - Build electrobun in release mode
+- `bun build:cli` - Build the CLI executable
+
+**Testing & Documentation:**
+- `bun test` - Build and run tests
+- `bun dev:docs` - Start documentation development server
+- `bun build:docs:release` - Build documentation for release
+
+**Script Organization:**
+All development scripts are organized by category in the `scripts/` directory:
+- `playground.ts` - Playground development workflows
+- `test.ts` - Test execution
+- `build.ts` - Build processes
+- `docs.ts` - Documentation tasks
+
+See `scripts/README.md` for detailed documentation.
+
+**Note:** All development scripts have been rewritten as cross-platform TypeScript to fix Windows compatibility issues with shell commands like `cd` and `rm -rf`.
 
 ### Debugging
 

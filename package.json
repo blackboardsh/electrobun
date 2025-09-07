@@ -26,19 +26,19 @@
     "url": "git+https://github.com/blackboardsh/electrobun.git"
   },
   "scripts": {
-    "build:cli": "mkdir -p bin && bun build src/cli/index.ts --compile --outfile bin/electrobun",
+    "build:cli": "bun scripts/build.ts cli",
     "start": "bun src/bun/index.ts",
     "check-zig-version": "vendors/zig/zig version",
     "build:dev": "bun build.ts",
     "build:release": "bun build.ts --release",
-    "dev:playground": "bun build:dev && bun build:cli && cd playground && npm install && bun build:dev && bun start",
-    "dev:playground:linux": "bun build:dev && npm link && cd playground && npm link electrobun && bun build:dev && bun start",
-    "dev:playground:clean": "cd playground && rm -rf node_modules && npm install && cd .. && bun dev:playground",
-    "dev:playground:rerun": "cd playground && bun start",
-    "dev:playground:canary": "bun build:release && cd playground && npm install && bun build:canary && bun start:canary",
-    "run:playground": "bun build:dev && bun build:cli && cd templates/interactive-playground && npm install && bun build:dev && bun start",
-    "dev:docs": "cd documentation && bun start",
-    "build:docs:release": "cd documentation && bun run build",
+    "dev:playground": "bun scripts/playground.ts playground",
+    "dev:playground:linux": "bun scripts/playground.ts playground:linux",
+    "dev:playground:clean": "bun scripts/playground.ts playground:clean",
+    "dev:playground:rerun": "bun scripts/playground.ts playground:rerun",
+    "dev:playground:canary": "bun scripts/playground.ts playground:canary",
+    "run:playground": "bun scripts/playground.ts playground:template",
+    "dev:docs": "bun scripts/docs.ts dev",
+    "build:docs:release": "bun scripts/docs.ts build",
     "npm:publish": "bun build:release && npm publish",
     "npm:publish:beta": "bun build:release && npm publish --tag beta",
     "npm:version:beta": "npm version prerelease --preid=beta",
@@ -47,7 +47,7 @@
     "push:minor": "npm version minor && git push origin main --tags",
     "push:major": "npm version major && git push origin main --tags",
     "build:push:artifacts": "bun scripts/build-and-upload-artifacts.js",
-    "test": "bun build:dev && bun build:cli && cd tests && npm install && bun build:dev && bun start"
+    "test": "bun scripts/test.ts"
   },
   "devDependencies": {
     "@types/archiver": "^6.0.3",
