@@ -71,7 +71,7 @@ git clone https://github.com/blackboardsh/electrobun.git
 cd electrobun
 git submodule update --init --recursive
 bun install
- ACTUAL```
+```
 
 **Why this is required:** The `src/bsdiff/zstd` directory contains a git submodule that is not automatically initialized when cloning. Without this step, you'll encounter build errors like:
 ```
