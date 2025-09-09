@@ -2335,11 +2335,12 @@ public:
                     storedLayerMask_ = nil;
                     
                     // Wait for fullscreen exit animation before reparenting CEF view
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                        NSLog(@"[CEF_FULLSCREEN] Fullscreen exit complete - now reparenting CEF view");
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                        // NSLog(@"[CEF_FULLSCREEN] Fullscreen exit complete - now reparenting CEF view");
                         
-                        // Hide temp window first to reduce flicker
-                        [tempWindow orderOut:nil];
+                        // Make temp window transparent first to reduce flicker
+                        [tempWindow setAlphaValue:0.0];
+                        
                         // NSLog(@"[CEF_FULLSCREEN] Hidden temp fullscreen window");
                         
                         // Now do the reparenting after temp window is hidden
