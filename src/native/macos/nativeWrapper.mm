@@ -345,6 +345,8 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL mirrorModeEnabled;
     @property (nonatomic, assign) BOOL fullSize;
     @property (nonatomic, assign) BOOL isRemoved;
+    @property (nonatomic, assign) BOOL isInFullscreen;
+    @property (nonatomic, strong) CALayer *storedLayerMask;
 
     - (void)loadURL:(const char *)urlString;
     - (void)goBack;
@@ -411,7 +413,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 
 // ----------------------- Webview Implementations -----------------------
 @interface WKWebViewImpl : AbstractView
-    @property (nonatomic, strong) WKWebView *webView;
+    @property (nonatomic, strong) WKWebView *webView;    
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window   
@@ -672,27 +674,27 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
 
     - (void)toggleMirrorMode:(BOOL)enable {        
-        NSView *subview = self.nsView;
+        NSView *subview = self.nsView;                
         
-        if (self.mirrorModeEnabled == enable) {
+        if (self.mirrorModeEnabled == enable) {            
             return;
         }
         BOOL isLeftMouseButtonDown = ([NSEvent pressedMouseButtons] & (1 << 0)) != 0;
-        if (isLeftMouseButtonDown) {
+        if (isLeftMouseButtonDown) {            
             return;
         }
         self.mirrorModeEnabled = enable;
         
         if (enable) {        
             CGFloat positionX = subview.frame.origin.x;
-            CGFloat positionY = subview.frame.origin.y;            
+            CGFloat positionY = subview.frame.origin.y;                        
             subview.frame = CGRectOffset(subview.frame, OFFSCREEN_OFFSET, OFFSCREEN_OFFSET);
-            subview.layer.position = CGPointMake(positionX, positionY);
-        } else {
+            subview.layer.position = CGPointMake(positionX, positionY);            
+        } else {            
             subview.frame = CGRectMake(subview.layer.position.x,
                                     subview.layer.position.y,
                                     subview.frame.size.width,
-                                    subview.frame.size.height);
+                                    subview.frame.size.height);            
         }
     }
 
@@ -701,19 +703,19 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         NSView *subview = self.nsView;
         if (!subview) {
             return;    
-        }        
+        }                        
         
         CGFloat adjustedX = floor(frame.origin.x);
         CGFloat adjustedWidth = ceilf(frame.size.width);
         CGFloat adjustedHeight = ceilf(frame.size.height);
         CGFloat adjustedY = floor(subview.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
-        CGFloat adjustedYZ = floor(frame.origin.y);
-        
+        CGFloat adjustedYZ = floor(frame.origin.y);   
+
         // TODO: move mirrorModeEnabled to abstractView
-        if (self.mirrorModeEnabled) {   
-            subview.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);            
-            subview.layer.position = CGPointMake(adjustedX, adjustedY);            
-        } else {
+        if (self.mirrorModeEnabled) {               
+            subview.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);
+            subview.layer.position = CGPointMake(adjustedX, adjustedY);                       
+        } else {            
             subview.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
         }
 
@@ -749,7 +751,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             return maskLayer;
         };
 
-        self.nsView.layer.mask = createMaskLayer();
+        self.nsView.layer.mask = createMaskLayer();                
         NSPoint currentMousePosition = [self.nsView.window mouseLocationOutsideOfEventStream];
         ContainerView *containerView = (ContainerView *)self.nsView.superview;    
         [containerView updateActiveWebviewForMousePosition:currentMousePosition];
@@ -837,26 +839,12 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
     - (void)removeAbstractViewWithId:(uint32_t)webviewId {
-        NSLog(@"ContainerView removeAbstractViewWithId: ENTRY - searching for webviewId %u in %lu views", 
-              webviewId, (unsigned long)self.abstractViews.count);
-        
-        BOOL found = NO;
         for (NSInteger i = 0; i < self.abstractViews.count; i++) {
             AbstractView * candidate = self.abstractViews[i];
-            NSLog(@"ContainerView removeAbstractViewWithId: checking index %ld, webviewId %u (looking for %u)", 
-                  (long)i, candidate.webviewId, webviewId);
             if (candidate.webviewId == webviewId) {
-                NSLog(@"ContainerView removeAbstractViewWithId: found match at index %ld, removing", (long)i);
                 [self.abstractViews removeObjectAtIndex:i];
-                NSLog(@"ContainerView removeAbstractViewWithId: removed webviewId %u, remaining count: %lu", 
-                      webviewId, (unsigned long)self.abstractViews.count);
-                found = YES;
                 break;
             }
-        }   
-        
-        if (!found) {
-            NSLog(@"ContainerView removeAbstractViewWithId: WARNING - webviewId %u not found in tracking array", webviewId);
         }
     }
 @end
@@ -1177,7 +1165,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
                 
                 [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
-                [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
+                [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];                                
                 
                 // Add scheme handler
                 MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
@@ -1191,8 +1179,10 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 [self.webView setValue:@NO forKey:@"drawsBackground"];
                 self.webView.layer.backgroundColor = [[NSColor clearColor] CGColor];
                 self.webView.layer.opaque = NO;
-
+                
                 self.webView.autoresizingMask = NSViewNotSizable;
+                
+                [self.webView addObserver:self forKeyPath:@"fullscreenState" options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionOld context:nil];
 
                 if (autoResize) {
                     self.fullSize = YES;
@@ -1276,9 +1266,6 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         // Add to global tracking map
         if (globalAbstractViews) {
             globalAbstractViews[@(self.webviewId)] = self;
-            NSLog(@"WKWebViewImpl: Added webview %u to global tracking (total: %lu)", self.webviewId, (unsigned long)globalAbstractViews.count);
-        } else {
-            NSLog(@"WKWebViewImpl: ERROR - globalAbstractViews is nil when trying to add webview %u", self.webviewId);
         }
         
         return self;
@@ -1303,23 +1290,13 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     }
 
     - (void)remove {
-        NSLog(@"WKWebViewImpl remove: ENTRY - cleaning up webview %u, webView=%p", self.webviewId, self.webView);
-        
         if (self.webView) {
-            NSLog(@"WKWebViewImpl remove: calling stopLoading on webview %u", self.webviewId);
             [self.webView stopLoading];
-            
-            NSLog(@"WKWebViewImpl remove: checking superview for webview %u, superview=%p, class=%@", 
-                  self.webviewId, self.webView.superview, NSStringFromClass([self.webView.superview class]));
             
             // Remove from ContainerView's tracking array first
             if (self.webView.superview && [self.webView.superview isKindOfClass:[ContainerView class]]) {
                 ContainerView *containerView = (ContainerView *)self.webView.superview;
-                NSLog(@"WKWebViewImpl remove: calling removeAbstractViewWithId for webview %u", self.webviewId);
                 [containerView removeAbstractViewWithId:self.webviewId];
-                NSLog(@"WKWebViewImpl remove: removed from ContainerView tracking");
-            } else {
-                NSLog(@"WKWebViewImpl remove: superview is not ContainerView or is nil");
             }
             
             // Keep a weak reference to the view for delayed removal
@@ -1327,7 +1304,6 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
             uint32_t webviewIdForLogging = self.webviewId;
             
             // Set delegates to nil and clean up immediately
-            NSLog(@"WKWebViewImpl remove: setting delegates to nil for webview %u", self.webviewId);
             self.webView.navigationDelegate = nil;
             self.webView.UIDelegate = nil;
             
@@ -1467,6 +1443,48 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                                                             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                         forMainFrameOnly:true];
         [contentController addUserScript:newUserScript];
+    }
+
+    // KVO observer method to track fullscreen and other webview state changes
+    - (void)observeValueForKeyPath:(NSString *)keyPath
+                          ofObject:(id)object
+                            change:(NSDictionary<NSKeyValueChangeKey, id> *)change
+                           context:(void *)context {        
+        
+        if (object == self.webView) {            
+            if ([keyPath isEqualToString:@"fullscreenState"]) {                
+                id newValue = change[NSKeyValueChangeNewKey];                                                
+                NSInteger stateValue = 0;
+                if (newValue) {
+                    stateValue = [newValue integerValue];                
+                }                
+                
+                // FULLSCREEN FIX: Handle fullscreen transitions with mask store/restore
+                if (stateValue == 1) { // Entering Fullscreen
+                    self.isInFullscreen = YES;
+                    
+                    // Store the current mask before clearing it
+                    self.storedLayerMask = self.webView.layer.mask;
+                    self.webView.layer.mask = nil;                                                            
+                } else if (stateValue == 0 || stateValue == 3) { // Not in fullscreen or exiting
+                    if (self.isInFullscreen) {
+                        self.isInFullscreen = NO;
+                        
+                        // Restore the stored mask when exiting fullscreen
+                        self.webView.layer.mask = self.storedLayerMask;
+                        self.storedLayerMask = nil; // Clear the stored reference                                                
+                    }                    
+                }                 
+            } 
+        } else {
+            // Call super for non-webview objects
+            [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        }
+    }
+
+    // Cleanup KVO observers when the webview is deallocated
+    - (void)dealloc {        
+        [self.webView removeObserver:self forKeyPath:@"fullscreenState"];            
     }
 
 @end
@@ -2620,7 +2638,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         // Add to global tracking map
         if (globalAbstractViews) {
             globalAbstractViews[@(self.webviewId)] = self;
-            NSLog(@"CEFWebViewImpl: Added webview %u to global tracking (total: %lu)", self.webviewId, (unsigned long)globalAbstractViews.count);
         } else {
             NSLog(@"CEFWebViewImpl: ERROR - globalAbstractViews is nil when trying to add webview %u", self.webviewId);
         }
@@ -2653,7 +2670,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     }
 
     - (void)remove {
-        NSLog(@"CEFWebViewImpl remove: ENTRY - cleaning up webview %u, browser=%p, nsView=%p", self.webviewId, self.browser.get(), self.nsView);
         
         // Stop loading, close the browser, remove from superview, etc.
         if (self.browser) {
@@ -2667,13 +2683,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         }
         
         if (self.nsView) {
-            NSLog(@"CEFWebViewImpl remove: checking superview for webview %u, superview=%p, class=%@", 
-                  self.webviewId, self.nsView.superview, NSStringFromClass([self.nsView.superview class]));
             
             // Remove from ContainerView's tracking array first
             if (self.nsView.superview && [self.nsView.superview isKindOfClass:[ContainerView class]]) {
                 ContainerView *containerView = (ContainerView *)self.nsView.superview;
-                NSLog(@"CEFWebViewImpl remove: calling removeAbstractViewWithId for webview %u", self.webviewId);
                 [containerView removeAbstractViewWithId:self.webviewId];
                 NSLog(@"CEFWebViewImpl remove: removed from ContainerView tracking");
             } else {
@@ -2801,21 +2814,21 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         ContainerView *containerView = [window contentView];
         NSRect fullFrame = [window frame];
         fullFrame.origin.x = 0;
-        fullFrame.origin.y = 0;
+        fullFrame.origin.y = 0;                
                 
-        for (AbstractView *abstractView in containerView.abstractViews) {                       
-            if (abstractView.fullSize) {            
-                [abstractView resize:fullFrame withMasksJSON:""];
+        for (AbstractView *abstractView in containerView.abstractViews) {                              
+            if (abstractView.fullSize) {                
+                [abstractView resize:fullFrame withMasksJSON:""];                
             }
-            
+
         }
         if (self.resizeHandler) {
             NSScreen *primaryScreen = [NSScreen screens][0];
             NSRect screenFrame = [primaryScreen frame];
-            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;            
+            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;                        
             self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
                             windowFrame.size.width, windowFrame.size.height);
-        }
+        }                
     }
     - (void)windowDidMove:(NSNotification *)notification {
         if (self.moveHandler) {
