@@ -2085,6 +2085,12 @@ public:
                                             inspect_at);
                 return true;
             }
+            
+            // Handle ESC key to exit fullscreen (try both key codes)
+            if (event.windows_key_code == 27 || event.native_key_code == 53) {
+                browser->GetHost()->ExitFullscreen(false);
+                return true;
+            }                        
         }
         return false;
     }
@@ -2243,6 +2249,7 @@ public:
     NSWindow* fullscreenWindow_;
     NSWindow* originalWindow_;
     CALayer* storedLayerMask_;
+    id globalKeyMonitor_;
     
     // CefDisplayHandler methods
     virtual void OnFullscreenModeChange(CefRefPtr<CefBrowser> browser,
@@ -2303,6 +2310,19 @@ public:
             [fullscreenWindow_ setCollectionBehavior:NSWindowCollectionBehaviorFullScreenPrimary];
             [fullscreenWindow_ toggleFullScreen:nil];
             
+            // Add local key monitor for ESC key (works even when our app has focus)
+            globalKeyMonitor_ = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown 
+                                handler:^NSEvent*(NSEvent *event) {
+                if (event.keyCode == 53) { // ESC key code on macOS
+                    NSLog(@"[CEF_FULLSCREEN] Local ESC key detected - exiting fullscreen for webview %u", webview_id_);
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        browser->GetHost()->ExitFullscreen(false);
+                    });
+                    return nil; // Consume the event
+                }
+                return event; // Let other events through
+            }];
+            
             // Notify CEF of the size change
             browser->GetHost()->WasResized();
             
@@ -2314,12 +2334,17 @@ public:
             
             // Exit fullscreen on the fullscreen window
             if (fullscreenWindow_) {
+                // Remove global key monitor
+                if (globalKeyMonitor_) {
+                    [NSEvent removeMonitor:globalKeyMonitor_];
+                    globalKeyMonitor_ = nil;                    
+                }
+                
                 // First exit fullscreen mode on temp window, then delay reparenting
                 NSWindow* tempWindow = fullscreenWindow_;
                 fullscreenWindow_ = nil; // Clear reference immediately
                 
-                if ((tempWindow.styleMask & NSWindowStyleMaskFullScreen) == NSWindowStyleMaskFullScreen) {
-                    NSLog(@"[CEF_FULLSCREEN] Exiting fullscreen mode on temp window - delaying reparenting");
+                if ((tempWindow.styleMask & NSWindowStyleMaskFullScreen) == NSWindowStyleMaskFullScreen) {                    
                     [tempWindow toggleFullScreen:nil];
                     
                     // Capture references before dispatch block
