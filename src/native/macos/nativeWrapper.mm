@@ -1600,7 +1600,11 @@ public:
         // Note: This stops CEF (Chromium) trying to access Chromium's storage for system-level things
         // like credential management. Using a mock keychain just means it doesn't use keychain
         // for credential storage. Other security features like cookies, https, etc. are unaffected.                
-        command_line->AppendSwitch("use-mock-keychain");       
+        command_line->AppendSwitch("use-mock-keychain");
+        
+        // Enable fullscreen support for videos
+        command_line->AppendSwitch("enable-features=PictureInPicture");
+        command_line->AppendSwitch("enable-fullscreen");       
                 
     }
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {        
@@ -1796,7 +1800,8 @@ class ElectrobunClient : public CefClient,
                         public CefContextMenuHandler,
                         public CefKeyboardHandler,
                         public CefResourceRequestHandler,
-                        public CefPermissionHandler  {
+                        public CefPermissionHandler,
+                        public CefDisplayHandler  {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -1874,6 +1879,10 @@ public:
     }
     
     virtual CefRefPtr<CefPermissionHandler> GetPermissionHandler() override {
+        return this;
+    }
+    
+    virtual CefRefPtr<CefDisplayHandler> GetDisplayHandler() override {
         return this;
     }
     
@@ -2227,6 +2236,175 @@ public:
         return false; // Let CEF handle with default behavior
     }
     */
+
+    // Store original state for fullscreen
+    NSRect storedFrame_;
+    NSView* storedSuperview_;
+    NSWindow* fullscreenWindow_;
+    NSWindow* originalWindow_;
+    CALayer* storedLayerMask_;
+    
+    // CefDisplayHandler methods
+    virtual void OnFullscreenModeChange(CefRefPtr<CefBrowser> browser,
+                                       bool fullscreen) override {
+        CEF_REQUIRE_UI_THREAD();
+        
+        NSLog(@"[CEF_FULLSCREEN] OnFullscreenModeChange called - fullscreen: %s for webview %u", 
+              fullscreen ? "YES" : "NO", webview_id_);
+        
+        if (!browser || !browser->GetHost()) {
+            return;
+        }
+        
+        CefWindowHandle handle = browser->GetHost()->GetWindowHandle();
+        if (!handle) {
+            return;
+        }
+        
+        NSView* cefView = (__bridge NSView*)handle;
+        
+        if (fullscreen) {
+            NSLog(@"[CEF_FULLSCREEN] Entering fullscreen for webview %u", webview_id_);
+            
+            // Store original state
+            storedFrame_ = cefView.frame;
+            storedSuperview_ = cefView.superview;
+            originalWindow_ = cefView.window;
+            
+            // Store and clear the layer mask (this was causing cropping in WKWebView too)
+            storedLayerMask_ = cefView.layer.mask;
+            cefView.layer.mask = nil;
+            NSLog(@"[CEF_FULLSCREEN] Stored and cleared layer mask for webview %u", webview_id_);
+            
+            // Create a new fullscreen window
+            NSScreen* screen = [NSScreen mainScreen];
+            NSRect screenFrame = screen.frame;
+            
+            fullscreenWindow_ = [[NSWindow alloc] initWithContentRect:screenFrame
+                                                            styleMask:NSWindowStyleMaskBorderless
+                                                              backing:NSBackingStoreBuffered
+                                                                defer:NO];
+            
+            fullscreenWindow_.level = NSScreenSaverWindowLevel;
+            fullscreenWindow_.backgroundColor = [NSColor blackColor];
+            fullscreenWindow_.opaque = YES;
+            fullscreenWindow_.hasShadow = NO;
+            
+            // Remove CEF view from original location and add to fullscreen window
+            [cefView removeFromSuperview];
+            [fullscreenWindow_.contentView addSubview:cefView];
+            
+            // Make CEF view fill the fullscreen window
+            cefView.frame = fullscreenWindow_.contentView.bounds;
+            cefView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            
+            // Show the fullscreen window
+            [fullscreenWindow_ makeKeyAndOrderFront:nil];
+            [fullscreenWindow_ setCollectionBehavior:NSWindowCollectionBehaviorFullScreenPrimary];
+            [fullscreenWindow_ toggleFullScreen:nil];
+            
+            // Notify CEF of the size change
+            browser->GetHost()->WasResized();
+            
+            NSLog(@"[CEF_FULLSCREEN] Created fullscreen window, CEF view size: %.0fx%.0f", 
+                  cefView.frame.size.width, cefView.frame.size.height);
+            
+        } else {
+            NSLog(@"[CEF_FULLSCREEN] Exiting fullscreen for webview %u", webview_id_);
+            
+            // Exit fullscreen on the fullscreen window
+            if (fullscreenWindow_) {
+                // First exit fullscreen mode on temp window, then delay reparenting
+                NSWindow* tempWindow = fullscreenWindow_;
+                fullscreenWindow_ = nil; // Clear reference immediately
+                
+                if ((tempWindow.styleMask & NSWindowStyleMaskFullScreen) == NSWindowStyleMaskFullScreen) {
+                    NSLog(@"[CEF_FULLSCREEN] Exiting fullscreen mode on temp window - delaying reparenting");
+                    [tempWindow toggleFullScreen:nil];
+                    
+                    // Capture references before dispatch block
+                    NSView* capturedCefView = cefView;
+                    NSView* capturedSuperview = storedSuperview_;
+                    NSRect capturedFrame = storedFrame_;
+                    CALayer* capturedMask = storedLayerMask_;
+                    NSWindow* capturedOriginalWindow = originalWindow_;
+                    
+                    // Clear instance variables to prevent double cleanup
+                    storedSuperview_ = nil;
+                    originalWindow_ = nil;
+                    storedLayerMask_ = nil;
+                    
+                    // Wait for fullscreen exit animation before reparenting CEF view
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                        NSLog(@"[CEF_FULLSCREEN] Fullscreen exit complete - now reparenting CEF view");
+                        
+                        // Hide temp window first to reduce flicker
+                        [tempWindow orderOut:nil];
+                        // NSLog(@"[CEF_FULLSCREEN] Hidden temp fullscreen window");
+                        
+                        // Now do the reparenting after temp window is hidden
+                        if (capturedCefView && capturedSuperview) {
+                            // Make original window key before reparenting to ensure smooth transition
+                            if (capturedOriginalWindow) {
+                                [capturedOriginalWindow makeKeyAndOrderFront:nil];
+                                // NSLog(@"[CEF_FULLSCREEN] Restored original window as key");
+                            }
+                            
+                            // NSLog(@"[CEF_FULLSCREEN] Removing CEF view from fullscreen window");
+                            [capturedCefView removeFromSuperview];
+                            
+                            // NSLog(@"[CEF_FULLSCREEN] Restoring CEF view to original parent");
+                            [capturedSuperview addSubview:capturedCefView];
+                            capturedCefView.frame = capturedFrame;
+                            capturedCefView.autoresizingMask = NSViewNotSizable;
+                            
+                            // Restore the layer mask
+                            if (capturedMask) {
+                                capturedCefView.layer.mask = capturedMask;
+                                NSLog(@"[CEF_FULLSCREEN] Restored layer mask for webview %u", webview_id_);
+                            }
+                            
+                            // Notify CEF of the size change after everything is in place
+                            browser->GetHost()->WasResized();
+                        } else {
+                            NSLog(@"[CEF_FULLSCREEN] ERROR: capturedCefView or capturedSuperview is nil!");
+                        }
+                    });
+                } else {
+                    NSLog(@"[CEF_FULLSCREEN] Window not in fullscreen mode, reparenting immediately");
+                    // Reparent immediately if not fullscreen
+                    if (cefView && storedSuperview_) {
+                        NSLog(@"[CEF_FULLSCREEN] Removing CEF view from fullscreen window");
+                        [cefView removeFromSuperview];
+                        
+                        NSLog(@"[CEF_FULLSCREEN] Restoring CEF view to original parent");
+                        [storedSuperview_ addSubview:cefView];
+                        cefView.frame = storedFrame_;
+                        cefView.autoresizingMask = NSViewNotSizable;
+                        
+                        // Restore the layer mask
+                        if (storedLayerMask_) {
+                            cefView.layer.mask = storedLayerMask_;
+                            storedLayerMask_ = nil;
+                            NSLog(@"[CEF_FULLSCREEN] Restored layer mask for webview %u", webview_id_);
+                        }
+                        
+                        browser->GetHost()->WasResized();
+                    }
+                    
+                    if (originalWindow_) {
+                        [originalWindow_ makeKeyAndOrderFront:nil];
+                        NSLog(@"[CEF_FULLSCREEN] Restored original window as key");
+                    }
+                    
+                    [tempWindow orderOut:nil];
+                }
+            }
+            
+            // Note: storedSuperview_, originalWindow_, and storedLayerMask_ are cleared
+            // either in the dispatch block above or in the immediate reparenting case
+        }
+    }
 
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
