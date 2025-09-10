@@ -502,7 +502,7 @@ const ConfigureWebviewTags = (
 
       this.internalRpc.send.webviewTagSetTransparent({
         id: this.webviewId,
-        transparent: this.transparent || Boolean(transparent),
+        transparent: bypassState ? transparent : this.transparent,
       });
     }
     togglePassthrough(enablePassthrough?: boolean, bypassState?: boolean) {
@@ -522,7 +522,7 @@ const ConfigureWebviewTags = (
       this.internalRpc.send.webviewTagSetPassthrough({
         id: this.webviewId,
         enablePassthrough:
-          this.passthroughEnabled || Boolean(enablePassthrough),
+          bypassState ? enablePassthrough : this.passthroughEnabled,
       });
     }
 
@@ -542,7 +542,7 @@ const ConfigureWebviewTags = (
 
       this.internalRpc.send.webviewTagSetHidden({
         id: this.webviewId,
-        hidden: this.hidden || Boolean(hidden),
+        hidden: bypassState ? hidden : this.hidden,
       });
     }   
   }
