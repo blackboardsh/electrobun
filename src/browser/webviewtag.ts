@@ -111,7 +111,7 @@ const ConfigureWebviewTags = (
         // todo: wire up to a param and a method to update them
         navigationRules: null,        
       });
-
+      console.log('electrobun webviewid: ', webviewId)
       this.webviewId = webviewId;
       this.id = `electrobun-webview-${webviewId}`;
       // todo: replace bun -> webviewtag communication with a global instead of
@@ -252,8 +252,10 @@ const ConfigureWebviewTags = (
 
       if (width === 0 && height === 0) {
         if (this.wasZeroRect === false) {
+          console.log('WAS NOT ZERO RECT', this.webviewId)
           this.wasZeroRect = true;
-          this.toggleHidden(true, true);
+          this.toggleTransparent(true, true);
+          this.togglePassthrough(true, true);
         }
         return;
       }
@@ -312,7 +314,9 @@ const ConfigureWebviewTags = (
 
       if (this.wasZeroRect) {
         this.wasZeroRect = false;
-        this.toggleHidden(false, true);
+        console.log('WAS ZERO RECT', this.webviewId)
+        this.toggleTransparent(false, true);
+        this.togglePassthrough(false, true);
       }
     }
 
@@ -492,17 +496,20 @@ const ConfigureWebviewTags = (
         return;
       }
 
-      if (!bypassState) {
-        if (typeof transparent === "undefined") {
-          this.transparent = !this.transparent;
-        } else {
-          this.transparent = transparent;
-        }
+      let newValue;
+      if (typeof transparent === "undefined") {
+        newValue = !this.transparent;
+      } else {
+        newValue = Boolean(transparent);
       }
+
+      if (!bypassState) {
+        this.transparent = newValue;
+      }               
 
       this.internalRpc.send.webviewTagSetTransparent({
         id: this.webviewId,
-        transparent: bypassState ? transparent : this.transparent,
+        transparent: newValue,
       });
     }
     togglePassthrough(enablePassthrough?: boolean, bypassState?: boolean) {
@@ -511,18 +518,21 @@ const ConfigureWebviewTags = (
         return;
       }
 
-      if (!bypassState) {
-        if (typeof enablePassthrough === "undefined") {
-          this.passthroughEnabled = !this.passthroughEnabled;
-        } else {
-          this.passthroughEnabled = enablePassthrough;
-        }
+      let newValue;
+      if (typeof enablePassthrough === "undefined") {
+        newValue = !this.passthroughEnabled;
+      } else {
+        newValue = Boolean(enablePassthrough);
+      }
+
+      if (!bypassState) {        
+        this.passthroughEnabled = newValue;        
       }
 
       this.internalRpc.send.webviewTagSetPassthrough({
         id: this.webviewId,
         enablePassthrough:
-          bypassState ? enablePassthrough : this.passthroughEnabled,
+          this.passthroughEnabled || Boolean(enablePassthrough),
       });
     }
 
@@ -532,17 +542,21 @@ const ConfigureWebviewTags = (
         return;
       }
 
-      if (!bypassState) {
-        if (typeof hidden === "undefined") {
-          this.hidden = !this.hidden;
-        } else {
-          this.hidden = hidden;
-        }
+      let newValue;
+      if (typeof hidden === "undefined") {
+        newValue = !this.hidden;
+      } else {
+        newValue = Boolean(hidden);
       }
 
+      if (!bypassState) {       
+        this.hidden = newValue;        
+      }
+
+      console.trace('electrobun toggle hidden: ', this.hidden, this.webviewId)
       this.internalRpc.send.webviewTagSetHidden({
         id: this.webviewId,
-        hidden: bypassState ? hidden : this.hidden,
+        hidden: this.hidden|| Boolean(hidden),
       });
     }   
   }
