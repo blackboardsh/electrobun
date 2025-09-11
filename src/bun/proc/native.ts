@@ -526,8 +526,7 @@ export const ffi = {
            // init (like views://myview/index.html) so fast while the Bun FFI to load a url is still executing
            // or something where the JSCallback that this postMessage fires is not available or busy or
            // its memory is allocated to something else or something and the handler receives garbage data in Bun.
-           setTimeout(() => {
-              console.log('emitWebviewEvent', eventName, detail)             
+           setTimeout(() => {              
               window.__electrobunInternalBridge?.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
           });
          };                 
@@ -683,7 +682,7 @@ export const ffi = {
         } = params;
 
         const tray = Tray.getById(id);
-        console.log('native.symbols.setTrayMenu', tray.ptr, menuConfig)
+        
         native.symbols.setTrayMenu(
           tray.ptr,
           toCString(menuConfig)
@@ -691,18 +690,14 @@ export const ffi = {
       },
 
       removeTray: (params: { id: number }): void => {
-        const { id } = params;
-        console.log('removeTray called with id:', id);
-        const tray = Tray.getById(id);
-        console.log('Found tray:', tray);
+        const { id } = params;        
+        const tray = Tray.getById(id);        
         
         if (!tray) {
           throw `Can't remove tray. Tray no longer exists`;
         }
-        
-        console.log('Calling native.symbols.removeTray with ptr:', tray.ptr);
-        native.symbols.removeTray(tray.ptr);
-        console.log('Native removeTray called successfully');
+                
+        native.symbols.removeTray(tray.ptr);        
         // The Tray class will handle removing from TrayMap
       },
       setApplicationMenu: (params: {menuConfig: string}): void => {
@@ -900,7 +895,7 @@ native.symbols.setJSUtils(getMimeType, getHTMLForWebviewSync);
 
 // TODO XX: revisit this as integrated into the will-navigate handler
 const webviewDecideNavigation = new JSCallback((webviewId, url) => {
-  console.log('webviewDecideNavigation', webviewId, new CString(url))
+  console.log('TODO: webviewDecideNavigation', webviewId, new CString(url))
   return true;
 }, {
   args: [FFIType.u32, FFIType.cstring],
@@ -1174,7 +1169,7 @@ export const internalRpcHandlers = {
       return native.symbols.webviewCanGoForward(webviewPtr);  
     },  
     webviewTagCallAsyncJavaScript: (params) => {
-      console.log('-----------+ request: ', 'webviewTagCallAsyncJavaScript', params)
+      console.log('TODO: webviewTagCallAsyncJavaScript NOT YET IMPLEMENTED', params)
       // Not implemented - users can use RPC for JavaScript execution if needed
     }
   },

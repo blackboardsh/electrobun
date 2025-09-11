@@ -162,8 +162,7 @@ export class BrowserWindow<T> {
     
   }
 
-  get webview() {
-    console.log('getting webview for window: ', this.webviewId)
+  get webview() {    
     // todo (yoav): we don't want this to be undefined, so maybe we should just
     // link directly to the browserview object instead of a getter
     return BrowserView.getById(this.webviewId) as BrowserView<T>;

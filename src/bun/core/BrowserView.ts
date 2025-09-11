@@ -124,12 +124,9 @@ export class BrowserView<T> {
     this.ptr = this.init();
   }
 
-  init() {
-    console.log('browserView init', this.id, this.windowId, this.renderer);
+  init() {    
     this.createStreams();
-
-    
-   console.log('ffi createWEbview')
+       
     // TODO: add a then to this that fires an onReady event
     return ffi.request.createWebview({
       id: this.id,

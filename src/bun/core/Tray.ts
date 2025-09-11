@@ -25,9 +25,7 @@ export class Tray {
     template = true,
     width = 16,
     height = 16,
-  }: ConstructorOptions = {}) {
-    console.log("img", image);
-    console.log("img", this.resolveImagePath(image));
+  }: ConstructorOptions = {}) {    
     this.ptr = ffi.request.createTray({
       id: this.id,
       title,
