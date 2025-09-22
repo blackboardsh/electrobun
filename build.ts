@@ -822,19 +822,33 @@ async function vendorWebview2() {
 
 async function vendorLinuxDeps() {
     if (OS === 'linux') {
-        console.log('Skipping Linux dependency installation (assuming already installed)');
-        
-        // Dependencies should already be installed:
-        // sudo apt update && sudo apt install -y build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
-        
-        // TODO: Add dependency checking instead of automatic installation
-        // const requiredPackages = ['build-essential', 'cmake', 'pkg-config', 'libgtk-3-dev', 'libwebkit2gtk-4.1-dev'];
-        // for (const pkg of requiredPackages) {
-        //     const result = await $`dpkg -l | grep ${pkg}`.catch(() => null);
-        //     if (!result) {
-        //         console.log(`Warning: Required package ${pkg} may not be installed`);
-        //     }
-        // }
+        // We can't check the package manager of every Linux distro,
+        // so lets just do Ubuntu/Debian for now since thats what CI uses.
+
+        const requiredPackages = ['build-essential', 'cmake', 'pkg-config', 'libgtk-3-dev', 'libwebkit2gtk-4.1-dev', 'libayatana-appindicator3-dev', 'librsvg2-dev'];
+
+        const distroInfo = await $`grep -E '^(ID|ID_LIKE)=' /etc/os-release`.catch(() => null);
+        if (!distroInfo||  !(String(distroInfo.stdout).includes('debian') || String(distroInfo.stdout).includes('ubuntu'))) {
+            console.log('Cannot determine Linux distro or not Debian/Ubuntu based - skipping automatic dependency check');
+            console.log(`Please ensure required packages are installed: ${requiredPackages.join(', ')}`);
+            return;
+        }
+
+        console.log('Detected Debian/Ubuntu based Linux. Checking dependencies...');
+        const missingPackages = [];
+        for (const pkg of requiredPackages) {
+            const result = await $`dpkg -l | grep ${pkg}`.catch(() => null);
+            if (!result || String(result.stdout).trim() === '') {
+                missingPackages.push(pkg);
+            }
+        }
+        if (missingPackages.length > 0) {
+            console.log(`Missing packages: ${missingPackages.join(', ')}`);
+            console.log('Please install them using:');
+            console.log(`sudo apt update && sudo apt install -y ${missingPackages.join(' ')}`);
+            throw new Error('Missing required packages'); // This works, but the error does not propagate and stop execution
+        }
+        console.log('All required packages are installed');
     }
 }
 
