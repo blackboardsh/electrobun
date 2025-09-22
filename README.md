@@ -60,13 +60,17 @@ Ways to get involved at this early stage:
 - cmake
 - webkit2gtk and GTK development packages
 
+Un Ubuntu/Debian based distros: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev build-essential cmake pkg-config`
+
 ### First-time Setup
 
 ```bash
-git clone <repo-url>
+git clone --recurse-submodules https://github.com/blackboardsh/electrobun.git
 cd electrobun
 bun install
 bun dev:playground:clean
+# On Linux, use:
+bun dev:playground:clean:linux
 ```
 
 ### Development Workflow
@@ -74,12 +78,16 @@ bun dev:playground:clean
 ```bash
 # After making changes to source code
 bun dev:playground
+# On Linux, use:
+bun dev:playground:linux
 
 # If you only changed playground code (not electrobun source)
 bun dev:playground:rerun
 
 # If you need a completely fresh start
 bun dev:playground:clean
+# On Linux, use:
+bun dev:playground:clean:linux
 ```
 
 ### Additional Commands
