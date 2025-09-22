@@ -846,7 +846,7 @@ async function vendorLinuxDeps() {
             console.log(`Missing packages: ${missingPackages.join(', ')}`);
             console.log('Please install them using:');
             console.log(`sudo apt update && sudo apt install -y ${missingPackages.join(' ')}`);
-            throw new Error('Missing required packages'); // This works, but the error does not propagate and stop execution
+            throw new Error('Missing required packages'); // This works, but the error does not propagate and thus doesn't stop execution
         }
         console.log('All required packages are installed');
     }
