@@ -27,7 +27,6 @@ const {values: args} = parseArgs({
 
 // TODO: set via cl arg
 const CHANNEL: 'debug' | 'release' = args.release ? 'release' : 'debug';
-const IS_CI = args.ci || false;
 const IS_NPM_BUILD = args.npm || false;
 const OS: 'win' | 'linux' | 'macos' = getPlatform();
 const ARCH: 'arm64' | 'x64' = getArch();
@@ -50,9 +49,6 @@ const PATH = {
         BIN: join(process.cwd(),'vendors','zig', zigBinary )
     }
 }
-
-
-
 
 // TODO: setup file watchers
 try {
@@ -253,8 +249,6 @@ async function copyApiFiles() {
     }
 }
 
-
-
 async function copyToDist() {
     // Bun runtime
     await $`cp ${PATH.bun.RUNTIME} ${PATH.bun.DIST}`;
@@ -395,7 +389,6 @@ async function createPlatformDistFolder() {
     console.log(`Successfully created and populated ${platformDistDir}`);
 }
 
-
 function getPlatform() {
     switch (platform()) {
         case "win32":
@@ -420,9 +413,6 @@ function getArch() {
     }
 }
 
-
-
-
 async function createDistFolder() {
     await $`rm -r dist`.catch(() => { });
     await $`mkdir -p dist/api`;
@@ -436,7 +426,6 @@ async function createDistFolder() {
 async function BunInstall() {
     await $`bun install`;
 }
-
 
 async function vendorBun() {
     if (existsSync(PATH.bun.RUNTIME)) {
@@ -521,7 +510,6 @@ async function vendorCEF() {
     // windows arm64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_windowsarm64_minimal.tar.bz2
     // linux x64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_linux64_minimal.tar.bz2
     // linux arm64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_linuxarm64_minimal.tar.bz2
-
 
     const CEF_VERSION_MAC = `125.0.22+gc410c95`;
     const CHROMIUM_VERSION_MAC = `125.0.6422.142`;
@@ -978,7 +966,6 @@ async function buildMainJs() {
     return result;
 }
 
-
 async function buildSelfExtractor() {
     const zigArgs = OS === 'win' ? ['-Dtarget=x86_64-windows', '-Dcpu=baseline'] : [];
     if (CHANNEL === 'debug') {
@@ -989,14 +976,11 @@ async function buildSelfExtractor() {
 }
 
 async function buildCli() {
-
     // await $`bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun`;
 
     const compileTarget = process.platform === 'win32' ? '--target=bun-windows-x64-baseline' : '';
 
     await $`BUN_INSTALL_CACHE_DIR=/tmp/bun-cache bun build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
-
-
 }
 
 async function generateTemplateEmbeddings() {
@@ -1099,4 +1083,3 @@ export function getTemplate(name: string): Template | undefined {
     const totalFiles = Object.values(templates).reduce((acc, t) => acc + Object.keys(t.files).length, 0);
     console.log(`Generated ${totalFiles} template files for ${templateNames.length} templates: ${templateNames.join(", ")}`);
 }
-
