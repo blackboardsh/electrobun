@@ -87,15 +87,38 @@ static dispatch_queue_t jsWorkerQueue = NULL;
 // Global instance of the struct
 static JSUtils jsUtils = {NULL, NULL};
 
+// Deadlock prevention for callJsCallbackFromMainSync
+static BOOL isInSyncCallback = NO;
+static NSMutableArray *queuedCallbacks = nil;
+
 // this lets you call non-threadsafe JSCallbacks on the bun worker thread, from the main thread
 // and wait for the response. 
 // use it like:
 // myCStringVal = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
+// 
+// DEADLOCK PREVENTION: If called recursively (e.g., during URL scheme handling), 
+// queues the callback for later execution to prevent deadlocks.
 static const char* callJsCallbackFromMainSync(const char* (^callback)(void)) {
     if (!jsWorkerQueue) {
         NSLog(@"Error: JS worker queue not initialized");
         return NULL;
     }
+    
+    // Initialize queue if needed
+    if (!queuedCallbacks) {
+        queuedCallbacks = [[NSMutableArray alloc] init];
+    }
+    
+    // Prevent recursive calls that can cause deadlocks
+    if (isInSyncCallback) {
+        NSLog(@"callJsCallbackFromMainSync: Preventing deadlock - queueing callback for later execution");
+        // For queued callbacks, we can't return a meaningful result since they're async
+        // This is fine since recursive calls are typically RPC sends that don't need return values
+        [queuedCallbacks addObject:[callback copy]];
+        return NULL;
+    }
+    
+    isInSyncCallback = YES;
     
     __block const char* result = NULL;
     __block char* resultCopy = NULL;
@@ -105,7 +128,7 @@ static const char* callJsCallbackFromMainSync(const char* (^callback)(void)) {
         // Call the provided block (which executes the JS callback)
         result = callback();
         
-        // Duplicate the result so it won’t be garbage collected.
+        // Duplicate the result so it won't be garbage collected.
         if (result != NULL) {
             resultCopy = strdup(result);
         }
@@ -114,6 +137,20 @@ static const char* callJsCallbackFromMainSync(const char* (^callback)(void)) {
     });
     
     dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+    
+    // Process any queued callbacks (these are typically fire-and-forget RPC calls)
+    while (queuedCallbacks.count > 0) {
+        NSLog(@"callJsCallbackFromMainSync: Processing %lu queued callback(s)", (unsigned long)queuedCallbacks.count);
+        const char* (^queuedCallback)(void) = queuedCallbacks[0];
+        [queuedCallbacks removeObjectAtIndex:0];
+        
+        // Execute queued callback asynchronously (these don't need return values)
+        dispatch_async(jsWorkerQueue, ^{
+            queuedCallback();
+        });
+    }
+    
+    isInSyncCallback = NO;
     return resultCopy; // Caller is responsible for freeing this memory.
 }
 
