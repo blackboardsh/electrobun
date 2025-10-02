@@ -876,8 +876,14 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 if (contentPtr) {
                     contentLength = strlen(contentPtr);
                     data = [NSData dataWithBytes:contentPtr length:contentLength];
+                } else {
+                    // Handle NULL content gracefully
+                    NSError *error = [NSError errorWithDomain:@"MyURLSchemeHandler" 
+                                                         code:404 
+                                                     userInfo:@{NSLocalizedDescriptionKey: @"Failed to load internal content"}];
+                    [urlSchemeTask didFailWithError:error];
+                    return;
                 }
-                return;
             } 
 
             data = readViewsFile(urlString.UTF8String);
@@ -894,7 +900,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             // Determine MIME type using your getMimeTypeSync function.
             // const char *mimeTypePtr = getMimeTypeSync(url.absoluteString.UTF8String);
             const char *mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(url.absoluteString.UTF8String);});
-            NSString *rawMimeType = [NSString stringWithUTF8String:mimeTypePtr];
+            NSString *rawMimeType = mimeTypePtr ? [NSString stringWithUTF8String:mimeTypePtr] : @"application/octet-stream";
 
             NSString *mimeType;
             NSString *encodingName = nil;
@@ -915,9 +921,11 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             [urlSchemeTask didFinish];
         } else {
             NSLog(@"============== ERROR ========== empty response for URL: %@", urlString);         
-            // Optionally, you might notify failure:
-            // NSError *error = [NSError errorWithDomain:@"MyURLSchemeHandler" code:404 userInfo:nil];
-            // [urlSchemeTask didFailWithError:error];
+            // Notify failure properly to prevent crashes
+            NSError *error = [NSError errorWithDomain:@"MyURLSchemeHandler" 
+                                                 code:404 
+                                             userInfo:@{NSLocalizedDescriptionKey: @"Resource not found"}];
+            [urlSchemeTask didFailWithError:error];
         }
        
     }
@@ -1109,7 +1117,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                     replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
         NSString *body = message.body;
         const char *response = self.zigCallback(self.webviewId, body.UTF8String);
-        NSString *responseNSString = [NSString stringWithUTF8String:response ?: ""];
+        NSString *responseNSString = response ? [NSString stringWithUTF8String:response] : @"";
         replyHandler(responseNSString, nil);
     }
 @end
