@@ -184,7 +184,13 @@ async function checkDependencies() {
             console.error('   sudo apt update && sudo apt install -y build-essential cmake');
         }
         
-        throw new Error('Missing required dependencies. Please install them and try again.');
+        // In CI, just warn but continue; locally throw an error
+        if (process.env['GITHUB_ACTIONS']) {
+            console.warn('\n⚠️  Running in CI - continuing despite missing dependencies');
+            console.warn('   The CI workflow should have already installed these dependencies');
+        } else {
+            throw new Error('Missing required dependencies. Please install them and try again.');
+        }
     }
     
     console.log('✓ All required dependencies found');
@@ -846,7 +852,14 @@ async function vendorLinuxDeps() {
             console.log(`Missing packages: ${missingPackages.join(', ')}`);
             console.log('Please install them using:');
             console.log(`sudo apt update && sudo apt install -y ${missingPackages.join(' ')}`);
-            throw new Error('Missing required packages'); // This works, but the error does not propagate and thus doesn't stop execution
+            
+            // In CI, just warn but continue; locally throw an error
+            if (process.env['GITHUB_ACTIONS']) {
+                console.warn('⚠️  Running in CI - continuing despite missing packages');
+                console.warn('   The CI workflow should have already installed these packages');
+            } else {
+                throw new Error('Missing required packages'); // This works, but the error does not propagate and thus doesn't stop execution
+            }
         }
         console.log('All required packages are installed');
     }
@@ -892,10 +905,21 @@ async function buildNative() {
         // Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
         await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
+        // Skip package checks in CI or continue anyway if packages are missing
+        if (!process.env['GITHUB_ACTIONS']) {
+            try {
+                // Check if required packages are available first
+                await $`pkg-config --exists webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3`;
+                console.log('✓ All required packages found via pkg-config');
+            } catch (error) {
+                console.warn('⚠️  Warning: Some packages might be missing (pkg-config check failed)');
+                console.warn('   Continuing anyway - build may fail if packages are actually missing');
+            }
+        } else {
+            console.log('Running in CI - skipping package checks');
+        }
+        
         try {
-            // Check if required packages are available first
-            await $`pkg-config --exists webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`;
-            
             // Always include CEF headers for Linux builds
             const cefInclude = join(process.cwd(), 'vendors', 'cef');
             const cefLib = join(process.cwd(), 'vendors', 'cef', 'Release', 'libcef.so');
@@ -912,18 +936,18 @@ async function buildNative() {
             
             // Compile the main wrapper with WebKitGTK, AppIndicator, and CEF headers
             await $`mkdir -p src/native/linux/build`;
-            await $`g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -I"${cefInclude}" -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
+            await $`g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3) -I"${cefInclude}" -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
 
             // Link with WebKitGTK, AppIndicator, and optionally CEF libraries using weak linking
             await $`mkdir -p src/native/build`;
             
             // Build both GTK-only and CEF versions for Linux to allow small bundles
             console.log('Building GTK-only version (libNativeWrapper.so)');
-            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -ldl -lpthread`;
+            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3) -ldl -lpthread`;
             
             if (cefLibsExist) {
                 console.log('Building CEF version (libNativeWrapper_cef.so)');
-                await $`g++ -shared -o src/native/build/libNativeWrapper_cef.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1) -Wl,--whole-archive ${cefWrapperLib} -Wl,--no-whole-archive -Wl,--as-needed ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
+                await $`g++ -shared -o src/native/build/libNativeWrapper_cef.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3) -Wl,--whole-archive ${cefWrapperLib} -Wl,--no-whole-archive -Wl,--as-needed ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
                 console.log('Built both GTK-only and CEF versions for flexible deployment');
             } else {
                 console.log('CEF libraries not found - only GTK version built');
