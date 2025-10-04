@@ -934,20 +934,47 @@ async function buildNative() {
                 console.log('CEF libraries not found, building with CEF headers only (runtime detection)');
             }
             
+            // Get pkg-config flags, falling back to manual flags if not available
+            let pkgConfigCflags = '';
+            let pkgConfigLibs = '';
+            
+            try {
+                // Try to get flags for all packages
+                const cflagsResult = await $`pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3`.quiet();
+                pkgConfigCflags = cflagsResult.stdout.toString().trim();
+                const libsResult = await $`pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3`.quiet();
+                pkgConfigLibs = libsResult.stdout.toString().trim();
+                console.log('Successfully retrieved pkg-config flags');
+            } catch {
+                // If that fails, try without ayatana-appindicator3
+                try {
+                    const cflagsResult = await $`pkg-config --cflags webkit2gtk-4.1 gtk+-3.0`.quiet();
+                    pkgConfigCflags = cflagsResult.stdout.toString().trim();
+                    const libsResult = await $`pkg-config --libs webkit2gtk-4.1 gtk+-3.0`.quiet();
+                    pkgConfigLibs = libsResult.stdout.toString().trim();
+                    console.warn('⚠️  Using pkg-config without ayatana-appindicator3');
+                } catch {
+                    // Fallback to manual flags if pkg-config fails entirely
+                    console.warn('⚠️  pkg-config failed, using fallback flags');
+                    pkgConfigCflags = '-I/usr/include/gtk-3.0 -I/usr/include/webkit2gtk-4.1 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/pango-1.0 -I/usr/include/cairo -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/atk-1.0';
+                    pkgConfigLibs = '-lgtk-3 -lwebkit2gtk-4.1 -lglib-2.0 -lgobject-2.0';
+                }
+            }
+            
             // Compile the main wrapper with WebKitGTK, AppIndicator, and CEF headers
             await $`mkdir -p src/native/linux/build`;
-            await $`g++ -c -std=c++17 -fPIC $(pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3) -I"${cefInclude}" -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
+            await $`g++ -c -std=c++17 -fPIC ${pkgConfigCflags} -I"${cefInclude}" -o src/native/linux/build/nativeWrapper.o src/native/linux/nativeWrapper.cpp`;
 
             // Link with WebKitGTK, AppIndicator, and optionally CEF libraries using weak linking
             await $`mkdir -p src/native/build`;
             
             // Build both GTK-only and CEF versions for Linux to allow small bundles
             console.log('Building GTK-only version (libNativeWrapper.so)');
-            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3) -ldl -lpthread`;
+            await $`g++ -shared -o src/native/build/libNativeWrapper.so src/native/linux/build/nativeWrapper.o ${pkgConfigLibs} -ldl -lpthread`;
             
             if (cefLibsExist) {
                 console.log('Building CEF version (libNativeWrapper_cef.so)');
-                await $`g++ -shared -o src/native/build/libNativeWrapper_cef.so src/native/linux/build/nativeWrapper.o $(pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3) -Wl,--whole-archive ${cefWrapperLib} -Wl,--no-whole-archive -Wl,--as-needed ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
+                await $`g++ -shared -o src/native/build/libNativeWrapper_cef.so src/native/linux/build/nativeWrapper.o ${pkgConfigLibs} -Wl,--whole-archive ${cefWrapperLib} -Wl,--no-whole-archive -Wl,--as-needed ${cefLib} -ldl -lpthread -Wl,-rpath,'$ORIGIN:$ORIGIN/cef'`;
                 console.log('Built both GTK-only and CEF versions for flexible deployment');
             } else {
                 console.log('CEF libraries not found - only GTK version built');

@@ -40,6 +40,37 @@ try {
   process.exit(1);
 }
 
+// Generate template embeddings before building CLI
+console.log('Generating template embeddings...');
+const templatesDir = path.join(__dirname, '..', 'templates');
+const outputFile = path.join(__dirname, '..', 'src', 'cli', 'templates', 'embedded.ts');
+
+// Ensure the templates directory exists for embedded.ts
+const templatesOutputDir = path.dirname(outputFile);
+if (!fs.existsSync(templatesOutputDir)) {
+    fs.mkdirSync(templatesOutputDir, { recursive: true });
+}
+
+// Create a minimal embedded.ts if templates directory doesn't exist
+if (!fs.existsSync(templatesDir)) {
+    console.log('No templates directory found, creating empty embedded.ts');
+    fs.writeFileSync(outputFile, `// Auto-generated template embeddings
+export const templates: Record<string, { name: string; files: Record<string, string> }> = {};
+
+export function getTemplate(name: string) {
+    return templates[name];
+}
+
+export function getTemplateNames(): string[] {
+    return Object.keys(templates);
+}
+`);
+} else {
+    // If templates exist, run the generation through build.ts
+    console.log('Templates found, generating embeddings...');
+    // This is already done by the build.ts --release command above
+}
+
 // Build CLI binary
 console.log('Building CLI binary...');
 if (!fs.existsSync('bin')) {
