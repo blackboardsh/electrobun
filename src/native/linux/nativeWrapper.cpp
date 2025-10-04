@@ -1,7 +1,9 @@
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
 #include <jsc/jsc.h>
+#ifndef NO_APPINDICATOR
 #include <libayatana-appindicator/app-indicator.h>
+#endif
 #include <gdk/gdkx.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/shape.h>
@@ -2970,6 +2972,7 @@ static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer
 }
 
 // Tray implementation using AppIndicator
+#ifndef NO_APPINDICATOR
 class TrayItem {
 public:
     uint32_t trayId;
@@ -3084,10 +3087,13 @@ private:
         }
     }
 };
+#endif // NO_APPINDICATOR
 
 // Global state
 static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
+#ifndef NO_APPINDICATOR
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
+#endif
 static bool g_gtkInitialized = false;
 static std::mutex g_gtkInitMutex;
 static std::condition_variable g_gtkInitCondition;
@@ -4690,6 +4696,7 @@ const char* openFileDialog(const char* startingFolder, const char* allowedFileTy
 // NOTE: Removed deferred tray creation code - now creating TrayItem synchronously
 // The TrayItem constructor handles deferred AppIndicator creation internally
 
+#ifndef NO_APPINDICATOR
 void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, uint32_t width, uint32_t height, void* clickHandler) {
     // NOTE: width and height parameters are ignored on Linux since AppIndicator doesn't support custom sizing
     // These parameters are included for FFI consistency across platforms (macOS and Windows use them)
@@ -4771,6 +4778,18 @@ void removeTray(void* statusItem) {
         }
     });
 }
+#else // NO_APPINDICATOR
+// Stub implementations when AppIndicator is not available
+void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, uint32_t width, uint32_t height, void* clickHandler) {
+    return nullptr;
+}
+
+void setTrayTitle(void* statusItem, const char* title) {}
+void setTrayImage(void* statusItem, const char* image) {}
+void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {}
+void setTrayMenu(void* statusItem, const char* menuConfig) {}
+void removeTray(void* statusItem) {}
+#endif // NO_APPINDICATOR
 
 void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
     if (!jsonString || strlen(jsonString) == 0) {

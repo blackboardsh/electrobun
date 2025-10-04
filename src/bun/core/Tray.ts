@@ -26,14 +26,20 @@ export class Tray {
     width = 16,
     height = 16,
   }: ConstructorOptions = {}) {    
-    this.ptr = ffi.request.createTray({
-      id: this.id,
-      title,
-      image: this.resolveImagePath(image),
-      template,
-      width,
-      height,
-    });
+    try {
+      this.ptr = ffi.request.createTray({
+        id: this.id,
+        title,
+        image: this.resolveImagePath(image),
+        template,
+        width,
+        height,
+      });
+    } catch (error) {
+      console.warn('Tray creation failed:', error);
+      console.warn('System tray functionality may not be available on this platform');
+      this.ptr = null;
+    }
 
     TrayMap[this.id] = this;
   }
@@ -48,10 +54,12 @@ export class Tray {
   }
 
   setTitle(title: string) {
+    if (!this.ptr) return;
     ffi.request.setTrayTitle({ id: this.id, title });
   }
 
   setImage(imgPath: string) {
+    if (!this.ptr) return;
     ffi.request.setTrayImage({
       id: this.id,
       image: this.resolveImagePath(imgPath),
@@ -59,6 +67,7 @@ export class Tray {
   }
 
   setMenu(menu: Array<MenuItemConfig>) {
+    if (!this.ptr) return;
     const menuWithDefaults = menuConfigWithDefaults(menu);
     ffi.request.setTrayMenu({
       id: this.id,
@@ -73,7 +82,9 @@ export class Tray {
 
   remove() {
     console.log('Tray.remove() called for id:', this.id);
-    ffi.request.removeTray({ id: this.id });
+    if (this.ptr) {
+      ffi.request.removeTray({ id: this.id });
+    }
     delete TrayMap[this.id];
     console.log('Tray removed from TrayMap');
   }
