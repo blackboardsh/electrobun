@@ -885,7 +885,7 @@ const getHTMLForWebviewSync = new JSCallback((webviewId) => {
   
   return toCString(webview?.html || '');
 }, {
-  args: [FFIType.cstring],  
+  args: [FFIType.u32],  
   returns: FFIType.cstring,
   // threadsafe: true
 });
