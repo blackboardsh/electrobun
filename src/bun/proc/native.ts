@@ -110,6 +110,10 @@ export const native = (() => {
         args: [FFIType.ptr, FFIType.cstring],
         returns: FFIType.void
       },
+      loadHTMLInWebView: {
+        args: [FFIType.ptr, FFIType.cstring],
+        returns: FFIType.void
+      },
      
       updatePreloadScriptToWebView: {
         args: [
@@ -134,6 +138,10 @@ export const native = (() => {
       },
       webviewRemove: {
         args: [FFIType.ptr],
+        returns: FFIType.void
+      },
+      setWebviewHTMLContent: {
+        args: [FFIType.u32, FFIType.cstring],
         returns: FFIType.void
       },
       startWindowMove: {
@@ -1200,6 +1208,10 @@ export const internalRpcHandlers = {
         console.error(`webviewTagUpdateHtml: BrowserView not found or has no ptr for id ${params.id}`);
         return;
       }   
+      
+      // Store HTML content in native map for scheme handlers
+      native.symbols.setWebviewHTMLContent(webview.id, toCString(params.html));
+      
       webview.loadHTML(params.html);
       webview.html = params.html;
     },

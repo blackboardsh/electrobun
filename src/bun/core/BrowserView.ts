@@ -122,6 +122,18 @@ export class BrowserView<T> {
 
     BrowserViewMap[this.id] = this;
     this.ptr = this.init();
+    
+    // If HTML content was provided, load it after webview creation
+    if (this.html) {
+      console.log(`DEBUG: BrowserView constructor triggering loadHTML for webview ${this.id}`);
+      // Small delay to ensure webview is ready
+      setTimeout(() => {
+        console.log(`DEBUG: BrowserView delayed loadHTML for webview ${this.id}`);
+        this.loadHTML(this.html!);
+      }, 100);  // Back to 100ms since we fixed the race condition
+    } else {
+      console.log(`DEBUG: BrowserView constructor - no HTML provided for webview ${this.id}`);
+    }
   }
 
   init() {    
@@ -138,7 +150,8 @@ export class BrowserView<T> {
       hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
       partition: this.partition,      
-      url: this.url,      
+      // Only pass URL if no HTML content is provided to avoid conflicts
+      url: this.html ? null : this.url,      
       html: this.html,
       preload: this.preload,
       frame: {
@@ -194,16 +207,23 @@ export class BrowserView<T> {
   }
 
   loadURL(url: string) {
+    console.log(`DEBUG: loadURL called for webview ${this.id}: ${url}`);
     this.url = url;    
     native.symbols.loadURLInWebView(this.ptr, toCString(this.url))      
   }
 
   loadHTML(html: string) {
-    // Note: CEF doesn't natively support "setting html" so we just return
-    // this BrowserView's html when a special views:// url is hit.
-    // So we can update that content and ask the webview to load that url
     this.html = html;
-    this.loadURL('views://internal/index.html');
+    console.log(`DEBUG: Setting HTML content for webview ${this.id}:`, html.substring(0, 50) + '...');
+    
+    if (this.renderer === 'cef') {
+      // For CEF, store HTML content in native map and use scheme handler
+      native.symbols.setWebviewHTMLContent(this.id, toCString(html));
+      this.loadURL('views://internal/index.html');
+    } else {
+      // For WKWebView, load HTML content directly
+      native.symbols.loadHTMLInWebView(this.ptr, toCString(html));
+    }
   }
 
 

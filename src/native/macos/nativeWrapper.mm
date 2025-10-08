@@ -72,20 +72,104 @@ typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);
 typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
 
-// JS Utils
+// JS Utils - DEPRECATED: Now using map-based approach instead of callbacks
 typedef const char* (*GetMimeType)(const char* filePath);
 typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);
-// typedef uint32_t (*GetResponseLength)(uint32_t responseId);
-
-typedef struct {    
-    GetMimeType getMimeType;
-    GetHTMLForWebviewSync getHTMLForWebviewSync;    
-} JSUtils;
 
 static dispatch_queue_t jsWorkerQueue = NULL;
 
-// Global instance of the struct
-static JSUtils jsUtils = {NULL, NULL};
+// Webview content storage (replaces JSCallback approach)
+static NSMutableDictionary<NSNumber*, NSString*> *webviewHTMLContent = nil;
+static NSLock *webviewHTMLLock = nil;
+
+// Forward declarations for HTML content management
+extern "C" const char* getWebviewHTMLContent(uint32_t webviewId);
+extern "C" void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
+
+// Shared MIME type detection function
+// Based on Bun runtime supported file types and web development standards
+static std::string getMimeTypeFromUrl(const std::string& url) {
+    // Web/Code Files (Bun native support)
+    if (url.find(".html") != std::string::npos || url.find(".htm") != std::string::npos) {
+        return "text/html";
+    } else if (url.find(".js") != std::string::npos || url.find(".mjs") != std::string::npos || url.find(".cjs") != std::string::npos) {
+        return "text/javascript";
+    } else if (url.find(".ts") != std::string::npos || url.find(".mts") != std::string::npos || url.find(".cts") != std::string::npos) {
+        return "text/typescript";
+    } else if (url.find(".jsx") != std::string::npos) {
+        return "text/jsx";
+    } else if (url.find(".tsx") != std::string::npos) {
+        return "text/tsx";
+    } else if (url.find(".css") != std::string::npos) {
+        return "text/css";
+    } else if (url.find(".json") != std::string::npos) {
+        return "application/json";
+    } else if (url.find(".xml") != std::string::npos) {
+        return "application/xml";
+    } else if (url.find(".md") != std::string::npos) {
+        return "text/markdown";
+    } else if (url.find(".txt") != std::string::npos) {
+        return "text/plain";
+    } else if (url.find(".toml") != std::string::npos) {
+        return "application/toml";
+    } else if (url.find(".yaml") != std::string::npos || url.find(".yml") != std::string::npos) {
+        return "application/x-yaml";
+    
+    // Image Files
+    } else if (url.find(".png") != std::string::npos) {
+        return "image/png";
+    } else if (url.find(".jpg") != std::string::npos || url.find(".jpeg") != std::string::npos) {
+        return "image/jpeg";
+    } else if (url.find(".gif") != std::string::npos) {
+        return "image/gif";
+    } else if (url.find(".webp") != std::string::npos) {
+        return "image/webp";
+    } else if (url.find(".svg") != std::string::npos) {
+        return "image/svg+xml";
+    } else if (url.find(".ico") != std::string::npos) {
+        return "image/x-icon";
+    } else if (url.find(".avif") != std::string::npos) {
+        return "image/avif";
+    
+    // Font Files
+    } else if (url.find(".woff") != std::string::npos) {
+        return "font/woff";
+    } else if (url.find(".woff2") != std::string::npos) {
+        return "font/woff2";
+    } else if (url.find(".ttf") != std::string::npos) {
+        return "font/ttf";
+    } else if (url.find(".otf") != std::string::npos) {
+        return "font/otf";
+    
+    // Media Files
+    } else if (url.find(".mp3") != std::string::npos) {
+        return "audio/mpeg";
+    } else if (url.find(".mp4") != std::string::npos) {
+        return "video/mp4";
+    } else if (url.find(".webm") != std::string::npos) {
+        return "video/webm";
+    } else if (url.find(".ogg") != std::string::npos) {
+        return "audio/ogg";
+    } else if (url.find(".wav") != std::string::npos) {
+        return "audio/wav";
+    
+    // Document Files
+    } else if (url.find(".pdf") != std::string::npos) {
+        return "application/pdf";
+    
+    // WebAssembly (Bun support)
+    } else if (url.find(".wasm") != std::string::npos) {
+        return "application/wasm";
+    
+    // Compressed Files
+    } else if (url.find(".zip") != std::string::npos) {
+        return "application/zip";
+    } else if (url.find(".gz") != std::string::npos) {
+        return "application/gzip";
+    }
+    
+    return "application/octet-stream"; // default
+}
 
 // Deadlock prevention for callJsCallbackFromMainSync
 static BOOL isInSyncCallback = NO;
@@ -94,16 +178,13 @@ static NSMutableArray *queuedCallbacks = nil;
 // this lets you call non-threadsafe JSCallbacks on the bun worker thread, from the main thread
 // and wait for the response. 
 // use it like:
-// myCStringVal = callJsCallbackFromMainSync(^{
-//     if (jsUtils.getHTMLForWebviewSync) {
-//         return jsUtils.getHTMLForWebviewSync(self.webviewId);
-//     }
-//     return (const char*)NULL;
+// REMOVED: jsUtils.getHTMLForWebviewSync callback (now using webviewHTMLContent map)
 // });
 // 
 // DEADLOCK PREVENTION: If called recursively (e.g., during URL scheme handling), 
 // queues the callback for later execution to prevent deadlocks.
 static const char* callJsCallbackFromMainSync(const char* (^callback)(void)) {
+    NSLog(@"callJSCallbackFromMainSync 1");
     if (!jsWorkerQueue) {
         NSLog(@"Error: JS worker queue not initialized");
         return NULL;
@@ -111,51 +192,92 @@ static const char* callJsCallbackFromMainSync(const char* (^callback)(void)) {
     
     // Initialize queue if needed
     if (!queuedCallbacks) {
+        NSLog(@"callJSCallbackFromMainSync 2");
         queuedCallbacks = [[NSMutableArray alloc] init];
     }
+
+    NSLog(@"callJSCallbackFromMainSync 3");
     
     // Prevent recursive calls that can cause deadlocks
     if (isInSyncCallback) {
+        NSLog(@"callJSCallbackFromMainSync 4");
         NSLog(@"callJsCallbackFromMainSync: Preventing deadlock - queueing callback for later execution");
         // For queued callbacks, we can't return a meaningful result since they're async
         // This is fine since recursive calls are typically RPC sends that don't need return values
         [queuedCallbacks addObject:[callback copy]];
+        NSLog(@"callJSCallbackFromMainSync 5");
         return NULL;
     }
+    NSLog(@"callJSCallbackFromMainSync 6");
     
     isInSyncCallback = YES;
     
     __block const char* result = NULL;
     __block char* resultCopy = NULL;
-    
+    NSLog(@"callJSCallbackFromMainSync 7");
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    NSLog(@"callJSCallbackFromMainSync 8");
     dispatch_async(jsWorkerQueue, ^{
-        // Call the provided block (which executes the JS callback)
-        result = callback();
+        NSLog(@"callJSCallbackFromMainSync 9");
+        
+        @try {
+            // Call the provided block (which executes the JS callback)
+            result = callback();
+            NSLog(@"callJSCallbackFromMainSync 10");
+        } @catch (NSException *exception) {
+            NSLog(@"callJSCallbackFromMainSync: Exception caught during callback execution: %@", exception);
+            result = NULL;
+        } @catch (...) {
+            NSLog(@"callJSCallbackFromMainSync: Unknown exception caught during callback execution");
+            result = NULL;
+        }
         
         // Duplicate the result so it won't be garbage collected.
         if (result != NULL) {
+            NSLog(@"callJSCallbackFromMainSync 11");
             resultCopy = strdup(result);
         }
+        NSLog(@"callJSCallbackFromMainSync 12");
         
         dispatch_semaphore_signal(semaphore);
+        NSLog(@"callJSCallbackFromMainSync 13");
     });
     
-    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+    // Add timeout to prevent indefinite blocking during process failures
+    dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC); // 5 second timeout
+    long result_wait = dispatch_semaphore_wait(semaphore, timeout);
+    
+    if (result_wait != 0) {
+        NSLog(@"callJSCallbackFromMainSync: Timeout waiting for callback completion - possible process failure");
+        isInSyncCallback = NO;
+        return NULL;
+    }
+    
+    NSLog(@"callJSCallbackFromMainSync 14");
     
     // Process any queued callbacks (these are typically fire-and-forget RPC calls)
     while (queuedCallbacks.count > 0) {
+        NSLog(@"callJSCallbackFromMainSync 15");
         NSLog(@"callJsCallbackFromMainSync: Processing %lu queued callback(s)", (unsigned long)queuedCallbacks.count);
         const char* (^queuedCallback)(void) = queuedCallbacks[0];
         [queuedCallbacks removeObjectAtIndex:0];
-        
+        NSLog(@"callJSCallbackFromMainSync 16");
         // Execute queued callback asynchronously (these don't need return values)
         dispatch_async(jsWorkerQueue, ^{
-            queuedCallback();
+            NSLog(@"callJSCallbackFromMainSync 17");
+            @try {
+                queuedCallback();
+            } @catch (NSException *exception) {
+                NSLog(@"callJSCallbackFromMainSync: Exception in queued callback: %@", exception);
+            } @catch (...) {
+                NSLog(@"callJSCallbackFromMainSync: Unknown exception in queued callback");
+            }
+            NSLog(@"callJSCallbackFromMainSync 18");
         });
     }
     
     isInSyncCallback = NO;
+    NSLog(@"callJSCallbackFromMainSync 19");
     return resultCopy; // Caller is responsible for freeing this memory.
 }
 
@@ -359,6 +481,12 @@ NSData* readViewsFile(const char* viewsUrl) {
     NSString *viewsDir = [cwd stringByAppendingPathComponent:@"../Resources/app/views"];
     NSString *filePath = [viewsDir stringByAppendingPathComponent:relativePath];    
     
+    NSLog(@"DEBUG readViewsFile: URL=%@, relativePath=%@", urlString, relativePath);
+    NSLog(@"DEBUG readViewsFile: cwd=%@", cwd);
+    NSLog(@"DEBUG readViewsFile: viewsDir=%@", viewsDir);
+    NSLog(@"DEBUG readViewsFile: filePath=%@", filePath);
+    NSLog(@"DEBUG readViewsFile: file exists=%@", [[NSFileManager defaultManager] fileExistsAtPath:filePath] ? @"YES" : @"NO");
+    
     // Read the file
     return [NSData dataWithContentsOfFile:filePath];
 }
@@ -391,6 +519,7 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, strong) CALayer *storedLayerMask;
 
     - (void)loadURL:(const char *)urlString;
+    - (void)loadHTML:(const char *)htmlString;
     - (void)goBack;
     - (void)goForward;
     - (void)reload;
@@ -678,6 +807,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
     - (void)loadURL:(const char *)urlString { [self doesNotRecognizeSelector:_cmd]; }
+    - (void)loadHTML:(const char *)htmlString { [self doesNotRecognizeSelector:_cmd]; }
     - (void)goBack { [self doesNotRecognizeSelector:_cmd]; }
     - (void)goForward { [self doesNotRecognizeSelector:_cmd]; }
     - (void)reload { [self doesNotRecognizeSelector:_cmd]; }
@@ -907,22 +1037,26 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         NSString *urlString = url.absoluteString;
         
         if ([urlString hasPrefix:@"views://"]) {
+            NSLog(@"DEBUG WKWebView: Processing views:// URL: %@", urlString);
             // Remove the "views://" prefix.
             NSString *relativePath = [urlString substringFromIndex:7];
+            NSLog(@"DEBUG WKWebView: relativePath = '%@'", relativePath);
 
-            if ([relativePath isEqualToString:@"internal/index.html"]) {
+            if ([relativePath isEqualToString:@"/internal/index.html"]) {
                 // For internal content, call the native HTML resolver.
-                // Assume getHTMLForWebviewSync returns a null-terminated C string.
-                // contentPtr = getHTMLForWebviewSync(self.webviewId);
-                contentPtr = callJsCallbackFromMainSync(^{
-                    if (jsUtils.getHTMLForWebviewSync) {
-                        return jsUtils.getHTMLForWebviewSync(self.webviewId);
-                    }
-                    NSLog(@"WARNING: jsUtils.getHTMLForWebviewSync is NULL");
-                    return (const char*)NULL;
-                });
+                NSLog(@"DEBUG: Handling views://internal/index.html for webview %u", self.webviewId);
+                // Use stored HTML content instead of JSCallback
+                contentPtr = getWebviewHTMLContent(self.webviewId);
+                if (!contentPtr) {
+                    // Fallback to default if no content set
+                    NSLog(@"DEBUG: No HTML content found for webview %u, using fallback", self.webviewId);
+                    contentPtr = strdup("<html><body>No content set</body></html>");
+                } else {
+                    NSLog(@"DEBUG: Retrieved HTML content for webview %u", self.webviewId);
+                }
                 if (contentPtr) {
                     contentLength = strlen(contentPtr);
+                    NSLog(@"DEBUG WKWebView: HTML content length: %zu, content preview: %.100s", contentLength, contentPtr);
                     data = [NSData dataWithBytes:contentPtr length:contentLength];
                 } else {
                     // Handle NULL content gracefully
@@ -932,28 +1066,29 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                     [urlSchemeTask didFailWithError:error];
                     return;
                 }
-            } 
-
-            data = readViewsFile(urlString.UTF8String);
-            
-            if (data) {
-                contentPtr = (const char *)data.bytes;
-                contentLength = data.length;
+            } else {
+                NSLog(@"DEBUG WKWebView: Attempting to read views file: %@", urlString);
+                data = readViewsFile(urlString.UTF8String);
+                
+                if (data) {
+                    NSLog(@"DEBUG WKWebView: Successfully read views file, length: %lu", (unsigned long)data.length);
+                    contentPtr = (const char *)data.bytes;
+                    contentLength = data.length;
+                } else {
+                    NSLog(@"DEBUG WKWebView: Failed to read views file: %@", urlString);
+                }
             } 
         } else {
             NSLog(@"Unknown URL format: %@", urlString);
         }
         
         if (contentPtr && contentLength > 0) {
-            // Determine MIME type using your getMimeTypeSync function.
-            // const char *mimeTypePtr = getMimeTypeSync(url.absoluteString.UTF8String);
-            const char *mimeTypePtr = callJsCallbackFromMainSync(^{
-                if (jsUtils.getMimeType) {
-                    return jsUtils.getMimeType(url.absoluteString.UTF8String);
-                }
-                NSLog(@"WARNING: jsUtils.getMimeType is NULL");
-                return (const char*)NULL;
-            });
+            // Determine MIME type using shared function
+            std::string urlStr = [urlString UTF8String];
+            std::string detectedMimeType = getMimeTypeFromUrl(urlStr);
+            const char *mimeTypePtr = strdup(detectedMimeType.c_str());
+            NSLog(@"DEBUG WKWebView: Set MIME type '%s' for URL: %@", detectedMimeType.c_str(), urlString);
+            
             NSString *rawMimeType = mimeTypePtr ? [NSString stringWithUTF8String:mimeTypePtr] : @"application/octet-stream";
 
             NSString *mimeType;
@@ -962,7 +1097,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 mimeType = @"text/html";
                 encodingName = @"UTF-8";  // Set encoding explicitly
             } else {
-                // For non-text content or text content that doesn’t need explicit encoding
+                // For non-text content or text content that doesn't need explicit encoding
                 mimeType = rawMimeType;
             }
             
@@ -970,9 +1105,16 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                                                     MIMEType:mimeType
                                         expectedContentLength:contentLength
                                             textEncodingName:encodingName];
+            NSLog(@"DEBUG WKWebView: Sending response with MIME type: %@, encoding: %@", mimeType, encodingName);
             [urlSchemeTask didReceiveResponse:response];
             [urlSchemeTask didReceiveData:data];
             [urlSchemeTask didFinish];
+            NSLog(@"DEBUG WKWebView: Response sent successfully");
+            
+            // Clean up memory
+            if (mimeTypePtr) {
+                free((void*)mimeTypePtr);
+            }
         } else {
             NSLog(@"============== ERROR ========== empty response for URL: %@", urlString);         
             // Notify failure properly to prevent crashes
@@ -993,6 +1135,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         NSURL *newURL = navigationAction.request.URL;
+        NSLog(@"DEBUG WKWebView Navigation: webview %u navigating to %@", self.webviewId, newURL.absoluteString);
         BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);        
         self.zigEventHandler(self.webviewId, "will-navigate", webView.URL.absoluteString.UTF8String);
         decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
@@ -1317,8 +1460,13 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                     [self updateCustomPreloadScript:customPreloadScript];
                 }
 
-                if (url) {                                   
+                // Only load URL if it's provided and no HTML content exists
+                NSLog(@"DEBUG WKWebView Constructor: URL check - url=%p, url='%s', strlen=%zu", url, url ? url : "NULL", url ? strlen(url) : 0);
+                if (url && strlen(url) > 0) {                                   
+                    NSLog(@"DEBUG WKWebView Constructor: Loading initial URL: %s", url);
                     [self loadURL:url];
+                } else {
+                    NSLog(@"DEBUG WKWebView Constructor: Skipping URL load - no URL or empty URL");
                 } 
                 
                 // associate
@@ -1340,6 +1488,21 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         if (!url) return;
         NSURLRequest *request = [NSURLRequest requestWithURL:url];
         [self.webView loadRequest:request];
+    }
+
+    - (void)loadHTML:(const char *)htmlString {
+        // Ensure the HTML loading happens on the main queue after webview is initialized
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!self.webView) {
+                NSLog(@"ERROR: WKWebView loadHTML called but webview is nil for webview ID: %u", self.webviewId);
+                return;
+            }
+            
+            NSString *htmlNSString = (htmlString ? [NSString stringWithUTF8String:htmlString] : @"");
+            NSLog(@"DEBUG WKWebView: Loading HTML content for webview %u: %.50s...", self.webviewId, htmlString);
+            [self.webView loadHTMLString:htmlNSString baseURL:nil];
+            NSLog(@"DEBUG WKWebView: loadHTMLString completed for webview ID: %u", self.webviewId);
+        });
     }
 
     - (void)goBack {
@@ -1704,8 +1867,8 @@ public:
         //     return;
         // }
         
-        // The actual factory registration will happen in the webview creation
-        CefRegisterSchemeHandlerFactory("views", "", nullptr);
+        // The actual factory registration will happen in getOrCreateRequestContext()
+        // CefRegisterSchemeHandlerFactory("views", "", nullptr);
     }
     CefRefPtr<CefClient> GetDefaultClient() override {
         return ElectrobunHandler::GetInstance();
@@ -1979,7 +2142,9 @@ public:
                        bool user_gesture,
                        bool is_redirect) override {
         std::string url = request->GetURL().ToString();
-        bool shouldAllow = navigation_callback_(webview_id_, url.c_str());
+        
+        // STUB: Always allow navigation without calling JSCallback
+        bool shouldAllow = true;  // navigation_callback_(webview_id_, url.c_str());
 
         
         if (webview_event_handler_) {        
@@ -2612,37 +2777,45 @@ public:
             
             // If the URL starts with "views://"
             if (urlStr.find("views://") == 0) {
-                // Remove the prefix (7 characters)
-                std::string relativePath = urlStr.substr(7);
+                NSLog(@"DEBUG CEF: Processing views:// URL: %s", urlStr.c_str());
+                // Remove the prefix (8 characters for "views://") - FIXED VERSION v2
+                std::string relativePath = urlStr.substr(8);
+                NSLog(@"DEBUG CEF FIXED: relativePath = '%s'", relativePath.c_str());
                 
                 // Check if this is the internal HTML request.
+                NSLog(@"DEBUG CEF: Comparing relativePath '%s' with 'internal/index.html'", relativePath.c_str());
                 if (relativePath == "internal/index.html") {
-                    // Now we're on the main thread, safe to call callJsCallbackFromMainSync
-                    const char* htmlContent = callJsCallbackFromMainSync(^{
-                        if (jsUtils.getHTMLForWebviewSync) {
-                            return jsUtils.getHTMLForWebviewSync(webviewId_);
-                        }
-                        NSLog(@"WARNING: jsUtils.getHTMLForWebviewSync is NULL");
-                        return (const char*)NULL;
-                    });
+                    NSLog(@"DEBUG CEF: Handling views://internal/index.html for webview %u", webviewId_);
+                    // Use stored HTML content instead of JSCallback
+                    const char* htmlContent = getWebviewHTMLContent(webviewId_);
+                    if (!htmlContent) {
+                        // Fallback to default if no content set
+                        NSLog(@"DEBUG CEF: No HTML content found for webview %u, using fallback", webviewId_);
+                        htmlContent = strdup("<html><body>No content set</body></html>");
+                    } else {
+                        NSLog(@"DEBUG CEF: Retrieved HTML content for webview %u", webviewId_);
+                    }
                     
                     if (htmlContent) {
                         size_t len = strlen(htmlContent);
+                        NSLog(@"DEBUG CEF: HTML content length: %zu, content preview: %.100s", len, htmlContent);
                         mimeTypeBlock = "text/html";
                         responseDataBlock.assign(htmlContent, htmlContent + len);
                         hasResponseBlock = true;
                         free((void*)htmlContent); // Free the strdup'd memory
+                    } else {
+                        NSLog(@"DEBUG CEF: No HTML content to load");
                     }
                 } else {
+                    NSLog(@"DEBUG CEF: Attempting to read views file: %s", urlStr.c_str());
                     NSData *data = readViewsFile(urlStr.c_str());
                     if (data) {   
-                        const char* mimeTypePtr = callJsCallbackFromMainSync(^{
-                            if (jsUtils.getMimeType) {
-                                return jsUtils.getMimeType(urlStr.c_str());
-                            }
-                            NSLog(@"WARNING: jsUtils.getMimeType is NULL");
-                            return (const char*)NULL;
-                        });
+                        NSLog(@"DEBUG CEF: Successfully read views file, length: %lu", (unsigned long)data.length);
+                        // Determine MIME type using shared function
+                        std::string mimeType = getMimeTypeFromUrl(relativePath);
+                        const char* mimeTypePtr = strdup(mimeType.c_str());
+                        NSLog(@"DEBUG CEF: Set MIME type '%s' for file: %s", mimeType.c_str(), relativePath.c_str());
+                        // REMOVED: jsUtils.getMimeType callback (now using file extension detection)
                         
                         if (mimeTypePtr) {
                             mimeTypeBlock = std::string(mimeTypePtr);
@@ -2654,7 +2827,9 @@ public:
                         responseDataBlock.assign((const char*)data.bytes,
                                             (const char*)data.bytes + data.length);
                         hasResponseBlock = true;
-                    } 
+                    } else {
+                        NSLog(@"DEBUG CEF: Failed to read views file: %s", urlStr.c_str());
+                    }
                 }
             }
             else {
@@ -2720,21 +2895,38 @@ public:
 };
 
 
+// Global map to track browser to webview ID mapping
+static std::map<int, uint32_t> browserToWebviewMap;
+static std::mutex browserMapMutex;
+
 // The factory class that creates scheme handlers
 class ElectrobunSchemeHandlerFactory : public CefSchemeHandlerFactory {
 public:
-  ElectrobunSchemeHandlerFactory(uint32_t webviewId)
-    : webviewId_(webviewId) {}
+  ElectrobunSchemeHandlerFactory() {}
 
   CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser,
                                          CefRefPtr<CefFrame> frame,
                                          const CefString& scheme_name,
                                          CefRefPtr<CefRequest> request) override {
-    return new ElectrobunSchemeHandler(webviewId_);
+    
+    NSLog(@"DEBUG CEF Factory: Create called for URL: %s", request->GetURL().ToString().c_str());
+    
+    // Get webview ID from browser ID
+    std::lock_guard<std::mutex> lock(browserMapMutex);
+    int browserId = browser->GetIdentifier();
+    auto it = browserToWebviewMap.find(browserId);
+    uint32_t webviewId = (it != browserToWebviewMap.end()) ? it->second : 0;
+    
+    NSLog(@"DEBUG CEF Factory: Creating handler for browser %d -> webview %u", browserId, webviewId);
+    
+    // Debug: print all current mappings
+    NSLog(@"DEBUG CEF Factory: Current browser-to-webview mappings:");
+    for (const auto& pair : browserToWebviewMap) {
+        NSLog(@"  Browser %d -> Webview %u", pair.first, pair.second);
+    }
+    
+    return new ElectrobunSchemeHandler(webviewId);
   }
-
-private:
-  uint32_t webviewId_;
   
   IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandlerFactory);
   DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandlerFactory);
@@ -2750,6 +2942,7 @@ private:
 
 CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
                                                                uint32_t webviewId) {
+  NSLog(@"DEBUG CEF: CreateRequestContextForPartition called for webview %u, partition: %s", webviewId, partitionIdentifier ? partitionIdentifier : "null");
   CefRequestContextSettings settings;
   if (!partitionIdentifier || !partitionIdentifier[0]) {
     settings.persist_session_cookies = false;
@@ -2778,9 +2971,15 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
   CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
 
-  // Register the new scheme handler factory.
-  CefRefPtr<ElectrobunSchemeHandlerFactory> factory(new ElectrobunSchemeHandlerFactory(webviewId));
-  context->RegisterSchemeHandlerFactory("views", "", factory);
+  // Register global scheme handler factory only once
+  static CefRefPtr<ElectrobunSchemeHandlerFactory> globalSchemeFactory = nullptr;
+  if (!globalSchemeFactory) {
+    globalSchemeFactory = new ElectrobunSchemeHandlerFactory();
+    bool registered = context->RegisterSchemeHandlerFactory("views", "", globalSchemeFactory);
+    NSLog(@"DEBUG CEF: Registered global scheme handler factory - success: %s", registered ? "yes" : "no");
+  } else {
+    NSLog(@"DEBUG CEF: Using existing global scheme handler factory");
+  }
 
   return context;
 }
@@ -2835,10 +3034,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 );
 
                 
-                // Register the scheme handler factory for this webview
-                CefRefPtr<ElectrobunSchemeHandlerFactory> factory(
-                    new ElectrobunSchemeHandlerFactory(webviewId));
-                                        
+                // Global scheme handler is already registered in getOrCreateRequestContext()
                 
                 self.client = new ElectrobunClient(
                     webviewId,  
@@ -2873,6 +3069,13 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                     window_info, self.client, CefString("about:blank"), browserSettings, nullptr, requestContext);
 
                 if (self.browser) {
+                    // Register browser-to-webview mapping for global scheme handler
+                    int browserId = self.browser->GetIdentifier();
+                    {
+                        std::lock_guard<std::mutex> lock(browserMapMutex);
+                        browserToWebviewMap[browserId] = self.webviewId;
+                    }
+                    NSLog(@"DEBUG CEF Mapping: Registered browser %d -> webview %u", browserId, self.webviewId);
                     CefWindowHandle handle = self.browser->GetHost()->GetWindowHandle();
                     self.nsView = (__bridge NSView *)handle;                
                     self.nsView.autoresizingMask = NSViewNotSizable;
@@ -2943,6 +3146,17 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
         CefString cefUrl = urlString ? urlString : "";
         self.browser->GetMainFrame()->LoadURL(cefUrl);
+    }
+
+    - (void)loadHTML:(const char *)htmlString {
+        if (!self.browser)
+            return;
+
+        NSLog(@"DEBUG CEF: Loading HTML content directly: %.50s...", htmlString);
+        // Store HTML content in the global map for the scheme handler
+        setWebviewHTMLContent(self.webviewId, htmlString);
+        // Load the internal scheme URL which will trigger our scheme handler
+        self.browser->GetMainFrame()->LoadURL(CefString("views://internal/index.html"));
     }
 
     - (void)goBack {
@@ -3149,6 +3363,13 @@ extern "C" void runNSApplication() {
         NSLog(@"Initialized global AbstractView tracking map");
     }
     
+    // Initialize webview HTML content storage
+    if (!webviewHTMLContent) {
+        webviewHTMLContent = [[NSMutableDictionary alloc] init];
+        webviewHTMLLock = [[NSLock alloc] init];
+        NSLog(@"Initialized webview HTML content storage");
+    }
+    
     if (useCEF) {
         @autoreleasepool {
             if (!initializeCEF()) {                
@@ -3265,7 +3486,13 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
 }
 
 extern "C" void loadURLInWebView(AbstractView *abstractView, const char *urlString) {
+    NSLog(@"DEBUG loadURLInWebView: webview %u loading URL: %s", abstractView.webviewId, urlString);
     [abstractView loadURL:urlString];
+}
+
+extern "C" void loadHTMLInWebView(AbstractView *abstractView, const char *htmlString) {
+    NSLog(@"DEBUG loadHTMLInWebView: webview %u loading HTML content", abstractView.webviewId);
+    [abstractView loadHTML:htmlString];
 }
 
 extern "C" void webviewGoBack(AbstractView *abstractView) {
@@ -3859,23 +4086,56 @@ extern "C" void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
 
 
 extern "C" void setJSUtils(GetMimeType getMimeType, GetHTMLForWebviewSync getHTMLForWebviewSync) {    
-    jsUtils.getMimeType = getMimeType;
-    jsUtils.getHTMLForWebviewSync = getHTMLForWebviewSync;
+    // NO-OP: jsUtils callbacks are deprecated, now using map-based approach
+    // The function is kept for compatibility but does nothing
     
     // create a dispatch queue on the current thread (worker thread) that
     // can later be called from main
     dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_DEFAULT, 0);
     jsWorkerQueue = dispatch_queue_create("com.electrobun.jsworker", attr);    
 
-
-    // size_t contentLength = 0;
-    // jsUtils.viewsHandler(0, "hi", "ho", &contentLength);
-
-    NSLog(@"got mimetype: %s", jsUtils.getMimeType("test.jpg"));
-    // NSLog(@"got mimetype: %s", getMimeTypeSync("test.png"));
-
-  
+    NSLog(@"setJSUtils called but using map-based approach instead of callbacks");
     
+}
+
+// MARK: - Webview HTML Content Management (replaces JSCallback approach)
+
+extern "C" void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent) {
+    if (!webviewHTMLContent) {
+        NSLog(@"ERROR: setWebviewHTMLContent called before initialization");
+        return;
+    }
+    
+    [webviewHTMLLock lock];
+    NSNumber *key = @(webviewId);
+    if (htmlContent) {
+        webviewHTMLContent[key] = [NSString stringWithUTF8String:htmlContent];
+        NSLog(@"setWebviewHTMLContent: Set HTML for webview %u", webviewId);
+    } else {
+        [webviewHTMLContent removeObjectForKey:key];
+        NSLog(@"setWebviewHTMLContent: Cleared HTML for webview %u", webviewId);
+    }
+    [webviewHTMLLock unlock];
+}
+
+const char* getWebviewHTMLContent(uint32_t webviewId) {
+    if (!webviewHTMLContent) {
+        NSLog(@"ERROR: getWebviewHTMLContent called before initialization");
+        return NULL;
+    }
+    
+    [webviewHTMLLock lock];
+    NSString *htmlContent = webviewHTMLContent[@(webviewId)];
+    const char* result = NULL;
+    if (htmlContent) {
+        result = strdup([htmlContent UTF8String]);
+        NSLog(@"getWebviewHTMLContent: Retrieved HTML for webview %u", webviewId);
+    } else {
+        NSLog(@"getWebviewHTMLContent: No HTML found for webview %u", webviewId);
+    }
+    [webviewHTMLLock unlock];
+    
+    return result;
 }
 
 
