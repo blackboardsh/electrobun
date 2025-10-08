@@ -2581,51 +2581,63 @@ public:
             CefRefPtr<CefCallback> callback) override {
 
         std::string urlStr = request->GetURL().ToString();
-        handle_request = true;
-        responseData_.clear();
-        hasResponse_ = false;
-        offset_ = 0;
-
         
-        // If the URL starts with "views://"
-        if (urlStr.find("views://") == 0) {
-            // Remove the prefix (7 characters)
-            std::string relativePath = urlStr.substr(7);
+        // CEF calls Open from a worker thread, so we need to handle this on the main thread
+        // to avoid threading issues with Bun's JS runtime
+        __block std::string responseDataBlock;
+        __block std::string mimeTypeBlock;
+        __block bool hasResponseBlock = false;
+        
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            responseData_.clear();
+            hasResponse_ = false;
+            offset_ = 0;
             
-            // Check if this is the internal HTML request.
-            if (relativePath == "internal/index.html") {
-                // Call into the JS utility to get HTML (using our bridging helper)                
-                const char* htmlContent = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(webviewId_);});
+            // If the URL starts with "views://"
+            if (urlStr.find("views://") == 0) {
+                // Remove the prefix (7 characters)
+                std::string relativePath = urlStr.substr(7);
                 
-                if (htmlContent) {
-                    size_t len = strlen(htmlContent);
-                    mimeType_ = "text/html";
-                    responseData_.assign(htmlContent, htmlContent + len);
-                    hasResponse_ = true;
-
-                }
-                
-                return hasResponse_;
-            }
-      
-            NSData *data = readViewsFile(urlStr.c_str());
-            if (data) {   
-                const char* mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(urlStr.c_str());});
-                
-                if (mimeTypePtr) {
-                    mimeType_ = std::string(mimeTypePtr);
+                // Check if this is the internal HTML request.
+                if (relativePath == "internal/index.html") {
+                    // Now we're on the main thread, safe to call callJsCallbackFromMainSync
+                    const char* htmlContent = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(webviewId_);});
+                    
+                    if (htmlContent) {
+                        size_t len = strlen(htmlContent);
+                        mimeTypeBlock = "text/html";
+                        responseDataBlock.assign(htmlContent, htmlContent + len);
+                        hasResponseBlock = true;
+                        free((void*)htmlContent); // Free the strdup'd memory
+                    }
                 } else {
-                    mimeType_ = "text/html"; // Fallback
-                }
+                    NSData *data = readViewsFile(urlStr.c_str());
+                    if (data) {   
+                        const char* mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(urlStr.c_str());});
+                        
+                        if (mimeTypePtr) {
+                            mimeTypeBlock = std::string(mimeTypePtr);
+                            free((void*)mimeTypePtr); // Free the strdup'd memory
+                        } else {
+                            mimeTypeBlock = "text/html"; // Fallback
+                        }
 
-                responseData_.assign((const char*)data.bytes,
-                                    (const char*)data.bytes + data.length);
-                hasResponse_ = true;
-            } 
-        }
-        else {
-         NSLog(@"Unknown URL format: %s", urlStr.c_str());
-        }
+                        responseDataBlock.assign((const char*)data.bytes,
+                                            (const char*)data.bytes + data.length);
+                        hasResponseBlock = true;
+                    } 
+                }
+            }
+            else {
+                NSLog(@"Unknown URL format: %s", urlStr.c_str());
+            }
+        });
+        
+        // Copy the results back to the member variables
+        mimeType_ = mimeTypeBlock;
+        responseData_.assign(responseDataBlock.begin(), responseDataBlock.end());
+        hasResponse_ = hasResponseBlock;
+        handle_request = true;
 
         return hasResponse_;
     }
