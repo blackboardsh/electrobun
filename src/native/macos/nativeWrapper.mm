@@ -94,7 +94,12 @@ static NSMutableArray *queuedCallbacks = nil;
 // this lets you call non-threadsafe JSCallbacks on the bun worker thread, from the main thread
 // and wait for the response. 
 // use it like:
-// myCStringVal = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
+// myCStringVal = callJsCallbackFromMainSync(^{
+//     if (jsUtils.getHTMLForWebviewSync) {
+//         return jsUtils.getHTMLForWebviewSync(self.webviewId);
+//     }
+//     return (const char*)NULL;
+// });
 // 
 // DEADLOCK PREVENTION: If called recursively (e.g., during URL scheme handling), 
 // queues the callback for later execution to prevent deadlocks.
@@ -909,7 +914,13 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
                 // For internal content, call the native HTML resolver.
                 // Assume getHTMLForWebviewSync returns a null-terminated C string.
                 // contentPtr = getHTMLForWebviewSync(self.webviewId);
-                contentPtr = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(self.webviewId);});
+                contentPtr = callJsCallbackFromMainSync(^{
+                    if (jsUtils.getHTMLForWebviewSync) {
+                        return jsUtils.getHTMLForWebviewSync(self.webviewId);
+                    }
+                    NSLog(@"WARNING: jsUtils.getHTMLForWebviewSync is NULL");
+                    return (const char*)NULL;
+                });
                 if (contentPtr) {
                     contentLength = strlen(contentPtr);
                     data = [NSData dataWithBytes:contentPtr length:contentLength];
@@ -936,7 +947,13 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         if (contentPtr && contentLength > 0) {
             // Determine MIME type using your getMimeTypeSync function.
             // const char *mimeTypePtr = getMimeTypeSync(url.absoluteString.UTF8String);
-            const char *mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(url.absoluteString.UTF8String);});
+            const char *mimeTypePtr = callJsCallbackFromMainSync(^{
+                if (jsUtils.getMimeType) {
+                    return jsUtils.getMimeType(url.absoluteString.UTF8String);
+                }
+                NSLog(@"WARNING: jsUtils.getMimeType is NULL");
+                return (const char*)NULL;
+            });
             NSString *rawMimeType = mimeTypePtr ? [NSString stringWithUTF8String:mimeTypePtr] : @"application/octet-stream";
 
             NSString *mimeType;
@@ -2601,7 +2618,13 @@ public:
                 // Check if this is the internal HTML request.
                 if (relativePath == "internal/index.html") {
                     // Now we're on the main thread, safe to call callJsCallbackFromMainSync
-                    const char* htmlContent = callJsCallbackFromMainSync(^{return jsUtils.getHTMLForWebviewSync(webviewId_);});
+                    const char* htmlContent = callJsCallbackFromMainSync(^{
+                        if (jsUtils.getHTMLForWebviewSync) {
+                            return jsUtils.getHTMLForWebviewSync(webviewId_);
+                        }
+                        NSLog(@"WARNING: jsUtils.getHTMLForWebviewSync is NULL");
+                        return (const char*)NULL;
+                    });
                     
                     if (htmlContent) {
                         size_t len = strlen(htmlContent);
@@ -2613,7 +2636,13 @@ public:
                 } else {
                     NSData *data = readViewsFile(urlStr.c_str());
                     if (data) {   
-                        const char* mimeTypePtr = callJsCallbackFromMainSync(^{return jsUtils.getMimeType(urlStr.c_str());});
+                        const char* mimeTypePtr = callJsCallbackFromMainSync(^{
+                            if (jsUtils.getMimeType) {
+                                return jsUtils.getMimeType(urlStr.c_str());
+                            }
+                            NSLog(@"WARNING: jsUtils.getMimeType is NULL");
+                            return (const char*)NULL;
+                        });
                         
                         if (mimeTypePtr) {
                             mimeTypeBlock = std::string(mimeTypePtr);
