@@ -915,8 +915,13 @@ const webviewDecideNavigation = new JSCallback((webviewId, url) => {
 });
 
 
-const webviewEventHandler = (id, eventName, detail) => {
+const webviewEventHandler = (id, eventName, detail) => {    
   const webview = BrowserView.getById(id);
+  if (!webview) {
+    console.error('[webviewEventHandler] No webview found for id:', id);
+    return;
+  }
+  
   if (webview.hostWebviewId) {
     // This is a webviewtag so we should send the event into the parent as well
     // TODO XX: escape event name and detail to remove `
@@ -939,28 +944,50 @@ const webviewEventHandler = (id, eventName, detail) => {
     electrobunEventEmitter.events.webview[eventMap[eventName]];
 
   if (!handler) {
-    
+    console.error('[webviewEventHandler] No handler found for event:', eventName, '(mapped to:', eventMap[eventName], ')');
     return { success: false };
+  }
+
+  // Parse JSON data for new-window-open events
+  let parsedDetail = detail;
+  if (eventName === "new-window-open") {    
+    try {
+      parsedDetail = JSON.parse(detail);      
+    } catch (e) {
+      console.error('[webviewEventHandler] Failed to parse JSON:', e);
+      // Fallback to string if parsing fails (backward compatibility)
+      parsedDetail = detail;
+    }
   }
 
   const event = handler({
     id,
-    detail,
-  });
+    detail: parsedDetail,
+  });  
 
   let result;
-  // global event
-  result = electrobunEventEmitter.emitEvent(event);      
-  result = electrobunEventEmitter.emitEvent(event, id);
+  // global event  
+  result = electrobunEventEmitter.emitEvent(event);        
+  result = electrobunEventEmitter.emitEvent(event, id);  
 }
 
-const webviewEventJSCallback = new JSCallback((id, _eventName, _detail) => {  
-  const eventName = new CString(_eventName);
-  const detail = new CString(_detail);
-
+const webviewEventJSCallback = new JSCallback((id, _eventName, _detail) => {    
+  let eventName = "";
+  let detail = "";
+  
+  try {
+    // Convert cstring pointers to actual strings
+    eventName = new CString(_eventName).toString();
+    detail = new CString(_detail).toString();
+  } catch (err) {
+    console.error('[webviewEventJSCallback] Error converting strings:', err);
+    console.error('[webviewEventJSCallback] Raw values:', { _eventName, _detail });
+    return;
+  }
+  
   webviewEventHandler(id, eventName, detail);    
 }, {
-  args: [FFIType.u32, FFIType.cstring],
+  args: [FFIType.u32, FFIType.cstring, FFIType.cstring],
   returns: FFIType.void,
   threadsafe: true
 });

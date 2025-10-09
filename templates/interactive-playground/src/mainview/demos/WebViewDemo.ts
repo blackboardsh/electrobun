@@ -160,6 +160,18 @@ export class WebViewDemo {
               </electrobun-webview>
             </div>
           </div>
+
+          <!-- CMD+Click Test WebView -->
+          <div style="margin-top: 1rem;">
+            <div style="font-weight: 500; padding: 0.5rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;">CMD+Click New Window Test</div>
+            <div style="margin-top: 0.5rem; border: 1px solid #e2e8f0; border-radius: 0.25rem; overflow: hidden;">
+              <electrobun-webview 
+                id="cmd-click-test"
+                style="width: 100%; height: 200px;"
+                html="<html><head><style>body{font-family:system-ui;padding:20px;background:#f9f9f9;}a{display:block;margin:10px 0;padding:10px;background:white;border:1px solid #ddd;text-decoration:none;border-radius:5px;transition:background 0.2s;}a:hover{background:#e6f3ff;}</style></head><body><h3>Test CMD+Click to Open New Windows</h3><p>Hold <strong>CMD</strong> (macOS) and click these links to test new window events:</p><a href='https://electrobun.dev' target='_self'>Regular Link (same window)</a><a href='https://github.com/blackboardsh/electrobun' target='_blank'>Target _blank Link</a><a href='https://bun.sh'>CMD+Click Me!</a><a href='javascript:window.open(\"https://anthropic.com\", \"_blank\")'>JavaScript window.open()</a><p style='color:#666;font-size:14px;'>Watch the events log above to see how different link types are handled.</p></body></html>">
+              </electrobun-webview>
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -340,8 +352,10 @@ export class WebViewDemo {
 
   private setupWebViewEvents() {
     const webview = document.getElementById('main-webview') as any;
+    const cmdClickTestWebview = document.getElementById('cmd-click-test') as any;
     const urlBar = document.getElementById('url-bar') as HTMLInputElement;
     
+    // Setup events for main webview
     if (webview && typeof webview.on === 'function') {
       // Use the on() method as shown in the old playground
       webview.on('did-navigate', (e: any) => {
@@ -365,7 +379,21 @@ export class WebViewDemo {
       });
 
       webview.on('new-window-open', (e: any) => {
-        this.addWebViewEvent(`new-window: ${e.detail?.url || 'unknown'}`);
+        const detail = e.detail;
+        
+        // Handle both legacy string format and new JSON format
+        if (typeof detail === 'string') {
+          this.addWebViewEvent(`new-window: ${detail}`);
+        } else if (detail && typeof detail === 'object') {
+          const { url, isCmdClick, modifierFlags, userGesture } = detail;
+          const eventDesc = isCmdClick ? 'cmd+click' : 'popup';
+          this.addWebViewEvent(`new-window (${eventDesc}): ${url || 'unknown'}`);
+          
+          // Log additional details for debugging
+          console.log('New window event details:', { url, isCmdClick, modifierFlags, userGesture });
+        } else {
+          this.addWebViewEvent(`new-window: ${JSON.stringify(detail)}`);
+        }
       });
 
       // Also try addEventListener for compatibility
@@ -378,6 +406,32 @@ export class WebViewDemo {
           this.addWebViewEvent(`did-navigate: ${url}`);
         });
       }
+    }
+
+    // Setup events for cmd+click test webview
+    if (cmdClickTestWebview && typeof cmdClickTestWebview.on === 'function') {
+      cmdClickTestWebview.on('new-window-open', (e: any) => {
+        const detail = e.detail;
+        
+        // Handle both legacy string format and new JSON format
+        if (typeof detail === 'string') {
+          this.addWebViewEvent(`[TEST] new-window: ${detail}`);
+        } else if (detail && typeof detail === 'object') {
+          const { url, isCmdClick, modifierFlags, userGesture } = detail;
+          const eventDesc = isCmdClick ? 'cmd+click' : 'popup';
+          this.addWebViewEvent(`[TEST] new-window (${eventDesc}): ${url || 'unknown'}`);
+          
+          // Log additional details for debugging
+          console.log('CMD+Click test webview event:', { url, isCmdClick, modifierFlags, userGesture });
+        } else {
+          this.addWebViewEvent(`[TEST] new-window: ${JSON.stringify(detail)}`);
+        }
+      });
+
+      cmdClickTestWebview.on('did-navigate', (e: any) => {
+        const url = e.detail?.url || 'unknown';
+        this.addWebViewEvent(`[TEST] did-navigate: ${url}`);
+      });
     }
   }
 

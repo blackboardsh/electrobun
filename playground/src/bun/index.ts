@@ -181,6 +181,24 @@ Electrobun.events.on("application-menu-clicked", (e) => {
   console.log("application menu clicked", e.data.action); // custom-actino
 });
 
+Electrobun.events.on("new-window-open", (e) => {
+  console.log('---------->>>> new window open ........', e)
+  /**
+   * {
+  name: "new-window-open",
+  data: {
+    id: 2,
+    detail: {
+      url: "https://en.wikipedia.org/wiki/Wikipedia",
+      isCmdClick: true,
+      targetDisposition: 4,
+      userGesture: true,
+    },
+  }
+   * 
+   */
+})
+
 // typically you'd wire up a frontend rightclick event, preventDefault, rpc to bun, then fire this.
 // but you can also fire and handle context menus entirely from bun globally positioned on screen
 // even if you have no windows open and another app is focused

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>New Window Event Test</title>
+    <style>
+        body { 
+            font-family: system-ui; 
+            padding: 20px; 
+            max-width: 600px; 
+            margin: 0 auto;
+        }
+        a, button { 
+            display: block; 
+            margin: 15px 0; 
+            padding: 10px; 
+            background: #f0f0f0;
+            text-decoration: none;
+            color: #333;
+            border: 1px solid #ddd;
+            cursor: pointer;
+        }
+        a:hover, button:hover { 
+            background: #e0e0e0; 
+        }
+        h2 { 
+            color: #444; 
+            border-bottom: 2px solid #ddd; 
+            padding-bottom: 10px; 
+        }
+        .note {
+            background: #fffbdd;
+            padding: 10px;
+            border-left: 4px solid #ffc107;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test New Window Events</h1>
+    
+    <div class="note">
+        <strong>Instructions:</strong> Open the console and watch for "new-window-open" events.
+        Try each link/button below with and without holding CMD key.
+    </div>
+
+    <h2>Links that SHOULD fire new-window-open:</h2>
+    <a href="https://example.com" target="_blank">1. Link with target="_blank"</a>
+    <a href="https://example.com" target="newwindow">2. Link with target="newwindow"</a>
+    <button onclick="window.open('https://example.com', '_blank')">3. JavaScript window.open()</button>
+
+    <h2>Links that should NOT fire (without CMD):</h2>
+    <a href="https://example.com">4. Regular link (no target)</a>
+    <a href="https://example.com" target="_self">5. Link with target="_self"</a>
+    
+    <h2>CMD+Click Test:</h2>
+    <p>Hold CMD and click this to see if it fires the event:</p>
+    <a href="https://example.com">6. CMD+Click me (regular link)</a>
+
+    <script>
+        // Log all clicks for debugging
+        document.addEventListener('click', (e) => {
+            if (e.target.tagName === 'A') {
+                console.log('Link clicked:', {
+                    href: e.target.href,
+                    target: e.target.target,
+                    cmdKey: e.metaKey,
+                    ctrlKey: e.ctrlKey,
+                    shiftKey: e.shiftKey,
+                    altKey: e.altKey
+                });
+            }
+        });
+    </script>
+</body>
+</html>

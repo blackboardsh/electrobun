@@ -1153,8 +1153,24 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
         forNavigationAction:(WKNavigationAction *)navigationAction
             windowFeatures:(WKWindowFeatures *)windowFeatures {
-        if (!navigationAction.targetFrame.isMainFrame) {
-            self.zigEventHandler(self.webviewId, "new-window-open", navigationAction.request.URL.absoluteString.UTF8String);
+        
+        // Check if this is a cmd+click or a traditional popup window request
+        BOOL isCmdClick = (navigationAction.modifierFlags & NSEventModifierFlagCommand) != 0;
+        BOOL isNewWindow = !navigationAction.targetFrame.isMainFrame || isCmdClick;        
+        
+        if (isNewWindow) {
+            NSString *eventData = [NSString stringWithFormat:@"{\"url\":\"%@\",\"isCmdClick\":%@,\"modifierFlags\":%lu}", 
+                                 navigationAction.request.URL.absoluteString, 
+                                 isCmdClick ? @"true" : @"false",
+                                 (unsigned long)navigationAction.modifierFlags];            
+            
+            if (self.zigEventHandler) {                
+                // Use strdup to create a persistent copy of the string for the FFI callback
+                char* eventDataCopy = strdup([eventData UTF8String]);
+                self.zigEventHandler(self.webviewId, strdup("new-window-open"), eventDataCopy);                
+            } else {
+                NSLog(@"[NEW_WINDOW] ERROR: zigEventHandler is NULL!");
+            }
         }
         return nil;
     }
@@ -2026,7 +2042,8 @@ class ElectrobunClient : public CefClient,
                         public CefKeyboardHandler,
                         public CefResourceRequestHandler,
                         public CefPermissionHandler,
-                        public CefDisplayHandler  {
+                        public CefDisplayHandler,
+                        public CefLifeSpanHandler  {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -2278,6 +2295,50 @@ public:
     // Keyboard Shortcut
     CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override {
         return this;
+    }
+
+    // Life Span Handler
+    CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
+        return this;
+    }
+
+    bool OnBeforePopup(CefRefPtr<CefBrowser> browser,
+                      CefRefPtr<CefFrame> frame,
+                      const CefString& target_url,
+                      const CefString& target_frame_name,
+                      CefLifeSpanHandler::WindowOpenDisposition target_disposition,
+                      bool user_gesture,
+                      const CefPopupFeatures& popupFeatures,
+                      CefWindowInfo& windowInfo,
+                      CefRefPtr<CefClient>& client,
+                      CefBrowserSettings& settings,
+                      CefRefPtr<CefDictionaryValue>& extra_info,
+                      bool* no_javascript_access) override {
+        CEF_REQUIRE_UI_THREAD();
+        
+        // Check if this is a new window request (cmd+click, target="_blank", window.open, etc.)
+        bool isCmdClick = target_disposition == CEF_WOD_NEW_FOREGROUND_TAB || 
+                         target_disposition == CEF_WOD_NEW_BACKGROUND_TAB ||
+                         target_disposition == CEF_WOD_NEW_WINDOW;        
+        
+        // Create event data with more context
+        std::string eventData = "{\"url\":\"" + target_url.ToString() + 
+                               "\",\"isCmdClick\":" + (isCmdClick ? "true" : "false") +
+                               ",\"targetDisposition\":" + std::to_string(target_disposition) +
+                               ",\"userGesture\":" + (user_gesture ? "true" : "false") + "}";
+                
+        
+        // Send the new window event
+        if (webview_event_handler_) {            
+            // Use strdup to create a persistent copy of the string for the FFI callback
+            char* eventDataCopy = strdup(eventData.c_str());
+            webview_event_handler_(webview_id_, strdup("new-window-open"), eventDataCopy);            
+        } else {
+            NSLog(@"[CEF_NEW_WINDOW] ERROR: webview_event_handler_ is NULL!");
+        }
+        
+        // Prevent the popup from actually opening by returning true
+        return true;
     }
 
     bool OnKeyEvent(CefRefPtr<CefBrowser> browser,
