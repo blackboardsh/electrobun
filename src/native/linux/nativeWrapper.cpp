@@ -91,6 +91,99 @@ static std::map<uint32_t, std::shared_ptr<MenuItemData>> g_menuItems;
 static std::string g_applicationMenuConfig;
 static ZigStatusItemHandler g_applicationMenuHandler = nullptr;
 
+// Webview content storage (replaces JSCallback approach)
+static std::map<uint32_t, std::string> webviewHTMLContent;
+static std::mutex webviewHTMLMutex;
+
+// Forward declarations for HTML content management
+extern "C" const char* getWebviewHTMLContent(uint32_t webviewId);
+extern "C" void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
+
+// Shared MIME type detection function
+// Based on Bun runtime supported file types and web development standards
+static std::string getMimeTypeFromUrl(const std::string& url) {
+    // Web/Code Files (Bun native support)
+    if (url.find(".html") != std::string::npos || url.find(".htm") != std::string::npos) {
+        return "text/html";
+    } else if (url.find(".js") != std::string::npos || url.find(".mjs") != std::string::npos || url.find(".cjs") != std::string::npos) {
+        return "text/javascript";
+    } else if (url.find(".ts") != std::string::npos || url.find(".mts") != std::string::npos || url.find(".cts") != std::string::npos) {
+        return "text/typescript";
+    } else if (url.find(".jsx") != std::string::npos) {
+        return "text/jsx";
+    } else if (url.find(".tsx") != std::string::npos) {
+        return "text/tsx";
+    } else if (url.find(".css") != std::string::npos) {
+        return "text/css";
+    } else if (url.find(".json") != std::string::npos) {
+        return "application/json";
+    } else if (url.find(".xml") != std::string::npos) {
+        return "application/xml";
+    } else if (url.find(".md") != std::string::npos) {
+        return "text/markdown";
+    } else if (url.find(".txt") != std::string::npos) {
+        return "text/plain";
+    } else if (url.find(".toml") != std::string::npos) {
+        return "application/toml";
+    } else if (url.find(".yaml") != std::string::npos || url.find(".yml") != std::string::npos) {
+        return "application/x-yaml";
+    
+    // Image Files
+    } else if (url.find(".png") != std::string::npos) {
+        return "image/png";
+    } else if (url.find(".jpg") != std::string::npos || url.find(".jpeg") != std::string::npos) {
+        return "image/jpeg";
+    } else if (url.find(".gif") != std::string::npos) {
+        return "image/gif";
+    } else if (url.find(".webp") != std::string::npos) {
+        return "image/webp";
+    } else if (url.find(".svg") != std::string::npos) {
+        return "image/svg+xml";
+    } else if (url.find(".ico") != std::string::npos) {
+        return "image/x-icon";
+    } else if (url.find(".avif") != std::string::npos) {
+        return "image/avif";
+    
+    // Font Files
+    } else if (url.find(".woff") != std::string::npos) {
+        return "font/woff";
+    } else if (url.find(".woff2") != std::string::npos) {
+        return "font/woff2";
+    } else if (url.find(".ttf") != std::string::npos) {
+        return "font/ttf";
+    } else if (url.find(".otf") != std::string::npos) {
+        return "font/otf";
+    
+    // Media Files
+    } else if (url.find(".mp3") != std::string::npos) {
+        return "audio/mpeg";
+    } else if (url.find(".mp4") != std::string::npos) {
+        return "video/mp4";
+    } else if (url.find(".webm") != std::string::npos) {
+        return "video/webm";
+    } else if (url.find(".ogg") != std::string::npos) {
+        return "audio/ogg";
+    } else if (url.find(".wav") != std::string::npos) {
+        return "audio/wav";
+    
+    // Document Files
+    } else if (url.find(".pdf") != std::string::npos) {
+        return "application/pdf";
+    
+    // WebAssembly (Bun support)
+    } else if (url.find(".wasm") != std::string::npos) {
+        return "application/wasm";
+    
+    // Compressed Files
+    } else if (url.find(".zip") != std::string::npos) {
+        return "application/zip";
+    } else if (url.find(".gz") != std::string::npos) {
+        return "application/gzip";
+    }
+    
+    return "application/octet-stream"; // default
+}
+
 // Permission cache for user media requests
 enum class PermissionType {
     USER_MEDIA,
@@ -575,6 +668,26 @@ public:
             fullPath = url.substr(8); // Skip "views://"
         }
         
+        // Check if this is the internal HTML request
+        if (fullPath == "internal/index.html") {
+            printf("DEBUG CEF Linux: Handling views://internal/index.html\n");
+            // Use stored HTML content instead of JSCallback
+            const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
+            if (htmlContent) {
+                data_ = std::string(htmlContent);
+                mimeType_ = "text/html";
+                free((void*)htmlContent); // Free the strdup'd memory
+                handle_request = true;
+                return true;
+            } else {
+                printf("DEBUG CEF Linux: No HTML content found, using fallback\n");
+                data_ = "<html><body>No content set</body></html>";
+                mimeType_ = "text/html";
+                handle_request = true;
+                return true;
+            }
+        }
+        
         // Build file path: ../Resources/app/views/[fullPath] relative to current directory (bin)
         char* cwd = g_get_current_dir();
         gchar* viewsDir = g_build_filename(cwd, "..", "Resources", "app", "views", nullptr);
@@ -590,22 +703,8 @@ public:
                 data_ = std::string(fileContent, fileSize);
                 g_free(fileContent);
                 
-                // Determine MIME type based on file extension
-                if (fullPath.find(".html") != std::string::npos) {
-                    mimeType_ = "text/html";
-                } else if (fullPath.find(".js") != std::string::npos) {
-                    mimeType_ = "application/javascript";
-                } else if (fullPath.find(".css") != std::string::npos) {
-                    mimeType_ = "text/css";
-                } else if (fullPath.find(".json") != std::string::npos) {
-                    mimeType_ = "application/json";
-                } else if (fullPath.find(".png") != std::string::npos) {
-                    mimeType_ = "image/png";
-                } else if (fullPath.find(".jpg") != std::string::npos || fullPath.find(".jpeg") != std::string::npos) {
-                    mimeType_ = "image/jpeg";
-                } else {
-                    mimeType_ = "text/plain";
-                }
+                // Determine MIME type using shared function
+                mimeType_ = getMimeTypeFromUrl(fullPath);
                 
                 
                 g_free(cwd);
@@ -3269,6 +3368,33 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         fullPath = uri + 8; // Skip "views://"
     }
     
+    // Check if this is the internal HTML request
+    if (strcmp(fullPath, "internal/index.html") == 0) {
+        printf("DEBUG WebKit Linux: Handling views://internal/index.html\n");
+        fflush(stdout);
+        // Use stored HTML content instead of JSCallback
+        const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
+        if (htmlContent) {
+            gsize contentLength = strlen(htmlContent);
+            GInputStream* stream = g_memory_input_stream_new_from_data(g_strdup(htmlContent), contentLength, g_free);
+            webkit_uri_scheme_request_finish(request, stream, contentLength, "text/html");
+            g_object_unref(stream);
+            free((void*)htmlContent); // Free the strdup'd memory
+            printf("DEBUG WebKit Linux: Sent HTML content for internal request\n");
+            fflush(stdout);
+            return;
+        } else {
+            printf("DEBUG WebKit Linux: No HTML content found, using fallback\n");
+            fflush(stdout);
+            const char* fallbackHTML = "<html><body>No content set</body></html>";
+            gsize contentLength = strlen(fallbackHTML);
+            GInputStream* stream = g_memory_input_stream_new_from_data(g_strdup(fallbackHTML), contentLength, g_free);
+            webkit_uri_scheme_request_finish(request, stream, contentLength, "text/html");
+            g_object_unref(stream);
+            return;
+        }
+    }
+    
     // Build file path: ../Resources/app/views/[fullPath] relative to current directory (bin)
     char* cwd = g_get_current_dir();
     gchar* viewsDir = g_build_filename(cwd, "..", "Resources", "app", "views", nullptr);
@@ -3282,23 +3408,9 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         GError* error = nullptr;
         
         if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
-            // Determine MIME type based on file extension
-            const char* mimeType = "text/plain";
-            if (g_str_has_suffix(filePath, ".html") || g_str_has_suffix(filePath, ".htm")) {
-                mimeType = "text/html";
-            } else if (g_str_has_suffix(filePath, ".css")) {
-                mimeType = "text/css";
-            } else if (g_str_has_suffix(filePath, ".js")) {
-                mimeType = "application/javascript";
-            } else if (g_str_has_suffix(filePath, ".json")) {
-                mimeType = "application/json";
-            } else if (g_str_has_suffix(filePath, ".png")) {
-                mimeType = "image/png";
-            } else if (g_str_has_suffix(filePath, ".jpg") || g_str_has_suffix(filePath, ".jpeg")) {
-                mimeType = "image/jpeg";
-            } else if (g_str_has_suffix(filePath, ".svg")) {
-                mimeType = "image/svg+xml";
-            }
+            // Determine MIME type using shared function
+            std::string mimeTypeStr = getMimeTypeFromUrl(fullPath);
+            const char* mimeType = mimeTypeStr.c_str();
             
             // Create response
             GInputStream* stream = g_memory_input_stream_new_from_data(fileContents, fileSize, g_free);
@@ -4842,7 +4954,37 @@ void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId, double x, double y,
 }
 
 void setJSUtils(void* getMimeType, void* getHTMLForWebviewSync) {
-    // TODO: Implement JS utils
+    printf("setJSUtils called but using map-based approach instead of callbacks\n");
+    fflush(stdout);
+}
+
+// MARK: - Webview HTML Content Management (replaces JSCallback approach)
+
+extern "C" void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent) {
+    std::lock_guard<std::mutex> lock(webviewHTMLMutex);
+    if (htmlContent) {
+        webviewHTMLContent[webviewId] = std::string(htmlContent);
+        printf("setWebviewHTMLContent: Set HTML for webview %u\n", webviewId);
+    } else {
+        webviewHTMLContent.erase(webviewId);
+        printf("setWebviewHTMLContent: Cleared HTML for webview %u\n", webviewId);
+    }
+    fflush(stdout);
+}
+
+const char* getWebviewHTMLContent(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(webviewHTMLMutex);
+    auto it = webviewHTMLContent.find(webviewId);
+    if (it != webviewHTMLContent.end()) {
+        char* result = strdup(it->second.c_str());
+        printf("getWebviewHTMLContent: Retrieved HTML for webview %u\n", webviewId);
+        fflush(stdout);
+        return result;
+    } else {
+        printf("getWebviewHTMLContent: No HTML found for webview %u\n", webviewId);
+        fflush(stdout);
+        return nullptr;
+    }
 }
 
 void runNSApplication() {

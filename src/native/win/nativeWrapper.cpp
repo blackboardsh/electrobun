@@ -107,6 +107,14 @@ static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 static GetMimeType g_getMimeType = nullptr;
 static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 
+// Webview content storage (replaces JSCallback approach)
+static std::map<uint32_t, std::string> webviewHTMLContent;
+static std::mutex webviewHTMLMutex;
+
+// Forward declarations for HTML content management
+extern "C" const char* getWebviewHTMLContent(uint32_t webviewId);
+extern "C" void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
+
 // Global mutex to serialize webview creation
 static std::mutex g_webviewCreationMutex;
 
@@ -5601,8 +5609,41 @@ ELECTROBUN_EXPORT void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId,
 }
 
 ELECTROBUN_EXPORT void setJSUtils(GetMimeType getMimeType, GetHTMLForWebviewSync getHTMLForWebviewSync) {
-    g_getMimeType = getMimeType;
-    g_getHTMLForWebviewSync = getHTMLForWebviewSync;
+    ::log("setJSUtils called but using map-based approach instead of callbacks");
+}
+
+// MARK: - Webview HTML Content Management (replaces JSCallback approach)
+
+extern "C" ELECTROBUN_EXPORT void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent) {
+    std::lock_guard<std::mutex> lock(webviewHTMLMutex);
+    if (htmlContent) {
+        webviewHTMLContent[webviewId] = std::string(htmlContent);
+        char logMsg[256];
+        sprintf_s(logMsg, "setWebviewHTMLContent: Set HTML for webview %u", webviewId);
+        ::log(logMsg);
+    } else {
+        webviewHTMLContent.erase(webviewId);
+        char logMsg[256];
+        sprintf_s(logMsg, "setWebviewHTMLContent: Cleared HTML for webview %u", webviewId);
+        ::log(logMsg);
+    }
+}
+
+extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(webviewHTMLMutex);
+    auto it = webviewHTMLContent.find(webviewId);
+    if (it != webviewHTMLContent.end()) {
+        char* result = _strdup(it->second.c_str());
+        char logMsg[256];
+        sprintf_s(logMsg, "getWebviewHTMLContent: Retrieved HTML for webview %u", webviewId);
+        ::log(logMsg);
+        return result;
+    } else {
+        char logMsg[256];
+        sprintf_s(logMsg, "getWebviewHTMLContent: No HTML found for webview %u", webviewId);
+        ::log(logMsg);
+        return nullptr;
+    }
 }
 
 // Adding a few Windows-specific functions for interop if needed
@@ -5704,20 +5745,16 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
     std::string mimeType = "text/html";
     
     if (path == "internal/index.html") {
-        // Handle internal HTML content using your JS callback
-        if (g_getHTMLForWebviewSync) {
-            const char* htmlContent = g_getHTMLForWebviewSync(webviewId);
-            if (htmlContent && strlen(htmlContent) > 0) {
-                responseData = std::string(htmlContent);
-                // sprintf_s(logMsg, "Got HTML content from JS callback: %zu bytes", responseData.length());
-                // ::log(logMsg);
-            } else {
-                responseData = "<html><body><h1>Empty HTML content from callback!</h1></body></html>";
-                ::log("JS callback returned empty or null content");
-            }
+        // Handle internal HTML content using stored content
+        ::log("DEBUG Windows: Handling views://internal/index.html");
+        const char* htmlContent = getWebviewHTMLContent(webviewId);
+        if (htmlContent && strlen(htmlContent) > 0) {
+            responseData = std::string(htmlContent);
+            free((void*)htmlContent); // Free the strdup'd memory
+            ::log("DEBUG Windows: Retrieved HTML content from storage");
         } else {
-            responseData = "<html><body><h1>JS callback not available</h1><p>g_getHTMLForWebviewSync is null</p></body></html>";
-            ::log("JS callback (g_getHTMLForWebviewSync) is not set");
+            responseData = "<html><body><h1>No content set</h1></body></html>";
+            ::log("DEBUG Windows: No HTML content found, using fallback");
         }
         mimeType = "text/html";
     } else {
@@ -5826,19 +5863,87 @@ std::string loadViewsFile(const std::string& path) {
     return content;
 }
 
+// Shared MIME type detection function
+// Based on Bun runtime supported file types and web development standards
 std::string getMimeTypeForFile(const std::string& path) {
-    // Extract file extension and return appropriate MIME type
-    size_t dotPos = path.find_last_of('.');
-    if (dotPos != std::string::npos) {
-        std::string ext = path.substr(dotPos + 1);
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext == "html" || ext == "htm") return "text/html";
-        if (ext == "js") return "application/javascript";
-        if (ext == "css") return "text/css";
-        if (ext == "json") return "application/json";
-        if (ext == "png") return "image/png";
-        if (ext == "jpg" || ext == "jpeg") return "image/jpeg";
-        if (ext == "svg") return "image/svg+xml";
+    // Web/Code Files (Bun native support)
+    if (path.find(".html") != std::string::npos || path.find(".htm") != std::string::npos) {
+        return "text/html";
+    } else if (path.find(".js") != std::string::npos || path.find(".mjs") != std::string::npos || path.find(".cjs") != std::string::npos) {
+        return "text/javascript";
+    } else if (path.find(".ts") != std::string::npos || path.find(".mts") != std::string::npos || path.find(".cts") != std::string::npos) {
+        return "text/typescript";
+    } else if (path.find(".jsx") != std::string::npos) {
+        return "text/jsx";
+    } else if (path.find(".tsx") != std::string::npos) {
+        return "text/tsx";
+    } else if (path.find(".css") != std::string::npos) {
+        return "text/css";
+    } else if (path.find(".json") != std::string::npos) {
+        return "application/json";
+    } else if (path.find(".xml") != std::string::npos) {
+        return "application/xml";
+    } else if (path.find(".md") != std::string::npos) {
+        return "text/markdown";
+    } else if (path.find(".txt") != std::string::npos) {
+        return "text/plain";
+    } else if (path.find(".toml") != std::string::npos) {
+        return "application/toml";
+    } else if (path.find(".yaml") != std::string::npos || path.find(".yml") != std::string::npos) {
+        return "application/x-yaml";
+    
+    // Image Files
+    } else if (path.find(".png") != std::string::npos) {
+        return "image/png";
+    } else if (path.find(".jpg") != std::string::npos || path.find(".jpeg") != std::string::npos) {
+        return "image/jpeg";
+    } else if (path.find(".gif") != std::string::npos) {
+        return "image/gif";
+    } else if (path.find(".webp") != std::string::npos) {
+        return "image/webp";
+    } else if (path.find(".svg") != std::string::npos) {
+        return "image/svg+xml";
+    } else if (path.find(".ico") != std::string::npos) {
+        return "image/x-icon";
+    } else if (path.find(".avif") != std::string::npos) {
+        return "image/avif";
+    
+    // Font Files
+    } else if (path.find(".woff") != std::string::npos) {
+        return "font/woff";
+    } else if (path.find(".woff2") != std::string::npos) {
+        return "font/woff2";
+    } else if (path.find(".ttf") != std::string::npos) {
+        return "font/ttf";
+    } else if (path.find(".otf") != std::string::npos) {
+        return "font/otf";
+    
+    // Media Files
+    } else if (path.find(".mp3") != std::string::npos) {
+        return "audio/mpeg";
+    } else if (path.find(".mp4") != std::string::npos) {
+        return "video/mp4";
+    } else if (path.find(".webm") != std::string::npos) {
+        return "video/webm";
+    } else if (path.find(".ogg") != std::string::npos) {
+        return "audio/ogg";
+    } else if (path.find(".wav") != std::string::npos) {
+        return "audio/wav";
+    
+    // Document Files
+    } else if (path.find(".pdf") != std::string::npos) {
+        return "application/pdf";
+    
+    // WebAssembly (Bun support)
+    } else if (path.find(".wasm") != std::string::npos) {
+        return "application/wasm";
+    
+    // Compressed Files
+    } else if (path.find(".zip") != std::string::npos) {
+        return "application/zip";
+    } else if (path.find(".gz") != std::string::npos) {
+        return "application/gzip";
     }
-    return "text/plain";
+    
+    return "application/octet-stream"; // default
 }
