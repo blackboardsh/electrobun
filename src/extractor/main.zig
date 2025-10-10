@@ -243,8 +243,8 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     defer allocator.free(exe_path);
     
     // Decompress using zstd
-    // Note: allocate on the heap to avoid stack overflow
-    const window_buffer = try allocator.alloc(u8, 16 * 1024 * 1024); // 16MB Buffer (reduced from 128MB to fix macOS code signing issues)
+    // Note: because it's a big boy we need to allocate it on the heap (like macOS does)
+    const window_buffer = try allocator.alloc(u8, 128 * 1024 * 1024); // 128MB Buffer
     defer allocator.free(window_buffer);
     
     var stream = std.io.fixedBufferStream(compressed_data);
@@ -1091,8 +1091,8 @@ pub fn main() !void {
     const src_reader = compressedAppBundle.reader();
 
     // Initialize the decompressor
-    // Note: allocate on the heap to avoid stack overflow
-    const window_buffer = try allocator.alloc(u8, 16 * 1024 * 1024); // 16MB Buffer (reduced from 128MB to fix macOS code signing issues)
+    // Note: because it's a big boy we need to allocate it on the heap
+    const window_buffer = try allocator.alloc(u8, 128 * 1024 * 1024); // 128MB Buffer
     defer allocator.free(window_buffer);
 
     var zstd_stream = zstd.decompressor(src_reader, .{ .verify_checksum = false, .window_buffer = window_buffer });
