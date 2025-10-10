@@ -1122,7 +1122,7 @@ if (commandArg === "init") {
     dereference: true,
   });
 
-  cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, 'main.js'));
+  cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, 'main.js'), { dereference: true });
 
   // Bun runtime binary
   // todo (yoav): this only works for the current architecture
