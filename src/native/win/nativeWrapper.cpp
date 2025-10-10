@@ -1384,6 +1384,7 @@ public:
     
     // Pure virtual methods - must be implemented by subclasses
     virtual void loadURL(const char* urlString) = 0;
+    virtual void loadHTML(const char* htmlString) = 0;
     virtual void goBack() = 0;
     virtual void goForward() = 0;
     virtual void reload() = 0;
@@ -1547,6 +1548,13 @@ public:
         if (webview) {
             std::wstring url = std::wstring(urlString, urlString + strlen(urlString));
             webview->Navigate(url.c_str());
+        }
+    }
+    
+    void loadHTML(const char* htmlString) override {
+        if (webview && htmlString) {
+            std::wstring html = std::wstring(htmlString, htmlString + strlen(htmlString));
+            webview->NavigateToString(html.c_str());
         }
     }
     
@@ -1954,6 +1962,15 @@ public:
     void loadURL(const char* urlString) override {
         if (browser) {
             browser->GetMainFrame()->LoadURL(urlString);
+        }
+    }
+    
+    void loadHTML(const char* htmlString) override {
+        if (browser && htmlString) {
+            // Create a data URI for the HTML content
+            std::string dataUri = "data:text/html;charset=utf-8,";
+            dataUri += htmlString;
+            browser->GetMainFrame()->LoadURL(CefString(dataUri));
         }
     }
     
@@ -4390,6 +4407,17 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
     // Use virtual method which handles threading and implementation details
     
     abstractView->loadURL(urlString);
+}
+
+ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView *abstractView, const char *htmlString) {
+    if (!abstractView || !htmlString) {
+        ::log("ERROR: Invalid parameters passed to loadHTMLInWebView");
+        return;
+    }
+    
+    // Use virtual method which handles threading and implementation details
+    
+    abstractView->loadHTML(htmlString);
 }
 
 ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {

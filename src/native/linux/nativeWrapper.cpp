@@ -1717,6 +1717,7 @@ public:
     
     // Pure virtual methods that must be implemented by derived classes
     virtual void loadURL(const char* urlString) = 0;
+    virtual void loadHTML(const char* htmlString) = 0;
     virtual void goBack() = 0;
     virtual void goForward() = 0;
     virtual void reload() = 0;
@@ -1892,6 +1893,14 @@ public:
             webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview), urlString);
         } else {
             fprintf(stderr, "ERROR: Cannot load URL - webview=%p, urlString=%s\n", webview, urlString ? urlString : "NULL");
+        }
+    }
+    
+    void loadHTML(const char* htmlString) override {
+        if (webview && htmlString) {
+            webkit_web_view_load_html(WEBKIT_WEB_VIEW(webview), htmlString, nullptr);
+        } else {
+            fprintf(stderr, "ERROR: Cannot load HTML - webview=%p, htmlString=%s\n", webview, htmlString ? htmlString : "NULL");
         }
     }
     
@@ -2639,6 +2648,15 @@ public:
     void loadURL(const char* urlString) override {
         if (browser) {
             browser->GetMainFrame()->LoadURL(CefString(urlString));
+        }
+    }
+    
+    void loadHTML(const char* htmlString) override {
+        if (browser && htmlString) {
+            // Create a data URI for the HTML content
+            std::string dataUri = "data:text/html;charset=utf-8,";
+            dataUri += htmlString;
+            browser->GetMainFrame()->LoadURL(CefString(dataUri));
         }
     }
     
@@ -4208,6 +4226,15 @@ void loadURLInWebView(AbstractView* abstractView, const char* urlString) {
         std::string urlStr(urlString);  // Copy the string to ensure it survives
         dispatch_sync_main_void([abstractView, urlStr]() {  // Capture by value
             abstractView->loadURL(urlStr.c_str());
+        });
+    }
+}
+
+void loadHTMLInWebView(AbstractView* abstractView, const char* htmlString) {
+    if (abstractView && htmlString) {
+        std::string htmlStr(htmlString);  // Copy the string to ensure it survives
+        dispatch_sync_main_void([abstractView, htmlStr]() {  // Capture by value
+            abstractView->loadHTML(htmlStr.c_str());
         });
     }
 }
