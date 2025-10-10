@@ -261,7 +261,7 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     if (existsSync(extractedMainJs) && !existsSync(sharedMainJs)) {
       console.log('Development fallback: copying main.js from platform-specific download to shared dist/');
       mkdirSync(sharedDistPath, { recursive: true });
-      cpSync(extractedMainJs, sharedMainJs);
+      cpSync(extractedMainJs, sharedMainJs, { dereference: true });
     }
     
     console.log(`Core dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`);
@@ -1163,7 +1163,7 @@ if (commandArg === "init") {
     "WebView2Loader.dll"
   );  ;
   // copy webview2 system webview library
-  cpSync(webview2LibSource, webview2LibDestination);
+  cpSync(webview2LibSource, webview2LibDestination, { dereference: true });
   
 } else if (targetOS === 'linux') {
   // Choose the appropriate native wrapper based on bundleCEF setting
@@ -1250,7 +1250,7 @@ if (commandArg === "init") {
         const sourcePath = join(cefSourcePath, dllFile);
         const destPath = join(appBundleMacOSPath, dllFile);
         if (existsSync(sourcePath)) {
-          cpSync(sourcePath, destPath);
+          cpSync(sourcePath, destPath, { dereference: true });
         }
       });
       
@@ -1258,7 +1258,7 @@ if (commandArg === "init") {
       const icuDataSource = join(cefSourcePath, 'icudtl.dat');
       const icuDataDest = join(appBundleMacOSPath, 'icudtl.dat');
       if (existsSync(icuDataSource)) {
-        cpSync(icuDataSource, icuDataDest);
+        cpSync(icuDataSource, icuDataDest, { dereference: true });
       }
       
       // Copy essential CEF pak files to MacOS root (same folder as libcef.dll) - required for CEF resources
@@ -1268,7 +1268,7 @@ if (commandArg === "init") {
         const destPath = join(appBundleMacOSPath, pakFile);
 
         if (existsSync(sourcePath)) {
-          cpSync(sourcePath, destPath);
+          cpSync(sourcePath, destPath, { dereference: true });
         } else {
           console.log(`WARNING: Missing CEF file: ${sourcePath}`);
         }
@@ -1298,7 +1298,7 @@ if (commandArg === "init") {
       if (existsSync(helperSourcePath)) {
         cefHelperNames.forEach((helperName) => {
           const destinationPath = join(appBundleMacOSPath, `${helperName}.exe`);
-          cpSync(helperSourcePath, destinationPath);
+          cpSync(helperSourcePath, destinationPath, { dereference: true });
           
         });
       } else {
@@ -1331,7 +1331,7 @@ if (commandArg === "init") {
         const icuDataSource = join(cefSourcePath, 'icudtl.dat');
         const icuDataDest = join(appBundleMacOSPath, 'icudtl.dat');
         if (existsSync(icuDataSource)) {
-          cpSync(icuDataSource, icuDataDest);
+          cpSync(icuDataSource, icuDataDest, { dereference: true });
         }
         
         // Copy .pak files and other CEF resources to the main executable directory
@@ -1350,7 +1350,7 @@ if (commandArg === "init") {
           const sourcePath = join(cefSourcePath, pakFile);
           const destPath = join(appBundleMacOSPath, pakFile);
           if (existsSync(sourcePath)) {
-            cpSync(sourcePath, destPath, { recursive: true });
+            cpSync(sourcePath, destPath, { recursive: true, dereference: true });
           }
         });
         
@@ -1365,7 +1365,7 @@ if (commandArg === "init") {
           const sourcePath = join(cefSourcePath, soFile);
           const destPath = join(cefResourcesDestination, soFile);
           if (existsSync(sourcePath)) {
-            cpSync(sourcePath, destPath);
+            cpSync(sourcePath, destPath, { dereference: true });
             console.log(`Copied CEF library to cef subdirectory: ${soFile}`);
           } else {
             console.log(`WARNING: Missing CEF library: ${sourcePath}`);
@@ -1378,7 +1378,7 @@ if (commandArg === "init") {
           const sourcePath = join(cefSourcePath, cefFile);
           const destPath = join(cefResourcesDestination, cefFile);
           if (existsSync(sourcePath)) {
-            cpSync(sourcePath, destPath);
+            cpSync(sourcePath, destPath, { dereference: true });
             console.log(`Copied CEF essential file to cef subdirectory: ${cefFile}`);
           } else {
             console.log(`WARNING: Missing CEF essential file: ${sourcePath}`);
@@ -1403,7 +1403,7 @@ if (commandArg === "init") {
             } catch (error) {
               console.log(`WARNING: Failed to create symlink for ${soFile}: ${error}`);
               // Fallback to copying the file
-              cpSync(cefFilePath, mainDirPath);
+              cpSync(cefFilePath, mainDirPath, { dereference: true });
               console.log(`Fallback: Copied CEF library to main directory: ${soFile}`);
             }
           }
@@ -1422,7 +1422,7 @@ if (commandArg === "init") {
         if (existsSync(helperSourcePath)) {
           cefHelperNames.forEach((helperName) => {
             const destinationPath = join(appBundleMacOSPath, helperName);
-            cpSync(helperSourcePath, destinationPath);
+            cpSync(helperSourcePath, destinationPath, { dereference: true });
             // console.log(`Copied CEF helper: ${helperName}`);
           });
         } else {
@@ -1706,7 +1706,7 @@ if (commandArg === "init") {
     );
 
     // copy the zstd tarball to the self-extracting app bundle
-    cpSync(compressedTarPath, compressedTarballInExtractingBundlePath);
+    cpSync(compressedTarPath, compressedTarballInExtractingBundlePath, { dereference: true });
 
     const selfExtractorBinSourcePath = targetPaths.EXTRACTOR;
     const selfExtractorBinDestinationPath = join(
@@ -1973,7 +1973,7 @@ exec "\$LAUNCHER_BINARY" "\$@"
 
     artifactsToUpload.forEach((filePath) => {
       const filename = basename(filePath);
-      cpSync(filePath, join(artifactFolder, filename));
+      cpSync(filePath, join(artifactFolder, filename), { dereference: true });
     });
 
     // todo: now just upload the artifacts to your bucket replacing the ones that exist
@@ -2409,7 +2409,7 @@ async function createAppImage(buildFolder: string, appBundlePath: string, appFil
     
     // Copy app bundle contents to AppDir
     const appDirAppPath = join(appDirPath, "app");
-    cpSync(appBundlePath, appDirAppPath, { recursive: true });
+    cpSync(appBundlePath, appDirAppPath, { recursive: true, dereference: true });
     
     // Create AppRun script (main executable for AppImage)
     const appRunContent = `#!/bin/bash
@@ -2443,7 +2443,7 @@ Categories=Application;
     const iconPath = config.build.linux?.appImageIcon;
     if (iconPath && existsSync(iconPath)) {
       const iconDestPath = join(appDirPath, `${appFileName}.png`);
-      cpSync(iconPath, iconDestPath);
+      cpSync(iconPath, iconDestPath, { dereference: true });
     }
     
     // Try to create AppImage using available tools
