@@ -923,11 +923,18 @@ const webviewEventHandler = (id, eventName, detail) => {
   }
   
   if (webview.hostWebviewId) {
+    const hostWebview = BrowserView.getById(webview.hostWebviewId);
+
+    if (!hostWebview) {
+      console.error('[webviewEventHandler] No webview found for id:', id);
+      return;
+    }
+
     // This is a webviewtag so we should send the event into the parent as well
     // TODO XX: escape event name and detail to remove `
     const js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, \`${detail}\`);`
     
-    native.symbols.evaluateJavaScriptWithNoCompletion(webview.ptr, toCString(js))        
+    native.symbols.evaluateJavaScriptWithNoCompletion(hostWebview.ptr, toCString(js))        
   }
     
   const eventMap = {
