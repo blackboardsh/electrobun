@@ -475,6 +475,37 @@ event.data = {
 
 The the dom ready event is fired from the browser context.
 
-### newWindowOpen
+### new-window-open
 
-The browser context is attempting to open a new window. For example a popup or a user right clicked and selected "open in new window"
+The browser context is attempting to open a new window. For example a popup or a user right clicked and selected "open in new window".
+
+```
+event.detail = string | {
+    url: string;
+    isCmdClick: boolean;
+    modifierFlags?: number;
+    targetDisposition?: number;
+    userGesture?: boolean;
+}
+```
+
+**Properties**:
+- `url` - The URL that should be opened in the new window
+- `isCmdClick` - Whether the Command key (macOS) or Ctrl key was held during the click
+- `modifierFlags` - Additional modifier flags for the event (optional)
+- `targetDisposition` - Target disposition indicating how the new window should be opened (optional)
+- `userGesture` - Whether this new window request was triggered by a user gesture (optional)
+
+**Example**:
+```typescript
+webview.on("new-window-open", (event) => {
+  if (typeof event.detail === 'object') {
+    console.log("New window requested:", event.detail.url);
+    console.log("Command/Ctrl key held:", event.detail.isCmdClick);
+    console.log("User gesture:", event.detail.userGesture);
+  } else {
+    // Legacy string format
+    console.log("New window requested:", event.detail);
+  }
+});
+```
