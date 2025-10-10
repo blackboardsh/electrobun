@@ -1521,8 +1521,8 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         });
     }
 
-    - (void)goBack {
-        [self.webView goBack];
+    - (void)goBack {        
+            [self.webView goBack];        
     }
     - (void)goForward {
         [self.webView goForward];
@@ -3220,7 +3220,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         self.browser->GetMainFrame()->LoadURL(CefString("views://internal/index.html"));
     }
 
-    - (void)goBack {
+    - (void)goBack {   
         if (self.browser)
             self.browser->GoBack();
     }
@@ -3556,7 +3556,7 @@ extern "C" void loadHTMLInWebView(AbstractView *abstractView, const char *htmlSt
     [abstractView loadHTML:htmlString];
 }
 
-extern "C" void webviewGoBack(AbstractView *abstractView) {
+extern "C" void webviewGoBack(AbstractView *abstractView) {   
     if (!abstractView) {
         NSLog(@"webviewGoBack: abstractView is null");
         return;
@@ -3568,7 +3568,9 @@ extern "C" void webviewGoBack(AbstractView *abstractView) {
         return;
     }
     
-    [abstractView goBack];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView goBack];
+    });
 }
 
 extern "C" void webviewGoForward(AbstractView *abstractView) {
@@ -3583,7 +3585,9 @@ extern "C" void webviewGoForward(AbstractView *abstractView) {
         return;
     }
     
-    [abstractView goForward];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView goForward];
+    });
 }
 
 extern "C" void webviewReload(AbstractView *abstractView) {
@@ -3598,7 +3602,9 @@ extern "C" void webviewReload(AbstractView *abstractView) {
         return;
     }
     
-    [abstractView reload];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView reload];
+    });
 }
 
 extern "C" void webviewRemove(AbstractView *abstractView) {
