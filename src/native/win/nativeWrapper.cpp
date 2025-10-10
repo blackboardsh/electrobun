@@ -112,8 +112,8 @@ static std::map<uint32_t, std::string> webviewHTMLContent;
 static std::mutex webviewHTMLMutex;
 
 // Forward declarations for HTML content management
-extern "C" const char* getWebviewHTMLContent(uint32_t webviewId);
-extern "C" void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
+extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewId);
+extern "C" ELECTROBUN_EXPORT void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
 
 // Global mutex to serialize webview creation
 static std::mutex g_webviewCreationMutex;
