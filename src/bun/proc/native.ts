@@ -7,7 +7,50 @@ import { BrowserView } from "../core/BrowserView";
 import { Updater } from "../core/Updater";
 import { Tray } from "../core/Tray";
 
+// Menu data reference system to avoid serialization overhead
+const menuDataRegistry = new Map<string, any>();
+let menuDataCounter = 0;
 
+function storeMenuData(data: any): string {
+  const id = `menuData_${++menuDataCounter}`;
+  menuDataRegistry.set(id, data);
+  return id;
+}
+
+function getMenuData(id: string): any {
+  return menuDataRegistry.get(id);
+}
+
+function clearMenuData(id: string): void {
+  menuDataRegistry.delete(id);
+}
+
+// Shared methods for EB delimiter serialization/deserialization
+const ELECTROBUN_DELIMITER = '|EB|';
+
+function serializeMenuAction(action: string, data: any): string {
+  const dataId = storeMenuData(data);
+  return `${ELECTROBUN_DELIMITER}${dataId}|${action}`;
+}
+
+function deserializeMenuAction(encodedAction: string): { action: string; data: any } {
+  let actualAction = encodedAction;
+  let data = undefined;
+  
+  if (encodedAction.startsWith(ELECTROBUN_DELIMITER)) {
+    const parts = encodedAction.split('|');
+    if (parts.length >= 4) { // ['', 'EB', 'dataId', 'actualAction', ...]
+      const dataId = parts[2];
+      actualAction = parts.slice(3).join('|'); // Rejoin in case action contains |
+      data = getMenuData(dataId);
+      
+      // Clean up data from registry after use
+      clearMenuData(dataId);
+    }
+  }
+  
+  return { action: actualAction, data };
+}
 
 // todo: set up FFI, this is already in the webworker.
 
@@ -765,6 +808,14 @@ export const ffi = {
       //   );
       // },
     
+  },
+   // Internal functions for menu data management
+  internal: {
+    storeMenuData,
+    getMenuData,
+    clearMenuData,
+    serializeMenuAction,
+    deserializeMenuAction,
   }
 }
 
@@ -1103,9 +1154,14 @@ const trayItemHandler = new JSCallback((id, action) => {
   // Note: Some invisible character that doesn't appear in .length
   // is causing issues      
   const actionString = (new CString(action).toString() || "").trim();
+  
+  // Use shared deserialization method
+  const { action: actualAction, data } = deserializeMenuAction(actionString);
+  
   const event = electrobunEventEmitter.events.tray.trayClicked({
     id,
-    action: actionString,
+    action: actualAction,
+    data, // Always include data property (undefined if no data)
   });
 
   let result;
@@ -1120,13 +1176,19 @@ const trayItemHandler = new JSCallback((id, action) => {
 
 
 const applicationMenuHandler = new JSCallback((id, action) => {  
+  const actionString = new CString(action).toString();
+  
+  // Use shared deserialization method
+  const { action: actualAction, data } = deserializeMenuAction(actionString);
+  
   const event = electrobunEventEmitter.events.app.applicationMenuClicked({
     id,
-    action: new CString(action),
+    action: actualAction,
+    data, // Always include data property (undefined if no data)
   });
   
   // global event
-  electrobunEventEmitter.emitEvent(event);  
+  electrobunEventEmitter.emitEvent(event);
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,
@@ -1134,8 +1196,14 @@ const applicationMenuHandler = new JSCallback((id, action) => {
 })
 
 const contextMenuHandler = new JSCallback((id, action) => {  
+  const actionString = new CString(action).toString();
+  
+  // Use shared deserialization method
+  const { action: actualAction, data } = deserializeMenuAction(actionString);
+  
   const event = electrobunEventEmitter.events.app.contextMenuClicked({
-    action: new CString(action),
+    action: actualAction,
+    data, // Always include data property (undefined if no data)
   });
 
   electrobunEventEmitter.emitEvent(event);
@@ -1329,7 +1397,9 @@ export const internalRpcHandlers = {
     webviewEvent: (params) => {
       console.log('-----------------+webviewEvent', params)
     },
-  }
+  },
+  
+ 
 };
 
 // todo: consider renaming to TrayMenuItemConfig
@@ -1340,6 +1410,7 @@ export type MenuItemConfig =
       label: string;
       tooltip?: string;
       action?: string;
+      data?: any;
       submenu?: Array<MenuItemConfig>;
       enabled?: boolean;
       checked?: boolean;
@@ -1353,6 +1424,7 @@ export type ApplicationMenuItemConfig =
       label: string;
       tooltip?: string;
       action?: string;
+      data?: any;
       submenu?: Array<ApplicationMenuItemConfig>;
       enabled?: boolean;
       checked?: boolean;
@@ -1364,6 +1436,7 @@ export type ApplicationMenuItemConfig =
       label?: string;
       tooltip?: string;
       role?: string;
+      data?: any;
       submenu?: Array<ApplicationMenuItemConfig>;
       enabled?: boolean;
       checked?: boolean;

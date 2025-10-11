@@ -91,7 +91,7 @@ const updateTrayMenu = () => {
     {
       type: "normal",
       label: `Toggle me`,
-      action: "item-1",
+      action: "item-1",      
       checked: menuState["item-1"],
       tooltip: `I'm a tooltip`,
       submenu: [
@@ -100,6 +100,9 @@ const updateTrayMenu = () => {
           label: "Click me to toggle sub-item 2",
           tooltip: "i will also unhide sub-item-3",
           action: "sub-item-1",
+          data: {
+          'test': 'toast'
+        },
         },
         {
           type: "divider",
@@ -132,7 +135,7 @@ if (process.platform === "linux") {
 // TODO: events should be typed
 tray.on("tray-clicked", (e) => {
   const { id, action } = e.data as { id: number; action: string };
-  console.log("tray clicked", id, action);
+  console.log("tray clicked", id, action, e);
   if (action === "") {
     // main menu was clicked before we create a system tray menu for it.
     updateTrayMenu();
@@ -160,6 +163,9 @@ ApplicationMenu.setApplicationMenu([
         label: "Custom Menu Item  🚀",
         action: "custom-action-1",
         tooltip: "I'm a tooltip",
+        data: {
+          hi: 'there'
+        }
       },
       {
         label: "Custom menu disabled",
@@ -178,7 +184,7 @@ ApplicationMenu.setApplicationMenu([
 ]);
 
 Electrobun.events.on("application-menu-clicked", (e) => {
-  console.log("application menu clicked", e.data.action); // custom-actino
+  console.log("application menu clicked", e.data); // custom-actino
 });
 
 Electrobun.events.on("new-window-open", (e) => {
@@ -211,6 +217,10 @@ setTimeout(() => {
       label: "Custom Menu Item  🚀",
       action: "custom-action-1",
       tooltip: "I'm a tooltip",
+      data: {
+        some: 'data',
+        bool: true
+      }
     },
     {
       label: "Custom menu disabled",
@@ -239,7 +249,7 @@ setTimeout(() => {
 }, 3000);
 
 Electrobun.events.on("context-menu-clicked", (e) => {
-  console.log("context event", e.data.action);
+  console.log("context event", e.data);
 });
 
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({

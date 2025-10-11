@@ -46,11 +46,14 @@ const menuConfigWithDefaults = (
     if (item.type === "divider" || item.type === "separator") {
       return { type: "divider" };
     } else {
+      // Use shared serialization method
+      const actionWithDataId = ffi.internal.serializeMenuAction(item.action || "", item.data);
+      
       return {
         label: item.label || roleLabelMap[item.role] || "",
         type: item.type || "normal",
         // application menus can either have an action or a role. not both.
-        ...(item.role ? { role: item.role } : { action: item.action || "" }),
+        ...(item.role ? { role: item.role } : { action: actionWithDataId }),
         // default enabled to true unless explicitly set to false
         enabled: item.enabled === false ? false : true,
         checked: Boolean(item.checked),
