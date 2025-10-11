@@ -430,7 +430,8 @@ async function createDistFolder() {
 }
 
 async function BunInstall() {
-    await $`bun install`;
+    // Use vendored Bun for consistency with CI
+    await $`${PATH.bun.RUNTIME} install`;
 }
 
 async function vendorBun() {
@@ -459,7 +460,7 @@ async function vendorBun() {
     const extractDir = join("vendors", "bun");
     
     // Download zip file
-    await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.2.2/${bunUrlSegment}`;
+    await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.3.0/${bunUrlSegment}`;
     
     // Extract zip file
     if (isWindows) {
@@ -1077,7 +1078,8 @@ async function buildCli() {
 
     const compileTarget = process.platform === 'win32' ? '--target=bun-windows-x64-baseline' : '';
 
-    await $`BUN_INSTALL_CACHE_DIR=/tmp/bun-cache bun build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
+    // Use vendored Bun for building CLI to ensure consistency with CI and proper code signing
+    await $`BUN_INSTALL_CACHE_DIR=/tmp/bun-cache ${PATH.bun.RUNTIME} build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
 }
 
 async function generateTemplateEmbeddings() {
