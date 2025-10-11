@@ -60,7 +60,7 @@ Ways to get involved at this early stage:
 - cmake
 - webkit2gtk and GTK development packages
 
-Un Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`
+On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`
 
 ### First-time Setup
 
