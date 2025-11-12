@@ -85,7 +85,7 @@ pub fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []c
     var newfile = std.ArrayList(u8).init(allocator.*);
 
     // Header is
-    //	0	8	"BSDIFF40" or "TSDIFF10" // The only difference in file format is bzip2 vs zstd compression of the blocks
+    //	0	8	"BSDIFF40" or "TRDIFF10" // The only difference in file format is bzip2 vs zstd compression of the blocks
     //	8	8	length of ctrl block  i64
     //	16	8	length of diff block  i64
     //	24	8	length of extra block i64
