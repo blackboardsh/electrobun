@@ -611,7 +611,15 @@ start "" launcher.exe
         // Cross-platform app launch
         switch (currentOS) {
           case 'macos':
-            await Bun.spawn(["open", runningAppBundlePath]);
+            // Use a detached shell so relaunch survives after killApp terminates the current process
+            await Bun.spawn(
+              [
+                "sh",
+                "-c",
+                `open "${runningAppBundlePath}" &`,
+              ],
+              { detached: true }
+            );
             break;
           case 'win':
             // On Windows, launch the run.bat file which handles versioning
@@ -627,22 +635,16 @@ start "" launcher.exe
             Bun.spawn(["sh", "-c", `${linuxLauncher} &`], { detached: true});
             break;
         }
-        // Use native killApp to properly clean up all resources on Windows/Linux
-        // macOS handles process.exit correctly
-        if (currentOS === 'linux' || currentOS === 'win') {
-          try {
-            native.symbols.killApp();
-            // Still call process.exit as a fallback
-            process.exit(0);
-          } catch (e) {
-            // Fallback if native binding fails
-            console.error('Failed to call native killApp:', e);
-            process.exit(0);
-          }
-        } else {
-          // macOS handles cleanup properly with process.exit
+        // Use native killApp to properly clean up all resources        
+        try {
+          native.symbols.killApp();
+          // Still call process.exit as a fallback
           process.exit(0);
-        }
+        } catch (e) {
+          // Fallback if native binding fails
+          console.error('Failed to call native killApp:', e);
+          process.exit(0);
+        }        
       }
     }
   },
