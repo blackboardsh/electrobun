@@ -80,7 +80,7 @@ pub fn main() !void {
     _ = try newFile.writeAll(newfile);
 }
 
-fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []const u8) ![]u8 {
+pub fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []const u8) ![]u8 {
     const header = patch[0..32];
     var newfile = std.ArrayList(u8).init(allocator.*);
 

@@ -85,4 +85,17 @@ pub fn build(b: *std.Build) void {
     bspatch.addIncludePath(b.path("zstd/lib"));
 
     b.installArtifact(bspatch);
+
+    const tests = b.addTest(.{
+        .root_source_file = b.path("tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    tests.addIncludePath(b.path("zstd/lib"));
+    tests.linkLibrary(libzstd);
+
+    const run_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "Run bsdiff/bspatch roundtrip tests");
+    test_step.dependOn(&run_tests.step);
 }

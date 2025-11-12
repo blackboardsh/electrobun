@@ -116,7 +116,7 @@ pub fn main() !void {
     _ = try patchFile.writeAll(patch);
 }
 
-fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, newData: []const u8, useZstd: bool) ![]u8 {
+pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, newData: []const u8, useZstd: bool) ![]u8 {
     if (!useZstd) {
         std.debug.print("Block compression with bzip2 not yet implemented.\n", .{});
     }
