@@ -208,13 +208,31 @@ const Updater = {
 
         // Note: cwd should be Contents/MacOS/ where the binaries are in the amc app bundle
         try {
-          Bun.spawnSync([
+          const patchResult = Bun.spawnSync([
             "bspatch",
             currentTarPath,
             tmpPatchedTarFilePath,
             patchFilePath,
           ]);
+
+          if (patchResult.exitCode !== 0 || patchResult.success === false) {
+            const stderr = new TextDecoder().decode(patchResult.stderr || new Uint8Array());
+            const stdout = new TextDecoder().decode(patchResult.stdout || new Uint8Array());
+            if (updateInfo) {
+              updateInfo.error = stderr || `bspatch failed with exit code ${patchResult.exitCode}`;
+            }
+            console.error(
+              "bspatch failed",
+              {
+                exitCode: patchResult.exitCode,
+                stdout,
+                stderr,
+              },
+            );
+            break;
+          }
         } catch (error) {
+          console.error("bspatch threw", error);
           break;
         }
 
