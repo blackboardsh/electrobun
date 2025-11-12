@@ -48,8 +48,8 @@
     "push:minor": "npm version minor && git push origin main --tags",
     "push:major": "npm version major && git push origin main --tags",
     "build:push:artifacts": "bun scripts/build-and-upload-artifacts.js",
-    "test": "bun build:dev && bun build:cli && cd tests && npm install && bun build:dev && bun start"
-    ,"test:bsdiff": "cd src/bsdiff && ../../vendors/zig/zig build test && echo \"bsdiff tests passed\""
+    "test": "bun build:dev && bun build:cli && cd tests && npm install && bun build:dev && bun start",
+    "test:bsdiff": "cd src/bsdiff && ../../vendors/zig/zig build test && echo \"bsdiff tests passed\""
   },
   "devDependencies": {
     "@types/archiver": "^6.0.3",

@@ -206,10 +206,13 @@ const Updater = {
           `from-${currentHash}.tar`
         );
 
+        const bunBinDir = dirname(process.execPath);
+        const bspatchPath = join(bunBinDir, "bspatch");
+
         // Note: cwd should be Contents/MacOS/ where the binaries are in the amc app bundle
         try {
           const patchResult = Bun.spawnSync([
-            "bspatch",
+            bspatchPath,
             currentTarPath,
             tmpPatchedTarFilePath,
             patchFilePath,
