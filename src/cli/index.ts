@@ -94,13 +94,18 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
   
   // Check platform-specific binaries
   const requiredBinaries = [
-    platformPaths.BUN_BINARY,
-    platformPaths.LAUNCHER_RELEASE,
-    // Platform-specific native wrapper
-    platformOS === 'macos' ? platformPaths.NATIVE_WRAPPER_MACOS :
-    platformOS === 'win' ? platformPaths.NATIVE_WRAPPER_WIN :
-    platformPaths.NATIVE_WRAPPER_LINUX
+    platformPaths.BUN_BINARY
   ];
+  if (platformOS === 'macos') {
+    requiredBinaries.push(
+      platformPaths.LAUNCHER_RELEASE,
+      platformPaths.NATIVE_WRAPPER_MACOS
+    );
+  } else if (platformOS === 'win') {
+    requiredBinaries.push(platformPaths.NATIVE_WRAPPER_WIN);
+  } else {
+    requiredBinaries.push(platformPaths.NATIVE_WRAPPER_LINUX);
+  }
   
   // Check shared files (main.js should be in shared dist/)
   const requiredSharedFiles = [
@@ -236,13 +241,17 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     }
     
     // Verify extraction completed successfully - check platform-specific binaries only
-    const requiredBinaries = [
-      platformPaths.BUN_BINARY,
-      platformPaths.LAUNCHER_RELEASE,
-      platformOS === 'macos' ? platformPaths.NATIVE_WRAPPER_MACOS :
-      platformOS === 'win' ? platformPaths.NATIVE_WRAPPER_WIN :
-      platformPaths.NATIVE_WRAPPER_LINUX
-    ];
+    const requiredBinaries = [platformPaths.BUN_BINARY];
+    if (platformOS === 'macos') {
+      requiredBinaries.push(
+        platformPaths.LAUNCHER_RELEASE,
+        platformPaths.NATIVE_WRAPPER_MACOS
+      );
+    } else if (platformOS === 'win') {
+      requiredBinaries.push(platformPaths.NATIVE_WRAPPER_WIN);
+    } else {
+      requiredBinaries.push(platformPaths.NATIVE_WRAPPER_LINUX);
+    }
     
     const missingBinaries = requiredBinaries.filter(file => !existsSync(file));
     if (missingBinaries.length > 0) {

@@ -259,17 +259,23 @@ async function copyToDist() {
     // Bun runtime
     await $`cp ${PATH.bun.RUNTIME} ${PATH.bun.DIST}`;
     // Zig
-    await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
+    if (OS === 'macos') {
+        await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
+    } else {
+        console.log(`Skipping launcher copy on ${OS}`);
+    }
     await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
     await $`cp src/bsdiff/zig-out/bin/bsdiff${binExt} dist/bsdiff${binExt}`;
     await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;
     
     // Verify critical files were copied
-    const launcherPath = join('dist', `launcher${binExt}`);
-    if (!existsSync(launcherPath)) {
-        throw new Error(`launcher${binExt} was not copied to ${launcherPath}`);
+    if (OS === 'macos') {
+        const launcherPath = join('dist', `launcher${binExt}`);
+        if (!existsSync(launcherPath)) {
+            throw new Error(`launcher${binExt} was not copied to ${launcherPath}`);
+        }
+        console.log(`launcher${binExt} copied successfully to ${launcherPath}`);
     }
-    console.log(`launcher${binExt} copied successfully to ${launcherPath}`);    
     // Electrobun cli and npm launcher
     await $`cp src/npmbin/index.js dist/npmbin.js`;
     await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;    
@@ -1022,20 +1028,22 @@ async function buildNative() {
 }
 
 async function buildLauncher() {
-    let zigArgs: string[] = [];
-    
-    // Set target architecture based on platform
-    if (OS === 'win') {
-        zigArgs = ['-Dtarget=x86_64-windows', '-Dcpu=baseline'];
-    } else if (OS === 'macos') {
-        // Build universal binary or native architecture
-        if (ARCH === 'arm64') {
-            zigArgs = ['-Dtarget=aarch64-macos'];
-        } else {
-            zigArgs = ['-Dtarget=x86_64-macos'];
-        }
+    if (OS !== 'macos') {
+        console.log(`Skipping launcher build on ${OS} (only needed on macOS)`);
+        return;
     }
-    // Linux builds native by default
+
+    let zigArgs: string[] = [];
+
+    // if (OS === 'win') {
+    //     zigArgs = ['-Dtarget=x86_64-windows', '-Dcpu=baseline'];
+    // }
+    if (ARCH === 'arm64') {
+        zigArgs = ['-Dtarget=aarch64-macos'];
+    } else {
+        zigArgs = ['-Dtarget=x86_64-macos'];
+    }
+    
     
     if (CHANNEL === 'debug') {
         await $`cd src/launcher && ../../vendors/zig/zig build ${zigArgs}`;

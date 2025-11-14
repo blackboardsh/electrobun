@@ -1460,7 +1460,7 @@ public:
         uint64_t prompt_id,
         cef_permission_request_result_t result) override {
         
-        printf("CEF: Permission prompt %llu dismissed with result %d\n", prompt_id, result);
+        printf("CEF: Permission prompt dismissed with result %d\n", result);
         // Optional: Handle prompt dismissal if needed
     }
     
