@@ -13,6 +13,7 @@ import {
   symlinkSync,
   statSync,
   copyFileSync,
+  renameSync,
 } from "fs";
 import { execSync } from "child_process";
 import * as readline from "readline";
@@ -1752,25 +1753,41 @@ if (commandArg === "init") {
     // DMG creation for macOS only
     if (targetOS === 'macos') {
       console.log("creating dmg...");
-      // make a dmg
-      const dmgPath = join(buildFolder, `${appFileName}.dmg`);
-      artifactsToUpload.push(dmgPath);
+      const finalDmgPath = join(buildFolder, `${appFileName}.dmg`);
+      // NOTE: For some ungodly reason using the bare name in CI can conflict with some mysterious
+      // already mounted volume. I suspect the sanitized appFileName can match your github repo
+      // or some other tool is mounting something somewhere. Either way, as a workaround
+      // while creating the dmg for a stable build we temporarily give it a -stable suffix
+      // to match the behaviour of -canary builds.
+      const dmgCreationPath =
+        buildEnvironment === "stable"
+          ? join(buildFolder, `${appFileName}-stable.dmg`)
+          : finalDmgPath;
+      const baseVolumeName = sanitizeVolumeNameForHdiutil(appFileName);
+      const dmgVolumeName =
+        buildEnvironment === "stable"
+          ? `${baseVolumeName}-stable`
+          : baseVolumeName;
       // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
       // Note: use ULFO (lzfse) for better compatibility with large CEF frameworks and modern macOS
       execSync(
-        `hdiutil create -volname "${sanitizeVolumeNameForHdiutil(appFileName)}" -srcfolder ${escapePathForTerminal(
+        `hdiutil create -volname "${dmgVolumeName}" -srcfolder ${escapePathForTerminal(
           selfExtractingBundle.appBundleFolderPath
-        )} -ov -format ULFO ${escapePathForTerminal(dmgPath)}`
+        )} -ov -format ULFO ${escapePathForTerminal(dmgCreationPath)}`
       );
+      if (buildEnvironment === "stable" && dmgCreationPath !== finalDmgPath) {
+        renameSync(dmgCreationPath, finalDmgPath);
+      }
+      artifactsToUpload.push(finalDmgPath);
 
       if (shouldCodesign) {
-        codesignAppBundle(dmgPath);
+        codesignAppBundle(finalDmgPath);
       } else {
         console.log("skipping codesign");
       }
 
       if (shouldNotarize) {
-        notarizeAndStaple(dmgPath);
+        notarizeAndStaple(finalDmgPath);
       } else {
         console.log("skipping notarization");
       }
