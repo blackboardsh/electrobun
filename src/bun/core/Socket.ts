@@ -85,6 +85,9 @@ const startRPCServer = () => {
           // Anything beyond the backpressure limit will be dropped
           backpressureLimit: payloadLimit * 2,
           open(ws) {
+            if (!ws?.data) {
+              return;
+            }
             const { webviewId } = ws.data;
 
             if (!socketMap[webviewId]) {
