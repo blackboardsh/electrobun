@@ -1136,7 +1136,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         NSURL *newURL = navigationAction.request.URL;
         NSLog(@"DEBUG WKWebView Navigation: webview %u navigating to %@", self.webviewId, newURL.absoluteString);
-        BOOL shouldAllow = self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);        
+        BOOL shouldAllow = 1;//self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);        
         self.zigEventHandler(self.webviewId, "will-navigate", webView.URL.absoluteString.UTF8String);
         decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
     }
