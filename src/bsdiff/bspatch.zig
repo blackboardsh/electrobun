@@ -30,6 +30,7 @@
 // the blocks together, modern suffix sorting, and so on.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const zstd = @cImport({
     @cInclude("zstd.h");
@@ -72,10 +73,10 @@ pub fn main() !void {
     defer allocator.free(patchFileBuff);
     _ = try patchFile.readAll(patchFileBuff);
 
-    // Log SIMD capabilities
+    // Log SIMD capabilities    
     std.debug.print("SIMD Status:\n", .{});
     std.debug.print("  Vector size: {d} bytes\n", .{vectorSize});
-    std.debug.print("  Platform: {s}\n", .{@tagName(std.Target.current.cpu.arch)});
+    std.debug.print("  Platform: {s}\n", .{@tagName(builtin.target.cpu.arch)});
     std.debug.print("  SIMD support: {s}\n", .{if (vectorSize > 1) "enabled" else "disabled (fallback to scalar)"});
     std.debug.print("\n", .{});
 
