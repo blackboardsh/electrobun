@@ -170,10 +170,13 @@ pub fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []c
     // Start progress logging thread
     var progressRunning: bool = true;
     var progressPercent: f32 = 0.0;
-    const progressThread = try std.Thread.spawn(.{}, logProgressPercent, .{ &progressRunning, &progressPercent, "Patching" });
+    var progressBytes: usize = 0;
+    const totalBytes: usize = @intCast(newSize);
+    const progressThread = try std.Thread.spawn(.{}, logProgressBytes, .{ &progressRunning, &progressPercent, &progressBytes, totalBytes, "Patching" });
 
     while (controlpos < controlBlockDecodedLength) {
-        // Update progress percentage for logging thread
+        // Update progress for logging thread
+        progressBytes = newpos;
         progressPercent = (@as(f32, @floatFromInt(newpos)) / @as(f32, @floatFromInt(newSize))) * 100.0;
         // Read control data
         const readDiffBy: usize = @intCast(offtin(controlBlock[controlpos .. controlpos + 8]));
@@ -247,6 +250,7 @@ pub fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []c
     }
 
     // Stop progress logging
+    progressBytes = totalBytes;
     progressPercent = 100.0;
     progressRunning = false;
     progressThread.join();
@@ -276,10 +280,12 @@ fn offtin(buf: []const u8) i64 {
     return y;
 }
 
-fn logProgressPercent(running: *bool, percent: *f32, operation: []const u8) void {
+fn logProgressBytes(running: *bool, percent: *f32, bytes: *usize, total: usize, operation: []const u8) void {
     while (running.*) {
         std.time.sleep(std.time.ns_per_s * 10); // Wait 10s between messages
         if (!running.*) break;
-        std.debug.print("{s}... {d:.1}% complete\n", .{ operation, percent.* });
+        const bytesMB = @as(f64, @floatFromInt(bytes.*)) / (1024.0 * 1024.0);
+        const totalMB = @as(f64, @floatFromInt(total)) / (1024.0 * 1024.0);
+        std.debug.print("{s}... {d:.1}/{d:.1} MB ({d:.1}%)\n", .{ operation, bytesMB, totalMB, percent.* });
     }
 }

@@ -132,7 +132,9 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
     // Start progress logging thread at the very beginning
     var progressRunning: bool = true;
     var progressPercent: f32 = 0.0;
-    const progressThread = try std.Thread.spawn(.{}, logProgressPercent, .{ &progressRunning, &progressPercent, "Diffing" });
+    var progressBytes: usize = 0;
+    const totalBytes = newData.len;
+    const progressThread = try std.Thread.spawn(.{}, logProgressBytes, .{ &progressRunning, &progressPercent, &progressBytes, totalBytes, "Diffing" });
 
     // Allocate memory for the suffix array based on the length of the old data
     const suffixIndexes = try allocator.alloc(i64, oldData.len + 1);
@@ -207,7 +209,8 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
 
     // Begin the main loop for calculating differences
     while (scanIndex < newsize) {
-        // Update progress percentage for logging thread
+        // Update progress for logging thread
+        progressBytes = @intCast(scanIndex);
         progressPercent = (@as(f32, @floatFromInt(scanIndex)) / @as(f32, @floatFromInt(newsize))) * 100.0;
 
         matchScore = 0;
@@ -373,6 +376,7 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
     }
 
     // Stop progress logging
+    progressBytes = newsize;
     progressPercent = 100.0;
     progressRunning = false;
     progressThread.join();
@@ -866,10 +870,12 @@ fn split(suffixIndexes: []i64, inverseSuffix: []i64, start: i64, ln: i64, h: i64
     }
 }
 
-fn logProgressPercent(running: *bool, percent: *f32, operation: []const u8) void {
+fn logProgressBytes(running: *bool, percent: *f32, bytes: *usize, total: usize, operation: []const u8) void {
     while (running.*) {
         std.time.sleep(std.time.ns_per_s * 10); // Wait 10s between messages
         if (!running.*) break;
-        std.debug.print("{s}... {d:.1}% complete\n", .{ operation, percent.* });
+        const bytesMB = @as(f64, @floatFromInt(bytes.*)) / (1024.0 * 1024.0);
+        const totalMB = @as(f64, @floatFromInt(total)) / (1024.0 * 1024.0);
+        std.debug.print("{s}... {d:.1}/{d:.1} MB ({d:.1}%)\n", .{ operation, bytesMB, totalMB, percent.* });
     }
 }
