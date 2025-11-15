@@ -1980,13 +1980,15 @@ exec "\$LAUNCHER_BINARY" "\$@"
         artifactsToUpload.push(patchFilePath);
         const result = Bun.spawnSync(
           [bsdiffpath, prevTarballPath, tarPath, patchFilePath, "--use-zstd"],
-          { cwd: buildFolder }
+          {
+            cwd: buildFolder,
+            stdout: "inherit",
+            stderr: "inherit"
+          }
         );
-        console.log(
-          "bsdiff result: ",
-          result.stdout.toString(),
-          result.stderr.toString()
-        );
+        if (!result.success) {
+          throw new Error(`bsdiff failed with exit code ${result.exitCode}`);
+        }
       }
     } else {
       console.log("prevoius version not found at: ", urlToLatestTarball);
