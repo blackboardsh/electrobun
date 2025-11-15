@@ -1,6 +1,6 @@
 {
   "name": "electrobun",
-  "version": "0.1.13-beta.2",
+  "version": "0.1.13-beta.3",
   "description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
   "license": "MIT",
   "author": "Blackboard Technologies Inc.",
@@ -41,7 +41,7 @@
     "dev:docs": "cd documentation && bun start",
     "build:docs:release": "cd documentation && bun run build",
     "npm:publish": "bun build:release && npm publish",
-    "npm:publish:beta": "bun build:release && npm publish --tag beta",        
+    "npm:publish:beta": "bun build:release && npm publish --tag beta",
     "push:beta": "npm version prerelease --preid=beta && git push origin main --tags",
     "push:patch": "npm version prepatch --preid=beta && git push origin main --tags",
     "push:minor": "npm version preminor --preid=beta && git push origin main --tags",
