@@ -107,6 +107,13 @@ pub fn main() !void {
     defer allocator.free(newFileBuff);
     _ = try newFile.readAll(newFileBuff);
 
+    // Log SIMD capabilities
+    std.debug.print("SIMD Status:\n", .{});
+    std.debug.print("  Vector size: {d} bytes\n", .{vectorSize});
+    std.debug.print("  Platform: {s}\n", .{@tagName(std.Target.current.cpu.arch)});
+    std.debug.print("  SIMD support: {s}\n", .{if (vectorSize > 1) "enabled" else "disabled (fallback to scalar)"});
+    std.debug.print("\n", .{});
+
     const patch = try calculateDifferences(&allocator, oldFileBuff, newFileBuff, useZstd);
 
     // Write the patch file, internal blocks compressed with bzip2
@@ -192,8 +199,19 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
 
     // var controlBlockOffset: usize = 0;
 
+    // Progress tracking
+    var lastProgressTime = std.time.milliTimestamp();
+    const progressIntervalMs: i64 = 30000; // 30 seconds
+
     // Begin the main loop for calculating differences
     while (scanIndex < newsize) {
+        // Report progress every 30 seconds
+        const currentTime = std.time.milliTimestamp();
+        if (currentTime - lastProgressTime >= progressIntervalMs) {
+            const progressPercent = (@as(f64, @floatFromInt(scanIndex)) / @as(f64, @floatFromInt(newsize))) * 100.0;
+            std.debug.print("Progress: {d:.1}% ({d}/{d} bytes)\n", .{ progressPercent, scanIndex, newsize });
+            lastProgressTime = currentTime;
+        }
         matchScore = 0;
         scanIndex += matchLength;
         scoreCounter = scanIndex;

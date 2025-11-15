@@ -72,6 +72,13 @@ pub fn main() !void {
     defer allocator.free(patchFileBuff);
     _ = try patchFile.readAll(patchFileBuff);
 
+    // Log SIMD capabilities
+    std.debug.print("SIMD Status:\n", .{});
+    std.debug.print("  Vector size: {d} bytes\n", .{vectorSize});
+    std.debug.print("  Platform: {s}\n", .{@tagName(std.Target.current.cpu.arch)});
+    std.debug.print("  SIMD support: {s}\n", .{if (vectorSize > 1) "enabled" else "disabled (fallback to scalar)"});
+    std.debug.print("\n", .{});
+
     const newfile = try applyPatch(&allocator, oldFileBuff, patchFileBuff);
 
     const newFile = try std.fs.cwd().createFile(newFilePath, .{});
@@ -159,7 +166,18 @@ pub fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []c
     var oldpos: usize = 0;
     var newpos: usize = 0;
 
+    // Progress tracking
+    var lastProgressTime = std.time.milliTimestamp();
+    const progressIntervalMs: i64 = 30000; // 30 seconds
+
     while (controlpos < controlBlockDecodedLength) {
+        // Report progress every 30 seconds
+        const currentTime = std.time.milliTimestamp();
+        if (currentTime - lastProgressTime >= progressIntervalMs) {
+            const progressPercent = (@as(f64, @floatFromInt(newpos)) / @as(f64, @floatFromInt(newSize))) * 100.0;
+            std.debug.print("Progress: {d:.1}% ({d}/{d} bytes)\n", .{ progressPercent, newpos, newSize });
+            lastProgressTime = currentTime;
+        }
         // Read control data
         const readDiffBy: usize = @intCast(offtin(controlBlock[controlpos .. controlpos + 8]));
         controlpos += 8;
