@@ -167,18 +167,14 @@ pub fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []c
     var oldpos: usize = 0;
     var newpos: usize = 0;
 
-    // Progress tracking
-    var lastProgressTime = std.time.milliTimestamp();
-    const progressIntervalMs: i64 = 30000; // 30 seconds
+    // Start progress logging thread
+    var progressRunning: bool = true;
+    var progressPercent: f32 = 0.0;
+    const progressThread = try std.Thread.spawn(.{}, logProgressPercent, .{ &progressRunning, &progressPercent, "Patching" });
 
     while (controlpos < controlBlockDecodedLength) {
-        // Report progress every 30 seconds
-        const currentTime = std.time.milliTimestamp();
-        if (currentTime - lastProgressTime >= progressIntervalMs) {
-            const progressPercent = (@as(f64, @floatFromInt(newpos)) / @as(f64, @floatFromInt(newSize))) * 100.0;
-            std.debug.print("Progress: {d:.1}% ({d}/{d} bytes)\n", .{ progressPercent, newpos, newSize });
-            lastProgressTime = currentTime;
-        }
+        // Update progress percentage for logging thread
+        progressPercent = (@as(f32, @floatFromInt(newpos)) / @as(f32, @floatFromInt(newSize))) * 100.0;
         // Read control data
         const readDiffBy: usize = @intCast(offtin(controlBlock[controlpos .. controlpos + 8]));
         controlpos += 8;
@@ -249,6 +245,15 @@ pub fn applyPatch(allocator: *std.mem.Allocator, oldfile: []const u8, patch: []c
         oldpos = @intCast(@as(i64, @intCast(oldpos + readDiffBy)) + seekBy);
         newpos += readDiffBy + readExtraBy;
     }
+
+    // Stop progress logging
+    progressPercent = 100.0;
+    progressRunning = false;
+    progressThread.join();
+
+    const newSizeMB = @as(f64, @floatFromInt(newfile.items.len)) / (1024.0 * 1024.0);
+    std.debug.print("Completed - New file: {d:.2} MB\n", .{newSizeMB});
+
     return newfile.items;
 }
 
@@ -269,4 +274,12 @@ fn offtin(buf: []const u8) i64 {
         y = -y;
     }
     return y;
+}
+
+fn logProgressPercent(running: *bool, percent: *f32, operation: []const u8) void {
+    while (running.*) {
+        std.time.sleep(std.time.ns_per_s * 10); // Wait 10s between messages
+        if (!running.*) break;
+        std.debug.print("{s}... {d:.1}% complete\n", .{ operation, percent.* });
+    }
 }

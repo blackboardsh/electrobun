@@ -129,6 +129,11 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
         std.debug.print("Block compression with bzip2 not yet implemented.\n", .{});
     }
 
+    // Start progress logging thread at the very beginning
+    var progressRunning: bool = true;
+    var progressPercent: f32 = 0.0;
+    const progressThread = try std.Thread.spawn(.{}, logProgressPercent, .{ &progressRunning, &progressPercent, "Diffing" });
+
     // Allocate memory for the suffix array based on the length of the old data
     const suffixIndexes = try allocator.alloc(i64, oldData.len + 1);
     defer allocator.free(suffixIndexes);
@@ -142,9 +147,9 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
 
     var streamingBytes = true;
     // compression threads
-    // control block
+    // control block - each triplet is 24 bytes, ensure minimum buffer size
     var controlBlockStreamOffset: usize = 0;
-    var controlBlockStream = try allocator.alloc(u8, newsize);
+    var controlBlockStream = try allocator.alloc(u8, @max(newsize, 64 * 1024));
     var controlBlockInput = zstd.ZSTD_inBuffer{ .src = controlBlockStream.ptr, .size = 0, .pos = 0 };
     const controlBlockCompressed = try allocator.alloc(u8, zstd.ZSTD_compressBound(controlBlockStream.len));
     var controlBlockOutput = zstd.ZSTD_outBuffer{ .dst = controlBlockCompressed.ptr, .size = controlBlockCompressed.len, .pos = 0 };
@@ -200,19 +205,11 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
 
     // var controlBlockOffset: usize = 0;
 
-    // Progress tracking
-    var lastProgressTime = std.time.milliTimestamp();
-    const progressIntervalMs: i64 = 30000; // 30 seconds
-
     // Begin the main loop for calculating differences
     while (scanIndex < newsize) {
-        // Report progress every 30 seconds
-        const currentTime = std.time.milliTimestamp();
-        if (currentTime - lastProgressTime >= progressIntervalMs) {
-            const progressPercent = (@as(f64, @floatFromInt(scanIndex)) / @as(f64, @floatFromInt(newsize))) * 100.0;
-            std.debug.print("Progress: {d:.1}% ({d}/{d} bytes)\n", .{ progressPercent, scanIndex, newsize });
-            lastProgressTime = currentTime;
-        }
+        // Update progress percentage for logging thread
+        progressPercent = (@as(f32, @floatFromInt(scanIndex)) / @as(f32, @floatFromInt(newsize))) * 100.0;
+
         matchScore = 0;
         scanIndex += matchLength;
         scoreCounter = scanIndex;
@@ -375,6 +372,11 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
         }
     }
 
+    // Stop progress logging
+    progressPercent = 100.0;
+    progressRunning = false;
+    progressThread.join();
+
     // Tell the compression threads to wrap up and wait for them
     streamingBytes = false;
     diffBlockThread.join();
@@ -406,6 +408,10 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
 
     @memcpy(patch[patchFileOffset..][0..extraBlockOutput.pos], extraBlockCompressed.ptr);
     patchFileOffset += extraBlockOutput.pos;
+
+    const patchSizeMB = @as(f64, @floatFromInt(patch.len)) / (1024.0 * 1024.0);
+    const compressionRatio = (@as(f64, @floatFromInt(patch.len)) / @as(f64, @floatFromInt(newData.len))) * 100.0;
+    std.debug.print("Completed - Patch: {d:.2} MB ({d:.1}% of new size)\n", .{ patchSizeMB, compressionRatio });
 
     return patch;
 }
@@ -857,5 +863,13 @@ fn split(suffixIndexes: []i64, inverseSuffix: []i64, start: i64, ln: i64, h: i64
 
     if (start + ln > kk) {
         split(suffixIndexes, inverseSuffix, kk, start + ln - kk, h);
+    }
+}
+
+fn logProgressPercent(running: *bool, percent: *f32, operation: []const u8) void {
+    while (running.*) {
+        std.time.sleep(std.time.ns_per_s * 10); // Wait 10s between messages
+        if (!running.*) break;
+        std.debug.print("{s}... {d:.1}% complete\n", .{ operation, percent.* });
     }
 }
