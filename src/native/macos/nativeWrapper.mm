@@ -3015,7 +3015,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     if (isPersistent) {
       std::string partitionName = identifier.substr(8);
       NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
-      NSString* cachePath = [[appSupportPath stringByAppendingPathComponent:@"Electrobun/CEF/Partitions"]
+      // Use app-specific cache directory to match root_cache_path
+      NSString* bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
+      NSString* appName = bundleIdentifier ?: @"Electrobun";
+      NSString* cachePath = [[[appSupportPath stringByAppendingPathComponent:appName]
+                              stringByAppendingPathComponent:@"CEF/Partitions"]
                               stringByAppendingPathComponent:[NSString stringWithUTF8String:partitionName.c_str()]];
       NSFileManager *fileManager = [NSFileManager defaultManager];
       if (![fileManager fileExistsAtPath:cachePath]) {
