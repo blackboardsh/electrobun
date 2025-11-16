@@ -28,7 +28,7 @@ console.log("This will create ~1MB file to ensure bsdiff takes >30 seconds\n");
 // Generate an old file (~1MB)
 // We'll create data that compresses reasonably but has some randomness
 const chunkSize = 1024 * 1024; // 1MB chunks
-const numChunks = 1; // 1MB total
+const numChunks = 2; // 1MB total
 const oldData: Uint8Array[] = [];
 
 for (let i = 0; i < numChunks; i++) {

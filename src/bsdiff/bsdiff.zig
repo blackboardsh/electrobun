@@ -108,11 +108,21 @@ pub fn main() !void {
     defer allocator.free(newFileBuff);
     _ = try newFile.readAll(newFileBuff);
 
-    // Log SIMD capabilities    
-    std.debug.print("SIMD Status:\n", .{});
-    std.debug.print("  Vector size: {d} bytes\n", .{vectorSize});
+    // Log system info and file sizes
+    const cpuCount = try std.Thread.getCpuCount();
+    const oldSizeMB = @as(f64, @floatFromInt(oldFileSize)) / (1024.0 * 1024.0);
+    const newSizeMB = @as(f64, @floatFromInt(newFileSize)) / (1024.0 * 1024.0);
+
+    std.debug.print("System Info:\n", .{});
+    std.debug.print("  CPUs: {d}\n", .{cpuCount});
     std.debug.print("  Platform: {s}\n", .{@tagName(builtin.target.cpu.arch)});
-    std.debug.print("  SIMD support: {s}\n", .{if (vectorSize > 1) "enabled" else "disabled (fallback to scalar)"});
+    std.debug.print("  SIMD vector size: {d} bytes ({s})\n", .{vectorSize, if (vectorSize > 1) "enabled" else "disabled"});
+    std.debug.print("\n", .{});
+    std.debug.print("Input Files:\n", .{});
+    std.debug.print("  File A (old): {d:.1} MB\n", .{oldSizeMB});
+    std.debug.print("  File B (new): {d:.1} MB\n", .{newSizeMB});
+    std.debug.print("\n", .{});
+    std.debug.print("Generating Patch file to turn File A into File B...", .{});
     std.debug.print("\n", .{});
 
     const patch = try calculateDifferences(&allocator, oldFileBuff, newFileBuff, useZstd);
@@ -133,8 +143,9 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
     var progressRunning: bool = true;
     var progressPercent: f32 = 0.0;
     var progressBytes: usize = 0;
+    var progressPhase: []const u8 = "Building suffix array";
     const totalBytes = newData.len;
-    const progressThread = try std.Thread.spawn(.{}, logProgressBytes, .{ &progressRunning, &progressPercent, &progressBytes, totalBytes, "Diffing" });
+    const progressThread = try std.Thread.spawn(.{}, logProgressPhase, .{ &progressRunning, &progressPercent, &progressBytes, totalBytes, &progressPhase });
 
     // Allocate memory for the suffix array based on the length of the old data
     const suffixIndexes = try allocator.alloc(i64, oldData.len + 1);
@@ -142,7 +153,10 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
 
     // Note: This is where a significant amount of time is spent in the diffing process
     // Todo: replace with a more modern suffix sort algorithm like libdivsufsort
-    try qsufsortFast(allocator, suffixIndexes, oldData);
+    try qsufsortFast(allocator, suffixIndexes, oldData, &progressBytes, &progressPercent);
+
+    // Switch to diffing phase
+    progressPhase = "Diffing";
 
     const newsize = newData.len;
     const oldsize = oldData.len;
@@ -413,9 +427,9 @@ pub fn calculateDifferences(allocator: *std.mem.Allocator, oldData: []const u8, 
     @memcpy(patch[patchFileOffset..][0..extraBlockOutput.pos], extraBlockCompressed.ptr);
     patchFileOffset += extraBlockOutput.pos;
 
-    const patchSizeMB = @as(f64, @floatFromInt(patch.len)) / (1024.0 * 1024.0);
+    const patchSizeKB = @as(f64, @floatFromInt(patch.len)) / 1024.0;
     const compressionRatio = (@as(f64, @floatFromInt(patch.len)) / @as(f64, @floatFromInt(newData.len))) * 100.0;
-    std.debug.print("Completed - Patch: {d:.2} MB ({d:.1}% of new size)\n", .{ patchSizeMB, compressionRatio });
+    std.debug.print("Completed - Patch: {d:.2} KB ({d:.1}% of new size)\n", .{ patchSizeKB, compressionRatio });
 
     return patch;
 }
@@ -646,7 +660,7 @@ fn matchlenFast(oldData: []const u8, newData: []const u8) usize {
     return matchLength;
 }
 
-fn qsufsortFast(allocator: *std.mem.Allocator, suffixIndexes: []i64, buf: []const u8) !void {
+fn qsufsortFast(allocator: *std.mem.Allocator, suffixIndexes: []i64, buf: []const u8, progressBytes: *usize, progressPercent: *f32) !void {
     // perf: instead of creating a buckets array of 256 elements, and shifting them over one index back and forth in the alogirthm,
     // we can create a slightly longer array, and just reposition the slice which should be a bit faster
 
@@ -727,6 +741,11 @@ fn qsufsortFast(allocator: *std.mem.Allocator, suffixIndexes: []i64, buf: []cons
                 i += ln;
                 ln = 0;
             }
+
+            // Update progress (based on oldData size since we're sorting oldData's suffixes)
+            // Note: We scale to bufzise instead of bufzisePlusOne for percentage, but use actual i for bytes
+            progressBytes.* = @intCast(i);
+            progressPercent.* = (@as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(bufzise))) * 100.0;
         }
         if (ln != 0) {
             suffixIndexes[@intCast(i - ln)] = -ln;
@@ -870,12 +889,12 @@ fn split(suffixIndexes: []i64, inverseSuffix: []i64, start: i64, ln: i64, h: i64
     }
 }
 
-fn logProgressBytes(running: *bool, percent: *f32, bytes: *usize, total: usize, operation: []const u8) void {
+fn logProgressPhase(running: *bool, percent: *f32, bytes: *usize, total: usize, phase: *[]const u8) void {
     while (running.*) {
         std.time.sleep(std.time.ns_per_s * 10); // Wait 10s between messages
         if (!running.*) break;
         const bytesMB = @as(f64, @floatFromInt(bytes.*)) / (1024.0 * 1024.0);
         const totalMB = @as(f64, @floatFromInt(total)) / (1024.0 * 1024.0);
-        std.debug.print("{s}... {d:.1}/{d:.1} MB ({d:.1}%)\n", .{ operation, bytesMB, totalMB, percent.* });
+        std.debug.print("{s}... {d:.1}/{d:.1} MB ({d:.1}%)\n", .{ phase.*, bytesMB, totalMB, percent.* });
     }
 }
