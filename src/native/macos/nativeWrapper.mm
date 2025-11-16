@@ -2773,9 +2773,16 @@ bool initializeCEF() {
     // settings.log_severity = LOGSEVERITY_VERBOSE;
     
     // Add cache path to prevent warnings and potential issues
-    NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
-    NSString* cachePath = [appSupportPath stringByAppendingPathComponent:@"Electrobun/CEF"];
+     // Use app-specific cache directory to allow multiple Electrobun apps to run simultaneously
+    NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];     
+    NSString* bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
+    NSString* appName = bundleIdentifier ?: @"Electrobun";
+    NSString* cachePath = [appSupportPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@/CEF", appName]];
     CefString(&settings.root_cache_path) = [cachePath UTF8String];
+
+    // Set log file path for debugging
+    NSString* logPath = [cachePath stringByAppendingPathComponent:@"debug.log"];
+    CefString(&settings.log_file) = [logPath UTF8String];    
     
     // Enable network service
     // settings.packaged_services = cef_services_t::CEF_SERVICE_ALL;
