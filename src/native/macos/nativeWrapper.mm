@@ -3194,9 +3194,14 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 }];
             }
             [window makeKeyAndOrderFront:nil];
-            dispatch_async(dispatch_get_main_queue(), ^{               
-                // createCEFBrowser();
-                // NSLog(@"-----------------> DISPATCH 1");
+
+            // Force trigger window update to ensure CEF browser is created immediately
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // Trigger a window update notification to ensure CEF browser creation
+                // This prevents the delay that would otherwise wait for mouse movement
+                [window display];
+                [[NSNotificationCenter defaultCenter] postNotificationName:NSWindowDidUpdateNotification
+                                                                    object:window];
             });
 
     
