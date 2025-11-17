@@ -2212,8 +2212,17 @@ public:
     void OnLoadEnd(CefRefPtr<CefBrowser> browser,
                   CefRefPtr<CefFrame> frame,
                   int httpStatusCode) override {
-        if (frame->IsMain() && webview_event_handler_) {                                   
-            webview_event_handler_(webview_id_,"did-navigate", frame->GetURL().ToString().c_str());            
+        if (frame->IsMain() && webview_event_handler_) {
+            // Create a persistent copy of the URL string using strdup
+            // The callback is invoked asynchronously and the local std::string would be destroyed
+            std::string url = frame->GetURL().ToString();
+            char* urlCopy = strdup(url.c_str());
+            webview_event_handler_(webview_id_, "did-navigate", urlCopy);
+
+            // Free the memory after giving the callback time to execute
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                free((void*)urlCopy);
+            });
         }
     }
 
