@@ -43,6 +43,8 @@
 
 CGFloat OFFSCREEN_OFFSET = -20000;
 BOOL useCEF = false;
+std::string g_electrobunChannel = "";
+std::string g_electrobunIdentifier = "";
 
 static BOOL isMovingWindow = NO;
 static NSWindow *targetWindow = nil;
@@ -2780,13 +2782,28 @@ bool initializeCEF() {
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single threaded message loop on macOS
     // settings.log_severity = LOGSEVERITY_VERBOSE;
+
+    // // Set explicit path to this app's own CEF helper process
+    // // This prevents multiple apps from sharing the same helper
+    // NSString* helperPath = [[NSBundle mainBundle] pathForAuxiliaryExecutable:@"bun Helper.app/Contents/MacOS/bun Helper"];
+    // if (helperPath) {
+    //     CefString(&settings.browser_subprocess_path) = [helperPath UTF8String];
+    //     NSLog(@"[CEF] Using helper at: %@", helperPath);
+    // }
     
     // Add cache path to prevent warnings and potential issues
      // Use app-specific cache directory to allow multiple Electrobun apps to run simultaneously
-    NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];     
-    NSString* bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
-    NSString* appName = bundleIdentifier ?: @"Electrobun";
+    NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+
+    // Build app identifier from version.json (consistent with Windows/Linux)
+    std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+    if (!g_electrobunChannel.empty()) {
+        appIdentifier += "-" + g_electrobunChannel;
+    }
+
+    NSString* appName = [NSString stringWithUTF8String:appIdentifier.c_str()];
     NSString* cachePath = [appSupportPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@/CEF", appName]];
+    NSLog(@"[CEF] Using app: %s", appIdentifier.c_str());
     CefString(&settings.root_cache_path) = [cachePath UTF8String];
 
     // Set log file path for debugging
@@ -3031,12 +3048,17 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     if (isPersistent) {
       std::string partitionName = identifier.substr(8);
       NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
-      // Use app-specific cache directory to match root_cache_path
-      NSString* bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
-      NSString* appName = bundleIdentifier ?: @"Electrobun";
-      NSString* cachePath = [[[appSupportPath stringByAppendingPathComponent:appName]
+
+      // Build app identifier from version.json to match root_cache_path logic
+      std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+      if (!g_electrobunChannel.empty()) {
+          appIdentifier += "-" + g_electrobunChannel;
+      }
+
+      NSString* appName = [NSString stringWithUTF8String:appIdentifier.c_str()];
+      NSString* cachePath = [[[[appSupportPath stringByAppendingPathComponent:appName]
                               stringByAppendingPathComponent:@"CEF/Partitions"]
-                              stringByAppendingPathComponent:[NSString stringWithUTF8String:partitionName.c_str()]];
+                              stringByAppendingPathComponent:[NSString stringWithUTF8String:partitionName.c_str()]] copy];
       NSFileManager *fileManager = [NSFileManager defaultManager];
       if (![fileManager fileExistsAtPath:cachePath]) {
         [fileManager createDirectoryAtPath:cachePath withIntermediateDirectories:YES attributes:nil error:nil];
@@ -3440,7 +3462,15 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
  */
 
 // Note: This is executed from the main bun thread
-extern "C" void runNSApplication() {      
+extern "C" void runNSApplication(const char* identifier, const char* channel) {
+    // Store identifier and channel globally for use in CEF initialization
+    if (identifier && identifier[0]) {
+        g_electrobunIdentifier = std::string(identifier);
+    }
+    if (channel && channel[0]) {
+        g_electrobunChannel = std::string(channel);
+    }
+
     useCEF = isCEFAvailable();    
     
     // Initialize the global AbstractView tracking map

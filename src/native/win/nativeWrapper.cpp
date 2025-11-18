@@ -107,6 +107,10 @@ static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 static GetMimeType g_getMimeType = nullptr;
 static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 
+// Global variables for CEF cache path isolation
+static std::string g_electrobunChannel = "";
+static std::string g_electrobunIdentifier = "";
+
 // Webview content storage (replaces JSCallback approach)
 static std::map<uint32_t, std::string> webviewHTMLContent;
 static std::mutex webviewHTMLMutex;
@@ -3586,7 +3590,25 @@ ELECTROBUN_EXPORT bool initCEF() {
 
     // Set up CEF paths (resources are in ./cef relative to executable)
     std::string cefResourceDir = std::string(exePath) + "\\cef";
-    std::string userDataDir = std::string(exePath) + "\\cef_cache";
+
+    // Build cache path with identifier and channel to allow multiple apps/channels to run simultaneously
+    // Use %LOCALAPPDATA%/identifier-channel/CEF (similar to macOS pattern)
+    std::string userDataDir;
+    char* localAppData = getenv("LOCALAPPDATA");
+    if (localAppData) {
+        std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+        if (!g_electrobunChannel.empty()) {
+            appIdentifier += "-" + g_electrobunChannel;
+        }
+        userDataDir = std::string(localAppData) + "\\" + appIdentifier + "\\CEF";
+        std::cout << "[CEF] Using app: " << appIdentifier << std::endl;
+    } else {
+        // Fallback to executable directory if LOCALAPPDATA not available
+        userDataDir = std::string(exePath) + "\\cef_cache";
+        if (!g_electrobunChannel.empty()) {
+            userDataDir += "_" + g_electrobunChannel;
+        }
+    }
 
     // Create cache directory if it doesn't exist
     CreateDirectoryA(userDataDir.c_str(), NULL);
@@ -4235,7 +4257,15 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
 
 extern "C" {
 
-ELECTROBUN_EXPORT void runNSApplication() {
+ELECTROBUN_EXPORT void runNSApplication(const char* identifier, const char* channel) {
+    // Store identifier and channel globally for use in CEF initialization
+    if (identifier && identifier[0]) {
+        g_electrobunIdentifier = std::string(identifier);
+    }
+    if (channel && channel[0]) {
+        g_electrobunChannel = std::string(channel);
+    }
+
     // Set up console control handler for graceful shutdown on Ctrl+C
     if (!SetConsoleCtrlHandler(ConsoleControlHandler, TRUE)) {
         std::cout << "[CEF] Warning: Failed to set console control handler" << std::endl;

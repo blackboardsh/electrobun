@@ -95,6 +95,10 @@ static ZigStatusItemHandler g_applicationMenuHandler = nullptr;
 static std::map<uint32_t, std::string> webviewHTMLContent;
 static std::mutex webviewHTMLMutex;
 
+// Global variables for CEF cache path isolation
+static std::string g_electrobunChannel = "";
+static std::string g_electrobunIdentifier = "";
+
 // Forward declarations for HTML content management
 extern "C" const char* getWebviewHTMLContent(uint32_t webviewId);
 extern "C" void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
@@ -1658,10 +1662,16 @@ bool initializeCEF() {
     // Set browser subprocess path to the main helper binary
     CefString(&settings.browser_subprocess_path) = execDir + "/bun Helper";
     
-    // Set cache path
+    // Set cache path with identifier and channel to allow multiple apps/channels to run simultaneously
+    // Use ~/.cache/identifier-channel/CEF (similar to macOS pattern)
     char* home = getenv("HOME");
     if (home) {
-        std::string cachePath = std::string(home) + "/.cache/Electrobun/CEF";
+        std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+        if (!g_electrobunChannel.empty()) {
+            appIdentifier += "-" + g_electrobunChannel;
+        }
+        std::string cachePath = std::string(home) + "/.cache/" + appIdentifier + "/CEF";
+        std::cout << "[CEF] Using app: " << appIdentifier << std::endl;
         CefString(&settings.root_cache_path) = cachePath;
     }
     
@@ -5014,7 +5024,15 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
     }
 }
 
-void runNSApplication() {
+void runNSApplication(const char* identifier, const char* channel) {
+    // Store identifier and channel globally for use in CEF initialization
+    if (identifier && identifier[0]) {
+        g_electrobunIdentifier = std::string(identifier);
+    }
+    if (channel && channel[0]) {
+        g_electrobunChannel = std::string(channel);
+    }
+
     // Linux uses runEventLoop instead
     runEventLoop();
 }
