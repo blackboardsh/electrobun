@@ -51,9 +51,9 @@ if (!fs.existsSync(templatesOutputDir)) {
     fs.mkdirSync(templatesOutputDir, { recursive: true });
 }
 
-// Create a minimal embedded.ts if templates directory doesn't exist
-if (!fs.existsSync(templatesDir)) {
-    console.log('No templates directory found, creating empty embedded.ts');
+// Verify that embedded.ts was created by build.ts, or create a minimal one
+if (!fs.existsSync(outputFile)) {
+    console.log('embedded.ts not found after build, creating minimal version...');
     fs.writeFileSync(outputFile, `// Auto-generated template embeddings
 export const templates: Record<string, { name: string; files: Record<string, string> }> = {};
 
