@@ -201,6 +201,7 @@ async function setup() {
     await Promise.all([
         vendorBun(),
         vendorZig(),
+        vendorBsdiff(),
         vendorCEF(),
         vendorWebview2(),
         vendorLinuxDeps(),
@@ -217,13 +218,12 @@ async function build() {
     console.log("Generating template embeddings...");
     await generateTemplateEmbeddings();
     
-    await Promise.all([        
-        buildTRDiff(),
+    await Promise.all([
         buildSelfExtractor(),
         buildLauncher(),
         buildCli(),
         buildMainJs(),
-      
+
     ]);
 }
 
@@ -265,8 +265,9 @@ async function copyToDist() {
         console.log(`Skipping launcher copy on ${OS}`);
     }
     await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
-    await $`cp src/bsdiff/zig-out/bin/bsdiff${binExt} dist/bsdiff${binExt}`;
-    await $`cp src/bsdiff/zig-out/bin/bspatch${binExt} dist/bspatch${binExt}`;
+    // Copy bsdiff/bspatch from vendored zig-bsdiff
+    await $`cp vendors/zig-bsdiff/bsdiff${binExt} dist/bsdiff${binExt}`;
+    await $`cp vendors/zig-bsdiff/bspatch${binExt} dist/bspatch${binExt}`;
     
     // Verify critical files were copied
     if (OS === 'macos') {
@@ -511,6 +512,68 @@ async function vendorZig() {
     } else if (OS === 'linux') {
         const zigArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
         await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-linux-${zigArch}-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-linux-${zigArch}-0.13.0/zig zig-linux-${zigArch}-0.13.0/lib zig-linux-${zigArch}-0.13.0/doc`;
+    }
+}
+
+async function vendorBsdiff() {
+    const BSDIFF_VERSION = '0.1.4';
+    const bsdiffDir = join(process.cwd(), 'vendors', 'zig-bsdiff');
+    const bsdiffBin = join(bsdiffDir, 'bsdiff' + binExt);
+    const bspatchBin = join(bsdiffDir, 'bspatch' + binExt);
+
+    // Check if binaries already exist
+    if (existsSync(bsdiffBin) && existsSync(bspatchBin)) {
+        return;
+    }
+
+    console.log('Downloading zig-bsdiff binaries...');
+
+    // Map OS names to match GitHub release naming
+    const platformMap: Record<string, string> = {
+        'macos': 'darwin',
+        'win': 'win32',
+        'linux': 'linux'
+    };
+    const platform = platformMap[OS];
+    const arch = ARCH;
+
+    const tarballUrl = `https://github.com/blackboardsh/zig-bsdiff/releases/download/v${BSDIFF_VERSION}/zig-bsdiff-${platform}-${arch}.tar.gz`;
+    const tempTarball = join('vendors', `zig-bsdiff-temp.tar.gz`);
+
+    try {
+        // Download tarball
+        await $`mkdir -p vendors/zig-bsdiff`;
+        await $`curl -L "${tarballUrl}" -o "${tempTarball}"`;
+
+        // Extract to vendors/zig-bsdiff
+        if (OS === 'win') {
+            // Use tar on Windows (built-in on Windows 10+)
+            await $`tar -xzf "${tempTarball}" -C vendors/zig-bsdiff`;
+        } else {
+            await $`tar -xzf "${tempTarball}" -C vendors/zig-bsdiff`;
+        }
+
+        // Clean up temp file
+        await $`rm "${tempTarball}"`;
+
+        // Verify binaries were extracted
+        if (!existsSync(bsdiffBin) || !existsSync(bspatchBin)) {
+            throw new Error(`Binaries not found after extraction: ${bsdiffDir}`);
+        }
+
+        // Make executable on Unix systems
+        if (OS !== 'win') {
+            await $`chmod +x ${bsdiffBin} ${bspatchBin}`;
+        }
+
+        console.log('✓ zig-bsdiff binaries downloaded successfully');
+    } catch (error: any) {
+        console.error('Failed to download zig-bsdiff binaries:', error.message);
+        console.error(`URL: ${tarballUrl}`);
+        throw new Error(
+            `Could not download zig-bsdiff binaries. ` +
+            `Please check that the release exists at: https://github.com/blackboardsh/zig-bsdiff/releases/tag/v${BSDIFF_VERSION}`
+        );
     }
 }
 
@@ -869,15 +932,6 @@ async function vendorLinuxDeps() {
             }
         }
         console.log('All required packages are installed');
-    }
-}
-
-async function buildTRDiff() {
-    const zigArgs = OS === 'win' ? ['-Dtarget=x86_64-windows', '-Dcpu=baseline'] : [];
-    if (CHANNEL === 'debug') {
-        await $`cd src/bsdiff && ../../vendors/zig/zig build ${zigArgs}`;
-    } else {
-        await $`cd src/bsdiff && ../../vendors/zig/zig build -Doptimize=ReleaseFast ${zigArgs}`;
     }
 }
 

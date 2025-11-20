@@ -48,8 +48,7 @@
     "push:major": "npm version premajor --preid=beta && git push origin main --tags",
     "push:stable": "npm version patch && git push origin main --tags",
     "build:push:artifacts": "bun scripts/build-and-upload-artifacts.js",
-    "test": "bun build:dev && bun build:cli && cd tests && npm install && bun build:dev && bun start",
-    "test:bsdiff": "cd src/bsdiff && ../../vendors/zig/zig build test && echo \"bsdiff tests passed\""
+    "test": "bun build:dev && bun build:cli && cd tests && npm install && bun build:dev && bun start"
   },
   "devDependencies": {
     "@types/archiver": "^6.0.3",
