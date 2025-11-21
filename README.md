@@ -8,12 +8,10 @@
 
 ## What is Electrobun?
 
-> Electrobun is in the **_very_** early stages. We currently support development on macOS, Windows, and Linux. You can also bundle your app for these platform targets and cross-bundle them from a mac. We're actively working on stabilizing so any bug reports, especially on different platforms are most welcome.
-
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
 Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in <a href="https://ziglang.org/">zig</a>.
 
-Visit <a href="https://www.electrobun.dev/">Electrobun.dev</a> to see api documentation, guides, and more.
+Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
 **Project Goals**
 
@@ -26,6 +24,9 @@ Visit <a href="https://www.electrobun.dev/">Electrobun.dev</a> to see api docume
 ## Architecture
 
 Read about how Electrobun is designed, and why, in our <a href="https://www.electrobun.dev/docs/guides/Architecture/Overview">architecture docs</a>.
+
+## Apps Built with Electrobun
+- [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
 
 ## Roadmap
 
