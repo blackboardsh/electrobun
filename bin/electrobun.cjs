@@ -8,13 +8,12 @@ const tar = require('tar');
 
 // Detect platform and architecture
 function getPlatform() {
-  switch (process.platform) {
-    case 'win32': return 'win';
-    case 'darwin': return 'darwin';
-    case 'linux': return 'linux';
-    default: throw new Error(`Unsupported platform: ${process.platform}`);
-  }
-}
+  const supportedPlatforms = ['win', 'darwin', 'linux']; // Future platform supports should be added here
+  if (!supportedPlatforms.includes(process.platform)) {
+    throw new Error(`Unsupported platform: ${process.platform}`);
+  };
+  return process.platform;
+};
 
 function getArch() {
   switch (process.arch) {
