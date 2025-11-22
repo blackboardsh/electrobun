@@ -16,12 +16,12 @@ function getPlatform() {
 };
 
 function getArch() {
-  switch (process.arch) {
-    case 'arm64': return 'arm64';
-    case 'x64': return 'x64';
-    default: throw new Error(`Unsupported architecture: ${process.arch}`);
-  }
-}
+  const supportedArchs = ['arm64', 'x64'];
+  if (!supportedArchs.includes(process.arch)) {
+    throw new Error(`Unsupported architecture: ${process.arch}`);
+  };
+  return process.arch;
+};
 
 const platform = getPlatform();
 // Always use x64 for Windows since we only build x64 Windows binaries
