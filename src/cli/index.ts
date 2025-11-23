@@ -1621,7 +1621,11 @@ if (commandArg === "init") {
       const result = Bun.spawnSync(['cmd', '/c', 'echo %PROCESSOR_ARCHITECTURE%'], {
         stdout: 'pipe',
       });
-      const systemArch = result.stdout.toString().trim().toUpperCase();
+      const rawOutput = result.stdout.toString();
+      console.log(`DEBUG: Raw output from cmd: "${rawOutput}"`);
+      console.log(`DEBUG: Raw output bytes: ${Array.from(rawOutput).map(c => c.charCodeAt(0)).join(',')}`);
+      const systemArch = rawOutput.trim().toUpperCase();
+      console.log(`DEBUG: Trimmed uppercase: "${systemArch}"`);
       const runtimeArch = systemArch.includes('ARM64') ? 'arm64' : 'x64';
       console.log(`Detected Windows ${runtimeArch} system (${systemArch}), looking for zig-asar binary...`);
 
