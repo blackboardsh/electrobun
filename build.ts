@@ -1034,7 +1034,8 @@ async function buildNative() {
         await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
 
         // Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
-        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
+        const asarLib = `./vendors/zig-asar/asar.lib`;
+        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" "${asarLib}" delayimp.lib /DELAYLOAD:libcef.dll /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
         // Skip package checks in CI or continue anyway if packages are missing
         if (!process.env['GITHUB_ACTIONS']) {
@@ -1118,20 +1119,24 @@ async function buildNative() {
             await $`mkdir -p src/native/build`;
             
             // Build both GTK-only and CEF versions for Linux to allow small bundles
+            const asarLib = join(process.cwd(), 'vendors', 'zig-asar', 'libasar.so');
+
             console.log('Building GTK-only version (libNativeWrapper.so)');
             const linkCmd = [
                 'g++', '-shared', '-o', 'src/native/build/libNativeWrapper.so',
                 'src/native/linux/build/nativeWrapper.o',
+                asarLib,
                 ...pkgConfigLibs.split(/\s+/).filter(f => f),
                 '-ldl', '-lpthread'
             ];
             await $`${linkCmd}`;
-            
+
             if (cefLibsExist) {
                 console.log('Building CEF version (libNativeWrapper_cef.so)');
                 const linkCefCmd = [
                     'g++', '-shared', '-o', 'src/native/build/libNativeWrapper_cef.so',
                     'src/native/linux/build/nativeWrapper.o',
+                    asarLib,
                     ...pkgConfigLibs.split(/\s+/).filter(f => f),
                     '-Wl,--whole-archive', cefWrapperLib, '-Wl,--no-whole-archive',
                     '-Wl,--as-needed', cefLib, '-ldl', '-lpthread',
