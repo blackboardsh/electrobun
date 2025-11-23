@@ -1592,7 +1592,20 @@ if (commandArg === "init") {
 
     const asarPath = join(appBundleFolderResourcesPath, "app.asar");
     const asarUnpackedPath = join(appBundleFolderResourcesPath, "app.asar.unpacked");
-    const zigAsarCli = join(targetPaths.BSPATCH).replace('bspatch', 'zig-asar');
+
+    // Get zig-asar CLI path - on Windows, check if we need the ARM64 version
+    let zigAsarCli = join(targetPaths.BSPATCH).replace('bspatch', 'zig-asar');
+
+    // If the derived path doesn't exist and we're on Windows, try the runtime architecture vendor path
+    if (!existsSync(zigAsarCli) && process.platform === 'win32') {
+      const runtimeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
+      const vendorPath = join(ELECTROBUN_DEP_PATH, 'vendors', 'zig-asar', runtimeArch, 'zig-asar.exe');
+      if (existsSync(vendorPath)) {
+        zigAsarCli = vendorPath;
+        console.log(`Using ${runtimeArch} zig-asar from vendors`);
+      }
+    }
+
     const appDirPath = appBundleAppCodePath;
 
     // Check if app directory exists
@@ -1619,8 +1632,9 @@ if (commandArg === "init") {
       ];
 
       // Add unpack patterns if any
-      if (unpackPatterns.length > 0) {
-        asarArgs.push("--unpack", unpackPatterns.join(","));
+      // Each pattern needs its own --unpack flag
+      for (const pattern of unpackPatterns) {
+        asarArgs.push("--unpack", pattern);
       }
 
       // Run zig-asar pack

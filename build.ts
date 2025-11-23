@@ -273,10 +273,12 @@ async function copyToDist() {
 
     // Copy zig-asar CLI and library from vendored zig-asar
     const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
-    await $`cp vendors/zig-asar/zig-asar${binExt} dist/zig-asar${binExt}`;
+    // On Windows, we have both x64 and arm64 in subdirectories, but we always ship x64 for now
+    const asarArchDir = OS === 'win' ? 'vendors/zig-asar/x64' : 'vendors/zig-asar';
+    await $`cp ${asarArchDir}/zig-asar${binExt} dist/zig-asar${binExt}`;
 
     // Copy library if it exists (Windows .dll may not be in zig-asar release yet)
-    const asarLibPath = `vendors/zig-asar/libasar${libExt}`;
+    const asarLibPath = `${asarArchDir}/libasar${libExt}`;
     if (existsSync(asarLibPath)) {
         await $`cp ${asarLibPath} dist/libasar${libExt}`;
     } else if (OS === 'win') {
@@ -594,31 +596,8 @@ async function vendorBsdiff() {
 }
 
 async function vendorAsar() {
-    const ASAR_VERSION = '0.2.0';
-    const asarDir = join(process.cwd(), 'vendors', 'zig-asar');
-    const asarCli = join(asarDir, 'zig-asar' + binExt);
-
-    // On Windows, we need the .lib file for linking and .dll for runtime
-    // For now, only require .lib since zig-asar releases may not include .dll yet
-    const asarImportLib = OS === 'win' ? join(asarDir, 'libasar.lib') : null;
-    const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
-    const asarLib = join(asarDir, 'libasar' + libExt);
-
-    // Check if binaries already exist
-    const requiredFiles = [asarCli];
-    if (asarImportLib) {
-        // On Windows, only require .lib for building (skip .dll check for now)
-        requiredFiles.push(asarImportLib);
-    } else {
-        // On Unix, require the shared library
-        requiredFiles.push(asarLib);
-    }
-
-    if (requiredFiles.every(f => existsSync(f))) {
-        return;
-    }
-
-    console.log('Downloading zig-asar binaries...');
+    const ASAR_VERSION = '0.2.1';
+    const asarBaseDir = join(process.cwd(), 'vendors', 'zig-asar');
 
     // Map OS names to match GitHub release naming
     const platformMap: Record<string, string> = {
@@ -627,53 +606,72 @@ async function vendorAsar() {
         'linux': 'linux'
     };
     const platform = platformMap[OS];
-    // Windows always uses x64 - ARM64 Windows machines are rare and have built-in x64 emulation
-    const arch = OS === 'win' ? 'x64' : ARCH;
 
-    const tarballUrl = `https://github.com/blackboardsh/zig-asar/releases/download/v${ASAR_VERSION}/zig-asar-${platform}-${arch}.tar.gz`;
-    const tempTarball = join('vendors', `zig-asar-temp.tar.gz`);
+    // On Windows, download both x64 and arm64 versions for development flexibility
+    // (allows testing on Windows ARM machines while shipping x64 binaries)
+    const archsToDownload = OS === 'win' ? ['x64', 'arm64'] : [ARCH];
 
-    try {
-        // Download tarball
-        await $`mkdir -p vendors/zig-asar`;
-        await $`curl -L "${tarballUrl}" -o "${tempTarball}"`;
+    for (const arch of archsToDownload) {
+        const asarDir = OS === 'win' ? join(asarBaseDir, arch) : asarBaseDir;
+        const asarCli = join(asarDir, 'zig-asar' + binExt);
+        const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
+        const asarLib = join(asarDir, 'libasar' + libExt);
+        const asarImportLib = OS === 'win' ? join(asarDir, 'libasar.lib') : null;
 
-        // Extract to vendors/zig-asar
-        if (OS === 'win') {
-            // Use tar on Windows (built-in on Windows 10+)
-            await $`tar -xzf "${tempTarball}" -C vendors/zig-asar`;
+        // Check if binaries already exist for this architecture
+        const requiredFiles = [asarCli];
+        if (asarImportLib) {
+            requiredFiles.push(asarImportLib);
         } else {
-            await $`tar -xzf "${tempTarball}" -C vendors/zig-asar`;
+            requiredFiles.push(asarLib);
         }
 
-        // Clean up temp file
-        await $`rm "${tempTarball}"`;
+        if (requiredFiles.every(f => existsSync(f))) {
+            continue; // Already have this architecture
+        }
 
-        // Verify binaries were extracted
-        const missingFiles = requiredFiles.filter(f => !existsSync(f));
-        if (missingFiles.length > 0) {
-            console.error('Missing files after extraction:', missingFiles);
-            console.error('Files found in', asarDir + ':');
-            if (existsSync(asarDir)) {
-                const files = await $`ls -la "${asarDir}"`.quiet();
-                console.error(files.stdout.toString());
+        console.log(`Downloading zig-asar binaries for ${platform}-${arch}...`);
+
+        const tarballUrl = `https://github.com/blackboardsh/zig-asar/releases/download/v${ASAR_VERSION}/zig-asar-${platform}-${arch}.tar.gz`;
+        const tempTarball = join('vendors', `zig-asar-temp-${arch}.tar.gz`);
+
+        try {
+            // Download tarball
+            await $`mkdir -p "${asarDir}"`;
+            await $`curl -L "${tarballUrl}" -o "${tempTarball}"`;
+
+            // Extract to architecture-specific directory
+            await $`tar -xzf "${tempTarball}" -C "${asarDir}"`;
+
+            // Clean up temp file
+            await $`rm "${tempTarball}"`;
+
+            // Verify binaries were extracted
+            const missingFiles = requiredFiles.filter(f => !existsSync(f));
+            if (missingFiles.length > 0) {
+                console.error('Missing files after extraction:', missingFiles);
+                console.error('Files found in', asarDir + ':');
+                if (existsSync(asarDir)) {
+                    const files = await $`ls -la "${asarDir}"`.quiet();
+                    console.error(files.stdout.toString());
+                }
+                throw new Error(`Required ASAR files not found after extraction`);
             }
-            throw new Error(`Required ASAR files not found after extraction`);
-        }
 
-        // Make executable on Unix systems
-        if (OS !== 'win') {
-            await $`chmod +x ${asarCli}`;
-        }
+            // Make executable on Unix systems
+            if (OS !== 'win') {
+                await $`chmod +x ${asarCli}`;
+            }
 
-        console.log('✓ zig-asar binaries downloaded successfully');
-    } catch (error: any) {
-        console.error('Failed to download zig-asar binaries:', error.message);
-        console.error(`URL: ${tarballUrl}`);
-        throw new Error(
-            `Could not download zig-asar binaries. ` +
-            `Please check that the release exists at: https://github.com/blackboardsh/zig-asar/releases/tag/v${ASAR_VERSION}`
-        );
+            console.log(`✓ zig-asar binaries for ${arch} downloaded successfully`);
+        } catch (error: any) {
+            console.error(`Failed to download zig-asar binaries for ${arch}:`, error.message);
+            console.error(`URL: ${tarballUrl}`);
+            throw new Error(
+                `Could not download zig-asar binaries. ` +
+                `Please check that the release exists at: https://github.com/blackboardsh/zig-asar/releases/tag/v${ASAR_VERSION}`
+            );
+        }
     }
 }
 
@@ -1066,7 +1064,8 @@ async function buildNative() {
 
         // Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
         // Note: zig-asar may have its own allocator, so we link it last and let MSVC CRT take precedence
-        const asarLib = `./vendors/zig-asar/libasar.lib`;
+        // Always use x64 for linking (we ship x64 binaries even on ARM dev machines)
+        const asarLib = `./vendors/zig-asar/x64/libasar.lib`;
         await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib "${asarLib}" /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
         // Skip package checks in CI or continue anyway if packages are missing
