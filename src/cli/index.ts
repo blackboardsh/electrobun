@@ -542,6 +542,8 @@ const defaultConfig = {
     buildFolder: "build",
     artifactFolder: "artifacts",
     targets: undefined, // Will default to current platform if not specified
+    useAsar: false,
+    asarUnpack: undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
     mac: {
       codesign: false,
       notarize: false,
