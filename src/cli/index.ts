@@ -1466,8 +1466,8 @@ if (commandArg === "init") {
 
   if (process.platform === 'win32') {
     // On Windows, use system architecture (not process arch)
-    const systemArch = process.env.PROCESSOR_ARCHITEW6432 || process.env.PROCESSOR_ARCHITECTURE || '';
-    const runtimeArch = systemArch.toLowerCase().includes('arm64') ? 'arm64' : 'x64';
+    const systemArch = (process.env.PROCESSOR_ARCHITEW6432 || process.env.PROCESSOR_ARCHITECTURE || '').toUpperCase();
+    const runtimeArch = systemArch.includes('ARM64') ? 'arm64' : 'x64';
     asarLibSource = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', runtimeArch, 'libasar.dll');
 
     // Fallback to vendors for development
@@ -1616,9 +1616,9 @@ if (commandArg === "init") {
       // Get actual system architecture, not the Bun runtime architecture
       // PROCESSOR_ARCHITEW6432 is set when running 32/64-bit process on 64-bit/ARM64 Windows
       // PROCESSOR_ARCHITECTURE shows the current process architecture
-      const systemArch = process.env.PROCESSOR_ARCHITEW6432 || process.env.PROCESSOR_ARCHITECTURE || '';
-      const runtimeArch = systemArch.toLowerCase().includes('arm64') ? 'arm64' : 'x64';
-      console.log(`Detected Windows ${runtimeArch} system, looking for zig-asar binary...`);
+      const systemArch = (process.env.PROCESSOR_ARCHITEW6432 || process.env.PROCESSOR_ARCHITECTURE || '').toUpperCase();
+      const runtimeArch = systemArch.includes('ARM64') ? 'arm64' : 'x64';
+      console.log(`Detected Windows ${runtimeArch} system (${systemArch}), looking for zig-asar binary...`);
 
       // Try dist folder first (shipped binaries)
       zigAsarCli = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', runtimeArch, 'zig-asar.exe');
