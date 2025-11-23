@@ -1465,8 +1465,11 @@ if (commandArg === "init") {
   let asarLibSource: string;
 
   if (process.platform === 'win32') {
-    // On Windows, use system architecture (not process arch)
-    const systemArch = (process.env.PROCESSOR_ARCHITEW6432 || process.env.PROCESSOR_ARCHITECTURE || '').toUpperCase();
+    // On Windows, get real system architecture by running a native command
+    const result = Bun.spawnSync(['cmd', '/c', 'echo %PROCESSOR_ARCHITECTURE%'], {
+      stdout: 'pipe',
+    });
+    const systemArch = result.stdout.toString().trim().toUpperCase();
     const runtimeArch = systemArch.includes('ARM64') ? 'arm64' : 'x64';
     asarLibSource = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', runtimeArch, 'libasar.dll');
 
@@ -1613,14 +1616,12 @@ if (commandArg === "init") {
     // Get zig-asar CLI path - on Windows, use system architecture (not process arch)
     let zigAsarCli: string;
     if (process.platform === 'win32') {
-      // Debug: log what we're seeing
-      console.log(`PROCESSOR_ARCHITECTURE: ${process.env.PROCESSOR_ARCHITECTURE}`);
-      console.log(`PROCESSOR_ARCHITEW6432: ${process.env.PROCESSOR_ARCHITEW6432}`);
-
-      // Get actual system architecture, not the Bun runtime architecture
-      // PROCESSOR_ARCHITEW6432 is set when running 32/64-bit process on 64-bit/ARM64 Windows
-      // PROCESSOR_ARCHITECTURE shows the current process architecture
-      const systemArch = (process.env.PROCESSOR_ARCHITEW6432 || process.env.PROCESSOR_ARCHITECTURE || '').toUpperCase();
+      // Get real system architecture by running a native command
+      // When Bun x64 runs under emulation, process.env lies, so we need to query the system directly
+      const result = Bun.spawnSync(['cmd', '/c', 'echo %PROCESSOR_ARCHITECTURE%'], {
+        stdout: 'pipe',
+      });
+      const systemArch = result.stdout.toString().trim().toUpperCase();
       const runtimeArch = systemArch.includes('ARM64') ? 'arm64' : 'x64';
       console.log(`Detected Windows ${runtimeArch} system (${systemArch}), looking for zig-asar binary...`);
 
