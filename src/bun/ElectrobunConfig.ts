@@ -89,6 +89,20 @@ export interface ElectrobunConfig {
     targets?: string;
 
     /**
+     * Enable ASAR archive packaging for bundled assets
+     * When enabled, all files in the Resources folder will be packed into an app.asar archive
+     * @default false
+     */
+    useAsar?: boolean;
+
+    /**
+     * Glob patterns for files to exclude from ASAR packing (extract to app.asar.unpacked)
+     * Useful for native modules or executables that need to be accessible as regular files
+     * @default ["*.node", "*.dll", "*.dylib", "*.so"]
+     */
+    asarUnpack?: string[];
+
+    /**
      * macOS-specific build configuration
      */
     mac?: {

@@ -5,10 +5,11 @@ export default {
         version: "0.0.1",
     },
     build: {
+        useAsar: true,
         bun: {
             entrypoint: "src/bun/index.ts",
             external: [],
-        },       
+        },
         views: {
             mainview: {
                 entrypoint: "src/mainview/index.ts",

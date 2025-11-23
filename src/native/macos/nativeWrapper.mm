@@ -41,6 +41,19 @@
  * =============================================================================
  */
 
+// ASAR C FFI declarations
+extern "C" {
+    typedef struct AsarArchive AsarArchive;
+
+    AsarArchive* asar_open(const char* path);
+    void asar_close(AsarArchive* archive);
+    const uint8_t* asar_read_file(AsarArchive* archive, const char* path, size_t* size_out);
+    void asar_free_buffer(const uint8_t* buffer, size_t size);
+}
+
+// Global ASAR archive handle (lazy-loaded)
+static AsarArchive* g_asarArchive = nullptr;
+
 CGFloat OFFSCREEN_OFFSET = -20000;
 BOOL useCEF = false;
 std::string g_electrobunChannel = "";
@@ -467,28 +480,65 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
 
 NSData* readViewsFile(const char* viewsUrl) {
     if (!viewsUrl) return nil;
-    
+
     NSString *urlString = [NSString stringWithUTF8String:viewsUrl];
-    
+
     // Check if it's a views:// URL
     if (![urlString hasPrefix:@"views://"]) {
         return nil;
     }
-    
+
     // Remove the "views://" prefix
-    NSString *relativePath = [urlString substringFromIndex:8]; // "views://" is 8 chars    
-    
-    // Get the views directory
+    NSString *relativePath = [urlString substringFromIndex:8]; // "views://" is 8 chars
+
+    // Get the current working directory and Resources path
     NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];
-    NSString *viewsDir = [cwd stringByAppendingPathComponent:@"../Resources/app/views"];
-    NSString *filePath = [viewsDir stringByAppendingPathComponent:relativePath];    
-    
-    NSLog(@"DEBUG readViewsFile: URL=%@, relativePath=%@", urlString, relativePath);
-    NSLog(@"DEBUG readViewsFile: cwd=%@", cwd);
-    NSLog(@"DEBUG readViewsFile: viewsDir=%@", viewsDir);
-    NSLog(@"DEBUG readViewsFile: filePath=%@", filePath);
+    NSString *resourcesDir = [cwd stringByAppendingPathComponent:@"../Resources"];
+    NSString *asarPath = [resourcesDir stringByAppendingPathComponent:@"app.asar"];
+
+    // Check if ASAR archive exists
+    if ([[NSFileManager defaultManager] fileExistsAtPath:asarPath]) {
+        // Lazy-load ASAR archive on first use
+        if (!g_asarArchive) {
+            const char* asarPathCStr = [asarPath UTF8String];
+            g_asarArchive = asar_open(asarPathCStr);
+            if (g_asarArchive) {
+                NSLog(@"DEBUG readViewsFile: Opened ASAR archive at %@", asarPath);
+            } else {
+                NSLog(@"ERROR readViewsFile: Failed to open ASAR archive at %@", asarPath);
+                // Fall through to flat file reading
+            }
+        }
+
+        // If ASAR archive is loaded, try to read from it
+        if (g_asarArchive) {
+            // The ASAR contains the views directory at the root, so just use relativePath directly
+            const char* asarFilePathCStr = [relativePath UTF8String];
+
+            size_t fileSize = 0;
+            const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePathCStr, &fileSize);
+
+            if (fileData && fileSize > 0) {
+                NSLog(@"DEBUG readViewsFile: Read %zu bytes from ASAR for %@", fileSize, relativePath);
+                // Create NSData that copies the buffer (we'll free it after)
+                NSData *data = [NSData dataWithBytes:fileData length:fileSize];
+                // Free the ASAR buffer
+                asar_free_buffer(fileData, fileSize);
+                return data;
+            } else {
+                NSLog(@"DEBUG readViewsFile: File not found in ASAR: %@", relativePath);
+                // Fall through to flat file reading
+            }
+        }
+    }
+
+    // Fallback: Read from flat file system (for non-ASAR builds or missing files)
+    NSString *viewsDir = [resourcesDir stringByAppendingPathComponent:@"app/views"];
+    NSString *filePath = [viewsDir stringByAppendingPathComponent:relativePath];
+
+    NSLog(@"DEBUG readViewsFile: Attempting flat file read: %@", filePath);
     NSLog(@"DEBUG readViewsFile: file exists=%@", [[NSFileManager defaultManager] fileExistsAtPath:filePath] ? @"YES" : @"NO");
-    
+
     // Read the file
     return [NSData dataWithContentsOfFile:filePath];
 }
