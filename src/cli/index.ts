@@ -1613,13 +1613,18 @@ if (commandArg === "init") {
     let zigAsarCli: string;
     if (process.platform === 'win32') {
       const runtimeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
+      console.log(`Detected Windows ${runtimeArch} runtime, looking for zig-asar binary...`);
+
       // Try dist folder first (shipped binaries)
       zigAsarCli = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', runtimeArch, 'zig-asar.exe');
 
       // Fallback to vendors for development
       if (!existsSync(zigAsarCli)) {
+        console.log(`Not found in dist, trying vendors...`);
         zigAsarCli = join(ELECTROBUN_DEP_PATH, 'vendors', 'zig-asar', runtimeArch, 'zig-asar.exe');
       }
+
+      console.log(`Using zig-asar from: ${zigAsarCli}`);
     } else {
       zigAsarCli = join(targetPaths.BSPATCH).replace('bspatch', 'zig-asar');
     }
