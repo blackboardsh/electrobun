@@ -1616,18 +1616,45 @@ if (commandArg === "init") {
     // Get zig-asar CLI path - on Windows, use system architecture (not process arch)
     let zigAsarCli: string;
     if (process.platform === 'win32') {
-      // Get real system architecture by running a native command
-      // When Bun x64 runs under emulation, process.env lies, so we need to query the system directly
-      const result = Bun.spawnSync(['cmd', '/c', 'echo %PROCESSOR_ARCHITECTURE%'], {
+      // When x64 process runs under ARM64 emulation, env vars lie, so we need to detect ARM64 differently
+      // Try running wmic to get the real processor architecture
+      const result = Bun.spawnSync(['wmic', 'cpu', 'get', 'architecture'], {
         stdout: 'pipe',
       });
-      const rawOutput = result.stdout.toString();
-      console.log(`DEBUG: Raw output from cmd: "${rawOutput}"`);
-      console.log(`DEBUG: Raw output bytes: ${Array.from(rawOutput).map(c => c.charCodeAt(0)).join(',')}`);
-      const systemArch = rawOutput.trim().toUpperCase();
-      console.log(`DEBUG: Trimmed uppercase: "${systemArch}"`);
-      const runtimeArch = systemArch.includes('ARM64') ? 'arm64' : 'x64';
-      console.log(`Detected Windows ${runtimeArch} system (${systemArch}), looking for zig-asar binary...`);
+      const wmicOutput = result.stdout.toString();
+      // ARM64 = 12, x64 = 9, x86 = 0
+      // But let's also try testing both binaries as a fallback
+      let runtimeArch: 'arm64' | 'x64' = 'x64';
+
+      if (wmicOutput.includes('12')) {
+        runtimeArch = 'arm64';
+        console.log(`Detected Windows ARM64 via wmic`);
+      } else {
+        // Fallback: try to run the arm64 binary and see if it works
+        const arm64TestPath = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', 'arm64', 'zig-asar.exe');
+        const x64TestPath = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', 'x64', 'zig-asar.exe');
+
+        // Try vendors if dist doesn't exist
+        const arm64VendorPath = join(ELECTROBUN_DEP_PATH, 'vendors', 'zig-asar', 'arm64', 'zig-asar.exe');
+        const x64VendorPath = join(ELECTROBUN_DEP_PATH, 'vendors', 'zig-asar', 'x64', 'zig-asar.exe');
+
+        const arm64Binary = existsSync(arm64TestPath) ? arm64TestPath : arm64VendorPath;
+
+        if (existsSync(arm64Binary)) {
+          // Try running the ARM64 binary with no args - if it works, we're on ARM64
+          const testResult = Bun.spawnSync([arm64Binary], { stdout: 'pipe', stderr: 'pipe' });
+          if (testResult.exitCode !== 29 && testResult.exitCode !== 1) {
+            // Exit code 29 means "can't run on this PC", exit code 1 means it ran but had an error (which is fine for our test)
+            // If we get anything else, the binary ran successfully
+            runtimeArch = 'arm64';
+            console.log(`Detected Windows ARM64 via binary test`);
+          } else {
+            console.log(`Detected Windows x64 (ARM64 binary test failed with code ${testResult.exitCode})`);
+          }
+        } else {
+          console.log(`Detected Windows x64 (no ARM64 binary to test)`);
+        }
+      }
 
       // Try dist folder first (shipped binaries)
       zigAsarCli = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', runtimeArch, 'zig-asar.exe');
