@@ -115,10 +115,16 @@ public:
                 if (std::holds_alternative<AsarFileEntry>(it->second)) {
                     const auto& entry = std::get<AsarFileEntry>(it->second);
 
-                    // Seek and read file data
-                    file.seekg(dataOffset + entry.offset);
+                    // Clear any error flags and seek to file data
+                    file.clear();
+                    file.seekg(dataOffset + entry.offset, std::ios::beg);
+
+                    if (!file.good()) return {};
+
                     std::vector<uint8_t> buffer(entry.size);
                     file.read(reinterpret_cast<char*>(buffer.data()), entry.size);
+
+                    if (!file.good()) return {};
 
                     return buffer;
                 }
