@@ -275,18 +275,16 @@ async function copyToDist() {
     const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
 
     if (OS === 'win') {
-        // On Windows, copy both x64 and arm64 versions to dist for runtime flexibility
+        // On Windows, copy both x64 and arm64 CLI versions (DLL not needed - ASAR reading is in C++)
         await $`mkdir -p dist/zig-asar/x64 dist/zig-asar/arm64`;
 
-        // Copy x64 version
+        // Copy x64 version (CLI only)
         await $`cp vendors/zig-asar/x64/zig-asar.exe dist/zig-asar/x64/zig-asar.exe`;
-        await $`cp vendors/zig-asar/x64/libasar.dll dist/zig-asar/x64/libasar.dll`;
 
-        // Copy arm64 version
+        // Copy arm64 version (CLI only)
         await $`cp vendors/zig-asar/arm64/zig-asar.exe dist/zig-asar/arm64/zig-asar.exe`;
-        await $`cp vendors/zig-asar/arm64/libasar.dll dist/zig-asar/arm64/libasar.dll`;
 
-        console.log('✓ Copied both x64 and arm64 zig-asar to dist');
+        console.log('✓ Copied both x64 and arm64 zig-asar CLI to dist');
     } else {
         // Unix: single architecture
         await $`cp vendors/zig-asar/zig-asar${binExt} dist/zig-asar${binExt}`;
@@ -627,13 +625,12 @@ async function vendorAsar() {
         const asarCli = join(asarDir, 'zig-asar' + binExt);
         const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
         const asarLib = join(asarDir, 'libasar' + libExt);
-        const asarImportLib = OS === 'win' ? join(asarDir, 'libasar.lib') : null;
 
         // Check if binaries already exist for this architecture
+        // Note: On Windows, we only need the CLI (ASAR reading is built into native wrapper in C++)
         const requiredFiles = [asarCli];
-        if (asarImportLib) {
-            requiredFiles.push(asarImportLib);
-        } else {
+        if (OS !== 'win') {
+            // macOS/Linux need the library for FFI
             requiredFiles.push(asarLib);
         }
 
@@ -1074,10 +1071,8 @@ async function buildNative() {
         await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /MT /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
 
         // Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
-        // Note: zig-asar may have its own allocator, so we link it last and let MSVC CRT take precedence
-        // Always use x64 for linking (we ship x64 binaries even on ARM dev machines)
-        const asarLib = `./vendors/zig-asar/x64/libasar.lib`;
-        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib "${asarLib}" /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
+        // Note: ASAR reading is now implemented directly in C++ (no external library needed)
+        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
         // Skip package checks in CI or continue anyway if packages are missing
         if (!process.env['GITHUB_ACTIONS']) {

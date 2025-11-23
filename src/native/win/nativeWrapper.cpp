@@ -33,15 +33,228 @@
 #include <direct.h>    // For _getcwd
 #include <tlhelp32.h>  // For process enumeration
 
-// ASAR C FFI declarations
-extern "C" {
-    typedef struct AsarArchive AsarArchive;
+// Simple ASAR reader implementation for Windows (no external dependency)
+#include <fstream>
+#include <map>
+#include <variant>
+#include <string>
+#include <sstream>
+#include <algorithm>
 
-    AsarArchive* asar_open(const char* path);
-    void asar_close(AsarArchive* archive);
-    const uint8_t* asar_read_file(AsarArchive* archive, const char* path, size_t* size_out);
-    void asar_free_buffer(const uint8_t* buffer, size_t size);
-}
+// Minimal JSON parser for ASAR headers
+struct AsarFileEntry {
+    size_t offset;
+    size_t size;
+};
+
+struct AsarDirEntry {
+    std::map<std::string, std::variant<AsarFileEntry, AsarDirEntry>> files;
+};
+
+class AsarArchive {
+public:
+    std::ifstream file;
+    AsarDirEntry root;
+    size_t dataOffset;
+
+    static AsarArchive* open(const std::string& path) {
+        auto archive = new AsarArchive();
+        archive->file.open(path, std::ios::binary);
+        if (!archive->file.is_open()) {
+            delete archive;
+            return nullptr;
+        }
+
+        // Read header size (8 bytes, little-endian)
+        uint64_t headerSize;
+        archive->file.read(reinterpret_cast<char*>(&headerSize), 8);
+        if (!archive->file || headerSize == 0 || headerSize > 100 * 1024 * 1024) {
+            delete archive;
+            return nullptr;
+        }
+
+        // Read JSON header
+        std::string headerJson(headerSize, '\0');
+        archive->file.read(&headerJson[0], headerSize);
+        if (!archive->file) {
+            delete archive;
+            return nullptr;
+        }
+
+        // Parse JSON header (simple parser for ASAR format)
+        if (!archive->parseHeader(headerJson)) {
+            delete archive;
+            return nullptr;
+        }
+
+        // Calculate data offset with 4-byte alignment padding
+        size_t headerEnd = 8 + headerSize;
+        size_t padding = (headerEnd % 4 == 0) ? 0 : (4 - headerEnd % 4);
+        archive->dataOffset = headerEnd + padding;
+
+        return archive;
+    }
+
+    std::vector<uint8_t> readFile(const std::string& path) {
+        // Split path by '/'
+        std::vector<std::string> segments;
+        std::string segment;
+        std::istringstream pathStream(path);
+        while (std::getline(pathStream, segment, '/')) {
+            if (!segment.empty()) segments.push_back(segment);
+        }
+
+        // Traverse directory structure
+        std::map<std::string, std::variant<AsarFileEntry, AsarDirEntry>>* current = &root.files;
+        for (size_t i = 0; i < segments.size(); i++) {
+            auto it = current->find(segments[i]);
+            if (it == current->end()) return {};
+
+            if (i == segments.size() - 1) {
+                // Last segment should be a file
+                if (std::holds_alternative<AsarFileEntry>(it->second)) {
+                    const auto& entry = std::get<AsarFileEntry>(it->second);
+
+                    // Seek and read file data
+                    file.seekg(dataOffset + entry.offset);
+                    std::vector<uint8_t> buffer(entry.size);
+                    file.read(reinterpret_cast<char*>(buffer.data()), entry.size);
+
+                    return buffer;
+                }
+                return {};
+            } else {
+                // Intermediate segment should be a directory
+                if (std::holds_alternative<AsarDirEntry>(it->second)) {
+                    current = &std::get<AsarDirEntry>(it->second).files;
+                } else {
+                    return {};
+                }
+            }
+        }
+
+        return {};
+    }
+
+private:
+    // Simple JSON parser specifically for ASAR header format
+    bool parseHeader(const std::string& json) {
+        size_t pos = json.find("\"files\"");
+        if (pos == std::string::npos) return false;
+
+        pos = json.find('{', pos);
+        if (pos == std::string::npos) return false;
+
+        return parseObject(json, pos, root.files);
+    }
+
+    bool parseObject(const std::string& json, size_t& pos, std::map<std::string, std::variant<AsarFileEntry, AsarDirEntry>>& map) {
+        pos++; // skip opening {
+
+        while (pos < json.size()) {
+            // Skip whitespace
+            while (pos < json.size() && std::isspace(json[pos])) pos++;
+
+            if (pos >= json.size()) return false;
+            if (json[pos] == '}') {
+                pos++;
+                return true;
+            }
+            if (json[pos] == ',') {
+                pos++;
+                continue;
+            }
+
+            // Parse key
+            if (json[pos] != '"') return false;
+            std::string key = parseString(json, pos);
+
+            // Skip whitespace and colon
+            while (pos < json.size() && (std::isspace(json[pos]) || json[pos] == ':')) pos++;
+
+            // Parse value object
+            if (json[pos] != '{') return false;
+            size_t valueStart = pos;
+
+            // Check if it's a file or directory by looking for "size" or "files"
+            size_t checkPos = pos;
+            int braceCount = 0;
+            bool hasSize = false;
+            bool hasFiles = false;
+
+            while (checkPos < json.size()) {
+                if (json[checkPos] == '{') braceCount++;
+                if (json[checkPos] == '}') {
+                    braceCount--;
+                    if (braceCount == 0) break;
+                }
+                if (json.substr(checkPos, 6) == "\"size\"") hasSize = true;
+                if (json.substr(checkPos, 7) == "\"files\"") hasFiles = true;
+                checkPos++;
+            }
+
+            if (hasFiles) {
+                // Directory
+                AsarDirEntry dir;
+                size_t filesPos = json.find("\"files\"", pos);
+                filesPos = json.find('{', filesPos);
+                if (!parseObject(json, filesPos, dir.files)) return false;
+                map[key] = dir;
+
+                // Skip to end of this object
+                braceCount = 1;
+                pos++;
+                while (pos < json.size() && braceCount > 0) {
+                    if (json[pos] == '{') braceCount++;
+                    if (json[pos] == '}') braceCount--;
+                    pos++;
+                }
+            } else if (hasSize) {
+                // File
+                AsarFileEntry entry;
+
+                // Parse size
+                size_t sizePos = json.find("\"size\"", pos);
+                sizePos = json.find(':', sizePos) + 1;
+                while (std::isspace(json[sizePos])) sizePos++;
+                entry.size = std::stoul(json.substr(sizePos));
+
+                // Parse offset
+                size_t offsetPos = json.find("\"offset\"", pos);
+                offsetPos = json.find('\"', offsetPos + 8) + 1;
+                entry.offset = std::stoul(json.substr(offsetPos));
+
+                map[key] = entry;
+
+                // Skip to end of this object
+                braceCount = 1;
+                pos++;
+                while (pos < json.size() && braceCount > 0) {
+                    if (json[pos] == '{') braceCount++;
+                    if (json[pos] == '}') braceCount--;
+                    pos++;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    std::string parseString(const std::string& json, size_t& pos) {
+        pos++; // skip opening quote
+        std::string result;
+        while (pos < json.size() && json[pos] != '"') {
+            if (json[pos] == '\\') {
+                pos++;
+                if (pos < json.size()) result += json[pos++];
+            } else {
+                result += json[pos++];
+            }
+        }
+        pos++; // skip closing quote
+        return result;
+    }
+};
 
 // Global ASAR archive handle (lazy-loaded)
 static AsarArchive* g_asarArchive = nullptr;
@@ -5926,7 +6139,7 @@ std::string loadViewsFile(const std::string& path) {
 
         // Lazy-load ASAR archive on first use
         if (!g_asarArchive) {
-            g_asarArchive = asar_open(asarPath.c_str());
+            g_asarArchive = AsarArchive::open(asarPath);
             if (g_asarArchive) {
                 ::log("DEBUG loadViewsFile: Opened ASAR archive at " + asarPath);
             } else {
@@ -5940,16 +6153,11 @@ std::string loadViewsFile(const std::string& path) {
             // The ASAR contains the entire app directory, so prepend "views/" to the path
             std::string asarFilePath = "views/" + path;
 
-            size_t fileSize = 0;
-            const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &fileSize);
+            std::vector<uint8_t> fileData = g_asarArchive->readFile(asarFilePath);
 
-            if (fileData && fileSize > 0) {
-                ::log("DEBUG loadViewsFile: Read " + std::to_string(fileSize) + " bytes from ASAR for " + path);
-                // Create std::string that copies the buffer (we'll free it after)
-                std::string content(reinterpret_cast<const char*>(fileData), fileSize);
-                // Free the ASAR buffer
-                asar_free_buffer(fileData, fileSize);
-                return content;
+            if (!fileData.empty()) {
+                ::log("DEBUG loadViewsFile: Read " + std::to_string(fileData.size()) + " bytes from ASAR for " + path);
+                return std::string(fileData.begin(), fileData.end());
             } else {
                 ::log("DEBUG loadViewsFile: File not found in ASAR: " + path);
                 // Fall through to flat file reading
