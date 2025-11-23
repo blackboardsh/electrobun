@@ -275,16 +275,19 @@ async function copyToDist() {
     const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
 
     if (OS === 'win') {
-        // On Windows, copy both x64 and arm64 CLI versions (DLL not needed - ASAR reading is in C++)
+        // On Windows, copy both x64 and arm64 versions
+        // Note: DLL is needed by launcher to extract bun/index.js from ASAR
         await $`mkdir -p dist/zig-asar/x64 dist/zig-asar/arm64`;
 
-        // Copy x64 version (CLI only)
+        // Copy x64 version
         await $`cp vendors/zig-asar/x64/zig-asar.exe dist/zig-asar/x64/zig-asar.exe`;
+        await $`cp vendors/zig-asar/x64/libasar.dll dist/zig-asar/x64/libasar.dll`;
 
-        // Copy arm64 version (CLI only)
+        // Copy arm64 version
         await $`cp vendors/zig-asar/arm64/zig-asar.exe dist/zig-asar/arm64/zig-asar.exe`;
+        await $`cp vendors/zig-asar/arm64/libasar.dll dist/zig-asar/arm64/libasar.dll`;
 
-        console.log('✓ Copied both x64 and arm64 zig-asar CLI to dist');
+        console.log('✓ Copied both x64 and arm64 zig-asar to dist');
     } else {
         // Unix: single architecture
         await $`cp vendors/zig-asar/zig-asar${binExt} dist/zig-asar${binExt}`;
@@ -627,12 +630,11 @@ async function vendorAsar() {
         const asarLib = join(asarDir, 'libasar' + libExt);
 
         // Check if binaries already exist for this architecture
-        // Note: On Windows, we only need the CLI (ASAR reading is built into native wrapper in C++)
-        const requiredFiles = [asarCli];
-        if (OS !== 'win') {
-            // macOS/Linux need the library for FFI
-            requiredFiles.push(asarLib);
-        }
+        // Note: All platforms need both CLI and library:
+        // - CLI: Used at build time to pack ASARs
+        // - Library: Used by launcher at runtime to extract bun/index.js from ASAR
+        //   (Native wrapper on Windows has built-in C++ reader for views:// files)
+        const requiredFiles = [asarCli, asarLib];
 
         if (requiredFiles.every(f => existsSync(f))) {
             continue; // Already have this architecture
