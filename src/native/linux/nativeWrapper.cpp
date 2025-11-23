@@ -28,6 +28,20 @@
 #include <sys/stat.h>
 #include <mutex>
 #include <condition_variable>
+#include <fstream>
+
+// ASAR C FFI declarations
+extern "C" {
+    typedef struct AsarArchive AsarArchive;
+
+    AsarArchive* asar_open(const char* path);
+    void asar_close(AsarArchive* archive);
+    const uint8_t* asar_read_file(AsarArchive* archive, const char* path, size_t* size_out);
+    void asar_free_buffer(const uint8_t* buffer, size_t size);
+}
+
+// Global ASAR archive handle (lazy-loaded)
+static AsarArchive* g_asarArchive = nullptr;
 
 // CEF includes - always include them even if it marginally increases binary size
 // we want a few binaries that will work whenever an electrobun developer
@@ -692,17 +706,78 @@ public:
             }
         }
         
-        // Build file path: ../Resources/app/views/[fullPath] relative to current directory (bin)
+        // Build paths relative to current directory (bin)
         char* cwd = g_get_current_dir();
-        gchar* viewsDir = g_build_filename(cwd, "..", "Resources", "app", "views", nullptr);
+        gchar* resourcesDir = g_build_filename(cwd, "..", "Resources", nullptr);
+        gchar* asarPath = g_build_filename(resourcesDir, "app.asar", nullptr);
+
+        // Check if ASAR archive exists
+        if (g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
+            // Lazy-load ASAR archive on first use
+            if (!g_asarArchive) {
+                g_asarArchive = asar_open(asarPath);
+                if (g_asarArchive) {
+                    printf("DEBUG CEF loadViewsFile: Opened ASAR archive at %s\n", asarPath);
+                } else {
+                    printf("ERROR CEF loadViewsFile: Failed to open ASAR archive at %s\n", asarPath);
+                    // Fall through to flat file reading
+                }
+            }
+
+            // If ASAR archive is loaded, try to read from it
+            if (g_asarArchive) {
+                // The ASAR contains the entire app directory, so prepend "views/" to the path
+                std::string asarFilePath = "views/" + fullPath;
+
+                size_t fileSize = 0;
+                const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &fileSize);
+
+                if (fileData && fileSize > 0) {
+                    printf("DEBUG CEF loadViewsFile: Read %zu bytes from ASAR for %s\n", fileSize, fullPath.c_str());
+                    // Create std::string that copies the buffer (we'll free it after)
+                    data_ = std::string(reinterpret_cast<const char*>(fileData), fileSize);
+                    // Free the ASAR buffer
+                    asar_free_buffer(fileData, fileSize);
+
+                    // Determine MIME type
+                    std::string mimeType = "application/octet-stream";
+                    if (fullPath.find(".html") != std::string::npos) mimeType = "text/html";
+                    else if (fullPath.find(".css") != std::string::npos) mimeType = "text/css";
+                    else if (fullPath.find(".js") != std::string::npos) mimeType = "text/javascript";
+                    else if (fullPath.find(".json") != std::string::npos) mimeType = "application/json";
+                    else if (fullPath.find(".png") != std::string::npos) mimeType = "image/png";
+                    else if (fullPath.find(".jpg") != std::string::npos || fullPath.find(".jpeg") != std::string::npos) mimeType = "image/jpeg";
+                    else if (fullPath.find(".svg") != std::string::npos) mimeType = "image/svg+xml";
+                    else if (fullPath.find(".woff") != std::string::npos) mimeType = "font/woff";
+                    else if (fullPath.find(".woff2") != std::string::npos) mimeType = "font/woff2";
+                    else if (fullPath.find(".ttf") != std::string::npos) mimeType = "font/ttf";
+                    mimeType_ = mimeType;
+
+                    g_free(cwd);
+                    g_free(resourcesDir);
+                    g_free(asarPath);
+
+                    handle_request = true;
+                    return true;
+                } else {
+                    printf("DEBUG CEF loadViewsFile: File not found in ASAR: %s\n", fullPath.c_str());
+                    // Fall through to flat file reading
+                }
+            }
+        }
+
+        // Fallback: Read from flat file system (for non-ASAR builds or missing files)
+        gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
         gchar* filePath = g_build_filename(viewsDir, fullPath.c_str(), nullptr);
-        
+
+        printf("DEBUG CEF loadViewsFile: Attempting flat file read: %s\n", filePath);
+
         // Check if file exists and read it
         if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
             gsize fileSize;
             gchar* fileContent;
             GError* error = nullptr;
-            
+
             if (g_file_get_contents(filePath, &fileContent, &fileSize, &error)) {
                 data_ = std::string(fileContent, fileSize);
                 g_free(fileContent);
@@ -3423,50 +3498,105 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         }
     }
     
-    // Build file path: ../Resources/app/views/[fullPath] relative to current directory (bin)
+    // Build paths relative to current directory (bin)
     char* cwd = g_get_current_dir();
-    gchar* viewsDir = g_build_filename(cwd, "..", "Resources", "app", "views", nullptr);
-    gchar* filePath = g_build_filename(viewsDir, fullPath, nullptr);
-    
-    
-    // Check if file exists and read it
-    if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
-        gsize fileSize;
-        gchar* fileContents = nullptr;
-        GError* error = nullptr;
-        
-        if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
-            // Determine MIME type using shared function
-            std::string mimeTypeStr = getMimeTypeFromUrl(fullPath);
-            const char* mimeType = mimeTypeStr.c_str();
-            
-            // Create response
-            GInputStream* stream = g_memory_input_stream_new_from_data(fileContents, fileSize, g_free);
-            webkit_uri_scheme_request_finish(request, stream, fileSize, mimeType);
-            g_object_unref(stream);
-            
-        } else {
-            
-            // Return 404 error
-            GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", fullPath);
-            webkit_uri_scheme_request_finish_error(request, responseError);
-            g_error_free(responseError);
-            if (error) g_error_free(error);
+    gchar* resourcesDir = g_build_filename(cwd, "..", "Resources", nullptr);
+    gchar* asarPath = g_build_filename(resourcesDir, "app.asar", nullptr);
+
+    gchar* fileContents = nullptr;
+    gsize fileSize = 0;
+    bool foundFile = false;
+
+    // Check if ASAR archive exists
+    if (g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
+        // Lazy-load ASAR archive on first use
+        if (!g_asarArchive) {
+            g_asarArchive = asar_open(asarPath);
+            if (g_asarArchive) {
+                printf("DEBUG WebKit loadViewsFile: Opened ASAR archive at %s\n", asarPath);
+                fflush(stdout);
+            } else {
+                printf("ERROR WebKit loadViewsFile: Failed to open ASAR archive at %s\n", asarPath);
+                fflush(stdout);
+                // Fall through to flat file reading
+            }
         }
-    } else {
-        printf("File not found: %s\n", filePath);
+
+        // If ASAR archive is loaded, try to read from it
+        if (g_asarArchive) {
+            // The ASAR contains the entire app directory, so prepend "views/" to the path
+            std::string asarFilePath = "views/" + std::string(fullPath);
+
+            size_t asarFileSize = 0;
+            const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &asarFileSize);
+
+            if (fileData && asarFileSize > 0) {
+                printf("DEBUG WebKit loadViewsFile: Read %zu bytes from ASAR for %s\n", asarFileSize, fullPath);
+                fflush(stdout);
+                // Copy the data (glib will free it)
+                fileContents = (gchar*)g_memdup2(fileData, asarFileSize);
+                fileSize = asarFileSize;
+                foundFile = true;
+                // Free the ASAR buffer
+                asar_free_buffer(fileData, asarFileSize);
+            } else {
+                printf("DEBUG WebKit loadViewsFile: File not found in ASAR: %s\n", fullPath);
+                fflush(stdout);
+                // Fall through to flat file reading
+            }
+        }
+    }
+
+    // Fallback: Read from flat file system (for non-ASAR builds or missing files)
+    if (!foundFile) {
+        gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
+        gchar* filePath = g_build_filename(viewsDir, fullPath, nullptr);
+
+        printf("DEBUG WebKit loadViewsFile: Attempting flat file read: %s\n", filePath);
         fflush(stdout);
-        
+
+        // Check if file exists and read it
+        if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
+            GError* error = nullptr;
+            if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
+                foundFile = true;
+            } else {
+                if (error) {
+                    printf("ERROR WebKit: Failed to read file: %s\n", error->message);
+                    fflush(stdout);
+                    g_error_free(error);
+                }
+            }
+        } else {
+            printf("File not found: %s\n", filePath);
+            fflush(stdout);
+        }
+
+        g_free(viewsDir);
+        g_free(filePath);
+    }
+
+    // Send response if file was found
+    if (foundFile && fileContents) {
+        // Determine MIME type using shared function
+        std::string mimeTypeStr = getMimeTypeFromUrl(fullPath);
+        const char* mimeType = mimeTypeStr.c_str();
+
+        // Create response
+        GInputStream* stream = g_memory_input_stream_new_from_data(fileContents, fileSize, g_free);
+        webkit_uri_scheme_request_finish(request, stream, fileSize, mimeType);
+        g_object_unref(stream);
+    } else {
         // Return 404 error
         GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", fullPath);
         webkit_uri_scheme_request_finish_error(request, responseError);
         g_error_free(responseError);
     }
-    
+
     // Cleanup
     g_free(cwd);
-    g_free(viewsDir);
-    g_free(filePath);
+    g_free(resourcesDir);
+    g_free(asarPath);
 }
 
 void initializeGTK() {

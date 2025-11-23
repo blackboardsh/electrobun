@@ -33,6 +33,19 @@
 #include <direct.h>    // For _getcwd
 #include <tlhelp32.h>  // For process enumeration
 
+// ASAR C FFI declarations
+extern "C" {
+    typedef struct AsarArchive AsarArchive;
+
+    AsarArchive* asar_open(const char* path);
+    void asar_close(AsarArchive* archive);
+    const uint8_t* asar_read_file(AsarArchive* archive, const char* path, size_t* size_out);
+    void asar_free_buffer(const uint8_t* buffer, size_t size);
+}
+
+// Global ASAR archive handle (lazy-loaded)
+static AsarArchive* g_asarArchive = nullptr;
+
 // Push macro definitions to avoid conflicts with Windows headers
 #pragma push_macro("GetNextSibling")
 #pragma push_macro("GetFirstChild")
@@ -5897,27 +5910,69 @@ std::string loadViewsFile(const std::string& path) {
     // Get the current working directory instead of executable directory
     char currentDir[MAX_PATH];
     DWORD result = GetCurrentDirectoryA(MAX_PATH, currentDir);
-    
+
     if (result == 0 || result > MAX_PATH) {
         ::log("ERROR: Failed to get current working directory");
         return "";
     }
-    
-    // Build full path to views file from current working directory
-    std::string fullPath = std::string(currentDir) + "\\..\\Resources\\app\\views\\" + path;
-    
-    
+
+    std::string resourcesDir = std::string(currentDir) + "\\..\\Resources";
+    std::string asarPath = resourcesDir + "\\app.asar";
+
+    // Check if ASAR archive exists
+    std::ifstream asarCheck(asarPath);
+    if (asarCheck.good()) {
+        asarCheck.close();
+
+        // Lazy-load ASAR archive on first use
+        if (!g_asarArchive) {
+            g_asarArchive = asar_open(asarPath.c_str());
+            if (g_asarArchive) {
+                ::log("DEBUG loadViewsFile: Opened ASAR archive at " + asarPath);
+            } else {
+                ::log("ERROR loadViewsFile: Failed to open ASAR archive at " + asarPath);
+                // Fall through to flat file reading
+            }
+        }
+
+        // If ASAR archive is loaded, try to read from it
+        if (g_asarArchive) {
+            // The ASAR contains the entire app directory, so prepend "views/" to the path
+            std::string asarFilePath = "views/" + path;
+
+            size_t fileSize = 0;
+            const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &fileSize);
+
+            if (fileData && fileSize > 0) {
+                ::log("DEBUG loadViewsFile: Read " + std::to_string(fileSize) + " bytes from ASAR for " + path);
+                // Create std::string that copies the buffer (we'll free it after)
+                std::string content(reinterpret_cast<const char*>(fileData), fileSize);
+                // Free the ASAR buffer
+                asar_free_buffer(fileData, fileSize);
+                return content;
+            } else {
+                ::log("DEBUG loadViewsFile: File not found in ASAR: " + path);
+                // Fall through to flat file reading
+            }
+        }
+    }
+
+    // Fallback: Read from flat file system (for non-ASAR builds or missing files)
+    std::string fullPath = resourcesDir + "\\app\\views\\" + path;
+
+    ::log("DEBUG loadViewsFile: Attempting flat file read: " + fullPath);
+
     // Try to read the file
     std::ifstream file(fullPath, std::ios::binary);
     if (!file.is_open()) {
-        ::log("ERROR: Could not open views file");
+        ::log("ERROR: Could not open views file: " + fullPath);
         return "";
     }
-    
+
     // Read file contents
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     file.close();
-    
+
     return content;
 }
 
