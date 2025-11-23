@@ -274,7 +274,16 @@ async function copyToDist() {
     // Copy zig-asar CLI and library from vendored zig-asar
     const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
     await $`cp vendors/zig-asar/zig-asar${binExt} dist/zig-asar${binExt}`;
-    await $`cp vendors/zig-asar/libasar${libExt} dist/libasar${libExt}`;
+
+    // Copy library if it exists (Windows .dll may not be in zig-asar release yet)
+    const asarLibPath = `vendors/zig-asar/libasar${libExt}`;
+    if (existsSync(asarLibPath)) {
+        await $`cp ${asarLibPath} dist/libasar${libExt}`;
+    } else if (OS === 'win') {
+        console.warn('⚠️  Warning: libasar.dll not found in zig-asar release. ASAR functionality will not work at runtime.');
+    } else {
+        throw new Error(`Required library file not found: ${asarLibPath}`);
+    }
 
     // Verify critical files were copied
     if (OS === 'macos') {
@@ -585,14 +594,27 @@ async function vendorBsdiff() {
 }
 
 async function vendorAsar() {
-    const ASAR_VERSION = '0.1.1';
+    const ASAR_VERSION = '0.2.0';
     const asarDir = join(process.cwd(), 'vendors', 'zig-asar');
-    const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
     const asarCli = join(asarDir, 'zig-asar' + binExt);
+
+    // On Windows, we need the .lib file for linking and .dll for runtime
+    // For now, only require .lib since zig-asar releases may not include .dll yet
+    const asarImportLib = OS === 'win' ? join(asarDir, 'libasar.lib') : null;
+    const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
     const asarLib = join(asarDir, 'libasar' + libExt);
 
     // Check if binaries already exist
-    if (existsSync(asarCli) && existsSync(asarLib)) {
+    const requiredFiles = [asarCli];
+    if (asarImportLib) {
+        // On Windows, only require .lib for building (skip .dll check for now)
+        requiredFiles.push(asarImportLib);
+    } else {
+        // On Unix, require the shared library
+        requiredFiles.push(asarLib);
+    }
+
+    if (requiredFiles.every(f => existsSync(f))) {
         return;
     }
 
@@ -627,8 +649,15 @@ async function vendorAsar() {
         await $`rm "${tempTarball}"`;
 
         // Verify binaries were extracted
-        if (!existsSync(asarCli) || !existsSync(asarLib)) {
-            throw new Error(`Binaries not found after extraction: ${asarDir}`);
+        const missingFiles = requiredFiles.filter(f => !existsSync(f));
+        if (missingFiles.length > 0) {
+            console.error('Missing files after extraction:', missingFiles);
+            console.error('Files found in', asarDir + ':');
+            if (existsSync(asarDir)) {
+                const files = await $`ls -la "${asarDir}"`.quiet();
+                console.error(files.stdout.toString());
+            }
+            throw new Error(`Required ASAR files not found after extraction`);
         }
 
         // Make executable on Unix systems
@@ -1034,7 +1063,7 @@ async function buildNative() {
         await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
 
         // Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
-        const asarLib = `./vendors/zig-asar/asar.lib`;
+        const asarLib = `./vendors/zig-asar/libasar.lib`;
         await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" "${asarLib}" delayimp.lib /DELAYLOAD:libcef.dll /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
         // Skip package checks in CI or continue anyway if packages are missing
