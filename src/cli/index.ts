@@ -1462,29 +1462,42 @@ if (commandArg === "init") {
 
   // Copy libasar dynamic library for ASAR support
   const libExt = targetOS === 'win' ? '.dll' : targetOS === 'macos' ? '.dylib' : '.so';
-  let asarLibSource: string;
 
   if (process.platform === 'win32') {
-    // On Windows, try x64 first from dist, then vendors, then arm64
+    // On Windows, copy BOTH x64 and ARM64 DLLs so launcher can choose at runtime
+    // (x64 Bun on ARM64 Windows can't detect real CPU architecture)
     const x64DistPath = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', 'x64', 'libasar.dll');
     const x64VendorPath = join(ELECTROBUN_DEP_PATH, 'vendors', 'zig-asar', 'x64', 'libasar.dll');
     const arm64DistPath = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', 'arm64', 'libasar.dll');
     const arm64VendorPath = join(ELECTROBUN_DEP_PATH, 'vendors', 'zig-asar', 'arm64', 'libasar.dll');
 
-    asarLibSource = existsSync(x64DistPath) ? x64DistPath :
-                    existsSync(x64VendorPath) ? x64VendorPath :
-                    existsSync(arm64DistPath) ? arm64DistPath :
-                    arm64VendorPath;
-  } else {
-    asarLibSource = join(dirname(targetPaths.BSPATCH), 'libasar' + libExt);
-  }
+    // Copy x64 version as default libasar.dll
+    const x64Source = existsSync(x64DistPath) ? x64DistPath : x64VendorPath;
+    if (existsSync(x64Source)) {
+      cpSync(x64Source, join(appBundleMacOSPath, 'libasar.dll'), {
+        recursive: true,
+        dereference: true,
+      });
+    }
 
-  if (existsSync(asarLibSource)) {
-    const asarLibDestination = join(appBundleMacOSPath, 'libasar' + libExt);
-    cpSync(asarLibSource, asarLibDestination, {
-      recursive: true,
-      dereference: true,
-    });
+    // Copy ARM64 version as libasar-arm64.dll
+    const arm64Source = existsSync(arm64DistPath) ? arm64DistPath : arm64VendorPath;
+    if (existsSync(arm64Source)) {
+      cpSync(arm64Source, join(appBundleMacOSPath, 'libasar-arm64.dll'), {
+        recursive: true,
+        dereference: true,
+      });
+    }
+  } else {
+    // macOS/Linux: single architecture
+    const asarLibSource = join(dirname(targetPaths.BSPATCH), 'libasar' + libExt);
+    if (existsSync(asarLibSource)) {
+      const asarLibDestination = join(appBundleMacOSPath, 'libasar' + libExt);
+      cpSync(asarLibSource, asarLibDestination, {
+        recursive: true,
+        dereference: true,
+      });
+    }
   }
 
   // transpile developer's bun code

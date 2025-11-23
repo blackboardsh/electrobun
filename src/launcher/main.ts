@@ -94,9 +94,20 @@ function main() {
     if (existsSync(asarPath)) {
         console.log(`[LAUNCHER] Loading app code from ASAR: ${asarPath}`);
 
-        // Load libasar.dylib via FFI
-        const asarLibPath = join(pathToMacOS, `libasar.${suffix}`);
-        let asarLib;
+        // Load ASAR functions via FFI
+        // On Windows, use libNativeWrapper.dll which has built-in C++ ASAR reader
+        // On macOS/Linux, use standalone libasar library
+        let asarLibPath: string;
+        let asarLib: any;
+
+        if (process.platform === 'win32') {
+            // Windows: Use native wrapper's built-in ASAR reader (no external DLL needed)
+            asarLibPath = libPath;
+            console.log(`[LAUNCHER] Using native wrapper's ASAR reader: ${asarLibPath}`);
+        } else {
+            // macOS/Linux: Use standalone libasar library
+            asarLibPath = join(pathToMacOS, `libasar.${suffix}`);
+        }
 
         try {
             asarLib = dlopen(asarLibPath, {

@@ -259,6 +259,42 @@ private:
 // Global ASAR archive handle (lazy-loaded)
 static AsarArchive* g_asarArchive = nullptr;
 
+// Export ASAR functions for launcher to use (compatible with libasar.dll API)
+extern "C" __declspec(dllexport) void* asar_open(const char* path) {
+    AsarArchive* archive = AsarArchive::open(std::string(path));
+    return static_cast<void*>(archive);
+}
+
+extern "C" __declspec(dllexport) uint8_t* asar_read_file(void* archive, const char* path, uint64_t* size) {
+    if (!archive) return nullptr;
+
+    AsarArchive* asar = static_cast<AsarArchive*>(archive);
+    std::vector<uint8_t> data = asar->readFile(std::string(path));
+
+    if (data.empty()) {
+        *size = 0;
+        return nullptr;
+    }
+
+    *size = data.size();
+    uint8_t* buffer = new uint8_t[data.size()];
+    std::memcpy(buffer, data.data(), data.size());
+    return buffer;
+}
+
+extern "C" __declspec(dllexport) void asar_free_buffer(uint8_t* buffer, uint64_t size) {
+    if (buffer) {
+        delete[] buffer;
+    }
+}
+
+extern "C" __declspec(dllexport) void asar_close(void* archive) {
+    if (archive) {
+        AsarArchive* asar = static_cast<AsarArchive*>(archive);
+        delete asar;
+    }
+}
+
 // Push macro definitions to avoid conflicts with Windows headers
 #pragma push_macro("GetNextSibling")
 #pragma push_macro("GetFirstChild")
