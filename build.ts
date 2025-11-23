@@ -1064,7 +1064,7 @@ async function buildNative() {
 
         // Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
         const asarLib = `./vendors/zig-asar/libasar.lib`;
-        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" "${asarLib}" delayimp.lib /DELAYLOAD:libcef.dll /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
+        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" "${asarLib}" delayimp.lib /DELAYLOAD:libcef.dll ucrt.lib vcruntime.lib msvcrt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
         // Skip package checks in CI or continue anyway if packages are missing
         if (!process.env['GITHUB_ACTIONS']) {
