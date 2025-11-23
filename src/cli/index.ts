@@ -1613,6 +1613,10 @@ if (commandArg === "init") {
     // Get zig-asar CLI path - on Windows, use system architecture (not process arch)
     let zigAsarCli: string;
     if (process.platform === 'win32') {
+      // Debug: log what we're seeing
+      console.log(`PROCESSOR_ARCHITECTURE: ${process.env.PROCESSOR_ARCHITECTURE}`);
+      console.log(`PROCESSOR_ARCHITEW6432: ${process.env.PROCESSOR_ARCHITEW6432}`);
+
       // Get actual system architecture, not the Bun runtime architecture
       // PROCESSOR_ARCHITEW6432 is set when running 32/64-bit process on 64-bit/ARM64 Windows
       // PROCESSOR_ARCHITECTURE shows the current process architecture
