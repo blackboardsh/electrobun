@@ -1064,8 +1064,9 @@ async function buildNative() {
         await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /MT /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
 
         // Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
+        // Note: zig-asar may have its own allocator, so we link it last and let MSVC CRT take precedence
         const asarLib = `./vendors/zig-asar/libasar.lib`;
-        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" "${asarLib}" delayimp.lib /DELAYLOAD:libcef.dll /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
+        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib "${asarLib}" /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
     } else if (OS === 'linux') {
         // Skip package checks in CI or continue anyway if packages are missing
         if (!process.env['GITHUB_ACTIONS']) {
