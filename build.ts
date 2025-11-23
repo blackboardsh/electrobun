@@ -273,18 +273,29 @@ async function copyToDist() {
 
     // Copy zig-asar CLI and library from vendored zig-asar
     const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
-    // On Windows, we have both x64 and arm64 in subdirectories, but we always ship x64 for now
-    const asarArchDir = OS === 'win' ? 'vendors/zig-asar/x64' : 'vendors/zig-asar';
-    await $`cp ${asarArchDir}/zig-asar${binExt} dist/zig-asar${binExt}`;
 
-    // Copy library if it exists (Windows .dll may not be in zig-asar release yet)
-    const asarLibPath = `${asarArchDir}/libasar${libExt}`;
-    if (existsSync(asarLibPath)) {
-        await $`cp ${asarLibPath} dist/libasar${libExt}`;
-    } else if (OS === 'win') {
-        console.warn('⚠️  Warning: libasar.dll not found in zig-asar release. ASAR functionality will not work at runtime.');
+    if (OS === 'win') {
+        // On Windows, copy both x64 and arm64 versions to dist for runtime flexibility
+        await $`mkdir -p dist/zig-asar/x64 dist/zig-asar/arm64`;
+
+        // Copy x64 version
+        await $`cp vendors/zig-asar/x64/zig-asar.exe dist/zig-asar/x64/zig-asar.exe`;
+        await $`cp vendors/zig-asar/x64/libasar.dll dist/zig-asar/x64/libasar.dll`;
+
+        // Copy arm64 version
+        await $`cp vendors/zig-asar/arm64/zig-asar.exe dist/zig-asar/arm64/zig-asar.exe`;
+        await $`cp vendors/zig-asar/arm64/libasar.dll dist/zig-asar/arm64/libasar.dll`;
+
+        console.log('✓ Copied both x64 and arm64 zig-asar to dist');
     } else {
-        throw new Error(`Required library file not found: ${asarLibPath}`);
+        // Unix: single architecture
+        await $`cp vendors/zig-asar/zig-asar${binExt} dist/zig-asar${binExt}`;
+        const asarLibPath = `vendors/zig-asar/libasar${libExt}`;
+        if (existsSync(asarLibPath)) {
+            await $`cp ${asarLibPath} dist/libasar${libExt}`;
+        } else {
+            throw new Error(`Required library file not found: ${asarLibPath}`);
+        }
     }
 
     // Verify critical files were copied

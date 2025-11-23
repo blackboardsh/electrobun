@@ -1462,7 +1462,21 @@ if (commandArg === "init") {
 
   // Copy libasar dynamic library for ASAR support
   const libExt = targetOS === 'win' ? '.dll' : targetOS === 'macos' ? '.dylib' : '.so';
-  const asarLibSource = join(dirname(targetPaths.BSPATCH), 'libasar' + libExt);
+  let asarLibSource: string;
+
+  if (process.platform === 'win32') {
+    // On Windows, use runtime architecture
+    const runtimeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    asarLibSource = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', runtimeArch, 'libasar.dll');
+
+    // Fallback to vendors for development
+    if (!existsSync(asarLibSource)) {
+      asarLibSource = join(ELECTROBUN_DEP_PATH, 'vendors', 'zig-asar', runtimeArch, 'libasar.dll');
+    }
+  } else {
+    asarLibSource = join(dirname(targetPaths.BSPATCH), 'libasar' + libExt);
+  }
+
   if (existsSync(asarLibSource)) {
     const asarLibDestination = join(appBundleMacOSPath, 'libasar' + libExt);
     cpSync(asarLibSource, asarLibDestination, {
@@ -1595,17 +1609,19 @@ if (commandArg === "init") {
     const asarPath = join(appBundleFolderResourcesPath, "app.asar");
     const asarUnpackedPath = join(appBundleFolderResourcesPath, "app.asar.unpacked");
 
-    // Get zig-asar CLI path - on Windows, check if we need the ARM64 version
-    let zigAsarCli = join(targetPaths.BSPATCH).replace('bspatch', 'zig-asar');
-
-    // If the derived path doesn't exist and we're on Windows, try the runtime architecture vendor path
-    if (!existsSync(zigAsarCli) && process.platform === 'win32') {
+    // Get zig-asar CLI path - on Windows, use runtime architecture
+    let zigAsarCli: string;
+    if (process.platform === 'win32') {
       const runtimeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
-      const vendorPath = join(ELECTROBUN_DEP_PATH, 'vendors', 'zig-asar', runtimeArch, 'zig-asar.exe');
-      if (existsSync(vendorPath)) {
-        zigAsarCli = vendorPath;
-        console.log(`Using ${runtimeArch} zig-asar from vendors`);
+      // Try dist folder first (shipped binaries)
+      zigAsarCli = join(ELECTROBUN_DEP_PATH, 'dist-win-x64', 'zig-asar', runtimeArch, 'zig-asar.exe');
+
+      // Fallback to vendors for development
+      if (!existsSync(zigAsarCli)) {
+        zigAsarCli = join(ELECTROBUN_DEP_PATH, 'vendors', 'zig-asar', runtimeArch, 'zig-asar.exe');
       }
+    } else {
+      zigAsarCli = join(targetPaths.BSPATCH).replace('bspatch', 'zig-asar');
     }
 
     const appDirPath = appBundleAppCodePath;
