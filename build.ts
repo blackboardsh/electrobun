@@ -627,7 +627,8 @@ async function vendorAsar() {
         'linux': 'linux'
     };
     const platform = platformMap[OS];
-    const arch = ARCH;
+    // Windows always uses x64 - ARM64 Windows machines are rare and have built-in x64 emulation
+    const arch = OS === 'win' ? 'x64' : ARCH;
 
     const tarballUrl = `https://github.com/blackboardsh/zig-asar/releases/download/v${ASAR_VERSION}/zig-asar-${platform}-${arch}.tar.gz`;
     const tempTarball = join('vendors', `zig-asar-temp.tar.gz`);
