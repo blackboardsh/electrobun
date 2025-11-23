@@ -1,6 +1,7 @@
 import { join, dirname, resolve } from "path";
-import { dlopen, suffix, ptr } from "bun:ffi";
-import { existsSync } from "fs";
+import { dlopen, suffix, ptr, toArrayBuffer } from "bun:ffi";
+import { existsSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
+import { tmpdir } from "os";
 
 // Since main.js now runs from Resources, we need to find libraries in the MacOS directory
 const pathToMacOS = dirname(process.argv0); // bun is still in MacOS/bin directory
@@ -83,14 +84,97 @@ function main() {
     const pathToLauncherBin = process.argv0;
     const pathToBinDir = dirname(pathToLauncherBin);
 
-    const appEntrypointPath = join(
-        pathToBinDir,
-        "..",
-        "Resources",
-        "app",
-        "bun",
-        "index.js"
-    );
+    const resourcesDir = join(pathToBinDir, "..", "Resources");
+    const asarPath = join(resourcesDir, "app.asar");
+    const appFolderPath = join(resourcesDir, "app");
+
+    let appEntrypointPath: string;
+
+    // Check if ASAR archive exists
+    if (existsSync(asarPath)) {
+        console.log(`[LAUNCHER] Loading app code from ASAR: ${asarPath}`);
+
+        // Load libasar.dylib via FFI
+        const asarLibPath = join(pathToMacOS, `libasar.${suffix}`);
+        let asarLib;
+
+        try {
+            asarLib = dlopen(asarLibPath, {
+                asar_open: { args: ["cstring"], returns: "ptr" },
+                asar_read_file: { args: ["ptr", "cstring", "ptr"], returns: "ptr" },
+                asar_free_buffer: { args: ["ptr", "u64"], returns: "void" },
+                asar_close: { args: ["ptr"], returns: "void" }
+            });
+        } catch (error) {
+            console.error(`[LAUNCHER] Failed to load ASAR library: ${error.message}`);
+            throw error;
+        }
+
+        // Open ASAR archive
+        const asarArchive = asarLib.symbols.asar_open(ptr(Buffer.from(asarPath + '\0', 'utf8')));
+
+        if (!asarArchive || asarArchive === 0n) {
+            console.error(`[LAUNCHER] Failed to open ASAR archive at: ${asarPath}`);
+            throw new Error("Failed to open ASAR archive");
+        }
+
+        // Read bun/index.js from ASAR
+        const filePath = "bun/index.js";
+        const sizeBuffer = new BigUint64Array(1);
+        const fileDataPtr = asarLib.symbols.asar_read_file(
+            asarArchive,
+            ptr(Buffer.from(filePath + '\0', 'utf8')),
+            ptr(sizeBuffer)
+        );
+
+        if (!fileDataPtr || fileDataPtr === 0n) {
+            console.error(`[LAUNCHER] Failed to read ${filePath} from ASAR`);
+            asarLib.symbols.asar_close(asarArchive);
+            throw new Error(`Failed to read ${filePath} from ASAR`);
+        }
+
+        const fileSize = Number(sizeBuffer[0]);
+        console.log(`[LAUNCHER] Read ${fileSize} bytes from ASAR for ${filePath}`);
+
+        // Copy data from the FFI pointer to a Buffer using toArrayBuffer
+        const arrayBuffer = toArrayBuffer(fileDataPtr, 0, fileSize);
+        const fileData = Buffer.from(arrayBuffer);
+
+        // Write to system temp directory with randomized filename for security
+        const systemTmpDir = tmpdir();
+        const randomFileName = `electrobun-${Date.now()}-${Math.random().toString(36).substring(7)}.js`;
+        appEntrypointPath = join(systemTmpDir, randomFileName);
+
+        // Prepend code to delete the temp file after a short delay
+        // This runs in the Worker thread, not the main thread (which gets blocked by runNSApplication)
+        const wrappedFileData = `
+// Auto-delete temp file after Worker loads it
+const __tempFilePath = "${appEntrypointPath}";
+setTimeout(() => {
+    try {
+        require("fs").unlinkSync(__tempFilePath);
+        console.log("[LAUNCHER] Deleted temp file:", __tempFilePath);
+    } catch (error) {
+        console.warn("[LAUNCHER] Failed to delete temp file:", error.message);
+    }
+}, 100);
+
+${fileData.toString('utf8')}
+`;
+
+        writeFileSync(appEntrypointPath, wrappedFileData);
+        console.log(`[LAUNCHER] Wrote app entrypoint to: ${appEntrypointPath}`);
+
+        // Free the buffer
+        asarLib.symbols.asar_free_buffer(fileDataPtr, BigInt(fileSize));
+
+        // Close the archive
+        asarLib.symbols.asar_close(asarArchive);
+    } else {
+        // Fallback to flat file system (for non-ASAR builds)
+        console.log(`[LAUNCHER] Loading app code from flat files`);
+        appEntrypointPath = join(appFolderPath, "bun", "index.js");
+    }
 
     // NOTE: No point adding any event listeners here because this is the main
     // ui thread which is about to be blocked by the native event loop below.
