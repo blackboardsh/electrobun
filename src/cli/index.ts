@@ -1120,19 +1120,21 @@ if (commandArg === "init") {
   //     mkdirSync(destLauncherFolder, {recursive: true});
   // }
   // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});
-  // Copy zig launcher for all builds (dev, canary, stable)
-  const bunCliLauncherBinarySource = targetPaths.LAUNCHER_RELEASE;
-  const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + targetBinExt;
-  const destLauncherFolder = dirname(bunCliLauncherDestination);
-  if (!existsSync(destLauncherFolder)) {
-    // console.info('creating folder: ', destFolder);
-    mkdirSync(destLauncherFolder, { recursive: true });
-  }
+  // Copy zig launcher for all builds (dev, canary, stable) - macOS only
+  if (targetOS === 'macos') {
+    const bunCliLauncherBinarySource = targetPaths.LAUNCHER_RELEASE;
+    const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + targetBinExt;
+    const destLauncherFolder = dirname(bunCliLauncherDestination);
+    if (!existsSync(destLauncherFolder)) {
+      // console.info('creating folder: ', destFolder);
+      mkdirSync(destLauncherFolder, { recursive: true });
+    }
 
-  cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {
-    recursive: true,
-    dereference: true,
-  });
+    cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {
+      recursive: true,
+      dereference: true,
+    });
+  }
 
   cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, 'main.js'), { dereference: true });
 
