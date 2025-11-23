@@ -1456,6 +1456,17 @@ if (commandArg === "init") {
     dereference: true,
   });
 
+  // Copy libasar dynamic library for ASAR support
+  const libExt = targetOS === 'win' ? '.dll' : targetOS === 'macos' ? '.dylib' : '.so';
+  const asarLibSource = join(dirname(targetPaths.BSPATCH), 'libasar' + libExt);
+  if (existsSync(asarLibSource)) {
+    const asarLibDestination = join(appBundleMacOSPath, 'libasar' + libExt);
+    cpSync(asarLibSource, asarLibDestination, {
+      recursive: true,
+      dereference: true,
+    });
+  }
+
   // transpile developer's bun code
   const bunDestFolder = join(appBundleAppCodePath, "bun");
   // Build bun-javascript ts files
@@ -1572,6 +1583,74 @@ if (commandArg === "init") {
       process.exit(1);
     }
   }
+
+  // Pack app resources into ASAR archive if enabled
+  if (config.build.useAsar) {
+    console.log("Packing resources into ASAR archive...");
+
+    const asarPath = join(appBundleFolderResourcesPath, "app.asar");
+    const asarUnpackedPath = join(appBundleFolderResourcesPath, "app.asar.unpacked");
+    const zigAsarCli = join(targetPaths.BSPATCH).replace('bspatch', 'zig-asar');
+    const appViewsPath = join(appBundleAppCodePath, "views");
+
+    // Check if views directory exists
+    if (!existsSync(appViewsPath)) {
+      console.log("⚠ No views directory found, skipping ASAR creation");
+    } else {
+      // Default unpack patterns for native modules and libraries
+      const defaultUnpackPatterns = ["*.node", "*.dll", "*.dylib", "*.so"];
+      const unpackPatterns = config.build.asarUnpack || defaultUnpackPatterns;
+
+      // Check if zig-asar CLI exists
+      if (!existsSync(zigAsarCli)) {
+        console.error(`zig-asar CLI not found at: ${zigAsarCli}`);
+        console.error("Make sure to run setup/vendoring first");
+        process.exit(1);
+      }
+
+      // Build zig-asar command arguments
+      // Pack only the views directory (source), not the entire app directory
+      const asarArgs = [
+        "pack",
+        appViewsPath,  // source: app/views directory
+        asarPath,      // output asar file
+      ];
+
+      // Add unpack patterns if any
+      if (unpackPatterns.length > 0) {
+        asarArgs.push("--unpack", unpackPatterns.join(","));
+      }
+
+      // Run zig-asar pack
+      const asarResult = Bun.spawnSync([zigAsarCli, ...asarArgs], {
+        stdio: ["ignore", "inherit", "inherit"],
+        cwd: projectRoot,
+      });
+
+      if (asarResult.exitCode !== 0) {
+        console.error("ASAR packing failed with exit code:", asarResult.exitCode);
+        if (asarResult.stderr) {
+          console.error("stderr:", asarResult.stderr.toString());
+        }
+        console.error("Command:", zigAsarCli, ...asarArgs);
+        process.exit(1);
+      }
+
+      // Verify ASAR was created
+      if (!existsSync(asarPath)) {
+        console.error("ASAR file was not created:", asarPath);
+        process.exit(1);
+      }
+
+      console.log("✓ Created app.asar");
+
+      // Remove the views folder since it's now packed in ASAR
+      // Keep the bun folder for direct filesystem access by main.js
+      rmdirSync(appViewsPath, { recursive: true });
+      console.log("✓ Removed app/views folder (now in ASAR)");
+    }
+  }
+
   // All the unique files are in the bundle now. Create an initial temporary tar file
   // for hashing the contents
   // tar the signed and notarized app bundle

@@ -202,6 +202,7 @@ async function setup() {
         vendorBun(),
         vendorZig(),
         vendorBsdiff(),
+        vendorAsar(),
         vendorCEF(),
         vendorWebview2(),
         vendorLinuxDeps(),
@@ -212,6 +213,7 @@ async function build() {
     await createDistFolder();
     await BunInstall();
 
+    // await buildAsar(); // Now using vendored binaries from zig-asar releases
     await buildNative(); // zig depends on this for linking symbols
     
     // Generate template embeddings before building CLI
@@ -268,7 +270,12 @@ async function copyToDist() {
     // Copy bsdiff/bspatch from vendored zig-bsdiff
     await $`cp vendors/zig-bsdiff/bsdiff${binExt} dist/bsdiff${binExt}`;
     await $`cp vendors/zig-bsdiff/bspatch${binExt} dist/bspatch${binExt}`;
-    
+
+    // Copy zig-asar CLI and library from vendored zig-asar
+    const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
+    await $`cp vendors/zig-asar/zig-asar${binExt} dist/zig-asar${binExt}`;
+    await $`cp vendors/zig-asar/libasar${libExt} dist/libasar${libExt}`;
+
     // Verify critical files were copied
     if (OS === 'macos') {
         const launcherPath = join('dist', `launcher${binExt}`);
@@ -573,6 +580,69 @@ async function vendorBsdiff() {
         throw new Error(
             `Could not download zig-bsdiff binaries. ` +
             `Please check that the release exists at: https://github.com/blackboardsh/zig-bsdiff/releases/tag/v${BSDIFF_VERSION}`
+        );
+    }
+}
+
+async function vendorAsar() {
+    const ASAR_VERSION = '0.1.1';
+    const asarDir = join(process.cwd(), 'vendors', 'zig-asar');
+    const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
+    const asarCli = join(asarDir, 'zig-asar' + binExt);
+    const asarLib = join(asarDir, 'libasar' + libExt);
+
+    // Check if binaries already exist
+    if (existsSync(asarCli) && existsSync(asarLib)) {
+        return;
+    }
+
+    console.log('Downloading zig-asar binaries...');
+
+    // Map OS names to match GitHub release naming
+    const platformMap: Record<string, string> = {
+        'macos': 'darwin',
+        'win': 'win32',
+        'linux': 'linux'
+    };
+    const platform = platformMap[OS];
+    const arch = ARCH;
+
+    const tarballUrl = `https://github.com/blackboardsh/zig-asar/releases/download/v${ASAR_VERSION}/zig-asar-${platform}-${arch}.tar.gz`;
+    const tempTarball = join('vendors', `zig-asar-temp.tar.gz`);
+
+    try {
+        // Download tarball
+        await $`mkdir -p vendors/zig-asar`;
+        await $`curl -L "${tarballUrl}" -o "${tempTarball}"`;
+
+        // Extract to vendors/zig-asar
+        if (OS === 'win') {
+            // Use tar on Windows (built-in on Windows 10+)
+            await $`tar -xzf "${tempTarball}" -C vendors/zig-asar`;
+        } else {
+            await $`tar -xzf "${tempTarball}" -C vendors/zig-asar`;
+        }
+
+        // Clean up temp file
+        await $`rm "${tempTarball}"`;
+
+        // Verify binaries were extracted
+        if (!existsSync(asarCli) || !existsSync(asarLib)) {
+            throw new Error(`Binaries not found after extraction: ${asarDir}`);
+        }
+
+        // Make executable on Unix systems
+        if (OS !== 'win') {
+            await $`chmod +x ${asarCli}`;
+        }
+
+        console.log('✓ zig-asar binaries downloaded successfully');
+    } catch (error: any) {
+        console.error('Failed to download zig-asar binaries:', error.message);
+        console.error(`URL: ${tarballUrl}`);
+        throw new Error(
+            `Could not download zig-asar binaries. ` +
+            `Please check that the release exists at: https://github.com/blackboardsh/zig-asar/releases/tag/v${ASAR_VERSION}`
         );
     }
 }
@@ -950,7 +1020,7 @@ async function buildNative() {
         }
         
         await $`mkdir -p src/native/macos/build && clang++ -c src/native/macos/nativeWrapper.mm -o src/native/macos/build/nativeWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef -std=c++17`;
-        await $`mkdir -p src/native/build && clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib`;
+        await $`mkdir -p src/native/build && clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o ./vendors/zig-asar/libasar.dylib -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib -Wl,-rpath,@executable_path`;
     } else if (OS === 'win') {
         const webview2Include = `./vendors/webview2/Microsoft.Web.WebView2/build/native/include`;
         // Always use x64 for Windows since we only build x64 Windows binaries
@@ -1103,6 +1173,22 @@ async function buildLauncher() {
         await $`cd src/launcher && ../../vendors/zig/zig build ${zigArgs}`;
     } else if (CHANNEL === 'release') {
         await $`cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
+    }
+}
+
+async function buildAsar() {
+    console.log("Building asar library...");
+    let zigArgs: string[] = [];
+    if (ARCH === 'arm64') {
+        zigArgs = ['-Dtarget=aarch64-macos'];
+    } else {
+        zigArgs = ['-Dtarget=x86_64-macos'];
+    }
+    
+    if (CHANNEL === 'debug') {
+        await $`cd ../zig-asar && ../electrobun/vendors/zig/zig build ${zigArgs}`;
+    } else if (CHANNEL === 'release') {
+        await $`cd ../zig-asar && ../electrobun/vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
     }
 }
 
