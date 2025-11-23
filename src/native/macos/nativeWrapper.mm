@@ -512,8 +512,9 @@ NSData* readViewsFile(const char* viewsUrl) {
 
         // If ASAR archive is loaded, try to read from it
         if (g_asarArchive) {
-            // The ASAR contains the views directory at the root, so just use relativePath directly
-            const char* asarFilePathCStr = [relativePath UTF8String];
+            // The ASAR contains the entire app directory, so prepend "views/" to the relativePath
+            NSString *asarFilePath = [NSString stringWithFormat:@"views/%@", relativePath];
+            const char* asarFilePathCStr = [asarFilePath UTF8String];
 
             size_t fileSize = 0;
             const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePathCStr, &fileSize);

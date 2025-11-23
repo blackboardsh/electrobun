@@ -1591,11 +1591,11 @@ if (commandArg === "init") {
     const asarPath = join(appBundleFolderResourcesPath, "app.asar");
     const asarUnpackedPath = join(appBundleFolderResourcesPath, "app.asar.unpacked");
     const zigAsarCli = join(targetPaths.BSPATCH).replace('bspatch', 'zig-asar');
-    const appViewsPath = join(appBundleAppCodePath, "views");
+    const appDirPath = appBundleAppCodePath;
 
-    // Check if views directory exists
-    if (!existsSync(appViewsPath)) {
-      console.log("⚠ No views directory found, skipping ASAR creation");
+    // Check if app directory exists
+    if (!existsSync(appDirPath)) {
+      console.log("⚠ No app directory found, skipping ASAR creation");
     } else {
       // Default unpack patterns for native modules and libraries
       const defaultUnpackPatterns = ["*.node", "*.dll", "*.dylib", "*.so"];
@@ -1609,10 +1609,10 @@ if (commandArg === "init") {
       }
 
       // Build zig-asar command arguments
-      // Pack only the views directory (source), not the entire app directory
+      // Pack the entire app directory
       const asarArgs = [
         "pack",
-        appViewsPath,  // source: app/views directory
+        appDirPath,    // source: entire app directory
         asarPath,      // output asar file
       ];
 
@@ -1644,10 +1644,9 @@ if (commandArg === "init") {
 
       console.log("✓ Created app.asar");
 
-      // Remove the views folder since it's now packed in ASAR
-      // Keep the bun folder for direct filesystem access by main.js
-      rmdirSync(appViewsPath, { recursive: true });
-      console.log("✓ Removed app/views folder (now in ASAR)");
+      // Remove the entire app folder since it's now packed in ASAR
+      rmdirSync(appDirPath, { recursive: true });
+      console.log("✓ Removed app/ folder (now in ASAR)");
     }
   }
 
