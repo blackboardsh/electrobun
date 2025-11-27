@@ -6,8 +6,8 @@
   "scripts": {
     "build:dev": "electrobun build",
     "build:canary": "electrobun build --canary",
-    "start": "electrobun dev",
-    "start:canary": "electrobun dev --canary"
+    "start": "electrobun build && electrobun dev",
+    "start:canary": "electrobun build --canary && electrobun dev --canary"
   },
   "dependencies": {
     "electrobun": "latest"
