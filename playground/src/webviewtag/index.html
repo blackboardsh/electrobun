@@ -27,10 +27,47 @@ ondragover="document.getElementById('draginfo').innerHTML = 'clientX: '+event.cl
     <div class="element-to-mask" style="position:absolute; top: 130px; left:720px; width:200px; height: 200px; background: black; color: white;">Layered above webview</div>
     <div class="element-to-mask" style="position:absolute; top: 130px; left:590px; width:200px; height: 200px; background: green; color: white;">Layered above webview</div>
 
-    <electrobun-webview  style="width:50%; height: 50%; " src="https://electrobun.dev" preload="" renderer="cef" ></electrobun-webview>    
+    <electrobun-webview  style="width:50%; height: 50%; " src="https://electrobun.dev" preload="" renderer="cef" ></electrobun-webview>
     <div draggable="true" style="padding: 10px; width:100px;height:100px;border:5px solid black; cursor:move;">drag me into the webview when delegate mode is enabled</div>
     <span id="draginfo"></span>
-    <electrobun-webview preload="window.onload = () => {document.body.innerHTML += 'hello from preload';}"  html="<html><body><h1>webview tag with html</h1></body></html>" ></electrobun-webview>    
+    <electrobun-webview preload="window.onload = () => {document.body.innerHTML += 'hello from preload';}"  html="<html><body><h1>webview tag with html</h1></body></html>" ></electrobun-webview>
+
+    <!-- Host Message Test -->
+    <div style="background: #e0f7fa; padding: 10px; margin: 10px 0; border: 2px solid #00838f;">
+        <h3>Host Message Test (sendToHost from preload)</h3>
+        <p>Messages from the webview below will appear here:</p>
+        <div id="hostMessageLog" style="background: #fff; padding: 10px; min-height: 50px; border: 1px solid #ccc; font-family: monospace;"></div>
+    </div>
+    <electrobun-webview
+        id="hostMessageTestWebview"
+        style="width:400px; height: 150px; border: 2px solid #00838f;"
+        renderer="cef"
+        src="views://webviewtag/host-message-test.html"
+        preload="
+            (function() {
+                console.log('Host message test preload running, __electrobunSendToHost:', typeof window.__electrobunSendToHost);
+                window.addEventListener('load', function() {
+                    console.log('Window loaded, setting up handlers');
+                    document.getElementById('sendBtn').onclick = () => {
+                        console.log('Button clicked, sending message');
+                        window.__electrobunSendToHost({ type: 'button-click', message: 'Hello from nested webview!', timestamp: Date.now() });
+                    };
+                    document.addEventListener('keydown', (e) => {
+                        console.log('Keydown, sending message', e.key);
+                        window.__electrobunSendToHost({
+                            type: 'keydown',
+                            key: e.key,
+                            code: e.code,
+                            ctrlKey: e.ctrlKey,
+                            shiftKey: e.shiftKey,
+                            altKey: e.altKey,
+                            metaKey: e.metaKey
+                        });
+                    });
+                });
+            })();
+        "
+    ></electrobun-webview>    
 
     <!-- File Chooser Test -->
     <div style="background: #f0f0f0; padding: 10px; margin: 10px 0; border: 2px solid #333;">
@@ -144,6 +181,21 @@ ondragover="document.getElementById('draginfo').innerHTML = 'clientX: '+event.cl
 
         document.querySelector('electrobun-webview').on('new-window-open', (e) => {
             console.log('new-window-open is fired', e.detail);
+        });
+
+        // Listen for host-message events from the test webview
+        document.getElementById('hostMessageTestWebview').on('host-message', (e) => {
+            console.log('host-message received:', e.detail);
+            const log = document.getElementById('hostMessageLog');
+            const entry = document.createElement('div');
+            entry.textContent = JSON.stringify(e.detail);
+            entry.style.borderBottom = '1px solid #eee';
+            entry.style.padding = '4px 0';
+            log.appendChild(entry);
+            // Keep only last 10 messages
+            while (log.children.length > 10) {
+                log.removeChild(log.firstChild);
+            }
         });
 
         setTimeout(() => {

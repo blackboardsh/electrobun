@@ -12,7 +12,7 @@ export default {
   domReady: (data) =>
     new ElectrobunEvent<{ detail: string }, {}>("dom-ready", data),
   newWindowOpen: (data) =>
-    new ElectrobunEvent<{ 
+    new ElectrobunEvent<{
       detail: string | {
         url: string;
         isCmdClick: boolean;
@@ -21,4 +21,6 @@ export default {
         userGesture?: boolean;
       }
     }, {}>("new-window-open", data),
+  hostMessage: (data) =>
+    new ElectrobunEvent<{ detail: string }, {}>("host-message", data),
 };

@@ -28,6 +28,7 @@ export default {
             "src/mainview/index.html": "views/mainview/index.html",
             "src/mainview/index.css": "views/mainview/index.css",
             "src/webviewtag/index.html": "views/webviewtag/index.html",
+            "src/webviewtag/host-message-test.html": "views/webviewtag/host-message-test.html",
             "src/webviewtag/electrobun.png": "views/webviewtag/electrobun.png",
             "assets/electrobun-logo-32-template.png": "views/assets/electrobun-logo-32-template.png",
         },

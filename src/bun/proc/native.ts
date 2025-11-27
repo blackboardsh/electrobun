@@ -573,13 +573,19 @@ export const ffi = {
         })();
         ` + `
          function emitWebviewEvent (eventName, detail) {
-           // Note: There appears to be some race bug with Bun FFI where sites can 
+           // Note: There appears to be some race bug with Bun FFI where sites can
            // init (like views://myview/index.html) so fast while the Bun FFI to load a url is still executing
            // or something where the JSCallback that this postMessage fires is not available or busy or
            // its memory is allocated to something else or something and the handler receives garbage data in Bun.
-           setTimeout(() => {              
+           setTimeout(() => {
               window.__electrobunInternalBridge?.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
           });
+         };
+
+         // Allow preload scripts to send custom messages to the host webview
+         // Usage: window.__electrobunSendToHost({ type: 'myEvent', data: {...} })
+         window.__electrobunSendToHost = function(message) {
+           emitWebviewEvent('host-message', JSON.stringify(message));
          };                 
         
          window.addEventListener('load', function(event) {
@@ -983,10 +989,10 @@ const webviewEventHandler = (id, eventName, detail) => {
 
     // This is a webviewtag so we should send the event into the parent as well
     // TODO XX: escape event name and detail to remove `
-    // NOTE: for new-window-open the detail is a json string that needs to be parsed
+    // NOTE: for new-window-open and host-message the detail is a json string that needs to be parsed
     let js;
-    if (eventName === 'new-window-open') {
-      js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, ${detail});`    
+    if (eventName === 'new-window-open' || eventName === 'host-message') {
+      js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, ${detail});`
     } else {
       js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, \`${detail}\`);`
     }
@@ -1001,6 +1007,7 @@ const webviewEventHandler = (id, eventName, detail) => {
       "did-commit-navigation": "didCommitNavigation",
       "dom-ready": "domReady",
       "new-window-open": "newWindowOpen",
+      "host-message": "hostMessage",
     };
 
   // todo: the events map should use the same hyphenated names instead of camelCase
@@ -1012,11 +1019,11 @@ const webviewEventHandler = (id, eventName, detail) => {
     return { success: false };
   }
 
-  // Parse JSON data for new-window-open events
+  // Parse JSON data for new-window-open and host-message events
   let parsedDetail = detail;
-  if (eventName === "new-window-open") {    
+  if (eventName === "new-window-open" || eventName === "host-message") {
     try {
-      parsedDetail = JSON.parse(detail);      
+      parsedDetail = JSON.parse(detail);
     } catch (e) {
       console.error('[webviewEventHandler] Failed to parse JSON:', e);
       // Fallback to string if parsing fails (backward compatibility)

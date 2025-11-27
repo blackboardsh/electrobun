@@ -2,7 +2,8 @@ type WebviewEventTypes =
   | "did-navigate"
   | "did-navigate-in-page"
   | "did-commit-navigation"
-  | "dom-ready";
+  | "dom-ready"
+  | "host-message";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
