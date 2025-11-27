@@ -375,6 +375,19 @@ wikiWindow.on("move", (event) => {
   console.log("wiki window moved", id, x, y);
 });
 
+// Window focus event - fires when the native macOS window becomes the key window
+// This is useful for tracking which window should receive keyboard shortcuts
+wikiWindow.on("focus", (event) => {
+  const { id } = event.data;
+  console.log("wiki window focused", id);
+});
+
+// Also demonstrate focus on the main window
+win.on("focus", (event) => {
+  const { id } = event.data;
+  console.log("main window focused", id);
+});
+
 const webviewTagWindow = new BrowserWindow({
   title: "webview tag test",
   url: "views://webviewtag/index.html",
@@ -390,6 +403,11 @@ const webviewTagWindow = new BrowserWindow({
 
 webviewTagWindow.on("close", () => {
   console.log("Webview tag window closed");
+});
+
+webviewTagWindow.on("focus", (event) => {
+  const { id } = event.data;
+  console.log("webview tag window focused", id);
 });
 
 // TODO: make this a unit test

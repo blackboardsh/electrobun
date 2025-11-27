@@ -80,6 +80,7 @@ static int x11_error_handler(Display* display, XErrorEvent* error) {
 typedef void (*WindowCloseCallback)(uint32_t windowId);
 typedef void (*WindowMoveCallback)(uint32_t windowId, double x, double y);
 typedef void (*WindowResizeCallback)(uint32_t windowId, double x, double y, double width, double height);
+typedef void (*WindowFocusCallback)(uint32_t windowId);
 
 // Webview callback types
 typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
@@ -290,10 +291,11 @@ struct X11Window {
     WindowCloseCallback closeCallback;
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
+    WindowFocusCallback focusCallback;
     std::vector<Window> childWindows;  // For managing webviews
     ContainerView* containerView = nullptr;  // Associated container for webview management
-    
-    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600) {}
+
+    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr) {}
 };
 
 // Forward declaration for X11 menu function
@@ -3008,8 +3010,9 @@ public:
     WindowCloseCallback closeCallback;
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
-    
-    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr) {
+    WindowFocusCallback focusCallback;
+
+    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
@@ -3017,8 +3020,8 @@ public:
         gtk_widget_show(overlay);
     }
     
-    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) 
-        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback) {
+    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback)
+        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
@@ -3900,6 +3903,13 @@ gboolean process_x11_events(gpointer data) {
                 case Expose:
                     // Handle expose events if needed
                     break;
+
+                case FocusIn:
+                    // Window received focus
+                    if (targetWin->focusCallback) {
+                        targetWin->focusCallback(targetWin->windowId);
+                    }
+                    break;
             }
         }
     }
@@ -3953,8 +3963,8 @@ void runEventLoop() {
 // Forward declarations
 void showWindow(void* window);
 
-void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title, 
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
+void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
     
     void* result = dispatch_sync_main([&]() -> void* {
         
@@ -4015,7 +4025,8 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->closeCallback = closeCallback;
             x11win->moveCallback = moveCallback;
             x11win->resizeCallback = resizeCallback;
-            
+            x11win->focusCallback = focusCallback;
+
             // Store in global maps
             g_x11_windows[windowId] = x11win;
             g_x11_window_to_id[x11_window] = windowId;
@@ -4035,8 +4046,8 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
     return result;
 }
 
-void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title, 
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
+void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
     
    
     
@@ -4060,16 +4071,16 @@ void* createGTKWindow(uint32_t windowId, double x, double y, double width, doubl
         }
         
         // Create container with callbacks
-        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback);
-        
+        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback);
+
         g_containers[windowId] = container;
-        
+
         // Apply application menu to new window if one is configured
         applyApplicationMenuToWindow(window);
-        
+
         // Connect window delete event to handle X button clicks properly
         g_signal_connect(window, "delete-event", G_CALLBACK(onWindowDeleteEvent), container.get());
-        
+
         // Connect destroy signal to clean up the container
         g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget* widget, gpointer user_data) {
             ContainerView* container = static_cast<ContainerView*>(user_data);
@@ -4078,10 +4089,19 @@ void* createGTKWindow(uint32_t windowId, double x, double y, double width, doubl
                 g_containers.erase(container->windowId);
             }
         }), container.get());
-        
+
+        // Connect window focus event
+        g_signal_connect(window, "focus-in-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventFocus* event, gpointer user_data) -> gboolean {
+            ContainerView* container = static_cast<ContainerView*>(user_data);
+            if (container && container->focusCallback) {
+                container->focusCallback(container->windowId);
+            }
+            return FALSE; // Allow event to propagate
+        }), container.get());
+
         // Note: Removed gtk_main_quit as default behavior - let the app decide whether to exit
-       
-        
+
+
         // Connect window resize signal for auto-resize functionality
         g_signal_connect(window, "configure-event", G_CALLBACK(onWindowConfigure), container.get());
       
@@ -4102,17 +4122,17 @@ void* createGTKWindow(uint32_t windowId, double x, double y, double width, doubl
 }
 
 // Mac-compatible function for Linux
-void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height, 
+void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle,
-                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback) {
-   
+                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
+
     // On Linux, ignore styleMask and titleBarStyle for now, just create basic window
     if (isCEFAvailable()) {
-        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback);
+        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback);
     } else {
-        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback);
+        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback);
     }
-    
+
 }
 
 void setX11WindowTitle(void* window, const char* title) {

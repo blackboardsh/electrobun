@@ -309,6 +309,7 @@ typedef struct {
 typedef void (*WindowCloseHandler)(uint32_t windowId);
 typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
 typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
+typedef void (*WindowFocusHandler)(uint32_t windowId);
 
 
 /** Tray and menu bridging. */
@@ -670,6 +671,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) WindowCloseHandler closeHandler;
     @property (nonatomic, assign) WindowMoveHandler moveHandler;
     @property (nonatomic, assign) WindowResizeHandler resizeHandler;
+    @property (nonatomic, assign) WindowFocusHandler focusHandler;
     @property (nonatomic, assign) uint32_t windowId;
     @property (nonatomic, strong) NSWindow *window;
 @end
@@ -3500,8 +3502,13 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             NSRect windowFrame = [window frame];
             NSScreen *primaryScreen = [NSScreen screens][0];
             NSRect screenFrame = [primaryScreen frame];
-            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;            
+            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
             self.moveHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y);
+        }
+    }
+    - (void)windowDidBecomeKey:(NSNotification *)notification {
+        if (self.focusHandler) {
+            self.focusHandler(self.windowId);
         }
     }
 @end
@@ -3875,7 +3882,8 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      createNSWindowWithFrameAndStyleParams config,
                                                      WindowCloseHandler zigCloseHandler,
                                                      WindowMoveHandler zigMoveHandler,
-                                                     WindowResizeHandler zigResizeHandler) {
+                                                     WindowResizeHandler zigResizeHandler,
+                                                     WindowFocusHandler zigFocusHandler) {
     
     NSScreen *primaryScreen = [NSScreen screens][0];
     NSRect screenFrame = [primaryScreen frame];
@@ -3896,6 +3904,7 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     delegate.closeHandler = zigCloseHandler;
     delegate.resizeHandler = zigResizeHandler;
     delegate.moveHandler = zigMoveHandler;
+    delegate.focusHandler = zigFocusHandler;
     delegate.windowId = windowId;
     delegate.window = window;
     [window setDelegate:delegate];
@@ -3921,11 +3930,12 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   uint32_t windowId,
   double x, double y,
   double width, double height,
-  uint32_t styleMask,   
+  uint32_t styleMask,
   const char* titleBarStyle,
   WindowCloseHandler zigCloseHandler,
   WindowMoveHandler zigMoveHandler,
-  WindowResizeHandler zigResizeHandler
+  WindowResizeHandler zigResizeHandler,
+  WindowFocusHandler zigFocusHandler
   ) {
 
     NSRect frame = NSMakeRect(x, y, width, height);
@@ -3947,7 +3957,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             config,
             zigCloseHandler,
             zigMoveHandler,
-            zigResizeHandler
+            zigResizeHandler,
+            zigFocusHandler
         );
     });
 

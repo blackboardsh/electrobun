@@ -365,6 +365,7 @@ typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint
 typedef void (*WindowCloseHandler)(uint32_t windowId);
 typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
 typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
+typedef void (*WindowFocusHandler)(uint32_t windowId);
 typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
 typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
 typedef const char* (*GetMimeType)(const char* filePath);
@@ -3051,6 +3052,7 @@ typedef struct {
     WindowCloseHandler closeHandler;
     WindowMoveHandler moveHandler;
     WindowResizeHandler resizeHandler;
+    WindowFocusHandler focusHandler;
 } WindowData;
 
 
@@ -3212,7 +3214,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
             }
             break;
-            
+
+        case WM_ACTIVATE:
+            // Window activation - WA_ACTIVE or WA_CLICKACTIVE means window is being activated
+            if (LOWORD(wParam) != WA_INACTIVE) {
+                if (data && data->focusHandler) {
+                    data->focusHandler(data->windowId);
+                }
+            }
+            break;
+
         case WM_PAINT:
             {
                 PAINTSTRUCT ps;
@@ -4866,7 +4877,8 @@ ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
                                          createNSWindowWithFrameAndStyleParams config,
                                          WindowCloseHandler zigCloseHandler,
                                          WindowMoveHandler zigMoveHandler,
-                                         WindowResizeHandler zigResizeHandler) {
+                                         WindowResizeHandler zigResizeHandler,
+                                         WindowFocusHandler zigFocusHandler) {
     // Stub implementation
     return new NSWindow();
 }
@@ -4886,7 +4898,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     const char* titleBarStyle,
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,
-    WindowResizeHandler zigResizeHandler) {
+    WindowResizeHandler zigResizeHandler,
+    WindowFocusHandler zigFocusHandler) {
     
     // Everything GUI-related needs to be dispatched to main thread
     HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
@@ -4910,7 +4923,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         data->closeHandler = zigCloseHandler;
         data->moveHandler = zigMoveHandler;
         data->resizeHandler = zigResizeHandler;
-        
+        data->focusHandler = zigFocusHandler;
+
         // Map style mask to Windows style
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
         

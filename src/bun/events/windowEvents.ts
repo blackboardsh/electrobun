@@ -9,4 +9,5 @@ export default {
     >("resize", data),
   move: (data) =>
     new ElectrobunEvent<{ id: number; x: number; y: number }, {}>("move", data),
+  focus: (data) => new ElectrobunEvent<{ id: number }, {}>("focus", data),
 };

@@ -69,13 +69,13 @@ export const native = (() => {
         args: [
           FFIType.u32,                 // windowId
           FFIType.f64, FFIType.f64,    // x, y
-          FFIType.f64, FFIType.f64,    // width, height    
-          FFIType.u32,           // styleMask 
+          FFIType.f64, FFIType.f64,    // width, height
+          FFIType.u32,           // styleMask
           FFIType.cstring,       // titleBarStyle
           FFIType.function,      // closeHandler
           FFIType.function,      // moveHandler
-          FFIType.function      // resizeHandler
-          
+          FFIType.function,      // resizeHandler
+          FFIType.function       // focusHandler
         ],
         returns: FFIType.ptr
       },
@@ -388,16 +388,17 @@ export const ffi = {
           )          
      
         const windowPtr = native.symbols.createWindowWithFrameAndStyleFromWorker(
-          id, 
+          id,
           // frame
-          x, y, width, height, 
+          x, y, width, height,
           styleMask,
           // style
           toCString(titleBarStyle),
           // callbacks
           windowCloseCallback,
           windowMoveCallback,
-          windowResizeCallback,       
+          windowResizeCallback,
+          windowFocusCallback,
         );
         
         
@@ -925,6 +926,26 @@ const windowResizeCallback = new JSCallback(
   },
   {
     args: ["u32", "f64", "f64", "f64", "f64"],
+    returns: "void",
+    threadsafe: true,
+  }
+);
+
+const windowFocusCallback = new JSCallback(
+  (id) => {
+    const handler = electrobunEventEmitter.events.window.focus;
+    const event = handler({
+      id,
+    });
+
+    let result;
+    // global event
+    result = electrobunEventEmitter.emitEvent(event);
+
+    result = electrobunEventEmitter.emitEvent(event, id);
+  },
+  {
+    args: ["u32"],
     returns: "void",
     threadsafe: true,
   }
