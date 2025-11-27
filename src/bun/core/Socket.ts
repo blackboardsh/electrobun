@@ -97,14 +97,25 @@ const startRPCServer = () => {
             }
           },
           close(ws, code, reason) {
+            if (!ws?.data) {
+              return;
+            }
             const { webviewId } = ws.data;
             console.log("Closed:", webviewId, code, reason);
-            socketMap[webviewId].socket = null;
+            if (socketMap[webviewId]) {
+              socketMap[webviewId].socket = null;
+            }
           },
 
           message(ws, message) {
+            if (!ws?.data) {
+              return;
+            }
             const { webviewId } = ws.data;
             const browserView = BrowserView.getById(webviewId);
+            if (!browserView) {
+              return;
+            }
 
             if (browserView.rpcHandler) {
               if (typeof message === "string") {
