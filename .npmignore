@@ -17,6 +17,14 @@
 /build.ts
 /CLAUDE.md
 /CLAUDE.local.md
+/templates
+/tests
+BETA_RELEASE.md
+BUILD.md
+test-new-window-events.ts
+test-new-window.html
+test-npm-install.sh
+debug.js
 
 # Exclude platform-specific dist directories
 /dist-*/

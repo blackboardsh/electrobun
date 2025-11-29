@@ -1,0 +1,24 @@
+{
+  "name": "electrobun-hello-world",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A simple Electrobun app showcasing core features",
+  "scripts": {
+    "dev": "electrobun dev",
+    "launch": "./build/dev-win-x64/hello-world-dev/bin/launcher",
+    "build": "electrobun build",
+    "nuxt:build": "nuxt build --prerender",
+    "nuxt:dev": "nuxt dev",
+    "start": "bun run nuxt:build && bun run dev",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "electrobun": "latest",
+    "nuxt": "^4.2.1",
+    "vue": "^3.5.24",
+    "vue-router": "^4.6.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
