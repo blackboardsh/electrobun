@@ -8,21 +8,20 @@ const tar = require('tar');
 
 // Detect platform and architecture
 function getPlatform() {
-  switch (process.platform) {
-    case 'win32': return 'win';
-    case 'darwin': return 'darwin';
-    case 'linux': return 'linux';
-    default: throw new Error(`Unsupported platform: ${process.platform}`);
-  }
-}
+  const supportedPlatforms = ['win', 'darwin', 'linux']; // Future platform supports should be added here
+  if (!supportedPlatforms.includes(process.platform)) {
+    throw new Error(`Unsupported platform: ${process.platform}`);
+  };
+  return process.platform;
+};
 
 function getArch() {
-  switch (process.arch) {
-    case 'arm64': return 'arm64';
-    case 'x64': return 'x64';
-    default: throw new Error(`Unsupported architecture: ${process.arch}`);
-  }
-}
+  const supportedArchs = ['arm64', 'x64'];
+  if (!supportedArchs.includes(process.arch)) {
+    throw new Error(`Unsupported architecture: ${process.arch}`);
+  };
+  return process.arch;
+};
 
 const platform = getPlatform();
 // Always use x64 for Windows since we only build x64 Windows binaries
