@@ -15,6 +15,7 @@ import {
   copyFileSync,
   renameSync,
 } from "fs";
+import type { Subprocess } from "bun";
 import { execSync } from "child_process";
 import * as readline from "readline";
 import tar from "tar";
@@ -24,7 +25,7 @@ import { OS, ARCH } from '../shared/platform';
 import { getTemplate, getTemplateNames } from './templates/embedded';
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
 // MacOS named pipes hang at around 4KB
-const MAX_CHUNK_SIZE = 1024 * 2;
+// const MAX_CHUNK_SIZE = 1024 * 2;
 
 
 // const binExt = OS === 'win' ? '.exe' : '';
@@ -83,7 +84,7 @@ function getPlatformPaths(targetOS: 'macos' | 'win' | 'linux', targetArch: 'arm6
 }
 
 // Default PATHS for host platform (backward compatibility)
-const PATHS = getPlatformPaths(OS, ARCH);
+// const PATHS = getPlatformPaths(OS, ARCH);
 
 async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targetArch?: 'arm64' | 'x64') {
   // Use provided target platform or default to host platform
@@ -679,7 +680,7 @@ function parseBuildTargets(): BuildTarget[] {
 function parseConfigTargets(): BuildTarget[] {
   // If config has targets, use them
   if (config.build.targets && config.build.targets.length > 0) {
-    return config.build.targets.map(target => {
+    return config.build.targets.map((target: string) => {
       if (target === 'current') {
         return { os: OS, arch: ARCH };
       }
@@ -903,7 +904,7 @@ const bundleFileName = targetOS === 'macos' ? `${appFileName}.app` : appFileName
 
 // const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
 
-let proc = null;
+// let proc = null;
 
 if (commandArg === "init") {
   await (async () => {
@@ -1334,7 +1335,7 @@ if (commandArg === "init") {
         // Copy CEF .so files to main directory as symlinks to cef/ subdirectory
         cefSoFiles.forEach(soFile => {
           const sourcePath = join(cefSourcePath, soFile);
-          const destPath = join(appBundleMacOSPath, soFile);
+          // const destPath = join(appBundleMacOSPath, soFile);
           if (existsSync(sourcePath)) {
             // We'll create the actual file in cef/ and symlink from main directory
             // This will be done after the cef/ directory is populated
@@ -1607,7 +1608,7 @@ if (commandArg === "init") {
     if (result.exitCode !== 0) {
       console.error("postBuild script failed with exit code:", result.exitCode);
       if (result.stderr) {
-        console.error("stderr:", result.stderr.toString());
+        console.error("stderr:", String(result.stderr));
       }
       // Also log which bun binary we're trying to use
       console.error("Tried to run with bun at:", hostPaths.BUN_BINARY);
@@ -1622,7 +1623,7 @@ if (commandArg === "init") {
     console.log("Packing resources into ASAR archive...");
 
     const asarPath = join(appBundleFolderResourcesPath, "app.asar");
-    const asarUnpackedPath = join(appBundleFolderResourcesPath, "app.asar.unpacked");
+    // const asarUnpackedPath = join(appBundleFolderResourcesPath, "app.asar.unpacked");
 
     // Get zig-asar CLI path - on Windows, try x64 first (most common), fall back to arm64
     let zigAsarCli: string;
@@ -1697,7 +1698,7 @@ if (commandArg === "init") {
       if (asarResult.exitCode !== 0) {
         console.error("ASAR packing failed with exit code:", asarResult.exitCode);
         if (asarResult.stderr) {
-          console.error("stderr:", asarResult.stderr.toString());
+          console.error("stderr:", String(asarResult.stderr));
         }
         console.error("Command:", zigAsarCli, ...asarArgs);
         process.exit(1);
@@ -1828,7 +1829,7 @@ if (commandArg === "init") {
     await ZstdInit().then(async ({ ZstdSimple, ZstdStream }) => {
       // Note: Simple is much faster than stream, but stream is better for large files
       // todo (yoav): consider a file size cutoff to switch to stream instead of simple.
-      const useStream = tarball.size > 100 * 1024 * 1024;
+      // const useStream = tarball.size > 100 * 1024 * 1024;
       
       if (tarball.size > 0) {
         // Uint8 array filestream of the tar file
@@ -1938,7 +1939,7 @@ if (commandArg === "init") {
       }
     } else {
       // For Windows and Linux, add the self-extracting bundle directly
-      const platformBundlePath = join(buildFolder, `${appFileName}${platformSuffix}${targetOS === 'win' ? '.exe' : ''}`);
+      //const platformBundlePath = join(buildFolder, `${appFileName}${platformSuffix}${targetOS === 'win' ? '.exe' : ''}`);
       // Copy the self-extracting bundle to platform-specific filename
       if (targetOS === 'win') {
         // On Windows, create a self-extracting exe
@@ -1959,6 +1960,7 @@ if (commandArg === "init") {
         // artifactsToUpload.push(selfExtractingExePath);
       } else if (targetOS === 'linux') {
         // Create desktop file for Linux
+        // TODO: I think config.package never exists on type config
         const desktopFileContent = `[Desktop Entry]
 Version=1.0
 Type=Application
@@ -2191,7 +2193,7 @@ exec "\$BUN_BINARY" "\$MAIN_JS" "\$@"
   //   env: {},
   // });
 
-  let mainProc;
+  let mainProc: Subprocess | null = null;
   let bundleExecPath: string;
   let bundleResourcesPath: string;
   
@@ -2822,7 +2824,8 @@ function codesignAppBundle(
         `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --identifier ${identifier} ${entitlementFlag} ${escapePathForTerminal(execPath)}`
       );
     } catch (err) {
-      console.error(`Failed to sign ${relativePath}:`, err.message);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`Failed to sign ${relativePath}:`, msg);
       // Continue signing other files even if one fails
     }
   }
@@ -2839,7 +2842,8 @@ function codesignAppBundle(
         `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`
       );
     } catch (error) {
-      console.error("Failed to sign launcher:", error.message);
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Failed to sign launcher:", msg);
       console.log("Attempting to sign launcher without runtime hardening...");
       execSync(
         `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`
