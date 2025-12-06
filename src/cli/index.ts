@@ -1985,16 +1985,22 @@ Categories=Application;
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 
-# Find the launcher binary relative to this script
-LAUNCHER_BINARY="\$SCRIPT_DIR/bin/launcher"
+# Linux uses bun directly as the entry point (no launcher binary like macOS)
+BUN_BINARY="\$SCRIPT_DIR/bin/bun"
+MAIN_JS="\$SCRIPT_DIR/Resources/main.js"
 
-if [ ! -x "\$LAUNCHER_BINARY" ]; then
-    echo "Error: Could not find launcher binary at \$LAUNCHER_BINARY"
+if [ ! -x "\$BUN_BINARY" ]; then
+    echo "Error: Could not find bun runtime at \$BUN_BINARY"
+    exit 1
+fi
+
+if [ ! -f "\$MAIN_JS" ]; then
+    echo "Error: Could not find main.js at \$MAIN_JS"
     exit 1
 fi
 
 # Launch the application
-exec "\$LAUNCHER_BINARY" "\$@"
+exec "\$BUN_BINARY" "\$MAIN_JS" "\$@"
 `;
         
         const launcherScriptPath = join(appBundleFolderPath, `${appFileName}.sh`);
@@ -2585,11 +2591,12 @@ async function createAppImage(buildFolder: string, appBundlePath: string, appFil
     cpSync(appBundlePath, appDirAppPath, { recursive: true, dereference: true });
     
     // Create AppRun script (main executable for AppImage)
+    // Linux uses bun directly as the entry point (no launcher binary like macOS)
     const appRunContent = `#!/bin/bash
 HERE="$(dirname "$(readlink -f "\${0}")")"
 export APPDIR="\$HERE"
 cd "\$HERE"
-exec "\$HERE/app/bin/launcher" "\$@"
+exec "\$HERE/app/bin/bun" "\$HERE/app/Resources/main.js" "\$@"
 `;
     
     const appRunPath = join(appDirPath, "AppRun");
