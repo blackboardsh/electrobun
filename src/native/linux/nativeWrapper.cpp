@@ -56,6 +56,7 @@ static AsarArchive* g_asarArchive = nullptr;
 #include "include/cef_response_filter.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
+#include "include/cef_download_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
 // X11 Error Handler (non-fatal errors are common in WebKit/GTK)
@@ -982,7 +983,8 @@ class ElectrobunClient : public CefClient,
                         public CefResourceRequestHandler,
                         public CefLifeSpanHandler,
                         public CefPermissionHandler,
-                        public CefDialogHandler {
+                        public CefDialogHandler,
+                        public CefDownloadHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -1069,6 +1071,10 @@ public:
     }
     
     virtual CefRefPtr<CefDialogHandler> GetDialogHandler() override {
+        return this;
+    }
+
+    virtual CefRefPtr<CefDownloadHandler> GetDownloadHandler() override {
         return this;
     }
 
@@ -1666,6 +1672,83 @@ public:
         return true; // We handled the dialog
     }
 
+    // CefDownloadHandler methods
+    bool OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefDownloadItem> download_item,
+                          const CefString& suggested_name,
+                          CefRefPtr<CefBeforeDownloadCallback> callback) override {
+        printf("CEF Linux: OnBeforeDownload for %s\n", suggested_name.ToString().c_str());
+
+        // Get the Downloads folder using GLib
+        const gchar* downloadsDir = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+        if (!downloadsDir) {
+            // Fallback to home directory + Downloads
+            const gchar* homeDir = g_get_home_dir();
+            if (homeDir) {
+                gchar* fallbackDir = g_build_filename(homeDir, "Downloads", nullptr);
+                downloadsDir = fallbackDir;
+            }
+        }
+
+        if (downloadsDir) {
+            std::string suggestedStr = suggested_name.ToString();
+            gchar* destinationPath = g_build_filename(downloadsDir, suggestedStr.c_str(), nullptr);
+
+            // Handle duplicate filenames
+            gchar* basePath = g_strdup(destinationPath);
+            gchar* extension = nullptr;
+            gchar* dot = g_strrstr(basePath, ".");
+            if (dot && dot != basePath) {
+                // Check if dot is in filename (not in path)
+                gchar* lastSlash = g_strrstr(basePath, "/");
+                if (!lastSlash || dot > lastSlash) {
+                    extension = g_strdup(dot);
+                    *dot = '\0';
+                }
+            }
+
+            int counter = 1;
+            while (g_file_test(destinationPath, G_FILE_TEST_EXISTS)) {
+                g_free(destinationPath);
+                if (extension) {
+                    destinationPath = g_strdup_printf("%s (%d)%s", basePath, counter, extension);
+                } else {
+                    destinationPath = g_strdup_printf("%s (%d)", basePath, counter);
+                }
+                counter++;
+            }
+
+            printf("CEF Linux: Downloading to %s\n", destinationPath);
+
+            // Continue the download to the specified path without showing a dialog
+            callback->Continue(destinationPath, false);
+
+            g_free(basePath);
+            g_free(extension);
+            g_free(destinationPath);
+        } else {
+            printf("CEF Linux ERROR: Could not determine Downloads directory, using default behavior\n");
+            callback->Continue("", false);
+        }
+
+        return true;  // We handled it
+    }
+
+    void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefDownloadItem> download_item,
+                           CefRefPtr<CefDownloadItemCallback> callback) override {
+        if (download_item->IsComplete()) {
+            printf("CEF Linux: Download complete - %s\n", download_item->GetFullPath().ToString().c_str());
+        } else if (download_item->IsCanceled()) {
+            printf("CEF Linux: Download canceled\n");
+        } else if (download_item->IsInProgress()) {
+            int percent = download_item->GetPercentComplete();
+            if (percent >= 0 && percent % 25 == 0) {  // Log at 0%, 25%, 50%, 75%, 100%
+                printf("CEF Linux: Download progress %d%%\n", percent);
+            }
+        }
+    }
+
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
@@ -1950,7 +2033,13 @@ public:
         
         // Handle file chooser requests for <input type="file">
         g_signal_connect(webview, "run-file-chooser", G_CALLBACK(onRunFileChooser), this);
-        
+
+        // Handle downloads
+        WebKitWebContext* defaultContext = webkit_web_view_get_context(WEBKIT_WEB_VIEW(webview));
+        if (defaultContext) {
+            g_signal_connect(defaultContext, "download-started", G_CALLBACK(onDownloadStarted), this);
+        }
+
         // Note: Removed visibility override for stability
         
         this->widget = webview;
@@ -2488,7 +2577,94 @@ public:
         gtk_widget_destroy(dialog);
         return TRUE; // We handled the request
     }
-    
+
+    // Download handling callbacks
+    static gboolean onDecideDestination(WebKitDownload* download, gchar* suggested_filename, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        fprintf(stderr, "WebKit2GTK: Deciding destination for download: %s\n", suggested_filename);
+
+        // Get the Downloads directory
+        const gchar* downloadsDir = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+        if (!downloadsDir) {
+            // Fallback to home directory + Downloads
+            downloadsDir = g_get_home_dir();
+            if (downloadsDir) {
+                gchar* fallbackDir = g_build_filename(downloadsDir, "Downloads", nullptr);
+                downloadsDir = fallbackDir;
+            }
+        }
+
+        if (downloadsDir) {
+            gchar* destinationPath = g_build_filename(downloadsDir, suggested_filename, nullptr);
+
+            // Handle duplicate filenames
+            gchar* basePath = g_strdup(destinationPath);
+            gchar* extension = nullptr;
+            gchar* dot = g_strrstr(basePath, ".");
+            if (dot && dot != basePath) {
+                // Check if dot is in filename (not in path)
+                gchar* lastSlash = g_strrstr(basePath, "/");
+                if (!lastSlash || dot > lastSlash) {
+                    extension = g_strdup(dot);
+                    *dot = '\0';
+                }
+            }
+
+            int counter = 1;
+            while (g_file_test(destinationPath, G_FILE_TEST_EXISTS)) {
+                g_free(destinationPath);
+                if (extension) {
+                    destinationPath = g_strdup_printf("%s (%d)%s", basePath, counter, extension);
+                } else {
+                    destinationPath = g_strdup_printf("%s (%d)", basePath, counter);
+                }
+                counter++;
+            }
+
+            g_free(basePath);
+            g_free(extension);
+
+            // Convert path to URI
+            gchar* destinationUri = g_filename_to_uri(destinationPath, nullptr, nullptr);
+            if (destinationUri) {
+                fprintf(stderr, "WebKit2GTK: Downloading to %s\n", destinationPath);
+                webkit_download_set_destination(download, destinationUri);
+                g_free(destinationUri);
+            } else {
+                fprintf(stderr, "WebKit2GTK ERROR: Could not convert path to URI: %s\n", destinationPath);
+            }
+
+            g_free(destinationPath);
+        } else {
+            fprintf(stderr, "WebKit2GTK ERROR: Could not determine Downloads directory\n");
+        }
+
+        return TRUE; // We handled the signal
+    }
+
+    static void onDownloadFinished(WebKitDownload* download, gpointer user_data) {
+        const gchar* destination = webkit_download_get_destination(download);
+        fprintf(stderr, "WebKit2GTK: Download finished - %s\n", destination ? destination : "unknown");
+    }
+
+    static void onDownloadFailed(WebKitDownload* download, GError* error, gpointer user_data) {
+        fprintf(stderr, "WebKit2GTK ERROR: Download failed - %s\n", error ? error->message : "unknown error");
+    }
+
+    static void onDownloadStarted(WebKitWebContext* context, WebKitDownload* download, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        WebKitURIRequest* request = webkit_download_get_request(download);
+        const gchar* uri = webkit_uri_request_get_uri(request);
+        fprintf(stderr, "WebKit2GTK: Download started for %s\n", uri);
+
+        // Connect to decide-destination signal
+        g_signal_connect(download, "decide-destination", G_CALLBACK(onDecideDestination), user_data);
+
+        // Connect to finished/failed signals for logging
+        g_signal_connect(download, "finished", G_CALLBACK(onDownloadFinished), user_data);
+        g_signal_connect(download, "failed", G_CALLBACK(onDownloadFailed), user_data);
+    }
+
 };
 
 

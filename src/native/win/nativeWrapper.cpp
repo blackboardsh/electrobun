@@ -24,6 +24,7 @@
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/base.h>
 #include <shobjidl.h>  // For IFileOpenDialog
+#include <shlobj.h>    // For SHGetKnownFolderPath, FOLDERID_Downloads
 #include <shlguid.h>   // For CLSID_FileOpenDialog
 #include <commdlg.h>   // For COMDLG_FILTERSPEC
 #include <dcomp.h>     // For DirectComposition
@@ -316,6 +317,7 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
+#include "include/cef_download_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
 // Restore macro definitions
@@ -1121,6 +1123,85 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunDialogHandler);
 };
 
+// CEF Download handler for Windows
+class ElectrobunDownloadHandler : public CefDownloadHandler {
+public:
+    ElectrobunDownloadHandler() {}
+
+    bool OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefDownloadItem> download_item,
+                          const CefString& suggested_name,
+                          CefRefPtr<CefBeforeDownloadCallback> callback) override {
+        printf("CEF Windows: OnBeforeDownload for %s\n", suggested_name.ToString().c_str());
+
+        // Get the Downloads folder using Windows API
+        wchar_t* downloadsPath = nullptr;
+        HRESULT hr = SHGetKnownFolderPath(FOLDERID_Downloads, 0, NULL, &downloadsPath);
+
+        if (SUCCEEDED(hr) && downloadsPath) {
+            // Convert suggested name to wide string
+            std::string suggestedStr = suggested_name.ToString();
+            std::wstring suggestedNameW(suggestedStr.begin(), suggestedStr.end());
+
+            // Build the full destination path
+            std::wstring destPath = downloadsPath;
+            destPath += L"\\";
+            destPath += suggestedNameW;
+
+            // Handle duplicate filenames
+            std::wstring basePath = destPath;
+            std::wstring extension;
+            size_t dotPos = destPath.find_last_of(L'.');
+            size_t slashPos = destPath.find_last_of(L"\\/");
+            if (dotPos != std::wstring::npos && (slashPos == std::wstring::npos || dotPos > slashPos)) {
+                basePath = destPath.substr(0, dotPos);
+                extension = destPath.substr(dotPos);
+            }
+
+            int counter = 1;
+            while (GetFileAttributesW(destPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                destPath = basePath + L" (" + std::to_wstring(counter) + L")" + extension;
+                counter++;
+            }
+
+            // Convert wide string back to UTF-8 for CEF
+            int size = WideCharToMultiByte(CP_UTF8, 0, destPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            std::string utf8Path(size - 1, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, destPath.c_str(), -1, &utf8Path[0], size, nullptr, nullptr);
+
+            printf("CEF Windows: Downloading to %s\n", utf8Path.c_str());
+
+            // Continue the download to the specified path without showing a dialog
+            callback->Continue(utf8Path, false);
+
+            CoTaskMemFree(downloadsPath);
+        } else {
+            printf("CEF Windows: Could not get Downloads folder, using default behavior\n");
+            callback->Continue("", false);
+        }
+
+        return true;  // We handled it
+    }
+
+    void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefDownloadItem> download_item,
+                           CefRefPtr<CefDownloadItemCallback> callback) override {
+        if (download_item->IsComplete()) {
+            printf("CEF Windows: Download complete - %s\n", download_item->GetFullPath().ToString().c_str());
+        } else if (download_item->IsCanceled()) {
+            printf("CEF Windows: Download canceled\n");
+        } else if (download_item->IsInProgress()) {
+            int percent = download_item->GetPercentComplete();
+            if (percent >= 0 && percent % 25 == 0) {  // Log at 0%, 25%, 50%, 75%, 100%
+                printf("CEF Windows: Download progress %d%%\n", percent);
+            }
+        }
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunDownloadHandler);
+};
+
 // CEF Client class with load and life span handlers
 class ElectrobunCefClient : public CefClient {
 public:
@@ -1136,6 +1217,7 @@ public:
         m_contextMenuHandler = new ElectrobunContextMenuHandler();
         m_permissionHandler = new ElectrobunPermissionHandler();
         m_dialogHandler = new ElectrobunDialogHandler();
+        m_downloadHandler = new ElectrobunDownloadHandler();
     }
 
     void AddPreloadScript(const std::string& script) {
@@ -1168,6 +1250,10 @@ public:
     
     CefRefPtr<CefDialogHandler> GetDialogHandler() override {
         return m_dialogHandler;
+    }
+
+    CefRefPtr<CefDownloadHandler> GetDownloadHandler() override {
+        return m_downloadHandler;
     }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -1230,6 +1316,7 @@ private:
     CefRefPtr<ElectrobunContextMenuHandler> m_contextMenuHandler;
     CefRefPtr<ElectrobunPermissionHandler> m_permissionHandler;
     CefRefPtr<ElectrobunDialogHandler> m_dialogHandler;
+    CefRefPtr<ElectrobunDownloadHandler> m_downloadHandler;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
 
@@ -4285,7 +4372,118 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 // Note: WebView2 generally handles file dialogs automatically,
                                 // but we can enhance support by enabling the necessary permissions
                                 // in the AdditionalBrowserArguments (already done above with --disable-web-security)
-                                
+
+                                // Add download handler - requires ICoreWebView2_4
+                                Microsoft::WRL::ComPtr<ICoreWebView2_4> webview4;
+                                if (SUCCEEDED(webview->QueryInterface(IID_PPV_ARGS(&webview4)))) {
+                                    webview4->add_DownloadStarting(
+                                        Callback<ICoreWebView2DownloadStartingEventHandler>(
+                                            [](ICoreWebView2* sender, ICoreWebView2DownloadStartingEventArgs* args) -> HRESULT {
+                                                printf("WebView2: Download starting\n");
+
+                                                // Get the download operation
+                                                Microsoft::WRL::ComPtr<ICoreWebView2DownloadOperation> downloadOp;
+                                                args->get_DownloadOperation(&downloadOp);
+
+                                                if (downloadOp) {
+                                                    // Get suggested filename from URI
+                                                    wchar_t* uriWStr = nullptr;
+                                                    downloadOp->get_Uri(&uriWStr);
+
+                                                    // Get the content disposition filename if available
+                                                    wchar_t* contentDisp = nullptr;
+                                                    downloadOp->get_ContentDisposition(&contentDisp);
+
+                                                    // Get Downloads folder path
+                                                    wchar_t* downloadsPath = nullptr;
+                                                    HRESULT hr = SHGetKnownFolderPath(FOLDERID_Downloads, 0, NULL, &downloadsPath);
+
+                                                    if (SUCCEEDED(hr) && downloadsPath) {
+                                                        // Get the suggested filename from the args
+                                                        wchar_t* resultFilePath = nullptr;
+                                                        args->get_ResultFilePath(&resultFilePath);
+
+                                                        std::wstring suggestedName;
+                                                        if (resultFilePath) {
+                                                            // Extract just the filename from the full path
+                                                            std::wstring fullPath(resultFilePath);
+                                                            size_t lastSlash = fullPath.find_last_of(L"\\/");
+                                                            if (lastSlash != std::wstring::npos) {
+                                                                suggestedName = fullPath.substr(lastSlash + 1);
+                                                            } else {
+                                                                suggestedName = fullPath;
+                                                            }
+                                                            CoTaskMemFree(resultFilePath);
+                                                        } else if (uriWStr) {
+                                                            // Extract filename from URI
+                                                            std::wstring uri(uriWStr);
+                                                            size_t lastSlash = uri.find_last_of(L'/');
+                                                            size_t queryStart = uri.find(L'?');
+                                                            if (lastSlash != std::wstring::npos) {
+                                                                if (queryStart != std::wstring::npos && queryStart > lastSlash) {
+                                                                    suggestedName = uri.substr(lastSlash + 1, queryStart - lastSlash - 1);
+                                                                } else {
+                                                                    suggestedName = uri.substr(lastSlash + 1);
+                                                                }
+                                                            } else {
+                                                                suggestedName = L"download";
+                                                            }
+                                                        } else {
+                                                            suggestedName = L"download";
+                                                        }
+
+                                                        // Build full destination path
+                                                        std::wstring destPath = downloadsPath;
+                                                        destPath += L"\\";
+                                                        destPath += suggestedName;
+
+                                                        // Handle duplicate filenames
+                                                        std::wstring basePath = destPath;
+                                                        std::wstring extension;
+                                                        size_t dotPos = destPath.find_last_of(L'.');
+                                                        size_t slashPos = destPath.find_last_of(L"\\/");
+                                                        if (dotPos != std::wstring::npos && (slashPos == std::wstring::npos || dotPos > slashPos)) {
+                                                            basePath = destPath.substr(0, dotPos);
+                                                            extension = destPath.substr(dotPos);
+                                                        }
+
+                                                        int counter = 1;
+                                                        while (GetFileAttributesW(destPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                                                            destPath = basePath + L" (" + std::to_wstring(counter) + L")" + extension;
+                                                            counter++;
+                                                        }
+
+                                                        // Set the download destination
+                                                        args->put_ResultFilePath(destPath.c_str());
+
+                                                        // Hide the default download dialog
+                                                        args->put_Handled(TRUE);
+
+                                                        // Log the download
+                                                        int size = WideCharToMultiByte(CP_UTF8, 0, destPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
+                                                        if (size > 0) {
+                                                            std::string utf8Path(size - 1, '\0');
+                                                            WideCharToMultiByte(CP_UTF8, 0, destPath.c_str(), -1, &utf8Path[0], size, nullptr, nullptr);
+                                                            printf("WebView2: Downloading to %s\n", utf8Path.c_str());
+                                                        }
+
+                                                        CoTaskMemFree(downloadsPath);
+                                                    } else {
+                                                        printf("WebView2: Could not get Downloads folder, using default behavior\n");
+                                                    }
+
+                                                    if (uriWStr) CoTaskMemFree(uriWStr);
+                                                    if (contentDisp) CoTaskMemFree(contentDisp);
+                                                }
+
+                                                return S_OK;
+                                            }).Get(),
+                                        nullptr);
+                                    printf("WebView2: Download handler registered successfully\n");
+                                } else {
+                                    printf("WebView2: Warning - Could not get ICoreWebView2_4 interface for download handling\n");
+                                }
+
                             } else {
                             }
                             

@@ -28,6 +28,7 @@
 #include "include/cef_command_line.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
+#include "include/cef_download_handler.h"
 #include <string>
 #include <vector>
 #include <list>
@@ -615,7 +616,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) uint32_t webviewId;
 @end
 
-@interface MyNavigationDelegate : NSObject <WKNavigationDelegate>
+@interface MyNavigationDelegate : NSObject <WKNavigationDelegate, WKDownloadDelegate>
     @property (nonatomic, assign) DecideNavigationCallback zigCallback;
     @property (nonatomic, assign) WebviewEventHandler zigEventHandler;
     @property (nonatomic, assign) uint32_t webviewId;
@@ -1191,15 +1192,92 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         NSURL *newURL = navigationAction.request.URL;
         NSLog(@"DEBUG WKWebView Navigation: webview %u navigating to %@", self.webviewId, newURL.absoluteString);
-        BOOL shouldAllow = 1;//self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);        
+        BOOL shouldAllow = 1;//self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
         self.zigEventHandler(self.webviewId, "will-navigate", webView.URL.absoluteString.UTF8String);
-        decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
+
+        // Check if this navigation action should trigger a download
+        if (navigationAction.shouldPerformDownload) {
+            decisionHandler(WKNavigationActionPolicyDownload);
+        } else {
+            decisionHandler(shouldAllow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
+        }
     }
+
+    - (void)webView:(WKWebView *)webView
+    decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse
+    decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+        // If the response cannot be shown (e.g., binary file, attachment), trigger download
+        if (!navigationResponse.canShowMIMEType) {
+            NSLog(@"DEBUG WKWebView Download: Cannot show MIME type, triggering download for %@", navigationResponse.response.URL.absoluteString);
+            decisionHandler(WKNavigationResponsePolicyDownload);
+        } else {
+            decisionHandler(WKNavigationResponsePolicyAllow);
+        }
+    }
+
     - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
         self.zigEventHandler(self.webviewId, "did-navigate", webView.URL.absoluteString.UTF8String);
     }
     - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
         self.zigEventHandler(self.webviewId, "did-commit-navigation", webView.URL.absoluteString.UTF8String);
+    }
+
+    // Called when navigationAction policy returns .download
+    - (void)webView:(WKWebView *)webView navigationAction:(WKNavigationAction *)navigationAction didBecomeDownload:(WKDownload *)download API_AVAILABLE(macos(11.3)) {
+        NSLog(@"DEBUG WKWebView Download: Navigation action became download");
+        download.delegate = self;
+    }
+
+    // Called when navigationResponse policy returns .download
+    - (void)webView:(WKWebView *)webView navigationResponse:(WKNavigationResponse *)navigationResponse didBecomeDownload:(WKDownload *)download API_AVAILABLE(macos(11.3)) {
+        NSLog(@"DEBUG WKWebView Download: Navigation response became download");
+        download.delegate = self;
+    }
+
+    // WKDownloadDelegate methods
+    - (void)download:(WKDownload *)download
+    decideDestinationUsingResponse:(NSURLResponse *)response
+    suggestedFilename:(NSString *)suggestedFilename
+    completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler API_AVAILABLE(macos(11.3)) {
+        NSLog(@"DEBUG WKWebView Download: Deciding destination for %@", suggestedFilename);
+
+        // Get the Downloads folder
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDownloadsDirectory, NSUserDomainMask, YES);
+        NSString *downloadsDirectory = [paths firstObject];
+
+        if (downloadsDirectory) {
+            NSString *destinationPath = [downloadsDirectory stringByAppendingPathComponent:suggestedFilename];
+
+            // Handle duplicate filenames by appending a number
+            NSFileManager *fileManager = [NSFileManager defaultManager];
+            NSString *basePath = [destinationPath stringByDeletingPathExtension];
+            NSString *extension = [destinationPath pathExtension];
+            int counter = 1;
+
+            while ([fileManager fileExistsAtPath:destinationPath]) {
+                if (extension.length > 0) {
+                    destinationPath = [NSString stringWithFormat:@"%@ (%d).%@", basePath, counter, extension];
+                } else {
+                    destinationPath = [NSString stringWithFormat:@"%@ (%d)", basePath, counter];
+                }
+                counter++;
+            }
+
+            NSURL *destinationURL = [NSURL fileURLWithPath:destinationPath];
+            NSLog(@"DEBUG WKWebView Download: Saving to %@", destinationPath);
+            completionHandler(destinationURL);
+        } else {
+            NSLog(@"ERROR WKWebView Download: Could not find Downloads directory");
+            completionHandler(nil);
+        }
+    }
+
+    - (void)downloadDidFinish:(WKDownload *)download API_AVAILABLE(macos(11.3)) {
+        NSLog(@"DEBUG WKWebView Download: Download finished successfully");
+    }
+
+    - (void)download:(WKDownload *)download didFailWithError:(NSError *)error resumeData:(NSData *)resumeData API_AVAILABLE(macos(11.3)) {
+        NSLog(@"ERROR WKWebView Download: Download failed with error: %@", error.localizedDescription);
     }
 @end
 
@@ -2098,7 +2176,8 @@ class ElectrobunClient : public CefClient,
                         public CefResourceRequestHandler,
                         public CefPermissionHandler,
                         public CefDisplayHandler,
-                        public CefLifeSpanHandler  {
+                        public CefLifeSpanHandler,
+                        public CefDownloadHandler  {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -2182,7 +2261,11 @@ public:
     virtual CefRefPtr<CefDisplayHandler> GetDisplayHandler() override {
         return this;
     }
-    
+
+    virtual CefRefPtr<CefDownloadHandler> GetDownloadHandler() override {
+        return this;
+    }
+
     // Commented out for now to prevent crashes - file dialogs will use default CEF behavior
     // virtual CefRefPtr<CefDialogHandler> GetDialogHandler() override {
     //     return this;
@@ -2203,9 +2286,62 @@ public:
                         int width,
                         int height) override {}
 
- 
-    
-    
+    // CefDownloadHandler methods
+    bool OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefDownloadItem> download_item,
+                          const CefString& suggested_name,
+                          CefRefPtr<CefBeforeDownloadCallback> callback) override {
+        NSLog(@"DEBUG CEF Download: OnBeforeDownload for %s", suggested_name.ToString().c_str());
+
+        // Get the Downloads folder
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDownloadsDirectory, NSUserDomainMask, YES);
+        NSString *downloadsDirectory = [paths firstObject];
+
+        if (downloadsDirectory) {
+            NSString *suggestedFilename = [NSString stringWithUTF8String:suggested_name.ToString().c_str()];
+            NSString *destinationPath = [downloadsDirectory stringByAppendingPathComponent:suggestedFilename];
+
+            // Handle duplicate filenames by appending a number
+            NSFileManager *fileManager = [NSFileManager defaultManager];
+            NSString *basePath = [destinationPath stringByDeletingPathExtension];
+            NSString *extension = [destinationPath pathExtension];
+            int counter = 1;
+
+            while ([fileManager fileExistsAtPath:destinationPath]) {
+                if (extension.length > 0) {
+                    destinationPath = [NSString stringWithFormat:@"%@ (%d).%@", basePath, counter, extension];
+                } else {
+                    destinationPath = [NSString stringWithFormat:@"%@ (%d)", basePath, counter];
+                }
+                counter++;
+            }
+
+            NSLog(@"DEBUG CEF Download: Saving to %@", destinationPath);
+
+            // Continue the download to the specified path without showing a dialog
+            callback->Continue([destinationPath UTF8String], false);
+        } else {
+            NSLog(@"ERROR CEF Download: Could not find Downloads directory, using suggested name");
+            callback->Continue("", false);  // Use default behavior
+        }
+
+        return true;  // We handled it
+    }
+
+    void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefDownloadItem> download_item,
+                           CefRefPtr<CefDownloadItemCallback> callback) override {
+        if (download_item->IsComplete()) {
+            NSLog(@"DEBUG CEF Download: Download complete - %s", download_item->GetFullPath().ToString().c_str());
+        } else if (download_item->IsCanceled()) {
+            NSLog(@"DEBUG CEF Download: Download canceled");
+        } else if (download_item->IsInProgress()) {
+            int percent = download_item->GetPercentComplete();
+            if (percent >= 0) {
+                NSLog(@"DEBUG CEF Download: Progress %d%%", percent);
+            }
+        }
+    }
 
     // Handle all navigation requests
     bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
