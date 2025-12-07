@@ -16,9 +16,10 @@ import { resolve, resolveSync } from "bun";
 import { homedir } from "os";
 import { join } from "path";
 
-setTimeout(() => {
-  process.exit();
-}, 30000)
+
+// setTimeout(() => {
+//   Utils.quit()
+// }, 30000)
 
 // Electrobun.Updater.getLocalVersion();
 
