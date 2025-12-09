@@ -4128,6 +4128,16 @@ extern "C" void closeNSWindow(NSWindow *window) {
     });
 }
 
+extern "C" void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if (alwaysOnTop) {
+            [window setLevel:NSFloatingWindowLevel];
+        } else {
+            [window setLevel:NSNormalWindowLevel];
+        }
+    });
+}
+
 extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {    
     NSRect frame = NSMakeRect(x, y, width, height);
     dispatch_async(dispatch_get_main_queue(), ^{

@@ -98,6 +98,13 @@ export const native = (() => {
         ],
         returns: FFIType.void,
       },
+      setWindowAlwaysOnTop: {
+        args: [
+          FFIType.ptr, // window ptr
+          FFIType.bool, // alwaysOnTop
+        ],
+        returns: FFIType.void,
+      },
       // webview
       initWebview: {
         args: [
@@ -441,12 +448,23 @@ export const ffi = {
       focusWindow: (params: {winId: number}) => {
         const {winId} = params;
         const windowPtr = BrowserWindow.getById(winId)?.ptr;
-        
+
         if (!windowPtr) {
           throw `Can't focus window. Window no longer exists`;
         }
-        
+
         native.symbols.makeNSWindowKeyAndOrderFront(windowPtr);
+      },
+
+      setAlwaysOnTop: (params: {winId: number, alwaysOnTop: boolean}) => {
+        const {winId, alwaysOnTop} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't set always on top. Window no longer exists`;
+        }
+
+        native.symbols.setWindowAlwaysOnTop(windowPtr, alwaysOnTop);
       },
 
       createWebview: (params: {

@@ -34,6 +34,7 @@ class WindowManager {
         Miniaturizable: true,
         Resizable: true,
       } : undefined,
+      alwaysOnTop: options.alwaysOnTop,
     });
 
     this.windows.set(id, window);

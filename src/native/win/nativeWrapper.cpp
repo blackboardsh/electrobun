@@ -5307,13 +5307,30 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
     });
 }
 
+ELECTROBUN_EXPORT void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
+    // On Windows, NSWindow* is actually HWND
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in setWindowAlwaysOnTop");
+        return;
+    }
+
+    // Dispatch to main thread to ensure thread safety
+    MainThreadDispatcher::dispatch_sync([=]() {
+        HWND insertAfter = alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST;
+        SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    });
+}
+
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
     if (!abstractView) {
         ::log("ERROR: Invalid AbstractView in resizeWebview");
         return;
     }
-    
-    
+
+
     RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
     abstractView->resize(bounds, masksJson);
 }

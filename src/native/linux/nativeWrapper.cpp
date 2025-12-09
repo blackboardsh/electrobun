@@ -5407,5 +5407,42 @@ void closeNSWindow(void* window) {
     }
 }
 
+void setWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
+    if (!window) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            // GTK window
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            gtk_window_set_keep_above(GTK_WINDOW(gtkWindow), alwaysOnTop ? TRUE : FALSE);
+        } else {
+            // X11 window
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                Display* display = x11win->display;
+                Window win = x11win->window;
+
+                Atom wmStateAbove = XInternAtom(display, "_NET_WM_STATE_ABOVE", False);
+                Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
+
+                XEvent xev;
+                memset(&xev, 0, sizeof(xev));
+                xev.type = ClientMessage;
+                xev.xclient.window = win;
+                xev.xclient.message_type = wmState;
+                xev.xclient.format = 32;
+                xev.xclient.data.l[0] = alwaysOnTop ? 1 : 0; // 1 = _NET_WM_STATE_ADD, 0 = _NET_WM_STATE_REMOVE
+                xev.xclient.data.l[1] = wmStateAbove;
+                xev.xclient.data.l[2] = 0;
+                xev.xclient.data.l[3] = 1; // Source indication: normal application
+
+                XSendEvent(display, DefaultRootWindow(display), False,
+                          SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+                XFlush(display);
+            }
+        }
+    });
+}
+
 
 }

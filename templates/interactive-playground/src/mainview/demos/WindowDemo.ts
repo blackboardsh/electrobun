@@ -35,8 +35,8 @@ export class WindowDemo {
             <label class="control-checkbox" title="Transparency is for webviews, not windows">
               <input type="checkbox" id="window-transparent" disabled> Transparent (WebView only)
             </label>
-            <label class="control-checkbox" title="Not yet implemented">
-              <input type="checkbox" id="window-always-on-top" disabled> Always on Top (Coming soon)
+            <label class="control-checkbox">
+              <input type="checkbox" id="window-always-on-top"> Always on Top
             </label>
           </div>
           
@@ -76,11 +76,11 @@ export class WindowDemo {
       const frameless = (document.getElementById('window-frameless') as HTMLInputElement).checked;
       // Transparent and alwaysOnTop are disabled for now
       // const transparent = (document.getElementById('window-transparent') as HTMLInputElement).checked;
-      // const alwaysOnTop = (document.getElementById('window-always-on-top') as HTMLInputElement).checked;
+      const alwaysOnTop = (document.getElementById('window-always-on-top') as HTMLInputElement).checked;
 
       try {
         const result = await rpc.request.createWindow({
-          width, height, x, y, frameless
+          width, height, x, y, frameless, alwaysOnTop
         });
         console.log('Window created:', result);
       } catch (error) {
