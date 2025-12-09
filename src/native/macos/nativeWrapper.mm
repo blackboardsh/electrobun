@@ -1192,8 +1192,21 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         NSURL *newURL = navigationAction.request.URL;
         NSLog(@"DEBUG WKWebView Navigation: webview %u navigating to %@", self.webviewId, newURL.absoluteString);
+
+        // Check if cmd key is held - if so, fire event and block navigation
+        BOOL isCmdClick = (navigationAction.modifierFlags & NSEventModifierFlagCommand) != 0;
+
+        if (isCmdClick && navigationAction.navigationType == WKNavigationTypeLinkActivated) {
+            NSString *eventData = [NSString stringWithFormat:@"{\"url\":\"%@\",\"isCmdClick\":true,\"modifierFlags\":%lu}",
+                                 newURL.absoluteString,
+                                 (unsigned long)navigationAction.modifierFlags];
+            self.zigEventHandler(self.webviewId, "new-window-open", [eventData UTF8String]);
+            decisionHandler(WKNavigationActionPolicyCancel);
+            return;
+        }
+
         BOOL shouldAllow = 1;//self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
-        self.zigEventHandler(self.webviewId, "will-navigate", webView.URL.absoluteString.UTF8String);
+        self.zigEventHandler(self.webviewId, "will-navigate", newURL.absoluteString.UTF8String);
 
         // Check if this navigation action should trigger a download
         if (navigationAction.shouldPerformDownload) {
@@ -2343,6 +2356,9 @@ public:
         }
     }
 
+    // Static timestamp for debouncing cmd+click across all webviews
+    static NSTimeInterval lastCmdClickTime;
+
     // Handle all navigation requests
     bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefFrame> frame,
@@ -2350,12 +2366,50 @@ public:
                        bool user_gesture,
                        bool is_redirect) override {
         std::string url = request->GetURL().ToString();
-        
+
+        // Check if cmd key is held - if so, fire new-window-open event and block navigation
+        // Use NSEvent to get current modifier flags since CEF doesn't provide them in OnBeforeBrowse
+        // Note: We don't check user_gesture because SPA frameworks may trigger navigations
+        // programmatically after a click, causing user_gesture to be false
+        NSEventModifierFlags modifierFlags = [NSEvent modifierFlags];
+        bool isCmdClick = (modifierFlags & NSEventModifierFlagCommand) != 0;
+
+        if (isCmdClick && !is_redirect) {
+            // Debounce: ignore cmd+click navigations within 500ms of the last one
+            // This prevents cascading new tabs when cmd is held during page load
+            NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+            if (now - lastCmdClickTime < 0.5) {
+                // Allow navigation normally, don't fire event
+            } else {
+                lastCmdClickTime = now;
+
+                // Escape special characters in URL for JSON
+                std::string escapedUrl;
+                for (char c : url) {
+                    switch (c) {
+                        case '"': escapedUrl += "\\\""; break;
+                        case '\\': escapedUrl += "\\\\"; break;
+                        case '\n': escapedUrl += "\\n"; break;
+                        case '\r': escapedUrl += "\\r"; break;
+                        case '\t': escapedUrl += "\\t"; break;
+                        default: escapedUrl += c; break;
+                    }
+                }
+                std::string eventData = "{\"url\":\"" + escapedUrl +
+                                       "\",\"isCmdClick\":true,\"modifierFlags\":" +
+                                       std::to_string((unsigned long)modifierFlags) + "}";
+                if (webview_event_handler_) {
+                    // Use strdup to create a persistent copy for the FFI callback
+                    webview_event_handler_(webview_id_, strdup("new-window-open"), strdup(eventData.c_str()));
+                }
+                return true;  // Cancel the navigation
+            }
+        }
+
         // STUB: Always allow navigation without calling JSCallback
         bool shouldAllow = true;  // navigation_callback_(webview_id_, url.c_str());
 
-        
-        if (webview_event_handler_) {        
+        if (webview_event_handler_) {
             webview_event_handler_(webview_id_, "will-navigate", url.c_str());
         }
         return !shouldAllow;  // Return true to cancel the navigation
@@ -2924,6 +2978,8 @@ public:
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
 };
 
+// Initialize static debounce timestamp for cmd+click handling
+NSTimeInterval ElectrobunClient::lastCmdClickTime = 0;
 
 @interface CEFWebViewImpl : AbstractView
     // @property (nonatomic, strong) WKWebView *webView;

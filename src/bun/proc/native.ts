@@ -599,24 +599,92 @@ export const ffi = {
          window.addEventListener('popstate', function(event) {
           emitWebviewEvent('did-navigate-in-page', window.location.href);
          });
-        
+
          window.addEventListener('hashchange', function(event) {
-          emitWebviewEvent('did-navigate-in-page', window.location.href);    
+          emitWebviewEvent('did-navigate-in-page', window.location.href);
          });
-        
-         document.addEventListener('click', function(event) {
-          if ((event.metaKey || event.ctrlKey) && event.target.tagName === 'A') {
-            event.preventDefault();
-            event.stopPropagation();
-        
-            // Get the href of the link
-            const url = event.target.href;        
-            
-            // Open the URL in a new window or tab
-            // Note: we already handle new windows in objc
-            window.open(url, '_blank');
-          }
-        }, true);
+
+         // Track cmd key state for SPA navigation detection
+         let __electrobunCmdKeyHeld = false;
+         let __electrobunCmdKeyTimestamp = 0;
+         const CMD_KEY_THRESHOLD_MS = 500; // How long after cmd release to still consider it a cmd+click
+
+         window.addEventListener('keydown', function(event) {
+           if (event.key === 'Meta' || event.metaKey) {
+             __electrobunCmdKeyHeld = true;
+             __electrobunCmdKeyTimestamp = Date.now();
+           }
+         }, true);
+
+         window.addEventListener('keyup', function(event) {
+           if (event.key === 'Meta') {
+             __electrobunCmdKeyHeld = false;
+             __electrobunCmdKeyTimestamp = Date.now();
+           }
+         }, true);
+
+         // Also track on blur in case key release happens outside window
+         window.addEventListener('blur', function() {
+           __electrobunCmdKeyHeld = false;
+         });
+
+         function __electrobunIsCmdHeld() {
+           if (__electrobunCmdKeyHeld) return true;
+           // Also return true if cmd was released very recently (for race conditions)
+           return (Date.now() - __electrobunCmdKeyTimestamp) < CMD_KEY_THRESHOLD_MS && __electrobunCmdKeyTimestamp > 0;
+         }
+
+         // Intercept cmd+clicks on anchors before SPA frameworks (like Turbo) can handle them
+         // Uses capture phase on window - this fires before document capture listeners
+         window.addEventListener('click', function(event) {
+           if (event.metaKey || event.ctrlKey) {
+             // Find the closest anchor element (handles clicks on nested elements inside <a>)
+             const anchor = event.target.closest('a');
+             if (anchor && anchor.href) {
+               event.preventDefault();
+               event.stopPropagation();
+               event.stopImmediatePropagation();
+               emitWebviewEvent('new-window-open', JSON.stringify({
+                 url: anchor.href,
+                 isCmdClick: true,
+                 isSPANavigation: false
+               }));
+             }
+           }
+         }, true);
+
+         // Intercept history.pushState and replaceState for SPA navigation
+         // This catches cases where cmd is held but the SPA still manages to call pushState
+         const originalPushState = history.pushState;
+         const originalReplaceState = history.replaceState;
+
+         history.pushState = function(state, title, url) {
+           if (__electrobunIsCmdHeld() && url) {
+             // Resolve relative URLs
+             const resolvedUrl = new URL(url, window.location.href).href;
+             emitWebviewEvent('new-window-open', JSON.stringify({
+               url: resolvedUrl,
+               isCmdClick: true,
+               isSPANavigation: true
+             }));
+             // Don't call original - block the navigation
+             return;
+           }
+           return originalPushState.apply(this, arguments);
+         };
+
+         history.replaceState = function(state, title, url) {
+           if (__electrobunIsCmdHeld() && url) {
+             const resolvedUrl = new URL(url, window.location.href).href;
+             emitWebviewEvent('new-window-open', JSON.stringify({
+               url: resolvedUrl,
+               isCmdClick: true,
+               isSPANavigation: true
+             }));
+             return;
+           }
+           return originalReplaceState.apply(this, arguments);
+         };
         
          // prevent overscroll
          document.addEventListener('DOMContentLoaded', () => {        
