@@ -750,13 +750,72 @@ private:
 // CEF Request Handler for views:// scheme support
 class ElectrobunRequestHandler : public CefRequestHandler {
 public:
+    uint32_t webview_id_ = 0;
+    WebviewEventHandler webview_event_handler_ = nullptr;
+
+    // Static debounce timestamp for ctrl+click handling
+    static double lastCtrlClickTime;
+
     ElectrobunRequestHandler() {}
 
-    // Script injection will be handled via render process context creation
+    void SetWebviewId(uint32_t id) { webview_id_ = id; }
+    void SetWebviewEventHandler(WebviewEventHandler handler) { webview_event_handler_ = handler; }
+
+    // Handle navigation requests with Ctrl+click detection
+    bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                       CefRefPtr<CefFrame> frame,
+                       CefRefPtr<CefRequest> request,
+                       bool user_gesture,
+                       bool is_redirect) override {
+        std::string url = request->GetURL().ToString();
+
+        // Check if Ctrl key is held
+        SHORT ctrlState = GetKeyState(VK_CONTROL);
+        bool isCtrlHeld = (ctrlState & 0x8000) != 0;
+
+        printf("[CEF OnBeforeBrowse] url=%s user_gesture=%d is_redirect=%d ctrlState=0x%04X isCtrlHeld=%d hasHandler=%d webviewId=%u\n",
+               url.c_str(), user_gesture, is_redirect, ctrlState, isCtrlHeld, webview_event_handler_ != nullptr, webview_id_);
+
+        if (isCtrlHeld && !is_redirect && webview_event_handler_) {
+            // Debounce: ignore ctrl+click navigations within 500ms
+            auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count() / 1000.0;
+
+            printf("[CEF OnBeforeBrowse] Ctrl held! now=%.3f lastTime=%.3f diff=%.3f\n",
+                   now, lastCtrlClickTime, now - lastCtrlClickTime);
+
+            if (now - lastCtrlClickTime >= 0.5) {
+                lastCtrlClickTime = now;
+
+                // Escape URL for JSON
+                std::string escapedUrl;
+                for (char c : url) {
+                    switch (c) {
+                        case '"': escapedUrl += "\\\""; break;
+                        case '\\': escapedUrl += "\\\\"; break;
+                        default: escapedUrl += c; break;
+                    }
+                }
+
+                std::string eventData = "{\"url\":\"" + escapedUrl +
+                                       "\",\"isCmdClick\":true,\"modifierFlags\":0}";
+                printf("[CEF OnBeforeBrowse] Firing new-window-open: %s\n", eventData.c_str());
+                webview_event_handler_(webview_id_, "new-window-open", eventData.c_str());
+                return true;  // Cancel navigation
+            } else {
+                printf("[CEF OnBeforeBrowse] Debounced - too soon after last ctrl+click\n");
+            }
+        }
+
+        return false;  // Allow navigation
+    }
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunRequestHandler);
 };
+
+// Initialize static debounce timestamp
+double ElectrobunRequestHandler::lastCtrlClickTime = 0;
 
 // CEF Context Menu Handler for devtools support
 class ElectrobunContextMenuHandler : public CefContextMenuHandler {
@@ -1205,19 +1264,29 @@ private:
 // CEF Client class with load and life span handlers
 class ElectrobunCefClient : public CefClient {
 public:
+    WebviewEventHandler webview_event_handler_ = nullptr;
+
     ElectrobunCefClient(uint32_t webviewId,
                        HandlePostMessage bunBridgeHandler,
-                       HandlePostMessage internalBridgeHandler) 
-        : webview_id_(webviewId), 
+                       HandlePostMessage internalBridgeHandler)
+        : webview_id_(webviewId),
           bun_bridge_handler_(bunBridgeHandler),
           webview_tag_handler_(internalBridgeHandler) {
         m_loadHandler = new ElectrobunLoadHandler();
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
         m_requestHandler = new ElectrobunRequestHandler();
+        m_requestHandler->SetWebviewId(webviewId);
         m_contextMenuHandler = new ElectrobunContextMenuHandler();
         m_permissionHandler = new ElectrobunPermissionHandler();
         m_dialogHandler = new ElectrobunDialogHandler();
         m_downloadHandler = new ElectrobunDownloadHandler();
+    }
+
+    void SetWebviewEventHandler(WebviewEventHandler handler) {
+        webview_event_handler_ = handler;
+        if (m_requestHandler) {
+            m_requestHandler->SetWebviewEventHandler(handler);
+        }
     }
 
     void AddPreloadScript(const std::string& script) {
@@ -1842,14 +1911,18 @@ private:
     ComPtr<ICoreWebView2> webview;
     HandlePostMessage bunBridgeCallbackHandler;
     HandlePostMessage internalBridgeCallbackHandler;
-    
+
 public:
     std::string pendingUrl;
     std::string electrobunScript;
     std::string customScript;
     bool isCreationComplete = false;
-    
-    WebView2View(uint32_t webviewId, HandlePostMessage bunBridgeHandler, HandlePostMessage internalBridgeHandler) 
+    WebviewEventHandler webviewEventHandler = nullptr;
+
+    // Static debounce timestamp for ctrl+click handling
+    static double lastCtrlClickTime;
+
+    WebView2View(uint32_t webviewId, HandlePostMessage bunBridgeHandler, HandlePostMessage internalBridgeHandler)
         : bunBridgeCallbackHandler(bunBridgeHandler), internalBridgeCallbackHandler(internalBridgeHandler) {
         this->webviewId = webviewId;
     }
@@ -2301,12 +2374,15 @@ private:
             }
             
             DeleteObject(webviewRegion);
-            
+
         } catch (...) {
             ::log("applyWindowMask: exception occurred during mask creation");
         }
     }
 };
+
+// Initialize static debounce timestamp for ctrl+click handling
+double WebView2View::lastCtrlClickTime = 0;
 
 // CEFView class - implements AbstractView for CEF
 class CEFView : public AbstractView {
@@ -4056,7 +4132,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     auto view = std::make_shared<WebView2View>(webviewId, bunBridgeHandler, internalBridgeHandler);
     view->hwnd = hwnd;
     view->fullSize = autoResize;
-    
+    view->webviewEventHandler = webviewEventHandler;
+
     // Store URL and scripts in view to survive async callbacks
     view->pendingUrl = urlString;
     view->electrobunScript = electrobunScript;
@@ -4249,11 +4326,72 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 combinedScript += view->customScript;
                             }
                             
+                            // Add Ctrl+Click detection handler for navigation
+                            webview->add_NavigationStarting(
+                                Callback<ICoreWebView2NavigationStartingEventHandler>(
+                                    [view](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                        // Check if Ctrl key is held
+                                        SHORT ctrlState = GetKeyState(VK_CONTROL);
+                                        bool isCtrlHeld = (ctrlState & 0x8000) != 0;
+
+                                        // Get URL for logging
+                                        wchar_t* uriWStr = nullptr;
+                                        args->get_Uri(&uriWStr);
+                                        std::string uri;
+                                        if (uriWStr) {
+                                            int size = WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, nullptr, 0, nullptr, nullptr);
+                                            if (size > 0) {
+                                                uri.resize(size - 1);
+                                                WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, &uri[0], size, nullptr, nullptr);
+                                            }
+                                            CoTaskMemFree(uriWStr);
+                                        }
+
+                                        printf("[WebView2 NavigationStarting] url=%s ctrlState=0x%04X isCtrlHeld=%d hasHandler=%d\n",
+                                               uri.c_str(), ctrlState, isCtrlHeld, view->webviewEventHandler != nullptr);
+
+                                        if (isCtrlHeld && view->webviewEventHandler) {
+                                            // Debounce: ignore ctrl+click navigations within 500ms
+                                            auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::system_clock::now().time_since_epoch()).count() / 1000.0;
+
+                                            printf("[WebView2 NavigationStarting] Ctrl held! now=%.3f lastTime=%.3f diff=%.3f\n",
+                                                   now, WebView2View::lastCtrlClickTime, now - WebView2View::lastCtrlClickTime);
+
+                                            if (now - WebView2View::lastCtrlClickTime >= 0.5) {
+                                                WebView2View::lastCtrlClickTime = now;
+
+                                                // Escape URL for JSON
+                                                std::string escapedUrl;
+                                                for (char c : uri) {
+                                                    switch (c) {
+                                                        case '"': escapedUrl += "\\\""; break;
+                                                        case '\\': escapedUrl += "\\\\"; break;
+                                                        default: escapedUrl += c; break;
+                                                    }
+                                                }
+
+                                                std::string eventData = "{\"url\":\"" + escapedUrl +
+                                                                       "\",\"isCmdClick\":true,\"modifierFlags\":0}";
+                                                printf("[WebView2 NavigationStarting] Firing new-window-open: %s\n", eventData.c_str());
+                                                view->webviewEventHandler(view->webviewId, "new-window-open", eventData.c_str());
+
+                                                // Cancel the navigation
+                                                args->put_Cancel(TRUE);
+                                                return S_OK;
+                                            } else {
+                                                printf("[WebView2 NavigationStarting] Debounced - too soon after last ctrl+click\n");
+                                            }
+                                        }
+                                        return S_OK;
+                                    }).Get(),
+                                nullptr);
+
                             if (!combinedScript.empty()) {
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
-                                
+
                                 webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
-                                
+
                                 webview->add_NavigationStarting(
                                     Callback<ICoreWebView2NavigationStartingEventHandler>(
                                         [combinedScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
@@ -4621,10 +4759,9 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             client->UpdateCustomPreloadScript(std::string(customPreloadScript));
         }
         
-        // Note: Additional callback methods would need to be implemented if needed
-        // client->SetNavigationCallback(navigationCallback);
-        // client->SetWebviewEventHandler(webviewEventHandler);
-        
+        // Set the webview event handler for ctrl+click handling
+        client->SetWebviewEventHandler(webviewEventHandler);
+
         view->setClient(client);
         
         // Store preload scripts before browser creation so they're available during LoadStart

@@ -1078,6 +1078,9 @@ public:
         return this;
     }
 
+    // Static debounce timestamp for ctrl+click handling
+    static double lastCtrlClickTime;
+
     // Handle navigation requests
     bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefFrame> frame,
@@ -1085,6 +1088,51 @@ public:
                        bool user_gesture,
                        bool is_redirect) override {
         std::string url = request->GetURL().ToString();
+
+        // Check for Ctrl key using GDK
+        GdkDisplay* display = gdk_display_get_default();
+        GdkSeat* seat = display ? gdk_display_get_default_seat(display) : nullptr;
+        GdkDevice* keyboard = seat ? gdk_seat_get_keyboard(seat) : nullptr;
+        GdkModifierType modifiers = (GdkModifierType)0;
+        bool isCtrlHeld = false;
+
+        if (keyboard) {
+            gdk_device_get_state(keyboard, gdk_get_default_root_window(), NULL, &modifiers);
+            isCtrlHeld = (modifiers & GDK_CONTROL_MASK) != 0;
+        }
+
+        printf("[CEF OnBeforeBrowse] url=%s user_gesture=%d is_redirect=%d display=%p seat=%p keyboard=%p modifiers=0x%X isCtrlHeld=%d hasHandler=%d webviewId=%u\n",
+               url.c_str(), user_gesture, is_redirect, display, seat, keyboard, modifiers, isCtrlHeld, webview_event_handler_ != nullptr, webview_id_);
+
+        if (isCtrlHeld && !is_redirect && webview_event_handler_) {
+            // Debounce: ignore ctrl+click navigations within 500ms
+            double now = g_get_monotonic_time() / 1000000.0;
+            printf("[CEF OnBeforeBrowse] Ctrl held! now=%.3f lastTime=%.3f diff=%.3f\n",
+                   now, lastCtrlClickTime, now - lastCtrlClickTime);
+
+            if (now - lastCtrlClickTime >= 0.5) {
+                lastCtrlClickTime = now;
+
+                // Escape URL for JSON
+                std::string escapedUrl;
+                for (char c : url) {
+                    switch (c) {
+                        case '"': escapedUrl += "\\\""; break;
+                        case '\\': escapedUrl += "\\\\"; break;
+                        default: escapedUrl += c; break;
+                    }
+                }
+
+                std::string eventData = "{\"url\":\"" + escapedUrl +
+                                       "\",\"isCmdClick\":true,\"modifierFlags\":0}";
+                printf("[CEF OnBeforeBrowse] Firing new-window-open: %s\n", eventData.c_str());
+                webview_event_handler_(webview_id_, "new-window-open", eventData.c_str());
+                return true;  // Cancel navigation
+            } else {
+                printf("[CEF OnBeforeBrowse] Debounced - too soon after last ctrl+click\n");
+            }
+        }
+
         bool shouldAllow = navigation_callback_(webview_id_, url.c_str());
 
         if (webview_event_handler_) {
@@ -1754,6 +1802,9 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
 };
 
+// Initialize static debounce timestamp for ctrl+click handling
+double ElectrobunClient::lastCtrlClickTime = 0;
+
 // Initialize CEF for Linux
 bool initializeCEF() {
     if (g_cefInitialized) return true;
@@ -2321,18 +2372,71 @@ public:
         }
     }
     
+    // Static debounce timestamp for ctrl+click handling
+    static double lastCtrlClickTime;
+
     static gboolean onDecidePolicy(WebKitWebView* webview, WebKitPolicyDecision* decision, WebKitPolicyDecisionType type, gpointer user_data) {
         WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        if (impl->navigationCallback && type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION) {
+
+        if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION) {
             WebKitNavigationPolicyDecision* nav_decision = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
             WebKitNavigationAction* action = webkit_navigation_policy_decision_get_navigation_action(nav_decision);
             WebKitURIRequest* request = webkit_navigation_action_get_request(action);
             const char* uri = webkit_uri_request_get_uri(request);
-            
-            uint32_t result = impl->navigationCallback(impl->webviewId, uri);
-            if (result == 0) {
-                webkit_policy_decision_ignore(decision);
-                return TRUE;
+
+            // Check for Ctrl key using GDK
+            GdkDisplay* display = gdk_display_get_default();
+            GdkSeat* seat = display ? gdk_display_get_default_seat(display) : nullptr;
+            GdkDevice* keyboard = seat ? gdk_seat_get_keyboard(seat) : nullptr;
+            GdkModifierType modifiers = (GdkModifierType)0;
+            bool isCtrlHeld = false;
+
+            if (keyboard) {
+                gdk_device_get_state(keyboard, gdk_get_default_root_window(), NULL, &modifiers);
+                isCtrlHeld = (modifiers & GDK_CONTROL_MASK) != 0;
+            }
+
+            printf("[GTKWebKit onDecidePolicy] url=%s display=%p seat=%p keyboard=%p modifiers=0x%X isCtrlHeld=%d hasHandler=%d\n",
+                   uri ? uri : "(null)", display, seat, keyboard, modifiers, isCtrlHeld, impl->eventHandler != nullptr);
+
+            if (isCtrlHeld && impl->eventHandler) {
+                // Debounce: ignore ctrl+click navigations within 500ms
+                double now = g_get_monotonic_time() / 1000000.0;
+                printf("[GTKWebKit onDecidePolicy] Ctrl held! now=%.3f lastTime=%.3f diff=%.3f\n",
+                       now, lastCtrlClickTime, now - lastCtrlClickTime);
+
+                if (now - lastCtrlClickTime >= 0.5) {
+                    lastCtrlClickTime = now;
+
+                    // Escape URL for JSON
+                    std::string url = uri ? uri : "";
+                    std::string escapedUrl;
+                    for (char c : url) {
+                        switch (c) {
+                            case '"': escapedUrl += "\\\""; break;
+                            case '\\': escapedUrl += "\\\\"; break;
+                            default: escapedUrl += c; break;
+                        }
+                    }
+
+                    std::string eventData = "{\"url\":\"" + escapedUrl +
+                                           "\",\"isCmdClick\":true,\"modifierFlags\":0}";
+                    printf("[GTKWebKit onDecidePolicy] Firing new-window-open: %s\n", eventData.c_str());
+                    impl->eventHandler(impl->webviewId, "new-window-open", eventData.c_str());
+
+                    webkit_policy_decision_ignore(decision);
+                    return TRUE;
+                } else {
+                    printf("[GTKWebKit onDecidePolicy] Debounced - too soon after last ctrl+click\n");
+                }
+            }
+
+            if (impl->navigationCallback) {
+                uint32_t result = impl->navigationCallback(impl->webviewId, uri);
+                if (result == 0) {
+                    webkit_policy_decision_ignore(decision);
+                    return TRUE;
+                }
             }
         }
         return FALSE;
@@ -2667,7 +2771,8 @@ public:
 
 };
 
-
+// Initialize static debounce timestamp for ctrl+click handling
+double WebKitWebViewImpl::lastCtrlClickTime = 0;
 
 // CEF WebView implementation
 class CEFWebViewImpl : public AbstractView {
