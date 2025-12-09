@@ -71,7 +71,7 @@ export class BrowserWindow<T> {
   };
   // todo (yoav): make this an array of ids or something
   webviewId: number;
-  alwaysOnTop: boolean = false;
+  private _alwaysOnTop: boolean = false;
 
   constructor(options: Partial<WindowOptionsType<T>> = defaultOptions) {
     this.title = options.title || "New Window";
@@ -83,7 +83,7 @@ export class BrowserWindow<T> {
     this.preload = options.preload || null;
     this.renderer = options.renderer === 'cef' ? 'cef' : 'native';
     this.navigationRules = options.navigationRules || null;
-    this.alwaysOnTop = options.alwaysOnTop || false;
+    this._alwaysOnTop = options.alwaysOnTop || false;
 
     this.init(options);
   }
@@ -163,7 +163,7 @@ export class BrowserWindow<T> {
     this.webviewId = webview.id;
 
     // Apply alwaysOnTop if set
-    if (this.alwaysOnTop) {
+    if (this._alwaysOnTop) {
       ffi.request.setAlwaysOnTop({ winId: this.id, alwaysOnTop: true });
     }
   }
@@ -192,10 +192,13 @@ export class BrowserWindow<T> {
   }
 
   setAlwaysOnTop(alwaysOnTop: boolean) {
-    this.alwaysOnTop = alwaysOnTop;
+    this._alwaysOnTop = alwaysOnTop;
     return ffi.request.setAlwaysOnTop({ winId: this.id, alwaysOnTop });
   }
 
+  get alwaysOnTop(): boolean {
+    return this._alwaysOnTop;
+  }
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserWindow events
