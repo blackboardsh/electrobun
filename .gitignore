@@ -19,4 +19,3 @@ electrobun-cli*
 dist-*
 /package/src/cli/templates/embedded.ts
 *.tar.gz
-/package/bin/electrobun.cjs
