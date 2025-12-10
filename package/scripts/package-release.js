@@ -42,7 +42,7 @@ try {
 
 // Generate template embeddings before building CLI
 console.log('Generating template embeddings...');
-const templatesDir = path.join(__dirname, '..', 'templates');
+const templatesDir = path.join(__dirname, '..', '..', 'templates');
 const outputFile = path.join(__dirname, '..', 'src', 'cli', 'templates', 'embedded.ts');
 
 // Ensure the templates directory exists for embedded.ts

@@ -1275,7 +1275,7 @@ async function buildCli() {
 }
 
 async function generateTemplateEmbeddings() {
-    const TEMPLATES_DIR = join(process.cwd(), "templates");
+    const TEMPLATES_DIR = join(process.cwd(), "..", "templates");
     const OUTPUT_FILE = join(process.cwd(), "src/cli/templates/embedded.ts");
     
     if (!existsSync(TEMPLATES_DIR)) {
