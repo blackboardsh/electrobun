@@ -1,22 +1,12 @@
 .DS_Store
-/.github
 /assets
-/docs-old
-/documentation
-/playground
 /scripts/*
-!/scripts/postinstall.js
 /src/*
 !/src/cli/
 /vendors
-/.colab.json
-/.gitignore
-/.gitmodules
 /bun.lockb
 /tsconfig.json
 /build.ts
-/CLAUDE.md
-/CLAUDE.local.md
 
 # Exclude platform-specific dist directories
 /dist-*/
