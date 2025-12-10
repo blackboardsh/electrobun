@@ -59,14 +59,18 @@ Both binaries are included in the distributed `electrobun` npm package, ensuring
 
 ## Build Commands
 
+All commands are run from the `/package` directory:
+
 ```bash
+cd electrobun/package
+
 # Full build with all platforms
 bun build.ts
 
 # Development build with playground
 bun dev:playground
 
-# Release build  
+# Release build
 bun build.ts --release
 
 # CI build
