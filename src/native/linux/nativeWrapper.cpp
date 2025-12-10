@@ -1126,7 +1126,8 @@ public:
                 std::string eventData = "{\"url\":\"" + escapedUrl +
                                        "\",\"isCmdClick\":true,\"modifierFlags\":0}";
                 printf("[CEF OnBeforeBrowse] Firing new-window-open: %s\n", eventData.c_str());
-                webview_event_handler_(webview_id_, "new-window-open", eventData.c_str());
+                // Use strdup to create persistent copies for the FFI callback
+                webview_event_handler_(webview_id_, strdup("new-window-open"), strdup(eventData.c_str()));
                 return true;  // Cancel navigation
             } else {
                 printf("[CEF OnBeforeBrowse] Debounced - too soon after last ctrl+click\n");
@@ -2422,7 +2423,8 @@ public:
                     std::string eventData = "{\"url\":\"" + escapedUrl +
                                            "\",\"isCmdClick\":true,\"modifierFlags\":0}";
                     printf("[GTKWebKit onDecidePolicy] Firing new-window-open: %s\n", eventData.c_str());
-                    impl->eventHandler(impl->webviewId, "new-window-open", eventData.c_str());
+                    // Use strdup to create persistent copies for the FFI callback
+                    impl->eventHandler(impl->webviewId, strdup("new-window-open"), strdup(eventData.c_str()));
 
                     webkit_policy_decision_ignore(decision);
                     return TRUE;

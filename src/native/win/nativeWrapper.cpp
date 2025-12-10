@@ -800,7 +800,8 @@ public:
                 std::string eventData = "{\"url\":\"" + escapedUrl +
                                        "\",\"isCmdClick\":true,\"modifierFlags\":0}";
                 printf("[CEF OnBeforeBrowse] Firing new-window-open: %s\n", eventData.c_str());
-                webview_event_handler_(webview_id_, "new-window-open", eventData.c_str());
+                // Use strdup to create persistent copies for the FFI callback
+                webview_event_handler_(webview_id_, _strdup("new-window-open"), _strdup(eventData.c_str()));
                 return true;  // Cancel navigation
             } else {
                 printf("[CEF OnBeforeBrowse] Debounced - too soon after last ctrl+click\n");
@@ -4374,7 +4375,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                 std::string eventData = "{\"url\":\"" + escapedUrl +
                                                                        "\",\"isCmdClick\":true,\"modifierFlags\":0}";
                                                 printf("[WebView2 NavigationStarting] Firing new-window-open: %s\n", eventData.c_str());
-                                                view->webviewEventHandler(view->webviewId, "new-window-open", eventData.c_str());
+                                                // Use strdup to create persistent copies for the FFI callback
+                                                view->webviewEventHandler(view->webviewId, _strdup("new-window-open"), _strdup(eventData.c_str()));
 
                                                 // Cancel the navigation
                                                 args->put_Cancel(TRUE);
