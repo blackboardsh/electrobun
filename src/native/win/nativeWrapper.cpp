@@ -4328,14 +4328,23 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             }
                             
                             // Add Ctrl+Click detection handler for navigation
+                            // Capture webviewId and handler separately to avoid shared_ptr issues
+                            uint32_t capturedWebviewId = view->webviewId;
+                            WebviewEventHandler capturedHandler = view->webviewEventHandler;
+
                             webview->add_NavigationStarting(
                                 Callback<ICoreWebView2NavigationStartingEventHandler>(
-                                    [view](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                    [capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
                                         // Check if Ctrl key is held
                                         SHORT ctrlState = GetKeyState(VK_CONTROL);
                                         bool isCtrlHeld = (ctrlState & 0x8000) != 0;
 
-                                        // Get URL for logging
+                                        // Only do expensive work if Ctrl is held and we have a handler
+                                        if (!isCtrlHeld || !capturedHandler) {
+                                            return S_OK;
+                                        }
+
+                                        // Get URL
                                         wchar_t* uriWStr = nullptr;
                                         args->get_Uri(&uriWStr);
                                         std::string uri;
@@ -4348,42 +4357,35 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                             CoTaskMemFree(uriWStr);
                                         }
 
-                                        printf("[WebView2 NavigationStarting] url=%s ctrlState=0x%04X isCtrlHeld=%d hasHandler=%d\n",
-                                               uri.c_str(), ctrlState, isCtrlHeld, view->webviewEventHandler != nullptr);
+                                        printf("[WebView2 NavigationStarting] Ctrl+click detected, url=%s\n", uri.c_str());
 
-                                        if (isCtrlHeld && view->webviewEventHandler) {
-                                            // Debounce: ignore ctrl+click navigations within 500ms
-                                            auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                std::chrono::system_clock::now().time_since_epoch()).count() / 1000.0;
+                                        // Debounce: ignore ctrl+click navigations within 500ms
+                                        auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::system_clock::now().time_since_epoch()).count() / 1000.0;
 
-                                            printf("[WebView2 NavigationStarting] Ctrl held! now=%.3f lastTime=%.3f diff=%.3f\n",
-                                                   now, WebView2View::lastCtrlClickTime, now - WebView2View::lastCtrlClickTime);
+                                        if (now - WebView2View::lastCtrlClickTime >= 0.5) {
+                                            WebView2View::lastCtrlClickTime = now;
 
-                                            if (now - WebView2View::lastCtrlClickTime >= 0.5) {
-                                                WebView2View::lastCtrlClickTime = now;
-
-                                                // Escape URL for JSON
-                                                std::string escapedUrl;
-                                                for (char c : uri) {
-                                                    switch (c) {
-                                                        case '"': escapedUrl += "\\\""; break;
-                                                        case '\\': escapedUrl += "\\\\"; break;
-                                                        default: escapedUrl += c; break;
-                                                    }
+                                            // Escape URL for JSON
+                                            std::string escapedUrl;
+                                            for (char c : uri) {
+                                                switch (c) {
+                                                    case '"': escapedUrl += "\\\""; break;
+                                                    case '\\': escapedUrl += "\\\\"; break;
+                                                    default: escapedUrl += c; break;
                                                 }
-
-                                                std::string eventData = "{\"url\":\"" + escapedUrl +
-                                                                       "\",\"isCmdClick\":true,\"modifierFlags\":0}";
-                                                printf("[WebView2 NavigationStarting] Firing new-window-open: %s\n", eventData.c_str());
-                                                // Use strdup to create persistent copies for the FFI callback
-                                                view->webviewEventHandler(view->webviewId, _strdup("new-window-open"), _strdup(eventData.c_str()));
-
-                                                // Cancel the navigation
-                                                args->put_Cancel(TRUE);
-                                                return S_OK;
-                                            } else {
-                                                printf("[WebView2 NavigationStarting] Debounced - too soon after last ctrl+click\n");
                                             }
+
+                                            std::string eventData = "{\"url\":\"" + escapedUrl +
+                                                                   "\",\"isCmdClick\":true,\"modifierFlags\":0}";
+                                            printf("[WebView2 NavigationStarting] Firing new-window-open: %s\n", eventData.c_str());
+                                            // Use strdup to create persistent copies for the FFI callback
+                                            capturedHandler(capturedWebviewId, _strdup("new-window-open"), _strdup(eventData.c_str()));
+
+                                            // Cancel the navigation
+                                            args->put_Cancel(TRUE);
+                                        } else {
+                                            printf("[WebView2 NavigationStarting] Debounced\n");
                                         }
                                         return S_OK;
                                     }).Get(),
