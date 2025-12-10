@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Always on Top Test</title>
+    <style>
+        body {
+            padding: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+            margin: 0;
+            box-sizing: border-box;
+        }
+        h2 {
+            margin-top: 0;
+        }
+        #status {
+            font-size: 24px;
+            font-weight: bold;
+            padding: 10px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        #log {
+            background: rgba(0,0,0,0.2);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 14px;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+        #log div {
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .instructions {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Always on Top Test</h2>
+    <div id="status">Initializing...</div>
+    <div id="log"></div>
+    <div class="instructions">
+        <p>This window should stay on top of all other windows.</p>
+        <p>Try clicking on other windows - this one should remain visible.</p>
+    </div>
+</body>
+</html>

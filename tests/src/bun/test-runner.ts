@@ -279,6 +279,63 @@ export class TestRunner {
       }
     });
     
+    // Always on Top test
+    this.registerTest({
+      id: 'window-always-on-top',
+      name: 'Window Always on Top',
+      category: 'Windows',
+      type: 'manual',
+      description: 'Test window always on top functionality',
+      instructions: [
+        'An "Always on Top" window will appear',
+        'Try clicking on other windows or apps - this window should stay on top',
+        'After 5 seconds, the window will toggle OFF always on top',
+        'Verify it can now go behind other windows',
+        'After another 5 seconds, it will toggle back ON',
+        'Verify it returns to always on top behavior'
+      ],
+      setup: async () => {
+        const alwaysOnTopWindow = new BrowserWindow({
+          title: 'Always on Top Test - STAY ON TOP',
+          frame: { width: 400, height: 300, x: 300, y: 200 },
+          url: 'views://testviews/always-on-top.html',
+          alwaysOnTop: true,
+        });
+
+        this.testWindows.push(alwaysOnTopWindow);
+
+        // Update UI to show current state
+        alwaysOnTopWindow.webview.on('dom-ready', () => {
+          alwaysOnTopWindow.webview.executeJavascript(`
+            document.getElementById('status').textContent = 'Always on Top: ON';
+            document.getElementById('status').style.color = 'green';
+          `);
+        });
+
+        // Toggle off after 5 seconds
+        setTimeout(() => {
+          alwaysOnTopWindow.setAlwaysOnTop(false);
+          alwaysOnTopWindow.setTitle('Always on Top Test - NOW NORMAL');
+          alwaysOnTopWindow.webview.executeJavascript(`
+            document.getElementById('status').textContent = 'Always on Top: OFF';
+            document.getElementById('status').style.color = 'red';
+            document.getElementById('log').innerHTML += '<div>Toggled OFF at ' + new Date().toLocaleTimeString() + '</div>';
+          `);
+        }, 5000);
+
+        // Toggle back on after 10 seconds
+        setTimeout(() => {
+          alwaysOnTopWindow.setAlwaysOnTop(true);
+          alwaysOnTopWindow.setTitle('Always on Top Test - BACK ON TOP');
+          alwaysOnTopWindow.webview.executeJavascript(`
+            document.getElementById('status').textContent = 'Always on Top: ON';
+            document.getElementById('status').style.color = 'green';
+            document.getElementById('log').innerHTML += '<div>Toggled ON at ' + new Date().toLocaleTimeString() + '</div>';
+          `);
+        }, 10000);
+      }
+    });
+
     // Multi-window test
     this.registerTest({
       id: 'multi-window',

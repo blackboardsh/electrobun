@@ -20,11 +20,12 @@ type WindowOptionsType<T = undefined> = {
   html: string | null;
   preload: string | null;
   renderer: 'native' | 'cef';
-  rpc?: T;  
+  rpc?: T;
   styleMask?: {};
   // TODO: implement all of them
   titleBarStyle: "hiddenInset" | "default";
   navigationRules: string | null;
+  alwaysOnTop?: boolean;
 };
 
 const defaultOptions: WindowOptionsType = {
@@ -70,6 +71,7 @@ export class BrowserWindow<T> {
   };
   // todo (yoav): make this an array of ids or something
   webviewId: number;
+  private _alwaysOnTop: boolean = false;
 
   constructor(options: Partial<WindowOptionsType<T>> = defaultOptions) {
     this.title = options.title || "New Window";
@@ -81,7 +83,8 @@ export class BrowserWindow<T> {
     this.preload = options.preload || null;
     this.renderer = options.renderer === 'cef' ? 'cef' : 'native';
     this.navigationRules = options.navigationRules || null;
-    
+    this._alwaysOnTop = options.alwaysOnTop || false;
+
     this.init(options);
   }
 
@@ -157,9 +160,12 @@ export class BrowserWindow<T> {
 
     console.log('setting webviewId: ', webview.id)
 
-    this.webviewId = webview.id;   
+    this.webviewId = webview.id;
 
-    
+    // Apply alwaysOnTop if set
+    if (this._alwaysOnTop) {
+      ffi.request.setAlwaysOnTop({ winId: this.id, alwaysOnTop: true });
+    }
   }
 
   get webview() {    
@@ -183,6 +189,15 @@ export class BrowserWindow<T> {
 
   focus() {
     return ffi.request.focusWindow({ winId: this.id });
+  }
+
+  setAlwaysOnTop(alwaysOnTop: boolean) {
+    this._alwaysOnTop = alwaysOnTop;
+    return ffi.request.setAlwaysOnTop({ winId: this.id, alwaysOnTop });
+  }
+
+  get alwaysOnTop(): boolean {
+    return this._alwaysOnTop;
   }
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
