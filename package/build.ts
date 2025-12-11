@@ -76,9 +76,20 @@ function validateDownload(filePath: string, type: string): void {
 }
 
 // Pause between GitHub downloads to avoid rate limiting
+// Track if we've done a GitHub download this session
+let lastGitHubDownload = 0;
+
 async function pauseForGitHub(): Promise<void> {
-    console.log('Pausing 20 seconds before next download...');
-    await new Promise(resolve => setTimeout(resolve, 20000));
+    const now = Date.now();
+    const timeSinceLastDownload = now - lastGitHubDownload;
+    const pauseDuration = 60000; // 60 seconds
+
+    if (lastGitHubDownload > 0 && timeSinceLastDownload < pauseDuration) {
+        const remainingPause = pauseDuration - timeSinceLastDownload;
+        console.log(`Pausing ${Math.ceil(remainingPause / 1000)} seconds before next GitHub download...`);
+        await new Promise(resolve => setTimeout(resolve, remainingPause));
+    }
+    lastGitHubDownload = Date.now();
 }
 
 // TODO: setup file watchers
@@ -230,11 +241,9 @@ async function checkDependencies() {
 async function setup() {
     await checkDependencies();
     // Run vendors sequentially to avoid network/curl conflicts
-    // Pause between GitHub downloads to avoid rate limiting
+    // GitHub downloads have built-in pauses to avoid rate limiting
     await vendorBun();      // GitHub
-    await pauseForGitHub();
     await vendorBsdiff();   // GitHub
-    await pauseForGitHub();
     await vendorAsar();     // GitHub
     await vendorZig();      // ziglang.org (not GitHub)
     await vendorCEF();      // Spotify CDN (not GitHub)
@@ -509,6 +518,8 @@ async function vendorBun() {
         return;
     }
 
+    await pauseForGitHub();
+
     let bunUrlSegment: string;
     let bunDirName: string;
     
@@ -592,6 +603,7 @@ async function vendorBsdiff() {
         return;
     }
 
+    await pauseForGitHub();
     console.log('Downloading zig-bsdiff binaries...');
 
     // Map OS names to match GitHub release naming
@@ -675,6 +687,7 @@ async function vendorAsar() {
             continue; // Already have this architecture
         }
 
+        await pauseForGitHub();
         console.log(`Downloading zig-asar binaries for ${platform}-${arch}...`);
 
         const tarballUrl = `https://github.com/blackboardsh/zig-asar/releases/download/v${ASAR_VERSION}/zig-asar-${platform}-${arch}.tar.gz`;
