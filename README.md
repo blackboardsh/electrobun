@@ -69,7 +69,7 @@ On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-conf
 git clone --recurse-submodules https://github.com/blackboardsh/electrobun.git
 cd electrobun/package
 bun install
-bun dev:playground:clean
+bun dev:clean
 ```
 
 ### Development Workflow
@@ -79,20 +79,20 @@ bun dev:playground:clean
 cd electrobun/package
 
 # After making changes to source code
-bun dev:playground
+bun dev
 
-# If you only changed playground code (not electrobun source)
-bun dev:playground:rerun
+# If you only changed kitchen sink code (not electrobun source)
+bun dev:rerun
 
 # If you need a completely fresh start
-bun dev:playground:clean
+bun dev:clean
 ```
 
 ### Additional Commands
 
 All commands are run from the `/package` directory:
 
-- `bun dev:playground:canary` - Build and run playground in canary mode
+- `bun dev:canary` - Build and run kitchen sink in canary mode
 - `bun build:dev` - Build electrobun in development mode
 - `bun build:release` - Build electrobun in release mode
 

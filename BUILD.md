@@ -67,8 +67,8 @@ cd electrobun/package
 # Full build with all platforms
 bun build.ts
 
-# Development build with playground
-bun dev:playground
+# Development build with the kitchen sink test app
+bun dev
 
 # Release build
 bun build.ts --release
