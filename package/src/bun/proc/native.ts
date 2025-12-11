@@ -1097,6 +1097,10 @@ const webviewEventHandler = (id, eventName, detail) => {
       "dom-ready": "domReady",
       "new-window-open": "newWindowOpen",
       "host-message": "hostMessage",
+      "download-started": "downloadStarted",
+      "download-progress": "downloadProgress",
+      "download-completed": "downloadCompleted",
+      "download-failed": "downloadFailed",
     };
 
   // todo: the events map should use the same hyphenated names instead of camelCase
@@ -1108,9 +1112,11 @@ const webviewEventHandler = (id, eventName, detail) => {
     return { success: false };
   }
 
-  // Parse JSON data for new-window-open and host-message events
+  // Parse JSON data for events that send JSON
   let parsedDetail = detail;
-  if (eventName === "new-window-open" || eventName === "host-message") {
+  if (eventName === "new-window-open" || eventName === "host-message" ||
+      eventName === "download-started" || eventName === "download-progress" ||
+      eventName === "download-completed" || eventName === "download-failed") {
     try {
       parsedDetail = JSON.parse(detail);
     } catch (e) {
@@ -1131,10 +1137,10 @@ const webviewEventHandler = (id, eventName, detail) => {
   result = electrobunEventEmitter.emitEvent(event, id);  
 }
 
-const webviewEventJSCallback = new JSCallback((id, _eventName, _detail) => {    
+const webviewEventJSCallback = new JSCallback((id, _eventName, _detail) => {
   let eventName = "";
   let detail = "";
-  
+
   try {
     // Convert cstring pointers to actual strings
     eventName = new CString(_eventName).toString();
@@ -1144,7 +1150,7 @@ const webviewEventJSCallback = new JSCallback((id, _eventName, _detail) => {
     console.error('[webviewEventJSCallback] Raw values:', { _eventName, _detail });
     return;
   }
-  
+
   webviewEventHandler(id, eventName, detail);    
 }, {
   args: [FFIType.u32, FFIType.cstring, FFIType.cstring],

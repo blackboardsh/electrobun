@@ -237,7 +237,11 @@ export class BrowserView<T> {
       | "did-navigate"
       | "did-navigate-in-page"
       | "did-commit-navigation"
-      | "dom-ready",
+      | "dom-ready"
+      | "download-started"
+      | "download-progress"
+      | "download-completed"
+      | "download-failed",
     handler
   ) {
     const specificName = `${name}-${this.id}`;

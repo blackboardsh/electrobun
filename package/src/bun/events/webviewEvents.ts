@@ -23,4 +23,12 @@ export default {
     }, {}>("new-window-open", data),
   hostMessage: (data) =>
     new ElectrobunEvent<{ detail: string }, {}>("host-message", data),
+  downloadStarted: (data) =>
+    new ElectrobunEvent<{ detail: string }, {}>("download-started", data),
+  downloadProgress: (data) =>
+    new ElectrobunEvent<{ detail: string }, {}>("download-progress", data),
+  downloadCompleted: (data) =>
+    new ElectrobunEvent<{ detail: string }, {}>("download-completed", data),
+  downloadFailed: (data) =>
+    new ElectrobunEvent<{ detail: string }, {}>("download-failed", data),
 };

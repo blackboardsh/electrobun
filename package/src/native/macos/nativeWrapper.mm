@@ -620,6 +620,8 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) DecideNavigationCallback zigCallback;
     @property (nonatomic, assign) WebviewEventHandler zigEventHandler;
     @property (nonatomic, assign) uint32_t webviewId;
+    @property (nonatomic, strong) NSMutableDictionary<NSValue *, NSString *> *downloadPaths;
+    @property (nonatomic, strong) NSMutableSet<WKDownload *> *observedDownloads;
 @end
 
 @interface MyWebViewUIDelegate : NSObject <WKUIDelegate>
@@ -1278,6 +1280,32 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
             NSURL *destinationURL = [NSURL fileURLWithPath:destinationPath];
             NSLog(@"DEBUG WKWebView Download: Saving to %@", destinationPath);
+
+            // Store the path for this download so we can reference it in completion handlers
+            if (!self.downloadPaths) {
+                self.downloadPaths = [NSMutableDictionary dictionary];
+            }
+            [self.downloadPaths setObject:destinationPath forKey:[NSValue valueWithNonretainedObject:download]];
+
+            // Observe download progress via KVO
+            if (!self.observedDownloads) {
+                self.observedDownloads = [NSMutableSet set];
+            }
+            [self.observedDownloads addObject:download];
+            [download.progress addObserver:self
+                                forKeyPath:@"fractionCompleted"
+                                   options:NSKeyValueObservingOptionNew
+                                   context:NULL];
+
+            // Send download-started event
+            if (self.zigEventHandler) {
+                // Use NSJSONSerialization for proper escaping
+                NSDictionary *eventDict = @{@"filename": suggestedFilename, @"path": destinationPath};
+                NSData *jsonData = [NSJSONSerialization dataWithJSONObject:eventDict options:0 error:nil];
+                NSString *eventData = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+                self.zigEventHandler(self.webviewId, strdup("download-started"), strdup([eventData UTF8String]));
+            }
+
             completionHandler(destinationURL);
         } else {
             NSLog(@"ERROR WKWebView Download: Could not find Downloads directory");
@@ -1287,10 +1315,67 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
     - (void)downloadDidFinish:(WKDownload *)download API_AVAILABLE(macos(11.3)) {
         NSLog(@"DEBUG WKWebView Download: Download finished successfully");
+
+        // Remove KVO observer
+        if ([self.observedDownloads containsObject:download]) {
+            [download.progress removeObserver:self forKeyPath:@"fractionCompleted"];
+            [self.observedDownloads removeObject:download];
+        }
+
+        // Send download-completed event
+        if (self.zigEventHandler) {
+            NSString *path = [self.downloadPaths objectForKey:[NSValue valueWithNonretainedObject:download]];
+            NSString *filename = [path lastPathComponent] ?: @"";
+            // Use NSJSONSerialization for proper escaping
+            NSDictionary *eventDict = @{@"filename": filename, @"path": path ?: @""};
+            NSData *jsonData = [NSJSONSerialization dataWithJSONObject:eventDict options:0 error:nil];
+            NSString *eventData = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+            self.zigEventHandler(self.webviewId, strdup("download-completed"), strdup([eventData UTF8String]));
+
+            // Clean up
+            [self.downloadPaths removeObjectForKey:[NSValue valueWithNonretainedObject:download]];
+        }
     }
 
     - (void)download:(WKDownload *)download didFailWithError:(NSError *)error resumeData:(NSData *)resumeData API_AVAILABLE(macos(11.3)) {
         NSLog(@"ERROR WKWebView Download: Download failed with error: %@", error.localizedDescription);
+
+        // Remove KVO observer
+        if ([self.observedDownloads containsObject:download]) {
+            [download.progress removeObserver:self forKeyPath:@"fractionCompleted"];
+            [self.observedDownloads removeObject:download];
+        }
+
+        // Send download-failed event
+        if (self.zigEventHandler) {
+            NSString *path = [self.downloadPaths objectForKey:[NSValue valueWithNonretainedObject:download]];
+            NSString *filename = [path lastPathComponent] ?: @"";
+            // Use NSJSONSerialization for proper escaping
+            NSDictionary *eventDict = @{@"filename": filename, @"path": path ?: @"", @"error": error.localizedDescription};
+            NSData *jsonData = [NSJSONSerialization dataWithJSONObject:eventDict options:0 error:nil];
+            NSString *eventData = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+            self.zigEventHandler(self.webviewId, strdup("download-failed"), strdup([eventData UTF8String]));
+
+            // Clean up
+            [self.downloadPaths removeObjectForKey:[NSValue valueWithNonretainedObject:download]];
+        }
+    }
+
+    // KVO observer for download progress
+    - (void)observeValueForKeyPath:(NSString *)keyPath
+                          ofObject:(id)object
+                            change:(NSDictionary<NSKeyValueChangeKey,id> *)change
+                           context:(void *)context {
+        if ([keyPath isEqualToString:@"fractionCompleted"]) {
+            NSProgress *progress = (NSProgress *)object;
+            int percent = (int)(progress.fractionCompleted * 100);
+
+            // Send download-progress event
+            if (self.zigEventHandler) {
+                NSString *eventData = [NSString stringWithFormat:@"{\"progress\":%d}", percent];
+                self.zigEventHandler(self.webviewId, strdup("download-progress"), strdup([eventData UTF8String]));
+            }
+        }
     }
 @end
 
@@ -2196,12 +2281,15 @@ private:
     HandlePostMessage bun_bridge_handler_;
     HandlePostMessage webview_tag_handler_;
     WebviewEventHandler webview_event_handler_;
-    DecideNavigationCallback navigation_callback_; 
-    
-    
+    DecideNavigationCallback navigation_callback_;
+
+
     PreloadScript electrobun_script_;
-    PreloadScript custom_script_; 
-    static const int MENU_ID_DEV_TOOLS = 1; 
+    PreloadScript custom_script_;
+    static const int MENU_ID_DEV_TOOLS = 1;
+
+    // Track download paths by download ID
+    std::map<uint32_t, std::string> download_paths_; 
 
      // Helper function to escape JavaScript code for embedding in a string
     std::string EscapeJavaScriptString(const std::string& input) {
@@ -2331,6 +2419,20 @@ public:
 
             NSLog(@"DEBUG CEF Download: Saving to %@", destinationPath);
 
+            // Store the path for this download
+            uint32_t downloadId = download_item->GetId();
+            download_paths_[downloadId] = [destinationPath UTF8String];
+
+            // Send download-started event
+            if (webview_event_handler_) {
+                std::string escapedFilename = EscapeJavaScriptString(suggested_name.ToString());
+                std::string escapedPath = EscapeJavaScriptString(std::string([destinationPath UTF8String]));
+                std::string eventData = "{\"filename\":\"" + escapedFilename +
+                    "\",\"path\":\"" + escapedPath + "\"}";
+                // Use strdup to create persistent copies for the FFI callback
+                webview_event_handler_(webview_id_, strdup("download-started"), strdup(eventData.c_str()));
+            }
+
             // Continue the download to the specified path without showing a dialog
             callback->Continue([destinationPath UTF8String], false);
         } else {
@@ -2344,14 +2446,58 @@ public:
     void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefDownloadItem> download_item,
                            CefRefPtr<CefDownloadItemCallback> callback) override {
+        uint32_t downloadId = download_item->GetId();
+
         if (download_item->IsComplete()) {
-            NSLog(@"DEBUG CEF Download: Download complete - %s", download_item->GetFullPath().ToString().c_str());
+            std::string fullPath = download_item->GetFullPath().ToString();
+            NSLog(@"DEBUG CEF Download: Download complete - %s", fullPath.c_str());
+
+            // Send download-completed event
+            if (webview_event_handler_) {
+                // Extract just the filename from the full path
+                std::string filename = fullPath;
+                size_t lastSlash = fullPath.find_last_of('/');
+                if (lastSlash != std::string::npos) {
+                    filename = fullPath.substr(lastSlash + 1);
+                }
+                std::string escapedFilename = EscapeJavaScriptString(filename);
+                std::string escapedPath = EscapeJavaScriptString(fullPath);
+                std::string eventData = "{\"filename\":\"" + escapedFilename +
+                    "\",\"path\":\"" + escapedPath + "\"}";
+                NSLog(@"DEBUG CEF Download: Sending event data - %s", eventData.c_str());
+                // Use strdup to create persistent copies for the FFI callback
+                webview_event_handler_(webview_id_, strdup("download-completed"), strdup(eventData.c_str()));
+            }
+
+            // Clean up
+            download_paths_.erase(downloadId);
         } else if (download_item->IsCanceled()) {
             NSLog(@"DEBUG CEF Download: Download canceled");
+
+            // Send download-failed event
+            if (webview_event_handler_) {
+                // Try to get path from stored paths or from download item
+                std::string path = download_paths_[downloadId];
+                if (path.empty()) {
+                    path = download_item->GetFullPath().ToString();
+                }
+                std::string escapedPath = EscapeJavaScriptString(path);
+                std::string eventData = "{\"filename\":\"\",\"path\":\"" + escapedPath +
+                    "\",\"error\":\"Download canceled\"}";
+                // Use strdup to create persistent copies for the FFI callback
+                webview_event_handler_(webview_id_, strdup("download-failed"), strdup(eventData.c_str()));
+            }
+
+            // Clean up
+            download_paths_.erase(downloadId);
         } else if (download_item->IsInProgress()) {
             int percent = download_item->GetPercentComplete();
             if (percent >= 0) {
-                NSLog(@"DEBUG CEF Download: Progress %d%%", percent);
+                // Send download-progress event
+                if (webview_event_handler_) {
+                    std::string eventData = "{\"progress\":" + std::to_string(percent) + "}";
+                    webview_event_handler_(webview_id_, strdup("download-progress"), strdup(eventData.c_str()));
+                }
             }
         }
     }
