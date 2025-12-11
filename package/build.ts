@@ -70,10 +70,15 @@ function validateDownload(filePath: string, type: string): void {
         unlinkSync(filePath);
         throw new Error(
             `Download failed: ${filePath} is only ${stats.size} bytes (expected > ${minSize} bytes). ` +
-            `This usually means the download was interrupted or returned an error page. ` +
-            `Please try running the command again.`
+            `Please try again in a minute.`
         );
     }
+}
+
+// Pause between GitHub downloads to avoid rate limiting
+async function pauseForGitHub(): Promise<void> {
+    console.log('Pausing 20 seconds before next download...');
+    await new Promise(resolve => setTimeout(resolve, 20000));
 }
 
 // TODO: setup file watchers
@@ -225,11 +230,14 @@ async function checkDependencies() {
 async function setup() {
     await checkDependencies();
     // Run vendors sequentially to avoid network/curl conflicts
-    await vendorBun();
-    await vendorZig();
-    await vendorBsdiff();
-    await vendorAsar();
-    await vendorCEF();
+    // Pause between GitHub downloads to avoid rate limiting
+    await vendorBun();      // GitHub
+    await pauseForGitHub();
+    await vendorBsdiff();   // GitHub
+    await pauseForGitHub();
+    await vendorAsar();     // GitHub
+    await vendorZig();      // ziglang.org (not GitHub)
+    await vendorCEF();      // Spotify CDN (not GitHub)
     await vendorWebview2();
     await vendorLinuxDeps();
 }
@@ -630,11 +638,7 @@ async function vendorBsdiff() {
         console.log('✓ zig-bsdiff binaries downloaded successfully');
     } catch (error: any) {
         console.error('Failed to download zig-bsdiff binaries:', error.message);
-        console.error(`URL: ${tarballUrl}`);
-        throw new Error(
-            `Could not download zig-bsdiff binaries. ` +
-            `Please check that the release exists at: https://github.com/blackboardsh/zig-bsdiff/releases/tag/v${BSDIFF_VERSION}`
-        );
+        throw new Error(`Failed to download zig-bsdiff binaries. Please try again in a minute.`);
     }
 }
 
@@ -710,11 +714,7 @@ async function vendorAsar() {
             console.log(`✓ zig-asar binaries for ${arch} downloaded successfully`);
         } catch (error: any) {
             console.error(`Failed to download zig-asar binaries for ${arch}:`, error.message);
-            console.error(`URL: ${tarballUrl}`);
-            throw new Error(
-                `Could not download zig-asar binaries. ` +
-                `Please check that the release exists at: https://github.com/blackboardsh/zig-asar/releases/tag/v${ASAR_VERSION}`
-            );
+            throw new Error(`Failed to download zig-asar binaries. Please try again in a minute.`);
         }
     }
 }
