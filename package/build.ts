@@ -3,7 +3,7 @@
 import { $ } from "bun";
 import { platform, arch } from "os";
 import { join, dirname, relative } from 'path';
-import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync, mkdirSync, statSync, unlinkSync } from "fs";
 import { parseArgs } from 'util';
 import process from 'process';
 
@@ -47,6 +47,32 @@ const PATH = {
     },
     zig: {
         BIN: join(process.cwd(),'vendors','zig', zigBinary )
+    }
+}
+
+// Minimum expected file sizes for downloaded archives (in bytes)
+// These are sanity checks to detect failed downloads (e.g., HTML error pages)
+const MIN_DOWNLOAD_SIZES: Record<string, number> = {
+    'bun': 10 * 1024 * 1024,      // Bun zip should be > 10MB
+    'zig-asar': 100 * 1024,        // zig-asar tarball should be > 100KB
+    'zig-bsdiff': 100 * 1024,      // zig-bsdiff tarball should be > 100KB
+    'cef': 50 * 1024 * 1024,       // CEF tarball should be > 50MB
+};
+
+function validateDownload(filePath: string, type: string): void {
+    if (!existsSync(filePath)) {
+        throw new Error(`Download failed: ${filePath} does not exist`);
+    }
+    const stats = statSync(filePath);
+    const minSize = MIN_DOWNLOAD_SIZES[type];
+    if (minSize && stats.size < minSize) {
+        // Remove the invalid file so next run will re-download
+        unlinkSync(filePath);
+        throw new Error(
+            `Download failed: ${filePath} is only ${stats.size} bytes (expected > ${minSize} bytes). ` +
+            `This usually means the download was interrupted or returned an error page. ` +
+            `Please try running the command again.`
+        );
     }
 }
 
@@ -198,15 +224,14 @@ async function checkDependencies() {
 
 async function setup() {
     await checkDependencies();
-    await Promise.all([
-        vendorBun(),
-        vendorZig(),
-        vendorBsdiff(),
-        vendorAsar(),
-        vendorCEF(),
-        vendorWebview2(),
-        vendorLinuxDeps(),
-    ]);
+    // Run vendors sequentially to avoid network/curl conflicts
+    await vendorBun();
+    await vendorZig();
+    await vendorBsdiff();
+    await vendorAsar();
+    await vendorCEF();
+    await vendorWebview2();
+    await vendorLinuxDeps();
 }
 
 async function build() {
@@ -495,10 +520,13 @@ async function vendorBun() {
 
     const tempZipPath = join("vendors", "bun", "temp.zip");
     const extractDir = join("vendors", "bun");
-    
+
     // Download zip file
     await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.2.23/${bunUrlSegment}`;
-    
+
+    // Validate download
+    validateDownload(tempZipPath, 'bun');
+
     // Extract zip file
     if (isWindows) {
         // Use PowerShell to extract zip on Windows
@@ -575,6 +603,9 @@ async function vendorBsdiff() {
         await $`mkdir -p vendors/zig-bsdiff`;
         await $`curl -L "${tarballUrl}" -o "${tempTarball}"`;
 
+        // Validate download
+        validateDownload(tempTarball, 'zig-bsdiff');
+
         // Extract to vendors/zig-bsdiff
         if (OS === 'win') {
             // Use tar on Windows (built-in on Windows 10+)
@@ -649,6 +680,9 @@ async function vendorAsar() {
             // Download tarball
             await $`mkdir -p "${asarDir}"`;
             await $`curl -L "${tarballUrl}" -o "${tempTarball}"`;
+
+            // Validate download
+            validateDownload(tempTarball, 'zig-asar');
 
             // Extract to architecture-specific directory
             await $`tar -xzf "${tempTarball}" -C "${asarDir}"`;
@@ -733,12 +767,10 @@ async function vendorCEF() {
             await $`mkdir -p vendors`;
             const tempFile = 'vendors/cef_temp.tar.bz2';
             await $`curl -L "${cefUrl}" -o "${tempFile}"`;
-            
-            // Check if download succeeded
-            if (!existsSync(tempFile)) {
-                throw new Error('CEF download failed - temp file not created');
-            }
-            
+
+            // Validate download
+            validateDownload(tempFile, 'cef');
+
             console.log('CEF download completed, extracting...');
             
             // Extract CEF
@@ -818,20 +850,10 @@ async function vendorCEF() {
             const cefArch = 'windows64';
             console.log('Downloading CEF for Windows x64...');
             await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_WIN}%2Bchromium-${CHROMIUM_VERSION_WIN}_${cefArch}_minimal.tar.bz2" -o "${tempPath}"`;
-            
-            // Verify download completed
-            if (!existsSync(tempPath)) {
-                throw new Error('Download failed - file not found');
-            }
-            
-            const { statSync } = await import('fs');
-            const stats = statSync(tempPath);
-            console.log(`Downloaded file size: ${stats.size} bytes`);
-            
-            if (stats.size < 1000000) { // Less than 1MB indicates failed download
-                throw new Error(`Download failed - file too small: ${stats.size} bytes`);
-            }
-            
+
+            // Validate download
+            validateDownload(tempPath, 'cef');
+
             // Extract using tar (Windows 10+ has built-in tar support)
             console.log('Extracting CEF...');
             await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef_temp' -Force | Out-Null"`;
