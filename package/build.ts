@@ -106,15 +106,15 @@ if (IS_NPM_BUILD) {
     console.log(err);
 }
 
-// Global variable to store cmake path
+// Global variables to store build tool paths
 var CMAKE_BIN = 'cmake';
 
 async function vendorCmake() {
     if (OS !== 'macos') return;
-    
+
     // On macOS, cmake is distributed as an app bundle
     const vendoredCmakePath = join(process.cwd(), 'vendors', 'cmake', 'CMake.app', 'Contents', 'bin', 'cmake');
-    
+
     // Check if cmake is already available (system or vendored)
     try {
         await $`which cmake`.quiet();
@@ -129,36 +129,36 @@ async function vendorCmake() {
             return;
         }
     }
-    
+
     console.log('cmake not found, downloading...');
-    
+
     try {
         const cmakeVersion = '3.30.2';
         const cmakeUrl = `https://github.com/Kitware/CMake/releases/download/v${cmakeVersion}/cmake-${cmakeVersion}-macos-universal.tar.gz`;
-        
+
         await $`mkdir -p vendors`;
         console.log(`Downloading cmake ${cmakeVersion} for macOS...`);
-        
+
         // Download and extract in vendors directory
         const tempFile = 'vendors/cmake_temp.tar.gz';
         await $`curl -L "${cmakeUrl}" -o "${tempFile}"`;
-        
+
         // Extract in vendors directory
         await $`cd vendors && tar -xzf cmake_temp.tar.gz`;
-        
+
         // Always clean up the temp file
         await $`rm -f vendors/cmake_temp.tar.gz`;
-        
+
         // Rename to simple 'cmake' directory if needed
         const extractedDir = `vendors/cmake-${cmakeVersion}-macos-universal`;
         if (existsSync(extractedDir)) {
             await $`rm -rf vendors/cmake`; // Remove old cmake if exists
             await $`mv "${extractedDir}" vendors/cmake`;
         }
-        
+
         // Set the cmake binary path
         CMAKE_BIN = vendoredCmakePath;
-        
+
         // Verify it works
         await $`"${CMAKE_BIN}" --version`;
         console.log('✓ cmake vendored successfully');
@@ -168,13 +168,89 @@ async function vendorCmake() {
     }
 }
 
+// Global variable to store vcvarsall path
+var VCVARSALL_PATH = '';
+
+async function findMsvcTools() {
+    if (OS !== 'win') return;
+
+    try {
+        const vswherePath = join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
+        if (!existsSync(vswherePath)) {
+            console.log('vswhere not found, using default tool names');
+            return;
+        }
+
+        // Find Visual Studio installation path
+        const vsInstallResult = await $`powershell -command "& '${vswherePath}' -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath"`.quiet();
+        if (vsInstallResult.exitCode !== 0 || !vsInstallResult.stdout.toString().trim()) {
+            console.log('Could not find Visual Studio installation path');
+            return;
+        }
+
+        const vsInstallPath = vsInstallResult.stdout.toString().trim();
+        VCVARSALL_PATH = join(vsInstallPath, 'VC', 'Auxiliary', 'Build', 'vcvarsall.bat');
+
+        if (!existsSync(VCVARSALL_PATH)) {
+            console.log('vcvarsall.bat not found at expected location');
+            VCVARSALL_PATH = '';
+            return;
+        }
+
+        console.log('✓ Found MSVC tools with vcvarsall.bat');
+    } catch (error) {
+        console.log('Could not locate MSVC tools, using default tool names');
+    }
+}
+
+// Helper function to run MSVC commands with environment set up
+async function runMsvcCommand(command: string) {
+    if (!VCVARSALL_PATH) {
+        // Fallback to running command directly
+        return await $`${command}`;
+    }
+
+    // Create a temporary batch file to run the command with proper environment
+    const tempBat = join(process.cwd(), 'temp_build_cmd.bat');
+    const batContent = `@echo off\ncall "${VCVARSALL_PATH}" x64 >nul\n${command}`;
+
+    writeFileSync(tempBat, batContent);
+
+    try {
+        const result = await $`cmd /c "${tempBat}"`;
+        await $`rm "${tempBat}"`.catch(() => {});
+        return result;
+    } catch (error) {
+        await $`rm "${tempBat}"`.catch(() => {});
+        throw error;
+    }
+}
+
+async function installWindowsDeps() {
+    const scriptPath = join(process.cwd(), 'scripts', 'install-windows-deps.ps1');
+    if (!existsSync(scriptPath)) {
+        console.error(`Installer script not found: ${scriptPath}`);
+        throw new Error('Windows installer script missing. Please run the installer manually.');
+    }
+
+    console.log('Running Windows dependency installer (may require Administrator privileges)...');
+    try {
+        // Run the PowerShell helper (it will request elevation if needed)
+        await $`powershell -ExecutionPolicy Bypass -NoProfile -File "${scriptPath}"`;
+        console.log('Windows dependency installer finished. Re-checking dependencies...');
+    } catch (err) {
+        console.error('Windows installer failed:', err);
+        throw err;
+    }
+}
+
 async function checkDependencies() {
     const missingDeps = [];
-    
+
     if (OS === 'macos') {
         // Try to vendor cmake if not available
         await vendorCmake();
-        
+
         // Check for make (should be available with Xcode command line tools)
         try {
             await $`which make`.quiet();
@@ -182,12 +258,75 @@ async function checkDependencies() {
             missingDeps.push('make (install Xcode Command Line Tools: xcode-select --install)');
         }
     } else if (OS === 'win') {
-        // Check for Visual Studio / MSBuild
+        // Find MSVC compiler tools
+        await findMsvcTools();
+
+        // Check for cmake
         try {
             await $`where cmake`.quiet();
             CMAKE_BIN = 'cmake';
         } catch {
             missingDeps.push('cmake');
+        }
+
+        // Check for Visual Studio (use vswhere if available)
+        let vsFound = false;
+        try {
+            const vswherePath = join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
+            if (existsSync(vswherePath)) {
+                // Use PowerShell wrapper to ensure output is captured correctly on Windows
+                const out = await $`powershell -command "& '${vswherePath}' -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath"`.quiet();
+                if (out.exitCode === 0 && out.stdout.toString().trim()) vsFound = true;
+            } else {
+                const out = await $`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`.quiet();
+                if (out.exitCode === 0 && out.stdout.toString().trim()) vsFound = true;
+            }
+        } catch {
+            vsFound = false;
+        }
+
+        if (!vsFound) missingDeps.push('visual-studio');
+
+        if (missingDeps.length > 0) {
+            // In CI we should not attempt interactive installs
+            if (process.env['GITHUB_ACTIONS']) {
+                console.warn('\n⚠️  Missing required dependencies in CI - continuing (CI should provide these)');
+            } else {
+                try {
+                    await installWindowsDeps();
+                } catch (err) {
+                    console.error('Auto-install failed or was cancelled.');
+                }
+
+                // Re-check cmake
+                const newMissing: string[] = [];
+                try { await $`where cmake`.quiet(); CMAKE_BIN = 'cmake'; } catch { newMissing.push('cmake'); }
+
+                // Re-check Visual Studio
+                try {
+                    const vswherePath = join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
+                    let out;
+                    if (existsSync(vswherePath)) {
+                        // Use PowerShell wrapper to ensure output is captured correctly on Windows
+                        out = await $`powershell -command "& '${vswherePath}' -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath"`.quiet();
+                    } else {
+                        out = await $`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`.quiet();
+                    }
+                    if (!(out && out.exitCode === 0 && out.stdout.toString().trim())) {
+                        newMissing.push('visual-studio');
+                    }
+                } catch {
+                    newMissing.push('visual-studio');
+                }
+
+                if (newMissing.length > 0) {
+                    missingDeps.length = 0;
+                    newMissing.forEach(m => missingDeps.push(m));
+                } else {
+                    // clear missingDeps if everything is present now
+                    missingDeps.length = 0;
+                }
+            }
         }
     } else if (OS === 'linux') {
         // Check for build essentials
@@ -945,10 +1084,10 @@ async function vendorCEF() {
             const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
             
             // Compile the Windows helper process
-            await $`cl /c /EHsc /std:c++17 /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/build/process_helper_win.obj src/native/win/cef_process_helper_win.cpp`;
+            await runMsvcCommand(`cl /c /EHsc /std:c++17 /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/build/process_helper_win.obj src/native/win/cef_process_helper_win.cpp`);
 
             // Link to create the helper executable
-            await $`link /OUT:src/native/build/process_helper.exe user32.lib ole32.lib shell32.lib "${cefLib}" "${cefWrapperLib}" /SUBSYSTEM:WINDOWS src/native/build/process_helper_win.obj`;
+            await runMsvcCommand(`link /OUT:src/native/build/process_helper.exe user32.lib ole32.lib shell32.lib "${cefLib}" "${cefWrapperLib}" /SUBSYSTEM:WINDOWS src/native/build/process_helper_win.obj`);
         }
     } else if (OS === 'linux') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {
@@ -1105,11 +1244,12 @@ async function buildNative() {
 
         // Compile the main wrapper with both WebView2 and CEF support (runtime detection)
         // Use /MT to statically link the C runtime (matches libcpmt.lib that CEF uses)
-        await $`mkdir -p src/native/win/build && cl /c /EHsc /std:c++17 /MT /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`;
+        await $`mkdir -p src/native/win/build`;
+        await runMsvcCommand(`cl /c /EHsc /std:c++17 /MT /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`);
 
         // Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
         // Note: ASAR reading is now implemented directly in C++ (no external library needed)
-        await $`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`;
+        await runMsvcCommand(`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`);
     } else if (OS === 'linux') {
         // Skip package checks in CI or continue anyway if packages are missing
         if (!process.env['GITHUB_ACTIONS']) {
