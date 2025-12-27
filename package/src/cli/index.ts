@@ -2014,10 +2014,10 @@ exec "\$LAUNCHER_BINARY" "\$@"
         // Also keep the raw .run for backwards compatibility (optional)
         // artifactsToUpload.push(selfExtractingLinuxPath);
         
-        // On Linux, create a tar.gz of the bundle
+        // On Linux, create a tar.gz of the bundle (for build process, not uploaded to artifacts)
         const linuxTarPath = join(buildFolder, `${appFileName}.tar.gz`);
         execSync(`tar -czf ${escapePathForTerminal(linuxTarPath)} -C ${escapePathForTerminal(buildFolder)} ${escapePathForTerminal(basename(appBundleFolderPath))}`);
-        artifactsToUpload.push(linuxTarPath);
+        // Note: Not adding to artifactsToUpload - we use .tar.zst for updates and .run.tar.gz for distribution
       }
     }
 
