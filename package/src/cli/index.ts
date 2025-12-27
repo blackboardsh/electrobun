@@ -1974,29 +1974,8 @@ Categories=Application;
         // Make desktop file executable
         execSync(`chmod +x ${escapePathForTerminal(desktopFilePath)}`);
         
-        // Create user-friendly launcher script
-        const launcherScriptContent = `#!/bin/bash
-# ${config.package?.name || config.app.name} Launcher
-# This script launches the application from any location
-
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-
-# Find the launcher binary relative to this script
-LAUNCHER_BINARY="\$SCRIPT_DIR/bin/launcher"
-
-if [ ! -x "\$LAUNCHER_BINARY" ]; then
-    echo "Error: Could not find launcher binary at \$LAUNCHER_BINARY"
-    exit 1
-fi
-
-# Launch the application
-exec "\$LAUNCHER_BINARY" "\$@"
-`;
-        
-        const launcherScriptPath = join(appBundleFolderPath, `${appFileName}.sh`);
-        writeFileSync(launcherScriptPath, launcherScriptContent);
-        execSync(`chmod +x ${escapePathForTerminal(launcherScriptPath)}`);
+        // Note: No longer creating shell script wrapper - users can run bin/launcher directly 
+        // or use the symlink created by the self-extractor
         
         // Create self-extracting Linux binary (similar to Windows approach)
         const selfExtractingLinuxPath = await createLinuxSelfExtractingBinary(
