@@ -441,12 +441,8 @@ async function copyApiFiles() {
 async function copyToDist() {
     // Bun runtime
     await $`cp ${PATH.bun.RUNTIME} ${PATH.bun.DIST}`;
-    // Zig
-    if (OS === 'macos') {
-        await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
-    } else {
-        console.log(`Skipping launcher copy on ${OS}`);
-    }
+    // Zig launcher for all platforms
+    await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
     await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
     // Copy bsdiff/bspatch from vendored zig-bsdiff
     await $`cp vendors/zig-bsdiff/bsdiff${binExt} dist/bsdiff${binExt}`;
@@ -1371,22 +1367,26 @@ async function buildNative() {
 }
 
 async function buildLauncher() {
-    if (OS !== 'macos') {
-        console.log(`Skipping launcher build on ${OS} (only needed on macOS)`);
-        return;
-    }
+    console.log(`Building launcher for ${OS} ${ARCH}...`);
 
     let zigArgs: string[] = [];
 
-    // if (OS === 'win') {
-    //     zigArgs = ['-Dtarget=x86_64-windows', '-Dcpu=baseline'];
-    // }
-    if (ARCH === 'arm64') {
-        zigArgs = ['-Dtarget=aarch64-macos'];
-    } else {
-        zigArgs = ['-Dtarget=x86_64-macos'];
+    if (OS === 'win') {
+        // Windows always x64 for now
+        zigArgs = ['-Dtarget=x86_64-windows', '-Dcpu=baseline'];
+    } else if (OS === 'linux') {
+        if (ARCH === 'arm64') {
+            zigArgs = ['-Dtarget=aarch64-linux'];
+        } else {
+            zigArgs = ['-Dtarget=x86_64-linux'];
+        }
+    } else if (OS === 'macos') {
+        if (ARCH === 'arm64') {
+            zigArgs = ['-Dtarget=aarch64-macos'];
+        } else {
+            zigArgs = ['-Dtarget=x86_64-macos'];
+        }
     }
-    
     
     if (CHANNEL === 'debug') {
         await $`cd src/launcher && ../../vendors/zig/zig build ${zigArgs}`;

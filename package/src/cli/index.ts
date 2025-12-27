@@ -1120,21 +1120,18 @@ if (commandArg === "init") {
   //     mkdirSync(destLauncherFolder, {recursive: true});
   // }
   // cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});
-  // Copy zig launcher for all builds (dev, canary, stable) - macOS only
-  if (targetOS === 'macos') {
-    const bunCliLauncherBinarySource = targetPaths.LAUNCHER_RELEASE;
-    const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + targetBinExt;
-    const destLauncherFolder = dirname(bunCliLauncherDestination);
-    if (!existsSync(destLauncherFolder)) {
-      // console.info('creating folder: ', destFolder);
-      mkdirSync(destLauncherFolder, { recursive: true });
-    }
-
-    cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {
-      recursive: true,
-      dereference: true,
-    });
+  // Copy zig launcher for all platforms
+  const bunCliLauncherBinarySource = targetPaths.LAUNCHER_RELEASE;
+  const bunCliLauncherDestination = join(appBundleMacOSPath, "launcher") + targetBinExt;
+  const destLauncherFolder = dirname(bunCliLauncherDestination);
+  if (!existsSync(destLauncherFolder)) {
+    mkdirSync(destLauncherFolder, { recursive: true });
   }
+
+  cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {
+    recursive: true,
+    dereference: true,
+  });
 
   cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, 'main.js'), { dereference: true });
 
@@ -2199,62 +2196,48 @@ exec "\$LAUNCHER_BINARY" "\$@"
     throw new Error(`Unsupported OS: ${OS}`);
   }
 
-  if (OS === 'macos') {
-    // Use the zig launcher for all builds (dev, canary, stable)
+  if (OS === 'macos' || OS === 'linux') {
+    // For Linux dev mode, update libNativeWrapper.so based on bundleCEF setting
+    if (OS === 'linux') {
+      const currentLibPath = join(bundleExecPath, 'libNativeWrapper.so');
+      const targetPaths = getPlatformPaths('linux', ARCH);
+      const correctLibSource = config.build.linux?.bundleCEF 
+        ? targetPaths.NATIVE_WRAPPER_LINUX_CEF 
+        : targetPaths.NATIVE_WRAPPER_LINUX;
+      
+      if (existsSync(correctLibSource)) {
+        try {
+          cpSync(correctLibSource, currentLibPath, { dereference: true });
+          console.log(`Updated libNativeWrapper.so for ${config.build.linux?.bundleCEF ? 'CEF' : 'GTK-only'} mode`);
+        } catch (error) {
+          console.warn('Failed to update libNativeWrapper.so:', error);
+        }
+      }
+    }
+    
+    // Use the zig launcher for macOS and Linux
     mainProc = Bun.spawn([join(bundleExecPath, 'launcher')], {
       stdio: ['inherit', 'inherit', 'inherit'],
       cwd: bundleExecPath
     })
   } else if (OS === 'win') {  
-    // Try the main process - use relative path to Resources folder
-    mainProc =  Bun.spawn(['./bun.exe', '../Resources/main.js'], {
-      stdio: ['inherit', 'inherit', 'inherit'],
-      cwd: bundleExecPath,
-      onExit: (proc, exitCode, signalCode, error) => {
-        console.log('Bun process exited:', { exitCode, signalCode, error });
-      }
-    })
-  } else if (OS === 'linux') {
-    let env = { ...process.env };
-    
-    // For dev mode on Linux, check if we need to update the libNativeWrapper.so
-    // based on the current bundleCEF setting
-    const currentLibPath = join(bundleExecPath, 'libNativeWrapper.so');
-    const targetPaths = getPlatformPaths('linux', ARCH);
-    const correctLibSource = config.build.linux?.bundleCEF 
-      ? targetPaths.NATIVE_WRAPPER_LINUX_CEF 
-      : targetPaths.NATIVE_WRAPPER_LINUX;
-    
-    // Check if the correct library exists and copy it if needed
-    if (existsSync(correctLibSource)) {
-      try {
-        // Copy the correct version to the build directory
-        cpSync(correctLibSource, currentLibPath, { dereference: true });
-        console.log(`Updated libNativeWrapper.so for ${config.build.linux?.bundleCEF ? 'CEF' : 'GTK-only'} mode`);
-      } catch (error) {
-        console.warn('Failed to update libNativeWrapper.so:', error);
-      }
+    // Windows: Use launcher if available, otherwise fallback to direct execution
+    const launcherPath = join(bundleExecPath, 'launcher.exe');
+    if (existsSync(launcherPath)) {
+      mainProc = Bun.spawn([launcherPath], {
+        stdio: ['inherit', 'inherit', 'inherit'],
+        cwd: bundleExecPath
+      })
+    } else {
+      // Fallback for older builds
+      mainProc = Bun.spawn(['./bun.exe', '../Resources/main.js'], {
+        stdio: ['inherit', 'inherit', 'inherit'],
+        cwd: bundleExecPath,
+        onExit: (proc, exitCode, signalCode, error) => {
+          console.log('Bun process exited:', { exitCode, signalCode, error });
+        }
+      })
     }
-    
-    // Add LD_LIBRARY_PATH to help find libraries
-    env['LD_LIBRARY_PATH'] = `${bundleExecPath}${env['LD_LIBRARY_PATH'] ? ':' + env['LD_LIBRARY_PATH'] : ''}`;
-    
-    // Add LD_PRELOAD for CEF libraries to fix static TLS allocation issues
-    if (config.build.linux?.bundleCEF) {
-      const cefLibs = ['./libcef.so', './libvk_swiftshader.so'];
-      const existingCefLibs = cefLibs.filter(lib => existsSync(join(bundleExecPath, lib)));
-      
-      if (existingCefLibs.length > 0) {
-        env['LD_PRELOAD'] = existingCefLibs.join(':');
-        console.log(`Using LD_PRELOAD for CEF: ${env['LD_PRELOAD']}`);
-      }
-    }
-    
-    mainProc = Bun.spawn([join(bundleExecPath, 'bun'), join(bundleResourcesPath, 'main.js')], {
-      stdio: ['inherit', 'inherit', 'inherit'],
-      cwd: bundleExecPath,
-      env
-    })
   }
 
   process.on("SIGINT", () => {

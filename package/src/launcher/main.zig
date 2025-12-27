@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @cImport({
     @cInclude("signal.h");
     @cInclude("unistd.h");
@@ -29,26 +30,92 @@ pub fn main() !void {
     const alloc = std.heap.page_allocator;
 
     var exePathBuffer: [1024]u8 = undefined;
-    const APPBUNDLE_MACOS_PATH = try std.fs.selfExeDirPath(exePathBuffer[0..]);
+    const exe_dir = try std.fs.selfExeDirPath(exePathBuffer[0..]);
 
-    std.debug.print("Launcher starting...\n", .{});
-    std.debug.print("Current directory: {s}\n", .{APPBUNDLE_MACOS_PATH});
+    std.debug.print("Launcher starting on {s}...\n", .{@tagName(builtin.os.tag)});
+    std.debug.print("Current directory: {s}\n", .{exe_dir});
 
-    // Set up signal handlers
-    _ = c.signal(c.SIGINT, signalHandler);
-    _ = c.signal(c.SIGTERM, signalHandler);
-    _ = c.signal(c.SIGHUP, signalHandler);
+    // Set up signal handlers (not on Windows)
+    if (builtin.os.tag != .windows) {
+        _ = c.signal(c.SIGINT, signalHandler);
+        _ = c.signal(c.SIGTERM, signalHandler);
+        _ = c.signal(c.SIGHUP, signalHandler);
+    }
 
+    // Platform-specific paths
+    var argv: []const []const u8 = undefined;
+    var resources_path: []u8 = undefined;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+    
+    switch (builtin.os.tag) {
+        .macos => {
+            // macOS: launcher is in MacOS/, resources in Resources/
+            resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
+            argv = &[_][]const u8{ "./bun", resources_path };
+        },
+        .linux, .windows => {
+            // Linux/Windows: launcher is in bin/, resources in Resources/
+            resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
+            const bun_name = if (builtin.os.tag == .windows) "bun.exe" else "bun";
+            argv = &[_][]const u8{ try std.fs.path.join(arena_alloc, &.{ exe_dir, bun_name }), resources_path };
+        },
+        else => @panic("Unsupported platform"),
+    }
+    
     // Create an instance of ChildProcess
-    const argv = &[_][]const u8{ "./bun", "../Resources/main.js" };
     var child_process = std.process.Child.init(argv, alloc);
-
-    child_process.cwd = APPBUNDLE_MACOS_PATH;
+    child_process.cwd = exe_dir;
+    
+    // Handle Linux-specific environment setup
+    if (builtin.os.tag == .linux) {
+        // Check for CEF libraries that need LD_PRELOAD
+        const cef_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libcef.so" });
+        const swiftshader_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libvk_swiftshader.so" });
+        
+        var env_map = try std.process.getEnvMap(arena_alloc);
+        
+        // Set LD_LIBRARY_PATH to include current directory
+        if (env_map.get("LD_LIBRARY_PATH")) |existing_ld_path| {
+            const new_ld_path = try std.fmt.allocPrint(arena_alloc, "{s}:{s}", .{ exe_dir, existing_ld_path });
+            try env_map.put("LD_LIBRARY_PATH", new_ld_path);
+        } else {
+            try env_map.put("LD_LIBRARY_PATH", exe_dir);
+        }
+        
+        // Check if CEF libraries exist and set LD_PRELOAD if needed
+        const cef_exists = blk: {
+            std.fs.accessAbsolute(cef_lib_path, .{}) catch {
+                break :blk false;
+            };
+            break :blk true;
+        };
+        const swiftshader_exists = blk: {
+            std.fs.accessAbsolute(swiftshader_lib_path, .{}) catch {
+                break :blk false;
+            };
+            break :blk true;
+        };
+        
+        if (cef_exists or swiftshader_exists) {
+            var preload_libs = std.ArrayList([]const u8).init(arena_alloc);
+            if (cef_exists) try preload_libs.append("./libcef.so");
+            if (swiftshader_exists) try preload_libs.append("./libvk_swiftshader.so");
+            
+            const ld_preload = try std.mem.join(arena_alloc, ":", preload_libs.items);
+            try env_map.put("LD_PRELOAD", ld_preload);
+            std.debug.print("Setting LD_PRELOAD: {s}\n", .{ld_preload});
+        }
+        
+        child_process.env_map = &env_map;
+    }
+    
     // Inherit stdout/stderr so we can see any errors
     child_process.stdout_behavior = .Inherit;
     child_process.stderr_behavior = .Inherit;
     
-    std.debug.print("Spawning: {s} {s}\n", .{argv[0], argv[1]});
+    std.debug.print("Spawning: {s} {s}\n", .{argv[0], if (argv.len > 1) argv[1] else ""});
 
     // Spawn the child process
     try child_process.spawn();

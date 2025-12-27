@@ -12,5 +12,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Link libc for signal handling on Linux
+    exe.linkLibC();
+
     b.installArtifact(exe);
 }

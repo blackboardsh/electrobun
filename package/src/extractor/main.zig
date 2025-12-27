@@ -397,6 +397,9 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         try replaceSelfWithLauncher(allocator, exe_path, app_dir);
     }
     
+    // Create launcher symlink in same directory as self-extractor
+    try createLocalLauncherScript(allocator, app_dir, metadata);
+    
     // Create desktop shortcuts on Linux and Windows
     if (builtin.os.tag == .linux) {
         try createDesktopShortcut(allocator, app_dir, metadata);
@@ -747,6 +750,85 @@ fn escapeDesktopString(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
     }
     
     return escaped;
+}
+
+fn createLocalLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
+    // Get the directory where the self-extractor is located
+    const exe_path = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(exe_path);
+    
+    const extractor_dir = std.fs.path.dirname(exe_path) orelse {
+        std.debug.print("Warning: Could not get directory of self-extractor\n", .{});
+        return;
+    };
+    
+    // Create launcher symlink in the same directory as the self-extractor
+    if (builtin.os.tag == .linux) {
+        const symlink_name = try std.fmt.allocPrint(allocator, "{s}", .{metadata.name});
+        defer allocator.free(symlink_name);
+        
+        const symlink_path = try std.fs.path.join(allocator, &.{ extractor_dir, symlink_name });
+        defer allocator.free(symlink_path);
+        
+        const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
+        defer allocator.free(launcher_path);
+        
+        // Check if launcher exists
+        std.fs.cwd().access(launcher_path, .{}) catch |err| {
+            std.debug.print("Warning: Launcher not found at {s}: {}\n", .{ launcher_path, err });
+            return;
+        };
+        
+        // Remove existing symlink if it exists
+        std.fs.cwd().deleteFile(symlink_path) catch {};
+        
+        // Create symlink to the launcher binary
+        const launcher_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{launcher_path});
+        defer allocator.free(launcher_path_z);
+        
+        const symlink_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{symlink_path});
+        defer allocator.free(symlink_path_z);
+        
+        const result = std.c.symlink(launcher_path_z.ptr, symlink_path_z.ptr);
+        if (result != 0) {
+            std.debug.print("Warning: Failed to create symlink {s} -> {s}: errno={}\n", .{ symlink_path, launcher_path, result });
+            return;
+        }
+        
+        std.debug.print("Created launcher symlink: {s} -> {s}\n", .{ symlink_path, launcher_path });
+    } else if (builtin.os.tag == .windows) {
+        const script_name = try std.fmt.allocPrint(allocator, "Launch {s}.bat", .{metadata.name});
+        defer allocator.free(script_name);
+        
+        const script_path = try std.fs.path.join(allocator, &.{ extractor_dir, script_name });
+        defer allocator.free(script_path);
+        
+        const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
+        defer allocator.free(launcher_path);
+        
+        // Check if launcher exists
+        std.fs.cwd().access(launcher_path, .{}) catch |err| {
+            std.debug.print("Warning: Launcher not found at {s}: {}\n", .{ launcher_path, err });
+            return;
+        };
+        
+        const script_content = try std.fmt.allocPrint(allocator,
+            \\@echo off
+            \\:: Electrobun App Launcher
+            \\:: Launch {s}
+            \\
+            \\cd /d "{s}\bin"
+            \\start "" launcher.exe
+            \\
+        , .{ metadata.name, app_dir });
+        defer allocator.free(script_content);
+        
+        const script_file = try std.fs.cwd().createFile(script_path, .{});
+        defer script_file.close();
+        try script_file.writeAll(script_content);
+        
+        std.debug.print("Created local launcher script: {s}\n", .{script_path});
+    }
 }
 
 fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
