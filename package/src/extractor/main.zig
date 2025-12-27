@@ -18,6 +18,92 @@ const AppMetadata = struct {
     hash: ?[]const u8 = null,
 };
 
+// Progress indicator for extraction
+const ProgressIndicator = struct {
+    child_process: ?std.process.Child,
+    allocator: std.mem.Allocator,
+    
+    fn init(allocator: std.mem.Allocator, app_name: []const u8) ProgressIndicator {
+        var self = ProgressIndicator{
+            .child_process = null,
+            .allocator = allocator,
+        };
+        
+        // Try to start a progress dialog
+        self.startProgressDialog(app_name) catch {
+            // Fallback to console output
+            std.debug.print("Extracting {s}...\n", .{app_name});
+        };
+        
+        return self;
+    }
+    
+    fn startProgressDialog(self: *ProgressIndicator, app_name: []const u8) !void {
+        if (builtin.os.tag != .linux) return;
+        
+        // Try zenity first (most common)
+        const extract_text = try std.fmt.allocPrint(self.allocator, "--text=Extracting {s}...", .{app_name});
+        defer self.allocator.free(extract_text);
+        
+        const zenity_args = [_][]const u8{
+            "zenity", "--progress", "--pulsate", "--no-cancel",
+            "--title=Electrobun Installer",
+            extract_text,
+            "--auto-close",
+        };
+        
+        var child = std.process.Child.init(&zenity_args, self.allocator);
+        child.stdin_behavior = .Pipe;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        
+        child.spawn() catch |err| {
+            // Try kdialog for KDE
+            if (err == error.FileNotFound) {
+                const kdialog_text = try std.fmt.allocPrint(self.allocator, "Extracting {s}...", .{app_name});
+                defer self.allocator.free(kdialog_text);
+                
+                const kdialog_args = [_][]const u8{
+                    "kdialog", "--progressbar", kdialog_text, "0",
+                    "--title", "Electrobun Installer",
+                };
+                
+                var kde_child = std.process.Child.init(&kdialog_args, self.allocator);
+                kde_child.stdin_behavior = .Ignore;
+                kde_child.stdout_behavior = .Ignore;
+                kde_child.stderr_behavior = .Ignore;
+                
+                kde_child.spawn() catch {
+                    return error.NoProgressDialog;
+                };
+                
+                self.child_process = kde_child;
+                return;
+            }
+            return err;
+        };
+        
+        self.child_process = child;
+    }
+    
+    fn deinit(self: *ProgressIndicator) void {
+        if (self.child_process) |*child| {
+            // Close stdin to signal completion for zenity
+            if (child.stdin) |stdin| {
+                stdin.close();
+                child.stdin = null;
+            }
+            
+            // Wait a moment for the dialog to close gracefully
+            std.time.sleep(500 * std.time.ns_per_ms);
+            
+            // Terminate if still running
+            _ = child.kill() catch {};
+            _ = child.wait() catch {};
+        }
+    }
+};
+
 fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Get path to self
     const exe_path = try std.fs.selfExePathAlloc(allocator);
@@ -238,6 +324,10 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
 }
 
 fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, metadata: AppMetadata, self_extraction_dir: []const u8, app_dir: []const u8) !bool {
+    // Initialize progress indicator
+    var progress = ProgressIndicator.init(allocator, metadata.name);
+    defer progress.deinit();
+    
     // Get exe path for shortcuts
     const exe_path = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(exe_path);
