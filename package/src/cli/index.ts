@@ -2217,6 +2217,28 @@ exec "\$LAUNCHER_BINARY" "\$@"
   } else if (OS === 'linux') {
     let env = { ...process.env };
     
+    // For dev mode on Linux, check if we need to update the libNativeWrapper.so
+    // based on the current bundleCEF setting
+    const currentLibPath = join(bundleExecPath, 'libNativeWrapper.so');
+    const targetPaths = getPlatformPaths('linux', ARCH);
+    const correctLibSource = config.build.linux?.bundleCEF 
+      ? targetPaths.NATIVE_WRAPPER_LINUX_CEF 
+      : targetPaths.NATIVE_WRAPPER_LINUX;
+    
+    // Check if the correct library exists and copy it if needed
+    if (existsSync(correctLibSource)) {
+      try {
+        // Copy the correct version to the build directory
+        cpSync(correctLibSource, currentLibPath, { dereference: true });
+        console.log(`Updated libNativeWrapper.so for ${config.build.linux?.bundleCEF ? 'CEF' : 'GTK-only'} mode`);
+      } catch (error) {
+        console.warn('Failed to update libNativeWrapper.so:', error);
+      }
+    }
+    
+    // Add LD_LIBRARY_PATH to help find libraries
+    env['LD_LIBRARY_PATH'] = `${bundleExecPath}${env['LD_LIBRARY_PATH'] ? ':' + env['LD_LIBRARY_PATH'] : ''}`;
+    
     // Add LD_PRELOAD for CEF libraries to fix static TLS allocation issues
     if (config.build.linux?.bundleCEF) {
       const cefLibs = ['./libcef.so', './libvk_swiftshader.so'];
