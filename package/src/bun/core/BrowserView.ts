@@ -1,4 +1,4 @@
-import {  native, toCString, ffi } from "../proc/native";
+import { native, toCString, ffi } from "../proc/native";
 import * as fs from "fs";
 import { execSync } from "child_process";
 import electrobunEventEmitter from "../events/eventEmitter";
@@ -11,10 +11,13 @@ import {
   createRPC,
 } from "rpc-anywhere";
 import { Updater } from "./Updater";
-import type { BuiltinBunToWebviewSchema,BuiltinWebviewToBunSchema } from "../../browser/builtinrpcSchema";
+import type {
+  BuiltinBunToWebviewSchema,
+  BuiltinWebviewToBunSchema,
+} from "../../browser/builtinrpcSchema";
 import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
 import { randomBytes } from "crypto";
-import {FFIType, type Pointer}  from 'bun:ffi';
+import { FFIType, type Pointer } from "bun:ffi";
 
 const BrowserViewMap: {
   [id: number]: BrowserView<any>;
@@ -27,7 +30,7 @@ type BrowserViewOptions<T = undefined> = {
   url: string | null;
   html: string | null;
   preload: string | null;
-  renderer: 'native' | 'cef';
+  renderer: "native" | "cef";
   partition: string | null;
   frame: {
     x: number;
@@ -35,13 +38,13 @@ type BrowserViewOptions<T = undefined> = {
     width: number;
     height: number;
   };
-  rpc: T;  
+  rpc: T;
   hostWebviewId: number;
   autoResize: boolean;
 
   windowId: number;
   navigationRules: string | null;
-  // renderer: 
+  // renderer:
 };
 
 interface ElectrobunWebviewRPCSChema {
@@ -53,7 +56,7 @@ const defaultOptions: Partial<BrowserViewOptions> = {
   url: null,
   html: null,
   preload: null,
-  renderer: 'native',
+  renderer: "native",
   frame: {
     x: 0,
     y: 0,
@@ -61,8 +64,6 @@ const defaultOptions: Partial<BrowserViewOptions> = {
     height: 600,
   },
 };
-
-
 
 const hash = await Updater.localInfo.hash();
 // Note: we use the build's hash to separate from different apps and different builds
@@ -74,7 +75,7 @@ export class BrowserView<T> {
   ptr: Pointer;
   hostWebviewId?: number;
   windowId: number;
-  renderer: 'cef' | 'native';
+  renderer: "cef" | "native";
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
@@ -86,22 +87,22 @@ export class BrowserView<T> {
     width: number;
     height: number;
   } = {
-    x: 0,
-    y: 0,
-    width: 800,
-    height: 600,
-  };
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+    };
   pipePrefix: string;
   inStream: fs.WriteStream;
   outStream: ReadableStream<Uint8Array>;
   secretKey: Uint8Array;
-  rpc?: T;  
+  rpc?: T;
   rpcHandler?: (msg: any) => void;
   navigationRules: string | null;
 
   constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
-    // const rpc = options.rpc;        
-    
+    // const rpc = options.rpc;
+
     this.url = options.url || defaultOptions.url || null;
     this.html = options.html || defaultOptions.html || null;
     this.preload = options.preload || defaultOptions.preload || null;
@@ -109,7 +110,7 @@ export class BrowserView<T> {
       ? { ...defaultOptions.frame, ...options.frame }
       : { ...defaultOptions.frame };
     this.rpc = options.rpc;
-    this.secretKey = new Uint8Array(randomBytes(32));    
+    this.secretKey = new Uint8Array(randomBytes(32));
     this.partition = options.partition || null;
     // todo (yoav): since collisions can crash the app add a function that checks if the
     // file exists first
@@ -122,36 +123,42 @@ export class BrowserView<T> {
 
     BrowserViewMap[this.id] = this;
     this.ptr = this.init();
-    
+
     // If HTML content was provided, load it after webview creation
     if (this.html) {
-      console.log(`DEBUG: BrowserView constructor triggering loadHTML for webview ${this.id}`);
+      console.log(
+        `DEBUG: BrowserView constructor triggering loadHTML for webview ${this.id}`,
+      );
       // Small delay to ensure webview is ready
       setTimeout(() => {
-        console.log(`DEBUG: BrowserView delayed loadHTML for webview ${this.id}`);
+        console.log(
+          `DEBUG: BrowserView delayed loadHTML for webview ${this.id}`,
+        );
         this.loadHTML(this.html!);
-      }, 100);  // Back to 100ms since we fixed the race condition
+      }, 100); // Back to 100ms since we fixed the race condition
     } else {
-      console.log(`DEBUG: BrowserView constructor - no HTML provided for webview ${this.id}`);
+      console.log(
+        `DEBUG: BrowserView constructor - no HTML provided for webview ${this.id}`,
+      );
     }
   }
 
-  init() {    
+  init() {
     this.createStreams();
-       
+
     // TODO: add a then to this that fires an onReady event
     return ffi.request.createWebview({
       id: this.id,
       windowId: this.windowId,
-      renderer: this.renderer, 
+      renderer: this.renderer,
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),
       hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
-      partition: this.partition,      
+      partition: this.partition,
       // Only pass URL if no HTML content is provided to avoid conflicts
-      url: this.html ? null : this.url,      
+      url: this.html ? null : this.url,
       html: this.html,
       preload: this.preload,
       frame: {
@@ -163,19 +170,16 @@ export class BrowserView<T> {
       autoResize: this.autoResize,
       navigationRules: this.navigationRules,
     });
-
-    
   }
 
-  createStreams() {    
+  createStreams() {
     if (!this.rpc) {
       this.rpc = BrowserView.defineRPC({
         handlers: { requests: {}, messages: {} },
       });
     }
-    
+
     this.rpc.setTransport(this.createTransport());
-    
   }
 
   sendMessageToWebviewViaExecute(jsonMessage) {
@@ -203,29 +207,31 @@ export class BrowserView<T> {
   // so we have to chunk it
   // TODO: is this still needed after switching from named pipes
   executeJavascript(js: string) {
-    ffi.request.evaluateJavascriptWithNoCompletion({id: this.id, js});
+    ffi.request.evaluateJavascriptWithNoCompletion({ id: this.id, js });
   }
 
   loadURL(url: string) {
     console.log(`DEBUG: loadURL called for webview ${this.id}: ${url}`);
-    this.url = url;    
-    native.symbols.loadURLInWebView(this.ptr, toCString(this.url))      
+    this.url = url;
+    native.symbols.loadURLInWebView(this.ptr, toCString(this.url));
   }
 
   loadHTML(html: string) {
     this.html = html;
-    console.log(`DEBUG: Setting HTML content for webview ${this.id}:`, html.substring(0, 50) + '...');
-    
-    if (this.renderer === 'cef') {
+    console.log(
+      `DEBUG: Setting HTML content for webview ${this.id}:`,
+      html.substring(0, 50) + "...",
+    );
+
+    if (this.renderer === "cef") {
       // For CEF, store HTML content in native map and use scheme handler
       native.symbols.setWebviewHTMLContent(this.id, toCString(html));
-      this.loadURL('views://internal/index.html');
+      this.loadURL("views://internal/index.html");
     } else {
       // For WKWebView, load HTML content directly
       native.symbols.loadHTMLInWebView(this.ptr, toCString(html));
     }
   }
-
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserView events
@@ -242,7 +248,7 @@ export class BrowserView<T> {
       | "download-progress"
       | "download-completed"
       | "download-failed",
-    handler
+    handler,
   ) {
     const specificName = `${name}-${this.id}`;
     electrobunEventEmitter.on(specificName, handler);
@@ -265,7 +271,7 @@ export class BrowserView<T> {
         }
       },
       registerHandler(handler) {
-        that.rpcHandler = handler;       
+        that.rpcHandler = handler;
       },
     };
   };
@@ -281,7 +287,7 @@ export class BrowserView<T> {
   static defineRPC<
     Schema extends ElectrobunWebviewRPCSChema,
     BunSchema extends RPCSchema = Schema["bun"],
-    WebviewSchema extends RPCSchema = Schema["webview"]
+    WebviewSchema extends RPCSchema = Schema["webview"],
   >(config: {
     maxRequestTime?: number;
     handlers: {
@@ -322,11 +328,11 @@ export class BrowserView<T> {
     // handlers for them alongside request handlers.
 
     type mixedWebviewSchema = {
-      requests: BunSchema["requests"]// & BuiltinWebviewToBunSchema["requests"];
+      requests: BunSchema["requests"]; // & BuiltinWebviewToBunSchema["requests"];
       messages: WebviewSchema["messages"];
     };
 
-    type mixedBunSchema = {      
+    type mixedBunSchema = {
       messages: BunSchema["messages"];
     };
 
@@ -338,12 +344,12 @@ export class BrowserView<T> {
       },
       transport: {
         // Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey
-        registerHandler: () => {},
+        registerHandler: () => { },
       },
     } as RPCOptions<mixedWebviewSchema, mixedBunSchema>;
 
     const rpc = createRPC<mixedWebviewSchema, mixedBunSchema>(rpcOptions);
-    
+
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
       // note: this can only be done once there is a transport
@@ -361,7 +367,7 @@ export class BrowserView<T> {
           if (messageHandler) {
             messageHandler(payload);
           }
-        }
+        },
       );
     }
 

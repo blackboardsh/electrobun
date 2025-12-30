@@ -14,6 +14,6 @@ export type BuiltinWebviewToBunSchema = {
     webviewTagInit: {
       params: {};
       response: any;
-    }
-  }
-}
+    };
+  };
+};

@@ -10,7 +10,7 @@ type Rect = { x: number; y: number; width: number; height: number };
 const ConfigureWebviewTags = (
   enableWebviewTags: boolean,
   internalRpc: (params: any) => any,
-  bunRpc: (params: any) => any
+  bunRpc: (params: any) => any,
 ) => {
   if (!enableWebviewTags) {
     return;
@@ -51,18 +51,18 @@ const ConfigureWebviewTags = (
 
     transparent: boolean = false;
     passthroughEnabled: boolean = false;
-    hidden: boolean = false;    
+    hidden: boolean = false;
     hiddenMirrorMode: boolean = false;
     wasZeroRect: boolean = false;
     isMirroring: boolean = false;
-    masks: string = '';
+    masks: string = "";
 
     partition: string | null = null;
 
     constructor() {
       super();
       this.internalRpc = internalRpc;
-      this.bunRpc = bunRpc;      
+      this.bunRpc = bunRpc;
 
       // Give it a frame to be added to the dom and render before measuring
       requestAnimationFrame(() => {
@@ -80,27 +80,27 @@ const ConfigureWebviewTags = (
       this.syncDimensions();
     }
 
-    async initWebview() {      
+    async initWebview() {
       const rect = this.getBoundingClientRect();
       this.lastRect = rect;
 
       const url = this.src || this.getAttribute("src");
-      const html = this.html || this.getAttribute("html");   
-      
+      const html = this.html || this.getAttribute("html");
+
       const maskSelectors = this.masks || this.getAttribute("masks");
 
       if (maskSelectors) {
-        maskSelectors.split(',').forEach(s => {
+        maskSelectors.split(",").forEach((s) => {
           this.maskSelectors.add(s);
-        })
+        });
       }
 
-      const webviewId = await this.internalRpc.request.webviewTagInit({        
+      const webviewId = await this.internalRpc.request.webviewTagInit({
         hostWebviewId: window.__electrobunWebviewId,
         windowId: window.__electrobunWindowId,
         renderer: this.renderer,
-        url: url, 
-        html: html,         
+        url: url,
+        html: html,
         preload: this.preload || this.getAttribute("preload") || null,
         partition: this.partition || this.getAttribute("partition") || null,
         frame: {
@@ -110,9 +110,9 @@ const ConfigureWebviewTags = (
           y: rect.y,
         },
         // todo: wire up to a param and a method to update them
-        navigationRules: null,        
+        navigationRules: null,
       });
-      console.log('electrobun webviewid: ', webviewId)
+      console.log("electrobun webviewid: ", webviewId);
       this.webviewId = webviewId;
       this.id = `electrobun-webview-${webviewId}`;
       // todo: replace bun -> webviewtag communication with a global instead of
@@ -158,13 +158,15 @@ const ConfigureWebviewTags = (
     }
 
     async canGoBack() {
-      return this.internalRpc.request.webviewTagCanGoBack({ id: this.webviewId });      
+      return this.internalRpc.request.webviewTagCanGoBack({
+        id: this.webviewId,
+      });
     }
 
     async canGoForward() {
       return this.internalRpc.request.webviewTagCanGoForward({
         id: this.webviewId,
-      });      
+      });
     }
 
     // propertie setters/getters. keeps them in sync with dom attributes
@@ -201,11 +203,12 @@ const ConfigureWebviewTags = (
     }
 
     get renderer() {
-      const _renderer = this.getAttribute("renderer") === "cef" ? "cef" : "native";
+      const _renderer =
+        this.getAttribute("renderer") === "cef" ? "cef" : "native";
       return _renderer;
     }
 
-    set renderer(value: 'cef' | 'native') {
+    set renderer(value: "cef" | "native") {
       const _renderer = value === "cef" ? "cef" : "native";
       this.updateAttr("renderer", _renderer);
     }
@@ -253,7 +256,7 @@ const ConfigureWebviewTags = (
 
       if (width === 0 && height === 0) {
         if (this.wasZeroRect === false) {
-          console.log('WAS NOT ZERO RECT', this.webviewId)
+          console.log("WAS NOT ZERO RECT", this.webviewId);
           this.wasZeroRect = true;
           this.toggleTransparent(true, true);
           this.togglePassthrough(true, true);
@@ -300,7 +303,7 @@ const ConfigureWebviewTags = (
         this.lastRect = rect;
         this.lastMasks = masks;
         this.lastMasksJSON = masksJson;
-        
+
         this.internalRpc.send.webviewTagResize({
           id: this.webviewId,
           frame: {
@@ -315,7 +318,7 @@ const ConfigureWebviewTags = (
 
       if (this.wasZeroRect) {
         this.wasZeroRect = false;
-        console.log('WAS ZERO RECT', this.webviewId)
+        console.log("WAS ZERO RECT", this.webviewId);
         this.toggleTransparent(false, true);
         this.togglePassthrough(false, true);
       }
@@ -385,7 +388,7 @@ const ConfigureWebviewTags = (
       // this.mutationObserver?.disconnect();
       window.removeEventListener("resize", this.boundForceSyncDimensions);
       window.removeEventListener("scroll", this.boundSyncDimensions);
-      
+
       if (this.webviewId) {
         this.internalRpc.send.webviewTagRemove({ id: this.webviewId });
         // Mark webview as removed to prevent further method calls
@@ -412,7 +415,7 @@ const ConfigureWebviewTags = (
 
     updateIFrameSrc(src: string) {
       if (!this.webviewId) {
-        console.warn('updateIFrameSrc called on removed webview');
+        console.warn("updateIFrameSrc called on removed webview");
         return;
       }
       this.internalRpc.send.webviewTagUpdateSrc({
@@ -423,10 +426,10 @@ const ConfigureWebviewTags = (
 
     updateIFrameHtml(html: string) {
       if (!this.webviewId) {
-        console.warn('updateIFrameHtml called on removed webview');
+        console.warn("updateIFrameHtml called on removed webview");
         return;
       }
-      
+
       this.internalRpc.send.webviewTagUpdateHtml({
         id: this.webviewId,
         html: html,
@@ -435,7 +438,7 @@ const ConfigureWebviewTags = (
 
     updateIFramePreload(preload: string) {
       if (!this.webviewId) {
-        console.warn('updateIFramePreload called on removed webview');
+        console.warn("updateIFramePreload called on removed webview");
         return;
       }
       this.internalRpc.send.webviewTagUpdatePreload({
@@ -446,7 +449,7 @@ const ConfigureWebviewTags = (
 
     goBack() {
       if (!this.webviewId) {
-        console.warn('goBack called on removed webview');
+        console.warn("goBack called on removed webview");
         return;
       }
       this.internalRpc.send.webviewTagGoBack({ id: this.webviewId });
@@ -454,7 +457,7 @@ const ConfigureWebviewTags = (
 
     goForward() {
       if (!this.webviewId) {
-        console.warn('goForward called on removed webview');
+        console.warn("goForward called on removed webview");
         return;
       }
       this.internalRpc.send.webviewTagGoForward({ id: this.webviewId });
@@ -462,14 +465,14 @@ const ConfigureWebviewTags = (
 
     reload() {
       if (!this.webviewId) {
-        console.warn('reload called on removed webview');
+        console.warn("reload called on removed webview");
         return;
       }
       this.internalRpc.send.webviewTagReload({ id: this.webviewId });
     }
     loadURL(url: string) {
       if (!this.webviewId) {
-        console.warn('loadURL called on removed webview');
+        console.warn("loadURL called on removed webview");
         return;
       }
       this.setAttribute("src", url);
@@ -480,20 +483,20 @@ const ConfigureWebviewTags = (
     }
     loadHTML(html: string) {
       if (!this.webviewId) {
-        console.warn('loadHTML called on removed webview');
+        console.warn("loadHTML called on removed webview");
         return;
       }
       this.setAttribute("html", html);
       this.internalRpc.send.webviewTagUpdateHtml({
         id: this.webviewId,
         html,
-      })
+      });
     }
 
     // This sets the native webview hovering over the dom to be transparent
     toggleTransparent(transparent?: boolean, bypassState?: boolean) {
       if (!this.webviewId) {
-        console.warn('toggleTransparent called on removed webview');
+        console.warn("toggleTransparent called on removed webview");
         return;
       }
 
@@ -506,7 +509,7 @@ const ConfigureWebviewTags = (
 
       if (!bypassState) {
         this.transparent = newValue;
-      }               
+      }
 
       this.internalRpc.send.webviewTagSetTransparent({
         id: this.webviewId,
@@ -515,7 +518,7 @@ const ConfigureWebviewTags = (
     }
     togglePassthrough(enablePassthrough?: boolean, bypassState?: boolean) {
       if (!this.webviewId) {
-        console.warn('togglePassthrough called on removed webview');
+        console.warn("togglePassthrough called on removed webview");
         return;
       }
 
@@ -526,8 +529,8 @@ const ConfigureWebviewTags = (
         newValue = Boolean(enablePassthrough);
       }
 
-      if (!bypassState) {        
-        this.passthroughEnabled = newValue;        
+      if (!bypassState) {
+        this.passthroughEnabled = newValue;
       }
 
       this.internalRpc.send.webviewTagSetPassthrough({
@@ -539,7 +542,7 @@ const ConfigureWebviewTags = (
 
     toggleHidden(hidden?: boolean, bypassState?: boolean) {
       if (!this.webviewId) {
-        console.warn('toggleHidden called on removed webview');
+        console.warn("toggleHidden called on removed webview");
         return;
       }
 
@@ -550,16 +553,16 @@ const ConfigureWebviewTags = (
         newValue = Boolean(hidden);
       }
 
-      if (!bypassState) {       
-        this.hidden = newValue;        
+      if (!bypassState) {
+        this.hidden = newValue;
       }
 
-      console.trace('electrobun toggle hidden: ', this.hidden, this.webviewId)
+      console.trace("electrobun toggle hidden: ", this.hidden, this.webviewId);
       this.internalRpc.send.webviewTagSetHidden({
         id: this.webviewId,
-        hidden: this.hidden|| Boolean(hidden),
+        hidden: this.hidden || Boolean(hidden),
       });
-    }   
+    }
   }
 
   customElements.define("electrobun-webview", WebviewTag);

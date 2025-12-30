@@ -1,11 +1,19 @@
 import { join, dirname, resolve, basename, relative } from "path";
 import { homedir } from "os";
-import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync, cpSync } from "fs";
+import {
+  renameSync,
+  unlinkSync,
+  mkdirSync,
+  rmdirSync,
+  statSync,
+  readdirSync,
+  cpSync,
+} from "fs";
 import { execSync } from "child_process";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
-import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
-import { native } from '../proc/native';
+import { OS as currentOS, ARCH as currentArch } from "../../shared/platform";
+import { native } from "../proc/native";
 
 // setTimeout(async () => {
 //   console.log('killing')
@@ -17,7 +25,7 @@ import { native } from '../proc/native';
 async function createLinuxLauncherScript(appDir: string): Promise<void> {
   const parentDir = dirname(appDir);
   const launcherPath = join(parentDir, "run.sh");
-  
+
   const launcherContent = `#!/bin/bash
 # Electrobun App Launcher
 # This script sets up the environment and launches the app
@@ -50,22 +58,22 @@ exec ./launcher "$@"
 `;
 
   await Bun.write(launcherPath, launcherContent);
-  
+
   // Make it executable
   execSync(`chmod +x "${launcherPath}"`);
-  
+
   console.log(`Created/updated Linux launcher script: ${launcherPath}`);
 }
 
 // Cross-platform app data directory
 function getAppDataDir(): string {
   switch (currentOS) {
-    case 'macos':
+    case "macos":
       return join(homedir(), "Library", "Application Support");
-    case 'win':
+    case "win":
       // Use LOCALAPPDATA to match extractor location
       return process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
-    case 'linux':
+    case "linux":
       // Use XDG_DATA_HOME or fallback to ~/.local/share to match extractor
       return process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
     default:
@@ -115,7 +123,11 @@ const Updater = {
     const channelBucketUrl = await Updater.channelBucketUrl();
     const cacheBuster = Math.random().toString(36).substring(7);
     const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
-    const updateInfoUrl = join(localInfo.bucketUrl, platformFolder, `update.json?${cacheBuster}`);
+    const updateInfoUrl = join(
+      localInfo.bucketUrl,
+      platformFolder,
+      `update.json?${cacheBuster}`,
+    );
 
     try {
       const updateInfoResponse = await fetch(updateInfoUrl);
@@ -184,7 +196,7 @@ const Updater = {
         // check if there's a patch file for it
         const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
         const patchResponse = await fetch(
-          join(localInfo.bucketUrl, platformFolder, `${currentHash}.patch`)
+          join(localInfo.bucketUrl, platformFolder, `${currentHash}.patch`),
         );
 
         if (!patchResponse.ok) {
@@ -196,14 +208,14 @@ const Updater = {
         const patchFilePath = join(
           appDataFolder,
           "self-extraction",
-          `${currentHash}.patch`
+          `${currentHash}.patch`,
         );
         await Bun.write(patchFilePath, await patchResponse.arrayBuffer());
         // patch it to a tmp name
         const tmpPatchedTarFilePath = join(
           appDataFolder,
           "self-extraction",
-          `from-${currentHash}.tar`
+          `from-${currentHash}.tar`,
         );
 
         const bunBinDir = dirname(process.execPath);
@@ -219,19 +231,22 @@ const Updater = {
           ]);
 
           if (patchResult.exitCode !== 0 || patchResult.success === false) {
-            const stderr = new TextDecoder().decode(patchResult.stderr || new Uint8Array());
-            const stdout = new TextDecoder().decode(patchResult.stdout || new Uint8Array());
-            if (updateInfo) {
-              updateInfo.error = stderr || `bspatch failed with exit code ${patchResult.exitCode}`;
-            }
-            console.error(
-              "bspatch failed",
-              {
-                exitCode: patchResult.exitCode,
-                stdout,
-                stderr,
-              },
+            const stderr = new TextDecoder().decode(
+              patchResult.stderr || new Uint8Array(),
             );
+            const stdout = new TextDecoder().decode(
+              patchResult.stdout || new Uint8Array(),
+            );
+            if (updateInfo) {
+              updateInfo.error =
+                stderr ||
+                `bspatch failed with exit code ${patchResult.exitCode}`;
+            }
+            console.error("bspatch failed", {
+              exitCode: patchResult.exitCode,
+              stdout,
+              stderr,
+            });
             break;
           }
         } catch (error) {
@@ -244,7 +259,7 @@ const Updater = {
         mkdirSync(untarDir, { recursive: true });
 
         // extract just the version.json from the patched tar file so we can see what hash it is now
-        const resourcesDir = 'Resources'; // Always use capitalized Resources
+        const resourcesDir = "Resources"; // Always use capitalized Resources
         await tar.x({
           // gzip: false,
           file: tmpPatchedTarFilePath,
@@ -260,7 +275,7 @@ const Updater = {
         });
 
         const currentVersionJson = await Bun.file(
-          join(untarDir, versionSubpath)
+          join(untarDir, versionSubpath),
         ).json();
         const nextHash = currentVersionJson.hash;
 
@@ -278,7 +293,7 @@ const Updater = {
         const updatedTarPath = join(
           appDataFolder,
           "self-extraction",
-          `${nextHash}.tar`
+          `${nextHash}.tar`,
         );
         renameSync(tmpPatchedTarFilePath, updatedTarPath);
 
@@ -291,7 +306,7 @@ const Updater = {
         currentTarPath = join(
           appDataFolder,
           "self-extraction",
-          `${currentHash}.tar`
+          `${currentHash}.tar`,
         );
         // loop through applying patches until we reach the latest version
         // if we get stuck then exit and just download the full latest version
@@ -304,23 +319,23 @@ const Updater = {
         const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
         // Platform-specific tarball naming
         let tarballName: string;
-        if (currentOS === 'macos') {
+        if (currentOS === "macos") {
           tarballName = `${appFileName}.app.tar.zst`;
-        } else if (currentOS === 'win') {
+        } else if (currentOS === "win") {
           tarballName = `${appFileName}.tar.zst`;
         } else {
           tarballName = `${appFileName}.tar.zst`;
         }
-        
+
         const urlToLatestTarball = join(
           localInfo.bucketUrl,
           platformFolder,
-          tarballName
+          tarballName,
         );
         const prevVersionCompressedTarballPath = join(
           appDataFolder,
           "self-extraction",
-          "latest.tar.zst"
+          "latest.tar.zst",
         );
         const response = await fetch(urlToLatestTarball + `?${cacheBuster}`);
 
@@ -342,7 +357,7 @@ const Updater = {
 
         await ZstdInit().then(async ({ ZstdSimple }) => {
           const data = new Uint8Array(
-            await Bun.file(prevVersionCompressedTarballPath).arrayBuffer()
+            await Bun.file(prevVersionCompressedTarballPath).arrayBuffer(),
           );
           const uncompressedData = ZstdSimple.decompress(data);
 
@@ -388,29 +403,32 @@ const Updater = {
 
       if (await Bun.file(latestTarPath).exists()) {
         // Windows needs a temporary directory to avoid file locking issues
-        const extractionDir = currentOS === 'win' 
-          ? join(extractionFolder, `temp-${latestHash}`)
-          : extractionFolder;
-        
-        if (currentOS === 'win') {
+        const extractionDir =
+          currentOS === "win"
+            ? join(extractionFolder, `temp-${latestHash}`)
+            : extractionFolder;
+
+        if (currentOS === "win") {
           mkdirSync(extractionDir, { recursive: true });
         }
-        
+
         // Use Windows native tar.exe on Windows due to npm tar library issues (same as CLI)
-        if (currentOS === 'win') {
-          console.log(`Using Windows native tar.exe to extract ${latestTarPath} to ${extractionDir}...`);
+        if (currentOS === "win") {
+          console.log(
+            `Using Windows native tar.exe to extract ${latestTarPath} to ${extractionDir}...`,
+          );
           try {
             const relativeTarPath = relative(extractionDir, latestTarPath);
-            execSync(`tar -xf "${relativeTarPath}"`, { 
-              stdio: 'inherit',
-              cwd: extractionDir
+            execSync(`tar -xf "${relativeTarPath}"`, {
+              stdio: "inherit",
+              cwd: extractionDir,
             });
-            console.log('Windows tar.exe extraction completed successfully');
-            
+            console.log("Windows tar.exe extraction completed successfully");
+
             // For Windows/Linux, the app bundle is at root level
             appBundleSubpath = "./";
           } catch (error) {
-            console.error('Windows tar.exe extraction failed:', error);
+            console.error("Windows tar.exe extraction failed:", error);
             throw error;
           }
         } else {
@@ -420,7 +438,7 @@ const Updater = {
             file: latestTarPath,
             cwd: extractionDir,
             onentry: (entry) => {
-              if (currentOS === 'macos') {
+              if (currentOS === "macos") {
                 // find the first .app bundle in the tarball
                 // Some apps may have nested .app bundles
                 if (!appBundleSubpath && entry.path.endsWith(".app/")) {
@@ -435,8 +453,10 @@ const Updater = {
             },
           });
         }
-        
-        console.log(`Tar extraction completed. Found appBundleSubpath: ${appBundleSubpath}`);
+
+        console.log(
+          `Tar extraction completed. Found appBundleSubpath: ${appBundleSubpath}`,
+        );
 
         if (!appBundleSubpath) {
           console.error("Failed to find app in tarball");
@@ -444,19 +464,19 @@ const Updater = {
         }
 
         // Note: resolve here removes the extra trailing / that the tar file adds
-        const extractedAppPath = resolve(
-          join(extractionDir, appBundleSubpath)
-        );
-        
+        const extractedAppPath = resolve(join(extractionDir, appBundleSubpath));
+
         // Platform-specific path handling
         let newAppBundlePath: string;
-        if (currentOS === 'linux' || currentOS === 'win') {
+        if (currentOS === "linux" || currentOS === "win") {
           // On Linux/Windows, the actual app is inside a subdirectory
           // Use same sanitization as extractor: remove spaces and dots
           // Note: localInfo.name already includes the channel (e.g., "test1-canary")
-          const appBundleName = localInfo.name.replace(/ /g, "").replace(/\./g, "-");
+          const appBundleName = localInfo.name
+            .replace(/ /g, "")
+            .replace(/\./g, "-");
           newAppBundlePath = join(extractionDir, appBundleName);
-          
+
           // Verify the extracted app exists
           if (!statSync(newAppBundlePath, { throwIfNoEntry: false })) {
             console.error(`Extracted app not found at: ${newAppBundlePath}`);
@@ -477,17 +497,13 @@ const Updater = {
         }
         // Platform-specific app path calculation
         let runningAppBundlePath: string;
-        if (currentOS === 'macos') {
+        if (currentOS === "macos") {
           // On macOS, executable is at Contents/MacOS/binary inside .app bundle
-          runningAppBundlePath = resolve(
-            dirname(process.execPath),
-            "..",
-            ".."
-          );
+          runningAppBundlePath = resolve(dirname(process.execPath), "..", "..");
         } else {
           // On Linux/Windows, calculate app path using app data directory structure
           const appDataFolder = await Updater.appDataFolder();
-          if (currentOS === 'linux') {
+          if (currentOS === "linux") {
             runningAppBundlePath = join(appDataFolder, "app");
           } else {
             // On Windows, use versioned app folders
@@ -497,7 +513,7 @@ const Updater = {
         }
         // Platform-specific backup handling
         let backupPath: string;
-        if (currentOS === 'macos') {
+        if (currentOS === "macos") {
           // On macOS, backup in extraction folder with .app extension
           backupPath = join(extractionFolder, "backup.app");
         } else {
@@ -506,57 +522,57 @@ const Updater = {
         }
 
         try {
-          if (currentOS === 'macos') {
+          if (currentOS === "macos") {
             // On macOS, use rename approach
             // Remove existing backup if it exists
             if (statSync(backupPath, { throwIfNoEntry: false })) {
               rmdirSync(backupPath, { recursive: true });
             }
-            
+
             // Move current running app to backup
             renameSync(runningAppBundlePath, backupPath);
-            
+
             // Move new app to running location
             renameSync(newAppBundlePath, runningAppBundlePath);
-          } else if (currentOS === 'linux') {
+          } else if (currentOS === "linux") {
             // On Linux, create tar backup and replace
             // Remove existing backup.tar if it exists
             if (statSync(backupPath, { throwIfNoEntry: false })) {
               unlinkSync(backupPath);
             }
-            
+
             // Create tar backup of current app
             await tar.c(
               {
                 file: backupPath,
                 cwd: dirname(runningAppBundlePath),
               },
-              [basename(runningAppBundlePath)]
+              [basename(runningAppBundlePath)],
             );
-            
+
             // Remove current app
             rmdirSync(runningAppBundlePath, { recursive: true });
-            
+
             // Move new app to app location
             renameSync(newAppBundlePath, runningAppBundlePath);
-            
+
             // Recreate run.sh launcher script
             await createLinuxLauncherScript(runningAppBundlePath);
           } else {
             // On Windows, use versioned app folders
             const parentDir = dirname(runningAppBundlePath);
             const newVersionDir = join(parentDir, `app-${latestHash}`);
-            
+
             // Create the versioned directory
             mkdirSync(newVersionDir, { recursive: true });
-            
+
             // Copy all contents from the extracted app to the versioned directory
             const files = readdirSync(newAppBundlePath);
             for (const file of files) {
               const srcPath = join(newAppBundlePath, file);
               const destPath = join(newVersionDir, file);
               const stats = statSync(srcPath);
-              
+
               if (stats.isDirectory()) {
                 // Recursively copy directories
                 cpSync(srcPath, destPath, { recursive: true });
@@ -565,12 +581,12 @@ const Updater = {
                 cpSync(srcPath, destPath);
               }
             }
-            
+
             // Clean up the temporary extraction directory on Windows
-            if (currentOS === 'win') {
+            if (currentOS === "win") {
               rmdirSync(extractionDir, { recursive: true });
             }
-            
+
             // Create/update the launcher batch file
             const launcherPath = join(parentDir, "run.bat");
             const launcherContent = `@echo off
@@ -595,12 +611,12 @@ set APP_DIR=%~dp0app-%CURRENT_HASH%
 cd /d "%APP_DIR%\\bin"
 start "" launcher.exe
 `;
-            
+
             await Bun.write(launcherPath, launcherContent);
-            
+
             // Update desktop shortcuts to point to run.bat
             // This is handled by the running app, not the updater
-            
+
             runningAppBundlePath = newVersionDir;
           }
         } catch (error) {
@@ -610,41 +626,35 @@ start "" launcher.exe
 
         // Cross-platform app launch
         switch (currentOS) {
-          case 'macos':
+          case "macos":
             // Use a detached shell so relaunch survives after killApp terminates the current process
-            await Bun.spawn(
-              [
-                "sh",
-                "-c",
-                `open "${runningAppBundlePath}" &`,
-              ],
-              { detached: true }
-            );
+            await Bun.spawn(["sh", "-c", `open "${runningAppBundlePath}" &`], {
+              detached: true,
+            });
             break;
-          case 'win':
+          case "win":
             // On Windows, launch the run.bat file which handles versioning
             const parentDir = dirname(runningAppBundlePath);
             const runBatPath = join(parentDir, "run.bat");
-            
-            
+
             await Bun.spawn(["cmd", "/c", runBatPath], { detached: true });
             break;
-          case 'linux':
+          case "linux":
             // On Linux, use shell backgrounding to detach the process
             const linuxLauncher = join(runningAppBundlePath, "bin", "launcher");
-            Bun.spawn(["sh", "-c", `${linuxLauncher} &`], { detached: true});
+            Bun.spawn(["sh", "-c", `${linuxLauncher} &`], { detached: true });
             break;
         }
-        // Use native killApp to properly clean up all resources        
+        // Use native killApp to properly clean up all resources
         try {
           native.symbols.killApp();
           // Still call process.exit as a fallback
           process.exit(0);
         } catch (e) {
           // Fallback if native binding fails
-          console.error('Failed to call native killApp:', e);
+          console.error("Failed to call native killApp:", e);
           process.exit(0);
-        }        
+        }
       }
     }
   },
@@ -660,7 +670,7 @@ start "" launcher.exe
     const appDataFolder = join(
       getAppDataDir(),
       localInfo.identifier,
-      localInfo.name
+      localInfo.name,
     );
 
     return appDataFolder;
@@ -688,7 +698,7 @@ start "" launcher.exe
     }
 
     try {
-      const resourcesDir = 'Resources'; // Always use capitalized Resources
+      const resourcesDir = "Resources"; // Always use capitalized Resources
       localInfo = await Bun.file(`../${resourcesDir}/version.json`).json();
       return localInfo;
     } catch (error) {
