@@ -2,7 +2,7 @@ import { ffi, type MenuItemConfig } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { VIEWS_FOLDER } from "./Paths";
 import { join } from "path";
-import {FFIType} from 'bun:ffi';
+import { FFIType } from "bun:ffi";
 
 let nextTrayId = 1;
 const TrayMap = {};
@@ -25,7 +25,7 @@ export class Tray {
     template = true,
     width = 16,
     height = 16,
-  }: ConstructorOptions = {}) {    
+  }: ConstructorOptions = {}) {
     try {
       this.ptr = ffi.request.createTray({
         id: this.id,
@@ -36,8 +36,10 @@ export class Tray {
         height,
       });
     } catch (error) {
-      console.warn('Tray creation failed:', error);
-      console.warn('System tray functionality may not be available on this platform');
+      console.warn("Tray creation failed:", error);
+      console.warn(
+        "System tray functionality may not be available on this platform",
+      );
       this.ptr = null;
     }
 
@@ -81,12 +83,12 @@ export class Tray {
   }
 
   remove() {
-    console.log('Tray.remove() called for id:', this.id);
+    console.log("Tray.remove() called for id:", this.id);
     if (this.ptr) {
       ffi.request.removeTray({ id: this.id });
     }
     delete TrayMap[this.id];
-    console.log('Tray removed from TrayMap');
+    console.log("Tray removed from TrayMap");
   }
 
   static getById(id: number) {
@@ -106,15 +108,18 @@ export class Tray {
 }
 
 const menuConfigWithDefaults = (
-  menu: Array<MenuItemConfig>
+  menu: Array<MenuItemConfig>,
 ): Array<MenuItemConfig> => {
   return menu.map((item) => {
     if (item.type === "divider" || item.type === "separator") {
       return { type: "divider" };
     } else {
       // Use shared serialization method
-      const actionWithDataId = ffi.internal.serializeMenuAction(item.action || "", item.data);
-      
+      const actionWithDataId = ffi.internal.serializeMenuAction(
+        item.action || "",
+        item.data,
+      );
+
       return {
         label: item.label || "",
         type: item.type || "normal",

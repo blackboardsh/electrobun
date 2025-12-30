@@ -19,7 +19,9 @@ import { join } from "path";
 const type = process.argv[2];
 
 if (!type || !["beta", "patch", "minor", "major", "stable"].includes(type)) {
-  console.error("Usage: bun scripts/push-version.js <beta|patch|minor|major|stable>");
+  console.error(
+    "Usage: bun scripts/push-version.js <beta|patch|minor|major|stable>",
+  );
   process.exit(1);
 }
 

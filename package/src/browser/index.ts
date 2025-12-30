@@ -10,8 +10,14 @@ import {
 import { ConfigureWebviewTags } from "./webviewtag";
 // todo: should this just be injected as a preload script?
 import { isAppRegionDrag } from "./stylesAndElements";
-import type { BuiltinBunToWebviewSchema, BuiltinWebviewToBunSchema } from "./builtinrpcSchema";
-import type { InternalWebviewHandlers, WebviewTagHandlers } from "./rpc/webview";
+import type {
+  BuiltinBunToWebviewSchema,
+  BuiltinWebviewToBunSchema,
+} from "./builtinrpcSchema";
+import type {
+  InternalWebviewHandlers,
+  WebviewTagHandlers,
+} from "./rpc/webview";
 
 interface ElectrobunWebviewRPCSChema {
   bun: RPCSchema;
@@ -22,7 +28,6 @@ const WEBVIEW_ID = window.__electrobunWebviewId;
 const WINDOW_ID = window.__electrobunWindowId;
 const RPC_SOCKET_PORT = window.__electrobunRpcSocketPort;
 
-
 class Electroview<T> {
   bunSocket?: WebSocket;
   // user's custom rpc browser <-> bun
@@ -31,7 +36,7 @@ class Electroview<T> {
   // electrobun rpc browser <-> bun
   internalRpc?: any;
   internalRpcHandler?: (msg: any) => void;
-  
+
   constructor(config: { rpc: T }) {
     this.rpc = config.rpc;
     this.init();
@@ -49,7 +54,8 @@ class Electroview<T> {
 
     window.__electrobun = {
       receiveMessageFromBun: this.receiveMessageFromBun.bind(this),
-      receiveInternalMessageFromBun: this.receiveInternalMessageFromBun.bind(this),
+      receiveInternalMessageFromBun:
+        this.receiveInternalMessageFromBun.bind(this),
     };
 
     if (this.rpc) {
@@ -70,7 +76,7 @@ class Electroview<T> {
   initSocketToBun() {
     // todo: upgrade to tls
     const socket = new WebSocket(
-      `ws://localhost:${RPC_SOCKET_PORT}/socket?webviewId=${WEBVIEW_ID}`
+      `ws://localhost:${RPC_SOCKET_PORT}/socket?webviewId=${WEBVIEW_ID}`,
     );
 
     this.bunSocket = socket;
@@ -88,7 +94,7 @@ class Electroview<T> {
           const decrypted = await window.__electrobun_decrypt(
             encryptedPacket.encryptedData,
             encryptedPacket.iv,
-            encryptedPacket.tag
+            encryptedPacket.tag,
           );
 
           this.rpcHandler?.(JSON.parse(decrypted));
@@ -113,9 +119,8 @@ class Electroview<T> {
 
   // This will be attached to the global object, bun can rpc reply by executingJavascript
   // of that global reference to the function
-  receiveInternalMessageFromBun(msg: any) {    
+  receiveInternalMessageFromBun(msg: any) {
     if (this.internalRpcHandler) {
-      
       this.internalRpcHandler(msg);
     }
   }
@@ -124,21 +129,20 @@ class Electroview<T> {
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
   isProcessingQueue = false;
   sendToInternalQueue = [];
-  sendToBunInternal(message: {}) {   
-    try {    
-      const strMessage = JSON.stringify(message);    
-      this.sendToInternalQueue.push(strMessage);    
+  sendToBunInternal(message: {}) {
+    try {
+      const strMessage = JSON.stringify(message);
+      this.sendToInternalQueue.push(strMessage);
 
       this.processQueue();
     } catch (err) {
-      console.error('failed to send to bun internal', err);
+      console.error("failed to send to bun internal", err);
     }
   }
 
   processQueue() {
     const that = this;
     if (that.isProcessingQueue) {
-
       // This timeout is just to schedule a retry "later"
       setTimeout(() => {
         that.processQueue();
@@ -148,26 +152,26 @@ class Electroview<T> {
 
     if (that.sendToInternalQueue.length === 0) {
       // that.isProcessingQueue = false;
-      return;  
+      return;
     }
 
     that.isProcessingQueue = true;
-    
+
     const batchMessage = JSON.stringify(that.sendToInternalQueue);
     that.sendToInternalQueue = [];
     window.__electrobunInternalBridge?.postMessage(batchMessage);
-    
+
     // Note: The postmessage handler is routed via native code to a Bun JSCallback.
     // Currently JSCallbacks are somewhat experimental and were designed for a single invocation
     // But we have tons of resize events in this webview's thread that are sent, maybe to main thread
-    // and then the JSCallback is invoked on the Bun worker thread. JSCallbacks have a little virtual memory 
+    // and then the JSCallback is invoked on the Bun worker thread. JSCallbacks have a little virtual memory
     // or something that can segfault when called from a thread while the worker(bun) thread is still executing
     // a previous call. The segfaults were really only triggered with multiple <electrobun-webview>s on a page
     // all trying to resize at the same time.
-    // 
+    //
     // To work around this we batch high frequency postMessage calls here with a timeout. While not deterministic hopefully Bun
     // fixes the underlying FFI/JSCallback issue before we have to invest time in a more deterministic solution.
-    // 
+    //
     // On my m4 max a 1ms delay is not long enough to let it complete and can segfault, a 2ms delay is long enough
     // This may be different on slower hardware but not clear if it would need more or less time so leaving this for now
     setTimeout(() => {
@@ -206,27 +210,26 @@ class Electroview<T> {
       },
     };
   }
-  
+
   createInternalTransport(): RPCTransport {
-    const that = this;    
+    const that = this;
     return {
-      send(message) {                  
-        message.hostWebviewId = WEBVIEW_ID;        
-        that.sendToBunInternal(message);      
+      send(message) {
+        message.hostWebviewId = WEBVIEW_ID;
+        that.sendToBunInternal(message);
       },
-      registerHandler(handler) {        
+      registerHandler(handler) {
         that.internalRpcHandler = handler;
         // webview tag doesn't handle any messages from bun just yet
       },
     };
   }
 
-  async bunBridge(msg: string) {    
+  async bunBridge(msg: string) {
     if (this.bunSocket?.readyState === WebSocket.OPEN) {
       try {
-        const { encryptedData, iv, tag } = await window.__electrobun_encrypt(
-          msg
-        );
+        const { encryptedData, iv, tag } =
+          await window.__electrobun_encrypt(msg);
 
         const encryptedPacket = {
           encryptedData: encryptedData,
@@ -255,7 +258,7 @@ class Electroview<T> {
     // TEMP: disable the fallback for now. for some reason suddenly can't
     // repro now that other places are chunking messages and laptop restart
 
-    if (true || msg.length < 8 * 1024) {      
+    if (true || msg.length < 8 * 1024) {
       window.__electrobunBunBridge?.postMessage(msg);
     } else {
       var xhr = new XMLHttpRequest();
@@ -281,7 +284,7 @@ class Electroview<T> {
   static defineRPC<
     Schema extends ElectrobunWebviewRPCSChema,
     BunSchema extends RPCSchema = Schema["bun"],
-    WebviewSchema extends RPCSchema = Schema["webview"]
+    WebviewSchema extends RPCSchema = Schema["webview"],
   >(config: {
     maxRequestTime?: number;
     handlers: {
@@ -372,7 +375,7 @@ class Electroview<T> {
     } as RPCOptions<mixedBunSchema, mixedWebviewSchema>;
 
     const rpc = createRPC<mixedBunSchema, mixedWebviewSchema>(rpcOptions);
-    
+
     const messageHandlers = config.handlers.messages;
     if (messageHandlers) {
       // note: this can only be done once there is a transport
@@ -390,7 +393,7 @@ class Electroview<T> {
           if (messageHandler) {
             messageHandler(payload);
           }
-        }
+        },
       );
     }
 
@@ -405,5 +408,3 @@ const Electrobun = {
 };
 
 export default Electrobun;
-
-

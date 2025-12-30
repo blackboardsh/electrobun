@@ -15,7 +15,7 @@ class ElectrobunEventEmitter extends EventEmitter {
   // will-navigate-1 is listened to for a specific webview with id 1
   emitEvent(
     ElectrobunEvent: ElectrobunEvent<any, any>,
-    specifier?: number | string
+    specifier?: number | string,
   ) {
     if (specifier) {
       this.emit(`${ElectrobunEvent.name}-${specifier}`, ElectrobunEvent);

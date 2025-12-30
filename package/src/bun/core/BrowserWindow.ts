@@ -2,7 +2,7 @@ import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type RPC } from "rpc-anywhere";
-import {FFIType} from 'bun:ffi'
+import { FFIType } from "bun:ffi";
 
 let nextWindowId = 1;
 
@@ -19,8 +19,8 @@ type WindowOptionsType<T = undefined> = {
   url: string | null;
   html: string | null;
   preload: string | null;
-  renderer: 'native' | 'cef';
-  rpc?: T;  
+  renderer: "native" | "cef";
+  rpc?: T;
   styleMask?: {};
   // TODO: implement all of them
   titleBarStyle: "hiddenInset" | "default";
@@ -28,7 +28,7 @@ type WindowOptionsType<T = undefined> = {
 };
 
 const defaultOptions: WindowOptionsType = {
-  title: "Electrobun",  
+  title: "Electrobun",
   frame: {
     x: 0,
     y: 0,
@@ -38,7 +38,7 @@ const defaultOptions: WindowOptionsType = {
   url: "https://electrobun.dev",
   html: null,
   preload: null,
-  renderer: 'native',
+  renderer: "native",
   titleBarStyle: "default",
   navigationRules: null,
 };
@@ -56,7 +56,7 @@ export class BrowserWindow<T> {
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
-  renderer:  'native' | 'cef';
+  renderer: "native" | "cef";
   frame: {
     x: number;
     y: number;
@@ -79,22 +79,17 @@ export class BrowserWindow<T> {
     this.url = options.url || null;
     this.html = options.html || null;
     this.preload = options.preload || null;
-    this.renderer = options.renderer === 'cef' ? 'cef' : 'native';
+    this.renderer = options.renderer === "cef" ? "cef" : "native";
     this.navigationRules = options.navigationRules || null;
-    
+
     this.init(options);
   }
 
-  init({
-    rpc,    
-    styleMask,
-    titleBarStyle,
-  }: Partial<WindowOptionsType<T>>) {
-    
+  init({ rpc, styleMask, titleBarStyle }: Partial<WindowOptionsType<T>>) {
     this.ptr = ffi.request.createWindow({
       id: this.id,
       title: this.title,
-      url: this.url || "",      
+      url: this.url || "",
       frame: {
         width: this.frame.width,
         height: this.frame.height,
@@ -127,8 +122,6 @@ export class BrowserWindow<T> {
 
     BrowserWindowMap[this.id] = this;
 
-    
-
     // todo (yoav): user should be able to override this and pass in their
     // own webview instance, or instances for attaching to the window.
     const webview = new BrowserView({
@@ -139,14 +132,14 @@ export class BrowserWindow<T> {
       html: this.html,
       preload: this.preload,
       // frame: this.frame,
-      renderer: this.renderer, 
+      renderer: this.renderer,
       frame: {
         x: 0,
         y: 0,
         width: this.frame.width,
         height: this.frame.height,
       },
-      rpc,      
+      rpc,
       // todo: we need to send the window here and attach it in one go
       // then the view creation code in objc can toggle between offscreen
       // or on screen views depending on if windowId is null
@@ -155,14 +148,12 @@ export class BrowserWindow<T> {
       navigationRules: this.navigationRules,
     });
 
-    console.log('setting webviewId: ', webview.id)
+    console.log("setting webviewId: ", webview.id);
 
-    this.webviewId = webview.id;   
-
-    
+    this.webviewId = webview.id;
   }
 
-  get webview() {    
+  get webview() {
     // todo (yoav): we don't want this to be undefined, so maybe we should just
     // link directly to the browserview object instead of a getter
     return BrowserView.getById(this.webviewId) as BrowserView<T>;

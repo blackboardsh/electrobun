@@ -40,15 +40,18 @@ const roleLabelMap = {
 };
 
 const menuConfigWithDefaults = (
-  menu: Array<ApplicationMenuItemConfig>
+  menu: Array<ApplicationMenuItemConfig>,
 ): Array<ApplicationMenuItemConfig> => {
   return menu.map((item) => {
     if (item.type === "divider" || item.type === "separator") {
       return { type: "divider" };
     } else {
       // Use shared serialization method
-      const actionWithDataId = ffi.internal.serializeMenuAction(item.action || "", item.data);
-      
+      const actionWithDataId = ffi.internal.serializeMenuAction(
+        item.action || "",
+        item.data,
+      );
+
       return {
         label: item.label || roleLabelMap[item.role] || "",
         type: item.type || "normal",

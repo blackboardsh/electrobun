@@ -7,7 +7,7 @@ function base64ToUint8Array(base64: string) {
     return new Uint8Array(
       atob(base64)
         .split("")
-        .map((char) => char.charCodeAt(0))
+        .map((char) => char.charCodeAt(0)),
     );
   }
 }
@@ -29,7 +29,7 @@ function decrypt(
   secretKey: Uint8Array,
   encryptedData: Uint8Array,
   iv: Uint8Array,
-  tag: Uint8Array
+  tag: Uint8Array,
 ) {
   const decipher = createDecipheriv("aes-256-gcm", secretKey, iv);
   decipher.setAuthTag(tag);
@@ -125,7 +125,7 @@ const startRPCServer = () => {
                     browserView.secretKey,
                     base64ToUint8Array(encryptedPacket.encryptedData),
                     base64ToUint8Array(encryptedPacket.iv),
-                    base64ToUint8Array(encryptedPacket.tag)
+                    base64ToUint8Array(encryptedPacket.tag),
                   );
 
                   // Note: At this point the secretKey for the webview id would
@@ -164,7 +164,7 @@ export const { rpcServer, rpcPort } = startRPCServer();
 // false if it was not (caller should fallback to postMessage/evaluateJS rpc)
 export const sendMessageToWebviewViaSocket = (
   webviewId: number,
-  message: any
+  message: any,
 ): boolean => {
   const rpc = socketMap[webviewId];
   const browserView = BrowserView.getById(webviewId);

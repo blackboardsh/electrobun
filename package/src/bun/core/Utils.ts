@@ -21,7 +21,7 @@ export const openFileDialog = async (
     canChooseFiles?: boolean;
     canChooseDirectory?: boolean;
     allowsMultipleSelection?: boolean;
-  } = {}
+  } = {},
 ): Promise<string[]> => {
   const optsWithDefault = {
     ...{

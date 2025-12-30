@@ -12,13 +12,13 @@ export interface ElectrobunConfig {
      * The display name of your application
      */
     name: string;
-    
+
     /**
      * Unique identifier for your application (e.g., "com.example.myapp")
      * Used for platform-specific identifiers
      */
     identifier: string;
-    
+
     /**
      * Application version string (e.g., "1.0.0")
      */
@@ -29,7 +29,7 @@ export interface ElectrobunConfig {
    * Build configuration options
    */
   build?: {
-        /**
+    /**
      * Bun process build configuration
      */
     bun?: {
@@ -38,7 +38,7 @@ export interface ElectrobunConfig {
        * @default "src/bun/index.ts"
        */
       entrypoint?: string;
-      
+
       /**
        * External modules to exclude from bundling
        * @default []
@@ -55,7 +55,7 @@ export interface ElectrobunConfig {
          * Entry point for this view's TypeScript code
          */
         entrypoint: string;
-        
+
         /**
          * External modules to exclude from bundling for this view
          */
@@ -75,13 +75,13 @@ export interface ElectrobunConfig {
      * @default "build"
      */
     buildFolder?: string;
-    
+
     /**
      * Output folder for distribution artifacts
      * @default "artifacts"
      */
     artifactFolder?: string;
-    
+
     /**
      * Build targets to compile for
      * Can be "current", "all", or comma-separated list like "macos-arm64,win-x64"
@@ -111,24 +111,24 @@ export interface ElectrobunConfig {
        * @default false
        */
       codesign?: boolean;
-      
+
       /**
        * Enable notarization for macOS builds (requires codesign)
        * @default false
        */
       notarize?: boolean;
-      
+
       /**
        * Bundle CEF (Chromium Embedded Framework) instead of using system WebView
        * @default false
        */
       bundleCEF?: boolean;
-      
+
       /**
        * macOS entitlements for code signing
        */
       entitlements?: Record<string, boolean | string>;
-      
+
       /**
        * Path to .iconset folder containing app icons
        * @default "icon.iconset"
@@ -182,4 +182,3 @@ export interface ElectrobunConfig {
     bucketUrl?: string;
   };
 }
-
