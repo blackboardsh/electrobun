@@ -55,6 +55,7 @@ const ProgressIndicator = struct {
                 \\    SYSMENU="no"
                 \\    SCROLL="no"
                 \\    SINGLEINSTANCE="yes"
+                \\    SHOWINTASKBAR="yes"
                 \\/>
                 \\<style>
                 \\body {{
@@ -77,14 +78,19 @@ const ProgressIndicator = struct {
                 \\    font-size: 13px;
                 \\}}
                 \\</style>
-                \\<script>
-                \\window.resizeTo(400, 150);
-                \\window.moveTo((screen.width - 400) / 2, (screen.height - 150) / 2);
-                \\</script>
                 \\</head>
                 \\<body>
                 \\<h2>Extracting {s}...</h2>
                 \\<p>Please wait, this may take a moment.</p>
+                \\<script>
+                \\window.resizeTo(400, 150);
+                \\window.moveTo((screen.width - 400) / 2, (screen.height - 150) / 2);
+                \\// Bring window to front after it's fully loaded and positioned
+                \\var shell = new ActiveXObject("WScript.Shell");
+                \\setTimeout(function() {{
+                \\    shell.AppActivate("Electrobun Installer");
+                \\}}, 200);
+                \\</script>
                 \\</body>
                 \\</html>
             , .{app_name});
