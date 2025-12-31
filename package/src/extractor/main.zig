@@ -39,8 +39,96 @@ const ProgressIndicator = struct {
     }
     
     fn startProgressDialog(self: *ProgressIndicator, app_name: []const u8) !void {
+        if (builtin.os.tag == .windows) {
+            // For Windows, create an HTA (HTML Application) that shows a custom progress window
+            // HTA runs without showing a console window and gives us full control over the UI
+            const hta_content = try std.fmt.allocPrint(self.allocator,
+                \\<html>
+                \\<head>
+                \\<title>Electrobun Installer</title>
+                \\<HTA:APPLICATION
+                \\    BORDER="dialog"
+                \\    BORDERSTYLE="normal"
+                \\    CAPTION="yes"
+                \\    MAXIMIZEBUTTON="no"
+                \\    MINIMIZEBUTTON="no"
+                \\    SYSMENU="no"
+                \\    SCROLL="no"
+                \\    SINGLEINSTANCE="yes"
+                \\/>
+                \\<style>
+                \\body {{
+                \\    font-family: 'Segoe UI', Tahoma, sans-serif;
+                \\    margin: 0;
+                \\    padding: 30px;
+                \\    background: white;
+                \\    text-align: center;
+                \\    overflow: hidden;
+                \\}}
+                \\h2 {{
+                \\    color: #333;
+                \\    margin: 0 0 15px 0;
+                \\    font-size: 16px;
+                \\    font-weight: 600;
+                \\}}
+                \\p {{
+                \\    color: #666;
+                \\    margin: 0;
+                \\    font-size: 13px;
+                \\}}
+                \\</style>
+                \\<script>
+                \\window.resizeTo(400, 150);
+                \\window.moveTo((screen.width - 400) / 2, (screen.height - 150) / 2);
+                \\</script>
+                \\</head>
+                \\<body>
+                \\<h2>Extracting {s}...</h2>
+                \\<p>Please wait, this may take a moment.</p>
+                \\</body>
+                \\</html>
+            , .{app_name});
+            defer self.allocator.free(hta_content);
+
+            // Create temp HTA file
+            const temp_dir = std.fs.getAppDataDir(self.allocator, "electrobun-installer") catch {
+                return;
+            };
+            defer self.allocator.free(temp_dir);
+
+            std.fs.makeDirAbsolute(temp_dir) catch {};
+
+            const hta_path = try std.fs.path.join(self.allocator, &[_][]const u8{ temp_dir, "progress.hta" });
+            defer self.allocator.free(hta_path);
+
+            const file = std.fs.createFileAbsolute(hta_path, .{}) catch {
+                return;
+            };
+            defer file.close();
+
+            file.writeAll(hta_content) catch {
+                return;
+            };
+
+            // Execute HTA file using mshta (no console window)
+            const args = [_][]const u8{ "mshta", hta_path };
+
+            var child = std.process.Child.init(&args, self.allocator);
+            child.stdin_behavior = .Ignore;
+            child.stdout_behavior = .Ignore;
+            child.stderr_behavior = .Ignore;
+
+            child.spawn() catch {
+                // If mshta fails, silently continue without progress dialog
+                return;
+            };
+
+            self.child_process = child;
+            return;
+        }
+
         if (builtin.os.tag != .linux) return;
-        
+
         // Try zenity first (most common)
         const extract_text = try std.fmt.allocPrint(self.allocator, "--text=Extracting {s}...", .{app_name});
         defer self.allocator.free(extract_text);
