@@ -975,36 +975,36 @@ fn createLocalLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8, 
         
         std.debug.print("Created launcher symlink: {s} -> {s}\n", .{ symlink_path, launcher_path });
     } else if (builtin.os.tag == .windows) {
-        const script_name = try std.fmt.allocPrint(allocator, "Launch {s}.bat", .{metadata.name});
+        const script_name = try std.fmt.allocPrint(allocator, "Launch {s}.vbs", .{metadata.name});
         defer allocator.free(script_name);
-        
+
         const script_path = try std.fs.path.join(allocator, &.{ extractor_dir, script_name });
         defer allocator.free(script_path);
-        
+
         const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
         defer allocator.free(launcher_path);
-        
+
         // Check if launcher exists
         std.fs.cwd().access(launcher_path, .{}) catch |err| {
             std.debug.print("Warning: Launcher not found at {s}: {}\n", .{ launcher_path, err });
             return;
         };
-        
+
+        // Use VBScript to launch without showing console window
         const script_content = try std.fmt.allocPrint(allocator,
-            \\@echo off
-            \\:: Electrobun App Launcher
-            \\:: Launch {s}
-            \\
-            \\cd /d "{s}\bin"
-            \\start "" launcher.exe
+            \\' Electrobun App Launcher
+            \\' Launch {s}
+            \\Set objShell = CreateObject("WScript.Shell")
+            \\objShell.CurrentDirectory = "{s}\bin"
+            \\objShell.Run "launcher.exe", 0, False
             \\
         , .{ metadata.name, app_dir });
         defer allocator.free(script_content);
-        
+
         const script_file = try std.fs.cwd().createFile(script_path, .{});
         defer script_file.close();
         try script_file.writeAll(script_content);
-        
+
         std.debug.print("Created local launcher script: {s}\n", .{script_path});
     }
 }
