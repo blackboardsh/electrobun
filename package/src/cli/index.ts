@@ -1910,13 +1910,32 @@ if (commandArg === "init") {
         buildEnvironment === "stable"
           ? `${baseVolumeName}-stable`
           : baseVolumeName;
-      // hdiutil create -volname "YourAppName" -srcfolder /path/to/YourApp.app -ov -format UDZO YourAppName.dmg
+
+      // Create a staging directory for DMG contents (app + Applications shortcut)
+      const dmgStagingDir = join(buildFolder, '.dmg-staging');
+      if (existsSync(dmgStagingDir)) {
+        rmSync(dmgStagingDir, { recursive: true });
+      }
+      mkdirSync(dmgStagingDir, { recursive: true });
+
+      // Copy the app bundle to the staging directory
+      const stagedAppPath = join(dmgStagingDir, basename(selfExtractingBundle.appBundleFolderPath));
+      execSync(`cp -R ${escapePathForTerminal(selfExtractingBundle.appBundleFolderPath)} ${escapePathForTerminal(stagedAppPath)}`);
+
+      // Create a symlink to /Applications for easy drag-and-drop installation
+      const applicationsLink = join(dmgStagingDir, 'Applications');
+      symlinkSync('/Applications', applicationsLink);
+
+      // hdiutil create -volname "YourAppName" -srcfolder /path/to/staging -ov -format UDZO YourAppName.dmg
       // Note: use ULFO (lzfse) for better compatibility with large CEF frameworks and modern macOS
       execSync(
         `hdiutil create -volname "${dmgVolumeName}" -srcfolder ${escapePathForTerminal(
-          selfExtractingBundle.appBundleFolderPath
+          dmgStagingDir
         )} -ov -format ULFO ${escapePathForTerminal(dmgCreationPath)}`
       );
+
+      // Clean up staging directory
+      rmSync(dmgStagingDir, { recursive: true });
       if (buildEnvironment === "stable" && dmgCreationPath !== finalDmgPath) {
         renameSync(dmgCreationPath, finalDmgPath);
       }
