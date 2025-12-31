@@ -19,3 +19,4 @@ electrobun-cli*
 dist-*
 /package/src/cli/templates/embedded.ts
 *.tar.gz
+settings.local.json
