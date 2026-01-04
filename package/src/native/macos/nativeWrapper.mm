@@ -4515,6 +4515,33 @@ extern "C" void showItemInFolder(char *path) {
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[fileURL]];
 }
 
+// Open a URL in the default browser or appropriate application
+extern "C" BOOL openExternal(const char *urlString) {
+    NSString *urlStr = [NSString stringWithUTF8String:urlString ?: ""];
+    NSURL *url = [NSURL URLWithString:urlStr];
+
+    if (!url) {
+        NSLog(@"[openExternal] Invalid URL: %@", urlStr);
+        return NO;
+    }
+
+    return [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+// Open a file or folder with the default application
+extern "C" BOOL openPath(const char *pathString) {
+    NSString *path = [NSString stringWithUTF8String:pathString ?: ""];
+    NSURL *fileURL = [NSURL fileURLWithPath:path];
+
+    BOOL success = [[NSWorkspace sharedWorkspace] openURL:fileURL];
+
+    if (!success) {
+        NSLog(@"[openPath] Failed to open path: %@", path);
+    }
+
+    return success;
+}
+
 extern "C" const char *openFileDialog(const char *startingFolder,
                                       const char *allowedFileTypes,
                                       BOOL canChooseFiles,

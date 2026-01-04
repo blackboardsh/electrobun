@@ -9,6 +9,46 @@ export const showItemInFolder = (path: string) => {
   return ffi.request.showItemInFolder({ path });
 };
 
+/**
+ * Open a URL in the default browser or appropriate application.
+ * Works with http/https URLs, mailto: links, custom URL schemes, etc.
+ *
+ * @param url - The URL to open (e.g., "https://example.com", "mailto:test@example.com")
+ * @returns true if the URL was opened successfully, false otherwise
+ *
+ * @example
+ * // Open a website
+ * openExternal("https://example.com");
+ *
+ * // Open an email
+ * openExternal("mailto:support@example.com?subject=Help");
+ *
+ * // Open a custom URL scheme
+ * openExternal("slack://open");
+ */
+export const openExternal = (url: string): boolean => {
+  return ffi.request.openExternal({ url });
+};
+
+/**
+ * Open a file or folder with the default application.
+ * For files, opens with the associated application (e.g., .pdf with PDF reader).
+ * For folders, opens in the file manager.
+ *
+ * @param path - The absolute path to the file or folder
+ * @returns true if the path was opened successfully, false otherwise
+ *
+ * @example
+ * // Open a document with default app
+ * openPath("/Users/me/Documents/report.pdf");
+ *
+ * // Open a folder in file manager
+ * openPath("/Users/me/Downloads");
+ */
+export const openPath = (path: string): boolean => {
+  return ffi.request.openPath({ path });
+};
+
 export const quit = () => {
   // Use native killApp for graceful shutdown
   native.symbols.killApp();

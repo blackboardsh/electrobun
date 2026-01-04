@@ -260,7 +260,15 @@ export const native = (() => {
       showItemInFolder: {
         args: [FFIType.cstring],
         returns: FFIType.void
-      },  
+      },
+      openExternal: {
+        args: [FFIType.cstring],
+        returns: FFIType.bool
+      },
+      openPath: {
+        args: [FFIType.cstring],
+        returns: FFIType.bool
+      },
       openFileDialog: {
         args: [
           FFIType.cstring,
@@ -906,7 +914,15 @@ export const ffi = {
           path
         } = params;
 
-        native.symbols.showItemInFolder(toCString(path));        
+        native.symbols.showItemInFolder(toCString(path));
+      },
+      openExternal: (params: {url: string}): boolean => {
+        const { url } = params;
+        return native.symbols.openExternal(toCString(url));
+      },
+      openPath: (params: {path: string}): boolean => {
+        const { path } = params;
+        return native.symbols.openPath(toCString(path));
       },
       openFileDialog: (params: {startingFolder: string, allowedFileTypes: string, canChooseFiles: boolean, canChooseDirectory: boolean, allowsMultipleSelection: boolean}): string => {
         const {

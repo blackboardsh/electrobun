@@ -5312,6 +5312,89 @@ void showItemInFolder(char* path) {
     g_free(parentDir);
 }
 
+// Open a URL in the default browser or appropriate application
+bool openExternal(const char* urlString) {
+    if (!urlString) {
+        fprintf(stderr, "ERROR: NULL URL passed to openExternal\n");
+        return false;
+    }
+
+    std::string url(urlString);
+    if (url.empty()) {
+        fprintf(stderr, "ERROR: Empty URL passed to openExternal\n");
+        return false;
+    }
+
+    GError* error = nullptr;
+
+    // Use g_app_info_launch_default_for_uri to open the URL with default app
+    gboolean result = g_app_info_launch_default_for_uri(urlString, nullptr, &error);
+
+    if (error) {
+        fprintf(stderr, "GIO failed to open URL: %s - trying xdg-open\n", error->message);
+        g_error_free(error);
+
+        // Fallback to xdg-open
+        gchar* command = g_strdup_printf("xdg-open \"%s\"", urlString);
+        int sysResult = system(command);
+        g_free(command);
+
+        if (sysResult != 0) {
+            fprintf(stderr, "ERROR: Failed to open external URL: %s\n", urlString);
+            return false;
+        }
+        return true;
+    }
+
+    return result == TRUE;
+}
+
+// Open a file or folder with the default application
+bool openPath(const char* pathString) {
+    if (!pathString) {
+        fprintf(stderr, "ERROR: NULL path passed to openPath\n");
+        return false;
+    }
+
+    std::string path(pathString);
+    if (path.empty()) {
+        fprintf(stderr, "ERROR: Empty path passed to openPath\n");
+        return false;
+    }
+
+    // Convert path to URI
+    gchar* uri = g_filename_to_uri(pathString, nullptr, nullptr);
+    if (!uri) {
+        fprintf(stderr, "ERROR: Failed to convert path to URI: %s\n", pathString);
+        return false;
+    }
+
+    GError* error = nullptr;
+
+    // Use g_app_info_launch_default_for_uri to open with default app
+    gboolean result = g_app_info_launch_default_for_uri(uri, nullptr, &error);
+
+    if (error) {
+        fprintf(stderr, "GIO failed to open path: %s - trying xdg-open\n", error->message);
+        g_error_free(error);
+
+        // Fallback to xdg-open
+        gchar* command = g_strdup_printf("xdg-open \"%s\"", uri);
+        int sysResult = system(command);
+        g_free(command);
+        g_free(uri);
+
+        if (sysResult != 0) {
+            fprintf(stderr, "ERROR: Failed to open path: %s\n", pathString);
+            return false;
+        }
+        return true;
+    }
+
+    g_free(uri);
+    return result == TRUE;
+}
+
 const char* openFileDialog(const char* startingFolder, const char* allowedFileTypes, int canChooseFiles, int canChooseDirectories, int allowsMultipleSelection) {
     // This function needs to run on the main thread
     return dispatch_sync_main([&]() -> const char* {

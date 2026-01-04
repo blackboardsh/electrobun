@@ -5798,6 +5798,90 @@ ELECTROBUN_EXPORT void showItemInFolder(char *path) {
     }
 }
 
+// Open a URL in the default browser or appropriate application
+ELECTROBUN_EXPORT BOOL openExternal(const char *urlString) {
+    if (!urlString) {
+        ::log("ERROR: NULL URL passed to openExternal");
+        return FALSE;
+    }
+
+    std::string url(urlString);
+    if (url.empty()) {
+        ::log("ERROR: Empty URL passed to openExternal");
+        return FALSE;
+    }
+
+    // Convert to wide string for Windows API
+    int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, urlString, -1, NULL, 0);
+    if (wideCharLen == 0) {
+        ::log("ERROR: Failed to convert URL to wide string");
+        return FALSE;
+    }
+
+    std::vector<wchar_t> wideUrl(wideCharLen);
+    MultiByteToWideChar(CP_UTF8, 0, urlString, -1, wideUrl.data(), wideCharLen);
+
+    // Use ShellExecuteW to open the URL
+    HINSTANCE result = ShellExecuteW(
+        NULL,           // parent window
+        L"open",        // operation
+        wideUrl.data(), // URL to open
+        NULL,           // parameters
+        NULL,           // working directory
+        SW_SHOWNORMAL   // show command
+    );
+
+    if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        ::log("ERROR: Failed to open external URL: " + url + " (error code: " + std::to_string(reinterpret_cast<INT_PTR>(result)) + ")");
+        return FALSE;
+    }
+
+    ::log("Successfully opened external URL: " + url);
+    return TRUE;
+}
+
+// Open a file or folder with the default application
+ELECTROBUN_EXPORT BOOL openPath(const char *pathString) {
+    if (!pathString) {
+        ::log("ERROR: NULL path passed to openPath");
+        return FALSE;
+    }
+
+    std::string path(pathString);
+    if (path.empty()) {
+        ::log("ERROR: Empty path passed to openPath");
+        return FALSE;
+    }
+
+    // Convert to wide string for Windows API
+    int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, pathString, -1, NULL, 0);
+    if (wideCharLen == 0) {
+        ::log("ERROR: Failed to convert path to wide string");
+        return FALSE;
+    }
+
+    std::vector<wchar_t> widePath(wideCharLen);
+    MultiByteToWideChar(CP_UTF8, 0, pathString, -1, widePath.data(), wideCharLen);
+
+    // Use ShellExecuteW to open the file/folder with default application
+    HINSTANCE result = ShellExecuteW(
+        NULL,            // parent window
+        L"open",         // operation
+        widePath.data(), // file/folder to open
+        NULL,            // parameters
+        NULL,            // working directory
+        SW_SHOWNORMAL    // show command
+    );
+
+    if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        ::log("ERROR: Failed to open path: " + path + " (error code: " + std::to_string(reinterpret_cast<INT_PTR>(result)) + ")");
+        return FALSE;
+    }
+
+    ::log("Successfully opened path: " + path);
+    return TRUE;
+}
+
 ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                           const char *allowedFileTypes,
                           BOOL canChooseFiles,
