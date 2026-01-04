@@ -2193,9 +2193,33 @@ public:
     }
     
     void updateCustomPreloadScript(const char* jsString) override {
-        // Implementation for updating custom preload script
+        if (!jsString || !webview) return;
+
+        std::string scriptContent;
+
+        // Check if this is a views:// URL for a script file
+        if (strncmp(jsString, "views://", 8) == 0) {
+            // Remove "views://" prefix and load the file
+            scriptContent = loadViewsFile(std::string(jsString + 8));
+            if (scriptContent.empty()) {
+                std::cout << "[WebView2] Could not read preload script from: " << jsString << std::endl;
+                return;
+            }
+        } else {
+            // Inline JavaScript
+            scriptContent = jsString;
+        }
+
+        // Convert to wide string and execute
+        std::wstring wScript(scriptContent.begin(), scriptContent.end());
+
+        // Add as a script to execute on document creation for future navigations
+        webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
+
+        // Also execute immediately if the page is already loaded
+        webview->ExecuteScript(wScript.c_str(), nullptr);
     }
-    
+
     void resize(const RECT& frame, const char* masksJson) override {
         
         if (controller) {
@@ -5314,14 +5338,22 @@ ELECTROBUN_EXPORT void callAsyncJavaScript(const char *messageId,
 }
 
 ELECTROBUN_EXPORT void addPreloadScriptToWebView(AbstractView *abstractView, const char *scriptContent, BOOL forMainFrameOnly) {
-    // Stub implementation
+    if (abstractView && scriptContent) {
+        MainThreadDispatcher::dispatch_sync([abstractView, scriptContent]() {
+            abstractView->addPreloadScriptToWebView(scriptContent);
+        });
+    }
 }
 
 ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView *abstractView,
                                  const char *scriptIdentifier,
                                  const char *scriptContent,
                                  BOOL forMainFrameOnly) {
-    // Stub implementation
+    if (abstractView && scriptContent) {
+        MainThreadDispatcher::dispatch_sync([abstractView, scriptContent]() {
+            abstractView->updateCustomPreloadScript(scriptContent);
+        });
+    }
 }
 
 ELECTROBUN_EXPORT void invokeDecisionHandler(void (*decisionHandler)(int), int policy) {
