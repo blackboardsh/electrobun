@@ -278,6 +278,29 @@ export const native = (() => {
         ],
         returns: FFIType.void
       },
+
+      // Global keyboard shortcuts
+      setGlobalShortcutCallback: {
+        args: [FFIType.function],
+        returns: FFIType.void
+      },
+      registerGlobalShortcut: {
+        args: [FFIType.cstring],
+        returns: FFIType.bool
+      },
+      unregisterGlobalShortcut: {
+        args: [FFIType.cstring],
+        returns: FFIType.bool
+      },
+      unregisterAllGlobalShortcuts: {
+        args: [],
+        returns: FFIType.void
+      },
+      isGlobalShortcutRegistered: {
+        args: [FFIType.cstring],
+        returns: FFIType.bool
+      },
+
       openFileDialog: {
         args: [
           FFIType.cstring,
@@ -1216,6 +1239,78 @@ const urlOpenCallback = new JSCallback(
 if (process.platform === 'darwin') {
   native.symbols.setURLOpenHandler(urlOpenCallback);
 }
+
+// Global shortcut storage and callback
+const globalShortcutHandlers = new Map<string, () => void>();
+
+const globalShortcutCallback = new JSCallback(
+  (acceleratorPtr) => {
+    const accelerator = new CString(acceleratorPtr).toString();
+    const handler = globalShortcutHandlers.get(accelerator);
+    if (handler) {
+      handler();
+    }
+  },
+  {
+    args: [FFIType.cstring],
+    returns: "void",
+    threadsafe: true,
+  }
+);
+
+// Set up the global shortcut callback
+native.symbols.setGlobalShortcutCallback(globalShortcutCallback);
+
+// GlobalShortcut module for external use
+export const GlobalShortcut = {
+  /**
+   * Register a global keyboard shortcut
+   * @param accelerator - The shortcut string (e.g., "CommandOrControl+Shift+Space")
+   * @param callback - Function to call when the shortcut is triggered
+   * @returns true if registered successfully, false otherwise
+   */
+  register: (accelerator: string, callback: () => void): boolean => {
+    if (globalShortcutHandlers.has(accelerator)) {
+      return false; // Already registered
+    }
+
+    const result = native.symbols.registerGlobalShortcut(toCString(accelerator));
+    if (result) {
+      globalShortcutHandlers.set(accelerator, callback);
+    }
+    return result;
+  },
+
+  /**
+   * Unregister a global keyboard shortcut
+   * @param accelerator - The shortcut string to unregister
+   * @returns true if unregistered successfully, false otherwise
+   */
+  unregister: (accelerator: string): boolean => {
+    const result = native.symbols.unregisterGlobalShortcut(toCString(accelerator));
+    if (result) {
+      globalShortcutHandlers.delete(accelerator);
+    }
+    return result;
+  },
+
+  /**
+   * Unregister all global keyboard shortcuts
+   */
+  unregisterAll: (): void => {
+    native.symbols.unregisterAllGlobalShortcuts();
+    globalShortcutHandlers.clear();
+  },
+
+  /**
+   * Check if a shortcut is registered
+   * @param accelerator - The shortcut string to check
+   * @returns true if registered, false otherwise
+   */
+  isRegistered: (accelerator: string): boolean => {
+    return native.symbols.isGlobalShortcutRegistered(toCString(accelerator));
+  },
+};
 
 // DEPRECATED: This callback is no longer used for navigation decisions.
 // Navigation rules are now stored in native code and evaluated synchronously

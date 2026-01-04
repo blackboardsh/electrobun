@@ -5007,7 +5007,7 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
         NSLog(@"ERROR: getWebviewHTMLContent called before initialization");
         return NULL;
     }
-    
+
     [webviewHTMLLock lock];
     NSString *htmlContent = webviewHTMLContent[@(webviewId)];
     const char* result = NULL;
@@ -5018,7 +5018,218 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
         NSLog(@"getWebviewHTMLContent: No HTML found for webview %u", webviewId);
     }
     [webviewHTMLLock unlock];
-    
+
+    return result;
+}
+
+/*
+ * =============================================================================
+ * GLOBAL KEYBOARD SHORTCUTS
+ * =============================================================================
+ */
+
+// Callback type for global shortcut triggers
+typedef void (*GlobalShortcutCallback)(const char* accelerator);
+static GlobalShortcutCallback g_globalShortcutCallback = nullptr;
+
+// Storage for registered shortcuts: accelerator string -> event monitor
+static NSMutableDictionary<NSString*, id> *g_globalShortcuts = nil;
+static NSLock *g_globalShortcutsLock = nil;
+
+// Helper to parse modifier flags from accelerator string
+static NSEventModifierFlags parseModifiers(NSString *accelerator, NSString **outKey) {
+    NSEventModifierFlags modifiers = 0;
+    NSMutableArray *parts = [[accelerator componentsSeparatedByString:@"+"] mutableCopy];
+
+    // The last part is the key
+    *outKey = [[parts lastObject] lowercaseString];
+    [parts removeLastObject];
+
+    for (NSString *part in parts) {
+        NSString *lowerPart = [part lowercaseString];
+        if ([lowerPart isEqualToString:@"command"] ||
+            [lowerPart isEqualToString:@"cmd"] ||
+            [lowerPart isEqualToString:@"commandorcontrol"] ||
+            [lowerPart isEqualToString:@"cmdorctrl"]) {
+            modifiers |= NSEventModifierFlagCommand;
+        } else if ([lowerPart isEqualToString:@"control"] ||
+                   [lowerPart isEqualToString:@"ctrl"]) {
+            modifiers |= NSEventModifierFlagControl;
+        } else if ([lowerPart isEqualToString:@"alt"] ||
+                   [lowerPart isEqualToString:@"option"]) {
+            modifiers |= NSEventModifierFlagOption;
+        } else if ([lowerPart isEqualToString:@"shift"]) {
+            modifiers |= NSEventModifierFlagShift;
+        }
+    }
+
+    return modifiers;
+}
+
+// Helper to get key code from key string
+static unsigned short keyCodeFromString(NSString *key) {
+    // Map common key names to key codes
+    static NSDictionary *keyMap = nil;
+    if (!keyMap) {
+        keyMap = @{
+            // Letters
+            @"a": @(0x00), @"b": @(0x0B), @"c": @(0x08), @"d": @(0x02),
+            @"e": @(0x0E), @"f": @(0x03), @"g": @(0x05), @"h": @(0x04),
+            @"i": @(0x22), @"j": @(0x26), @"k": @(0x28), @"l": @(0x25),
+            @"m": @(0x2E), @"n": @(0x2D), @"o": @(0x1F), @"p": @(0x23),
+            @"q": @(0x0C), @"r": @(0x0F), @"s": @(0x01), @"t": @(0x11),
+            @"u": @(0x20), @"v": @(0x09), @"w": @(0x0D), @"x": @(0x07),
+            @"y": @(0x10), @"z": @(0x06),
+            // Numbers
+            @"0": @(0x1D), @"1": @(0x12), @"2": @(0x13), @"3": @(0x14),
+            @"4": @(0x15), @"5": @(0x17), @"6": @(0x16), @"7": @(0x1A),
+            @"8": @(0x1C), @"9": @(0x19),
+            // Function keys
+            @"f1": @(0x7A), @"f2": @(0x78), @"f3": @(0x63), @"f4": @(0x76),
+            @"f5": @(0x60), @"f6": @(0x61), @"f7": @(0x62), @"f8": @(0x64),
+            @"f9": @(0x65), @"f10": @(0x6D), @"f11": @(0x67), @"f12": @(0x6F),
+            // Special keys
+            @"space": @(0x31), @" ": @(0x31),
+            @"return": @(0x24), @"enter": @(0x24),
+            @"tab": @(0x30),
+            @"escape": @(0x35), @"esc": @(0x35),
+            @"backspace": @(0x33), @"delete": @(0x33),
+            @"up": @(0x7E), @"down": @(0x7D), @"left": @(0x7B), @"right": @(0x7C),
+            @"home": @(0x73), @"end": @(0x77),
+            @"pageup": @(0x74), @"pagedown": @(0x79),
+            // Symbols
+            @"-": @(0x1B), @"=": @(0x18), @"[": @(0x21), @"]": @(0x1E),
+            @"\\": @(0x2A), @";": @(0x29), @"'": @(0x27), @",": @(0x2B),
+            @".": @(0x2F), @"/": @(0x2C), @"`": @(0x32),
+        };
+    }
+
+    NSNumber *code = keyMap[key];
+    return code ? [code unsignedShortValue] : 0xFFFF;
+}
+
+// Set the callback for global shortcut events
+extern "C" void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
+    g_globalShortcutCallback = callback;
+
+    // Initialize storage if needed
+    if (!g_globalShortcuts) {
+        g_globalShortcuts = [[NSMutableDictionary alloc] init];
+        g_globalShortcutsLock = [[NSLock alloc] init];
+    }
+}
+
+// Register a global keyboard shortcut
+extern "C" BOOL registerGlobalShortcut(const char* accelerator) {
+    if (!accelerator || !g_globalShortcutCallback) {
+        NSLog(@"[GlobalShortcut] Cannot register: invalid accelerator or no callback set");
+        return NO;
+    }
+
+    NSString *accelStr = [NSString stringWithUTF8String:accelerator];
+
+    [g_globalShortcutsLock lock];
+
+    // Check if already registered
+    if (g_globalShortcuts[accelStr]) {
+        [g_globalShortcutsLock unlock];
+        NSLog(@"[GlobalShortcut] Already registered: %@", accelStr);
+        return NO;
+    }
+
+    // Parse the accelerator
+    NSString *key = nil;
+    NSEventModifierFlags modifiers = parseModifiers(accelStr, &key);
+    unsigned short keyCode = keyCodeFromString(key);
+
+    if (keyCode == 0xFFFF) {
+        [g_globalShortcutsLock unlock];
+        NSLog(@"[GlobalShortcut] Unknown key: %@", key);
+        return NO;
+    }
+
+    // Create a copy of accelerator for the block
+    NSString *accelCopy = [accelStr copy];
+
+    // Create global monitor
+    id monitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+        handler:^(NSEvent *event) {
+            // Check if the key and modifiers match
+            if (event.keyCode == keyCode) {
+                // Mask out irrelevant modifier bits (like caps lock, fn, etc.)
+                NSEventModifierFlags relevantMask = (NSEventModifierFlagCommand |
+                                                     NSEventModifierFlagControl |
+                                                     NSEventModifierFlagOption |
+                                                     NSEventModifierFlagShift);
+                NSEventModifierFlags eventMods = event.modifierFlags & relevantMask;
+
+                if (eventMods == modifiers) {
+                    // Trigger the callback
+                    if (g_globalShortcutCallback) {
+                        g_globalShortcutCallback([accelCopy UTF8String]);
+                    }
+                }
+            }
+        }];
+
+    if (monitor) {
+        g_globalShortcuts[accelStr] = monitor;
+        [g_globalShortcutsLock unlock];
+        NSLog(@"[GlobalShortcut] Registered: %@ (keyCode: %d, modifiers: 0x%lX)",
+              accelStr, keyCode, (unsigned long)modifiers);
+        return YES;
+    }
+
+    [g_globalShortcutsLock unlock];
+    NSLog(@"[GlobalShortcut] Failed to create monitor for: %@", accelStr);
+    return NO;
+}
+
+// Unregister a global keyboard shortcut
+extern "C" BOOL unregisterGlobalShortcut(const char* accelerator) {
+    if (!accelerator) return NO;
+
+    NSString *accelStr = [NSString stringWithUTF8String:accelerator];
+
+    [g_globalShortcutsLock lock];
+
+    id monitor = g_globalShortcuts[accelStr];
+    if (monitor) {
+        [NSEvent removeMonitor:monitor];
+        [g_globalShortcuts removeObjectForKey:accelStr];
+        [g_globalShortcutsLock unlock];
+        NSLog(@"[GlobalShortcut] Unregistered: %@", accelStr);
+        return YES;
+    }
+
+    [g_globalShortcutsLock unlock];
+    return NO;
+}
+
+// Unregister all global keyboard shortcuts
+extern "C" void unregisterAllGlobalShortcuts(void) {
+    [g_globalShortcutsLock lock];
+
+    for (NSString *key in g_globalShortcuts) {
+        id monitor = g_globalShortcuts[key];
+        [NSEvent removeMonitor:monitor];
+    }
+    [g_globalShortcuts removeAllObjects];
+
+    [g_globalShortcutsLock unlock];
+    NSLog(@"[GlobalShortcut] Unregistered all shortcuts");
+}
+
+// Check if a shortcut is registered
+extern "C" BOOL isGlobalShortcutRegistered(const char* accelerator) {
+    if (!accelerator) return NO;
+
+    NSString *accelStr = [NSString stringWithUTF8String:accelerator];
+
+    [g_globalShortcutsLock lock];
+    BOOL result = g_globalShortcuts[accelStr] != nil;
+    [g_globalShortcutsLock unlock];
+
     return result;
 }
 

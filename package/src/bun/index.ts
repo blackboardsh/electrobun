@@ -12,6 +12,7 @@ import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
 import * as Socket from "./core/Socket";
 import type { ElectrobunConfig } from "./ElectrobunConfig";
+import { GlobalShortcut } from "./proc/native";
 
 // Named Exports
 export {
@@ -30,6 +31,7 @@ export {
   ContextMenu,
   PATHS,
   Socket,
+  GlobalShortcut,
 };
 
 // Default Export
@@ -41,6 +43,7 @@ const Electrobun = {
   Utils,
   ApplicationMenu,
   ContextMenu,
+  GlobalShortcut,
   events: electobunEventEmmitter,
   PATHS,
   Socket,

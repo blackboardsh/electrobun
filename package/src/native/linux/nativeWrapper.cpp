@@ -6019,16 +6019,297 @@ void closeNSWindow(void* window) {
                     printf("DEBUG: Destroying X11 window\n");
                     XDestroyWindow(x11win->display, x11win->window);
                     XFlush(x11win->display);
-                    
+
                     // Remove from global maps
                     g_x11_window_to_id.erase(x11win->window);
                     g_x11_windows.erase(x11win->windowId);
-                    
+
                     // Note: Don't close display here as it might be shared
                 }
             }
         });
     }
+}
+
+/*
+ * =============================================================================
+ * GLOBAL KEYBOARD SHORTCUTS
+ * =============================================================================
+ */
+
+// Callback type for global shortcut triggers
+typedef void (*GlobalShortcutCallback)(const char* accelerator);
+static GlobalShortcutCallback g_globalShortcutCallback = nullptr;
+
+// Storage for registered shortcuts
+struct ShortcutInfo {
+    KeyCode keycode;
+    unsigned int modifiers;
+};
+static std::map<std::string, ShortcutInfo> g_globalShortcuts;
+static Display* g_shortcutDisplay = nullptr;
+static std::thread g_shortcutThread;
+static bool g_shortcutThreadRunning = false;
+
+// Helper to get X11 keysym from key string
+static KeySym getKeySym(const std::string& key) {
+    std::string lowerKey = key;
+    std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+
+    // Letters
+    if (lowerKey.length() == 1 && lowerKey[0] >= 'a' && lowerKey[0] <= 'z') {
+        return XK_a + (lowerKey[0] - 'a');
+    }
+    // Numbers
+    if (lowerKey.length() == 1 && lowerKey[0] >= '0' && lowerKey[0] <= '9') {
+        return XK_0 + (lowerKey[0] - '0');
+    }
+    // Function keys
+    if (lowerKey[0] == 'f' && lowerKey.length() >= 2) {
+        int fNum = std::stoi(lowerKey.substr(1));
+        if (fNum >= 1 && fNum <= 12) return XK_F1 + (fNum - 1);
+    }
+    // Special keys
+    if (lowerKey == "space" || lowerKey == " ") return XK_space;
+    if (lowerKey == "return" || lowerKey == "enter") return XK_Return;
+    if (lowerKey == "tab") return XK_Tab;
+    if (lowerKey == "escape" || lowerKey == "esc") return XK_Escape;
+    if (lowerKey == "backspace") return XK_BackSpace;
+    if (lowerKey == "delete") return XK_Delete;
+    if (lowerKey == "up") return XK_Up;
+    if (lowerKey == "down") return XK_Down;
+    if (lowerKey == "left") return XK_Left;
+    if (lowerKey == "right") return XK_Right;
+    if (lowerKey == "home") return XK_Home;
+    if (lowerKey == "end") return XK_End;
+    if (lowerKey == "pageup") return XK_Page_Up;
+    if (lowerKey == "pagedown") return XK_Page_Down;
+    // Symbols
+    if (lowerKey == "-") return XK_minus;
+    if (lowerKey == "=") return XK_equal;
+    if (lowerKey == "[") return XK_bracketleft;
+    if (lowerKey == "]") return XK_bracketright;
+    if (lowerKey == "\\") return XK_backslash;
+    if (lowerKey == ";") return XK_semicolon;
+    if (lowerKey == "'") return XK_apostrophe;
+    if (lowerKey == ",") return XK_comma;
+    if (lowerKey == ".") return XK_period;
+    if (lowerKey == "/") return XK_slash;
+    if (lowerKey == "`") return XK_grave;
+
+    return NoSymbol;
+}
+
+// Helper to parse modifiers from accelerator string
+static unsigned int parseX11Modifiers(const std::string& accelerator, std::string& outKey) {
+    unsigned int modifiers = 0;
+    std::vector<std::string> parts;
+
+    // Split by '+'
+    size_t start = 0, end;
+    while ((end = accelerator.find('+', start)) != std::string::npos) {
+        parts.push_back(accelerator.substr(start, end - start));
+        start = end + 1;
+    }
+    parts.push_back(accelerator.substr(start));
+
+    // Last part is the key
+    outKey = parts.back();
+    parts.pop_back();
+
+    for (const auto& part : parts) {
+        std::string lowerPart = part;
+        std::transform(lowerPart.begin(), lowerPart.end(), lowerPart.begin(), ::tolower);
+
+        if (lowerPart == "command" || lowerPart == "cmd" ||
+            lowerPart == "commandorcontrol" || lowerPart == "cmdorctrl" ||
+            lowerPart == "control" || lowerPart == "ctrl") {
+            modifiers |= ControlMask;
+        } else if (lowerPart == "alt" || lowerPart == "option") {
+            modifiers |= Mod1Mask;
+        } else if (lowerPart == "shift") {
+            modifiers |= ShiftMask;
+        } else if (lowerPart == "super" || lowerPart == "meta" || lowerPart == "win") {
+            modifiers |= Mod4Mask;
+        }
+    }
+
+    return modifiers;
+}
+
+// X11 event loop for global shortcuts
+static void shortcutEventLoop() {
+    g_shortcutDisplay = XOpenDisplay(nullptr);
+    if (!g_shortcutDisplay) {
+        fprintf(stderr, "ERROR: Failed to open X11 display for shortcuts\n");
+        return;
+    }
+
+    Window root = DefaultRootWindow(g_shortcutDisplay);
+
+    while (g_shortcutThreadRunning) {
+        while (XPending(g_shortcutDisplay)) {
+            XEvent event;
+            XNextEvent(g_shortcutDisplay, &event);
+
+            if (event.type == KeyPress) {
+                KeyCode keycode = event.xkey.keycode;
+                unsigned int state = event.xkey.state & (ControlMask | ShiftMask | Mod1Mask | Mod4Mask);
+
+                // Find matching shortcut
+                for (const auto& pair : g_globalShortcuts) {
+                    if (pair.second.keycode == keycode && pair.second.modifiers == state) {
+                        if (g_globalShortcutCallback) {
+                            g_globalShortcutCallback(pair.first.c_str());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        usleep(10000); // 10ms sleep
+    }
+
+    XCloseDisplay(g_shortcutDisplay);
+    g_shortcutDisplay = nullptr;
+}
+
+// Set the callback for global shortcut events
+void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
+    g_globalShortcutCallback = callback;
+
+    // Start the event loop thread if not running
+    if (!g_shortcutThreadRunning && callback) {
+        g_shortcutThreadRunning = true;
+        g_shortcutThread = std::thread(shortcutEventLoop);
+        // Wait for display to be opened
+        while (!g_shortcutDisplay && g_shortcutThreadRunning) {
+            usleep(10000);
+        }
+    }
+}
+
+// Register a global keyboard shortcut
+bool registerGlobalShortcut(const char* accelerator) {
+    if (!accelerator || !g_shortcutDisplay) {
+        fprintf(stderr, "ERROR: Cannot register shortcut - invalid accelerator or display not ready\n");
+        return false;
+    }
+
+    std::string accelStr(accelerator);
+
+    // Check if already registered
+    if (g_globalShortcuts.find(accelStr) != g_globalShortcuts.end()) {
+        fprintf(stderr, "GlobalShortcut already registered: %s\n", accelerator);
+        return false;
+    }
+
+    // Parse the accelerator
+    std::string key;
+    unsigned int modifiers = parseX11Modifiers(accelStr, key);
+    KeySym keysym = getKeySym(key);
+
+    if (keysym == NoSymbol) {
+        fprintf(stderr, "ERROR: Unknown key: %s\n", key.c_str());
+        return false;
+    }
+
+    KeyCode keycode = XKeysymToKeycode(g_shortcutDisplay, keysym);
+    if (keycode == 0) {
+        fprintf(stderr, "ERROR: Failed to get keycode for key: %s\n", key.c_str());
+        return false;
+    }
+
+    Window root = DefaultRootWindow(g_shortcutDisplay);
+
+    // Grab key with various modifier combinations (to handle NumLock, CapsLock, etc.)
+    unsigned int modifierVariants[] = {
+        modifiers,
+        modifiers | Mod2Mask,  // NumLock
+        modifiers | LockMask,  // CapsLock
+        modifiers | Mod2Mask | LockMask
+    };
+
+    bool success = false;
+    for (unsigned int mods : modifierVariants) {
+        int result = XGrabKey(g_shortcutDisplay, keycode, mods, root, True, GrabModeAsync, GrabModeAsync);
+        if (result == 0) success = true;  // At least one succeeded
+    }
+    XFlush(g_shortcutDisplay);
+
+    ShortcutInfo info;
+    info.keycode = keycode;
+    info.modifiers = modifiers;
+    g_globalShortcuts[accelStr] = info;
+
+    printf("GlobalShortcut registered: %s (keycode: %d, modifiers: 0x%X)\n",
+           accelerator, keycode, modifiers);
+    return true;
+}
+
+// Unregister a global keyboard shortcut
+bool unregisterGlobalShortcut(const char* accelerator) {
+    if (!accelerator || !g_shortcutDisplay) return false;
+
+    std::string accelStr(accelerator);
+    auto it = g_globalShortcuts.find(accelStr);
+    if (it != g_globalShortcuts.end()) {
+        Window root = DefaultRootWindow(g_shortcutDisplay);
+        KeyCode keycode = it->second.keycode;
+        unsigned int modifiers = it->second.modifiers;
+
+        // Ungrab with same modifier variants
+        unsigned int modifierVariants[] = {
+            modifiers,
+            modifiers | Mod2Mask,
+            modifiers | LockMask,
+            modifiers | Mod2Mask | LockMask
+        };
+
+        for (unsigned int mods : modifierVariants) {
+            XUngrabKey(g_shortcutDisplay, keycode, mods, root);
+        }
+        XFlush(g_shortcutDisplay);
+
+        g_globalShortcuts.erase(it);
+        printf("GlobalShortcut unregistered: %s\n", accelerator);
+        return true;
+    }
+
+    return false;
+}
+
+// Unregister all global keyboard shortcuts
+void unregisterAllGlobalShortcuts() {
+    if (!g_shortcutDisplay) return;
+
+    Window root = DefaultRootWindow(g_shortcutDisplay);
+
+    for (const auto& pair : g_globalShortcuts) {
+        KeyCode keycode = pair.second.keycode;
+        unsigned int modifiers = pair.second.modifiers;
+
+        unsigned int modifierVariants[] = {
+            modifiers,
+            modifiers | Mod2Mask,
+            modifiers | LockMask,
+            modifiers | Mod2Mask | LockMask
+        };
+
+        for (unsigned int mods : modifierVariants) {
+            XUngrabKey(g_shortcutDisplay, keycode, mods, root);
+        }
+    }
+    XFlush(g_shortcutDisplay);
+
+    g_globalShortcuts.clear();
+    printf("GlobalShortcut: Unregistered all shortcuts\n");
+}
+
+// Check if a shortcut is registered
+bool isGlobalShortcutRegistered(const char* accelerator) {
+    if (!accelerator) return false;
+    return g_globalShortcuts.find(std::string(accelerator)) != g_globalShortcuts.end();
 }
 
 

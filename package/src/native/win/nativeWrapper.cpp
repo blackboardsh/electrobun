@@ -7300,6 +7300,239 @@ std::string getMimeTypeForFile(const std::string& path) {
     } else if (path.find(".gz") != std::string::npos) {
         return "application/gzip";
     }
-    
+
     return "application/octet-stream"; // default
+}
+
+/*
+ * =============================================================================
+ * GLOBAL KEYBOARD SHORTCUTS
+ * =============================================================================
+ */
+
+// Callback type for global shortcut triggers
+typedef void (*GlobalShortcutCallback)(const char* accelerator);
+static GlobalShortcutCallback g_globalShortcutCallback = nullptr;
+
+// Storage for registered shortcuts: accelerator string -> hotkey ID
+static std::map<std::string, int> g_globalShortcuts;
+static std::map<int, std::string> g_hotkeyIdToAccelerator;
+static int g_nextHotkeyId = 1;
+static HWND g_hotkeyWindow = NULL;
+static std::thread g_hotkeyThread;
+static bool g_hotkeyThreadRunning = false;
+
+// Helper to parse virtual key code from key string
+static UINT getVirtualKeyCode(const std::string& key) {
+    std::string lowerKey = key;
+    std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+
+    // Letters
+    if (lowerKey.length() == 1 && lowerKey[0] >= 'a' && lowerKey[0] <= 'z') {
+        return 'A' + (lowerKey[0] - 'a');
+    }
+    // Numbers
+    if (lowerKey.length() == 1 && lowerKey[0] >= '0' && lowerKey[0] <= '9') {
+        return '0' + (lowerKey[0] - '0');
+    }
+    // Function keys
+    if (lowerKey[0] == 'f' && lowerKey.length() >= 2) {
+        int fNum = std::stoi(lowerKey.substr(1));
+        if (fNum >= 1 && fNum <= 24) return VK_F1 + (fNum - 1);
+    }
+    // Special keys
+    if (lowerKey == "space" || lowerKey == " ") return VK_SPACE;
+    if (lowerKey == "return" || lowerKey == "enter") return VK_RETURN;
+    if (lowerKey == "tab") return VK_TAB;
+    if (lowerKey == "escape" || lowerKey == "esc") return VK_ESCAPE;
+    if (lowerKey == "backspace") return VK_BACK;
+    if (lowerKey == "delete") return VK_DELETE;
+    if (lowerKey == "up") return VK_UP;
+    if (lowerKey == "down") return VK_DOWN;
+    if (lowerKey == "left") return VK_LEFT;
+    if (lowerKey == "right") return VK_RIGHT;
+    if (lowerKey == "home") return VK_HOME;
+    if (lowerKey == "end") return VK_END;
+    if (lowerKey == "pageup") return VK_PRIOR;
+    if (lowerKey == "pagedown") return VK_NEXT;
+    // Symbols
+    if (lowerKey == "-") return VK_OEM_MINUS;
+    if (lowerKey == "=") return VK_OEM_PLUS;
+    if (lowerKey == "[") return VK_OEM_4;
+    if (lowerKey == "]") return VK_OEM_6;
+    if (lowerKey == "\\") return VK_OEM_5;
+    if (lowerKey == ";") return VK_OEM_1;
+    if (lowerKey == "'") return VK_OEM_7;
+    if (lowerKey == ",") return VK_OEM_COMMA;
+    if (lowerKey == ".") return VK_OEM_PERIOD;
+    if (lowerKey == "/") return VK_OEM_2;
+    if (lowerKey == "`") return VK_OEM_3;
+
+    return 0;
+}
+
+// Helper to parse modifiers from accelerator string
+static UINT parseModifiers(const std::string& accelerator, std::string& outKey) {
+    UINT modifiers = 0;
+    std::vector<std::string> parts;
+
+    // Split by '+'
+    size_t start = 0, end;
+    while ((end = accelerator.find('+', start)) != std::string::npos) {
+        parts.push_back(accelerator.substr(start, end - start));
+        start = end + 1;
+    }
+    parts.push_back(accelerator.substr(start));
+
+    // Last part is the key
+    outKey = parts.back();
+    parts.pop_back();
+
+    for (const auto& part : parts) {
+        std::string lowerPart = part;
+        std::transform(lowerPart.begin(), lowerPart.end(), lowerPart.begin(), ::tolower);
+
+        if (lowerPart == "command" || lowerPart == "cmd" ||
+            lowerPart == "commandorcontrol" || lowerPart == "cmdorctrl" ||
+            lowerPart == "control" || lowerPart == "ctrl") {
+            modifiers |= MOD_CONTROL;
+        } else if (lowerPart == "alt" || lowerPart == "option") {
+            modifiers |= MOD_ALT;
+        } else if (lowerPart == "shift") {
+            modifiers |= MOD_SHIFT;
+        } else if (lowerPart == "win" || lowerPart == "super" || lowerPart == "meta") {
+            modifiers |= MOD_WIN;
+        }
+    }
+
+    return modifiers;
+}
+
+// Window procedure for hotkey window
+static LRESULT CALLBACK HotkeyWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_HOTKEY) {
+        int hotkeyId = (int)wParam;
+        auto it = g_hotkeyIdToAccelerator.find(hotkeyId);
+        if (it != g_hotkeyIdToAccelerator.end() && g_globalShortcutCallback) {
+            g_globalShortcutCallback(it->second.c_str());
+        }
+        return 0;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+// Message loop thread for hotkey window
+static void hotkeyMessageLoop() {
+    // Create a message-only window
+    WNDCLASSEXW wc = {};
+    wc.cbSize = sizeof(WNDCLASSEXW);
+    wc.lpfnWndProc = HotkeyWndProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = L"ElectrobunHotkeyWindow";
+
+    RegisterClassExW(&wc);
+
+    g_hotkeyWindow = CreateWindowExW(0, L"ElectrobunHotkeyWindow", L"",
+        0, 0, 0, 0, 0, HWND_MESSAGE, NULL, GetModuleHandle(NULL), NULL);
+
+    if (!g_hotkeyWindow) {
+        ::log("ERROR: Failed to create hotkey window");
+        return;
+    }
+
+    MSG msg;
+    while (g_hotkeyThreadRunning && GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    DestroyWindow(g_hotkeyWindow);
+    g_hotkeyWindow = NULL;
+}
+
+// Set the callback for global shortcut events
+ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
+    g_globalShortcutCallback = callback;
+
+    // Start the hotkey message loop thread if not running
+    if (!g_hotkeyThreadRunning && callback) {
+        g_hotkeyThreadRunning = true;
+        g_hotkeyThread = std::thread(hotkeyMessageLoop);
+        // Wait for window to be created
+        while (!g_hotkeyWindow && g_hotkeyThreadRunning) {
+            Sleep(10);
+        }
+    }
+}
+
+// Register a global keyboard shortcut
+ELECTROBUN_EXPORT BOOL registerGlobalShortcut(const char* accelerator) {
+    if (!accelerator || !g_hotkeyWindow) {
+        ::log("ERROR: Cannot register shortcut - invalid accelerator or hotkey window not ready");
+        return FALSE;
+    }
+
+    std::string accelStr(accelerator);
+
+    // Check if already registered
+    if (g_globalShortcuts.find(accelStr) != g_globalShortcuts.end()) {
+        ::log("GlobalShortcut already registered: " + accelStr);
+        return FALSE;
+    }
+
+    // Parse the accelerator
+    std::string key;
+    UINT modifiers = parseModifiers(accelStr, key);
+    UINT vkCode = getVirtualKeyCode(key);
+
+    if (vkCode == 0) {
+        ::log("ERROR: Unknown key: " + key);
+        return FALSE;
+    }
+
+    // Register the hotkey
+    int hotkeyId = g_nextHotkeyId++;
+    if (RegisterHotKey(g_hotkeyWindow, hotkeyId, modifiers | MOD_NOREPEAT, vkCode)) {
+        g_globalShortcuts[accelStr] = hotkeyId;
+        g_hotkeyIdToAccelerator[hotkeyId] = accelStr;
+        ::log("GlobalShortcut registered: " + accelStr);
+        return TRUE;
+    }
+
+    ::log("ERROR: Failed to register hotkey: " + accelStr);
+    return FALSE;
+}
+
+// Unregister a global keyboard shortcut
+ELECTROBUN_EXPORT BOOL unregisterGlobalShortcut(const char* accelerator) {
+    if (!accelerator) return FALSE;
+
+    std::string accelStr(accelerator);
+    auto it = g_globalShortcuts.find(accelStr);
+    if (it != g_globalShortcuts.end()) {
+        int hotkeyId = it->second;
+        UnregisterHotKey(g_hotkeyWindow, hotkeyId);
+        g_hotkeyIdToAccelerator.erase(hotkeyId);
+        g_globalShortcuts.erase(it);
+        ::log("GlobalShortcut unregistered: " + accelStr);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+// Unregister all global keyboard shortcuts
+ELECTROBUN_EXPORT void unregisterAllGlobalShortcuts() {
+    for (const auto& pair : g_globalShortcuts) {
+        UnregisterHotKey(g_hotkeyWindow, pair.second);
+    }
+    g_globalShortcuts.clear();
+    g_hotkeyIdToAccelerator.clear();
+    ::log("GlobalShortcut: Unregistered all shortcuts");
+}
+
+// Check if a shortcut is registered
+ELECTROBUN_EXPORT BOOL isGlobalShortcutRegistered(const char* accelerator) {
+    if (!accelerator) return FALSE;
+    return g_globalShortcuts.find(std::string(accelerator)) != g_globalShortcuts.end();
 }

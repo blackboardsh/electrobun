@@ -9,6 +9,7 @@ import Electrobun, {
   type ElectrobunEvent,
   createRPC,
   Utils,
+  GlobalShortcut,
 } from "electrobun/bun";
 import { type MyWebviewRPC } from "../mainview/rpc";
 import { type MyExtensionSchema } from "../myextension/rpc";
@@ -203,6 +204,58 @@ Electrobun.events.on("open-url", (e) => {
     console.log("  Failed to parse URL:", err);
   }
 });
+
+// Global Shortcuts demo
+// These shortcuts work even when the app doesn't have focus
+const shortcut1 = "CommandOrControl+Shift+G";
+const shortcut2 = "CommandOrControl+Shift+H";
+
+// Register first shortcut - shows a notification
+if (GlobalShortcut.register(shortcut1, () => {
+  console.log(`Global shortcut ${shortcut1} triggered!`);
+  Utils.showNotification({
+    title: "Global Shortcut",
+    body: `You pressed ${shortcut1}`,
+    subtitle: "Electrobun Kitchen Sink",
+  });
+})) {
+  console.log(`Registered global shortcut: ${shortcut1}`);
+} else {
+  console.log(`Failed to register global shortcut: ${shortcut1}`);
+}
+
+// Register second shortcut - logs and unregisters the first shortcut
+if (GlobalShortcut.register(shortcut2, () => {
+  console.log(`Global shortcut ${shortcut2} triggered!`);
+
+  if (GlobalShortcut.isRegistered(shortcut1)) {
+    GlobalShortcut.unregister(shortcut1);
+    console.log(`Unregistered ${shortcut1} - press ${shortcut2} again to re-register it`);
+    Utils.showNotification({
+      title: "Shortcut Unregistered",
+      body: `${shortcut1} has been unregistered`,
+    });
+  } else {
+    // Re-register the first shortcut
+    GlobalShortcut.register(shortcut1, () => {
+      console.log(`Global shortcut ${shortcut1} triggered!`);
+      Utils.showNotification({
+        title: "Global Shortcut",
+        body: `You pressed ${shortcut1}`,
+        subtitle: "Electrobun Kitchen Sink",
+      });
+    });
+    console.log(`Re-registered ${shortcut1}`);
+    Utils.showNotification({
+      title: "Shortcut Registered",
+      body: `${shortcut1} has been re-registered`,
+    });
+  }
+})) {
+  console.log(`Registered global shortcut: ${shortcut2}`);
+} else {
+  console.log(`Failed to register global shortcut: ${shortcut2}`);
+}
 
 Electrobun.events.on("new-window-open", (e) => {
   console.log('---------->>>> new window open ........', e)
