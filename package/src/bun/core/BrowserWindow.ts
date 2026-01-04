@@ -6,8 +6,6 @@ import {FFIType} from 'bun:ffi'
 
 let nextWindowId = 1;
 
-// todo (yoav): if we default to builtInSchema, we don't want dev to have to define custom handlers
-// for the built-in schema stuff.
 type WindowOptionsType<T = undefined> = {
   title: string;
   frame: {
@@ -44,9 +42,6 @@ const defaultOptions: WindowOptionsType = {
 };
 
 export const BrowserWindowMap = {};
-
-// todo (yoav): do something where the type extends the default schema
-// that way we can provide built-in requests/messages and devs can extend it
 
 export class BrowserWindow<T> {
   id: number = nextWindowId++;
