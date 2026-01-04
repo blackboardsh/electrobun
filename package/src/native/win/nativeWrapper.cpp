@@ -4275,7 +4275,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     std::string urlString = url ? std::string(url) : "";
     std::string electrobunScript = electrobunPreloadScript ? std::string(electrobunPreloadScript) : "";
     std::string customScript = customPreloadScript ? std::string(customPreloadScript) : "";
-    
+    std::string partitionStr = partitionIdentifier ? std::string(partitionIdentifier) : "";
+
     auto view = std::make_shared<WebView2View>(webviewId, bunBridgeHandler, internalBridgeHandler);
     view->hwnd = hwnd;
     view->fullSize = autoResize;
@@ -4285,9 +4286,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->pendingUrl = urlString;
     view->electrobunScript = electrobunScript;
     view->customScript = customScript;
-    
-    // Create WebView2 on main thread  
-    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd]() {
+
+    // Create WebView2 on main thread
+    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr]() {
         // Initialize COM for this thread
         HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
@@ -4833,28 +4834,28 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         try {
             auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
             options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --allow-insecure-localhost --disable-web-security");
-            
-            // Get the interface that supports custom scheme registration  
+
+            // Get the interface that supports custom scheme registration
             Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
             if (SUCCEEDED(options.As(&options4))) {
                 // ::log("Setting up views:// custom scheme registration");
-                
+
                 // Set allowed origins for the custom scheme
                 const WCHAR* allowedOrigins[1] = {L"*"};
-                
+
                 // Create custom scheme registration for "views"
                 auto viewsSchemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>(L"views");
                 viewsSchemeRegistration->put_TreatAsSecure(TRUE);
                 viewsSchemeRegistration->put_HasAuthorityComponent(TRUE); // This allows views://host/path format
                 viewsSchemeRegistration->SetAllowedOrigins(1, allowedOrigins);
-                
+
                 // Set the custom scheme registrations
                 ICoreWebView2CustomSchemeRegistration* registrations[1] = {
                     viewsSchemeRegistration.Get()
                 };
-                
+
                 HRESULT schemeResult = options4->SetCustomSchemeRegistrations(1, registrations);
-                
+
                 if (SUCCEEDED(schemeResult)) {
                     // ::log("views:// custom scheme registration set successfully");
                 } else {
@@ -4865,9 +4866,50 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             } else {
                 ::log("ERROR: Failed to get ICoreWebView2EnvironmentOptions4 interface for custom scheme registration");
             }
-            
-            
-            HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, options.Get(), environmentCompletedHandler.Get());
+
+            // Create user data folder path based on partition
+            std::wstring userDataFolder;
+            char* localAppData = getenv("LOCALAPPDATA");
+            if (localAppData) {
+                std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+                if (!g_electrobunChannel.empty()) {
+                    appIdentifier += "-" + g_electrobunChannel;
+                }
+
+                std::string userDataPath = std::string(localAppData) + "\\" + appIdentifier + "\\WebView2";
+
+                // Handle partition-specific storage
+                if (!partitionStr.empty()) {
+                    bool isPersistent = partitionStr.substr(0, 8) == "persist:";
+                    if (isPersistent) {
+                        // Persistent partition: use named subfolder
+                        std::string partitionName = partitionStr.substr(8);
+                        userDataPath += "\\Partitions\\" + partitionName;
+                    } else {
+                        // Ephemeral partition: use unique temp folder per webview
+                        // Note: WebView2 doesn't support true ephemeral sessions,
+                        // so we use a timestamped folder that gets cleaned up
+                        userDataPath += "\\Ephemeral\\" + std::to_string(view->webviewId);
+                    }
+                }
+                // If no partition specified, use default WebView2 folder (shared)
+
+                // Convert to wide string for WebView2 API
+                int wideSize = MultiByteToWideChar(CP_UTF8, 0, userDataPath.c_str(), -1, nullptr, 0);
+                if (wideSize > 0) {
+                    userDataFolder.resize(wideSize - 1);
+                    MultiByteToWideChar(CP_UTF8, 0, userDataPath.c_str(), -1, &userDataFolder[0], wideSize);
+                }
+
+                // Create directory if it doesn't exist
+                // Use SHCreateDirectoryExW for recursive creation
+                SHCreateDirectoryExW(NULL, userDataFolder.c_str(), NULL);
+            }
+
+            // Use partition-specific user data folder (nullptr if empty for default behavior)
+            LPCWSTR userDataFolderPtr = userDataFolder.empty() ? nullptr : userDataFolder.c_str();
+
+            HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, userDataFolderPtr, options.Get(), environmentCompletedHandler.Get());
             
             
             if (FAILED(hr)) {

@@ -2130,24 +2130,61 @@ public:
         
         // Try to improve offscreen rendering without breaking stability
         // webkit_settings_set_enable_accelerated_2d_canvas is deprecated - removed
-        
-        // Create web context with partition
-        WebKitWebContext* context = webkit_web_context_new();
+
+        // Create web context with partition-specific data manager
+        WebKitWebContext* context = nullptr;
+
         if (!partition.empty()) {
-            webkit_web_context_set_web_extensions_directory(context, "/tmp"); // TODO: Use proper partition
+            // Get app identifier for base path
+            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+            if (!g_electrobunChannel.empty()) {
+                appIdentifier += "-" + g_electrobunChannel;
+            }
+
+            char* home = getenv("HOME");
+            std::string basePath = home ? std::string(home) : "/tmp";
+
+            bool isPersistent = partition.substr(0, 8) == "persist:";
+
+            if (isPersistent) {
+                // Persistent partition: use named directory in ~/.local/share and ~/.cache
+                std::string partitionName = partition.substr(8);
+                std::string dataPath = basePath + "/.local/share/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+                std::string cachePath = basePath + "/.cache/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+
+                // Create directories
+                g_mkdir_with_parents(dataPath.c_str(), 0755);
+                g_mkdir_with_parents(cachePath.c_str(), 0755);
+
+                WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new(
+                    "base-data-directory", dataPath.c_str(),
+                    "base-cache-directory", cachePath.c_str(),
+                    NULL
+                );
+                context = webkit_web_context_new_with_website_data_manager(dataManager);
+                g_object_unref(dataManager);
+            } else {
+                // Ephemeral partition: use non-persistent (in-memory) data manager
+                WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new_ephemeral();
+                context = webkit_web_context_new_with_website_data_manager(dataManager);
+                g_object_unref(dataManager);
+            }
+        } else {
+            // No partition: use default context
+            context = webkit_web_context_get_default();
         }
-        
-        // Create webview
-        webview = webkit_web_view_new_with_user_content_manager(manager);
+
+        // Create webview with context and user content manager
+        webview = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW,
+            "web-context", context,
+            "user-content-manager", manager,
+            "settings", settings,
+            NULL));
         if (!webview) {
             fprintf(stderr, "ERROR: Failed to create WebKit webview\n");
             throw std::runtime_error("Failed to create WebKit webview");
         }
-        
-        // Set the context separately if needed
-        // webkit_web_view_set_context(WEBKIT_WEB_VIEW(webview), context);
-        webkit_web_view_set_settings(WEBKIT_WEB_VIEW(webview), settings);
-        
+
         // Set size
         gtk_widget_set_size_request(webview, (int)width, (int)height);
         
@@ -2909,6 +2946,48 @@ public:
 // Initialize static debounce timestamp for ctrl+click handling
 double WebKitWebViewImpl::lastCtrlClickTime = 0;
 
+// Create a CefRequestContext for partition isolation (CEF)
+CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier, uint32_t webviewId) {
+    CefRequestContextSettings settings;
+
+    if (!partitionIdentifier || !partitionIdentifier[0]) {
+        // No partition: use ephemeral settings
+        settings.persist_session_cookies = false;
+        settings.persist_user_preferences = false;
+    } else {
+        std::string identifier(partitionIdentifier);
+        bool isPersistent = identifier.substr(0, 8) == "persist:";
+
+        if (isPersistent) {
+            std::string partitionName = identifier.substr(8);
+
+            // Build app identifier
+            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+            if (!g_electrobunChannel.empty()) {
+                appIdentifier += "-" + g_electrobunChannel;
+            }
+
+            // Build cache path
+            char* home = getenv("HOME");
+            std::string basePath = home ? std::string(home) : "/tmp";
+            std::string cachePath = basePath + "/.cache/" + appIdentifier + "/CEF/Partitions/" + partitionName;
+
+            // Create directory
+            g_mkdir_with_parents(cachePath.c_str(), 0755);
+
+            settings.persist_session_cookies = true;
+            settings.persist_user_preferences = true;
+            CefString(&settings.cache_path).FromString(cachePath);
+        } else {
+            // Ephemeral partition
+            settings.persist_session_cookies = false;
+            settings.persist_user_preferences = false;
+        }
+    }
+
+    return CefRequestContext::CreateContext(settings, nullptr);
+}
+
 // CEF WebView implementation
 class CEFWebViewImpl : public AbstractView {
 public:
@@ -3028,9 +3107,10 @@ public:
             client->UpdateCustomPreloadScript(customPreloadScript);
         }
         
-        // Create the browser
+        // Create the browser with partition-specific request context
         std::string loadUrl = deferredUrl.empty() ? "https://www.wikipedia.org" : deferredUrl;
-        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, nullptr, nullptr);
+        CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(partition.c_str(), webviewId);
+        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, nullptr, requestContext);
         
         if (!create_result) {
             creationFailed = true;
