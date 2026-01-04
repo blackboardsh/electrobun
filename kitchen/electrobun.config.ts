@@ -3,6 +3,7 @@ export default {
         name: "Electrobun (Playground)",
         identifier: "dev.electrobun.playground",
         version: "0.0.1",
+        urlSchemes: ["electrobun-playground"],
     },
     build: {
         useAsar: true,

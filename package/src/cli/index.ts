@@ -609,20 +609,43 @@ function escapeXml(str: string): string {
 // Helper function to generate usage description entries for Info.plist
 function generateUsageDescriptions(entitlements: Record<string, boolean | string>): string {
   const usageEntries: string[] = [];
-  
+
   for (const [entitlement, value] of Object.entries(entitlements)) {
     const plistKey = ENTITLEMENT_TO_PLIST_KEY[entitlement];
     if (plistKey && value) {
       // Use the string value as description, or a default if it's just true
-      const description = typeof value === "string" 
+      const description = typeof value === "string"
         ? escapeXml(value)
         : `This app requires access for ${entitlement.split('.').pop()?.replace('-', ' ')}`;
-      
+
       usageEntries.push(`    <key>${plistKey}</key>\n    <string>${description}</string>`);
     }
   }
-  
+
   return usageEntries.join('\n');
+}
+
+// Helper function to generate CFBundleURLTypes for custom URL schemes
+function generateURLTypes(urlSchemes: string[] | undefined, identifier: string): string {
+  if (!urlSchemes || urlSchemes.length === 0) {
+    return '';
+  }
+
+  const schemesXml = urlSchemes.map(scheme => `                <string>${escapeXml(scheme)}</string>`).join('\n');
+
+  return `    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>${escapeXml(identifier)}</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+${schemesXml}
+            </array>
+        </dict>
+    </array>`;
 }
 
 const command = commandDefaults[commandArg];
@@ -1064,7 +1087,9 @@ if (commandArg === "init") {
   // provide methods to help segment data in those folders based on channel/environment
   // Generate usage descriptions from entitlements
   const usageDescriptions = generateUsageDescriptions(config.build.mac.entitlements || {});
-  
+  // Generate URL scheme handlers
+  const urlTypes = generateURLTypes(config.app.urlSchemes, config.app.identifier);
+
   const InfoPlistContents = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -1080,7 +1105,7 @@ if (commandArg === "init") {
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>${usageDescriptions ? '\n' + usageDescriptions : ''}
+    <string>AppIcon</string>${usageDescriptions ? '\n' + usageDescriptions : ''}${urlTypes ? '\n' + urlTypes : ''}
 </dict>
 </plist>`;
 

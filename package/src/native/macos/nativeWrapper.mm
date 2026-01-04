@@ -320,6 +320,10 @@ typedef void (*MenuHandler)(const char *menuItemId);
 /** Snapshot callback. */
 typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
 
+/** URL open handler for deep linking. */
+typedef void (*URLOpenHandler)(const char *url);
+static URLOpenHandler g_urlOpenHandler = nullptr;
+
 typedef struct {    
 } MenuItemConfig;
 
@@ -3883,8 +3887,19 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 // ----------------------- AppDelegate & WindowDelegate -----------------------
 
 @implementation AppDelegate
-    - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {    
+    - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
         return NSTerminateNow;
+    }
+
+    // Handle URLs opened via custom URL schemes (deep linking)
+    - (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls {
+        for (NSURL *url in urls) {
+            if (g_urlOpenHandler) {
+                g_urlOpenHandler([[url absoluteString] UTF8String]);
+            } else {
+                NSLog(@"[URL Handler] Received URL but no handler registered: %@", url);
+            }
+        }
     }
 @end
 
@@ -4739,6 +4754,15 @@ extern "C" const char* clipboardAvailableFormats() {
     });
 
     return result;
+}
+
+// ============================================================================
+// URL Scheme / Deep Linking API
+// ============================================================================
+
+// setURLOpenHandler - Set the callback for handling URLs opened via custom URL schemes
+extern "C" void setURLOpenHandler(URLOpenHandler handler) {
+    g_urlOpenHandler = handler;
 }
 
 extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,

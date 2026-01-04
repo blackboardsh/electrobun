@@ -310,6 +310,12 @@ export const native = (() => {
         returns: FFIType.cstring
       },
 
+      // URL scheme handler (macOS only)
+      setURLOpenHandler: {
+        args: [FFIType.function], // handler callback
+        returns: FFIType.void
+      },
+
       // MacOS specific native utils
       getNSWindowStyleMask: {
         args: [
@@ -1155,6 +1161,27 @@ const getHTMLForWebviewSync = new JSCallback((webviewId) => {
 
 
 native.symbols.setJSUtils(getMimeType, getHTMLForWebviewSync);
+
+// URL scheme open handler (macOS only)
+// Receives URLs when the app is opened via custom URL schemes (e.g., myapp://path)
+const urlOpenCallback = new JSCallback(
+  (urlPtr) => {
+    const url = new CString(urlPtr).toString();
+    const handler = electrobunEventEmitter.events.app.openUrl;
+    const event = handler({ url });
+    electrobunEventEmitter.emitEvent(event);
+  },
+  {
+    args: [FFIType.cstring],
+    returns: "void",
+    threadsafe: true,
+  }
+);
+
+// Register the URL open handler with native code (macOS only)
+if (process.platform === 'darwin') {
+  native.symbols.setURLOpenHandler(urlOpenCallback);
+}
 
 // DEPRECATED: This callback is no longer used for navigation decisions.
 // Navigation rules are now stored in native code and evaluated synchronously

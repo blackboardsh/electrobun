@@ -12,17 +12,35 @@ export interface ElectrobunConfig {
      * The display name of your application
      */
     name: string;
-    
+
     /**
      * Unique identifier for your application (e.g., "com.example.myapp")
      * Used for platform-specific identifiers
      */
     identifier: string;
-    
+
     /**
      * Application version string (e.g., "1.0.0")
      */
     version: string;
+
+    /**
+     * Custom URL schemes to register for deep linking (e.g., ["myapp", "myapp-dev"])
+     * This allows your app to be opened via URLs like myapp://some/path
+     *
+     * Platform support:
+     * - macOS: Fully supported. App must be in /Applications folder for registration to work.
+     * - Windows: Not yet supported
+     * - Linux: Not yet supported
+     *
+     * To handle incoming URLs, listen for the "open-url" event:
+     * ```typescript
+     * Electrobun.events.on("open-url", (e) => {
+     *   console.log("Opened with URL:", e.data.url);
+     * });
+     * ```
+     */
+    urlSchemes?: string[];
   };
 
   /**

@@ -11,4 +11,9 @@ export default {
       "context-menu-clicked",
       data
     ),
+  openUrl: (data) =>
+    new ElectrobunEvent<{ url: string }, void>(
+      "open-url",
+      data
+    ),
 };

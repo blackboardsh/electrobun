@@ -188,6 +188,22 @@ Electrobun.events.on("application-menu-clicked", (e) => {
   console.log("application menu clicked", e.data); // custom-actino
 });
 
+// URL Scheme / Deep Linking demo (macOS only)
+// Test with: open electrobun-playground://some/path?query=value
+Electrobun.events.on("open-url", (e) => {
+  console.log("App opened with URL scheme:", e.data.url);
+
+  // Parse the URL to extract information
+  try {
+    const url = new URL(e.data.url);
+    console.log("  Protocol:", url.protocol);
+    console.log("  Pathname:", url.pathname);
+    console.log("  Search params:", Object.fromEntries(url.searchParams));
+  } catch (err) {
+    console.log("  Failed to parse URL:", err);
+  }
+});
+
 Electrobun.events.on("new-window-open", (e) => {
   console.log('---------->>>> new window open ........', e)
   /**
