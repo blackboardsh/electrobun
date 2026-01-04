@@ -4545,6 +4545,69 @@ extern "C" const char *openFileDialog(const char *startingFolder,
     return (concatenatedPaths) ? strdup([concatenatedPaths UTF8String]) : NULL;
 }
 
+// showMessageBox - Display a native message box dialog with custom buttons
+// type: 0=none, 1=info, 2=warning, 3=error, 4=question
+// buttons: comma-separated list of button labels (e.g., "OK,Cancel")
+// Returns: index of the clicked button (0-based), or -1 if cancelled
+extern "C" int showMessageBox(const char *type,
+                              const char *title,
+                              const char *message,
+                              const char *detail,
+                              const char *buttons,
+                              int defaultId,
+                              int cancelId) {
+    __block int result = -1;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSAlert *alert = [[NSAlert alloc] init];
+
+        // Set the message and informative text
+        if (title && strlen(title) > 0) {
+            [alert setMessageText:[NSString stringWithUTF8String:title]];
+        }
+        if (message && strlen(message) > 0) {
+            [alert setInformativeText:[NSString stringWithUTF8String:message]];
+        }
+
+        // Set the alert style based on type
+        if (type) {
+            NSString *typeStr = [NSString stringWithUTF8String:type];
+            if ([typeStr isEqualToString:@"warning"]) {
+                [alert setAlertStyle:NSAlertStyleWarning];
+            } else if ([typeStr isEqualToString:@"error"] || [typeStr isEqualToString:@"critical"]) {
+                [alert setAlertStyle:NSAlertStyleCritical];
+            } else {
+                // info, question, none all use informational style
+                [alert setAlertStyle:NSAlertStyleInformational];
+            }
+        }
+
+        // Add buttons from comma-separated list
+        if (buttons && strlen(buttons) > 0) {
+            NSString *buttonsStr = [NSString stringWithUTF8String:buttons];
+            NSArray *buttonArray = [buttonsStr componentsSeparatedByString:@","];
+            for (NSString *buttonTitle in buttonArray) {
+                NSString *trimmedTitle = [buttonTitle stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if (trimmedTitle.length > 0) {
+                    [alert addButtonWithTitle:trimmedTitle];
+                }
+            }
+        } else {
+            // Default to OK button if none specified
+            [alert addButtonWithTitle:@"OK"];
+        }
+
+        // Run the modal and get the response
+        NSModalResponse response = [alert runModal];
+
+        // Convert NSModalResponse to button index (0-based)
+        // NSAlertFirstButtonReturn = 1000, NSAlertSecondButtonReturn = 1001, etc.
+        result = (int)(response - NSAlertFirstButtonReturn);
+    });
+
+    return result;
+}
+
 
 extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,
                                     uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {

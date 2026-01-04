@@ -270,8 +270,20 @@ export const native = (() => {
           FFIType.int,
         ],
         returns: FFIType.cstring
-      },  
-      
+      },
+      showMessageBox: {
+        args: [
+          FFIType.cstring, // type
+          FFIType.cstring, // title
+          FFIType.cstring, // message
+          FFIType.cstring, // detail
+          FFIType.cstring, // buttons (comma-separated)
+          FFIType.int,     // defaultId
+          FFIType.int,     // cancelId
+        ],
+        returns: FFIType.int
+      },
+
       // MacOS specific native utils
       getNSWindowStyleMask: {
         args: [
@@ -871,12 +883,34 @@ export const ffi = {
           canChooseFiles,
           canChooseDirectory,
           allowsMultipleSelection,
-        } = params;        
-        const filePath = native.symbols.openFileDialog(toCString(startingFolder), toCString(allowedFileTypes), canChooseFiles, canChooseDirectory, allowsMultipleSelection);        
-        
+        } = params;
+        const filePath = native.symbols.openFileDialog(toCString(startingFolder), toCString(allowedFileTypes), canChooseFiles, canChooseDirectory, allowsMultipleSelection);
+
         return filePath.toString();
       },
-      
+      showMessageBox: (params: {type?: string, title?: string, message?: string, detail?: string, buttons?: string[], defaultId?: number, cancelId?: number}): number => {
+        const {
+          type = 'info',
+          title = '',
+          message = '',
+          detail = '',
+          buttons = ['OK'],
+          defaultId = 0,
+          cancelId = -1,
+        } = params;
+        // Convert buttons array to comma-separated string
+        const buttonsStr = buttons.join(',');
+        return native.symbols.showMessageBox(
+          toCString(type),
+          toCString(title),
+          toCString(message),
+          toCString(detail),
+          toCString(buttonsStr),
+          defaultId,
+          cancelId
+        );
+      },
+
       // ffifunc: (params: {}): void => {
       //   const {
           

@@ -5967,7 +5967,114 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
     return strdup(result.c_str());
 }
 
+ELECTROBUN_EXPORT int showMessageBox(const char *type,
+                                     const char *title,
+                                     const char *message,
+                                     const char *detail,
+                                     const char *buttons,
+                                     int defaultId,
+                                     int cancelId) {
+    return MainThreadDispatcher::dispatch_sync([=]() -> int {
+        // Parse button labels (comma-separated)
+        std::vector<std::wstring> buttonLabels;
+        if (buttons && strlen(buttons) > 0) {
+            std::string buttonsStr(buttons);
+            std::stringstream ss(buttonsStr);
+            std::string buttonLabel;
+            while (std::getline(ss, buttonLabel, ',')) {
+                // Trim whitespace
+                buttonLabel.erase(0, buttonLabel.find_first_not_of(" \t"));
+                buttonLabel.erase(buttonLabel.find_last_not_of(" \t") + 1);
+                if (!buttonLabel.empty()) {
+                    int wideLen = MultiByteToWideChar(CP_UTF8, 0, buttonLabel.c_str(), -1, nullptr, 0);
+                    std::wstring wLabel(wideLen - 1, 0);
+                    MultiByteToWideChar(CP_UTF8, 0, buttonLabel.c_str(), -1, &wLabel[0], wideLen);
+                    buttonLabels.push_back(wLabel);
+                }
+            }
+        }
+        if (buttonLabels.empty()) {
+            buttonLabels.push_back(L"OK");
+        }
 
+        // Convert strings to wide
+        std::wstring wTitle, wMessage, wDetail;
+        if (title && strlen(title) > 0) {
+            int len = MultiByteToWideChar(CP_UTF8, 0, title, -1, nullptr, 0);
+            wTitle.resize(len - 1);
+            MultiByteToWideChar(CP_UTF8, 0, title, -1, &wTitle[0], len);
+        }
+        if (message && strlen(message) > 0) {
+            int len = MultiByteToWideChar(CP_UTF8, 0, message, -1, nullptr, 0);
+            wMessage.resize(len - 1);
+            MultiByteToWideChar(CP_UTF8, 0, message, -1, &wMessage[0], len);
+        }
+        if (detail && strlen(detail) > 0) {
+            int len = MultiByteToWideChar(CP_UTF8, 0, detail, -1, nullptr, 0);
+            wDetail.resize(len - 1);
+            MultiByteToWideChar(CP_UTF8, 0, detail, -1, &wDetail[0], len);
+        }
+
+        // Combine message and detail
+        std::wstring fullMessage = wMessage;
+        if (!wDetail.empty()) {
+            if (!fullMessage.empty()) fullMessage += L"\n\n";
+            fullMessage += wDetail;
+        }
+
+        // Use TaskDialog for custom buttons (Windows Vista+)
+        // TaskDialog allows custom button labels
+        std::vector<TASKDIALOG_BUTTON> tdButtons;
+        for (size_t i = 0; i < buttonLabels.size(); i++) {
+            TASKDIALOG_BUTTON btn;
+            btn.nButtonID = static_cast<int>(100 + i); // Start IDs at 100
+            btn.pszButtonText = buttonLabels[i].c_str();
+            tdButtons.push_back(btn);
+        }
+
+        TASKDIALOGCONFIG config = {0};
+        config.cbSize = sizeof(config);
+        config.hwndParent = nullptr;
+        config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION;
+        config.pszWindowTitle = wTitle.c_str();
+        config.pszContent = fullMessage.c_str();
+        config.cButtons = static_cast<UINT>(tdButtons.size());
+        config.pButtons = tdButtons.data();
+        config.nDefaultButton = static_cast<int>(100 + defaultId);
+
+        // Set icon based on type
+        if (type) {
+            std::string typeStr(type);
+            if (typeStr == "warning") {
+                config.pszMainIcon = TD_WARNING_ICON;
+            } else if (typeStr == "error" || typeStr == "critical") {
+                config.pszMainIcon = TD_ERROR_ICON;
+            } else if (typeStr == "question") {
+                config.pszMainIcon = TD_INFORMATION_ICON; // Windows doesn't have a question icon in TaskDialog
+            } else {
+                config.pszMainIcon = TD_INFORMATION_ICON;
+            }
+        } else {
+            config.pszMainIcon = TD_INFORMATION_ICON;
+        }
+
+        int nButton = 0;
+        HRESULT hr = TaskDialogIndirect(&config, &nButton, nullptr, nullptr);
+
+        if (SUCCEEDED(hr)) {
+            // Convert button ID back to index
+            if (nButton >= 100) {
+                return nButton - 100;
+            }
+            // Handle standard buttons (IDCANCEL = 2)
+            if (nButton == IDCANCEL) {
+                return cancelId >= 0 ? cancelId : -1;
+            }
+        }
+
+        return -1; // Dialog was cancelled or failed
+    });
+}
 
 // Window procedure for handling tray messages
 LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {

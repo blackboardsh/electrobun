@@ -6,6 +6,7 @@ import * as ApplicationMenu from "./core/ApplicationMenu";
 import * as ContextMenu from "./core/ContextMenu";
 import { Updater } from "./core/Updater";
 import * as Utils from "./core/Utils";
+import type { MessageBoxOptions, MessageBoxResponse } from "./core/Utils";
 import { type RPCSchema, createRPC } from "rpc-anywhere";
 import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
@@ -17,6 +18,8 @@ export {
   type RPCSchema,
   type ElectrobunEvent,
   type ElectrobunConfig,
+  type MessageBoxOptions,
+  type MessageBoxResponse,
   createRPC,
   BrowserWindow,
   BrowserView,

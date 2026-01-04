@@ -51,3 +51,70 @@ export const openFileDialog = async (
   // todo: it's nested like this due to zig union types. needs a zig refactor and revisit
   return filePaths;
 };
+
+export type MessageBoxOptions = {
+  type?: "info" | "warning" | "error" | "question";
+  title?: string;
+  message?: string;
+  detail?: string;
+  buttons?: string[];
+  defaultId?: number;
+  cancelId?: number;
+};
+
+export type MessageBoxResponse = {
+  response: number; // Index of the clicked button
+};
+
+/**
+ * Shows a message box dialog and returns which button was clicked.
+ * Similar to Electron's dialog.showMessageBox()
+ *
+ * @param opts - Options for the message box
+ * @param opts.type - The type of dialog: "info", "warning", "error", or "question"
+ * @param opts.title - The title of the dialog window
+ * @param opts.message - The main message to display
+ * @param opts.detail - Additional detail text (displayed smaller on some platforms)
+ * @param opts.buttons - Array of button labels (e.g., ["OK", "Cancel"])
+ * @param opts.defaultId - Index of the default button (focused on open)
+ * @param opts.cancelId - Index of the button to trigger on Escape key or dialog close
+ * @returns Promise resolving to an object with `response` (0-based button index clicked)
+ *
+ * @example
+ * const { response } = await showMessageBox({
+ *   type: "question",
+ *   title: "Confirm",
+ *   message: "Are you sure you want to delete this file?",
+ *   buttons: ["Delete", "Cancel"],
+ *   defaultId: 1,
+ *   cancelId: 1
+ * });
+ * if (response === 0) {
+ *   // User clicked Delete
+ * }
+ */
+export const showMessageBox = async (
+  opts: MessageBoxOptions = {}
+): Promise<MessageBoxResponse> => {
+  const {
+    type = "info",
+    title = "",
+    message = "",
+    detail = "",
+    buttons = ["OK"],
+    defaultId = 0,
+    cancelId = -1,
+  } = opts;
+
+  const response = ffi.request.showMessageBox({
+    type,
+    title,
+    message,
+    detail,
+    buttons,
+    defaultId,
+    cancelId,
+  });
+
+  return { response };
+};
