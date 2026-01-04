@@ -215,7 +215,7 @@ export class BrowserView<T> {
   loadHTML(html: string) {
     this.html = html;
     console.log(`DEBUG: Setting HTML content for webview ${this.id}:`, html.substring(0, 50) + '...');
-    
+
     if (this.renderer === 'cef') {
       // For CEF, store HTML content in native map and use scheme handler
       native.symbols.setWebviewHTMLContent(this.id, toCString(html));
@@ -226,6 +226,11 @@ export class BrowserView<T> {
     }
   }
 
+  setNavigationRules(rules: string[]) {
+    this.navigationRules = JSON.stringify(rules);
+    const rulesJson = JSON.stringify(rules);
+    native.symbols.setWebviewNavigationRules(this.ptr, toCString(rulesJson));
+  }
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserView events

@@ -207,7 +207,11 @@ export const native = (() => {
       webviewSetHidden: {
         args: [FFIType.ptr, FFIType.bool],
         returns: FFIType.void
-      },     
+      },
+      setWebviewNavigationRules: {
+        args: [FFIType.ptr, FFIType.cstring],
+        returns: FFIType.void
+      },
       evaluateJavaScriptWithNoCompletion: {
         args: [FFIType.ptr, FFIType.cstring],
         returns: FFIType.void
@@ -1047,15 +1051,14 @@ const getHTMLForWebviewSync = new JSCallback((webviewId) => {
 
 native.symbols.setJSUtils(getMimeType, getHTMLForWebviewSync);
 
-// TODO XX: revisit this as integrated into the will-navigate handler
+// DEPRECATED: This callback is no longer used for navigation decisions.
+// Navigation rules are now stored in native code and evaluated synchronously
+// without calling back to Bun. Use webview.setNavigationRules() instead.
+// This callback is kept for FFI signature compatibility but is not called.
 const webviewDecideNavigation = new JSCallback((webviewId, url) => {
-  console.log('TODO: webviewDecideNavigation', webviewId, new CString(url))
   return true;
 }, {
   args: [FFIType.u32, FFIType.cstring],
-  // NOTE: In Objc true is YES which is so dumb, but that doesn't work with Bun's FFIType.bool
-  // in JSCallbacks right now (it always infers false) so to make this cross platform we have to use 
-  // FFIType.u32 and uint32_t and then just treat it as a boolean in code.
   returns: FFIType.u32,
   threadsafe: true
 });
@@ -1495,6 +1498,15 @@ export const internalRpcHandlers = {
         return;
       }
       native.symbols.webviewSetHidden(webview.ptr, params.hidden);
+    },
+    webviewTagSetNavigationRules: (params: {id: number; rules: string[]}) => {
+      const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagSetNavigationRules: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
+      const rulesJson = JSON.stringify(params.rules);
+      native.symbols.setWebviewNavigationRules(webview.ptr, toCString(rulesJson));
     },
     webviewEvent: (params) => {
       console.log('-----------------+webviewEvent', params)

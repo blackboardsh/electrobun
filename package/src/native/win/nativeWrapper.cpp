@@ -33,6 +33,7 @@
 #include <d2d1.h>      // For Direct2D
 #include <direct.h>    // For _getcwd
 #include <tlhelp32.h>  // For process enumeration
+#include <regex>       // For navigation rules pattern matching
 
 // Simple ASAR reader implementation for Windows (no external dependency)
 #include <fstream>
@@ -385,6 +386,13 @@ static std::string g_electrobunIdentifier = "";
 // Webview content storage (replaces JSCallback approach)
 static std::map<uint32_t, std::string> webviewHTMLContent;
 static std::mutex webviewHTMLMutex;
+
+// Forward declaration for AbstractView
+class AbstractView;
+
+// Global map to track all AbstractView instances by their webviewId
+static std::map<uint32_t, AbstractView*> g_abstractViews;
+static std::mutex g_abstractViewsMutex;
 
 // Forward declarations for HTML content management
 extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewId);
@@ -808,7 +816,33 @@ public:
             }
         }
 
-        return false;  // Allow navigation
+        // Check navigation rules synchronously from native-stored rules
+        bool shouldAllow = true;
+        {
+            std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+            auto it = g_abstractViews.find(webview_id_);
+            if (it != g_abstractViews.end() && it->second != nullptr) {
+                shouldAllow = it->second->shouldAllowNavigationToURL(url);
+            }
+        }
+
+        // Fire will-navigate event with allowed status
+        if (webview_event_handler_) {
+            // Escape URL for JSON
+            std::string escapedUrl;
+            for (char c : url) {
+                switch (c) {
+                    case '"': escapedUrl += "\\\""; break;
+                    case '\\': escapedUrl += "\\\\"; break;
+                    default: escapedUrl += c; break;
+                }
+            }
+            std::string eventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":" +
+                                   (shouldAllow ? "true" : "false") + "}";
+            webview_event_handler_(webview_id_, _strdup("will-navigate"), _strdup(eventData.c_str()));
+        }
+
+        return !shouldAllow;  // Return true to cancel navigation
     }
 
 private:
@@ -1797,19 +1831,22 @@ public:
     bool isMousePassthroughEnabled = false;
     bool mirrorModeEnabled = false;
     bool fullSize = false;
-    
+
     // Common state
     bool isReceivingInput = true;
     std::string maskJSON;
     RECT visualBounds = {};
     bool creationFailed = false;
-    
+
+    // Navigation rules for URL filtering
+    std::vector<std::string> navigationRules;
+
     // Bridge handlers
     ComPtr<BridgeHandler> bunBridgeHandler;
     ComPtr<BridgeHandler> internalBridgeHandler;
     ComPtr<BunBridgeDispatch> bunBridgeDispatch;
     ComPtr<InternalBridgeDispatch> internalBridgeDispatch;
-    
+
     virtual ~AbstractView() = default;
     
     // Pure virtual methods - must be implemented by subclasses
@@ -1841,7 +1878,92 @@ public:
             ShowWindow(hwnd, hidden ? SW_HIDE : SW_SHOW);
         }
     }
-    
+
+    // Set navigation rules from JSON array string
+    void setNavigationRulesFromJSON(const char* rulesJson) {
+        navigationRules.clear();
+        if (!rulesJson || strlen(rulesJson) == 0) {
+            return;
+        }
+
+        // Simple JSON array parser for string arrays: ["rule1", "rule2", ...]
+        std::string json(rulesJson);
+        size_t pos = json.find('[');
+        if (pos == std::string::npos) return;
+
+        pos++;
+        while (pos < json.length()) {
+            // Find start of string
+            size_t strStart = json.find('"', pos);
+            if (strStart == std::string::npos) break;
+
+            // Find end of string (handle escaped quotes)
+            size_t strEnd = strStart + 1;
+            while (strEnd < json.length()) {
+                if (json[strEnd] == '"' && json[strEnd - 1] != '\\') break;
+                strEnd++;
+            }
+            if (strEnd >= json.length()) break;
+
+            // Extract string value
+            std::string rule = json.substr(strStart + 1, strEnd - strStart - 1);
+            navigationRules.push_back(rule);
+
+            pos = strEnd + 1;
+        }
+    }
+
+    // Check if URL should be allowed based on navigation rules
+    bool shouldAllowNavigationToURL(const std::string& url) {
+        if (navigationRules.empty()) {
+            return true; // Default allow if no rules
+        }
+
+        bool allowed = true; // Default allow if no rules match
+
+        for (const std::string& rule : navigationRules) {
+            bool isBlockRule = !rule.empty() && rule[0] == '^';
+            std::string pattern = isBlockRule ? rule.substr(1) : rule;
+
+            // Convert glob pattern to regex: escape regex special chars, then replace * with .*
+            std::string regexPattern;
+            for (char c : pattern) {
+                switch (c) {
+                    case '*': regexPattern += ".*"; break;
+                    case '.': regexPattern += "\\."; break;
+                    case '?': regexPattern += "\\?"; break;
+                    case '+': regexPattern += "\\+"; break;
+                    case '[': regexPattern += "\\["; break;
+                    case ']': regexPattern += "\\]"; break;
+                    case '(': regexPattern += "\\("; break;
+                    case ')': regexPattern += "\\)"; break;
+                    case '{': regexPattern += "\\{"; break;
+                    case '}': regexPattern += "\\}"; break;
+                    case '|': regexPattern += "\\|"; break;
+                    case '$': regexPattern += "\\$"; break;
+                    case '^': regexPattern += "\\^"; break;
+                    case '\\': regexPattern += "\\\\"; break;
+                    default: regexPattern += c; break;
+                }
+            }
+
+            // Wrap in anchors for full match
+            regexPattern = "^" + regexPattern + "$";
+
+            try {
+                std::regex regex(regexPattern, std::regex::icase);
+                if (std::regex_match(url, regex)) {
+                    allowed = !isBlockRule; // Last match wins
+                }
+            } catch (const std::regex_error& e) {
+                // Skip invalid regex patterns
+                printf("Invalid navigation rule regex: %s\n", e.what());
+            }
+        }
+
+        return allowed;
+    }
+
     virtual void setCreationFailed(bool failed) {
         creationFailed = failed;
     }
@@ -4327,7 +4449,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 combinedScript += view->customScript;
                             }
                             
-                            // Add Ctrl+Click detection handler for navigation
+                            // Add Ctrl+Click detection and navigation rules handler
                             // Capture webviewId and handler separately to avoid shared_ptr issues
                             uint32_t capturedWebviewId = view->webviewId;
                             WebviewEventHandler capturedHandler = view->webviewEventHandler;
@@ -4335,16 +4457,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             webview->add_NavigationStarting(
                                 Callback<ICoreWebView2NavigationStartingEventHandler>(
                                     [capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
-                                        // Check if Ctrl key is held
-                                        SHORT ctrlState = GetKeyState(VK_CONTROL);
-                                        bool isCtrlHeld = (ctrlState & 0x8000) != 0;
-
-                                        // Only do expensive work if Ctrl is held and we have a handler
-                                        if (!isCtrlHeld || !capturedHandler) {
-                                            return S_OK;
-                                        }
-
-                                        // Get URL
+                                        // Get URL first - needed for both ctrl+click and navigation rules
                                         wchar_t* uriWStr = nullptr;
                                         args->get_Uri(&uriWStr);
                                         std::string uri;
@@ -4357,15 +4470,55 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                             CoTaskMemFree(uriWStr);
                                         }
 
-                                        printf("[WebView2 NavigationStarting] Ctrl+click detected, url=%s\n", uri.c_str());
+                                        // Check if Ctrl key is held
+                                        SHORT ctrlState = GetKeyState(VK_CONTROL);
+                                        bool isCtrlHeld = (ctrlState & 0x8000) != 0;
 
-                                        // Debounce: ignore ctrl+click navigations within 500ms
-                                        auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                            std::chrono::system_clock::now().time_since_epoch()).count() / 1000.0;
+                                        // Handle Ctrl+click for new window
+                                        if (isCtrlHeld && capturedHandler) {
+                                            printf("[WebView2 NavigationStarting] Ctrl+click detected, url=%s\n", uri.c_str());
 
-                                        if (now - WebView2View::lastCtrlClickTime >= 0.5) {
-                                            WebView2View::lastCtrlClickTime = now;
+                                            // Debounce: ignore ctrl+click navigations within 500ms
+                                            auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::system_clock::now().time_since_epoch()).count() / 1000.0;
 
+                                            if (now - WebView2View::lastCtrlClickTime >= 0.5) {
+                                                WebView2View::lastCtrlClickTime = now;
+
+                                                // Escape URL for JSON
+                                                std::string escapedUrl;
+                                                for (char c : uri) {
+                                                    switch (c) {
+                                                        case '"': escapedUrl += "\\\""; break;
+                                                        case '\\': escapedUrl += "\\\\"; break;
+                                                        default: escapedUrl += c; break;
+                                                    }
+                                                }
+
+                                                std::string eventData = "{\"url\":\"" + escapedUrl +
+                                                                       "\",\"isCmdClick\":true,\"modifierFlags\":0}";
+                                                printf("[WebView2 NavigationStarting] Firing new-window-open: %s\n", eventData.c_str());
+                                                capturedHandler(capturedWebviewId, _strdup("new-window-open"), _strdup(eventData.c_str()));
+
+                                                args->put_Cancel(TRUE);
+                                                return S_OK;
+                                            } else {
+                                                printf("[WebView2 NavigationStarting] Debounced\n");
+                                            }
+                                        }
+
+                                        // Check navigation rules synchronously from native-stored rules
+                                        bool shouldAllow = true;
+                                        {
+                                            std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+                                            auto it = g_abstractViews.find(capturedWebviewId);
+                                            if (it != g_abstractViews.end() && it->second != nullptr) {
+                                                shouldAllow = it->second->shouldAllowNavigationToURL(uri);
+                                            }
+                                        }
+
+                                        // Fire will-navigate event with allowed status
+                                        if (capturedHandler) {
                                             // Escape URL for JSON
                                             std::string escapedUrl;
                                             for (char c : uri) {
@@ -4375,18 +4528,16 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                     default: escapedUrl += c; break;
                                                 }
                                             }
-
-                                            std::string eventData = "{\"url\":\"" + escapedUrl +
-                                                                   "\",\"isCmdClick\":true,\"modifierFlags\":0}";
-                                            printf("[WebView2 NavigationStarting] Firing new-window-open: %s\n", eventData.c_str());
-                                            // Use strdup to create persistent copies for the FFI callback
-                                            capturedHandler(capturedWebviewId, _strdup("new-window-open"), _strdup(eventData.c_str()));
-
-                                            // Cancel the navigation
-                                            args->put_Cancel(TRUE);
-                                        } else {
-                                            printf("[WebView2 NavigationStarting] Debounced\n");
+                                            std::string eventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":" +
+                                                                   (shouldAllow ? "true" : "false") + "}";
+                                            capturedHandler(capturedWebviewId, _strdup("will-navigate"), _strdup(eventData.c_str()));
                                         }
+
+                                        // Cancel navigation if not allowed
+                                        if (!shouldAllow) {
+                                            args->put_Cancel(TRUE);
+                                        }
+
                                         return S_OK;
                                     }).Get(),
                                 nullptr);
@@ -4636,7 +4787,13 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             view->setCreationComplete(true);
                             container->AddAbstractView(view);
-                            
+
+                            // Register in global AbstractView map for navigation rules
+                            {
+                                std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+                                g_abstractViews[view->webviewId] = view.get();
+                            }
+
                             // Store WebView2View in global map for JavaScript execution
                             HWND containerHwnd = container->GetHwnd();
                             g_webview2Views[containerHwnd] = view.get();
@@ -4793,8 +4950,15 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             // Track browser in global map
             g_cefBrowsers[browser->GetIdentifier()] = browser;
             g_browser_count++;
-            
+
             container->AddAbstractView(view);
+
+            // Register in global AbstractView map for navigation rules
+            {
+                std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+                g_abstractViews[view->webviewId] = view.get();
+            }
+
             // Add client to global map
             HWND containerHwnd = container->GetHwnd();
             g_cefClients[containerHwnd] = client;
@@ -5202,6 +5366,15 @@ ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden)
         // UI operations must be performed on the main thread
         MainThreadDispatcher::dispatch_sync([abstractView, hidden]() {
             abstractView->setTransparent(hidden);
+        });
+    }
+}
+
+ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
+    if (abstractView) {
+        // UI operations must be performed on the main thread
+        MainThreadDispatcher::dispatch_sync([abstractView, rulesJson]() {
+            abstractView->setNavigationRulesFromJSON(rulesJson);
         });
     }
 }

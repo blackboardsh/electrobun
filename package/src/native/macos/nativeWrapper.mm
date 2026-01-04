@@ -572,6 +572,7 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL isRemoved;
     @property (nonatomic, assign) BOOL isInFullscreen;
     @property (nonatomic, strong) CALayer *storedLayerMask;
+    @property (nonatomic, strong) NSArray<NSString *> *navigationRules;
 
     - (void)loadURL:(const char *)urlString;
     - (void)loadHTML:(const char *)htmlString;
@@ -597,6 +598,9 @@ void releaseObjCObject(id objcObject) {
     - (void)updateCustomPreloadScript:(const char*)jsString;
 
     - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson;
+
+    - (void)setNavigationRulesFromJSON:(const char*)rulesJson;
+    - (BOOL)shouldAllowNavigationToURL:(NSString *)url;
 @end
 
 // Global map to track all AbstractView instances by their webviewId
@@ -981,10 +985,68 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             return maskLayer;
         };
 
-        self.nsView.layer.mask = createMaskLayer();                
+        self.nsView.layer.mask = createMaskLayer();
         NSPoint currentMousePosition = [self.nsView.window mouseLocationOutsideOfEventStream];
-        ContainerView *containerView = (ContainerView *)self.nsView.superview;    
+        ContainerView *containerView = (ContainerView *)self.nsView.superview;
         [containerView updateActiveWebviewForMousePosition:currentMousePosition];
+    }
+
+    - (void)setNavigationRulesFromJSON:(const char*)rulesJson {
+        if (!rulesJson || strlen(rulesJson) == 0) {
+            self.navigationRules = @[];
+            return;
+        }
+
+        NSString *jsonString = [NSString stringWithUTF8String:rulesJson];
+        NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
+        if (!jsonData) {
+            self.navigationRules = @[];
+            return;
+        }
+
+        NSError *error = nil;
+        NSArray *rulesArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        if (error || ![rulesArray isKindOfClass:[NSArray class]]) {
+            NSLog(@"Failed to parse navigation rules JSON: %@", error);
+            self.navigationRules = @[];
+            return;
+        }
+
+        self.navigationRules = rulesArray;
+    }
+
+    - (BOOL)shouldAllowNavigationToURL:(NSString *)url {
+        if (!self.navigationRules || self.navigationRules.count == 0) {
+            return YES; // Default allow if no rules
+        }
+
+        BOOL allowed = YES; // Default allow if no rules match
+
+        for (NSString *rule in self.navigationRules) {
+            BOOL isBlockRule = [rule hasPrefix:@"^"];
+            NSString *pattern = isBlockRule ? [rule substringFromIndex:1] : rule;
+
+            // Convert glob pattern to regex: escape regex chars, then replace * with .*
+            NSString *escaped = [NSRegularExpression escapedPatternForString:pattern];
+            NSString *regexPattern = [escaped stringByReplacingOccurrencesOfString:@"\\*" withString:@".*"];
+            regexPattern = [NSString stringWithFormat:@"^%@$", regexPattern];
+
+            NSError *error = nil;
+            NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:regexPattern
+                                                                                   options:NSRegularExpressionCaseInsensitive
+                                                                                     error:&error];
+            if (error) {
+                NSLog(@"Invalid navigation rule pattern: %@, error: %@", pattern, error);
+                continue;
+            }
+
+            NSRange range = NSMakeRange(0, url.length);
+            if ([regex numberOfMatchesInString:url options:0 range:range] > 0) {
+                allowed = !isBlockRule; // Last match wins, continue checking
+            }
+        }
+
+        return allowed;
     }
 @end
 
@@ -1207,8 +1269,15 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             return;
         }
 
-        BOOL shouldAllow = 1;//self.zigCallback(self.webviewId, newURL.absoluteString.UTF8String);
-        self.zigEventHandler(self.webviewId, "will-navigate", newURL.absoluteString.UTF8String);
+        // Check navigation rules synchronously from native-stored rules
+        AbstractView *abstractView = [globalAbstractViews objectForKey:@(self.webviewId)];
+        BOOL shouldAllow = abstractView ? [abstractView shouldAllowNavigationToURL:newURL.absoluteString] : YES;
+
+        // Fire will-navigate event with allowed status
+        NSString *eventData = [NSString stringWithFormat:@"{\"url\":\"%@\",\"allowed\":%@}",
+                             newURL.absoluteString,
+                             shouldAllow ? @"true" : @"false"];
+        self.zigEventHandler(self.webviewId, "will-navigate", [eventData UTF8String]);
 
         // Check if this navigation action should trigger a download
         if (navigationAction.shouldPerformDownload) {
@@ -2552,11 +2621,28 @@ public:
             }
         }
 
-        // STUB: Always allow navigation without calling JSCallback
-        bool shouldAllow = true;  // navigation_callback_(webview_id_, url.c_str());
+        // Check navigation rules synchronously from native-stored rules
+        AbstractView *abstractView = [globalAbstractViews objectForKey:@(webview_id_)];
+        bool shouldAllow = abstractView ? [abstractView shouldAllowNavigationToURL:[NSString stringWithUTF8String:url.c_str()]] : true;
 
+        // Escape special characters in URL for JSON event
+        std::string escapedUrl;
+        for (char c : url) {
+            switch (c) {
+                case '"': escapedUrl += "\\\""; break;
+                case '\\': escapedUrl += "\\\\"; break;
+                case '\n': escapedUrl += "\\n"; break;
+                case '\r': escapedUrl += "\\r"; break;
+                case '\t': escapedUrl += "\\t"; break;
+                default: escapedUrl += c; break;
+            }
+        }
+
+        // Fire will-navigate event with allowed status
         if (webview_event_handler_) {
-            webview_event_handler_(webview_id_, "will-navigate", url.c_str());
+            std::string eventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":" +
+                                   (shouldAllow ? "true" : "false") + "}";
+            webview_event_handler_(webview_id_, "will-navigate", eventData.c_str());
         }
         return !shouldAllow;  // Return true to cancel the navigation
     }
@@ -4205,9 +4291,15 @@ extern "C" void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePas
     });
 }
 
-extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {   
+extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [abstractView setHidden:hidden];    
+        [abstractView setHidden:hidden];
+    });
+}
+
+extern "C" void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView setNavigationRulesFromJSON:rulesJson];
     });
 }
 

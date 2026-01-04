@@ -74,6 +74,10 @@ export type InternalWebviewHandlers = RPCSchema<{
         id: number;
         hidden: boolean;
       };
+      webviewTagSetNavigationRules: {
+        id: number;
+        rules: string[];
+      };
     };
   }>;
   

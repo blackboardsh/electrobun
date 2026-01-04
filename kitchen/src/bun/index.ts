@@ -361,6 +361,14 @@ const wikiWindow = new BrowserWindow({
   }),
 });
 
+// Test navigation rules: Allow only Wikipedia, block everything else
+wikiWindow.webview.setNavigationRules([
+  "^*",                                    // Block everything by default
+  "*://en.wikipedia.org/*",                // Allow Wikipedia
+  "*://upload.wikimedia.org/*",            // Allow Wikipedia images
+]);
+console.log("Navigation rules set for wikiWindow: Allow Wikipedia only");
+
 wikiWindow.on("close", (event) => {
   const { id } = event.data;
   console.log("wiki window closed", id);

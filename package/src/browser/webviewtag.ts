@@ -559,7 +559,19 @@ const ConfigureWebviewTags = (
         id: this.webviewId,
         hidden: this.hidden|| Boolean(hidden),
       });
-    }   
+    }
+
+    setNavigationRules(rules: string[]) {
+      if (!this.webviewId) {
+        console.warn('setNavigationRules called on removed webview');
+        return;
+      }
+
+      this.internalRpc.send.webviewTagSetNavigationRules({
+        id: this.webviewId,
+        rules: rules,
+      });
+    }
   }
 
   customElements.define("electrobun-webview", WebviewTag);

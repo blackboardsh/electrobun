@@ -29,6 +29,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <fstream>
+#include <regex>       // For navigation rules pattern matching
 
 // ASAR C FFI declarations
 extern "C" {
@@ -1134,12 +1135,32 @@ public:
             }
         }
 
-        bool shouldAllow = navigation_callback_(webview_id_, url.c_str());
-
-        if (webview_event_handler_) {
-            webview_event_handler_(webview_id_, "will-navigate", url.c_str());
+        // Check navigation rules synchronously from native-stored rules
+        bool shouldAllow = true;
+        {
+            auto it = g_webviewMap.find(webview_id_);
+            if (it != g_webviewMap.end() && it->second != nullptr) {
+                shouldAllow = it->second->shouldAllowNavigationToURL(url);
+            }
         }
-        return !shouldAllow;
+
+        // Fire will-navigate event with allowed status
+        if (webview_event_handler_) {
+            // Escape URL for JSON
+            std::string escapedUrl;
+            for (char c : url) {
+                switch (c) {
+                    case '"': escapedUrl += "\\\""; break;
+                    case '\\': escapedUrl += "\\\\"; break;
+                    default: escapedUrl += c; break;
+                }
+            }
+            std::string eventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":" +
+                                   (shouldAllow ? "true" : "false") + "}";
+            webview_event_handler_(webview_id_, strdup("will-navigate"), strdup(eventData.c_str()));
+        }
+
+        return !shouldAllow;  // Return true to cancel navigation
     }
 
     virtual CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
@@ -1934,8 +1955,96 @@ public:
     GdkRectangle visualBounds = {};
     bool creationFailed = false;
 
+    // Navigation rules for URL filtering
+    std::vector<std::string> navigationRules;
+
     AbstractView(uint32_t webviewId) : webviewId(webviewId) {}
     virtual ~AbstractView() {}
+
+    // Set navigation rules from JSON array string
+    void setNavigationRulesFromJSON(const char* rulesJson) {
+        navigationRules.clear();
+        if (!rulesJson || strlen(rulesJson) == 0) {
+            return;
+        }
+
+        // Simple JSON array parser for string arrays: ["rule1", "rule2", ...]
+        std::string json(rulesJson);
+        size_t pos = json.find('[');
+        if (pos == std::string::npos) return;
+
+        pos++;
+        while (pos < json.length()) {
+            // Find start of string
+            size_t strStart = json.find('"', pos);
+            if (strStart == std::string::npos) break;
+
+            // Find end of string (handle escaped quotes)
+            size_t strEnd = strStart + 1;
+            while (strEnd < json.length()) {
+                if (json[strEnd] == '"' && json[strEnd - 1] != '\\') break;
+                strEnd++;
+            }
+            if (strEnd >= json.length()) break;
+
+            // Extract string value
+            std::string rule = json.substr(strStart + 1, strEnd - strStart - 1);
+            navigationRules.push_back(rule);
+
+            pos = strEnd + 1;
+        }
+    }
+
+    // Check if URL should be allowed based on navigation rules
+    bool shouldAllowNavigationToURL(const std::string& url) {
+        if (navigationRules.empty()) {
+            return true; // Default allow if no rules
+        }
+
+        bool allowed = true; // Default allow if no rules match
+
+        for (const std::string& rule : navigationRules) {
+            bool isBlockRule = !rule.empty() && rule[0] == '^';
+            std::string pattern = isBlockRule ? rule.substr(1) : rule;
+
+            // Convert glob pattern to regex: escape regex special chars, then replace * with .*
+            std::string regexPattern;
+            for (char c : pattern) {
+                switch (c) {
+                    case '*': regexPattern += ".*"; break;
+                    case '.': regexPattern += "\\."; break;
+                    case '?': regexPattern += "\\?"; break;
+                    case '+': regexPattern += "\\+"; break;
+                    case '[': regexPattern += "\\["; break;
+                    case ']': regexPattern += "\\]"; break;
+                    case '(': regexPattern += "\\("; break;
+                    case ')': regexPattern += "\\)"; break;
+                    case '{': regexPattern += "\\{"; break;
+                    case '}': regexPattern += "\\}"; break;
+                    case '|': regexPattern += "\\|"; break;
+                    case '$': regexPattern += "\\$"; break;
+                    case '^': regexPattern += "\\^"; break;
+                    case '\\': regexPattern += "\\\\"; break;
+                    default: regexPattern += c; break;
+                }
+            }
+
+            // Wrap in anchors for full match
+            regexPattern = "^" + regexPattern + "$";
+
+            try {
+                std::regex regex(regexPattern, std::regex::icase);
+                if (std::regex_match(url, regex)) {
+                    allowed = !isBlockRule; // Last match wins
+                }
+            } catch (const std::regex_error& e) {
+                // Skip invalid regex patterns
+                printf("Invalid navigation rule regex: %s\n", e.what());
+            }
+        }
+
+        return allowed;
+    }
     
     // Pure virtual methods that must be implemented by derived classes
     virtual void loadURL(const char* urlString) = 0;
@@ -2433,12 +2542,36 @@ public:
                 }
             }
 
-            if (impl->navigationCallback) {
-                uint32_t result = impl->navigationCallback(impl->webviewId, uri);
-                if (result == 0) {
-                    webkit_policy_decision_ignore(decision);
-                    return TRUE;
+            // Check navigation rules synchronously from native-stored rules
+            std::string url = uri ? uri : "";
+            bool shouldAllow = true;
+            {
+                auto it = g_webviewMap.find(impl->webviewId);
+                if (it != g_webviewMap.end() && it->second != nullptr) {
+                    shouldAllow = it->second->shouldAllowNavigationToURL(url);
                 }
+            }
+
+            // Fire will-navigate event with allowed status
+            if (impl->eventHandler) {
+                // Escape URL for JSON
+                std::string escapedUrl;
+                for (char c : url) {
+                    switch (c) {
+                        case '"': escapedUrl += "\\\""; break;
+                        case '\\': escapedUrl += "\\\\"; break;
+                        default: escapedUrl += c; break;
+                    }
+                }
+                std::string eventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":" +
+                                       (shouldAllow ? "true" : "false") + "}";
+                impl->eventHandler(impl->webviewId, strdup("will-navigate"), strdup(eventData.c_str()));
+            }
+
+            // Block navigation if not allowed
+            if (!shouldAllow) {
+                webkit_policy_decision_ignore(decision);
+                return TRUE;
             }
         }
         return FALSE;
@@ -4831,6 +4964,15 @@ void webviewSetHidden(AbstractView* abstractView, bool hidden) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {
             abstractView->setHidden(hidden);
+        });
+    }
+}
+
+void setWebviewNavigationRules(AbstractView* abstractView, const char* rulesJson) {
+    if (abstractView) {
+        std::string rulesStr(rulesJson ? rulesJson : "");  // Copy the string to ensure it survives
+        dispatch_sync_main_void([abstractView, rulesStr]() {
+            abstractView->setNavigationRulesFromJSON(rulesStr.c_str());
         });
     }
 }
