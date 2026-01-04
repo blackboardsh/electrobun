@@ -12,7 +12,8 @@ import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
 import * as Socket from "./core/Socket";
 import type { ElectrobunConfig } from "./ElectrobunConfig";
-import { GlobalShortcut } from "./proc/native";
+import { GlobalShortcut, Screen } from "./proc/native";
+import type { Display, Rectangle, Point } from "./proc/native";
 
 // Named Exports
 export {
@@ -21,6 +22,9 @@ export {
   type ElectrobunConfig,
   type MessageBoxOptions,
   type MessageBoxResponse,
+  type Display,
+  type Rectangle,
+  type Point,
   createRPC,
   BrowserWindow,
   BrowserView,
@@ -32,6 +36,7 @@ export {
   PATHS,
   Socket,
   GlobalShortcut,
+  Screen,
 };
 
 // Default Export
@@ -44,6 +49,7 @@ const Electrobun = {
   ApplicationMenu,
   ContextMenu,
   GlobalShortcut,
+  Screen,
   events: electobunEventEmmitter,
   PATHS,
   Socket,

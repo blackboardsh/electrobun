@@ -301,6 +301,20 @@ export const native = (() => {
         returns: FFIType.bool
       },
 
+      // Screen API
+      getAllDisplays: {
+        args: [],
+        returns: FFIType.cstring
+      },
+      getPrimaryDisplay: {
+        args: [],
+        returns: FFIType.cstring
+      },
+      getCursorScreenPoint: {
+        args: [],
+        returns: FFIType.cstring
+      },
+
       openFileDialog: {
         args: [
           FFIType.cstring,
@@ -1309,6 +1323,90 @@ export const GlobalShortcut = {
    */
   isRegistered: (accelerator: string): boolean => {
     return native.symbols.isGlobalShortcutRegistered(toCString(accelerator));
+  },
+};
+
+// Types for Screen API
+export interface Rectangle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface Display {
+  id: number;
+  bounds: Rectangle;
+  workArea: Rectangle;
+  scaleFactor: number;
+  isPrimary: boolean;
+}
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+// Screen module for display and cursor information
+export const Screen = {
+  /**
+   * Get the primary display
+   * @returns Display object for the primary monitor
+   */
+  getPrimaryDisplay: (): Display => {
+    const jsonStr = native.symbols.getPrimaryDisplay();
+    if (!jsonStr) {
+      return {
+        id: 0,
+        bounds: { x: 0, y: 0, width: 0, height: 0 },
+        workArea: { x: 0, y: 0, width: 0, height: 0 },
+        scaleFactor: 1,
+        isPrimary: true,
+      };
+    }
+    try {
+      return JSON.parse(jsonStr);
+    } catch {
+      return {
+        id: 0,
+        bounds: { x: 0, y: 0, width: 0, height: 0 },
+        workArea: { x: 0, y: 0, width: 0, height: 0 },
+        scaleFactor: 1,
+        isPrimary: true,
+      };
+    }
+  },
+
+  /**
+   * Get all connected displays
+   * @returns Array of Display objects
+   */
+  getAllDisplays: (): Display[] => {
+    const jsonStr = native.symbols.getAllDisplays();
+    if (!jsonStr) {
+      return [];
+    }
+    try {
+      return JSON.parse(jsonStr);
+    } catch {
+      return [];
+    }
+  },
+
+  /**
+   * Get the current cursor position in screen coordinates
+   * @returns Point with x and y coordinates
+   */
+  getCursorScreenPoint: (): Point => {
+    const jsonStr = native.symbols.getCursorScreenPoint();
+    if (!jsonStr) {
+      return { x: 0, y: 0 };
+    }
+    try {
+      return JSON.parse(jsonStr);
+    } catch {
+      return { x: 0, y: 0 };
+    }
   },
 };
 

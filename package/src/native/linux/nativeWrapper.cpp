@@ -6312,5 +6312,144 @@ bool isGlobalShortcutRegistered(const char* accelerator) {
     return g_globalShortcuts.find(std::string(accelerator)) != g_globalShortcuts.end();
 }
 
+/*
+ * =============================================================================
+ * SCREEN API
+ * =============================================================================
+ */
+
+// Get all displays as JSON array
+const char* getAllDisplays() {
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display) {
+        return strdup("[]");
+    }
+
+    int numMonitors = gdk_display_get_n_monitors(display);
+    GdkMonitor* primaryMonitor = gdk_display_get_primary_monitor(display);
+
+    std::ostringstream result;
+    result << "[";
+
+    for (int i = 0; i < numMonitors; i++) {
+        GdkMonitor* monitor = gdk_display_get_monitor(display, i);
+        if (!monitor) continue;
+
+        if (i > 0) result << ",";
+
+        // Get geometry (full bounds)
+        GdkRectangle geometry;
+        gdk_monitor_get_geometry(monitor, &geometry);
+
+        // Get work area (excludes panels/taskbars)
+        GdkRectangle workarea;
+        gdk_monitor_get_workarea(monitor, &workarea);
+
+        // Get scale factor
+        int scaleFactor = gdk_monitor_get_scale_factor(monitor);
+
+        // Check if primary
+        bool isPrimary = (monitor == primaryMonitor);
+
+        // Use monitor index as ID (GdkMonitor doesn't have a persistent ID)
+        result << "{";
+        result << "\"id\":" << i << ",";
+        result << "\"bounds\":{";
+        result << "\"x\":" << geometry.x << ",";
+        result << "\"y\":" << geometry.y << ",";
+        result << "\"width\":" << geometry.width << ",";
+        result << "\"height\":" << geometry.height;
+        result << "},";
+        result << "\"workArea\":{";
+        result << "\"x\":" << workarea.x << ",";
+        result << "\"y\":" << workarea.y << ",";
+        result << "\"width\":" << workarea.width << ",";
+        result << "\"height\":" << workarea.height;
+        result << "},";
+        result << "\"scaleFactor\":" << scaleFactor << ",";
+        result << "\"isPrimary\":" << (isPrimary ? "true" : "false");
+        result << "}";
+    }
+
+    result << "]";
+    return strdup(result.str().c_str());
+}
+
+// Get primary display as JSON
+const char* getPrimaryDisplay() {
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display) {
+        return strdup("{}");
+    }
+
+    GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
+    if (!monitor) {
+        // Fallback to first monitor if no primary is set
+        if (gdk_display_get_n_monitors(display) > 0) {
+            monitor = gdk_display_get_monitor(display, 0);
+        }
+        if (!monitor) {
+            return strdup("{}");
+        }
+    }
+
+    // Get geometry (full bounds)
+    GdkRectangle geometry;
+    gdk_monitor_get_geometry(monitor, &geometry);
+
+    // Get work area (excludes panels/taskbars)
+    GdkRectangle workarea;
+    gdk_monitor_get_workarea(monitor, &workarea);
+
+    // Get scale factor
+    int scaleFactor = gdk_monitor_get_scale_factor(monitor);
+
+    std::ostringstream result;
+    result << "{";
+    result << "\"id\":0,";
+    result << "\"bounds\":{";
+    result << "\"x\":" << geometry.x << ",";
+    result << "\"y\":" << geometry.y << ",";
+    result << "\"width\":" << geometry.width << ",";
+    result << "\"height\":" << geometry.height;
+    result << "},";
+    result << "\"workArea\":{";
+    result << "\"x\":" << workarea.x << ",";
+    result << "\"y\":" << workarea.y << ",";
+    result << "\"width\":" << workarea.width << ",";
+    result << "\"height\":" << workarea.height;
+    result << "},";
+    result << "\"scaleFactor\":" << scaleFactor << ",";
+    result << "\"isPrimary\":true";
+    result << "}";
+
+    return strdup(result.str().c_str());
+}
+
+// Get current cursor position as JSON: {"x": 123, "y": 456}
+const char* getCursorScreenPoint() {
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display) {
+        return strdup("{\"x\":0,\"y\":0}");
+    }
+
+    GdkSeat* seat = gdk_display_get_default_seat(display);
+    if (!seat) {
+        return strdup("{\"x\":0,\"y\":0}");
+    }
+
+    GdkDevice* pointer = gdk_seat_get_pointer(seat);
+    if (!pointer) {
+        return strdup("{\"x\":0,\"y\":0}");
+    }
+
+    int x, y;
+    gdk_device_get_position(pointer, NULL, &x, &y);
+
+    std::ostringstream result;
+    result << "{\"x\":" << x << ",\"y\":" << y << "}";
+    return strdup(result.str().c_str());
+}
+
 
 }

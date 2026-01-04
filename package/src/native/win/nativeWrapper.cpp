@@ -7536,3 +7536,170 @@ ELECTROBUN_EXPORT BOOL isGlobalShortcutRegistered(const char* accelerator) {
     if (!accelerator) return FALSE;
     return g_globalShortcuts.find(std::string(accelerator)) != g_globalShortcuts.end();
 }
+
+/*
+ * =============================================================================
+ * SCREEN API
+ * =============================================================================
+ */
+
+// Structure to collect monitor info during enumeration
+struct MonitorEnumData {
+    std::vector<std::string> displays;
+};
+
+// Callback for EnumDisplayMonitors
+static BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
+    MonitorEnumData* data = reinterpret_cast<MonitorEnumData*>(dwData);
+
+    MONITORINFOEX monitorInfo;
+    monitorInfo.cbSize = sizeof(MONITORINFOEX);
+
+    if (GetMonitorInfo(hMonitor, &monitorInfo)) {
+        // Get DPI/scale factor using GetDpiForMonitor if available (Windows 8.1+)
+        double scaleFactor = 1.0;
+
+        // Try to get DPI - load dynamically as it may not be available on all Windows versions
+        typedef HRESULT(WINAPI *GetDpiForMonitorFunc)(HMONITOR, int, UINT*, UINT*);
+        HMODULE shcore = LoadLibrary(L"Shcore.dll");
+        if (shcore) {
+            GetDpiForMonitorFunc getDpi = (GetDpiForMonitorFunc)GetProcAddress(shcore, "GetDpiForMonitor");
+            if (getDpi) {
+                UINT dpiX, dpiY;
+                // MDT_EFFECTIVE_DPI = 0
+                if (SUCCEEDED(getDpi(hMonitor, 0, &dpiX, &dpiY))) {
+                    scaleFactor = dpiX / 96.0;  // 96 DPI is 100% scaling
+                }
+            }
+            FreeLibrary(shcore);
+        }
+
+        // Check if primary
+        bool isPrimary = (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
+
+        // Build JSON for this display
+        std::ostringstream json;
+        json << "{";
+        json << "\"id\":" << reinterpret_cast<uintptr_t>(hMonitor) << ",";
+        json << "\"bounds\":{";
+        json << "\"x\":" << monitorInfo.rcMonitor.left << ",";
+        json << "\"y\":" << monitorInfo.rcMonitor.top << ",";
+        json << "\"width\":" << (monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left) << ",";
+        json << "\"height\":" << (monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top);
+        json << "},";
+        json << "\"workArea\":{";
+        json << "\"x\":" << monitorInfo.rcWork.left << ",";
+        json << "\"y\":" << monitorInfo.rcWork.top << ",";
+        json << "\"width\":" << (monitorInfo.rcWork.right - monitorInfo.rcWork.left) << ",";
+        json << "\"height\":" << (monitorInfo.rcWork.bottom - monitorInfo.rcWork.top);
+        json << "},";
+        json << "\"scaleFactor\":" << scaleFactor << ",";
+        json << "\"isPrimary\":" << (isPrimary ? "true" : "false");
+        json << "}";
+
+        data->displays.push_back(json.str());
+    }
+
+    return TRUE;  // Continue enumeration
+}
+
+// Get all displays as JSON array
+ELECTROBUN_EXPORT const char* getAllDisplays() {
+    MonitorEnumData data;
+
+    EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, reinterpret_cast<LPARAM>(&data));
+
+    // Build JSON array
+    std::ostringstream result;
+    result << "[";
+    for (size_t i = 0; i < data.displays.size(); i++) {
+        if (i > 0) result << ",";
+        result << data.displays[i];
+    }
+    result << "]";
+
+    return _strdup(result.str().c_str());
+}
+
+// Callback for finding primary display
+struct PrimaryMonitorData {
+    std::string json;
+    bool found;
+};
+
+static BOOL CALLBACK PrimaryMonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
+    PrimaryMonitorData* data = reinterpret_cast<PrimaryMonitorData*>(dwData);
+
+    MONITORINFOEX monitorInfo;
+    monitorInfo.cbSize = sizeof(MONITORINFOEX);
+
+    if (GetMonitorInfo(hMonitor, &monitorInfo)) {
+        if (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) {
+            // Get DPI/scale factor
+            double scaleFactor = 1.0;
+            HMODULE shcore = LoadLibrary(L"Shcore.dll");
+            if (shcore) {
+                typedef HRESULT(WINAPI *GetDpiForMonitorFunc)(HMONITOR, int, UINT*, UINT*);
+                GetDpiForMonitorFunc getDpi = (GetDpiForMonitorFunc)GetProcAddress(shcore, "GetDpiForMonitor");
+                if (getDpi) {
+                    UINT dpiX, dpiY;
+                    if (SUCCEEDED(getDpi(hMonitor, 0, &dpiX, &dpiY))) {
+                        scaleFactor = dpiX / 96.0;
+                    }
+                }
+                FreeLibrary(shcore);
+            }
+
+            std::ostringstream json;
+            json << "{";
+            json << "\"id\":" << reinterpret_cast<uintptr_t>(hMonitor) << ",";
+            json << "\"bounds\":{";
+            json << "\"x\":" << monitorInfo.rcMonitor.left << ",";
+            json << "\"y\":" << monitorInfo.rcMonitor.top << ",";
+            json << "\"width\":" << (monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left) << ",";
+            json << "\"height\":" << (monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top);
+            json << "},";
+            json << "\"workArea\":{";
+            json << "\"x\":" << monitorInfo.rcWork.left << ",";
+            json << "\"y\":" << monitorInfo.rcWork.top << ",";
+            json << "\"width\":" << (monitorInfo.rcWork.right - monitorInfo.rcWork.left) << ",";
+            json << "\"height\":" << (monitorInfo.rcWork.bottom - monitorInfo.rcWork.top);
+            json << "},";
+            json << "\"scaleFactor\":" << scaleFactor << ",";
+            json << "\"isPrimary\":true";
+            json << "}";
+
+            data->json = json.str();
+            data->found = true;
+            return FALSE;  // Stop enumeration
+        }
+    }
+
+    return TRUE;  // Continue enumeration
+}
+
+// Get primary display as JSON
+ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
+    PrimaryMonitorData data;
+    data.found = false;
+
+    EnumDisplayMonitors(NULL, NULL, PrimaryMonitorEnumProc, reinterpret_cast<LPARAM>(&data));
+
+    if (data.found) {
+        return _strdup(data.json.c_str());
+    }
+
+    return _strdup("{}");
+}
+
+// Get current cursor position as JSON: {"x": 123, "y": 456}
+ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
+    POINT cursorPos;
+    if (GetCursorPos(&cursorPos)) {
+        std::ostringstream json;
+        json << "{\"x\":" << cursorPos.x << ",\"y\":" << cursorPos.y << "}";
+        return _strdup(json.str().c_str());
+    }
+
+    return _strdup("{\"x\":0,\"y\":0}");
+}

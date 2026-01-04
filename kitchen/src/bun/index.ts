@@ -10,6 +10,7 @@ import Electrobun, {
   createRPC,
   Utils,
   GlobalShortcut,
+  Screen,
 } from "electrobun/bun";
 import { type MyWebviewRPC } from "../mainview/rpc";
 import { type MyExtensionSchema } from "../myextension/rpc";
@@ -256,6 +257,24 @@ if (GlobalShortcut.register(shortcut2, () => {
 } else {
   console.log(`Failed to register global shortcut: ${shortcut2}`);
 }
+
+// Screen API demo
+// Log display and cursor information at startup
+console.log("\n=== Screen API Demo ===");
+
+const primaryDisplay = Screen.getPrimaryDisplay();
+console.log("Primary Display:", primaryDisplay);
+
+const allDisplays = Screen.getAllDisplays();
+console.log(`Found ${allDisplays.length} display(s):`);
+allDisplays.forEach((display, index) => {
+  console.log(`  Display ${index}: ${display.bounds.width}x${display.bounds.height} @ (${display.bounds.x}, ${display.bounds.y}), scale: ${display.scaleFactor}x, primary: ${display.isPrimary}`);
+});
+
+const cursorPos = Screen.getCursorScreenPoint();
+console.log("Cursor position:", cursorPos);
+
+console.log("=== End Screen API Demo ===\n");
 
 Electrobun.events.on("new-window-open", (e) => {
   console.log('---------->>>> new window open ........', e)

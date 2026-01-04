@@ -5233,6 +5233,156 @@ extern "C" BOOL isGlobalShortcutRegistered(const char* accelerator) {
     return result;
 }
 
+/*
+ * =============================================================================
+ * SCREEN API
+ * =============================================================================
+ */
+
+// Get all displays as JSON array
+// Returns: [{"id":123,"bounds":{x,y,width,height},"workArea":{...},"scaleFactor":2.0,"isPrimary":true},...]
+extern "C" const char* getAllDisplays(void) {
+    @autoreleasepool {
+        NSArray<NSScreen *> *screens = [NSScreen screens];
+        CGDirectDisplayID primaryDisplayId = CGMainDisplayID();
+
+        NSMutableArray *displays = [NSMutableArray array];
+
+        for (NSScreen *screen in screens) {
+            // Get the display ID from the screen's deviceDescription
+            NSDictionary *deviceDescription = [screen deviceDescription];
+            NSNumber *screenNumber = deviceDescription[@"NSScreenNumber"];
+            CGDirectDisplayID displayId = [screenNumber unsignedIntValue];
+
+            // Get frame (full bounds) - need to flip Y coordinate for consistency
+            NSRect frame = [screen frame];
+            // macOS uses bottom-left origin, convert to top-left for consistency with other platforms
+            CGFloat primaryHeight = [[[NSScreen screens] firstObject] frame].size.height;
+            CGFloat flippedY = primaryHeight - frame.origin.y - frame.size.height;
+
+            // Get visible frame (excludes menu bar and dock)
+            NSRect visibleFrame = [screen visibleFrame];
+            CGFloat visibleFlippedY = primaryHeight - visibleFrame.origin.y - visibleFrame.size.height;
+
+            // Get scale factor (Retina = 2.0)
+            CGFloat scaleFactor = [screen backingScaleFactor];
+
+            // Check if this is the primary display
+            BOOL isPrimary = (displayId == primaryDisplayId);
+
+            NSDictionary *displayInfo = @{
+                @"id": @(displayId),
+                @"bounds": @{
+                    @"x": @((int)frame.origin.x),
+                    @"y": @((int)flippedY),
+                    @"width": @((int)frame.size.width),
+                    @"height": @((int)frame.size.height)
+                },
+                @"workArea": @{
+                    @"x": @((int)visibleFrame.origin.x),
+                    @"y": @((int)visibleFlippedY),
+                    @"width": @((int)visibleFrame.size.width),
+                    @"height": @((int)visibleFrame.size.height)
+                },
+                @"scaleFactor": @(scaleFactor),
+                @"isPrimary": @(isPrimary)
+            };
+
+            [displays addObject:displayInfo];
+        }
+
+        NSError *error = nil;
+        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:displays options:0 error:&error];
+        if (error) {
+            NSLog(@"[Screen] Failed to serialize displays: %@", error);
+            return strdup("[]");
+        }
+
+        NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+        return strdup([jsonString UTF8String]);
+    }
+}
+
+// Get primary display as JSON
+extern "C" const char* getPrimaryDisplay(void) {
+    @autoreleasepool {
+        NSArray<NSScreen *> *screens = [NSScreen screens];
+        CGDirectDisplayID primaryDisplayId = CGMainDisplayID();
+
+        for (NSScreen *screen in screens) {
+            NSDictionary *deviceDescription = [screen deviceDescription];
+            NSNumber *screenNumber = deviceDescription[@"NSScreenNumber"];
+            CGDirectDisplayID displayId = [screenNumber unsignedIntValue];
+
+            if (displayId == primaryDisplayId) {
+                NSRect frame = [screen frame];
+                CGFloat primaryHeight = [[[NSScreen screens] firstObject] frame].size.height;
+                CGFloat flippedY = primaryHeight - frame.origin.y - frame.size.height;
+
+                NSRect visibleFrame = [screen visibleFrame];
+                CGFloat visibleFlippedY = primaryHeight - visibleFrame.origin.y - visibleFrame.size.height;
+
+                CGFloat scaleFactor = [screen backingScaleFactor];
+
+                NSDictionary *displayInfo = @{
+                    @"id": @(displayId),
+                    @"bounds": @{
+                        @"x": @((int)frame.origin.x),
+                        @"y": @((int)flippedY),
+                        @"width": @((int)frame.size.width),
+                        @"height": @((int)frame.size.height)
+                    },
+                    @"workArea": @{
+                        @"x": @((int)visibleFrame.origin.x),
+                        @"y": @((int)visibleFlippedY),
+                        @"width": @((int)visibleFrame.size.width),
+                        @"height": @((int)visibleFrame.size.height)
+                    },
+                    @"scaleFactor": @(scaleFactor),
+                    @"isPrimary": @YES
+                };
+
+                NSError *error = nil;
+                NSData *jsonData = [NSJSONSerialization dataWithJSONObject:displayInfo options:0 error:&error];
+                if (error) {
+                    NSLog(@"[Screen] Failed to serialize primary display: %@", error);
+                    return strdup("{}");
+                }
+
+                NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+                return strdup([jsonString UTF8String]);
+            }
+        }
+
+        return strdup("{}");
+    }
+}
+
+// Get current cursor position as JSON: {"x": 123, "y": 456}
+extern "C" const char* getCursorScreenPoint(void) {
+    @autoreleasepool {
+        NSPoint mouseLocation = [NSEvent mouseLocation];
+
+        // Convert from bottom-left origin to top-left origin
+        CGFloat primaryHeight = [[[NSScreen screens] firstObject] frame].size.height;
+        CGFloat flippedY = primaryHeight - mouseLocation.y;
+
+        NSDictionary *point = @{
+            @"x": @((int)mouseLocation.x),
+            @"y": @((int)flippedY)
+        };
+
+        NSError *error = nil;
+        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:point options:0 error:&error];
+        if (error) {
+            return strdup("{\"x\":0,\"y\":0}");
+        }
+
+        NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+        return strdup([jsonString UTF8String]);
+    }
+}
+
 
 
 
