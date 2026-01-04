@@ -4542,6 +4542,30 @@ extern "C" BOOL openPath(const char *pathString) {
     return success;
 }
 
+// Show a native desktop notification
+extern "C" void showNotification(const char *title, const char *body, const char *subtitle, BOOL silent) {
+    NSString *titleStr = [NSString stringWithUTF8String:title ?: ""];
+    NSString *bodyStr = [NSString stringWithUTF8String:body ?: ""];
+    NSString *subtitleStr = subtitle ? [NSString stringWithUTF8String:subtitle] : nil;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
+        NSUserNotification *notification = [[NSUserNotification alloc] init];
+        notification.title = titleStr;
+        notification.informativeText = bodyStr;
+        if (subtitleStr) {
+            notification.subtitle = subtitleStr;
+        }
+        notification.soundName = silent ? nil : NSUserNotificationDefaultSoundName;
+
+        [[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
+
+        #pragma clang diagnostic pop
+    });
+}
+
 extern "C" const char *openFileDialog(const char *startingFolder,
                                       const char *allowedFileTypes,
                                       BOOL canChooseFiles,

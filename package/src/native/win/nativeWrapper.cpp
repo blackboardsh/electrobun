@@ -5882,6 +5882,74 @@ ELECTROBUN_EXPORT BOOL openPath(const char *pathString) {
     return TRUE;
 }
 
+// Show a native desktop notification using Shell_NotifyIcon balloon
+ELECTROBUN_EXPORT void showNotification(const char *title, const char *body, const char *subtitle, BOOL silent) {
+    if (!title) {
+        ::log("ERROR: NULL title passed to showNotification");
+        return;
+    }
+
+    // Convert strings to wide chars
+    int titleLen = MultiByteToWideChar(CP_UTF8, 0, title, -1, NULL, 0);
+    std::vector<wchar_t> wideTitle(titleLen);
+    MultiByteToWideChar(CP_UTF8, 0, title, -1, wideTitle.data(), titleLen);
+
+    std::wstring wideBody;
+    if (body) {
+        int bodyLen = MultiByteToWideChar(CP_UTF8, 0, body, -1, NULL, 0);
+        std::vector<wchar_t> bodyBuf(bodyLen);
+        MultiByteToWideChar(CP_UTF8, 0, body, -1, bodyBuf.data(), bodyLen);
+        wideBody = bodyBuf.data();
+    }
+
+    // If subtitle is provided, prepend it to body
+    if (subtitle) {
+        int subtitleLen = MultiByteToWideChar(CP_UTF8, 0, subtitle, -1, NULL, 0);
+        std::vector<wchar_t> subtitleBuf(subtitleLen);
+        MultiByteToWideChar(CP_UTF8, 0, subtitle, -1, subtitleBuf.data(), subtitleLen);
+        if (!wideBody.empty()) {
+            wideBody = std::wstring(subtitleBuf.data()) + L"\n" + wideBody;
+        } else {
+            wideBody = subtitleBuf.data();
+        }
+    }
+
+    // Create notification icon data
+    NOTIFYICONDATAW nid = {};
+    nid.cbSize = sizeof(NOTIFYICONDATAW);
+    nid.hWnd = NULL;  // No window handle needed for balloon
+    nid.uID = 1;
+    nid.uFlags = NIF_INFO | NIF_ICON;
+    nid.dwInfoFlags = NIIF_INFO | (silent ? NIIF_NOSOUND : 0);
+
+    // Copy title (max 63 chars)
+    wcsncpy_s(nid.szInfoTitle, wideTitle.data(), _TRUNCATE);
+
+    // Copy body (max 255 chars)
+    if (!wideBody.empty()) {
+        wcsncpy_s(nid.szInfo, wideBody.c_str(), _TRUNCATE);
+    }
+
+    // Use app icon or default
+    nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+
+    // Add the notification icon (required before showing balloon)
+    Shell_NotifyIconW(NIM_ADD, &nid);
+
+    // Show the balloon notification
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+
+    // Remove the icon after a delay (fire and forget - icon will be cleaned up)
+    // Note: In a real app, you might want to keep the icon around
+    // For now, we schedule removal after notification timeout
+    std::thread([nid]() mutable {
+        Sleep(5000);  // Wait for notification to be shown
+        Shell_NotifyIconW(NIM_DELETE, &nid);
+    }).detach();
+
+    ::log("Notification shown: " + std::string(title));
+}
+
 ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                           const char *allowedFileTypes,
                           BOOL canChooseFiles,

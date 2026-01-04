@@ -5395,6 +5395,64 @@ bool openPath(const char* pathString) {
     return result == TRUE;
 }
 
+// Show a native desktop notification using notify-send
+void showNotification(const char* title, const char* body, const char* subtitle, bool silent) {
+    if (!title) {
+        fprintf(stderr, "ERROR: NULL title passed to showNotification\n");
+        return;
+    }
+
+    std::string titleStr(title);
+    std::string bodyStr;
+
+    // Combine subtitle and body if both exist
+    if (subtitle && strlen(subtitle) > 0) {
+        bodyStr = std::string(subtitle);
+        if (body && strlen(body) > 0) {
+            bodyStr += "\n" + std::string(body);
+        }
+    } else if (body) {
+        bodyStr = std::string(body);
+    }
+
+    // Build the notify-send command
+    // Escape single quotes in strings for shell safety
+    auto escapeForShell = [](const std::string& str) -> std::string {
+        std::string result;
+        for (char c : str) {
+            if (c == '\'') {
+                result += "'\\''";
+            } else {
+                result += c;
+            }
+        }
+        return result;
+    };
+
+    std::string command = "notify-send";
+
+    // Add urgency hint (low for silent notifications)
+    if (silent) {
+        command += " --urgency=low";
+    }
+
+    // Add title
+    command += " '" + escapeForShell(titleStr) + "'";
+
+    // Add body if present
+    if (!bodyStr.empty()) {
+        command += " '" + escapeForShell(bodyStr) + "'";
+    }
+
+    // Execute asynchronously to not block
+    std::thread([command]() {
+        int result = system(command.c_str());
+        if (result != 0) {
+            fprintf(stderr, "Warning: notify-send failed (is libnotify-bin installed?)\n");
+        }
+    }).detach();
+}
+
 const char* openFileDialog(const char* startingFolder, const char* allowedFileTypes, int canChooseFiles, int canChooseDirectories, int allowsMultipleSelection) {
     // This function needs to run on the main thread
     return dispatch_sync_main([&]() -> const char* {

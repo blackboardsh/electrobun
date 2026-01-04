@@ -269,6 +269,15 @@ export const native = (() => {
         args: [FFIType.cstring],
         returns: FFIType.bool
       },
+      showNotification: {
+        args: [
+          FFIType.cstring, // title
+          FFIType.cstring, // body
+          FFIType.cstring, // subtitle
+          FFIType.bool,    // silent
+        ],
+        returns: FFIType.void
+      },
       openFileDialog: {
         args: [
           FFIType.cstring,
@@ -923,6 +932,15 @@ export const ffi = {
       openPath: (params: {path: string}): boolean => {
         const { path } = params;
         return native.symbols.openPath(toCString(path));
+      },
+      showNotification: (params: {title: string, body?: string, subtitle?: string, silent?: boolean}): void => {
+        const { title, body = '', subtitle = '', silent = false } = params;
+        native.symbols.showNotification(
+          toCString(title),
+          toCString(body),
+          toCString(subtitle),
+          silent
+        );
       },
       openFileDialog: (params: {startingFolder: string, allowedFileTypes: string, canChooseFiles: boolean, canChooseDirectory: boolean, allowsMultipleSelection: boolean}): string => {
         const {

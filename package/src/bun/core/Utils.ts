@@ -49,6 +49,64 @@ export const openPath = (path: string): boolean => {
   return ffi.request.openPath({ path });
 };
 
+export type NotificationOptions = {
+  /**
+   * The title of the notification (required)
+   */
+  title: string;
+  /**
+   * The main body text of the notification
+   */
+  body?: string;
+  /**
+   * A subtitle displayed below the title (macOS only, shown as additional line on other platforms)
+   */
+  subtitle?: string;
+  /**
+   * If true, the notification will not play a sound
+   */
+  silent?: boolean;
+};
+
+/**
+ * Show a native desktop notification.
+ *
+ * @param options - Notification options
+ * @param options.title - The title of the notification (required)
+ * @param options.body - The main body text
+ * @param options.subtitle - A subtitle (macOS shows this between title and body)
+ * @param options.silent - If true, no sound will be played
+ *
+ * @example
+ * // Simple notification
+ * showNotification({ title: "Download Complete" });
+ *
+ * // Notification with body
+ * showNotification({
+ *   title: "New Message",
+ *   body: "You have a new message from John"
+ * });
+ *
+ * // Full notification
+ * showNotification({
+ *   title: "Reminder",
+ *   subtitle: "Calendar Event",
+ *   body: "Team meeting in 15 minutes",
+ *   silent: false
+ * });
+ *
+ * // Silent notification
+ * showNotification({
+ *   title: "Sync Complete",
+ *   body: "All files have been synchronized",
+ *   silent: true
+ * });
+ */
+export const showNotification = (options: NotificationOptions): void => {
+  const { title, body, subtitle, silent } = options;
+  ffi.request.showNotification({ title, body, subtitle, silent });
+};
+
 export const quit = () => {
   // Use native killApp for graceful shutdown
   native.symbols.killApp();
