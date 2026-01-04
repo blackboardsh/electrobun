@@ -4608,6 +4608,138 @@ extern "C" int showMessageBox(const char *type,
     return result;
 }
 
+// ============================================================================
+// Clipboard API
+// ============================================================================
+
+// clipboardReadText - Read text from the system clipboard
+// Returns: UTF-8 string (caller must free) or NULL if no text available
+extern "C" const char* clipboardReadText() {
+    __block const char* result = NULL;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        NSString *text = [pasteboard stringForType:NSPasteboardTypeString];
+        if (text) {
+            result = strdup([text UTF8String]);
+        }
+    });
+
+    return result;
+}
+
+// clipboardWriteText - Write text to the system clipboard
+extern "C" void clipboardWriteText(const char *text) {
+    if (!text) return;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        [pasteboard clearContents];
+        [pasteboard setString:[NSString stringWithUTF8String:text] forType:NSPasteboardTypeString];
+    });
+}
+
+// clipboardReadImage - Read image from clipboard as PNG data
+// Returns: PNG data (caller must free) and sets outSize, or NULL if no image
+extern "C" const uint8_t* clipboardReadImage(size_t *outSize) {
+    __block const uint8_t* result = NULL;
+    __block size_t size = 0;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+
+        // Try to read image data (supports PNG, TIFF, etc.)
+        NSArray *imageTypes = @[NSPasteboardTypePNG, NSPasteboardTypeTIFF];
+        NSString *bestType = [pasteboard availableTypeFromArray:imageTypes];
+
+        if (bestType) {
+            NSData *imageData = [pasteboard dataForType:bestType];
+            if (imageData) {
+                // Convert to PNG if not already
+                if ([bestType isEqualToString:NSPasteboardTypePNG]) {
+                    size = [imageData length];
+                    uint8_t *buffer = (uint8_t*)malloc(size);
+                    memcpy(buffer, [imageData bytes], size);
+                    result = buffer;
+                } else {
+                    // Convert TIFF or other formats to PNG
+                    NSImage *image = [[NSImage alloc] initWithData:imageData];
+                    if (image) {
+                        NSBitmapImageRep *bitmapRep = [[NSBitmapImageRep alloc] initWithData:[image TIFFRepresentation]];
+                        NSData *pngData = [bitmapRep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+                        if (pngData) {
+                            size = [pngData length];
+                            uint8_t *buffer = (uint8_t*)malloc(size);
+                            memcpy(buffer, [pngData bytes], size);
+                            result = buffer;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    if (outSize) *outSize = size;
+    return result;
+}
+
+// clipboardWriteImage - Write PNG image data to clipboard
+extern "C" void clipboardWriteImage(const uint8_t *pngData, size_t size) {
+    if (!pngData || size == 0) return;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        [pasteboard clearContents];
+
+        NSData *data = [NSData dataWithBytes:pngData length:size];
+        [pasteboard setData:data forType:NSPasteboardTypePNG];
+    });
+}
+
+// clipboardClear - Clear the clipboard
+extern "C" void clipboardClear() {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        [pasteboard clearContents];
+    });
+}
+
+// clipboardAvailableFormats - Get available formats in clipboard
+// Returns: comma-separated list of formats (caller must free)
+extern "C" const char* clipboardAvailableFormats() {
+    __block const char* result = NULL;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        NSMutableArray *formats = [NSMutableArray array];
+
+        // Check for text
+        if ([pasteboard stringForType:NSPasteboardTypeString]) {
+            [formats addObject:@"text"];
+        }
+
+        // Check for image
+        NSArray *imageTypes = @[NSPasteboardTypePNG, NSPasteboardTypeTIFF];
+        if ([pasteboard availableTypeFromArray:imageTypes]) {
+            [formats addObject:@"image"];
+        }
+
+        // Check for files
+        if ([pasteboard availableTypeFromArray:@[NSPasteboardTypeFileURL]]) {
+            [formats addObject:@"files"];
+        }
+
+        // Check for HTML
+        if ([pasteboard availableTypeFromArray:@[NSPasteboardTypeHTML]]) {
+            [formats addObject:@"html"];
+        }
+
+        NSString *joined = [formats componentsJoinedByString:@","];
+        result = strdup([joined UTF8String]);
+    });
+
+    return result;
+}
 
 extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,
                                     uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {

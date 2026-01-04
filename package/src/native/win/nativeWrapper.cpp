@@ -6076,6 +6076,182 @@ ELECTROBUN_EXPORT int showMessageBox(const char *type,
     });
 }
 
+// ============================================================================
+// Clipboard API
+// ============================================================================
+
+// clipboardReadText - Read text from the system clipboard
+// Returns: UTF-8 string (caller must free) or NULL if no text available
+ELECTROBUN_EXPORT const char* clipboardReadText() {
+    return MainThreadDispatcher::dispatch_sync([=]() -> const char* {
+        if (!OpenClipboard(nullptr)) {
+            return nullptr;
+        }
+
+        const char* result = nullptr;
+        HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+        if (hData) {
+            wchar_t* wText = static_cast<wchar_t*>(GlobalLock(hData));
+            if (wText) {
+                // Convert wide string to UTF-8
+                int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wText, -1, nullptr, 0, nullptr, nullptr);
+                if (utf8Len > 0) {
+                    char* utf8Text = static_cast<char*>(malloc(utf8Len));
+                    WideCharToMultiByte(CP_UTF8, 0, wText, -1, utf8Text, utf8Len, nullptr, nullptr);
+                    result = utf8Text;
+                }
+                GlobalUnlock(hData);
+            }
+        }
+
+        CloseClipboard();
+        return result;
+    });
+}
+
+// clipboardWriteText - Write text to the system clipboard
+ELECTROBUN_EXPORT void clipboardWriteText(const char* text) {
+    if (!text) return;
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        if (!OpenClipboard(nullptr)) {
+            return;
+        }
+
+        EmptyClipboard();
+
+        // Convert UTF-8 to wide string
+        int wideLen = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+        if (wideLen > 0) {
+            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wideLen * sizeof(wchar_t));
+            if (hMem) {
+                wchar_t* wText = static_cast<wchar_t*>(GlobalLock(hMem));
+                MultiByteToWideChar(CP_UTF8, 0, text, -1, wText, wideLen);
+                GlobalUnlock(hMem);
+                SetClipboardData(CF_UNICODETEXT, hMem);
+            }
+        }
+
+        CloseClipboard();
+    });
+}
+
+// clipboardReadImage - Read image from clipboard as PNG data
+// Returns: PNG data (caller must free) and sets outSize, or NULL if no image
+ELECTROBUN_EXPORT const uint8_t* clipboardReadImage(size_t* outSize) {
+    return MainThreadDispatcher::dispatch_sync([=]() -> const uint8_t* {
+        if (outSize) *outSize = 0;
+
+        if (!OpenClipboard(nullptr)) {
+            return nullptr;
+        }
+
+        const uint8_t* result = nullptr;
+
+        // Try CF_DIB format (Device Independent Bitmap)
+        HANDLE hData = GetClipboardData(CF_DIB);
+        if (hData) {
+            BITMAPINFO* bmi = static_cast<BITMAPINFO*>(GlobalLock(hData));
+            if (bmi) {
+                // For now, return raw DIB data - full PNG conversion would require
+                // additional libraries like libpng or GDI+
+                // TODO: Implement proper PNG conversion using GDI+ or similar
+                size_t dataSize = GlobalSize(hData);
+                uint8_t* buffer = static_cast<uint8_t*>(malloc(dataSize));
+                memcpy(buffer, bmi, dataSize);
+                if (outSize) *outSize = dataSize;
+                result = buffer;
+                GlobalUnlock(hData);
+            }
+        }
+
+        CloseClipboard();
+        return result;
+    });
+}
+
+// clipboardWriteImage - Write PNG image data to clipboard
+ELECTROBUN_EXPORT void clipboardWriteImage(const uint8_t* pngData, size_t size) {
+    if (!pngData || size == 0) return;
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        if (!OpenClipboard(nullptr)) {
+            return;
+        }
+
+        EmptyClipboard();
+
+        // For now, store as raw data - proper PNG to DIB conversion would require
+        // additional libraries
+        // TODO: Implement proper PNG to DIB conversion
+        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, size);
+        if (hMem) {
+            void* data = GlobalLock(hMem);
+            memcpy(data, pngData, size);
+            GlobalUnlock(hMem);
+            // Register a custom format for PNG data
+            UINT pngFormat = RegisterClipboardFormatA("PNG");
+            SetClipboardData(pngFormat, hMem);
+        }
+
+        CloseClipboard();
+    });
+}
+
+// clipboardClear - Clear the clipboard
+ELECTROBUN_EXPORT void clipboardClear() {
+    MainThreadDispatcher::dispatch_sync([=]() {
+        if (OpenClipboard(nullptr)) {
+            EmptyClipboard();
+            CloseClipboard();
+        }
+    });
+}
+
+// clipboardAvailableFormats - Get available formats in clipboard
+// Returns: comma-separated list of formats (caller must free)
+ELECTROBUN_EXPORT const char* clipboardAvailableFormats() {
+    return MainThreadDispatcher::dispatch_sync([=]() -> const char* {
+        if (!OpenClipboard(nullptr)) {
+            return strdup("");
+        }
+
+        std::vector<std::string> formats;
+
+        // Check for text
+        if (IsClipboardFormatAvailable(CF_UNICODETEXT) || IsClipboardFormatAvailable(CF_TEXT)) {
+            formats.push_back("text");
+        }
+
+        // Check for image
+        if (IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_BITMAP)) {
+            formats.push_back("image");
+        }
+
+        // Check for files
+        if (IsClipboardFormatAvailable(CF_HDROP)) {
+            formats.push_back("files");
+        }
+
+        // Check for HTML
+        UINT htmlFormat = RegisterClipboardFormatA("HTML Format");
+        if (IsClipboardFormatAvailable(htmlFormat)) {
+            formats.push_back("html");
+        }
+
+        CloseClipboard();
+
+        // Join formats with comma
+        std::string result;
+        for (size_t i = 0; i < formats.size(); i++) {
+            if (i > 0) result += ",";
+            result += formats[i];
+        }
+
+        return strdup(result.c_str());
+    });
+}
+
 // Window procedure for handling tray messages
 LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {

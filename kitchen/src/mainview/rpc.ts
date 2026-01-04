@@ -14,6 +14,30 @@ export type MyWebviewRPC = {
         params: string;
         response: string;
       };
+      showMessageBoxDemo: {
+        params: {
+          type: "info" | "warning" | "error" | "question";
+        };
+        response: {
+          clickedButton: number;
+          buttonLabel: string;
+        };
+      };
+      clipboardRead: {
+        params: {};
+        response: {
+          text: string | null;
+          formats: string[];
+        };
+      };
+      clipboardWrite: {
+        params: {
+          text: string;
+        };
+        response: {
+          success: boolean;
+        };
+      };
     };
     messages: {
       logToBun: {

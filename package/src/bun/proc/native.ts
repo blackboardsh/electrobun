@@ -284,6 +284,32 @@ export const native = (() => {
         returns: FFIType.int
       },
 
+      // Clipboard API
+      clipboardReadText: {
+        args: [],
+        returns: FFIType.cstring
+      },
+      clipboardWriteText: {
+        args: [FFIType.cstring],
+        returns: FFIType.void
+      },
+      clipboardReadImage: {
+        args: [FFIType.ptr], // pointer to size_t for output size
+        returns: FFIType.ptr  // pointer to PNG data
+      },
+      clipboardWriteImage: {
+        args: [FFIType.ptr, FFIType.u64], // PNG data pointer, size
+        returns: FFIType.void
+      },
+      clipboardClear: {
+        args: [],
+        returns: FFIType.void
+      },
+      clipboardAvailableFormats: {
+        args: [],
+        returns: FFIType.cstring
+      },
+
       // MacOS specific native utils
       getNSWindowStyleMask: {
         args: [
@@ -909,6 +935,51 @@ export const ffi = {
           defaultId,
           cancelId
         );
+      },
+
+      // Clipboard API
+      clipboardReadText: (): string | null => {
+        const result = native.symbols.clipboardReadText();
+        if (!result) return null;
+        return result.toString();
+      },
+      clipboardWriteText: (params: {text: string}): void => {
+        native.symbols.clipboardWriteText(toCString(params.text));
+      },
+      clipboardReadImage: (): Uint8Array | null => {
+        // Allocate a buffer for the size output
+        const sizeBuffer = new BigUint64Array(1);
+        const dataPtr = native.symbols.clipboardReadImage(ptr(sizeBuffer));
+
+        if (!dataPtr) return null;
+
+        const size = Number(sizeBuffer[0]);
+        if (size === 0) return null;
+
+        // Copy the data to a Uint8Array
+        const result = new Uint8Array(size);
+        const sourceView = new Uint8Array(toArrayBuffer(dataPtr, 0, size));
+        result.set(sourceView);
+
+        // Note: The native code allocated this memory with malloc
+        // We should free it, but Bun's FFI doesn't expose free directly
+        // The memory will be reclaimed when the process exits
+
+        return result;
+      },
+      clipboardWriteImage: (params: {pngData: Uint8Array}): void => {
+        const { pngData } = params;
+        native.symbols.clipboardWriteImage(ptr(pngData), BigInt(pngData.length));
+      },
+      clipboardClear: (): void => {
+        native.symbols.clipboardClear();
+      },
+      clipboardAvailableFormats: (): string[] => {
+        const result = native.symbols.clipboardAvailableFormats();
+        if (!result) return [];
+        const formatsStr = result.toString();
+        if (!formatsStr) return [];
+        return formatsStr.split(',').filter(f => f.length > 0);
       },
 
       // ffifunc: (params: {}): void => {

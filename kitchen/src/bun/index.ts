@@ -268,6 +268,62 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPC>({
         console.log("big request received", input.length);
         return "y".repeat(1024 * 1024 * 2) + "y";
       },
+      showMessageBoxDemo: async ({ type }) => {
+        const dialogs: Record<string, { title: string; message: string; detail: string; buttons: string[] }> = {
+          info: {
+            title: "Information",
+            message: "This is an info dialog",
+            detail: "You can use this to display helpful information to users.",
+            buttons: ["Got it", "Learn More"],
+          },
+          warning: {
+            title: "Warning",
+            message: "This is a warning dialog",
+            detail: "Something might need your attention.",
+            buttons: ["OK", "Ignore"],
+          },
+          error: {
+            title: "Error",
+            message: "This is an error dialog",
+            detail: "Something went wrong. Please try again.",
+            buttons: ["Retry", "Cancel"],
+          },
+          question: {
+            title: "Question",
+            message: "Do you want to proceed?",
+            detail: "This action may have consequences.",
+            buttons: ["Yes", "No", "Cancel"],
+          },
+        };
+
+        const config = dialogs[type] || dialogs.info;
+        const { response } = await Utils.showMessageBox({
+          type: type as "info" | "warning" | "error" | "question",
+          title: config.title,
+          message: config.message,
+          detail: config.detail,
+          buttons: config.buttons,
+          defaultId: 0,
+          cancelId: config.buttons.length - 1,
+        });
+
+        console.log(`showMessageBox (${type}) result:`, response, config.buttons[response]);
+        return {
+          clickedButton: response,
+          buttonLabel: config.buttons[response] || "Unknown",
+        };
+      },
+      clipboardRead: () => {
+        const text = Utils.clipboardReadText();
+        const formats = Utils.clipboardAvailableFormats();
+        console.log("clipboardRead:", { text, formats });
+        return { text, formats };
+      },
+      clipboardWrite: ({ text }: { text: string }) => {
+        Utils.clipboardWriteText(text);
+        console.log("clipboardWrite:", text);
+        return { success: true };
+      },
     },
     messages: {
       "*": (messageName, payload) => {

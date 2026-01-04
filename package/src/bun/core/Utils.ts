@@ -118,3 +118,54 @@ export const showMessageBox = async (
 
   return { response };
 };
+
+// ============================================================================
+// Clipboard API
+// ============================================================================
+
+/**
+ * Read text from the system clipboard.
+ * @returns The clipboard text, or null if no text is available
+ */
+export const clipboardReadText = (): string | null => {
+  return ffi.request.clipboardReadText();
+};
+
+/**
+ * Write text to the system clipboard.
+ * @param text - The text to write to the clipboard
+ */
+export const clipboardWriteText = (text: string): void => {
+  ffi.request.clipboardWriteText({ text });
+};
+
+/**
+ * Read image from the system clipboard as PNG data.
+ * @returns PNG image data as Uint8Array, or null if no image is available
+ */
+export const clipboardReadImage = (): Uint8Array | null => {
+  return ffi.request.clipboardReadImage();
+};
+
+/**
+ * Write PNG image data to the system clipboard.
+ * @param pngData - PNG image data as Uint8Array
+ */
+export const clipboardWriteImage = (pngData: Uint8Array): void => {
+  ffi.request.clipboardWriteImage({ pngData });
+};
+
+/**
+ * Clear the system clipboard.
+ */
+export const clipboardClear = (): void => {
+  ffi.request.clipboardClear();
+};
+
+/**
+ * Get the available formats in the clipboard.
+ * @returns Array of format names (e.g., ["text", "image", "files", "html"])
+ */
+export const clipboardAvailableFormats = (): string[] => {
+  return ffi.request.clipboardAvailableFormats();
+};
