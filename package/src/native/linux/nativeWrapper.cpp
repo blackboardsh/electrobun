@@ -6531,5 +6531,533 @@ const char* getCursorScreenPoint() {
     return strdup(result.str().c_str());
 }
 
+/*
+ * =============================================================================
+ * COOKIE MANAGEMENT API
+ * =============================================================================
+ */
+
+// Store for partition-specific data managers (for cookie access)
+static std::map<std::string, WebKitWebsiteDataManager*> g_partitionDataManagers;
+
+// Get or create a data manager for a partition
+static WebKitWebsiteDataManager* getDataManagerForPartition(const char* partitionIdentifier) {
+    std::string partition = partitionIdentifier ? partitionIdentifier : "";
+
+    auto it = g_partitionDataManagers.find(partition);
+    if (it != g_partitionDataManagers.end()) {
+        return it->second;
+    }
+
+    WebKitWebsiteDataManager* dataManager = nullptr;
+
+    if (partition.empty()) {
+        // Default: use default context's data manager
+        WebKitWebContext* context = webkit_web_context_get_default();
+        dataManager = webkit_web_context_get_website_data_manager(context);
+    } else {
+        bool isPersistent = partition.substr(0, 8) == "persist:";
+
+        if (isPersistent) {
+            std::string partitionName = partition.substr(8);
+            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+            if (!g_electrobunChannel.empty()) {
+                appIdentifier += "-" + g_electrobunChannel;
+            }
+
+            char* home = getenv("HOME");
+            std::string basePath = home ? std::string(home) : "/tmp";
+            std::string dataPath = basePath + "/.local/share/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+            std::string cachePath = basePath + "/.cache/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+
+            g_mkdir_with_parents(dataPath.c_str(), 0755);
+            g_mkdir_with_parents(cachePath.c_str(), 0755);
+
+            dataManager = webkit_website_data_manager_new(
+                "base-data-directory", dataPath.c_str(),
+                "base-cache-directory", cachePath.c_str(),
+                NULL
+            );
+        } else {
+            dataManager = webkit_website_data_manager_new_ephemeral();
+        }
+
+        g_partitionDataManagers[partition] = dataManager;
+    }
+
+    return dataManager;
+}
+
+// Helper struct for async cookie operations
+struct CookieCallbackData {
+    std::string* result;
+    bool* done;
+    GMainLoop* loop;
+};
+
+// Callback for getting cookies
+static void onGetCookiesFinished(GObject* source, GAsyncResult* result, gpointer user_data) {
+    CookieCallbackData* data = static_cast<CookieCallbackData*>(user_data);
+    GError* error = nullptr;
+    GList* cookies = webkit_cookie_manager_get_cookies_finish(
+        WEBKIT_COOKIE_MANAGER(source), result, &error);
+
+    std::ostringstream json;
+    json << "[";
+
+    if (!error && cookies) {
+        GList* item = cookies;
+        bool first = true;
+        while (item) {
+            SoupCookie* cookie = static_cast<SoupCookie*>(item->data);
+            if (!first) json << ",";
+            first = false;
+
+            json << "{";
+            json << "\"name\":\"" << (soup_cookie_get_name(cookie) ?: "") << "\",";
+            json << "\"value\":\"" << (soup_cookie_get_value(cookie) ?: "") << "\",";
+            json << "\"domain\":\"" << (soup_cookie_get_domain(cookie) ?: "") << "\",";
+            json << "\"path\":\"" << (soup_cookie_get_path(cookie) ?: "") << "\",";
+            json << "\"secure\":" << (soup_cookie_get_secure(cookie) ? "true" : "false") << ",";
+            json << "\"httpOnly\":" << (soup_cookie_get_http_only(cookie) ? "true" : "false");
+
+            GDateTime* expires = soup_cookie_get_expires(cookie);
+            if (expires) {
+                json << ",\"expirationDate\":" << g_date_time_to_unix(expires);
+            }
+
+            json << "}";
+
+            item = item->next;
+        }
+        g_list_free_full(cookies, (GDestroyNotify)soup_cookie_free);
+    }
+
+    if (error) {
+        g_error_free(error);
+    }
+
+    json << "]";
+    *(data->result) = json.str();
+    *(data->done) = true;
+
+    if (data->loop) {
+        g_main_loop_quit(data->loop);
+    }
+}
+
+// Get cookies for a partition (WebKit2GTK)
+const char* sessionGetCookies(const char* partitionIdentifier, const char* filterJson) {
+    WebKitWebsiteDataManager* dataManager = getDataManagerForPartition(partitionIdentifier);
+    if (!dataManager) {
+        return strdup("[]");
+    }
+
+    WebKitCookieManager* cookieManager = webkit_website_data_manager_get_cookie_manager(dataManager);
+    if (!cookieManager) {
+        return strdup("[]");
+    }
+
+    // Parse filter for URL
+    std::string filterStr = filterJson ? filterJson : "{}";
+    std::string filterUrl;
+
+    size_t urlPos = filterStr.find("\"url\"");
+    if (urlPos != std::string::npos) {
+        size_t colonPos = filterStr.find(':', urlPos);
+        size_t quoteStart = filterStr.find('"', colonPos);
+        size_t quoteEnd = filterStr.find('"', quoteStart + 1);
+        if (quoteStart != std::string::npos && quoteEnd != std::string::npos) {
+            filterUrl = filterStr.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+        }
+    }
+
+    std::string result = "[]";
+    bool done = false;
+
+    CookieCallbackData callbackData;
+    callbackData.result = &result;
+    callbackData.done = &done;
+    callbackData.loop = g_main_loop_new(NULL, FALSE);
+
+    const char* uri = filterUrl.empty() ? nullptr : filterUrl.c_str();
+    webkit_cookie_manager_get_cookies(cookieManager, uri, nullptr, onGetCookiesFinished, &callbackData);
+
+    // Run main loop until done or timeout
+    GSource* timeout = g_timeout_source_new(5000);
+    g_source_set_callback(timeout, [](gpointer data) -> gboolean {
+        g_main_loop_quit(static_cast<GMainLoop*>(data));
+        return G_SOURCE_REMOVE;
+    }, callbackData.loop, nullptr);
+    g_source_attach(timeout, g_main_loop_get_context(callbackData.loop));
+
+    g_main_loop_run(callbackData.loop);
+    g_source_destroy(timeout);
+    g_source_unref(timeout);
+    g_main_loop_unref(callbackData.loop);
+
+    return strdup(result.c_str());
+}
+
+// Callback for setting cookie
+static void onSetCookieFinished(GObject* source, GAsyncResult* result, gpointer user_data) {
+    CookieCallbackData* data = static_cast<CookieCallbackData*>(user_data);
+    GError* error = nullptr;
+    gboolean success = webkit_cookie_manager_add_cookie_finish(
+        WEBKIT_COOKIE_MANAGER(source), result, &error);
+
+    *(data->result) = success ? "true" : "false";
+    *(data->done) = true;
+
+    if (error) {
+        g_error_free(error);
+    }
+
+    if (data->loop) {
+        g_main_loop_quit(data->loop);
+    }
+}
+
+// Set a cookie (WebKit2GTK)
+bool sessionSetCookie(const char* partitionIdentifier, const char* cookieJson) {
+    WebKitWebsiteDataManager* dataManager = getDataManagerForPartition(partitionIdentifier);
+    if (!dataManager) {
+        return false;
+    }
+
+    WebKitCookieManager* cookieManager = webkit_website_data_manager_get_cookie_manager(dataManager);
+    if (!cookieManager) {
+        return false;
+    }
+
+    // Parse JSON (simple parsing)
+    std::string jsonStr = cookieJson ? cookieJson : "{}";
+
+    auto extractString = [&jsonStr](const std::string& key) -> std::string {
+        std::string searchKey = "\"" + key + "\"";
+        size_t pos = jsonStr.find(searchKey);
+        if (pos == std::string::npos) return "";
+        size_t colonPos = jsonStr.find(':', pos);
+        size_t quoteStart = jsonStr.find('"', colonPos);
+        size_t quoteEnd = jsonStr.find('"', quoteStart + 1);
+        if (quoteStart != std::string::npos && quoteEnd != std::string::npos) {
+            return jsonStr.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+        }
+        return "";
+    };
+
+    auto extractBool = [&jsonStr](const std::string& key) -> bool {
+        std::string searchKey = "\"" + key + "\"";
+        size_t pos = jsonStr.find(searchKey);
+        if (pos == std::string::npos) return false;
+        size_t commaPos = jsonStr.find(',', pos);
+        size_t truePos = jsonStr.find("true", pos);
+        return truePos != std::string::npos && (commaPos == std::string::npos || truePos < commaPos);
+    };
+
+    auto extractDouble = [&jsonStr](const std::string& key) -> double {
+        std::string searchKey = "\"" + key + "\"";
+        size_t pos = jsonStr.find(searchKey);
+        if (pos == std::string::npos) return 0;
+        size_t colonPos = jsonStr.find(':', pos);
+        size_t numStart = colonPos + 1;
+        while (numStart < jsonStr.size() && (jsonStr[numStart] == ' ' || jsonStr[numStart] == '\t')) numStart++;
+        try {
+            return std::stod(jsonStr.substr(numStart));
+        } catch (...) {
+            return 0;
+        }
+    };
+
+    std::string name = extractString("name");
+    std::string value = extractString("value");
+    std::string domain = extractString("domain");
+    std::string path = extractString("path");
+    std::string url = extractString("url");
+    bool secure = extractBool("secure");
+    bool httpOnly = extractBool("httpOnly");
+    double expirationDate = extractDouble("expirationDate");
+
+    if (name.empty()) {
+        return false;
+    }
+
+    // Derive domain from URL if not provided
+    if (domain.empty() && !url.empty()) {
+        size_t start = url.find("://");
+        if (start != std::string::npos) {
+            start += 3;
+            size_t end = url.find('/', start);
+            domain = url.substr(start, end - start);
+        }
+    }
+
+    if (domain.empty()) {
+        return false;
+    }
+
+    if (path.empty()) path = "/";
+
+    // Create SoupCookie
+    SoupCookie* cookie = soup_cookie_new(name.c_str(), value.c_str(), domain.c_str(), path.c_str(), -1);
+    if (!cookie) {
+        return false;
+    }
+
+    soup_cookie_set_secure(cookie, secure);
+    soup_cookie_set_http_only(cookie, httpOnly);
+
+    if (expirationDate > 0) {
+        GDateTime* expires = g_date_time_new_from_unix_utc((gint64)expirationDate);
+        soup_cookie_set_expires(cookie, expires);
+        g_date_time_unref(expires);
+    }
+
+    std::string result = "false";
+    bool done = false;
+
+    CookieCallbackData callbackData;
+    callbackData.result = &result;
+    callbackData.done = &done;
+    callbackData.loop = g_main_loop_new(NULL, FALSE);
+
+    webkit_cookie_manager_add_cookie(cookieManager, cookie, nullptr, onSetCookieFinished, &callbackData);
+
+    // Run main loop until done or timeout
+    GSource* timeout = g_timeout_source_new(5000);
+    g_source_set_callback(timeout, [](gpointer data) -> gboolean {
+        g_main_loop_quit(static_cast<GMainLoop*>(data));
+        return G_SOURCE_REMOVE;
+    }, callbackData.loop, nullptr);
+    g_source_attach(timeout, g_main_loop_get_context(callbackData.loop));
+
+    g_main_loop_run(callbackData.loop);
+    g_source_destroy(timeout);
+    g_source_unref(timeout);
+    g_main_loop_unref(callbackData.loop);
+
+    soup_cookie_free(cookie);
+
+    return result == "true";
+}
+
+// Callback for deleting cookie
+static void onDeleteCookieFinished(GObject* source, GAsyncResult* result, gpointer user_data) {
+    CookieCallbackData* data = static_cast<CookieCallbackData*>(user_data);
+    GError* error = nullptr;
+    gboolean success = webkit_cookie_manager_delete_cookie_finish(
+        WEBKIT_COOKIE_MANAGER(source), result, &error);
+
+    *(data->result) = success ? "true" : "false";
+    *(data->done) = true;
+
+    if (error) {
+        g_error_free(error);
+    }
+
+    if (data->loop) {
+        g_main_loop_quit(data->loop);
+    }
+}
+
+// Remove a specific cookie (WebKit2GTK)
+bool sessionRemoveCookie(const char* partitionIdentifier, const char* urlStr, const char* cookieName) {
+    if (!urlStr || !cookieName) return false;
+
+    WebKitWebsiteDataManager* dataManager = getDataManagerForPartition(partitionIdentifier);
+    if (!dataManager) {
+        return false;
+    }
+
+    WebKitCookieManager* cookieManager = webkit_website_data_manager_get_cookie_manager(dataManager);
+    if (!cookieManager) {
+        return false;
+    }
+
+    // First get all cookies for the URL, then delete the matching one
+    std::string result = "[]";
+    bool done = false;
+
+    CookieCallbackData callbackData;
+    callbackData.result = &result;
+    callbackData.done = &done;
+    callbackData.loop = g_main_loop_new(NULL, FALSE);
+
+    // Get cookies first
+    webkit_cookie_manager_get_cookies(cookieManager, urlStr, nullptr,
+        [](GObject* source, GAsyncResult* result, gpointer user_data) {
+            CookieCallbackData* data = static_cast<CookieCallbackData*>(user_data);
+            GError* error = nullptr;
+            GList* cookies = webkit_cookie_manager_get_cookies_finish(
+                WEBKIT_COOKIE_MANAGER(source), result, &error);
+
+            if (cookies) {
+                // Store cookies list in result for now
+                *(data->result) = std::to_string(reinterpret_cast<uintptr_t>(cookies));
+            } else {
+                *(data->result) = "0";
+            }
+            *(data->done) = true;
+
+            if (error) {
+                g_error_free(error);
+            }
+
+            if (data->loop) {
+                g_main_loop_quit(data->loop);
+            }
+        }, &callbackData);
+
+    GSource* timeout = g_timeout_source_new(5000);
+    g_source_set_callback(timeout, [](gpointer data) -> gboolean {
+        g_main_loop_quit(static_cast<GMainLoop*>(data));
+        return G_SOURCE_REMOVE;
+    }, callbackData.loop, nullptr);
+    g_source_attach(timeout, g_main_loop_get_context(callbackData.loop));
+
+    g_main_loop_run(callbackData.loop);
+    g_source_destroy(timeout);
+    g_source_unref(timeout);
+    g_main_loop_unref(callbackData.loop);
+
+    // Parse the cookies list pointer
+    GList* cookies = reinterpret_cast<GList*>(std::stoull(result));
+    bool found = false;
+
+    if (cookies) {
+        std::string targetName = cookieName;
+        GList* item = cookies;
+        while (item) {
+            SoupCookie* cookie = static_cast<SoupCookie*>(item->data);
+            if (std::string(soup_cookie_get_name(cookie)) == targetName) {
+                // Delete this cookie
+                done = false;
+                result = "false";
+                callbackData.loop = g_main_loop_new(NULL, FALSE);
+
+                webkit_cookie_manager_delete_cookie(cookieManager, cookie, nullptr, onDeleteCookieFinished, &callbackData);
+
+                timeout = g_timeout_source_new(5000);
+                g_source_set_callback(timeout, [](gpointer data) -> gboolean {
+                    g_main_loop_quit(static_cast<GMainLoop*>(data));
+                    return G_SOURCE_REMOVE;
+                }, callbackData.loop, nullptr);
+                g_source_attach(timeout, g_main_loop_get_context(callbackData.loop));
+
+                g_main_loop_run(callbackData.loop);
+                g_source_destroy(timeout);
+                g_source_unref(timeout);
+                g_main_loop_unref(callbackData.loop);
+
+                found = (result == "true");
+                break;
+            }
+            item = item->next;
+        }
+        g_list_free_full(cookies, (GDestroyNotify)soup_cookie_free);
+    }
+
+    return found;
+}
+
+// Clear all cookies (WebKit2GTK)
+void sessionClearCookies(const char* partitionIdentifier) {
+    WebKitWebsiteDataManager* dataManager = getDataManagerForPartition(partitionIdentifier);
+    if (!dataManager) {
+        return;
+    }
+
+    // Remove cookies data type
+    WebKitWebsiteDataTypes types = WEBKIT_WEBSITE_DATA_COOKIES;
+
+    GMainLoop* loop = g_main_loop_new(NULL, FALSE);
+
+    webkit_website_data_manager_clear(dataManager, types, 0, nullptr,
+        [](GObject* source, GAsyncResult* result, gpointer user_data) {
+            GMainLoop* loop = static_cast<GMainLoop*>(user_data);
+            GError* error = nullptr;
+            webkit_website_data_manager_clear_finish(WEBKIT_WEBSITE_DATA_MANAGER(source), result, &error);
+            if (error) {
+                g_error_free(error);
+            }
+            g_main_loop_quit(loop);
+        }, loop);
+
+    GSource* timeout = g_timeout_source_new(5000);
+    g_source_set_callback(timeout, [](gpointer data) -> gboolean {
+        g_main_loop_quit(static_cast<GMainLoop*>(data));
+        return G_SOURCE_REMOVE;
+    }, loop, nullptr);
+    g_source_attach(timeout, g_main_loop_get_context(loop));
+
+    g_main_loop_run(loop);
+    g_source_destroy(timeout);
+    g_source_unref(timeout);
+    g_main_loop_unref(loop);
+}
+
+// Clear storage data (WebKit2GTK)
+void sessionClearStorageData(const char* partitionIdentifier, const char* storageTypesJson) {
+    WebKitWebsiteDataManager* dataManager = getDataManagerForPartition(partitionIdentifier);
+    if (!dataManager) {
+        return;
+    }
+
+    WebKitWebsiteDataTypes types = 0;
+
+    if (storageTypesJson && strlen(storageTypesJson) > 2) {
+        std::string typesStr = storageTypesJson;
+
+        if (typesStr.find("cookies") != std::string::npos) {
+            types |= WEBKIT_WEBSITE_DATA_COOKIES;
+        }
+        if (typesStr.find("localStorage") != std::string::npos) {
+            types |= WEBKIT_WEBSITE_DATA_LOCAL_STORAGE;
+        }
+        if (typesStr.find("indexedDB") != std::string::npos) {
+            types |= WEBKIT_WEBSITE_DATA_INDEXEDDB_DATABASES;
+        }
+        if (typesStr.find("cache") != std::string::npos) {
+            types |= WEBKIT_WEBSITE_DATA_DISK_CACHE;
+            types |= WEBKIT_WEBSITE_DATA_MEMORY_CACHE;
+        }
+        if (typesStr.find("serviceWorkers") != std::string::npos) {
+            types |= WEBKIT_WEBSITE_DATA_SERVICE_WORKER_REGISTRATIONS;
+        }
+    } else {
+        // Clear all
+        types = WEBKIT_WEBSITE_DATA_ALL;
+    }
+
+    if (types == 0) {
+        return;
+    }
+
+    GMainLoop* loop = g_main_loop_new(NULL, FALSE);
+
+    webkit_website_data_manager_clear(dataManager, types, 0, nullptr,
+        [](GObject* source, GAsyncResult* result, gpointer user_data) {
+            GMainLoop* loop = static_cast<GMainLoop*>(user_data);
+            GError* error = nullptr;
+            webkit_website_data_manager_clear_finish(WEBKIT_WEBSITE_DATA_MANAGER(source), result, &error);
+            if (error) {
+                g_error_free(error);
+            }
+            g_main_loop_quit(loop);
+        }, loop);
+
+    GSource* timeout = g_timeout_source_new(10000);
+    g_source_set_callback(timeout, [](gpointer data) -> gboolean {
+        g_main_loop_quit(static_cast<GMainLoop*>(data));
+        return G_SOURCE_REMOVE;
+    }, loop, nullptr);
+    g_source_attach(timeout, g_main_loop_get_context(loop));
+
+    g_main_loop_run(loop);
+    g_source_destroy(timeout);
+    g_source_unref(timeout);
+    g_main_loop_unref(loop);
+}
+
 
 }

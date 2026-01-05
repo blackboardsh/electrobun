@@ -364,6 +364,28 @@ export const native = (() => {
         returns: FFIType.cstring
       },
 
+      // Session/Cookie API
+      sessionGetCookies: {
+        args: [FFIType.cstring, FFIType.cstring],
+        returns: FFIType.cstring
+      },
+      sessionSetCookie: {
+        args: [FFIType.cstring, FFIType.cstring],
+        returns: FFIType.bool
+      },
+      sessionRemoveCookie: {
+        args: [FFIType.cstring, FFIType.cstring, FFIType.cstring],
+        returns: FFIType.bool
+      },
+      sessionClearCookies: {
+        args: [FFIType.cstring],
+        returns: FFIType.void
+      },
+      sessionClearStorageData: {
+        args: [FFIType.cstring, FFIType.cstring],
+        returns: FFIType.void
+      },
+
       // URL scheme handler (macOS only)
       setURLOpenHandler: {
         args: [FFIType.function], // handler callback
@@ -1407,6 +1429,148 @@ export const Screen = {
     } catch {
       return { x: 0, y: 0 };
     }
+  },
+};
+
+// Types for Session/Cookie API
+export interface Cookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+  sameSite?: 'no_restriction' | 'lax' | 'strict';
+  expirationDate?: number; // Unix timestamp in seconds
+}
+
+export interface CookieFilter {
+  url?: string;
+  name?: string;
+  domain?: string;
+  path?: string;
+  secure?: boolean;
+  session?: boolean;
+}
+
+export type StorageType =
+  | 'cookies'
+  | 'localStorage'
+  | 'sessionStorage'
+  | 'indexedDB'
+  | 'webSQL'
+  | 'cache'
+  | 'all';
+
+// Cookies API for a session
+class SessionCookies {
+  private partitionId: string;
+
+  constructor(partitionId: string) {
+    this.partitionId = partitionId;
+  }
+
+  /**
+   * Get cookies matching the filter criteria
+   * @param filter - Optional filter to match cookies
+   * @returns Array of matching cookies
+   */
+  get(filter?: CookieFilter): Cookie[] {
+    const filterJson = JSON.stringify(filter || {});
+    const result = native.symbols.sessionGetCookies(
+      toCString(this.partitionId),
+      toCString(filterJson)
+    );
+    if (!result) return [];
+    try {
+      return JSON.parse(result);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Set a cookie
+   * @param cookie - The cookie to set
+   * @returns true if the cookie was set successfully
+   */
+  set(cookie: Cookie): boolean {
+    const cookieJson = JSON.stringify(cookie);
+    return native.symbols.sessionSetCookie(
+      toCString(this.partitionId),
+      toCString(cookieJson)
+    );
+  }
+
+  /**
+   * Remove a specific cookie
+   * @param url - The URL associated with the cookie
+   * @param name - The name of the cookie
+   * @returns true if the cookie was removed successfully
+   */
+  remove(url: string, name: string): boolean {
+    return native.symbols.sessionRemoveCookie(
+      toCString(this.partitionId),
+      toCString(url),
+      toCString(name)
+    );
+  }
+
+  /**
+   * Clear all cookies for this session
+   */
+  clear(): void {
+    native.symbols.sessionClearCookies(toCString(this.partitionId));
+  }
+}
+
+// Session class representing a storage partition
+class SessionInstance {
+  readonly partition: string;
+  readonly cookies: SessionCookies;
+
+  constructor(partition: string) {
+    this.partition = partition;
+    this.cookies = new SessionCookies(partition);
+  }
+
+  /**
+   * Clear storage data for this session
+   * @param types - Array of storage types to clear, or 'all' to clear everything
+   */
+  clearStorageData(types: StorageType[] | 'all' = 'all'): void {
+    const typesArray = types === 'all' ? ['all'] : types;
+    native.symbols.sessionClearStorageData(
+      toCString(this.partition),
+      toCString(JSON.stringify(typesArray))
+    );
+  }
+}
+
+// Cache of session instances
+const sessionCache = new Map<string, SessionInstance>();
+
+// Session module for storage/cookie management
+export const Session = {
+  /**
+   * Get or create a session for a given partition
+   * @param partition - The partition identifier (e.g., "persist:myapp" or "ephemeral")
+   * @returns Session instance for the partition
+   */
+  fromPartition: (partition: string): SessionInstance => {
+    let session = sessionCache.get(partition);
+    if (!session) {
+      session = new SessionInstance(partition);
+      sessionCache.set(partition, session);
+    }
+    return session;
+  },
+
+  /**
+   * Get the default session (persist:default partition)
+   */
+  get defaultSession(): SessionInstance {
+    return Session.fromPartition('persist:default');
   },
 };
 

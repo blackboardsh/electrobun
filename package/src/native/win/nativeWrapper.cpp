@@ -7745,3 +7745,424 @@ ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
 
     return _strdup("{\"x\":0,\"y\":0}");
 }
+
+/*
+ * =============================================================================
+ * COOKIE MANAGEMENT API
+ * =============================================================================
+ */
+
+// Helper to find a WebView2View by webview ID
+static WebView2View* findWebView2ById(uint32_t webviewId) {
+    for (auto& pair : g_webview2Views) {
+        if (pair.second && pair.second->webviewId == webviewId) {
+            return pair.second;
+        }
+    }
+    return nullptr;
+}
+
+// Get cookies for a webview (WebView2)
+// Note: WebView2 requires a live webview to access cookies. Pass webviewId of an existing webview.
+// filterJson: {"url": "https://example.com"} or {} for all
+ELECTROBUN_EXPORT const char* sessionGetCookies(const char* partitionIdentifier, const char* filterJson) {
+    // For WebView2, we need a webview to access cookies
+    // We'll try to find any webview with the matching partition
+    // For now, return empty array - full implementation requires webview access
+
+    std::string result = "[]";
+
+    // Parse filter to get URL
+    std::string filterStr = filterJson ? filterJson : "{}";
+    std::string filterUrl;
+
+    // Simple JSON parsing for url field
+    size_t urlPos = filterStr.find("\"url\"");
+    if (urlPos != std::string::npos) {
+        size_t colonPos = filterStr.find(':', urlPos);
+        size_t quoteStart = filterStr.find('"', colonPos);
+        size_t quoteEnd = filterStr.find('"', quoteStart + 1);
+        if (quoteStart != std::string::npos && quoteEnd != std::string::npos) {
+            filterUrl = filterStr.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+        }
+    }
+
+    // Find a WebView2 instance (ideally matching partition)
+    WebView2View* view = nullptr;
+    for (auto& pair : g_webview2Views) {
+        if (pair.second) {
+            view = pair.second;
+            break; // Use first available view
+        }
+    }
+
+    if (!view || !view->webview) {
+        return _strdup("[]");
+    }
+
+    // Get cookie manager
+    ComPtr<ICoreWebView2_2> webview2;
+    if (FAILED(view->webview->QueryInterface(IID_PPV_ARGS(&webview2)))) {
+        return _strdup("[]");
+    }
+
+    ComPtr<ICoreWebView2CookieManager> cookieManager;
+    if (FAILED(webview2->get_CookieManager(&cookieManager)) || !cookieManager) {
+        return _strdup("[]");
+    }
+
+    // Get cookies synchronously using event
+    std::string cookiesJson = "[]";
+    HANDLE event = CreateEvent(NULL, FALSE, FALSE, NULL);
+
+    std::wstring wFilterUrl;
+    if (!filterUrl.empty()) {
+        int wideSize = MultiByteToWideChar(CP_UTF8, 0, filterUrl.c_str(), -1, nullptr, 0);
+        wFilterUrl.resize(wideSize - 1);
+        MultiByteToWideChar(CP_UTF8, 0, filterUrl.c_str(), -1, &wFilterUrl[0], wideSize);
+    }
+
+    LPCWSTR uri = filterUrl.empty() ? nullptr : wFilterUrl.c_str();
+
+    cookieManager->GetCookies(uri,
+        Callback<ICoreWebView2GetCookiesCompletedHandler>(
+            [&cookiesJson, event](HRESULT result, ICoreWebView2CookieList* cookieList) -> HRESULT {
+                if (SUCCEEDED(result) && cookieList) {
+                    UINT count;
+                    cookieList->get_Count(&count);
+
+                    std::ostringstream json;
+                    json << "[";
+                    for (UINT i = 0; i < count; i++) {
+                        ComPtr<ICoreWebView2Cookie> cookie;
+                        if (SUCCEEDED(cookieList->GetValueAtIndex(i, &cookie))) {
+                            LPWSTR name, value, domain, path;
+                            BOOL secure, httpOnly;
+                            double expires;
+
+                            cookie->get_Name(&name);
+                            cookie->get_Value(&value);
+                            cookie->get_Domain(&domain);
+                            cookie->get_Path(&path);
+                            cookie->get_IsSecure(&secure);
+                            cookie->get_IsHttpOnly(&httpOnly);
+                            cookie->get_Expires(&expires);
+
+                            // Convert to UTF-8
+                            auto toUtf8 = [](LPWSTR wstr) -> std::string {
+                                if (!wstr) return "";
+                                int size = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+                                std::string str(size - 1, '\0');
+                                WideCharToMultiByte(CP_UTF8, 0, wstr, -1, &str[0], size, nullptr, nullptr);
+                                return str;
+                            };
+
+                            if (i > 0) json << ",";
+                            json << "{";
+                            json << "\"name\":\"" << toUtf8(name) << "\",";
+                            json << "\"value\":\"" << toUtf8(value) << "\",";
+                            json << "\"domain\":\"" << toUtf8(domain) << "\",";
+                            json << "\"path\":\"" << toUtf8(path) << "\",";
+                            json << "\"secure\":" << (secure ? "true" : "false") << ",";
+                            json << "\"httpOnly\":" << (httpOnly ? "true" : "false");
+                            if (expires > 0) {
+                                json << ",\"expirationDate\":" << expires;
+                            }
+                            json << "}";
+
+                            CoTaskMemFree(name);
+                            CoTaskMemFree(value);
+                            CoTaskMemFree(domain);
+                            CoTaskMemFree(path);
+                        }
+                    }
+                    json << "]";
+                    cookiesJson = json.str();
+                }
+                SetEvent(event);
+                return S_OK;
+            }).Get());
+
+    WaitForSingleObject(event, 5000);
+    CloseHandle(event);
+
+    return _strdup(cookiesJson.c_str());
+}
+
+// Set a cookie (WebView2)
+ELECTROBUN_EXPORT bool sessionSetCookie(const char* partitionIdentifier, const char* cookieJson) {
+    if (!cookieJson) return false;
+
+    // Find a WebView2 instance
+    WebView2View* view = nullptr;
+    for (auto& pair : g_webview2Views) {
+        if (pair.second) {
+            view = pair.second;
+            break;
+        }
+    }
+
+    if (!view || !view->webview) {
+        return false;
+    }
+
+    // Get cookie manager
+    ComPtr<ICoreWebView2_2> webview2;
+    if (FAILED(view->webview->QueryInterface(IID_PPV_ARGS(&webview2)))) {
+        return false;
+    }
+
+    ComPtr<ICoreWebView2CookieManager> cookieManager;
+    if (FAILED(webview2->get_CookieManager(&cookieManager)) || !cookieManager) {
+        return false;
+    }
+
+    // Parse JSON
+    std::string jsonStr = cookieJson;
+    auto extractString = [&jsonStr](const std::string& key) -> std::string {
+        std::string searchKey = "\"" + key + "\"";
+        size_t pos = jsonStr.find(searchKey);
+        if (pos == std::string::npos) return "";
+        size_t colonPos = jsonStr.find(':', pos);
+        size_t quoteStart = jsonStr.find('"', colonPos);
+        size_t quoteEnd = jsonStr.find('"', quoteStart + 1);
+        if (quoteStart != std::string::npos && quoteEnd != std::string::npos) {
+            return jsonStr.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+        }
+        return "";
+    };
+
+    auto extractBool = [&jsonStr](const std::string& key) -> bool {
+        std::string searchKey = "\"" + key + "\"";
+        size_t pos = jsonStr.find(searchKey);
+        if (pos == std::string::npos) return false;
+        return jsonStr.find("true", pos) < jsonStr.find(',', pos);
+    };
+
+    auto extractDouble = [&jsonStr](const std::string& key) -> double {
+        std::string searchKey = "\"" + key + "\"";
+        size_t pos = jsonStr.find(searchKey);
+        if (pos == std::string::npos) return 0;
+        size_t colonPos = jsonStr.find(':', pos);
+        size_t numStart = colonPos + 1;
+        while (numStart < jsonStr.size() && (jsonStr[numStart] == ' ' || jsonStr[numStart] == '\t')) numStart++;
+        return std::stod(jsonStr.substr(numStart));
+    };
+
+    std::string name = extractString("name");
+    std::string value = extractString("value");
+    std::string domain = extractString("domain");
+    std::string path = extractString("path");
+    std::string url = extractString("url");
+    bool secure = extractBool("secure");
+    bool httpOnly = extractBool("httpOnly");
+    double expirationDate = extractDouble("expirationDate");
+
+    if (name.empty() || (domain.empty() && url.empty())) {
+        return false;
+    }
+
+    // Derive domain from URL if not provided
+    if (domain.empty() && !url.empty()) {
+        size_t start = url.find("://");
+        if (start != std::string::npos) {
+            start += 3;
+            size_t end = url.find('/', start);
+            domain = url.substr(start, end - start);
+        }
+    }
+
+    if (path.empty()) path = "/";
+
+    // Convert to wide strings
+    auto toWide = [](const std::string& str) -> std::wstring {
+        int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
+        std::wstring wstr(size - 1, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], size);
+        return wstr;
+    };
+
+    // Create cookie - need to use CreateCookie which requires a URI
+    std::string cookieUrl = url.empty() ? ("https://" + domain + "/") : url;
+    std::wstring wUrl = toWide(cookieUrl);
+
+    ComPtr<ICoreWebView2Cookie> cookie;
+    if (FAILED(cookieManager->CreateCookie(toWide(name).c_str(), toWide(value).c_str(),
+                                           toWide(domain).c_str(), toWide(path).c_str(), &cookie))) {
+        return false;
+    }
+
+    cookie->put_IsSecure(secure);
+    cookie->put_IsHttpOnly(httpOnly);
+    if (expirationDate > 0) {
+        cookie->put_Expires(expirationDate);
+    }
+
+    bool success = false;
+    HANDLE event = CreateEvent(NULL, FALSE, FALSE, NULL);
+
+    cookieManager->AddOrUpdateCookie(cookie.Get());
+    success = true; // AddOrUpdateCookie doesn't have a callback
+
+    return success;
+}
+
+// Remove a specific cookie (WebView2)
+ELECTROBUN_EXPORT bool sessionRemoveCookie(const char* partitionIdentifier, const char* urlStr, const char* cookieName) {
+    if (!urlStr || !cookieName) return false;
+
+    // Find a WebView2 instance
+    WebView2View* view = nullptr;
+    for (auto& pair : g_webview2Views) {
+        if (pair.second) {
+            view = pair.second;
+            break;
+        }
+    }
+
+    if (!view || !view->webview) {
+        return false;
+    }
+
+    // Get cookie manager
+    ComPtr<ICoreWebView2_2> webview2;
+    if (FAILED(view->webview->QueryInterface(IID_PPV_ARGS(&webview2)))) {
+        return false;
+    }
+
+    ComPtr<ICoreWebView2CookieManager> cookieManager;
+    if (FAILED(webview2->get_CookieManager(&cookieManager)) || !cookieManager) {
+        return false;
+    }
+
+    std::string url = urlStr;
+    std::string name = cookieName;
+
+    // Convert to wide strings
+    int wideSize = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
+    std::wstring wUrl(wideSize - 1, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, &wUrl[0], wideSize);
+
+    wideSize = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, nullptr, 0);
+    std::wstring wName(wideSize - 1, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, &wName[0], wideSize);
+
+    // Get cookies matching URL, then delete the one with matching name
+    bool found = false;
+    HANDLE event = CreateEvent(NULL, FALSE, FALSE, NULL);
+
+    cookieManager->GetCookies(wUrl.c_str(),
+        Callback<ICoreWebView2GetCookiesCompletedHandler>(
+            [&found, &wName, &cookieManager, event](HRESULT result, ICoreWebView2CookieList* cookieList) -> HRESULT {
+                if (SUCCEEDED(result) && cookieList) {
+                    UINT count;
+                    cookieList->get_Count(&count);
+
+                    for (UINT i = 0; i < count; i++) {
+                        ComPtr<ICoreWebView2Cookie> cookie;
+                        if (SUCCEEDED(cookieList->GetValueAtIndex(i, &cookie))) {
+                            LPWSTR cookieName;
+                            cookie->get_Name(&cookieName);
+                            if (wcscmp(cookieName, wName.c_str()) == 0) {
+                                cookieManager->DeleteCookie(cookie.Get());
+                                found = true;
+                            }
+                            CoTaskMemFree(cookieName);
+                        }
+                    }
+                }
+                SetEvent(event);
+                return S_OK;
+            }).Get());
+
+    WaitForSingleObject(event, 5000);
+    CloseHandle(event);
+
+    return found;
+}
+
+// Clear all cookies (WebView2)
+ELECTROBUN_EXPORT void sessionClearCookies(const char* partitionIdentifier) {
+    // Find a WebView2 instance
+    WebView2View* view = nullptr;
+    for (auto& pair : g_webview2Views) {
+        if (pair.second) {
+            view = pair.second;
+            break;
+        }
+    }
+
+    if (!view || !view->webview) {
+        return;
+    }
+
+    // Get cookie manager
+    ComPtr<ICoreWebView2_2> webview2;
+    if (FAILED(view->webview->QueryInterface(IID_PPV_ARGS(&webview2)))) {
+        return;
+    }
+
+    ComPtr<ICoreWebView2CookieManager> cookieManager;
+    if (FAILED(webview2->get_CookieManager(&cookieManager)) || !cookieManager) {
+        return;
+    }
+
+    // DeleteAllCookies deletes all cookies
+    cookieManager->DeleteAllCookies();
+}
+
+// Clear storage data (WebView2) - uses Profile API
+ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionIdentifier, const char* storageTypesJson) {
+    // Find a WebView2 instance
+    WebView2View* view = nullptr;
+    for (auto& pair : g_webview2Views) {
+        if (pair.second) {
+            view = pair.second;
+            break;
+        }
+    }
+
+    if (!view || !view->webview) {
+        return;
+    }
+
+    // Try to get Profile interface for clearing browsing data
+    ComPtr<ICoreWebView2_13> webview13;
+    if (SUCCEEDED(view->webview->QueryInterface(IID_PPV_ARGS(&webview13)))) {
+        ComPtr<ICoreWebView2Profile> profile;
+        if (SUCCEEDED(webview13->get_Profile(&profile))) {
+            ComPtr<ICoreWebView2Profile2> profile2;
+            if (SUCCEEDED(profile->QueryInterface(IID_PPV_ARGS(&profile2)))) {
+                // Determine what to clear
+                COREWEBVIEW2_BROWSING_DATA_KINDS dataKinds = COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE;
+
+                if (storageTypesJson && strlen(storageTypesJson) > 2) {
+                    dataKinds = (COREWEBVIEW2_BROWSING_DATA_KINDS)0;
+                    std::string types = storageTypesJson;
+
+                    if (types.find("cookies") != std::string::npos) {
+                        dataKinds = (COREWEBVIEW2_BROWSING_DATA_KINDS)(dataKinds | COREWEBVIEW2_BROWSING_DATA_KINDS_COOKIES);
+                    }
+                    if (types.find("cache") != std::string::npos) {
+                        dataKinds = (COREWEBVIEW2_BROWSING_DATA_KINDS)(dataKinds | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE);
+                    }
+                    if (types.find("localStorage") != std::string::npos ||
+                        types.find("sessionStorage") != std::string::npos ||
+                        types.find("indexedDB") != std::string::npos) {
+                        dataKinds = (COREWEBVIEW2_BROWSING_DATA_KINDS)(dataKinds | COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE);
+                    }
+                }
+
+                HANDLE event = CreateEvent(NULL, FALSE, FALSE, NULL);
+                profile2->ClearBrowsingData(dataKinds,
+                    Callback<ICoreWebView2ClearBrowsingDataCompletedHandler>(
+                        [event](HRESULT result) -> HRESULT {
+                            SetEvent(event);
+                            return S_OK;
+                        }).Get());
+                WaitForSingleObject(event, 10000);
+                CloseHandle(event);
+            }
+        }
+    }
+}

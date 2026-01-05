@@ -11,6 +11,7 @@ import Electrobun, {
   Utils,
   GlobalShortcut,
   Screen,
+  Session,
 } from "electrobun/bun";
 import { type MyWebviewRPC } from "../mainview/rpc";
 import { type MyExtensionSchema } from "../myextension/rpc";
@@ -275,6 +276,53 @@ const cursorPos = Screen.getCursorScreenPoint();
 console.log("Cursor position:", cursorPos);
 
 console.log("=== End Screen API Demo ===\n");
+
+// Session/Cookie API demo
+// Demonstrates managing cookies and storage for partitions
+console.log("\n=== Session/Cookie API Demo ===");
+
+// Get or create a session for a partition
+const mySession = Session.fromPartition("persist:demo");
+console.log("Created session for partition:", mySession.partition);
+
+// Set a test cookie
+const cookieSet = mySession.cookies.set({
+  name: "demo-cookie",
+  value: "hello-electrobun",
+  domain: "localhost",
+  path: "/",
+  secure: false,
+  httpOnly: false,
+  sameSite: "lax",
+  expirationDate: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+});
+console.log("Cookie set result:", cookieSet);
+
+// Get all cookies
+const allCookies = mySession.cookies.get();
+console.log("All cookies in session:", allCookies);
+
+// Get cookies with filter
+const filteredCookies = mySession.cookies.get({ name: "demo-cookie" });
+console.log("Filtered cookies (name=demo-cookie):", filteredCookies);
+
+// Set another cookie for testing
+mySession.cookies.set({
+  name: "test-cookie-2",
+  value: "value2",
+  domain: "localhost",
+  path: "/test",
+});
+
+// Get cookies count
+const cookiesAfterSecond = mySession.cookies.get();
+console.log(`Total cookies after adding second: ${cookiesAfterSecond.length}`);
+
+// Test the default session
+const defaultSession = Session.defaultSession;
+console.log("Default session partition:", defaultSession.partition);
+
+console.log("=== End Session/Cookie API Demo ===\n");
 
 Electrobun.events.on("new-window-open", (e) => {
   console.log('---------->>>> new window open ........', e)
