@@ -130,6 +130,14 @@ export const native = (() => {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
+      setNSWindowAlwaysOnTop: {
+        args: [FFIType.ptr, FFIType.bool],
+        returns: FFIType.void,
+      },
+      isNSWindowAlwaysOnTop: {
+        args: [FFIType.ptr],
+        returns: FFIType.bool,
+      },
       // webview
       initWebview: {
         args: [
@@ -691,6 +699,28 @@ export const ffi = {
         }
 
         return native.symbols.isNSWindowFullScreen(windowPtr);
+      },
+
+      setWindowAlwaysOnTop: (params: {winId: number; alwaysOnTop: boolean}) => {
+        const {winId, alwaysOnTop} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't set always on top. Window no longer exists`;
+        }
+
+        native.symbols.setNSWindowAlwaysOnTop(windowPtr, alwaysOnTop);
+      },
+
+      isWindowAlwaysOnTop: (params: {winId: number}): boolean => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          return false;
+        }
+
+        return native.symbols.isNSWindowAlwaysOnTop(windowPtr);
       },
 
       createWebview: (params: {

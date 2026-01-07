@@ -212,6 +212,14 @@ export class BrowserWindow<T> {
     return ffi.request.isWindowFullScreen({ winId: this.id });
   }
 
+  setAlwaysOnTop(alwaysOnTop: boolean) {
+    return ffi.request.setWindowAlwaysOnTop({ winId: this.id, alwaysOnTop });
+  }
+
+  isAlwaysOnTop(): boolean {
+    return ffi.request.isWindowAlwaysOnTop({ winId: this.id });
+  }
+
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserWindow events
   on(name, handler) {

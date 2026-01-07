@@ -5832,6 +5832,33 @@ ELECTROBUN_EXPORT bool isNSWindowFullScreen(NSWindow *window) {
     return (style & WS_POPUP) && !(style & WS_OVERLAPPEDWINDOW);
 }
 
+ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in setNSWindowAlwaysOnTop");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        SetWindowPos(hwnd,
+            alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST,
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE);
+    });
+}
+
+ELECTROBUN_EXPORT bool isNSWindowAlwaysOnTop(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        return false;
+    }
+
+    LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+    return (exStyle & WS_EX_TOPMOST) != 0;
+}
+
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
     if (!abstractView) {
         ::log("ERROR: Invalid AbstractView in resizeWebview");

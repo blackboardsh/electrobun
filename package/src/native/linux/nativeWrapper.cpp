@@ -6375,6 +6375,82 @@ bool isNSWindowFullScreen(void* window) {
     return result;
 }
 
+void setNSWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
+    if (!window) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                gtk_window_set_keep_above(GTK_WINDOW(gtkWindow), alwaysOnTop ? TRUE : FALSE);
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+                Atom aboveAtom = XInternAtom(x11win->display, "_NET_WM_STATE_ABOVE", False);
+
+                XEvent xev = {};
+                xev.type = ClientMessage;
+                xev.xclient.window = x11win->window;
+                xev.xclient.message_type = wmState;
+                xev.xclient.format = 32;
+                xev.xclient.data.l[0] = alwaysOnTop ? 1 : 0; // _NET_WM_STATE_ADD or REMOVE
+                xev.xclient.data.l[1] = aboveAtom;
+                xev.xclient.data.l[2] = 0;
+                xev.xclient.data.l[3] = 0;
+
+                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                    SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+bool isNSWindowAlwaysOnTop(void* window) {
+    if (!window) return false;
+
+    bool result = false;
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
+                if (gdkWindow) {
+                    GdkWindowState state = gdk_window_get_state(gdkWindow);
+                    result = (state & GDK_WINDOW_STATE_ABOVE) != 0;
+                }
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+                Atom aboveAtom = XInternAtom(x11win->display, "_NET_WM_STATE_ABOVE", False);
+
+                Atom actualType;
+                int actualFormat;
+                unsigned long nItems, bytesAfter;
+                unsigned char* propData = nullptr;
+
+                if (XGetWindowProperty(x11win->display, x11win->window, wmState,
+                        0, (~0L), False, XA_ATOM, &actualType, &actualFormat,
+                        &nItems, &bytesAfter, &propData) == Success && propData) {
+                    Atom* atoms = reinterpret_cast<Atom*>(propData);
+                    for (unsigned long i = 0; i < nItems; i++) {
+                        if (atoms[i] == aboveAtom) {
+                            result = true;
+                            break;
+                        }
+                    }
+                    XFree(propData);
+                }
+            }
+        }
+    });
+    return result;
+}
+
 /*
  * =============================================================================
  * GLOBAL KEYBOARD SHORTCUTS
