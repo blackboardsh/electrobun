@@ -1,0 +1,24 @@
+{
+  "name": "electrobun-svelte",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Electrobun app with Svelte and Vite HMR",
+  "scripts": {
+    "dev": "bun run build && electrobun dev",
+    "dev:hmr": "concurrently \"bun run hmr\" \"bun run dev\"",
+    "hmr": "vite --port 5173",
+    "build": "vite build && electrobun build",
+    "build:prod": "vite build && electrobun build --channel prod"
+  },
+  "dependencies": {
+    "electrobun": "latest"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.1",
+    "@types/bun": "latest",
+    "concurrently": "^9.1.0",
+    "svelte": "^5.14.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}
