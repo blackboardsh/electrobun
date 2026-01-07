@@ -180,6 +180,38 @@ export class BrowserWindow<T> {
     return ffi.request.focusWindow({ winId: this.id });
   }
 
+  minimize() {
+    return ffi.request.minimizeWindow({ winId: this.id });
+  }
+
+  unminimize() {
+    return ffi.request.unminimizeWindow({ winId: this.id });
+  }
+
+  isMinimized(): boolean {
+    return ffi.request.isWindowMinimized({ winId: this.id });
+  }
+
+  maximize() {
+    return ffi.request.maximizeWindow({ winId: this.id });
+  }
+
+  unmaximize() {
+    return ffi.request.unmaximizeWindow({ winId: this.id });
+  }
+
+  isMaximized(): boolean {
+    return ffi.request.isWindowMaximized({ winId: this.id });
+  }
+
+  setFullScreen(fullScreen: boolean) {
+    return ffi.request.setWindowFullScreen({ winId: this.id, fullScreen });
+  }
+
+  isFullScreen(): boolean {
+    return ffi.request.isWindowFullScreen({ winId: this.id });
+  }
+
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserWindow events
   on(name, handler) {

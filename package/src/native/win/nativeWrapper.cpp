@@ -5657,22 +5657,22 @@ ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
 ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
-    
+
     if (!IsWindow(hwnd)) {
         ::log("ERROR: Invalid window handle in closeNSWindow");
         return;
     }
-    
+
     // Dispatch to main thread to ensure thread safety
     MainThreadDispatcher::dispatch_sync([=]() {
 
-        
+
         // Clean up any associated container views before closing
         auto containerIt = g_containerViews.find(hwnd);
         if (containerIt != g_containerViews.end()) {
             g_containerViews.erase(containerIt);
         }
-        
+
         // Send WM_CLOSE message to the window
         // This will trigger the window's close handler if one is set
         if (PostMessage(hwnd, WM_CLOSE, 0, 0)) {
@@ -5681,7 +5681,7 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
             char errorMsg[256];
             sprintf_s(errorMsg, "Failed to send WM_CLOSE message, error: %lu", error);
             ::log(errorMsg);
-            
+
             // If PostMessage fails, try DestroyWindow as a fallback
             ::log("Attempting DestroyWindow as fallback");
             if (DestroyWindow(hwnd)) {
@@ -5693,6 +5693,143 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
             }
         }
     });
+}
+
+ELECTROBUN_EXPORT void minimizeNSWindow(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in minimizeNSWindow");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        ShowWindow(hwnd, SW_MINIMIZE);
+    });
+}
+
+ELECTROBUN_EXPORT void unminimizeNSWindow(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in unminimizeNSWindow");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        ShowWindow(hwnd, SW_RESTORE);
+    });
+}
+
+ELECTROBUN_EXPORT bool isNSWindowMinimized(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        return false;
+    }
+
+    return IsIconic(hwnd) != 0;
+}
+
+ELECTROBUN_EXPORT void maximizeNSWindow(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in maximizeNSWindow");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        ShowWindow(hwnd, SW_MAXIMIZE);
+    });
+}
+
+ELECTROBUN_EXPORT void unmaximizeNSWindow(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in unmaximizeNSWindow");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        ShowWindow(hwnd, SW_RESTORE);
+    });
+}
+
+ELECTROBUN_EXPORT bool isNSWindowMaximized(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        return false;
+    }
+
+    return IsZoomed(hwnd) != 0;
+}
+
+ELECTROBUN_EXPORT void setNSWindowFullScreen(NSWindow *window, bool fullScreen) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in setNSWindowFullScreen");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        static std::map<HWND, WINDOWPLACEMENT> savedPlacements;
+        static std::map<HWND, LONG> savedStyles;
+
+        LONG style = GetWindowLong(hwnd, GWL_STYLE);
+        bool isCurrentlyFullScreen = (style & WS_POPUP) && !(style & WS_OVERLAPPEDWINDOW);
+
+        if (fullScreen && !isCurrentlyFullScreen) {
+            // Save current state
+            WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+            GetWindowPlacement(hwnd, &wp);
+            savedPlacements[hwnd] = wp;
+            savedStyles[hwnd] = style;
+
+            // Get the monitor info for the window
+            HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi = { sizeof(MONITORINFO) };
+            GetMonitorInfo(monitor, &mi);
+
+            // Remove window decorations and set to fullscreen
+            SetWindowLong(hwnd, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW | WS_POPUP);
+            SetWindowPos(hwnd, HWND_TOP,
+                mi.rcMonitor.left, mi.rcMonitor.top,
+                mi.rcMonitor.right - mi.rcMonitor.left,
+                mi.rcMonitor.bottom - mi.rcMonitor.top,
+                SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        } else if (!fullScreen && isCurrentlyFullScreen) {
+            // Restore saved state
+            auto styleIt = savedStyles.find(hwnd);
+            if (styleIt != savedStyles.end()) {
+                SetWindowLong(hwnd, GWL_STYLE, styleIt->second);
+                savedStyles.erase(styleIt);
+            }
+
+            auto placementIt = savedPlacements.find(hwnd);
+            if (placementIt != savedPlacements.end()) {
+                SetWindowPlacement(hwnd, &placementIt->second);
+                savedPlacements.erase(placementIt);
+            }
+
+            SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        }
+    });
+}
+
+ELECTROBUN_EXPORT bool isNSWindowFullScreen(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        return false;
+    }
+
+    LONG style = GetWindowLong(hwnd, GWL_STYLE);
+    return (style & WS_POPUP) && !(style & WS_OVERLAPPEDWINDOW);
 }
 
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {

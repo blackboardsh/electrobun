@@ -324,6 +324,11 @@ console.log("Default session partition:", defaultSession.partition);
 
 console.log("=== End Session/Cookie API Demo ===\n");
 
+// Window State API demo
+// Demonstrates minimize, maximize, and fullscreen controls
+// These will be demonstrated after the main window is created below
+// See the setTimeout block at the bottom of this file for the demo
+
 Electrobun.events.on("new-window-open", (e) => {
   console.log('---------->>>> new window open ........', e)
   /**
@@ -701,3 +706,42 @@ setTimeout(() => {
     win.webview.rpc?.send.logToWebview({ msg: "hi from bun!" });
   }, 1000);
 }, 3000);
+
+// Window State API Demo
+// Demonstrates minimize, maximize, and fullscreen controls
+setTimeout(() => {
+  console.log("\n=== Window State API Demo ===");
+
+  // Check initial state
+  console.log("wikiWindow isMinimized:", wikiWindow.isMinimized());
+  console.log("wikiWindow isMaximized:", wikiWindow.isMaximized());
+  console.log("wikiWindow isFullScreen:", wikiWindow.isFullScreen());
+
+  // Minimize the wiki window
+  console.log("Minimizing wikiWindow...");
+  wikiWindow.minimize();
+
+  setTimeout(() => {
+    console.log("wikiWindow isMinimized:", wikiWindow.isMinimized());
+
+    // Unminimize
+    console.log("Unminimizing wikiWindow...");
+    wikiWindow.unminimize();
+
+    setTimeout(() => {
+      // Maximize the wiki window
+      console.log("Maximizing wikiWindow...");
+      wikiWindow.maximize();
+
+      setTimeout(() => {
+        console.log("wikiWindow isMaximized:", wikiWindow.isMaximized());
+
+        // Unmaximize
+        console.log("Unmaximizing wikiWindow...");
+        wikiWindow.unmaximize();
+
+        console.log("=== End Window State API Demo ===\n");
+      }, 1500);
+    }, 1500);
+  }, 1500);
+}, 8000);

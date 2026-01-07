@@ -98,6 +98,38 @@ export const native = (() => {
         ],
         returns: FFIType.void,
       },
+      minimizeNSWindow: {
+        args: [FFIType.ptr],
+        returns: FFIType.void,
+      },
+      unminimizeNSWindow: {
+        args: [FFIType.ptr],
+        returns: FFIType.void,
+      },
+      isNSWindowMinimized: {
+        args: [FFIType.ptr],
+        returns: FFIType.bool,
+      },
+      maximizeNSWindow: {
+        args: [FFIType.ptr],
+        returns: FFIType.void,
+      },
+      unmaximizeNSWindow: {
+        args: [FFIType.ptr],
+        returns: FFIType.void,
+      },
+      isNSWindowMaximized: {
+        args: [FFIType.ptr],
+        returns: FFIType.bool,
+      },
+      setNSWindowFullScreen: {
+        args: [FFIType.ptr, FFIType.bool],
+        returns: FFIType.void,
+      },
+      isNSWindowFullScreen: {
+        args: [FFIType.ptr],
+        returns: FFIType.bool,
+      },
       // webview
       initWebview: {
         args: [
@@ -565,12 +597,100 @@ export const ffi = {
       focusWindow: (params: {winId: number}) => {
         const {winId} = params;
         const windowPtr = BrowserWindow.getById(winId)?.ptr;
-        
+
         if (!windowPtr) {
           throw `Can't focus window. Window no longer exists`;
         }
-        
+
         native.symbols.makeNSWindowKeyAndOrderFront(windowPtr);
+      },
+
+      minimizeWindow: (params: {winId: number}) => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't minimize window. Window no longer exists`;
+        }
+
+        native.symbols.minimizeNSWindow(windowPtr);
+      },
+
+      unminimizeWindow: (params: {winId: number}) => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't unminimize window. Window no longer exists`;
+        }
+
+        native.symbols.unminimizeNSWindow(windowPtr);
+      },
+
+      isWindowMinimized: (params: {winId: number}): boolean => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          return false;
+        }
+
+        return native.symbols.isNSWindowMinimized(windowPtr);
+      },
+
+      maximizeWindow: (params: {winId: number}) => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't maximize window. Window no longer exists`;
+        }
+
+        native.symbols.maximizeNSWindow(windowPtr);
+      },
+
+      unmaximizeWindow: (params: {winId: number}) => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't unmaximize window. Window no longer exists`;
+        }
+
+        native.symbols.unmaximizeNSWindow(windowPtr);
+      },
+
+      isWindowMaximized: (params: {winId: number}): boolean => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          return false;
+        }
+
+        return native.symbols.isNSWindowMaximized(windowPtr);
+      },
+
+      setWindowFullScreen: (params: {winId: number; fullScreen: boolean}) => {
+        const {winId, fullScreen} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't set fullscreen. Window no longer exists`;
+        }
+
+        native.symbols.setNSWindowFullScreen(windowPtr, fullScreen);
+      },
+
+      isWindowFullScreen: (params: {winId: number}): boolean => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          return false;
+        }
+
+        return native.symbols.isNSWindowFullScreen(windowPtr);
       },
 
       createWebview: (params: {

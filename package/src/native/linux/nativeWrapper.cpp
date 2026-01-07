@@ -6111,6 +6111,270 @@ void closeNSWindow(void* window) {
     }
 }
 
+void minimizeNSWindow(void* window) {
+    if (!window) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                gtk_window_iconify(GTK_WINDOW(gtkWindow));
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                XIconifyWindow(x11win->display, x11win->window, DefaultScreen(x11win->display));
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+void unminimizeNSWindow(void* window) {
+    if (!window) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                gtk_window_deiconify(GTK_WINDOW(gtkWindow));
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                XMapWindow(x11win->display, x11win->window);
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+bool isNSWindowMinimized(void* window) {
+    if (!window) return false;
+
+    bool result = false;
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
+                if (gdkWindow) {
+                    GdkWindowState state = gdk_window_get_state(gdkWindow);
+                    result = (state & GDK_WINDOW_STATE_ICONIFIED) != 0;
+                }
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                Atom wmState = XInternAtom(x11win->display, "WM_STATE", True);
+                if (wmState != None) {
+                    Atom actualType;
+                    int actualFormat;
+                    unsigned long nItems, bytesAfter;
+                    unsigned char* propData = nullptr;
+
+                    if (XGetWindowProperty(x11win->display, x11win->window, wmState,
+                            0, 2, False, wmState, &actualType, &actualFormat,
+                            &nItems, &bytesAfter, &propData) == Success && propData) {
+                        // WM_STATE first element: WithdrawnState=0, NormalState=1, IconicState=3
+                        result = (propData[0] == 3); // IconicState
+                        XFree(propData);
+                    }
+                }
+            }
+        }
+    });
+    return result;
+}
+
+void maximizeNSWindow(void* window) {
+    if (!window) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                gtk_window_maximize(GTK_WINDOW(gtkWindow));
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+                Atom maxH = XInternAtom(x11win->display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+                Atom maxV = XInternAtom(x11win->display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+
+                XEvent xev = {};
+                xev.type = ClientMessage;
+                xev.xclient.window = x11win->window;
+                xev.xclient.message_type = wmState;
+                xev.xclient.format = 32;
+                xev.xclient.data.l[0] = 1; // _NET_WM_STATE_ADD
+                xev.xclient.data.l[1] = maxH;
+                xev.xclient.data.l[2] = maxV;
+                xev.xclient.data.l[3] = 0;
+
+                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                    SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+void unmaximizeNSWindow(void* window) {
+    if (!window) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                gtk_window_unmaximize(GTK_WINDOW(gtkWindow));
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+                Atom maxH = XInternAtom(x11win->display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+                Atom maxV = XInternAtom(x11win->display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+
+                XEvent xev = {};
+                xev.type = ClientMessage;
+                xev.xclient.window = x11win->window;
+                xev.xclient.message_type = wmState;
+                xev.xclient.format = 32;
+                xev.xclient.data.l[0] = 0; // _NET_WM_STATE_REMOVE
+                xev.xclient.data.l[1] = maxH;
+                xev.xclient.data.l[2] = maxV;
+                xev.xclient.data.l[3] = 0;
+
+                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                    SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+bool isNSWindowMaximized(void* window) {
+    if (!window) return false;
+
+    bool result = false;
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                result = gtk_window_is_maximized(GTK_WINDOW(gtkWindow));
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+                Atom maxH = XInternAtom(x11win->display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+                Atom maxV = XInternAtom(x11win->display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+
+                Atom actualType;
+                int actualFormat;
+                unsigned long nItems, bytesAfter;
+                unsigned char* propData = nullptr;
+
+                if (XGetWindowProperty(x11win->display, x11win->window, wmState,
+                        0, (~0L), False, XA_ATOM, &actualType, &actualFormat,
+                        &nItems, &bytesAfter, &propData) == Success && propData) {
+                    Atom* atoms = reinterpret_cast<Atom*>(propData);
+                    bool hasMaxH = false, hasMaxV = false;
+                    for (unsigned long i = 0; i < nItems; i++) {
+                        if (atoms[i] == maxH) hasMaxH = true;
+                        if (atoms[i] == maxV) hasMaxV = true;
+                    }
+                    result = hasMaxH && hasMaxV;
+                    XFree(propData);
+                }
+            }
+        }
+    });
+    return result;
+}
+
+void setNSWindowFullScreen(void* window, bool fullScreen) {
+    if (!window) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                if (fullScreen) {
+                    gtk_window_fullscreen(GTK_WINDOW(gtkWindow));
+                } else {
+                    gtk_window_unfullscreen(GTK_WINDOW(gtkWindow));
+                }
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+                Atom fullscreenAtom = XInternAtom(x11win->display, "_NET_WM_STATE_FULLSCREEN", False);
+
+                XEvent xev = {};
+                xev.type = ClientMessage;
+                xev.xclient.window = x11win->window;
+                xev.xclient.message_type = wmState;
+                xev.xclient.format = 32;
+                xev.xclient.data.l[0] = fullScreen ? 1 : 0; // _NET_WM_STATE_ADD or REMOVE
+                xev.xclient.data.l[1] = fullscreenAtom;
+                xev.xclient.data.l[2] = 0;
+                xev.xclient.data.l[3] = 0;
+
+                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                    SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+bool isNSWindowFullScreen(void* window) {
+    if (!window) return false;
+
+    bool result = false;
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
+                if (gdkWindow) {
+                    GdkWindowState state = gdk_window_get_state(gdkWindow);
+                    result = (state & GDK_WINDOW_STATE_FULLSCREEN) != 0;
+                }
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+                Atom fullscreenAtom = XInternAtom(x11win->display, "_NET_WM_STATE_FULLSCREEN", False);
+
+                Atom actualType;
+                int actualFormat;
+                unsigned long nItems, bytesAfter;
+                unsigned char* propData = nullptr;
+
+                if (XGetWindowProperty(x11win->display, x11win->window, wmState,
+                        0, (~0L), False, XA_ATOM, &actualType, &actualFormat,
+                        &nItems, &bytesAfter, &propData) == Success && propData) {
+                    Atom* atoms = reinterpret_cast<Atom*>(propData);
+                    for (unsigned long i = 0; i < nItems; i++) {
+                        if (atoms[i] == fullscreenAtom) {
+                            result = true;
+                            break;
+                        }
+                    }
+                    XFree(propData);
+                }
+            }
+        }
+    });
+    return result;
+}
+
 /*
  * =============================================================================
  * GLOBAL KEYBOARD SHORTCUTS

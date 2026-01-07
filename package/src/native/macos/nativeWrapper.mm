@@ -4437,6 +4437,69 @@ extern "C" void closeNSWindow(NSWindow *window) {
     });
 }
 
+extern "C" void minimizeNSWindow(NSWindow *window) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [window miniaturize:nil];
+    });
+}
+
+extern "C" void unminimizeNSWindow(NSWindow *window) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [window deminiaturize:nil];
+    });
+}
+
+extern "C" bool isNSWindowMinimized(NSWindow *window) {
+    __block bool result = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = [window isMiniaturized];
+    });
+    return result;
+}
+
+extern "C" void maximizeNSWindow(NSWindow *window) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        // Only zoom if not already zoomed
+        if (![window isZoomed]) {
+            [window zoom:nil];
+        }
+    });
+}
+
+extern "C" void unmaximizeNSWindow(NSWindow *window) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        // Only unzoom if currently zoomed
+        if ([window isZoomed]) {
+            [window zoom:nil];
+        }
+    });
+}
+
+extern "C" bool isNSWindowMaximized(NSWindow *window) {
+    __block bool result = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = [window isZoomed];
+    });
+    return result;
+}
+
+extern "C" void setNSWindowFullScreen(NSWindow *window, bool fullScreen) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        bool isCurrentlyFullScreen = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+        if (fullScreen != isCurrentlyFullScreen) {
+            [window toggleFullScreen:nil];
+        }
+    });
+}
+
+extern "C" bool isNSWindowFullScreen(NSWindow *window) {
+    __block bool result = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+    });
+    return result;
+}
+
 extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {    
     NSRect frame = NSMakeRect(x, y, width, height);
     dispatch_async(dispatch_get_main_queue(), ^{
