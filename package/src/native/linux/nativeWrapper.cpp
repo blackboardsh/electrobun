@@ -1135,14 +1135,9 @@ public:
             }
         }
 
-        // Check navigation rules synchronously from native-stored rules
+        // Navigation is allowed by default
+        // TODO: Implement navigation rules check when navigation rules feature is added
         bool shouldAllow = true;
-        {
-            auto it = g_webviewMap.find(webview_id_);
-            if (it != g_webviewMap.end() && it->second != nullptr) {
-                shouldAllow = it->second->shouldAllowNavigationToURL(url);
-            }
-        }
 
         // Fire will-navigate event with allowed status
         if (webview_event_handler_) {
@@ -2179,7 +2174,7 @@ public:
         }
 
         // Create webview with context and user content manager
-        webview = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW,
+        webview = GTK_WIDGET(g_object_new(WEBKIT_TYPE_WEB_VIEW,
             "web-context", context,
             "user-content-manager", manager,
             "settings", settings,
@@ -7444,33 +7439,35 @@ void sessionClearStorageData(const char* partitionIdentifier, const char* storag
             return;
         }
 
-        WebKitWebsiteDataTypes types = 0;
+        unsigned int typesFlags = 0;
 
         if (typesStr.length() > 2) {
             if (typesStr.find("cookies") != std::string::npos) {
-                types |= WEBKIT_WEBSITE_DATA_COOKIES;
+                typesFlags |= WEBKIT_WEBSITE_DATA_COOKIES;
             }
             if (typesStr.find("localStorage") != std::string::npos) {
-                types |= WEBKIT_WEBSITE_DATA_LOCAL_STORAGE;
+                typesFlags |= WEBKIT_WEBSITE_DATA_LOCAL_STORAGE;
             }
             if (typesStr.find("indexedDB") != std::string::npos) {
-                types |= WEBKIT_WEBSITE_DATA_INDEXEDDB_DATABASES;
+                typesFlags |= WEBKIT_WEBSITE_DATA_INDEXEDDB_DATABASES;
             }
             if (typesStr.find("cache") != std::string::npos) {
-                types |= WEBKIT_WEBSITE_DATA_DISK_CACHE;
-                types |= WEBKIT_WEBSITE_DATA_MEMORY_CACHE;
+                typesFlags |= WEBKIT_WEBSITE_DATA_DISK_CACHE;
+                typesFlags |= WEBKIT_WEBSITE_DATA_MEMORY_CACHE;
             }
             if (typesStr.find("serviceWorkers") != std::string::npos) {
-                types |= WEBKIT_WEBSITE_DATA_SERVICE_WORKER_REGISTRATIONS;
+                typesFlags |= WEBKIT_WEBSITE_DATA_SERVICE_WORKER_REGISTRATIONS;
             }
         } else {
             // Clear all
-            types = WEBKIT_WEBSITE_DATA_ALL;
+            typesFlags = WEBKIT_WEBSITE_DATA_ALL;
         }
 
-        if (types == 0) {
+        if (typesFlags == 0) {
             return;
         }
+
+        WebKitWebsiteDataTypes types = static_cast<WebKitWebsiteDataTypes>(typesFlags);
 
         GMainLoop* loop = g_main_loop_new(NULL, FALSE);
 
