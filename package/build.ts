@@ -676,7 +676,7 @@ async function vendorBun() {
     const extractDir = join("vendors", "bun");
 
     // Download zip file
-    await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.2.23/${bunUrlSegment}`;
+    await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.3.5/${bunUrlSegment}`;
 
     // Validate download
     validateDownload(tempZipPath, 'bun');
