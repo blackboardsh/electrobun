@@ -232,6 +232,16 @@ export class BrowserView<T> {
     native.symbols.setWebviewNavigationRules(this.ptr, toCString(rulesJson));
   }
 
+  findInPage(searchText: string, options?: {forward?: boolean; matchCase?: boolean}) {
+    const forward = options?.forward ?? true;
+    const matchCase = options?.matchCase ?? false;
+    native.symbols.webviewFindInPage(this.ptr, toCString(searchText), forward, matchCase);
+  }
+
+  stopFindInPage() {
+    native.symbols.webviewStopFind(this.ptr);
+  }
+
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserView events
   // Note: normalize event names to willNavigate instead of ['will-navigate'] to save

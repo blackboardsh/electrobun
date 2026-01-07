@@ -252,6 +252,14 @@ export const native = (() => {
         args: [FFIType.ptr, FFIType.cstring],
         returns: FFIType.void
       },
+      webviewFindInPage: {
+        args: [FFIType.ptr, FFIType.cstring, FFIType.bool, FFIType.bool],
+        returns: FFIType.void
+      },
+      webviewStopFind: {
+        args: [FFIType.ptr],
+        returns: FFIType.void
+      },
       evaluateJavaScriptWithNoCompletion: {
         args: [FFIType.ptr, FFIType.cstring],
         returns: FFIType.void
@@ -2180,6 +2188,22 @@ export const internalRpcHandlers = {
       }
       const rulesJson = JSON.stringify(params.rules);
       native.symbols.setWebviewNavigationRules(webview.ptr, toCString(rulesJson));
+    },
+    webviewTagFindInPage: (params: {id: number; searchText: string; forward: boolean; matchCase: boolean}) => {
+      const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagFindInPage: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
+      native.symbols.webviewFindInPage(webview.ptr, toCString(params.searchText), params.forward, params.matchCase);
+    },
+    webviewTagStopFind: (params: {id: number}) => {
+      const webview = BrowserView.getById(params.id);
+      if (!webview || !webview.ptr) {
+        console.error(`webviewTagStopFind: BrowserView not found or has no ptr for id ${params.id}`);
+        return;
+      }
+      native.symbols.webviewStopFind(webview.ptr);
     },
     webviewEvent: (params) => {
       console.log('-----------------+webviewEvent', params)

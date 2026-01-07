@@ -2024,6 +2024,10 @@ public:
     virtual void applyVisualMask() = 0;
     virtual void removeMasks() = 0;
     virtual void toggleMirrorMode(bool enable) = 0;
+
+    // Find in page methods
+    virtual void findInPage(const char* searchText, bool forward, bool matchCase) = 0;
+    virtual void stopFindInPage() = 0;
 };
 
 // WebView2View class - implements AbstractView for WebView2
@@ -2526,6 +2530,43 @@ private:
             ::log("applyWindowMask: exception occurred during mask creation");
         }
     }
+
+    void findInPage(const char* searchText, bool forward, bool matchCase) override {
+        if (!webview) return;
+
+        if (!searchText || strlen(searchText) == 0) {
+            stopFindInPage();
+            return;
+        }
+
+        // WebView2 doesn't have a native Find API in older versions
+        // Use JavaScript window.find() instead
+        std::string text(searchText);
+        // Escape special characters for JavaScript string
+        std::string escaped;
+        for (char c : text) {
+            if (c == '\\') escaped += "\\\\";
+            else if (c == '\'') escaped += "\\'";
+            else if (c == '\n') escaped += "\\n";
+            else if (c == '\r') escaped += "\\r";
+            else escaped += c;
+        }
+
+        // window.find(string, caseSensitive, backwards, wrapAround)
+        std::string js = "window.find('" + escaped + "', " +
+            (matchCase ? "true" : "false") + ", " +
+            (forward ? "false" : "true") + ", true, false, false, false)";
+
+        std::wstring wjs(js.begin(), js.end());
+        webview->ExecuteScript(wjs.c_str(), nullptr);
+    }
+
+    void stopFindInPage() override {
+        if (!webview) return;
+
+        // Clear selection to remove find highlighting
+        webview->ExecuteScript(L"window.getSelection().removeAllRanges();", nullptr);
+    }
 };
 
 // Initialize static debounce timestamp for ctrl+click handling
@@ -2878,9 +2919,33 @@ public:
     void setHidden(bool hidden) override {
         // Use the working transparency implementation which provides hide + passthrough behavior
         setTransparent(hidden);
-        
+
         // Also handle the container window using base implementation
         AbstractView::setHidden(hidden);
+    }
+
+    void findInPage(const char* searchText, bool forward, bool matchCase) override {
+        if (!browser) return;
+
+        CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        if (!host) return;
+
+        if (!searchText || strlen(searchText) == 0) {
+            host->StopFinding(true);
+            return;
+        }
+
+        // Use CEF's native find functionality
+        host->Find(CefString(searchText), forward, matchCase, false);
+    }
+
+    void stopFindInPage() override {
+        if (!browser) return;
+
+        CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        if (host) {
+            host->StopFinding(true); // true = clear selection
+        }
     }
 };
 
@@ -5449,6 +5514,22 @@ ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView *abstractView, con
         // UI operations must be performed on the main thread
         MainThreadDispatcher::dispatch_sync([abstractView, rulesJson]() {
             abstractView->setNavigationRulesFromJSON(rulesJson);
+        });
+    }
+}
+
+ELECTROBUN_EXPORT void webviewFindInPage(AbstractView *abstractView, const char *searchText, bool forward, bool matchCase) {
+    if (abstractView) {
+        MainThreadDispatcher::dispatch_sync([abstractView, searchText, forward, matchCase]() {
+            abstractView->findInPage(searchText, forward, matchCase);
+        });
+    }
+}
+
+ELECTROBUN_EXPORT void webviewStopFind(AbstractView *abstractView) {
+    if (abstractView) {
+        MainThreadDispatcher::dispatch_sync([abstractView]() {
+            abstractView->stopFindInPage();
         });
     }
 }

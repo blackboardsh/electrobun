@@ -605,6 +605,9 @@ void releaseObjCObject(id objcObject) {
 
     - (void)setNavigationRulesFromJSON:(const char*)rulesJson;
     - (BOOL)shouldAllowNavigationToURL:(NSString *)url;
+
+    - (void)findInPage:(const char*)searchText forward:(BOOL)forward matchCase:(BOOL)matchCase;
+    - (void)stopFindInPage;
 @end
 
 // Global map to track all AbstractView instances by their webviewId
@@ -1051,6 +1054,14 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         }
 
         return allowed;
+    }
+
+    - (void)findInPage:(const char*)searchText forward:(BOOL)forward matchCase:(BOOL)matchCase {
+        [self doesNotRecognizeSelector:_cmd];
+    }
+
+    - (void)stopFindInPage {
+        [self doesNotRecognizeSelector:_cmd];
     }
 @end
 
@@ -2029,8 +2040,39 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     }
 
     // Cleanup KVO observers when the webview is deallocated
-    - (void)dealloc {        
-        [self.webView removeObserver:self forKeyPath:@"fullscreenState"];            
+    - (void)dealloc {
+        [self.webView removeObserver:self forKeyPath:@"fullscreenState"];
+    }
+
+    - (void)findInPage:(const char*)searchText forward:(BOOL)forward matchCase:(BOOL)matchCase {
+        if (!searchText || strlen(searchText) == 0) {
+            [self stopFindInPage];
+            return;
+        }
+
+        NSString *text = [NSString stringWithUTF8String:searchText];
+        NSString *escapedText = [text stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        escapedText = [escapedText stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        escapedText = [escapedText stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+        escapedText = [escapedText stringByReplacingOccurrencesOfString:@"\r" withString:@"\\r"];
+
+        // Use window.find() - parameters: string, caseSensitive, backwards, wrapAround
+        NSString *js = [NSString stringWithFormat:
+            @"window.find('%@', %@, %@, true, false, false, false)",
+            escapedText,
+            matchCase ? @"true" : @"false",
+            forward ? @"false" : @"true"];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.webView evaluateJavaScript:js completionHandler:nil];
+        });
+    }
+
+    - (void)stopFindInPage {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // Clear selection to remove find highlighting
+            [self.webView evaluateJavaScript:@"window.getSelection().removeAllRanges();" completionHandler:nil];
+        });
     }
 
 @end
@@ -3874,11 +3916,41 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         self.client->AddPreloadScript(script);
     }
 
-    - (void)updateCustomPreloadScript:(const char*)jsString {   
-    if (!jsString) return;
-        
-        std::string script(jsString);        
+    - (void)updateCustomPreloadScript:(const char*)jsString {
+        if (!jsString) return;
+
+        std::string script(jsString);
         self.client->UpdateCustomPreloadScript(script);
+    }
+
+    - (void)findInPage:(const char*)searchText forward:(BOOL)forward matchCase:(BOOL)matchCase {
+        if (!self.browser) return;
+
+        CefRefPtr<CefBrowserHost> host = self.browser->GetHost();
+        if (!host) return;
+
+        if (!searchText || strlen(searchText) == 0) {
+            // Stop find and clear highlights
+            host->StopFinding(true);
+            return;
+        }
+
+        // CEF Find flags
+        bool findNext = false; // Will be set based on direction changes
+        bool forwardDirection = forward ? true : false;
+        bool caseSensitive = matchCase ? true : false;
+
+        // Use CEF's native find functionality
+        host->Find(CefString(searchText), forwardDirection, caseSensitive, findNext);
+    }
+
+    - (void)stopFindInPage {
+        if (!self.browser) return;
+
+        CefRefPtr<CefBrowserHost> host = self.browser->GetHost();
+        if (host) {
+            host->StopFinding(true); // true = clear selection
+        }
     }
 
 @end
@@ -4315,6 +4387,18 @@ extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
 extern "C" void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [abstractView setNavigationRulesFromJSON:rulesJson];
+    });
+}
+
+extern "C" void webviewFindInPage(AbstractView *abstractView, const char *searchText, bool forward, bool matchCase) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView findInPage:searchText forward:forward matchCase:matchCase];
+    });
+}
+
+extern "C" void webviewStopFind(AbstractView *abstractView) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView stopFindInPage];
     });
 }
 

@@ -2068,6 +2068,10 @@ public:
     virtual void setTransparent(bool transparent) {}
     virtual void setPassthrough(bool enable) { isMousePassthroughEnabled = enable; }
     virtual void setHidden(bool hidden) {}
+
+    // Find in page methods
+    virtual void findInPage(const char* searchText, bool forward, bool matchCase) = 0;
+    virtual void stopFindInPage() = 0;
 };
 
 // WebKitGTK implementation
@@ -2941,6 +2945,37 @@ public:
         g_signal_connect(download, "failed", G_CALLBACK(onDownloadFailed), user_data);
     }
 
+    void findInPage(const char* searchText, bool forward, bool matchCase) override {
+        if (!WEBKIT_IS_WEB_VIEW(webview)) return;
+
+        WebKitFindController* findController = webkit_web_view_get_find_controller(WEBKIT_WEB_VIEW(webview));
+        if (!findController) return;
+
+        if (!searchText || strlen(searchText) == 0) {
+            webkit_find_controller_search_finish(findController);
+            return;
+        }
+
+        guint32 findOptions = WEBKIT_FIND_OPTIONS_WRAP_AROUND;
+        if (!matchCase) {
+            findOptions |= WEBKIT_FIND_OPTIONS_CASE_INSENSITIVE;
+        }
+        if (!forward) {
+            findOptions |= WEBKIT_FIND_OPTIONS_BACKWARDS;
+        }
+
+        webkit_find_controller_search(findController, searchText, findOptions, G_MAXUINT);
+    }
+
+    void stopFindInPage() override {
+        if (!WEBKIT_IS_WEB_VIEW(webview)) return;
+
+        WebKitFindController* findController = webkit_web_view_get_find_controller(WEBKIT_WEB_VIEW(webview));
+        if (findController) {
+            webkit_find_controller_search_finish(findController);
+        }
+    }
+
 };
 
 // Initialize static debounce timestamp for ctrl+click handling
@@ -3472,7 +3507,7 @@ public:
     
     void setPassthrough(bool enable) override {
         AbstractView::setPassthrough(enable); // Set the flag
-        
+
         if (browser) {
             // Use X11 input shape extension for mouse passthrough
             CefWindowHandle window = browser->GetHost()->GetWindowHandle();
@@ -3489,6 +3524,30 @@ public:
                 }
                 XFlush(display);
             }
+        }
+    }
+
+    void findInPage(const char* searchText, bool forward, bool matchCase) override {
+        if (!browser) return;
+
+        CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        if (!host) return;
+
+        if (!searchText || strlen(searchText) == 0) {
+            host->StopFinding(true);
+            return;
+        }
+
+        // Use CEF's native find functionality
+        host->Find(CefString(searchText), forward, matchCase, false);
+    }
+
+    void stopFindInPage() override {
+        if (!browser) return;
+
+        CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        if (host) {
+            host->StopFinding(true); // true = clear selection
         }
     }
 };
@@ -5053,6 +5112,23 @@ void setWebviewNavigationRules(AbstractView* abstractView, const char* rulesJson
         std::string rulesStr(rulesJson ? rulesJson : "");  // Copy the string to ensure it survives
         dispatch_sync_main_void([abstractView, rulesStr]() {
             abstractView->setNavigationRulesFromJSON(rulesStr.c_str());
+        });
+    }
+}
+
+void webviewFindInPage(AbstractView* abstractView, const char* searchText, bool forward, bool matchCase) {
+    if (abstractView) {
+        std::string text(searchText ? searchText : "");
+        dispatch_sync_main_void([abstractView, text, forward, matchCase]() {
+            abstractView->findInPage(text.c_str(), forward, matchCase);
+        });
+    }
+}
+
+void webviewStopFind(AbstractView* abstractView) {
+    if (abstractView) {
+        dispatch_sync_main_void([abstractView]() {
+            abstractView->stopFindInPage();
         });
     }
 }
