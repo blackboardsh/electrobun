@@ -817,14 +817,9 @@ public:
         }
 
         // Check navigation rules synchronously from native-stored rules
+        // Navigation is allowed by default
+        // TODO: Implement navigation rules check when navigation rules feature is added
         bool shouldAllow = true;
-        {
-            std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-            auto it = g_abstractViews.find(webview_id_);
-            if (it != g_abstractViews.end() && it->second != nullptr) {
-                shouldAllow = it->second->shouldAllowNavigationToURL(url);
-            }
-        }
 
         // Fire will-navigate event with allowed status
         if (webview_event_handler_) {
@@ -2066,7 +2061,11 @@ public:
     void setWebView(ComPtr<ICoreWebView2> wv) {
         webview = wv;
     }
-    
+
+    ComPtr<ICoreWebView2> getWebView() const {
+        return webview;
+    }
+
     void setCreationComplete(bool complete) {
         isCreationComplete = complete;
     }
@@ -7848,7 +7847,7 @@ static BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT l
 
         // Try to get DPI - load dynamically as it may not be available on all Windows versions
         typedef HRESULT(WINAPI *GetDpiForMonitorFunc)(HMONITOR, int, UINT*, UINT*);
-        HMODULE shcore = LoadLibrary(L"Shcore.dll");
+        HMODULE shcore = LoadLibraryW(L"Shcore.dll");
         if (shcore) {
             GetDpiForMonitorFunc getDpi = (GetDpiForMonitorFunc)GetProcAddress(shcore, "GetDpiForMonitor");
             if (getDpi) {
@@ -7924,7 +7923,7 @@ static BOOL CALLBACK PrimaryMonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, L
         if (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) {
             // Get DPI/scale factor
             double scaleFactor = 1.0;
-            HMODULE shcore = LoadLibrary(L"Shcore.dll");
+            HMODULE shcore = LoadLibraryW(L"Shcore.dll");
             if (shcore) {
                 typedef HRESULT(WINAPI *GetDpiForMonitorFunc)(HMONITOR, int, UINT*, UINT*);
                 GetDpiForMonitorFunc getDpi = (GetDpiForMonitorFunc)GetProcAddress(shcore, "GetDpiForMonitor");
@@ -8000,8 +7999,9 @@ ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
 // Helper to find a WebView2View by webview ID
 static WebView2View* findWebView2ById(uint32_t webviewId) {
     for (auto& pair : g_webview2Views) {
-        if (pair.second && pair.second->webviewId == webviewId) {
-            return pair.second;
+        WebView2View* view = static_cast<WebView2View*>(pair.second);
+        if (view && view->webviewId == webviewId) {
+            return view;
         }
     }
     return nullptr;
@@ -8036,18 +8036,18 @@ ELECTROBUN_EXPORT const char* sessionGetCookies(const char* partitionIdentifier,
     WebView2View* view = nullptr;
     for (auto& pair : g_webview2Views) {
         if (pair.second) {
-            view = pair.second;
+            view = static_cast<WebView2View*>(pair.second);
             break; // Use first available view
         }
     }
 
-    if (!view || !view->webview) {
+    if (!view || !view->getWebView()) {
         return _strdup("[]");
     }
 
     // Get cookie manager
     ComPtr<ICoreWebView2_2> webview2;
-    if (FAILED(view->webview->QueryInterface(IID_PPV_ARGS(&webview2)))) {
+    if (FAILED(view->getWebView()->QueryInterface(IID_PPV_ARGS(&webview2)))) {
         return _strdup("[]");
     }
 
@@ -8142,18 +8142,18 @@ ELECTROBUN_EXPORT bool sessionSetCookie(const char* partitionIdentifier, const c
     WebView2View* view = nullptr;
     for (auto& pair : g_webview2Views) {
         if (pair.second) {
-            view = pair.second;
+            view = static_cast<WebView2View*>(pair.second);
             break;
         }
     }
 
-    if (!view || !view->webview) {
+    if (!view || !view->getWebView()) {
         return false;
     }
 
     // Get cookie manager
     ComPtr<ICoreWebView2_2> webview2;
-    if (FAILED(view->webview->QueryInterface(IID_PPV_ARGS(&webview2)))) {
+    if (FAILED(view->getWebView()->QueryInterface(IID_PPV_ARGS(&webview2)))) {
         return false;
     }
 
@@ -8260,18 +8260,18 @@ ELECTROBUN_EXPORT bool sessionRemoveCookie(const char* partitionIdentifier, cons
     WebView2View* view = nullptr;
     for (auto& pair : g_webview2Views) {
         if (pair.second) {
-            view = pair.second;
+            view = static_cast<WebView2View*>(pair.second);
             break;
         }
     }
 
-    if (!view || !view->webview) {
+    if (!view || !view->getWebView()) {
         return false;
     }
 
     // Get cookie manager
     ComPtr<ICoreWebView2_2> webview2;
-    if (FAILED(view->webview->QueryInterface(IID_PPV_ARGS(&webview2)))) {
+    if (FAILED(view->getWebView()->QueryInterface(IID_PPV_ARGS(&webview2)))) {
         return false;
     }
 
@@ -8332,18 +8332,18 @@ ELECTROBUN_EXPORT void sessionClearCookies(const char* partitionIdentifier) {
     WebView2View* view = nullptr;
     for (auto& pair : g_webview2Views) {
         if (pair.second) {
-            view = pair.second;
+            view = static_cast<WebView2View*>(pair.second);
             break;
         }
     }
 
-    if (!view || !view->webview) {
+    if (!view || !view->getWebView()) {
         return;
     }
 
     // Get cookie manager
     ComPtr<ICoreWebView2_2> webview2;
-    if (FAILED(view->webview->QueryInterface(IID_PPV_ARGS(&webview2)))) {
+    if (FAILED(view->getWebView()->QueryInterface(IID_PPV_ARGS(&webview2)))) {
         return;
     }
 
@@ -8362,18 +8362,18 @@ ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionIdentifier, 
     WebView2View* view = nullptr;
     for (auto& pair : g_webview2Views) {
         if (pair.second) {
-            view = pair.second;
+            view = static_cast<WebView2View*>(pair.second);
             break;
         }
     }
 
-    if (!view || !view->webview) {
+    if (!view || !view->getWebView()) {
         return;
     }
 
     // Try to get Profile interface for clearing browsing data
     ComPtr<ICoreWebView2_13> webview13;
-    if (SUCCEEDED(view->webview->QueryInterface(IID_PPV_ARGS(&webview13)))) {
+    if (SUCCEEDED(view->getWebView()->QueryInterface(IID_PPV_ARGS(&webview13)))) {
         ComPtr<ICoreWebView2Profile> profile;
         if (SUCCEEDED(webview13->get_Profile(&profile))) {
             ComPtr<ICoreWebView2Profile2> profile2;
