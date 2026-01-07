@@ -473,7 +473,14 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
         identifier = [identifier substringFromIndex:8];
         NSUUID *uuid = UUIDFromString(identifier);
         if (uuid) {
-            return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
+            // dataStoreForIdentifier is only available on macOS 14.0+
+            if (@available(macOS 14.0, *)) {
+                return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
+            } else {
+                // Fallback to default data store on older macOS versions
+                NSLog(@"[Session] Partition-specific data stores require macOS 14.0+, using default store");
+                return [WKWebsiteDataStore defaultDataStore];
+            }
         } else {
             NSLog(@"Invalid UUID for identifier: %@", identifier);
             return [WKWebsiteDataStore defaultDataStore];
@@ -5576,266 +5583,285 @@ static NSDictionary* cookieToDictionary(NSHTTPCookie *cookie) {
 // filterJson: {"url": "https://example.com"} or {"domain": ".example.com"} or {} for all
 // Returns JSON array of cookies
 extern "C" const char* sessionGetCookies(const char* partitionIdentifier, const char* filterJson) {
-    @autoreleasepool {
-        // Parse filter
-        NSString *filterStr = filterJson ? [NSString stringWithUTF8String:filterJson] : @"{}";
-        NSData *filterData = [filterStr dataUsingEncoding:NSUTF8StringEncoding];
-        NSError *parseError = nil;
-        NSDictionary *filter = [NSJSONSerialization JSONObjectWithData:filterData options:0 error:&parseError];
-        if (parseError) {
-            filter = @{};
+    // Copy strings for use in block
+    NSString *partitionStr = partitionIdentifier ? [NSString stringWithUTF8String:partitionIdentifier] : @"";
+    NSString *filterStr = filterJson ? [NSString stringWithUTF8String:filterJson] : @"{}";
+
+    __block char* result = strdup("[]");
+    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            NSData *filterData = [filterStr dataUsingEncoding:NSUTF8StringEncoding];
+            NSError *parseError = nil;
+            NSDictionary *filter = [NSJSONSerialization JSONObjectWithData:filterData options:0 error:&parseError];
+            if (parseError) {
+                filter = @{};
+            }
+
+            NSString *filterUrl = filter[@"url"];
+            NSString *filterDomain = filter[@"domain"];
+
+            // Get the data store for this partition
+            WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
+            WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
+
+            [cookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
+                NSMutableArray *matchingCookies = [NSMutableArray array];
+
+                for (NSHTTPCookie *cookie in cookies) {
+                    BOOL matches = YES;
+
+                    if (filterUrl) {
+                        NSURL *url = [NSURL URLWithString:filterUrl];
+                        NSString *host = url.host;
+                        NSString *cookieDomain = cookie.domain;
+                        if ([cookieDomain hasPrefix:@"."]) {
+                            matches = [host hasSuffix:cookieDomain] || [host isEqualToString:[cookieDomain substringFromIndex:1]];
+                        } else {
+                            matches = [host isEqualToString:cookieDomain];
+                        }
+                        if (matches && cookie.path && url.path) {
+                            matches = [url.path hasPrefix:cookie.path];
+                        }
+                    } else if (filterDomain) {
+                        NSString *cookieDomain = cookie.domain;
+                        if ([filterDomain hasPrefix:@"."]) {
+                            matches = [cookieDomain isEqualToString:filterDomain] ||
+                                      [cookieDomain hasSuffix:filterDomain];
+                        } else {
+                            matches = [cookieDomain isEqualToString:filterDomain] ||
+                                      [cookieDomain isEqualToString:[@"." stringByAppendingString:filterDomain]];
+                        }
+                    }
+
+                    if (matches) {
+                        [matchingCookies addObject:cookieToDictionary(cookie)];
+                    }
+                }
+
+                NSError *error = nil;
+                NSData *jsonData = [NSJSONSerialization dataWithJSONObject:matchingCookies options:0 error:&error];
+                if (!error) {
+                    NSString *resultJson = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+                    free(result);
+                    result = strdup([resultJson UTF8String]);
+                }
+
+                dispatch_semaphore_signal(completionSemaphore);
+            }];
         }
+    });
 
-        NSString *filterUrl = filter[@"url"];
-        NSString *filterDomain = filter[@"domain"];
-
-        // Get the data store for this partition
-        WKWebsiteDataStore *dataStore = createDataStoreForPartition(partitionIdentifier);
-        WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
-
-        __block NSString *resultJson = @"[]";
-        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-
-        [cookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
-            NSMutableArray *matchingCookies = [NSMutableArray array];
-
-            for (NSHTTPCookie *cookie in cookies) {
-                BOOL matches = YES;
-
-                if (filterUrl) {
-                    NSURL *url = [NSURL URLWithString:filterUrl];
-                    // Check if cookie domain matches URL host
-                    NSString *host = url.host;
-                    NSString *cookieDomain = cookie.domain;
-                    if ([cookieDomain hasPrefix:@"."]) {
-                        matches = [host hasSuffix:cookieDomain] || [host isEqualToString:[cookieDomain substringFromIndex:1]];
-                    } else {
-                        matches = [host isEqualToString:cookieDomain];
-                    }
-                    // Also check path
-                    if (matches && cookie.path && url.path) {
-                        matches = [url.path hasPrefix:cookie.path];
-                    }
-                } else if (filterDomain) {
-                    NSString *cookieDomain = cookie.domain;
-                    if ([filterDomain hasPrefix:@"."]) {
-                        matches = [cookieDomain isEqualToString:filterDomain] ||
-                                  [cookieDomain hasSuffix:filterDomain];
-                    } else {
-                        matches = [cookieDomain isEqualToString:filterDomain] ||
-                                  [cookieDomain isEqualToString:[@"." stringByAppendingString:filterDomain]];
-                    }
-                }
-
-                if (matches) {
-                    [matchingCookies addObject:cookieToDictionary(cookie)];
-                }
-            }
-
-            NSError *error = nil;
-            NSData *jsonData = [NSJSONSerialization dataWithJSONObject:matchingCookies options:0 error:&error];
-            if (!error) {
-                resultJson = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-            }
-
-            dispatch_semaphore_signal(semaphore);
-        }];
-
-        dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
-
-        return strdup([resultJson UTF8String]);
-    }
+    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    return result;
 }
 
 // Set a cookie for a partition (WKWebView)
 // cookieJson: {"url":"https://example.com","name":"token","value":"abc","domain":".example.com","path":"/","secure":true,"httpOnly":true,"expirationDate":1234567890,"sameSite":"Lax"}
 extern "C" bool sessionSetCookie(const char* partitionIdentifier, const char* cookieJson) {
-    @autoreleasepool {
-        NSString *jsonStr = cookieJson ? [NSString stringWithUTF8String:cookieJson] : @"{}";
-        NSData *jsonData = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
-        NSError *parseError = nil;
-        NSDictionary *cookieDict = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&parseError];
-        if (parseError || !cookieDict[@"name"] || !cookieDict[@"value"]) {
-            NSLog(@"[Cookie] Invalid cookie JSON: %@", jsonStr);
-            return false;
-        }
+    // Copy strings for use in block
+    NSString *partitionStr = partitionIdentifier ? [NSString stringWithUTF8String:partitionIdentifier] : @"";
+    NSString *jsonStr = cookieJson ? [NSString stringWithUTF8String:cookieJson] : @"{}";
 
-        // Build cookie properties
-        NSMutableDictionary *properties = [NSMutableDictionary dictionary];
-        properties[NSHTTPCookieName] = cookieDict[@"name"];
-        properties[NSHTTPCookieValue] = cookieDict[@"value"];
-
-        // Domain - required, derive from URL if not provided
-        if (cookieDict[@"domain"]) {
-            properties[NSHTTPCookieDomain] = cookieDict[@"domain"];
-        } else if (cookieDict[@"url"]) {
-            NSURL *url = [NSURL URLWithString:cookieDict[@"url"]];
-            properties[NSHTTPCookieDomain] = url.host;
-        } else {
-            NSLog(@"[Cookie] Missing domain or url");
-            return false;
-        }
-
-        // Path
-        properties[NSHTTPCookiePath] = cookieDict[@"path"] ?: @"/";
-
-        // Secure
-        if ([cookieDict[@"secure"] boolValue]) {
-            properties[NSHTTPCookieSecure] = @"TRUE";
-        }
-
-        // Expiration date
-        if (cookieDict[@"expirationDate"]) {
-            NSTimeInterval timestamp = [cookieDict[@"expirationDate"] doubleValue];
-            properties[NSHTTPCookieExpires] = [NSDate dateWithTimeIntervalSince1970:timestamp];
-        }
-
-        // SameSite
-        if (cookieDict[@"sameSite"]) {
-            properties[NSHTTPCookieSameSitePolicy] = cookieDict[@"sameSite"];
-        }
-
-        NSHTTPCookie *cookie = [NSHTTPCookie cookieWithProperties:properties];
-        if (!cookie) {
-            NSLog(@"[Cookie] Failed to create cookie from properties");
-            return false;
-        }
-
-        // Get the data store for this partition
-        WKWebsiteDataStore *dataStore = createDataStoreForPartition(partitionIdentifier);
-        WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
-
-        __block bool success = false;
-        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-
-        [cookieStore setCookie:cookie completionHandler:^{
-            success = true;
-            dispatch_semaphore_signal(semaphore);
-        }];
-
-        dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
-
-        return success;
+    // Parse cookie JSON first (can be done off main thread)
+    NSData *jsonData = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+    NSError *parseError = nil;
+    NSDictionary *cookieDict = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&parseError];
+    if (parseError || !cookieDict[@"name"] || !cookieDict[@"value"]) {
+        NSLog(@"[Cookie] Invalid cookie JSON: %@", jsonStr);
+        return false;
     }
+
+    // Build cookie properties
+    NSMutableDictionary *properties = [NSMutableDictionary dictionary];
+    properties[NSHTTPCookieName] = cookieDict[@"name"];
+    properties[NSHTTPCookieValue] = cookieDict[@"value"];
+
+    // Domain - required, derive from URL if not provided
+    if (cookieDict[@"domain"]) {
+        properties[NSHTTPCookieDomain] = cookieDict[@"domain"];
+    } else if (cookieDict[@"url"]) {
+        NSURL *url = [NSURL URLWithString:cookieDict[@"url"]];
+        properties[NSHTTPCookieDomain] = url.host;
+    } else {
+        NSLog(@"[Cookie] Missing domain or url");
+        return false;
+    }
+
+    // Path
+    properties[NSHTTPCookiePath] = cookieDict[@"path"] ?: @"/";
+
+    // Secure
+    if ([cookieDict[@"secure"] boolValue]) {
+        properties[NSHTTPCookieSecure] = @"TRUE";
+    }
+
+    // Expiration date
+    if (cookieDict[@"expirationDate"]) {
+        NSTimeInterval timestamp = [cookieDict[@"expirationDate"] doubleValue];
+        properties[NSHTTPCookieExpires] = [NSDate dateWithTimeIntervalSince1970:timestamp];
+    }
+
+    // SameSite
+    if (cookieDict[@"sameSite"]) {
+        properties[NSHTTPCookieSameSitePolicy] = cookieDict[@"sameSite"];
+    }
+
+    NSHTTPCookie *cookie = [NSHTTPCookie cookieWithProperties:properties];
+    if (!cookie) {
+        NSLog(@"[Cookie] Failed to create cookie from properties");
+        return false;
+    }
+
+    __block bool success = false;
+    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
+            WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
+
+            [cookieStore setCookie:cookie completionHandler:^{
+                success = true;
+                dispatch_semaphore_signal(completionSemaphore);
+            }];
+        }
+    });
+
+    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    return success;
 }
 
 // Remove a specific cookie for a partition (WKWebView)
 extern "C" bool sessionRemoveCookie(const char* partitionIdentifier, const char* urlStr, const char* cookieName) {
-    @autoreleasepool {
-        if (!urlStr || !cookieName) {
-            return false;
-        }
+    if (!urlStr || !cookieName) {
+        return false;
+    }
 
-        NSString *url = [NSString stringWithUTF8String:urlStr];
-        NSString *name = [NSString stringWithUTF8String:cookieName];
-        NSURL *nsUrl = [NSURL URLWithString:url];
-        if (!nsUrl) {
-            return false;
-        }
+    NSString *partitionStr = partitionIdentifier ? [NSString stringWithUTF8String:partitionIdentifier] : @"";
+    NSString *url = [NSString stringWithUTF8String:urlStr];
+    NSString *name = [NSString stringWithUTF8String:cookieName];
+    NSURL *nsUrl = [NSURL URLWithString:url];
+    if (!nsUrl) {
+        return false;
+    }
 
-        WKWebsiteDataStore *dataStore = createDataStoreForPartition(partitionIdentifier);
-        WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
+    __block bool found = false;
+    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
 
-        __block bool found = false;
-        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
+            WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
 
-        [cookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
-            for (NSHTTPCookie *cookie in cookies) {
-                if ([cookie.name isEqualToString:name]) {
-                    // Check if domain matches
-                    NSString *host = nsUrl.host;
-                    NSString *cookieDomain = cookie.domain;
-                    BOOL domainMatches = NO;
-                    if ([cookieDomain hasPrefix:@"."]) {
-                        domainMatches = [host hasSuffix:cookieDomain] || [host isEqualToString:[cookieDomain substringFromIndex:1]];
-                    } else {
-                        domainMatches = [host isEqualToString:cookieDomain];
-                    }
+            [cookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
+                for (NSHTTPCookie *cookie in cookies) {
+                    if ([cookie.name isEqualToString:name]) {
+                        // Check if domain matches
+                        NSString *host = nsUrl.host;
+                        NSString *cookieDomain = cookie.domain;
+                        BOOL domainMatches = NO;
+                        if ([cookieDomain hasPrefix:@"."]) {
+                            domainMatches = [host hasSuffix:cookieDomain] || [host isEqualToString:[cookieDomain substringFromIndex:1]];
+                        } else {
+                            domainMatches = [host isEqualToString:cookieDomain];
+                        }
 
-                    if (domainMatches) {
-                        [cookieStore deleteCookie:cookie completionHandler:^{
-                            found = true;
-                            dispatch_semaphore_signal(semaphore);
-                        }];
-                        return;
+                        if (domainMatches) {
+                            [cookieStore deleteCookie:cookie completionHandler:^{
+                                found = true;
+                                dispatch_semaphore_signal(completionSemaphore);
+                            }];
+                            return;
+                        }
                     }
                 }
-            }
-            dispatch_semaphore_signal(semaphore);
-        }];
+                dispatch_semaphore_signal(completionSemaphore);
+            }];
+        }
+    });
 
-        dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
 
-        return found;
-    }
+    return found;
 }
 
 // Remove all cookies for a partition (WKWebView)
 extern "C" void sessionClearCookies(const char* partitionIdentifier) {
-    @autoreleasepool {
-        WKWebsiteDataStore *dataStore = createDataStoreForPartition(partitionIdentifier);
+    NSString *partitionStr = partitionIdentifier ? [NSString stringWithUTF8String:partitionIdentifier] : @"";
 
-        NSSet *dataTypes = [NSSet setWithObject:WKWebsiteDataTypeCookies];
-        NSDate *dateFrom = [NSDate dateWithTimeIntervalSince1970:0];
+    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
 
-        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
 
-        [dataStore removeDataOfTypes:dataTypes modifiedSince:dateFrom completionHandler:^{
-            dispatch_semaphore_signal(semaphore);
-        }];
+            NSSet *dataTypes = [NSSet setWithObject:WKWebsiteDataTypeCookies];
+            NSDate *dateFrom = [NSDate dateWithTimeIntervalSince1970:0];
 
-        dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
-    }
+            [dataStore removeDataOfTypes:dataTypes modifiedSince:dateFrom completionHandler:^{
+                dispatch_semaphore_signal(completionSemaphore);
+            }];
+        }
+    });
+
+    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
 }
 
 // Clear all storage data for a partition (WKWebView)
 // storageTypesJson: ["cookies", "localStorage", "sessionStorage", "indexedDB", "cache"] or null for all
 extern "C" void sessionClearStorageData(const char* partitionIdentifier, const char* storageTypesJson) {
-    @autoreleasepool {
-        WKWebsiteDataStore *dataStore = createDataStoreForPartition(partitionIdentifier);
+    NSString *partitionStr = partitionIdentifier ? [NSString stringWithUTF8String:partitionIdentifier] : @"";
+    NSString *typesStr = storageTypesJson ? [NSString stringWithUTF8String:storageTypesJson] : @"";
 
-        NSMutableSet *dataTypes = [NSMutableSet set];
+    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
 
-        if (storageTypesJson && strlen(storageTypesJson) > 0) {
-            NSString *jsonStr = [NSString stringWithUTF8String:storageTypesJson];
-            NSData *jsonData = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
-            NSArray *types = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
 
-            for (NSString *type in types) {
-                if ([type isEqualToString:@"cookies"]) {
-                    [dataTypes addObject:WKWebsiteDataTypeCookies];
-                } else if ([type isEqualToString:@"localStorage"]) {
-                    [dataTypes addObject:WKWebsiteDataTypeLocalStorage];
-                } else if ([type isEqualToString:@"sessionStorage"]) {
-                    [dataTypes addObject:WKWebsiteDataTypeSessionStorage];
-                } else if ([type isEqualToString:@"indexedDB"]) {
-                    [dataTypes addObject:WKWebsiteDataTypeIndexedDBDatabases];
-                } else if ([type isEqualToString:@"cache"]) {
-                    [dataTypes addObject:WKWebsiteDataTypeDiskCache];
-                    [dataTypes addObject:WKWebsiteDataTypeMemoryCache];
-                } else if ([type isEqualToString:@"serviceWorkers"]) {
-                    [dataTypes addObject:WKWebsiteDataTypeServiceWorkerRegistrations];
+            NSMutableSet *dataTypes = [NSMutableSet set];
+
+            if (typesStr.length > 0) {
+                NSData *jsonData = [typesStr dataUsingEncoding:NSUTF8StringEncoding];
+                NSArray *types = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+
+                for (NSString *type in types) {
+                    if ([type isEqualToString:@"cookies"]) {
+                        [dataTypes addObject:WKWebsiteDataTypeCookies];
+                    } else if ([type isEqualToString:@"localStorage"]) {
+                        [dataTypes addObject:WKWebsiteDataTypeLocalStorage];
+                    } else if ([type isEqualToString:@"sessionStorage"]) {
+                        [dataTypes addObject:WKWebsiteDataTypeSessionStorage];
+                    } else if ([type isEqualToString:@"indexedDB"]) {
+                        [dataTypes addObject:WKWebsiteDataTypeIndexedDBDatabases];
+                    } else if ([type isEqualToString:@"cache"]) {
+                        [dataTypes addObject:WKWebsiteDataTypeDiskCache];
+                        [dataTypes addObject:WKWebsiteDataTypeMemoryCache];
+                    } else if ([type isEqualToString:@"serviceWorkers"]) {
+                        [dataTypes addObject:WKWebsiteDataTypeServiceWorkerRegistrations];
+                    }
                 }
+            } else {
+                // Clear all
+                dataTypes = [NSMutableSet setWithSet:[WKWebsiteDataStore allWebsiteDataTypes]];
             }
-        } else {
-            // Clear all
-            dataTypes = [NSMutableSet setWithSet:[WKWebsiteDataStore allWebsiteDataTypes]];
+
+            if (dataTypes.count == 0) {
+                dispatch_semaphore_signal(completionSemaphore);
+                return;
+            }
+
+            NSDate *dateFrom = [NSDate dateWithTimeIntervalSince1970:0];
+
+            [dataStore removeDataOfTypes:dataTypes modifiedSince:dateFrom completionHandler:^{
+                dispatch_semaphore_signal(completionSemaphore);
+            }];
         }
+    });
 
-        if (dataTypes.count == 0) {
-            return;
-        }
-
-        NSDate *dateFrom = [NSDate dateWithTimeIntervalSince1970:0];
-
-        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-
-        [dataStore removeDataOfTypes:dataTypes modifiedSince:dateFrom completionHandler:^{
-            dispatch_semaphore_signal(semaphore);
-        }];
-
-        dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
-    }
+    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
 }
 
 
