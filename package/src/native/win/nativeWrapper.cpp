@@ -7737,7 +7737,7 @@ static void hotkeyMessageLoop() {
 }
 
 // Set the callback for global shortcut events
-ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
+extern "C" ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
     g_globalShortcutCallback = callback;
 
     // Start the hotkey message loop thread if not running
@@ -7752,7 +7752,7 @@ ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback
 }
 
 // Register a global keyboard shortcut
-ELECTROBUN_EXPORT BOOL registerGlobalShortcut(const char* accelerator) {
+extern "C" ELECTROBUN_EXPORT BOOL registerGlobalShortcut(const char* accelerator) {
     if (!accelerator || !g_hotkeyWindow) {
         ::log("ERROR: Cannot register shortcut - invalid accelerator or hotkey window not ready");
         return FALSE;
@@ -7790,7 +7790,7 @@ ELECTROBUN_EXPORT BOOL registerGlobalShortcut(const char* accelerator) {
 }
 
 // Unregister a global keyboard shortcut
-ELECTROBUN_EXPORT BOOL unregisterGlobalShortcut(const char* accelerator) {
+extern "C" ELECTROBUN_EXPORT BOOL unregisterGlobalShortcut(const char* accelerator) {
     if (!accelerator) return FALSE;
 
     std::string accelStr(accelerator);
@@ -7808,7 +7808,7 @@ ELECTROBUN_EXPORT BOOL unregisterGlobalShortcut(const char* accelerator) {
 }
 
 // Unregister all global keyboard shortcuts
-ELECTROBUN_EXPORT void unregisterAllGlobalShortcuts() {
+extern "C" ELECTROBUN_EXPORT void unregisterAllGlobalShortcuts() {
     for (const auto& pair : g_globalShortcuts) {
         UnregisterHotKey(g_hotkeyWindow, pair.second);
     }
@@ -7818,7 +7818,7 @@ ELECTROBUN_EXPORT void unregisterAllGlobalShortcuts() {
 }
 
 // Check if a shortcut is registered
-ELECTROBUN_EXPORT BOOL isGlobalShortcutRegistered(const char* accelerator) {
+extern "C" ELECTROBUN_EXPORT BOOL isGlobalShortcutRegistered(const char* accelerator) {
     if (!accelerator) return FALSE;
     return g_globalShortcuts.find(std::string(accelerator)) != g_globalShortcuts.end();
 }
@@ -7890,7 +7890,7 @@ static BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT l
 }
 
 // Get all displays as JSON array
-ELECTROBUN_EXPORT const char* getAllDisplays() {
+extern "C" ELECTROBUN_EXPORT const char* getAllDisplays() {
     MonitorEnumData data;
 
     EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, reinterpret_cast<LPARAM>(&data));
@@ -7965,7 +7965,7 @@ static BOOL CALLBACK PrimaryMonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, L
 }
 
 // Get primary display as JSON
-ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
+extern "C" ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
     PrimaryMonitorData data;
     data.found = false;
 
@@ -7979,7 +7979,7 @@ ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
 }
 
 // Get current cursor position as JSON: {"x": 123, "y": 456}
-ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
+extern "C" ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
     POINT cursorPos;
     if (GetCursorPos(&cursorPos)) {
         std::ostringstream json;
@@ -8010,7 +8010,7 @@ static WebView2View* findWebView2ById(uint32_t webviewId) {
 // Get cookies for a webview (WebView2)
 // Note: WebView2 requires a live webview to access cookies. Pass webviewId of an existing webview.
 // filterJson: {"url": "https://example.com"} or {} for all
-ELECTROBUN_EXPORT const char* sessionGetCookies(const char* partitionIdentifier, const char* filterJson) {
+extern "C" ELECTROBUN_EXPORT const char* sessionGetCookies(const char* partitionIdentifier, const char* filterJson) {
     // For WebView2, we need a webview to access cookies
     // We'll try to find any webview with the matching partition
     // For now, return empty array - full implementation requires webview access
@@ -8135,7 +8135,7 @@ ELECTROBUN_EXPORT const char* sessionGetCookies(const char* partitionIdentifier,
 }
 
 // Set a cookie (WebView2)
-ELECTROBUN_EXPORT bool sessionSetCookie(const char* partitionIdentifier, const char* cookieJson) {
+extern "C" ELECTROBUN_EXPORT bool sessionSetCookie(const char* partitionIdentifier, const char* cookieJson) {
     if (!cookieJson) return false;
 
     // Find a WebView2 instance
@@ -8253,7 +8253,7 @@ ELECTROBUN_EXPORT bool sessionSetCookie(const char* partitionIdentifier, const c
 }
 
 // Remove a specific cookie (WebView2)
-ELECTROBUN_EXPORT bool sessionRemoveCookie(const char* partitionIdentifier, const char* urlStr, const char* cookieName) {
+extern "C" ELECTROBUN_EXPORT bool sessionRemoveCookie(const char* partitionIdentifier, const char* urlStr, const char* cookieName) {
     if (!urlStr || !cookieName) return false;
 
     // Find a WebView2 instance
@@ -8327,7 +8327,7 @@ ELECTROBUN_EXPORT bool sessionRemoveCookie(const char* partitionIdentifier, cons
 }
 
 // Clear all cookies (WebView2)
-ELECTROBUN_EXPORT void sessionClearCookies(const char* partitionIdentifier) {
+extern "C" ELECTROBUN_EXPORT void sessionClearCookies(const char* partitionIdentifier) {
     // Find a WebView2 instance
     WebView2View* view = nullptr;
     for (auto& pair : g_webview2Views) {
@@ -8357,7 +8357,7 @@ ELECTROBUN_EXPORT void sessionClearCookies(const char* partitionIdentifier) {
 }
 
 // Clear storage data (WebView2) - uses Profile API
-ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionIdentifier, const char* storageTypesJson) {
+extern "C" ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionIdentifier, const char* storageTypesJson) {
     // Find a WebView2 instance
     WebView2View* view = nullptr;
     for (auto& pair : g_webview2Views) {
@@ -8410,4 +8410,10 @@ ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionIdentifier, 
             }
         }
     }
+}
+
+// URL scheme handler - macOS only, stub for Windows
+extern "C" ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*)) {
+    // Not supported on Windows - stub to prevent dlopen failure
+    // Windows URL protocol handling is done via registry
 }
