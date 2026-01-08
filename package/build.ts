@@ -1245,7 +1245,7 @@ async function buildNative() {
 
         // Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
         // Note: ASAR reading is now implemented directly in C++ (no external library needed)
-        await runMsvcCommand(`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`);
+        await runMsvcCommand(`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib comctl32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`);
     } else if (OS === 'linux') {
         // Skip package checks in CI or continue anyway if packages are missing
         if (!process.env['GITHUB_ACTIONS']) {

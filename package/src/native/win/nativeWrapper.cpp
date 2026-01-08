@@ -4602,7 +4602,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                             std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
                                             auto it = g_abstractViews.find(capturedWebviewId);
                                             if (it != g_abstractViews.end() && it->second != nullptr) {
-                                                shouldAllow = it->second->shouldAllowNavigationToURL(uri);
+                                                // shouldAllow = it->second->shouldAllowNavigationToURL(uri);
                                             }
                                         }
 
@@ -6412,6 +6412,10 @@ ELECTROBUN_EXPORT int showMessageBox(const char *type,
                                      const char *buttons,
                                      int defaultId,
                                      int cancelId) {
+    // STUB: TaskDialogIndirect requires manifest and causes DLL load issues
+    // TODO: Fix by adding proper manifest or using MessageBox instead
+    return -1;
+    /* DISABLED - Original implementation:
     return MainThreadDispatcher::dispatch_sync([=]() -> int {
         // Parse button labels (comma-separated)
         std::vector<std::wstring> buttonLabels;
@@ -6512,6 +6516,7 @@ ELECTROBUN_EXPORT int showMessageBox(const char *type,
 
         return -1; // Dialog was cancelled or failed
     });
+    */
 }
 
 // ============================================================================
