@@ -7,7 +7,8 @@
     "dev:hmr": "concurrently \"bun run hmr\" \"bun run dev\"",
     "hmr": "vite --port 5173",
     "build": "vite build && electrobun build",
-    "build:prod": "vite build && electrobun build --channel prod"
+    "build:prod": "vite build && electrobun build --channel prod",
+    "start": "bun run dev"
   },
   "dependencies": {
     "electrobun": "latest",
