@@ -62,6 +62,9 @@ static AsarArchive* g_asarArchive = nullptr;
 #include "include/cef_download_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
+// Ensure the exported functions have appropriate visibility
+#define ELECTROBUN_EXPORT __attribute__((visibility("default")))
+
 // X11 Error Handler (non-fatal errors are common in WebKit/GTK)
 static int x11_error_handler(Display* display, XErrorEvent* error) {
     // Only log severe errors, ignore common ones like BadWindow for destroyed widgets
@@ -85,6 +88,9 @@ typedef void (*WindowCloseCallback)(uint32_t windowId);
 typedef void (*WindowMoveCallback)(uint32_t windowId, double x, double y);
 typedef void (*WindowResizeCallback)(uint32_t windowId, double x, double y, double width, double height);
 typedef void (*WindowFocusCallback)(uint32_t windowId);
+
+// Forward declaration for WebKit scheme handler
+static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data);
 
 // Webview callback types
 typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
@@ -119,8 +125,8 @@ static std::string g_electrobunChannel = "";
 static std::string g_electrobunIdentifier = "";
 
 // Forward declarations for HTML content management
-extern "C" const char* getWebviewHTMLContent(uint32_t webviewId);
-extern "C" void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
+extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewId);
+extern "C" ELECTROBUN_EXPORT void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
 
 // Shared MIME type detection function
 // Based on Bun runtime supported file types and web development standards
@@ -694,7 +700,6 @@ public:
         
         // Check if this is the internal HTML request
         if (fullPath == "internal/index.html") {
-            printf("DEBUG CEF Linux: Handling views://internal/index.html\n");
             // Use stored HTML content instead of JSCallback
             const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
             if (htmlContent) {
@@ -704,7 +709,6 @@ public:
                 handle_request = true;
                 return true;
             } else {
-                printf("DEBUG CEF Linux: No HTML content found, using fallback\n");
                 data_ = "<html><body>No content set</body></html>";
                 mimeType_ = "text/html";
                 handle_request = true;
@@ -723,7 +727,6 @@ public:
             if (!g_asarArchive) {
                 g_asarArchive = asar_open(asarPath);
                 if (g_asarArchive) {
-                    printf("DEBUG CEF loadViewsFile: Opened ASAR archive at %s\n", asarPath);
                 } else {
                     printf("ERROR CEF loadViewsFile: Failed to open ASAR archive at %s\n", asarPath);
                     // Fall through to flat file reading
@@ -739,7 +742,6 @@ public:
                 const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &fileSize);
 
                 if (fileData && fileSize > 0) {
-                    printf("DEBUG CEF loadViewsFile: Read %zu bytes from ASAR for %s\n", fileSize, fullPath.c_str());
                     // Create std::string that copies the buffer (we'll free it after)
                     data_ = std::string(reinterpret_cast<const char*>(fileData), fileSize);
                     // Free the ASAR buffer
@@ -766,7 +768,6 @@ public:
                     handle_request = true;
                     return true;
                 } else {
-                    printf("DEBUG CEF loadViewsFile: File not found in ASAR: %s\n", fullPath.c_str());
                     // Fall through to flat file reading
                 }
             }
@@ -776,7 +777,6 @@ public:
         gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
         gchar* filePath = g_build_filename(viewsDir, fullPath.c_str(), nullptr);
 
-        printf("DEBUG CEF loadViewsFile: Attempting flat file read: %s\n", filePath);
 
         // Check if file exists and read it
         if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
@@ -1921,6 +1921,7 @@ bool initializeCEF() {
     if (!result) {
         printf("CEF initialization failed\n");
         return false;
+    } else {
     }
     
     g_cefInitialized = true;
@@ -2133,11 +2134,17 @@ public:
                 );
                 context = webkit_web_context_new_with_website_data_manager(dataManager);
                 g_object_unref(dataManager);
+                
+                // Register views:// scheme handler for this partition context
+                webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
             } else {
                 // Ephemeral partition: use non-persistent (in-memory) data manager
                 WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new_ephemeral();
                 context = webkit_web_context_new_with_website_data_manager(dataManager);
                 g_object_unref(dataManager);
+                
+                // Register views:// scheme handler for this partition context
+                webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
             }
         } else {
             // No partition: use default context
@@ -2986,7 +2993,13 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         }
     }
 
-    return CefRequestContext::CreateContext(settings, nullptr);
+    // Create context with proper partition isolation and scheme handler inheritance
+    
+    // Create context that inherits the global scheme handler registration
+    
+    // Use the global context as the parent to ensure scheme handler inheritance
+    CefRefPtr<CefRequestContext> globalContext = CefRequestContext::GetGlobalContext();
+    return CefRequestContext::CreateContext(globalContext, nullptr);
 }
 
 // CEF WebView implementation
@@ -3997,7 +4010,6 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     
     // Check if this is the internal HTML request
     if (strcmp(fullPath, "internal/index.html") == 0) {
-        printf("DEBUG WebKit Linux: Handling views://internal/index.html\n");
         fflush(stdout);
         // Use stored HTML content instead of JSCallback
         const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
@@ -4007,11 +4019,9 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
             webkit_uri_scheme_request_finish(request, stream, contentLength, "text/html");
             g_object_unref(stream);
             free((void*)htmlContent); // Free the strdup'd memory
-            printf("DEBUG WebKit Linux: Sent HTML content for internal request\n");
             fflush(stdout);
             return;
         } else {
-            printf("DEBUG WebKit Linux: No HTML content found, using fallback\n");
             fflush(stdout);
             const char* fallbackHTML = "<html><body>No content set</body></html>";
             gsize contentLength = strlen(fallbackHTML);
@@ -4037,7 +4047,6 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         if (!g_asarArchive) {
             g_asarArchive = asar_open(asarPath);
             if (g_asarArchive) {
-                printf("DEBUG WebKit loadViewsFile: Opened ASAR archive at %s\n", asarPath);
                 fflush(stdout);
             } else {
                 printf("ERROR WebKit loadViewsFile: Failed to open ASAR archive at %s\n", asarPath);
@@ -4055,7 +4064,6 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
             const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &asarFileSize);
 
             if (fileData && asarFileSize > 0) {
-                printf("DEBUG WebKit loadViewsFile: Read %zu bytes from ASAR for %s\n", asarFileSize, fullPath);
                 fflush(stdout);
                 // Copy the data (glib will free it)
                 fileContents = (gchar*)g_memdup2(fileData, asarFileSize);
@@ -4064,7 +4072,6 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
                 // Free the ASAR buffer
                 asar_free_buffer(fileData, asarFileSize);
             } else {
-                printf("DEBUG WebKit loadViewsFile: File not found in ASAR: %s\n", fullPath);
                 fflush(stdout);
                 // Fall through to flat file reading
             }
@@ -4076,7 +4083,6 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
         gchar* filePath = g_build_filename(viewsDir, fullPath, nullptr);
 
-        printf("DEBUG WebKit loadViewsFile: Attempting flat file read: %s\n", filePath);
         fflush(stdout);
 
         // Check if file exists and read it
@@ -4567,7 +4573,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
     return result;
 }
 
-void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
+ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
     
    
@@ -4643,7 +4649,7 @@ void* createGTKWindow(uint32_t windowId, double x, double y, double width, doubl
 }
 
 // Mac-compatible function for Linux
-void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
+ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle,
                                              WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
 
@@ -4674,7 +4680,7 @@ void setGTKWindowTitle(void* window, const char* title) {
 }
 
 // Mac-compatible function for Linux
-void setNSWindowTitle(void* window, const char* title) {
+ELECTROBUN_EXPORT void setNSWindowTitle(void* window, const char* title) {
     if (isCEFAvailable()) {
         setX11WindowTitle(window, title);
     } else {
@@ -4684,7 +4690,7 @@ void setNSWindowTitle(void* window, const char* title) {
 }
 
 // Mac-compatible function for Linux
-void makeNSWindowKeyAndOrderFront(void* window) {
+ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(void* window) {
     showWindow(window);
 }
 
@@ -4717,7 +4723,7 @@ void showGTKWindow(void* window) {
     });
 }
 
-void showWindow(void* window) {
+ELECTROBUN_EXPORT void showWindow(void* window) {
     if (isCEFAvailable()) {
         showX11Window(window);
     } else {
@@ -4864,7 +4870,7 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
     return result;
 }
 
-AbstractView* initWebview(uint32_t webviewId,
+ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          void* window,
                          const char* renderer,
                          const char* url,
@@ -4902,7 +4908,7 @@ AbstractView* initWebview(uint32_t webviewId,
        
 }
 
-void loadURLInWebView(AbstractView* abstractView, const char* urlString) {
+ELECTROBUN_EXPORT void loadURLInWebView(AbstractView* abstractView, const char* urlString) {
     if (abstractView && urlString) {
         std::string urlStr(urlString);  // Copy the string to ensure it survives
         dispatch_sync_main_void([abstractView, urlStr]() {  // Capture by value
@@ -4911,7 +4917,7 @@ void loadURLInWebView(AbstractView* abstractView, const char* urlString) {
     }
 }
 
-void loadHTMLInWebView(AbstractView* abstractView, const char* htmlString) {
+ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView* abstractView, const char* htmlString) {
     if (abstractView && htmlString) {
         std::string htmlStr(htmlString);  // Copy the string to ensure it survives
         dispatch_sync_main_void([abstractView, htmlStr]() {  // Capture by value
@@ -4920,7 +4926,7 @@ void loadHTMLInWebView(AbstractView* abstractView, const char* htmlString) {
     }
 }
 
-void webviewGoBack(AbstractView* abstractView) {
+ELECTROBUN_EXPORT void webviewGoBack(AbstractView* abstractView) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {
             abstractView->goBack();
@@ -4928,7 +4934,7 @@ void webviewGoBack(AbstractView* abstractView) {
     }
 }
 
-void webviewGoForward(AbstractView* abstractView) {
+ELECTROBUN_EXPORT void webviewGoForward(AbstractView* abstractView) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {
             abstractView->goForward();
@@ -4936,7 +4942,7 @@ void webviewGoForward(AbstractView* abstractView) {
     }
 }
 
-void webviewReload(AbstractView* abstractView) {
+ELECTROBUN_EXPORT void webviewReload(AbstractView* abstractView) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {
             abstractView->reload();
@@ -4944,7 +4950,7 @@ void webviewReload(AbstractView* abstractView) {
     }
 }
 
-void webviewRemove(AbstractView* abstractView) {
+ELECTROBUN_EXPORT void webviewRemove(AbstractView* abstractView) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {
             abstractView->remove();
@@ -4952,14 +4958,14 @@ void webviewRemove(AbstractView* abstractView) {
     }
 }
 
-bool webviewCanGoBack(AbstractView* abstractView) {
+ELECTROBUN_EXPORT bool webviewCanGoBack(AbstractView* abstractView) {
     if (abstractView) {
         return abstractView->canGoBack();
     }
     return false;
 }
 
-bool webviewCanGoForward(AbstractView* abstractView) {
+ELECTROBUN_EXPORT bool webviewCanGoForward(AbstractView* abstractView) {
     if (abstractView) {
         return abstractView->canGoForward();
     }
@@ -5021,7 +5027,7 @@ void updateActiveWebviewForMousePosition(uint32_t windowId, int mouseX, int mous
     container->activeWebView = nullptr;
 }
 
-void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
+ELECTROBUN_EXPORT void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
     if (abstractView) {
         
         std::string masksStr(masksJson ? masksJson : "");  // Copy the string to ensure it survives
@@ -5032,7 +5038,7 @@ void resizeWebview(AbstractView* abstractView, double x, double y, double width,
     }
 }
 
-void evaluateJavaScriptWithNoCompletion(AbstractView* abstractView, const char* js) {
+ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView* abstractView, const char* js) {
     if (abstractView && js) {
         std::string jsString(js);  // Copy the string to ensure it survives
         dispatch_sync_main_void([abstractView, jsString]() {  // Capture by value
@@ -5073,7 +5079,7 @@ void webviewSetHidden(AbstractView* abstractView, bool hidden) {
     }
 }
 
-void setWebviewNavigationRules(AbstractView* abstractView, const char* rulesJson) {
+ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView* abstractView, const char* rulesJson) {
     if (abstractView) {
         std::string rulesStr(rulesJson ? rulesJson : "");  // Copy the string to ensure it survives
         dispatch_sync_main_void([abstractView, rulesStr]() {
@@ -5082,7 +5088,7 @@ void setWebviewNavigationRules(AbstractView* abstractView, const char* rulesJson
     }
 }
 
-void webviewFindInPage(AbstractView* abstractView, const char* searchText, bool forward, bool matchCase) {
+ELECTROBUN_EXPORT void webviewFindInPage(AbstractView* abstractView, const char* searchText, bool forward, bool matchCase) {
     if (abstractView) {
         std::string text(searchText ? searchText : "");
         dispatch_sync_main_void([abstractView, text, forward, matchCase]() {
@@ -5091,7 +5097,7 @@ void webviewFindInPage(AbstractView* abstractView, const char* searchText, bool 
     }
 }
 
-void webviewStopFind(AbstractView* abstractView) {
+ELECTROBUN_EXPORT void webviewStopFind(AbstractView* abstractView) {
     if (abstractView) {
         dispatch_sync_main_void([abstractView]() {
             abstractView->stopFindInPage();
@@ -5099,7 +5105,7 @@ void webviewStopFind(AbstractView* abstractView) {
     }
 }
 
-void updatePreloadScriptToWebView(AbstractView* abstractView, const char* scriptIdentifier, const char* scriptContent, bool forMainFrameOnly) {
+ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView* abstractView, const char* scriptIdentifier, const char* scriptContent, bool forMainFrameOnly) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {
             abstractView->updateCustomPreloadScript(scriptContent);
@@ -5150,7 +5156,7 @@ static gboolean onWindowDragButtonRelease(GtkWidget* widget, GdkEventButton* eve
     return FALSE; // Let other handlers process the event
 }
 
-void startWindowMove(void* window) {
+ELECTROBUN_EXPORT void startWindowMove(void* window) {
     dispatch_sync_main_void([&]() {
         // Handle both GTK and X11 windows
         if (isCEFAvailable()) {
@@ -5267,7 +5273,7 @@ void startWindowMove(void* window) {
     });
 }
 
-void stopWindowMove() {
+ELECTROBUN_EXPORT void stopWindowMove() {
     dispatch_sync_main_void([&]() {
         printf("stopWindowMove called\n");
         fflush(stdout);
@@ -5306,7 +5312,7 @@ void stopWindowMove() {
     });
 }
 
-void addPreloadScriptToWebView(AbstractView* abstractView, const char* scriptContent, bool forMainFrameOnly) {
+ELECTROBUN_EXPORT void addPreloadScriptToWebView(AbstractView* abstractView, const char* scriptContent, bool forMainFrameOnly) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {
             abstractView->addPreloadScriptToWebView(scriptContent);
@@ -5314,7 +5320,7 @@ void addPreloadScriptToWebView(AbstractView* abstractView, const char* scriptCon
     }
 }
 
-void callAsyncJavaScript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) {
+ELECTROBUN_EXPORT void callAsyncJavaScript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) {
     // Find the webview in containers
     for (auto& [id, container] : g_containers) {
         for (auto& view : container->abstractViews) {
@@ -5352,18 +5358,18 @@ void testFFI2(void (*completionHandler)()) {
     }
 }
 
-int simpleTest() {
+ELECTROBUN_EXPORT int simpleTest() {
     printf("simpleTest called successfully\n");
     fflush(stdout);
     return 42;
 }
 
-const char* getUrlFromNavigationAction(void* navigationAction) {
+ELECTROBUN_EXPORT const char* getUrlFromNavigationAction(void* navigationAction) {
     // TODO: Implement URL extraction from navigation action
     return nullptr;
 }
 
-const char* getBodyFromScriptMessage(void* message) {
+ELECTROBUN_EXPORT const char* getBodyFromScriptMessage(void* message) {
     // TODO: Implement body extraction from script message
     return nullptr;
 }
@@ -5372,7 +5378,7 @@ void invokeDecisionHandler(void* decisionHandler, uint32_t policy) {
     // TODO: Implement decision handler invocation
 }
 
-bool moveToTrash(char* pathString) {
+ELECTROBUN_EXPORT bool moveToTrash(char* pathString) {
     if (!pathString) return false;
     
     // Use GIO to move file to trash
@@ -5435,7 +5441,7 @@ void showItemInFolder(char* path) {
 }
 
 // Open a URL in the default browser or appropriate application
-bool openExternal(const char* urlString) {
+ELECTROBUN_EXPORT bool openExternal(const char* urlString) {
     if (!urlString) {
         fprintf(stderr, "ERROR: NULL URL passed to openExternal\n");
         return false;
@@ -5472,7 +5478,7 @@ bool openExternal(const char* urlString) {
 }
 
 // Open a file or folder with the default application
-bool openPath(const char* pathString) {
+ELECTROBUN_EXPORT bool openPath(const char* pathString) {
     if (!pathString) {
         fprintf(stderr, "ERROR: NULL path passed to openPath\n");
         return false;
@@ -5575,7 +5581,7 @@ void showNotification(const char* title, const char* body, const char* subtitle,
     }).detach();
 }
 
-const char* openFileDialog(const char* startingFolder, const char* allowedFileTypes, int canChooseFiles, int canChooseDirectories, int allowsMultipleSelection) {
+ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const char* allowedFileTypes, int canChooseFiles, int canChooseDirectories, int allowsMultipleSelection) {
     // This function needs to run on the main thread
     return dispatch_sync_main([&]() -> const char* {
         // Determine the file chooser action based on parameters
@@ -5680,7 +5686,7 @@ const char* openFileDialog(const char* startingFolder, const char* allowedFileTy
     });
 }
 
-int showMessageBox(const char *type,
+ELECTROBUN_EXPORT int showMessageBox(const char *type,
                    const char *title,
                    const char *message,
                    const char *detail,
@@ -5773,7 +5779,7 @@ int showMessageBox(const char *type,
 
 // clipboardReadText - Read text from the system clipboard
 // Returns: UTF-8 string (caller must free) or NULL if no text available
-const char* clipboardReadText() {
+ELECTROBUN_EXPORT const char* clipboardReadText() {
     return dispatch_sync_main([&]() -> const char* {
         GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
         gchar* text = gtk_clipboard_wait_for_text(clipboard);
@@ -5787,7 +5793,7 @@ const char* clipboardReadText() {
 }
 
 // clipboardWriteText - Write text to the system clipboard
-void clipboardWriteText(const char* text) {
+ELECTROBUN_EXPORT void clipboardWriteText(const char* text) {
     if (!text) return;
 
     // Make a copy of the text since we need it to persist
@@ -5841,7 +5847,7 @@ const uint8_t* clipboardReadImage(size_t* outSize) {
 }
 
 // clipboardWriteImage - Write PNG image data to clipboard
-void clipboardWriteImage(const uint8_t* pngData, size_t size) {
+ELECTROBUN_EXPORT void clipboardWriteImage(const uint8_t* pngData, size_t size) {
     if (!pngData || size == 0) return;
 
     // Copy the data since we need it to persist
@@ -5874,7 +5880,7 @@ void clipboardWriteImage(const uint8_t* pngData, size_t size) {
 }
 
 // clipboardClear - Clear the clipboard
-void clipboardClear() {
+ELECTROBUN_EXPORT void clipboardClear() {
     dispatch_sync_main_void([&]() {
         GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
         gtk_clipboard_clear(clipboard);
@@ -5883,7 +5889,7 @@ void clipboardClear() {
 
 // clipboardAvailableFormats - Get available formats in clipboard
 // Returns: comma-separated list of formats (caller must free)
-const char* clipboardAvailableFormats() {
+ELECTROBUN_EXPORT const char* clipboardAvailableFormats() {
     return dispatch_sync_main([&]() -> const char* {
         GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
         std::vector<std::string> formats;
@@ -5918,7 +5924,7 @@ const char* clipboardAvailableFormats() {
 // The TrayItem constructor handles deferred AppIndicator creation internally
 
 #ifndef NO_APPINDICATOR
-void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, uint32_t width, uint32_t height, void* clickHandler) {
+ELECTROBUN_EXPORT void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, uint32_t width, uint32_t height, void* clickHandler) {
     // NOTE: width and height parameters are ignored on Linux since AppIndicator doesn't support custom sizing
     // These parameters are included for FFI consistency across platforms (macOS and Windows use them)
     
@@ -5948,7 +5954,7 @@ void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bo
     });
 }
 
-void setTrayTitle(void* statusItem, const char* title) {
+ELECTROBUN_EXPORT void setTrayTitle(void* statusItem, const char* title) {
     dispatch_sync_main_void([&]() {
         // Find the tray by statusItem pointer
         for (auto& [id, tray] : g_trays) {
@@ -5960,7 +5966,7 @@ void setTrayTitle(void* statusItem, const char* title) {
     });
 }
 
-void setTrayImage(void* statusItem, const char* image) {
+ELECTROBUN_EXPORT void setTrayImage(void* statusItem, const char* image) {
     dispatch_sync_main_void([&]() {
         // Find the tray by statusItem pointer
         for (auto& [id, tray] : g_trays) {
@@ -5972,7 +5978,7 @@ void setTrayImage(void* statusItem, const char* image) {
     });
 }
 
-void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {
+ELECTROBUN_EXPORT void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {
     dispatch_sync_main_void([&]() {
         // Find the tray by statusItem pointer
         for (auto& [id, tray] : g_trays) {
@@ -5984,11 +5990,11 @@ void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {
     });
 }
 
-void setTrayMenu(void* statusItem, const char* menuConfig) {
+ELECTROBUN_EXPORT void setTrayMenu(void* statusItem, const char* menuConfig) {
     setTrayMenuFromJSON(statusItem, menuConfig);
 }
 
-void removeTray(void* statusItem) {
+ELECTROBUN_EXPORT void removeTray(void* statusItem) {
     dispatch_sync_main_void([&]() {
         // Find the tray by statusItem pointer and remove it
         for (auto it = g_trays.begin(); it != g_trays.end(); ++it) {
@@ -6001,18 +6007,18 @@ void removeTray(void* statusItem) {
 }
 #else // NO_APPINDICATOR
 // Stub implementations when AppIndicator is not available
-void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, uint32_t width, uint32_t height, void* clickHandler) {
+ELECTROBUN_EXPORT void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, uint32_t width, uint32_t height, void* clickHandler) {
     return nullptr;
 }
 
-void setTrayTitle(void* statusItem, const char* title) {}
-void setTrayImage(void* statusItem, const char* image) {}
-void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {}
-void setTrayMenu(void* statusItem, const char* menuConfig) {}
-void removeTray(void* statusItem) {}
+ELECTROBUN_EXPORT void setTrayTitle(void* statusItem, const char* title) {}
+ELECTROBUN_EXPORT void setTrayImage(void* statusItem, const char* image) {}
+ELECTROBUN_EXPORT void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {}
+ELECTROBUN_EXPORT void setTrayMenu(void* statusItem, const char* menuConfig) {}
+ELECTROBUN_EXPORT void removeTray(void* statusItem) {}
 #endif // NO_APPINDICATOR
 
-void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
+ELECTROBUN_EXPORT void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
     if (!jsonString || strlen(jsonString) == 0) {
         return;
     }
@@ -6053,12 +6059,12 @@ void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
 // On macOS, you can programmatically show a custom menu at the current mouse position.
 // On Linux/GTK, context menus are typically triggered by right-click events rather than
 // programmatic calls. This function is not supported on Linux.
-void showContextMenu(const char* jsonString, void* contextMenuHandler) {
+ELECTROBUN_EXPORT void showContextMenu(const char* jsonString, void* contextMenuHandler) {
     printf("showContextMenu is not supported on Linux. Use application menus or system tray menus instead.\n");
     fflush(stdout);
 }
 
-void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId, double x, double y, double width, double height, void* completionHandler) {
+ELECTROBUN_EXPORT void getWebviewSnapshot(uint32_t hostId, uint32_t webviewId, double x, double y, double width, double height, void* completionHandler) {
     // TODO: Implement webview snapshot
 }
 
@@ -6096,7 +6102,7 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
     }
 }
 
-void runNSApplication(const char* identifier, const char* channel) {
+ELECTROBUN_EXPORT void runNSApplication(const char* identifier, const char* channel) {
     // Store identifier and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
@@ -6109,13 +6115,13 @@ void runNSApplication(const char* identifier, const char* channel) {
     runEventLoop();
 }
 
-void killApp() {
+ELECTROBUN_EXPORT void killApp() {
     // Properly shutdown GTK and then exit
     gtk_main_quit();
     exit(0);
 }
 
-void shutdownApplication() {
+ELECTROBUN_EXPORT void shutdownApplication() {
     // TODO: Implement graceful shutdown
     gtk_main_quit();
 }
@@ -6126,7 +6132,7 @@ void* createNSRectWrapper(double x, double y, double width, double height) {
 }
 
 
-void closeNSWindow(void* window) {
+ELECTROBUN_EXPORT void closeNSWindow(void* window) {
     if (window) {
         dispatch_sync_main_void([&]() {
             // Check if it's a GTK window first
@@ -6153,7 +6159,7 @@ void closeNSWindow(void* window) {
     }
 }
 
-void minimizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void minimizeNSWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6172,7 +6178,7 @@ void minimizeNSWindow(void* window) {
     });
 }
 
-void unminimizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void unminimizeNSWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6191,7 +6197,7 @@ void unminimizeNSWindow(void* window) {
     });
 }
 
-bool isNSWindowMinimized(void* window) {
+ELECTROBUN_EXPORT bool isNSWindowMinimized(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6229,7 +6235,7 @@ bool isNSWindowMinimized(void* window) {
     return result;
 }
 
-void maximizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void maximizeNSWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6263,7 +6269,7 @@ void maximizeNSWindow(void* window) {
     });
 }
 
-void unmaximizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void unmaximizeNSWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6297,7 +6303,7 @@ void unmaximizeNSWindow(void* window) {
     });
 }
 
-bool isNSWindowMaximized(void* window) {
+ELECTROBUN_EXPORT bool isNSWindowMaximized(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6337,7 +6343,7 @@ bool isNSWindowMaximized(void* window) {
     return result;
 }
 
-void setNSWindowFullScreen(void* window, bool fullScreen) {
+ELECTROBUN_EXPORT void setNSWindowFullScreen(void* window, bool fullScreen) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6374,7 +6380,7 @@ void setNSWindowFullScreen(void* window, bool fullScreen) {
     });
 }
 
-bool isNSWindowFullScreen(void* window) {
+ELECTROBUN_EXPORT bool isNSWindowFullScreen(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6417,7 +6423,7 @@ bool isNSWindowFullScreen(void* window) {
     return result;
 }
 
-void setNSWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
+ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6450,7 +6456,7 @@ void setNSWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
     });
 }
 
-bool isNSWindowAlwaysOnTop(void* window) {
+ELECTROBUN_EXPORT bool isNSWindowAlwaysOnTop(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6637,7 +6643,7 @@ static void shortcutEventLoop() {
 }
 
 // Set the callback for global shortcut events
-void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
+ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
     g_globalShortcutCallback = callback;
 
     // Start the event loop thread if not running
@@ -6652,7 +6658,7 @@ void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
 }
 
 // Register a global keyboard shortcut
-bool registerGlobalShortcut(const char* accelerator) {
+ELECTROBUN_EXPORT bool registerGlobalShortcut(const char* accelerator) {
     if (!accelerator || !g_shortcutDisplay) {
         fprintf(stderr, "ERROR: Cannot register shortcut - invalid accelerator or display not ready\n");
         return false;
@@ -6710,7 +6716,7 @@ bool registerGlobalShortcut(const char* accelerator) {
 }
 
 // Unregister a global keyboard shortcut
-bool unregisterGlobalShortcut(const char* accelerator) {
+ELECTROBUN_EXPORT bool unregisterGlobalShortcut(const char* accelerator) {
     if (!accelerator || !g_shortcutDisplay) return false;
 
     std::string accelStr(accelerator);
@@ -6742,7 +6748,7 @@ bool unregisterGlobalShortcut(const char* accelerator) {
 }
 
 // Unregister all global keyboard shortcuts
-void unregisterAllGlobalShortcuts() {
+ELECTROBUN_EXPORT void unregisterAllGlobalShortcuts() {
     if (!g_shortcutDisplay) return;
 
     Window root = DefaultRootWindow(g_shortcutDisplay);
@@ -6769,7 +6775,7 @@ void unregisterAllGlobalShortcuts() {
 }
 
 // Check if a shortcut is registered
-bool isGlobalShortcutRegistered(const char* accelerator) {
+ELECTROBUN_EXPORT bool isGlobalShortcutRegistered(const char* accelerator) {
     if (!accelerator) return false;
     return g_globalShortcuts.find(std::string(accelerator)) != g_globalShortcuts.end();
 }
@@ -6781,7 +6787,7 @@ bool isGlobalShortcutRegistered(const char* accelerator) {
  */
 
 // Get all displays as JSON array
-const char* getAllDisplays() {
+ELECTROBUN_EXPORT const char* getAllDisplays() {
     GdkDisplay* display = gdk_display_get_default();
     if (!display) {
         return strdup("[]");
@@ -6838,7 +6844,7 @@ const char* getAllDisplays() {
 }
 
 // Get primary display as JSON
-const char* getPrimaryDisplay() {
+ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
     GdkDisplay* display = gdk_display_get_default();
     if (!display) {
         return strdup("{}");
@@ -6889,7 +6895,7 @@ const char* getPrimaryDisplay() {
 }
 
 // Get current cursor position as JSON: {"x": 123, "y": 456}
-const char* getCursorScreenPoint() {
+ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
     GdkDisplay* display = gdk_display_get_default();
     if (!display) {
         return strdup("{\"x\":0,\"y\":0}");
@@ -7029,7 +7035,7 @@ static void onGetCookiesFinished(GObject* source, GAsyncResult* result, gpointer
 }
 
 // Get cookies for a partition (WebKit2GTK)
-const char* sessionGetCookies(const char* partitionIdentifier, const char* filterJson) {
+ELECTROBUN_EXPORT const char* sessionGetCookies(const char* partitionIdentifier, const char* filterJson) {
     // Copy arguments before dispatching to main thread
     std::string partitionStr = partitionIdentifier ? partitionIdentifier : "";
     std::string filterStr = filterJson ? filterJson : "{}";
@@ -7066,7 +7072,7 @@ const char* sessionGetCookies(const char* partitionIdentifier, const char* filte
         callbackData.done = &done;
         callbackData.loop = g_main_loop_new(NULL, FALSE);
 
-        const char* uri = filterUrl.empty() ? nullptr : filterUrl.c_str();
+        const char* uri = filterUrl.empty() ? "https://localhost" : filterUrl.c_str();
         webkit_cookie_manager_get_cookies(cookieManager, uri, nullptr, onGetCookiesFinished, &callbackData);
 
         // Run main loop until done or timeout
@@ -7106,7 +7112,7 @@ static void onSetCookieFinished(GObject* source, GAsyncResult* result, gpointer 
 }
 
 // Set a cookie (WebKit2GTK)
-bool sessionSetCookie(const char* partitionIdentifier, const char* cookieJson) {
+ELECTROBUN_EXPORT bool sessionSetCookie(const char* partitionIdentifier, const char* cookieJson) {
     // Copy arguments before dispatching to main thread
     std::string partitionStr = partitionIdentifier ? partitionIdentifier : "";
     std::string jsonStr = cookieJson ? cookieJson : "{}";
@@ -7252,7 +7258,7 @@ static void onDeleteCookieFinished(GObject* source, GAsyncResult* result, gpoint
 }
 
 // Remove a specific cookie (WebKit2GTK)
-bool sessionRemoveCookie(const char* partitionIdentifier, const char* urlStr, const char* cookieName) {
+ELECTROBUN_EXPORT bool sessionRemoveCookie(const char* partitionIdentifier, const char* urlStr, const char* cookieName) {
     if (!urlStr || !cookieName) return false;
 
     // Copy arguments before dispatching to main thread
@@ -7358,7 +7364,7 @@ bool sessionRemoveCookie(const char* partitionIdentifier, const char* urlStr, co
 }
 
 // Clear all cookies (WebKit2GTK)
-void sessionClearCookies(const char* partitionIdentifier) {
+ELECTROBUN_EXPORT void sessionClearCookies(const char* partitionIdentifier) {
     // Copy arguments before dispatching to main thread
     std::string partitionStr = partitionIdentifier ? partitionIdentifier : "";
 
@@ -7399,7 +7405,7 @@ void sessionClearCookies(const char* partitionIdentifier) {
 }
 
 // Clear storage data (WebKit2GTK)
-void sessionClearStorageData(const char* partitionIdentifier, const char* storageTypesJson) {
+ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionIdentifier, const char* storageTypesJson) {
     // Copy arguments before dispatching to main thread
     std::string partitionStr = partitionIdentifier ? partitionIdentifier : "";
     std::string typesStr = storageTypesJson ? storageTypesJson : "";
@@ -7467,5 +7473,9 @@ void sessionClearStorageData(const char* partitionIdentifier, const char* storag
     });
 }
 
+ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*)) {
+    // Not supported on Linux - stub to prevent dlopen failure
+    // Linux URL protocol handling is done via desktop file associations
+}
 
 }
