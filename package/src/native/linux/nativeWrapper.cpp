@@ -29,7 +29,9 @@
 #include <mutex>
 #include <condition_variable>
 #include <fstream>
-#include <regex>       // For navigation rules pattern matching
+
+// Shared cross-platform utilities
+#include "../shared/glob_match.h"
 
 // ASAR C FFI declarations
 extern "C" {
@@ -2002,39 +2004,8 @@ public:
             bool isBlockRule = !rule.empty() && rule[0] == '^';
             std::string pattern = isBlockRule ? rule.substr(1) : rule;
 
-            // Convert glob pattern to regex: escape regex special chars, then replace * with .*
-            std::string regexPattern;
-            for (char c : pattern) {
-                switch (c) {
-                    case '*': regexPattern += ".*"; break;
-                    case '.': regexPattern += "\\."; break;
-                    case '?': regexPattern += "\\?"; break;
-                    case '+': regexPattern += "\\+"; break;
-                    case '[': regexPattern += "\\["; break;
-                    case ']': regexPattern += "\\]"; break;
-                    case '(': regexPattern += "\\("; break;
-                    case ')': regexPattern += "\\)"; break;
-                    case '{': regexPattern += "\\{"; break;
-                    case '}': regexPattern += "\\}"; break;
-                    case '|': regexPattern += "\\|"; break;
-                    case '$': regexPattern += "\\$"; break;
-                    case '^': regexPattern += "\\^"; break;
-                    case '\\': regexPattern += "\\\\"; break;
-                    default: regexPattern += c; break;
-                }
-            }
-
-            // Wrap in anchors for full match
-            regexPattern = "^" + regexPattern + "$";
-
-            try {
-                std::regex regex(regexPattern, std::regex::icase);
-                if (std::regex_match(url, regex)) {
-                    allowed = !isBlockRule; // Last match wins
-                }
-            } catch (const std::regex_error& e) {
-                // Skip invalid regex patterns
-                printf("Invalid navigation rule regex: %s\n", e.what());
+            if (electrobun::globMatch(pattern, url)) {
+                allowed = !isBlockRule; // Last match wins
             }
         }
 

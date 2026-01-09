@@ -36,6 +36,9 @@
 #include <chrono>
 #include <map>
 
+// Shared cross-platform utilities
+#include "../shared/glob_match.h"
+
 /*
  * =============================================================================
  * 2. CONSTANTS, GLOBAL VARIABLES, FORWARD DECLARATIONS & TYPE DEFINITIONS
@@ -1035,28 +1038,15 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         }
 
         BOOL allowed = YES; // Default allow if no rules match
+        std::string urlStr = [url UTF8String] ?: "";
 
         for (NSString *rule in self.navigationRules) {
             BOOL isBlockRule = [rule hasPrefix:@"^"];
             NSString *pattern = isBlockRule ? [rule substringFromIndex:1] : rule;
+            std::string patternStr = [pattern UTF8String] ?: "";
 
-            // Convert glob pattern to regex: escape regex chars, then replace * with .*
-            NSString *escaped = [NSRegularExpression escapedPatternForString:pattern];
-            NSString *regexPattern = [escaped stringByReplacingOccurrencesOfString:@"\\*" withString:@".*"];
-            regexPattern = [NSString stringWithFormat:@"^%@$", regexPattern];
-
-            NSError *error = nil;
-            NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:regexPattern
-                                                                                   options:NSRegularExpressionCaseInsensitive
-                                                                                     error:&error];
-            if (error) {
-                NSLog(@"Invalid navigation rule pattern: %@, error: %@", pattern, error);
-                continue;
-            }
-
-            NSRange range = NSMakeRange(0, url.length);
-            if ([regex numberOfMatchesInString:url options:0 range:range] > 0) {
-                allowed = !isBlockRule; // Last match wins, continue checking
+            if (electrobun::globMatch(patternStr, urlStr)) {
+                allowed = !isBlockRule; // Last match wins
             }
         }
 

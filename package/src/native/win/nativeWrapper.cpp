@@ -33,7 +33,9 @@
 #include <d2d1.h>      // For Direct2D
 #include <direct.h>    // For _getcwd
 #include <tlhelp32.h>  // For process enumeration
-#include <regex>       // For navigation rules pattern matching
+
+// Shared cross-platform utilities
+#include "../shared/glob_match.h"
 
 // Simple ASAR reader implementation for Windows (no external dependency)
 #include <fstream>
@@ -1920,39 +1922,8 @@ public:
             bool isBlockRule = !rule.empty() && rule[0] == '^';
             std::string pattern = isBlockRule ? rule.substr(1) : rule;
 
-            // Convert glob pattern to regex: escape regex special chars, then replace * with .*
-            std::string regexPattern;
-            for (char c : pattern) {
-                switch (c) {
-                    case '*': regexPattern += ".*"; break;
-                    case '.': regexPattern += "\\."; break;
-                    case '?': regexPattern += "\\?"; break;
-                    case '+': regexPattern += "\\+"; break;
-                    case '[': regexPattern += "\\["; break;
-                    case ']': regexPattern += "\\]"; break;
-                    case '(': regexPattern += "\\("; break;
-                    case ')': regexPattern += "\\)"; break;
-                    case '{': regexPattern += "\\{"; break;
-                    case '}': regexPattern += "\\}"; break;
-                    case '|': regexPattern += "\\|"; break;
-                    case '$': regexPattern += "\\$"; break;
-                    case '^': regexPattern += "\\^"; break;
-                    case '\\': regexPattern += "\\\\"; break;
-                    default: regexPattern += c; break;
-                }
-            }
-
-            // Wrap in anchors for full match
-            regexPattern = "^" + regexPattern + "$";
-
-            try {
-                std::regex regex(regexPattern, std::regex::icase);
-                if (std::regex_match(url, regex)) {
-                    allowed = !isBlockRule; // Last match wins
-                }
-            } catch (const std::regex_error& e) {
-                // Skip invalid regex patterns
-                printf("Invalid navigation rule regex: %s\n", e.what());
+            if (electrobun::globMatch(pattern, url)) {
+                allowed = !isBlockRule; // Last match wins
             }
         }
 
@@ -4602,7 +4573,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                             std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
                                             auto it = g_abstractViews.find(capturedWebviewId);
                                             if (it != g_abstractViews.end() && it->second != nullptr) {
-                                                // shouldAllow = it->second->shouldAllowNavigationToURL(uri);
+                                                shouldAllow = it->second->shouldAllowNavigationToURL(uri);
                                             }
                                         }
 
@@ -6412,13 +6383,50 @@ ELECTROBUN_EXPORT int showMessageBox(const char *type,
                                      const char *buttons,
                                      int defaultId,
                                      int cancelId) {
-    // STUB: TaskDialogIndirect requires manifest and causes DLL load issues
-    // TODO: Fix by adding proper manifest or using MessageBox instead
-    return -1;
-    /* DISABLED - Original implementation:
     return MainThreadDispatcher::dispatch_sync([=]() -> int {
-        // Parse button labels (comma-separated)
-        std::vector<std::wstring> buttonLabels;
+        // Convert strings to wide
+        std::wstring wTitle, wMessage;
+        if (title && strlen(title) > 0) {
+            int len = MultiByteToWideChar(CP_UTF8, 0, title, -1, nullptr, 0);
+            wTitle.resize(len - 1);
+            MultiByteToWideChar(CP_UTF8, 0, title, -1, &wTitle[0], len);
+        }
+
+        // Combine message and detail
+        std::string fullMsg;
+        if (message && strlen(message) > 0) {
+            fullMsg = message;
+        }
+        if (detail && strlen(detail) > 0) {
+            if (!fullMsg.empty()) fullMsg += "\n\n";
+            fullMsg += detail;
+        }
+        if (!fullMsg.empty()) {
+            int len = MultiByteToWideChar(CP_UTF8, 0, fullMsg.c_str(), -1, nullptr, 0);
+            wMessage.resize(len - 1);
+            MultiByteToWideChar(CP_UTF8, 0, fullMsg.c_str(), -1, &wMessage[0], len);
+        }
+
+        // Determine icon based on type
+        UINT uType = MB_OK;
+        if (type) {
+            std::string typeStr(type);
+            if (typeStr == "warning") {
+                uType |= MB_ICONWARNING;
+            } else if (typeStr == "error" || typeStr == "critical") {
+                uType |= MB_ICONERROR;
+            } else if (typeStr == "question") {
+                uType |= MB_ICONQUESTION;
+            } else {
+                uType |= MB_ICONINFORMATION;
+            }
+        } else {
+            uType |= MB_ICONINFORMATION;
+        }
+
+        // Parse button labels to determine button type
+        // MessageBox only supports predefined button combinations
+        std::vector<std::string> buttonLabels;
         if (buttons && strlen(buttons) > 0) {
             std::string buttonsStr(buttons);
             std::stringstream ss(buttonsStr);
@@ -6427,96 +6435,43 @@ ELECTROBUN_EXPORT int showMessageBox(const char *type,
                 // Trim whitespace
                 buttonLabel.erase(0, buttonLabel.find_first_not_of(" \t"));
                 buttonLabel.erase(buttonLabel.find_last_not_of(" \t") + 1);
+                // Convert to lowercase for comparison
+                std::transform(buttonLabel.begin(), buttonLabel.end(), buttonLabel.begin(), ::tolower);
                 if (!buttonLabel.empty()) {
-                    int wideLen = MultiByteToWideChar(CP_UTF8, 0, buttonLabel.c_str(), -1, nullptr, 0);
-                    std::wstring wLabel(wideLen - 1, 0);
-                    MultiByteToWideChar(CP_UTF8, 0, buttonLabel.c_str(), -1, &wLabel[0], wideLen);
-                    buttonLabels.push_back(wLabel);
+                    buttonLabels.push_back(buttonLabel);
                 }
             }
         }
-        if (buttonLabels.empty()) {
-            buttonLabels.push_back(L"OK");
-        }
 
-        // Convert strings to wide
-        std::wstring wTitle, wMessage, wDetail;
-        if (title && strlen(title) > 0) {
-            int len = MultiByteToWideChar(CP_UTF8, 0, title, -1, nullptr, 0);
-            wTitle.resize(len - 1);
-            MultiByteToWideChar(CP_UTF8, 0, title, -1, &wTitle[0], len);
-        }
-        if (message && strlen(message) > 0) {
-            int len = MultiByteToWideChar(CP_UTF8, 0, message, -1, nullptr, 0);
-            wMessage.resize(len - 1);
-            MultiByteToWideChar(CP_UTF8, 0, message, -1, &wMessage[0], len);
-        }
-        if (detail && strlen(detail) > 0) {
-            int len = MultiByteToWideChar(CP_UTF8, 0, detail, -1, nullptr, 0);
-            wDetail.resize(len - 1);
-            MultiByteToWideChar(CP_UTF8, 0, detail, -1, &wDetail[0], len);
-        }
-
-        // Combine message and detail
-        std::wstring fullMessage = wMessage;
-        if (!wDetail.empty()) {
-            if (!fullMessage.empty()) fullMessage += L"\n\n";
-            fullMessage += wDetail;
-        }
-
-        // Use TaskDialog for custom buttons (Windows Vista+)
-        // TaskDialog allows custom button labels
-        std::vector<TASKDIALOG_BUTTON> tdButtons;
-        for (size_t i = 0; i < buttonLabels.size(); i++) {
-            TASKDIALOG_BUTTON btn;
-            btn.nButtonID = static_cast<int>(100 + i); // Start IDs at 100
-            btn.pszButtonText = buttonLabels[i].c_str();
-            tdButtons.push_back(btn);
-        }
-
-        TASKDIALOGCONFIG config = {0};
-        config.cbSize = sizeof(config);
-        config.hwndParent = nullptr;
-        config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION;
-        config.pszWindowTitle = wTitle.c_str();
-        config.pszContent = fullMessage.c_str();
-        config.cButtons = static_cast<UINT>(tdButtons.size());
-        config.pButtons = tdButtons.data();
-        config.nDefaultButton = static_cast<int>(100 + defaultId);
-
-        // Set icon based on type
-        if (type) {
-            std::string typeStr(type);
-            if (typeStr == "warning") {
-                config.pszMainIcon = TD_WARNING_ICON;
-            } else if (typeStr == "error" || typeStr == "critical") {
-                config.pszMainIcon = TD_ERROR_ICON;
-            } else if (typeStr == "question") {
-                config.pszMainIcon = TD_INFORMATION_ICON; // Windows doesn't have a question icon in TaskDialog
-            } else {
-                config.pszMainIcon = TD_INFORMATION_ICON;
+        // Map common button combinations to MessageBox types
+        if (buttonLabels.size() == 2) {
+            if ((buttonLabels[0] == "ok" && buttonLabels[1] == "cancel") ||
+                (buttonLabels[0] == "yes" && buttonLabels[1] == "no")) {
+                uType = (uType & ~MB_OK) | MB_OKCANCEL;
+            } else if (buttonLabels[0] == "yes" && buttonLabels[1] == "no") {
+                uType = (uType & ~MB_OK) | MB_YESNO;
             }
-        } else {
-            config.pszMainIcon = TD_INFORMATION_ICON;
-        }
-
-        int nButton = 0;
-        HRESULT hr = TaskDialogIndirect(&config, &nButton, nullptr, nullptr);
-
-        if (SUCCEEDED(hr)) {
-            // Convert button ID back to index
-            if (nButton >= 100) {
-                return nButton - 100;
-            }
-            // Handle standard buttons (IDCANCEL = 2)
-            if (nButton == IDCANCEL) {
-                return cancelId >= 0 ? cancelId : -1;
+        } else if (buttonLabels.size() == 3) {
+            if (buttonLabels[0] == "yes" && buttonLabels[1] == "no" && buttonLabels[2] == "cancel") {
+                uType = (uType & ~MB_OK) | MB_YESNOCANCEL;
             }
         }
 
-        return -1; // Dialog was cancelled or failed
+        int result = MessageBoxW(nullptr, wMessage.c_str(), wTitle.c_str(), uType);
+
+        // Map MessageBox result to button index
+        switch (result) {
+            case IDOK:
+            case IDYES:
+                return 0;
+            case IDNO:
+                return 1;
+            case IDCANCEL:
+                return cancelId >= 0 ? cancelId : (buttonLabels.size() > 2 ? 2 : 1);
+            default:
+                return -1;
+        }
     });
-    */
 }
 
 // ============================================================================
