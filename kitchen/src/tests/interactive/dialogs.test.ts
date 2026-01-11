@@ -219,12 +219,17 @@ export const dialogTests = [
     interactive: true,
     async run({ log, showInstructions }) {
       await showInstructions([
-        "A desktop notification will be shown",
-        "Verify the notification appears",
-        "The test will auto-pass after sending",
+        "A notification will be sent in 3 seconds",
+        "CLICK AWAY from this app to see it",
+        "(macOS hides notifications when app is focused)",
       ]);
 
-      log("Showing notification");
+      log("Sending notification in 3 seconds - click away from this app!");
+
+      // Give user time to click away
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      log("Showing notification now");
       Utils.showNotification({
         title: "Electrobun Test Notification",
         body: "This is a test notification from the kitchen sink",
@@ -232,8 +237,9 @@ export const dialogTests = [
         silent: false, // Play sound so it's noticeable
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      log("Notification sent - test complete");
+      // Wait for notification to appear
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      log("Notification sent - check your notification center");
     },
   }),
 ];

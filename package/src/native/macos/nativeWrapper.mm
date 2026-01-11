@@ -10,6 +10,7 @@
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonCrypto.h>
 #import <QuartzCore/QuartzCore.h>
+#import <UserNotifications/UserNotifications.h>
 
 // CEF includes
 #include "include/base/cef_ref_counted.h"
@@ -4767,11 +4768,13 @@ extern "C" BOOL openPath(const char *pathString) {
 }
 
 // Show a native desktop notification
-extern "C" void showNotification(const char *title, const char *body, const char *subtitle, BOOL silent) {
-    NSString *titleStr = [NSString stringWithUTF8String:title ?: ""];
-    NSString *bodyStr = [NSString stringWithUTF8String:body ?: ""];
-    NSString *subtitleStr = subtitle ? [NSString stringWithUTF8String:subtitle] : nil;
+// Track notification authorization state
+static BOOL notificationAuthRequested = NO;
+static BOOL notificationAuthGranted = NO;
+static BOOL useModernNotifications = YES;
 
+// Fallback to deprecated NSUserNotification API (works better in dev mode without proper bundle)
+static void showNotificationLegacy(NSString *titleStr, NSString *bodyStr, NSString *subtitleStr, BOOL silent) {
     dispatch_async(dispatch_get_main_queue(), ^{
         #pragma clang diagnostic push
         #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -4785,9 +4788,87 @@ extern "C" void showNotification(const char *title, const char *body, const char
         notification.soundName = silent ? nil : NSUserNotificationDefaultSoundName;
 
         [[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
+        NSLog(@"Notification delivered via legacy API: %@", titleStr);
 
         #pragma clang diagnostic pop
     });
+}
+
+extern "C" void showNotification(const char *title, const char *body, const char *subtitle, BOOL silent) {
+    NSString *titleStr = [NSString stringWithUTF8String:title ?: ""];
+    NSString *bodyStr = [NSString stringWithUTF8String:body ?: ""];
+    NSString *subtitleStr = subtitle ? [NSString stringWithUTF8String:subtitle] : nil;
+
+    // If we've already determined modern API doesn't work, use legacy
+    if (!useModernNotifications) {
+        showNotificationLegacy(titleStr, bodyStr, subtitleStr, silent);
+        return;
+    }
+
+    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+
+    // Request authorization if we haven't already
+    if (!notificationAuthRequested) {
+        notificationAuthRequested = YES;
+
+        // Use a semaphore to wait for authorization result on first call
+        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+
+        [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge)
+                              completionHandler:^(BOOL granted, NSError * _Nullable error) {
+            if (error) {
+                NSLog(@"Notification authorization error: %@ - falling back to legacy API", error);
+                useModernNotifications = NO;
+            } else if (!granted) {
+                NSLog(@"Notification permission denied by user - falling back to legacy API");
+                useModernNotifications = NO;
+            } else {
+                NSLog(@"Notification permission granted");
+                notificationAuthGranted = YES;
+            }
+            dispatch_semaphore_signal(sem);
+        }];
+
+        // Wait briefly for authorization (with timeout)
+        dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC));
+
+        // If modern API failed, use legacy for this and future calls
+        if (!useModernNotifications) {
+            showNotificationLegacy(titleStr, bodyStr, subtitleStr, silent);
+            return;
+        }
+    }
+
+    // Create notification content
+    UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+    content.title = titleStr;
+    content.body = bodyStr;
+    if (subtitleStr) {
+        content.subtitle = subtitleStr;
+    }
+    if (!silent) {
+        content.sound = [UNNotificationSound defaultSound];
+    }
+
+    // Create a unique identifier for this notification
+    NSString *identifier = [[NSUUID UUID] UUIDString];
+
+    // Create the request with no trigger (immediate delivery)
+    UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:identifier
+                                                                          content:content
+                                                                          trigger:nil];
+
+    // Schedule the notification
+    [center addNotificationRequest:request withCompletionHandler:^(NSError * _Nullable error) {
+        if (error) {
+            NSLog(@"Failed to schedule notification via modern API: %@ - trying legacy", error);
+            // Fall back to legacy API
+            useModernNotifications = NO;
+            showNotificationLegacy(titleStr, bodyStr, subtitleStr, silent);
+        } else {
+            NSLog(@"Notification scheduled successfully: %@", titleStr);
+        }
+    }];
 }
 
 extern "C" const char *openFileDialog(const char *startingFolder,
