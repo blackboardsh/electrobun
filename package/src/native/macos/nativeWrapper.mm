@@ -3594,15 +3594,12 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
   CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
 
-  // Register global scheme handler factory only once
-  static CefRefPtr<ElectrobunSchemeHandlerFactory> globalSchemeFactory = nullptr;
-  if (!globalSchemeFactory) {
-    globalSchemeFactory = new ElectrobunSchemeHandlerFactory();
-    bool registered = context->RegisterSchemeHandlerFactory("views", "", globalSchemeFactory);
-    NSLog(@"DEBUG CEF: Registered global scheme handler factory - success: %s", registered ? "yes" : "no");
-  } else {
-    NSLog(@"DEBUG CEF: Using existing global scheme handler factory");
-  }
+  // Register scheme handler factory for this request context
+  // Note: Each CefRequestContext needs its own registration - it's not global
+  static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
+  bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
+  NSLog(@"DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s",
+        partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
 
   return context;
 }
