@@ -4124,9 +4124,9 @@ extern "C" void shutdownApplication() {
 extern "C" AbstractView* initWebview(uint32_t webviewId,
                         NSWindow *window,
                         const char *renderer,
-                        const char *url,                                                
+                        const char *url,
                         double x, double y,
-                        double width, double height,                        
+                        double width, double height,
                         bool autoResize,
                         const char *partitionIdentifier,
                         DecideNavigationCallback navigationCallback,
@@ -4135,6 +4135,24 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         HandlePostMessage internalBridgeHandler,
                         const char *electrobunPreloadScript,
                         const char *customPreloadScript ) {
+
+    // Validate frame values - use defaults if NaN or invalid
+    if (isnan(x) || isinf(x)) {
+        NSLog(@"WARNING initWebview: x is NaN/Inf for webview %u, using 0", webviewId);
+        x = 0;
+    }
+    if (isnan(y) || isinf(y)) {
+        NSLog(@"WARNING initWebview: y is NaN/Inf for webview %u, using 0", webviewId);
+        y = 0;
+    }
+    if (isnan(width) || isinf(width) || width <= 0) {
+        NSLog(@"WARNING initWebview: width is NaN/Inf/invalid for webview %u, using 100", webviewId);
+        width = 100;
+    }
+    if (isnan(height) || isinf(height) || height <= 0) {
+        NSLog(@"WARNING initWebview: height is NaN/Inf/invalid for webview %u, using 100", webviewId);
+        height = 100;
+    }
 
     NSRect frame = NSMakeRect(x, y, width, height);     
  
@@ -4496,6 +4514,12 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   WindowFocusHandler zigFocusHandler
   ) {
 
+    // Validate frame values - use defaults if NaN or invalid
+    if (isnan(x) || isinf(x)) x = 100;
+    if (isnan(y) || isinf(y)) y = 100;
+    if (isnan(width) || isinf(width) || width <= 0) width = 800;
+    if (isnan(height) || isinf(height) || height <= 0) height = 600;
+
     NSRect frame = NSMakeRect(x, y, width, height);
   
     // Create the params struct
@@ -4631,7 +4655,13 @@ extern "C" bool isNSWindowAlwaysOnTop(NSWindow *window) {
     return result;
 }
 
-extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {    
+extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
+    // Validate frame values - use defaults if NaN or invalid
+    if (isnan(x) || isinf(x)) x = 0;
+    if (isnan(y) || isinf(y)) y = 0;
+    if (isnan(width) || isinf(width) || width <= 0) width = 100;
+    if (isnan(height) || isinf(height) || height <= 0) height = 100;
+
     NSRect frame = NSMakeRect(x, y, width, height);
     dispatch_async(dispatch_get_main_queue(), ^{
         [abstractView resize:frame withMasksJSON:masksJson];
