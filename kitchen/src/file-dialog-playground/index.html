@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Dialog Playground</title>
+    <script src="views://file-dialog-playground/index.js"></script>
+    <link rel="stylesheet" href="views://file-dialog-playground/index.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>File Dialog Playground</h1>
+                <p class="subtitle">Configure options and test the file dialog</p>
+            </div>
+            <button id="doneBtn" class="done-btn">Done</button>
+        </div>
+
+        <div class="options-section">
+            <h2>Options</h2>
+
+            <div class="option-group">
+                <label>Starting Folder:</label>
+                <input type="text" id="startingFolder" value="~/" placeholder="e.g., ~/Documents">
+                <div class="presets">
+                    <button class="preset-btn" data-folder="~/">Home</button>
+                    <button class="preset-btn" data-folder="~/Documents">Documents</button>
+                    <button class="preset-btn" data-folder="~/Downloads">Downloads</button>
+                    <button class="preset-btn" data-folder="~/Desktop">Desktop</button>
+                </div>
+            </div>
+
+            <div class="option-group">
+                <label>Allowed File Types:</label>
+                <input type="text" id="allowedFileTypes" value="*" placeholder="e.g., txt,md or png,jpg,gif">
+                <div class="presets">
+                    <button class="preset-btn" data-types="*">All (*)</button>
+                    <button class="preset-btn" data-types="txt,md">Text</button>
+                    <button class="preset-btn" data-types="png,jpg,jpeg,gif">Images</button>
+                    <button class="preset-btn" data-types="js,ts,json">Code</button>
+                    <button class="preset-btn" data-types="pdf">PDF</button>
+                </div>
+            </div>
+
+            <div class="option-group checkboxes">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="canChooseFiles" checked>
+                    Can Choose Files
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="canChooseDirectory">
+                    Can Choose Directories
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="allowsMultipleSelection">
+                    Allow Multiple Selection
+                </label>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button id="openDialogBtn" class="primary-btn">Open File Dialog</button>
+        </div>
+
+        <div class="result-section">
+            <h2>Result</h2>
+            <div id="result" class="result-box">
+                <span class="placeholder">No result yet. Click "Open File Dialog" to test.</span>
+            </div>
+        </div>
+
+        <div class="history-section">
+            <h2>History</h2>
+            <div id="history" class="history-box">
+                <span class="placeholder">Previous results will appear here.</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tray Playground</title>
+    <script src="views://tray-playground/index.js"></script>
+    <link rel="stylesheet" href="views://tray-playground/index.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>Tray Playground</h1>
+                <p class="subtitle">Configure and test system tray functionality</p>
+            </div>
+            <button id="doneBtn" class="done-btn">Done</button>
+        </div>
+
+        <div class="section">
+            <h2>Create Tray</h2>
+
+            <div class="option-group">
+                <label>Title:</label>
+                <input type="text" id="trayTitle" value="My Tray" placeholder="Tray title">
+            </div>
+
+            <div class="option-group checkboxes">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="showMenu" checked>
+                    Show Context Menu
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="hasSubmenu" checked>
+                    Include Submenu
+                </label>
+            </div>
+
+            <button id="createTrayBtn" class="primary-btn">Create Tray</button>
+        </div>
+
+        <div class="section">
+            <h2>Update Tray</h2>
+
+            <div class="option-group">
+                <label>New Title:</label>
+                <input type="text" id="newTitle" placeholder="New title">
+                <button id="updateTitleBtn" class="secondary-btn">Update Title</button>
+            </div>
+
+            <div class="button-row">
+                <button id="startCounterBtn" class="secondary-btn">Start Counter</button>
+                <button id="stopCounterBtn" class="secondary-btn">Stop Counter</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Actions</h2>
+            <div class="button-row">
+                <button id="removeTrayBtn" class="danger-btn">Remove Tray</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Event Log</h2>
+            <div id="eventLog" class="log-box">
+                <span class="placeholder">Tray events will appear here...</span>
+            </div>
+        </div>
+
+        <div class="info">
+            <p>Look in your menu bar for the tray icon. Click on it to see the menu.</p>
+        </div>
+    </div>
+</body>
+</html>

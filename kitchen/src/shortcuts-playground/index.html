@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Shortcuts Playground</title>
+    <script src="views://shortcuts-playground/index.js"></script>
+    <link rel="stylesheet" href="views://shortcuts-playground/index.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>Global Shortcuts Playground</h1>
+                <p class="subtitle">Register and test global keyboard shortcuts</p>
+            </div>
+            <button id="doneBtn" class="done-btn">Done</button>
+        </div>
+
+        <div class="section">
+            <h2>Register Custom Shortcut</h2>
+            <div class="option-group">
+                <label>Accelerator:</label>
+                <input type="text" id="accelerator" value="CommandOrControl+Shift+T" placeholder="e.g., CommandOrControl+Shift+T">
+                <div class="presets">
+                    <button class="preset-btn" data-accelerator="CommandOrControl+Shift+T">Cmd+Shift+T</button>
+                    <button class="preset-btn" data-accelerator="CommandOrControl+Alt+K">Cmd+Alt+K</button>
+                    <button class="preset-btn" data-accelerator="CommandOrControl+Shift+1">Cmd+Shift+1</button>
+                    <button class="preset-btn" data-accelerator="Alt+Shift+Space">Alt+Shift+Space</button>
+                </div>
+            </div>
+            <div class="button-row">
+                <button id="registerBtn" class="primary-btn">Register Shortcut</button>
+                <button id="unregisterBtn" class="secondary-btn">Unregister</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Active Shortcuts</h2>
+            <div id="activeShortcuts" class="shortcuts-list">
+                <span class="placeholder">No shortcuts registered yet.</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Event Log</h2>
+            <div id="eventLog" class="log-box">
+                <span class="placeholder">Shortcut triggers will appear here...</span>
+            </div>
+            <button id="clearLogBtn" class="secondary-btn" style="margin-top: 10px;">Clear Log</button>
+        </div>
+
+        <div class="section info">
+            <p><strong>How to test:</strong> Press the registered shortcuts anywhere (even outside this app).</p>
+            <p>A notification will appear when a shortcut is triggered.</p>
+        </div>
+
+        <div class="section troubleshoot">
+            <h2>Troubleshooting</h2>
+            <p>If shortcuts don't trigger, check:</p>
+            <ul>
+                <li><strong>Accessibility permissions</strong> - On macOS, the app may need Accessibility access in System Preferences > Privacy & Security</li>
+                <li><strong>Conflicting shortcuts</strong> - System or other apps may already use the same combination</li>
+                <li><strong>VM environment</strong> - Running in a VM? Global shortcuts may be captured by the host OS</li>
+                <li><strong>Focus</strong> - Some shortcuts may require a specific app focus state</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

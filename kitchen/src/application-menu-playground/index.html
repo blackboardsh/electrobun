@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Application Menu Playground</title>
+    <script src="views://application-menu-playground/index.js"></script>
+    <link rel="stylesheet" href="views://application-menu-playground/index.css">
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>Application Menu Playground</h1>
+            <p class="subtitle">Test different application menu configurations</p>
+        </div>
+        <button id="doneBtn" class="done-btn">Done</button>
+    </div>
+
+    <div class="main-content">
+        <div class="config-panel">
+            <h2>Menu Configurations</h2>
+            <p class="hint">Click a button to apply that menu configuration. Check the menu bar to see changes.</p>
+
+            <div class="config-buttons">
+                <button id="config1" class="config-btn active">
+                    <span class="config-title">Basic Menu</span>
+                    <span class="config-desc">Custom item with accelerator, disabled item</span>
+                </button>
+                <button id="config2" class="config-btn">
+                    <span class="config-title">Checkboxes</span>
+                    <span class="config-desc">Menu items with checkmarks</span>
+                </button>
+                <button id="config3" class="config-btn">
+                    <span class="config-title">Nested Submenus</span>
+                    <span class="config-desc">Multi-level menu hierarchy</span>
+                </button>
+                <button id="config4" class="config-btn">
+                    <span class="config-title">Standard Roles</span>
+                    <span class="config-desc">Edit menu with system roles (Undo, Copy, etc.)</span>
+                </button>
+            </div>
+
+            <div class="current-config">
+                <h3>Current Configuration</h3>
+                <div id="configDetails" class="config-details">
+                    <p><strong>Basic Menu</strong></p>
+                    <ul>
+                        <li>Test menu with "Click Me!" item (Cmd+T)</li>
+                        <li>Includes a disabled item</li>
+                        <li>Try the keyboard shortcut!</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="log-panel">
+            <div class="log-header">
+                <h2>Event Log</h2>
+                <button id="clearLog" class="clear-btn">Clear</button>
+            </div>
+            <div id="eventLog" class="event-log">
+                <div class="log-placeholder">Menu click events will appear here...</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

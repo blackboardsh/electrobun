@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Draggable Region Playground</title>
+    <script src="views://draggable-playground/index.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            height: 100vh;
+            background: #f5f5f5;
+        }
+        .header {
+            background: #222;
+            padding: 15px 20px;
+            color: #fff;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .done-btn {
+            padding: 8px 20px;
+            background: #4ade80;
+            border: none;
+            border-radius: 4px;
+            color: #1a1a2e;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .done-btn:hover {
+            background: #22c55e;
+        }
+        .content {
+            padding: 20px;
+        }
+        .info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .info code {
+            background: #bbdefb;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px;
+        }
+        .drag-zone {
+            background: #333;
+            color: #fff;
+            padding: 30px;
+            text-align: center;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            cursor: move;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .no-drag {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            border: 2px dashed #ccc;
+        }
+        .no-drag p {
+            margin-bottom: 10px;
+            color: #555;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #2196f3;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Draggable Region Test</h1>
+        <button id="doneBtn" class="done-btn">Done</button>
+    </div>
+    <div class="content">
+        <div class="info">
+            <p><strong>Instructions:</strong></p>
+            <p>The dark box below has the <code>.electrobun-webkit-app-region-drag</code> class.</p>
+            <p>Try dragging the window by clicking and dragging in that box.</p>
+            <p>Use <code>.electrobun-webkit-app-region-no-drag</code> on child elements to exclude them from dragging.</p>
+        </div>
+        <div class="electrobun-webkit-app-region-drag drag-zone">
+            Drag the window from here!
+        </div>
+        <div class="no-drag">
+            <p>This area is NOT draggable. You can interact with elements normally:</p>
+            <input type="text" placeholder="Try typing here - no dragging!">
+        </div>
+    </div>
+</body>
+</html>

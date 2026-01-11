@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Context Menu Playground</title>
+    <script src="views://context-menu-playground/index.js"></script>
+    <link rel="stylesheet" href="views://context-menu-playground/index.css">
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>Context Menu Playground</h1>
+            <p class="subtitle">Test different context menu configurations</p>
+        </div>
+        <button id="doneBtn" class="done-btn">Done</button>
+    </div>
+
+    <div class="main-content">
+        <div class="menu-panel">
+            <h2>Context Menus</h2>
+            <p class="hint">Click a button to show that context menu. You can also right-click in the test area below.</p>
+
+            <div class="menu-buttons">
+                <button id="menu1" class="menu-btn">
+                    <span class="menu-title">Basic Menu</span>
+                    <span class="menu-desc">Simple actions with separator</span>
+                </button>
+                <button id="menu2" class="menu-btn">
+                    <span class="menu-title">With Custom Data</span>
+                    <span class="menu-desc">Items that pass data payload</span>
+                </button>
+                <button id="menu3" class="menu-btn">
+                    <span class="menu-title">Submenus</span>
+                    <span class="menu-desc">Nested File and Edit menus</span>
+                </button>
+                <button id="menu4" class="menu-btn">
+                    <span class="menu-title">Disabled Items</span>
+                    <span class="menu-desc">Mix of enabled and disabled</span>
+                </button>
+            </div>
+
+            <div class="test-area" id="testArea">
+                <div class="test-area-content">
+                    <span class="test-area-icon">&#x1F5B1;</span>
+                    <p>Right-click here to test context menu</p>
+                    <p class="test-area-hint">Uses the currently selected menu type</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="log-panel">
+            <div class="log-header">
+                <h2>Event Log</h2>
+                <button id="clearLog" class="clear-btn">Clear</button>
+            </div>
+            <div id="eventLog" class="event-log">
+                <div class="log-placeholder">Context menu click events will appear here...</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

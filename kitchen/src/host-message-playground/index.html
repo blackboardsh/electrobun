@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Host Message Playground</title>
+    <script src="views://host-message-playground/index.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
+        }
+        h1 { margin: 0 0 5px 0; font-size: 24px; color: #fff; }
+        .subtitle { margin: 0; color: #888; font-size: 14px; }
+        .done-btn {
+            padding: 10px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            background: #4ade80;
+            border: none;
+            border-radius: 6px;
+            color: #1a1a2e;
+            cursor: pointer;
+        }
+        .done-btn:hover { background: #22c55e; }
+        h2 {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #888;
+            margin: 15px 0 10px 0;
+        }
+        .section {
+            background: #252540;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .info {
+            background: #2a2a4a;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #aaa;
+            margin-bottom: 15px;
+        }
+        electrobun-webview {
+            width: 100%;
+            height: 180px;
+            border: 2px solid #3a3a5a;
+            border-radius: 6px;
+        }
+        .log-box {
+            background: #1a1a2e;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+            font-size: 12px;
+            min-height: 150px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            padding: 6px 0;
+            border-bottom: 1px solid #2a2a4a;
+        }
+        .log-entry:last-child { border-bottom: none; }
+        .log-entry .time { color: #666; margin-right: 8px; }
+        .log-entry .type { color: #a5b4fc; }
+        .log-entry .data { color: #4ade80; margin-left: 8px; }
+        .placeholder { color: #666; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>Host Message Playground</h1>
+            <p class="subtitle">Test sendToHost communication from nested webviews</p>
+        </div>
+        <button id="doneBtn" class="done-btn">Done</button>
+    </div>
+
+    <div class="section">
+        <h2>Nested Webview</h2>
+        <div class="info">
+            <p>The webview below uses <code>__electrobunSendToHost()</code> to send messages to this parent view.</p>
+            <p>Click the buttons in the webview to test. Messages will appear in the log below.</p>
+        </div>
+        <electrobun-webview
+            id="testWebview"
+            renderer="cef"
+            src="views://webviewtag/host-message-test.html"
+            preload="
+                (function() {
+                    window.addEventListener('load', function() {
+                        document.getElementById('sendBtn').onclick = () => {
+                            window.__electrobunSendToHost({
+                                type: 'button-click',
+                                message: 'Hello from nested webview!',
+                                timestamp: Date.now()
+                            });
+                        };
+                        document.addEventListener('keydown', (e) => {
+                            window.__electrobunSendToHost({
+                                type: 'keydown',
+                                key: e.key,
+                                code: e.code,
+                                modifiers: {
+                                    ctrl: e.ctrlKey,
+                                    shift: e.shiftKey,
+                                    alt: e.altKey,
+                                    meta: e.metaKey
+                                }
+                            });
+                        });
+                        // Send initial load message
+                        window.__electrobunSendToHost({ type: 'loaded', timestamp: Date.now() });
+                    });
+                })();
+            ">
+        </electrobun-webview>
+    </div>
+
+    <div class="section">
+        <h2>Message Log</h2>
+        <div id="messageLog" class="log-box">
+            <span class="placeholder">Waiting for messages from the nested webview...</span>
+        </div>
+    </div>
+
+    <script>
+        // Listen for host-message events from the webview
+        document.getElementById('testWebview').on('host-message', (e) => {
+            const log = document.getElementById('messageLog');
+            const placeholder = log.querySelector('.placeholder');
+            if (placeholder) placeholder.remove();
+
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = '<span class="time">' + time + '</span>' +
+                '<span class="type">[' + (e.detail.type || 'unknown') + ']</span>' +
+                '<span class="data">' + JSON.stringify(e.detail) + '</span>';
+            log.insertBefore(entry, log.firstChild);
+
+            // Keep only last 20 messages
+            while (log.children.length > 20) {
+                log.removeChild(log.lastChild);
+            }
+        });
+    </script>
+</body>
+</html>

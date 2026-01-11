@@ -1,0 +1,246 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: #1a1a2e;
+    color: #eee;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 560px;
+    margin: 0 auto;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 15px;
+}
+
+h1 {
+    margin: 0 0 5px 0;
+    font-size: 24px;
+    color: #fff;
+}
+
+.subtitle {
+    margin: 0;
+    color: #888;
+    font-size: 14px;
+}
+
+.done-btn {
+    padding: 10px 24px;
+    font-size: 14px;
+    font-weight: 600;
+    background: #4ade80;
+    border: none;
+    border-radius: 6px;
+    color: #1a1a2e;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.done-btn:hover {
+    background: #22c55e;
+}
+
+h2 {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #888;
+    margin: 20px 0 10px 0;
+}
+
+.options-section {
+    background: #252540;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+}
+
+.option-group {
+    margin-bottom: 15px;
+}
+
+.option-group:last-child {
+    margin-bottom: 0;
+}
+
+.option-group > label {
+    display: block;
+    font-size: 13px;
+    color: #aaa;
+    margin-bottom: 6px;
+}
+
+input[type="text"] {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 14px;
+    background: #1a1a2e;
+    border: 1px solid #3a3a5a;
+    border-radius: 6px;
+    color: #fff;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+input[type="text"]:focus {
+    border-color: #6366f1;
+}
+
+input[type="text"]::placeholder {
+    color: #666;
+}
+
+.presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.preset-btn {
+    padding: 5px 10px;
+    font-size: 12px;
+    background: #3a3a5a;
+    border: none;
+    border-radius: 4px;
+    color: #ccc;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.preset-btn:hover {
+    background: #4a4a6a;
+    color: #fff;
+}
+
+.preset-btn:active {
+    transform: scale(0.95);
+}
+
+.checkboxes {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #6366f1;
+    cursor: pointer;
+}
+
+.actions {
+    margin-bottom: 15px;
+}
+
+.primary-btn {
+    width: 100%;
+    padding: 14px 20px;
+    font-size: 16px;
+    font-weight: 600;
+    background: #6366f1;
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.primary-btn:hover {
+    background: #5558e3;
+}
+
+.primary-btn:active {
+    transform: scale(0.98);
+}
+
+.primary-btn:disabled {
+    background: #4a4a6a;
+    cursor: not-allowed;
+}
+
+.result-section,
+.history-section {
+    background: #252540;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+}
+
+.result-box,
+.history-box {
+    background: #1a1a2e;
+    border-radius: 6px;
+    padding: 12px;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+    font-size: 13px;
+    min-height: 60px;
+    max-height: 200px;
+    overflow-y: auto;
+    word-break: break-all;
+}
+
+.result-box .placeholder,
+.history-box .placeholder {
+    color: #666;
+    font-style: italic;
+}
+
+.result-item {
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #3a3a5a;
+}
+
+.result-item:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.result-item .timestamp {
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 4px;
+}
+
+.result-item .options {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 4px;
+}
+
+.result-item .files {
+    color: #4ade80;
+}
+
+.result-item .cancelled {
+    color: #f87171;
+}
+
+.result-item .file-path {
+    display: block;
+    padding: 2px 0;
+    color: #60a5fa;
+}

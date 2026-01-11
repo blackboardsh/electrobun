@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electrobun Integration Tests</title>
+    <script src="views://test-runner/index.js"></script>
+    <link rel="stylesheet" href="views://test-runner/index.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Electrobun Integration Tests</h1>
+            <div class="summary" id="summary">
+                <span class="total">Total: <strong id="total-count">0</strong></span>
+                <span class="passed">Passed: <strong id="passed-count">0</strong></span>
+                <span class="failed">Failed: <strong id="failed-count">0</strong></span>
+                <span class="pending">Pending: <strong id="pending-count">0</strong></span>
+            </div>
+        </header>
+
+        <div class="controls">
+            <button id="btn-run-all" class="btn btn-primary">Run All Automated</button>
+            <button id="btn-run-interactive" class="btn btn-secondary">Run Interactive Tests</button>
+        </div>
+
+        <div class="test-list" id="test-list">
+            <!-- Tests will be populated here -->
+        </div>
+
+        <!-- Modal for interactive test instructions -->
+        <div class="modal" id="interactive-modal" style="display: none;">
+            <div class="modal-content">
+                <h2 id="modal-title">Interactive Test</h2>
+                <div id="modal-instructions"></div>
+                <div class="modal-actions" id="modal-buttons">
+                    <button id="btn-start" class="btn btn-primary" style="display: none;">Start Test</button>
+                    <button id="btn-pass" class="btn btn-success">Pass</button>
+                    <button id="btn-fail" class="btn btn-danger">Fail</button>
+                    <button id="btn-retest" class="btn btn-secondary" style="display: none;">Re-test</button>
+                </div>
+                <div class="modal-notes">
+                    <label for="notes-input">Notes (optional):</label>
+                    <input type="text" id="notes-input" placeholder="Add notes about the result...">
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

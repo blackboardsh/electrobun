@@ -3,225 +3,121 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>webview tag test</title>
+    <title>Webview Tag Playground</title>
     <script src="views://webviewtag/index.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { margin: 0 0 10px 0; }
+        h2 { margin: 20px 0 10px 0; font-size: 16px; color: #555; }
+        .controls {
+            margin: 10px 0;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 8px 14px;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background: #fff;
+        }
+        button:hover {
+            background: #f0f0f0;
+        }
+        .element-to-mask {
+            position: absolute;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+            z-index: 100;
+        }
+        electrobun-webview {
+            border: 2px solid #333;
+        }
+        .drag-box {
+            padding: 10px;
+            width: 100px;
+            height: 80px;
+            border: 3px dashed #333;
+            background: #fff8dc;
+            cursor: move;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-size: 12px;
+        }
+    </style>
 </head>
-<body style="height: 100vh; padding-top: 20px; background: #fff"
-ondragover="document.getElementById('draginfo').innerHTML = 'clientX: '+event.clientX+' | clientY: '+event.clientY;">    
-    <div class="electrobun-webkit-app-region-drag" style=" cursor:move; -webkit-user-select: none; position:absolute; top: 0; right: 0; left: 80px; background: #222; padding: 3px 10px; color: #eee;">draggable area: move the window by adding .electrobun-webkit-app-region-drag class to any html element</div>
-    <h1>Webview Tag Test</h1>
-    
-    
-    
-    <button onclick="document.querySelector('electrobun-webview').goBack()">Go Back</button>
-    <button onclick="document.querySelector('electrobun-webview').goForward()">Go Forward</button>
-    <button onclick="document.querySelector('electrobun-webview').reload()">Reload</button>
-    <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
-    <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">github.com/blackboardsh/electrobun</button>    
-    <button onclick="document.querySelector('electrobun-webview').toggleTransparent()">Toggle Transparent</button>
-    <button onclick="document.querySelector('electrobun-webview').togglePassthrough()">Toggle Passthrough</button>
-    <button onclick="document.querySelector('electrobun-webview').toggleHidden()">Toggle Hidden</button>    
-    <button onclick="document.querySelector('electrobun-webview').addMaskSelector('.element-to-mask')">Add mask selector</button>
-    <button onclick="document.querySelector('electrobun-webview').removeMaskSelector('.element-to-mask')">Remove mask selector</button>
+<body>
+    <button id="doneBtn" style="position: fixed; top: 10px; right: 10px; z-index: 9999; padding: 10px 24px; font-size: 14px; font-weight: 600; background: #4ade80; border: none; border-radius: 6px; color: #1a1a2e; cursor: pointer;">Done</button>
 
-    <div class="element-to-mask" style="position:absolute; top: 130px; left:720px; width:200px; height: 200px; background: black; color: white;">Layered above webview</div>
-    <div class="element-to-mask" style="position:absolute; top: 130px; left:590px; width:200px; height: 200px; background: green; color: white;">Layered above webview</div>
+    <h1>Webview Tag Playground</h1>
+    <p>Test OOPIF webview with masks, passthrough, and navigation controls.</p>
 
-    <electrobun-webview  style="width:50%; height: 50%; " src="https://electrobun.dev" preload="" renderer="cef" ></electrobun-webview>
-    <div draggable="true" style="padding: 10px; width:100px;height:100px;border:5px solid black; cursor:move;">drag me into the webview when delegate mode is enabled</div>
-    <span id="draginfo"></span>
-    <electrobun-webview preload="window.onload = () => {document.body.innerHTML += 'hello from preload';}"  html="<html><body><h1>webview tag with html</h1></body></html>" ></electrobun-webview>
-
-    <!-- Host Message Test -->
-    <div style="background: #e0f7fa; padding: 10px; margin: 10px 0; border: 2px solid #00838f;">
-        <h3>Host Message Test (sendToHost from preload)</h3>
-        <p>Messages from the webview below will appear here:</p>
-        <div id="hostMessageLog" style="background: #fff; padding: 10px; min-height: 50px; border: 1px solid #ccc; font-family: monospace;"></div>
+    <h2>Navigation & Display Controls</h2>
+    <div class="controls">
+        <button onclick="document.querySelector('electrobun-webview').goBack()">Go Back</button>
+        <button onclick="document.querySelector('electrobun-webview').goForward()">Go Forward</button>
+        <button onclick="document.querySelector('electrobun-webview').reload()">Reload</button>
+        <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
+        <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">GitHub</button>
     </div>
+
+    <h2>Mask & Passthrough Controls</h2>
+    <div class="controls">
+        <button onclick="document.querySelector('electrobun-webview').toggleTransparent()">Toggle Transparent</button>
+        <button onclick="document.querySelector('electrobun-webview').togglePassthrough()">Toggle Passthrough</button>
+        <button onclick="document.querySelector('electrobun-webview').toggleHidden()">Toggle Hidden</button>
+        <button onclick="document.querySelector('electrobun-webview').addMaskSelector('.element-to-mask')">Add Mask Selector</button>
+        <button onclick="document.querySelector('electrobun-webview').removeMaskSelector('.element-to-mask')">Remove Mask Selector</button>
+    </div>
+
+    <div style="position: relative; margin-top: 15px;">
+        <div class="element-to-mask" style="top: 20px; left: 450px; width: 150px; height: 100px; background: rgba(0,0,0,0.8);">Mask Overlay 1</div>
+        <div class="element-to-mask" style="top: 20px; left: 300px; width: 140px; height: 100px; background: rgba(0,128,0,0.8);">Mask Overlay 2</div>
+        <electrobun-webview style="width: 600px; height: 350px;" src="https://electrobun.dev" renderer="cef"></electrobun-webview>
+    </div>
+
+    <div style="margin-top: 15px;">
+        <div class="drag-box" draggable="true">Drag me into the webview when passthrough is enabled</div>
+        <span id="draginfo" style="margin-left: 10px; color: #666;"></span>
+    </div>
+
+    <h2>Webview with Inline HTML</h2>
     <electrobun-webview
-        id="hostMessageTestWebview"
-        style="width:400px; height: 150px; border: 2px solid #00838f;"
-        renderer="cef"
-        src="views://webviewtag/host-message-test.html"
-        preload="
-            (function() {
-                console.log('Host message test preload running, __electrobunSendToHost:', typeof window.__electrobunSendToHost);
-                window.addEventListener('load', function() {
-                    console.log('Window loaded, setting up handlers');
-                    document.getElementById('sendBtn').onclick = () => {
-                        console.log('Button clicked, sending message');
-                        window.__electrobunSendToHost({ type: 'button-click', message: 'Hello from nested webview!', timestamp: Date.now() });
-                    };
-                    document.addEventListener('keydown', (e) => {
-                        console.log('Keydown, sending message', e.key);
-                        window.__electrobunSendToHost({
-                            type: 'keydown',
-                            key: e.key,
-                            code: e.code,
-                            ctrlKey: e.ctrlKey,
-                            shiftKey: e.shiftKey,
-                            altKey: e.altKey,
-                            metaKey: e.metaKey
-                        });
-                    });
-                });
-            })();
-        "
-    ></electrobun-webview>    
+        style="width: 600px; height: 100px;"
+        preload="window.onload = () => { document.body.innerHTML += '<br>Hello from preload script!'; }"
+        html="<html><body style='font-family: sans-serif; padding: 10px;'><h3>Webview with inline HTML</h3><p>This webview was created with the html attribute instead of src.</p></body></html>">
+    </electrobun-webview>
 
-    <!-- File Chooser Test -->
-    <div style="background: #f0f0f0; padding: 10px; margin: 10px 0; border: 2px solid #333;">
-        <h3>File Chooser Test (runs in webview context)</h3>
-        <button onclick="testFileChooser()" style="background: #4CAF50; color: white; padding: 10px 20px; border: none; cursor: pointer; font-size: 16px;">
-            🗂️ Test File Chooser
-        </button>
-        <input type="file" id="hiddenFileInput" style="display: none;" onchange="handleFileSelected(event)" />
-        <button onclick="document.getElementById('hiddenFileInput').click()" style="background: #2196F3; color: white; padding: 10px 20px; border: none; cursor: pointer; font-size: 16px; margin-left: 10px;">
-            📁 Test with Hidden Input
-        </button>
-        <span id="fileResult" style="margin-left: 10px; font-weight: bold;"></span>
-    </div>
-
-    <h2>Test loading a bundled png via views:// scheme</h2>
-    <img src="views://webviewtag/electrobun.png" />
-
-    
-
-    <h2>parition test</h2>
-    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="" ></electrobun-webview>    
-    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="" ></electrobun-webview>
-    
-    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="persist:test1" ></electrobun-webview>
-    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="persist:test1" ></electrobun-webview>
-
-    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="persist:test2" ></electrobun-webview>
-    <electrobun-webview  src="http://wikipedia.org" renderer="cef" partition="temp:2" ></electrobun-webview>
-
-    
-    
+    <h2>Test: Bundled Asset via views:// Scheme</h2>
+    <p>This image is loaded from <code>views://webviewtag/electrobun.png</code>:</p>
+    <img src="views://webviewtag/electrobun.png" style="max-width: 200px; border: 1px solid #ccc;" />
 
     <script>
-        // File Chooser Test Functions
-        function testFileChooser() {
-            // Test the File System Access API if available
-            if ('showOpenFilePicker' in window) {
-                window.showOpenFilePicker({
-                    multiple: false,
-                    types: [
-                        {
-                            description: 'Text Files',
-                            accept: {
-                                'text/plain': ['.txt', '.md'],
-                                'text/html': ['.html', '.htm'],
-                                'application/json': ['.json']
-                            }
-                        },
-                        {
-                            description: 'Images',
-                            accept: {
-                                'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp']
-                            }
-                        }
-                    ]
-                }).then(fileHandles => {
-                    if (fileHandles.length > 0) {
-                        fileHandles[0].getFile().then(file => {
-                            document.getElementById('fileResult').textContent = 
-                                `✅ Selected: ${file.name} (${file.size} bytes)`;
-                            document.getElementById('fileResult').style.color = 'green';
-                            console.log('File selected via File System Access API:', file);
-                        });
-                    }
-                }).catch(err => {
-                    if (err.name !== 'AbortError') {
-                        document.getElementById('fileResult').textContent = 
-                            `❌ File System Access API error: ${err.message}`;
-                        document.getElementById('fileResult').style.color = 'red';
-                        console.error('File System Access API error:', err);
-                        
-                        // Fallback to file input
-                        console.log('Falling back to file input element...');
-                        document.getElementById('hiddenFileInput').click();
-                    }
-                });
-            } else {
-                // Fallback for browsers that don't support File System Access API
-                document.getElementById('fileResult').textContent = 
-                    '⚠️ File System Access API not available, using file input';
-                document.getElementById('fileResult').style.color = 'orange';
-                document.getElementById('hiddenFileInput').click();
-            }
+        // Drag info display
+        document.body.ondragover = (e) => {
+            document.getElementById('draginfo').innerHTML = 'Drag position: ' + e.clientX + ', ' + e.clientY;
+        };
+
+        // Webview event listeners
+        const webview = document.querySelector('electrobun-webview');
+        if (webview) {
+            webview.on('did-navigate', () => console.log('did-navigate'));
+            webview.on('did-navigate-in-page', () => console.log('did-navigate-in-page'));
+            webview.on('did-commit-navigation', () => console.log('did-commit-navigation'));
+            webview.on('dom-ready', (e) => console.log('dom-ready', e.detail));
+            webview.on('new-window-open', (e) => console.log('new-window-open', e.detail));
         }
-        
-        function handleFileSelected(event) {
-            const file = event.target.files[0];
-            if (file) {
-                document.getElementById('fileResult').textContent = 
-                    `✅ Selected via input: ${file.name} (${file.size} bytes)`;
-                document.getElementById('fileResult').style.color = 'green';
-                console.log('File selected via input element:', file);
-            }
-        }
-        
-        document.querySelector('electrobun-webview').on('did-navigate', () => {
-            console.log('did-navigate');
-        });
-
-        document.querySelector('electrobun-webview').on('did-navigate-in-page', () => {
-            console.log('did-navigate-in-page');
-        });
-
-        document.querySelector('electrobun-webview').on('did-commit-navigation', () => {
-            console.log('did-commit-navigation');
-        });
-
-        document.querySelector('electrobun-webview').on('dom-ready', (e) => {
-            console.log('dom-ready is fired', e.detail);
-        });
-
-        document.querySelector('electrobun-webview').on('new-window-open', (e) => {
-            console.log('new-window-open is fired', e.detail);
-        });
-
-        // Listen for host-message events from the test webview
-        document.getElementById('hostMessageTestWebview').on('host-message', (e) => {
-            console.log('host-message received:', e.detail);
-            const log = document.getElementById('hostMessageLog');
-            const entry = document.createElement('div');
-            entry.textContent = JSON.stringify(e.detail);
-            entry.style.borderBottom = '1px solid #eee';
-            entry.style.padding = '4px 0';
-            log.appendChild(entry);
-            // Keep only last 10 messages
-            while (log.children.length > 10) {
-                log.removeChild(log.firstChild);
-            }
-        });
-
-        setTimeout(() => {
-            
-            document.querySelector('electrobun-webview').callAsyncJavaScript({
-                // script: `document.body.innerHTML = 'hello from host browser context'`,
-                // script: `document.body.textContent`,
-                script: `
-                return new Promise(
-                    resolve => {
-                        setTimeout(() => {
-                            resolve(document.location.href + 'from host browser context')
-                        }, 1000)
-                    }
-                )
-                `,
-                }).then(result => {
-                    console.log('evalResult', result);
-                }).catch(err => {
-                    // Note: add a typo to the script to see the error
-                    console.error('evalError', err);
-                });
-        }, 1000)
-
-
-        
     </script>
 </body>
 </html>
