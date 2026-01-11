@@ -2004,6 +2004,7 @@ private:
     ComPtr<ICoreWebView2> webview;
     HandlePostMessage bunBridgeCallbackHandler;
     HandlePostMessage internalBridgeCallbackHandler;
+    HWND containerHwnd = nullptr;  // Container window for masking
 
 public:
     std::string pendingUrl;
@@ -2031,6 +2032,10 @@ public:
     
     void setWebView(ComPtr<ICoreWebView2> wv) {
         webview = wv;
+    }
+
+    void setContainerHwnd(HWND hwnd) {
+        containerHwnd = hwnd;
     }
 
     ComPtr<ICoreWebView2> getWebView() const {
@@ -2238,266 +2243,42 @@ public:
     }
     
     // WebView2-specific implementation of mask functionality
-    void applyVisualMask() override {        
-        if (!controller) {
-            ::log("applyVisualMask: controller is null, returning");
-            return;
-        }
-        
-        if (maskJSON.empty()) {
-            // ::log("applyVisualMask: maskJSON empty, removing masks");
-            removeMasks();
-            return;
-        }
-        
-        // Use composition controller if available, otherwise fallback to window masking
-        if (compositionController) {
-            // ::log("applyVisualMask: using composition controller approach");
-            applyCompositionMask();
-        } else {
-            // ::log("applyVisualMask: using window region fallback approach");
-            applyWindowMask();
-        }
+    void applyVisualMask() override {
+        // NOTE: WebView2 visual masking is not supported.
+        //
+        // WebView2 uses GPU-accelerated Direct3D rendering through an "Intermediate D3D Window"
+        // which does not respect traditional GDI window regions (SetWindowRgn). The rendering
+        // pipeline bypasses the Windows compositor in a way that makes hole-cutting impossible
+        // with standard Win32 APIs.
+        //
+        // Approaches that were investigated and failed:
+        // 1. SetWindowRgn on Chrome_WidgetWin_0 - Ignored by GPU rendering
+        // 2. SetWindowRgn on Intermediate D3D Window - Ignored by D3D surface
+        // 3. SetWindowRgn on shared container - Affects all webviews, not just the target
+        //
+        // CEF (Chromium bundling) works because it provides direct access to the browser
+        // window handle via browser->GetHost()->GetWindowHandle(), which respects SetWindowRgn.
+        //
+        // Recommendation: Use CEF (bundleChromium: true) for webviews that require maskJSON
+        // functionality on Windows.
+        //
+        // The maskJSON value is still stored (in AbstractView::maskJSON) for potential future
+        // use if WebView2 adds an API for visual clipping.
     }
-    
+
     void removeMasks() override {
-        if (compositionController) {
-            // Clear composition mask
-            compositionController->put_RootVisualTarget(nullptr);
-            // ::log("removeMasks: cleared composition mask");
-        } else {
-            // For fallback approach, clear window region from specific WebView2 window
-            HWND webview2Hwnd = getWebView2WindowHandle();
-            if (webview2Hwnd) {
-                // Clear the window region by setting it to nullptr
-                if (SetWindowRgn(webview2Hwnd, nullptr, TRUE) != 0) {
-                    // ::log("removeMasks: window region cleared successfully from WebView2");
-                } else {
-                    // ::log("removeMasks: failed to clear window region from WebView2");
-                }
-            } else {
-                ::log("removeMasks: could not find WebView2 window handle");
-            }
-            // ::log("removeMasks: cleared fallback mask");
-        }
+        // No-op for WebView2 - see applyVisualMask() for explanation
     }
     
     void toggleMirrorMode(bool enable) override {
         if (!controller) return;
-        
+
         if (enable && !mirrorModeEnabled) {
             mirrorModeEnabled = true;
             // Disable input for WebView2
         } else if (!enable && mirrorModeEnabled) {
             mirrorModeEnabled = false;
             controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-        }
-    }
-    
-    // Helper function to find the actual WebView2 child window handle
-    HWND getWebView2WindowHandle() {
-        if (!hwnd) return nullptr;
-        
-        // Find the container window first
-        HWND containerHwnd = FindWindowEx(hwnd, nullptr, nullptr, nullptr);
-        if (!containerHwnd) return nullptr;
-        
-        // Structure to pass data to the enum callback
-        struct EnumData {
-            HWND webview2Hwnd;
-            uint32_t targetWebviewId;
-        } enumData = { nullptr, webviewId };
-        
-        // Enumerate child windows of the container to find the WebView2 window
-        EnumChildWindows(containerHwnd, [](HWND hwnd, LPARAM lParam) -> BOOL {
-            EnumData* data = reinterpret_cast<EnumData*>(lParam);
-            
-            // Check if this is a WebView2 window by checking class name
-            char className[256];
-            if (GetClassNameA(hwnd, className, sizeof(className)) > 0) {
-                // WebView2 typically creates windows with Chrome-related class names
-                if (strstr(className, "Chrome") || strstr(className, "WebView") || 
-                    strstr(className, "Edge") || strstr(className, "Browser")) {
-                    data->webview2Hwnd = hwnd;
-                    return FALSE; // Stop enumeration
-                }
-            }
-            return TRUE; // Continue enumeration
-        }, reinterpret_cast<LPARAM>(&enumData));
-        
-        return enumData.webview2Hwnd;
-    }
-
-private:
-    // WebView2-specific helper for composition-based masking
-    void applyCompositionMask() {
-        if (!compositionController || maskJSON.empty()) {
-            return;
-        }
-        
-        try {
-            // Create Windows composition visual with mask geometry
-            // This requires Direct Composition integration with WebView2
-            // For now, use the simpler approach of creating a mask region
-            HRGN maskRegion = CreateRectRgn(0, 0, 0, 0);
-            
-            // Parse maskJSON and build combined mask region
-            size_t pos = 0;
-            int maskCount = 0;
-            while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
-                try {
-                    // Extract mask rectangle coordinates  
-                    size_t xStart = maskJSON.find(":", pos) + 1;
-                    size_t xEnd = maskJSON.find(",", xStart);
-                    int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
-                    
-                    size_t yPos = maskJSON.find("\"y\":", pos);
-                    size_t yStart = maskJSON.find(":", yPos) + 1;
-                    size_t yEnd = maskJSON.find(",", yStart);
-                    int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
-                    
-                    size_t wPos = maskJSON.find("\"width\":", pos);
-                    size_t wStart = maskJSON.find(":", wPos) + 1;
-                    size_t wEnd = maskJSON.find(",", wStart);
-                    if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
-                    int width = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
-                    
-                    size_t hPos = maskJSON.find("\"height\":", pos);
-                    size_t hStart = maskJSON.find(":", hPos) + 1;
-                    size_t hEnd = maskJSON.find("}", hStart);
-                    int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
-                    
-                    // Create region for this mask rectangle
-                    HRGN rectRegion = CreateRectRgn(x, y, x + width, y + height);
-                    if (rectRegion) {
-                        CombineRgn(maskRegion, maskRegion, rectRegion, RGN_OR);
-                        DeleteObject(rectRegion);
-                        maskCount++;
-                    }
-                    
-                    pos = hEnd;
-                } catch (...) {
-                    pos++;
-                }
-            }
-            
-            if (maskCount > 0) {
-                
-                
-                // For WebView2, we need to implement visual hosting approach
-                // This is a simplified version - full implementation would use DirectComposition
-                // TODO: Implement proper DirectComposition visual tree masking
-                
-                DeleteObject(maskRegion);
-            } else {
-                ::log("applyCompositionMask: no valid mask rectangles found");
-                DeleteObject(maskRegion);
-            }
-            
-        } catch (...) {
-            ::log("applyCompositionMask: exception occurred during mask creation");
-        }
-    }
-    
-    // Fallback window-based masking for when composition controller is not available
-    void applyWindowMask() {
-        if (!controller || maskJSON.empty()) {
-            return;
-        }
-        
-        
-        try {
-            // Get the WebView2 window bounds
-            RECT bounds;
-            HRESULT boundsResult = controller->get_Bounds(&bounds);
-            int width = bounds.right - bounds.left;
-            int height = bounds.bottom - bounds.top;
-            
-           
-            
-            if (width <= 0 || height <= 0) {
-                ::log("applyWindowMask: invalid WebView2 bounds - using visual bounds fallback");
-                // Use the stored visual bounds instead
-                RECT visualRect = visualBounds;
-                width = visualRect.right - visualRect.left;
-                height = visualRect.bottom - visualRect.top;
-                
-                
-                
-                if (width <= 0 || height <= 0) {
-                    ::log("applyWindowMask: visual bounds also invalid, cannot apply mask");
-                    return;
-                }
-            }
-            
-            // Create base region covering entire webview
-            HRGN webviewRegion = CreateRectRgn(0, 0, width, height);
-            
-            // Parse maskJSON and subtract mask regions (holes)
-            size_t pos = 0;
-            int maskCount = 0;
-            while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
-                try {
-                    // Extract mask rectangle coordinates  
-                    size_t xStart = maskJSON.find(":", pos) + 1;
-                    size_t xEnd = maskJSON.find(",", xStart);
-                    int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
-                    
-                    size_t yPos = maskJSON.find("\"y\":", pos);
-                    size_t yStart = maskJSON.find(":", yPos) + 1;
-                    size_t yEnd = maskJSON.find(",", yStart);
-                    int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
-                    
-                    size_t wPos = maskJSON.find("\"width\":", pos);
-                    size_t wStart = maskJSON.find(":", wPos) + 1;
-                    size_t wEnd = maskJSON.find(",", wStart);
-                    if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
-                    int maskWidth = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
-                    
-                    size_t hPos = maskJSON.find("\"height\":", pos);
-                    size_t hStart = maskJSON.find(":", hPos) + 1;
-                    size_t hEnd = maskJSON.find("}", hStart);
-                    int maskHeight = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
-                    
-                    // Create hole region and subtract from webview region
-                    HRGN holeRegion = CreateRectRgn(x, y, x + maskWidth, y + maskHeight);
-                    if (holeRegion) {
-                        CombineRgn(webviewRegion, webviewRegion, holeRegion, RGN_DIFF);
-                        DeleteObject(holeRegion);
-                        maskCount++;
-                    }
-                    
-                    pos = hEnd;
-                } catch (...) {
-                    pos++;
-                }
-            }
-            
-            if (maskCount > 0) {
-                
-                
-                // Apply the region to the specific WebView2 child window
-                HWND webview2Hwnd = getWebView2WindowHandle();
-                if (webview2Hwnd) {
-                    
-                    
-                    // Apply the region to the specific WebView2 window
-                    if (SetWindowRgn(webview2Hwnd, webviewRegion, TRUE) != 0) {
-                        // ::log("applyWindowMask: window region applied successfully to WebView2");
-                        // Don't delete the region - SetWindowRgn takes ownership
-                        return;
-                    } else {
-                        ::log("applyWindowMask: failed to apply window region to WebView2");
-                    }
-                } else {
-                    ::log("applyWindowMask: could not find WebView2 window handle");
-                }
-            }
-            
-            DeleteObject(webviewRegion);
-
-        } catch (...) {
-            ::log("applyWindowMask: exception occurred during mask creation");
         }
     }
 
@@ -4416,7 +4197,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 // ::log("[WebView2] Composition controller interface available");
                             } else {
                             }
-                            
+
+                            // Store container HWND for masking support
+                            view->setContainerHwnd(container->GetHwnd());
+
                             // Set up JavaScript bridge objects
                             view->setupJavaScriptBridges();
                             
