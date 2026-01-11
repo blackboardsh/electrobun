@@ -70,6 +70,17 @@
         <button onclick="document.querySelector('electrobun-webview').reload()">Reload</button>
         <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
         <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">GitHub</button>
+        <button onclick="checkNavState()">Check Nav State</button>
+        <span id="navState" style="font-size: 12px; color: #666;"></span>
+    </div>
+
+    <h2>Find in Page</h2>
+    <div class="controls">
+        <input type="text" id="findInput" placeholder="Search text..." style="padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; width: 150px;">
+        <button onclick="findInPage()">Find</button>
+        <button onclick="findNext()">Find Next</button>
+        <button onclick="findPrev()">Find Prev</button>
+        <button onclick="stopFind()">Stop Find</button>
     </div>
 
     <h2>Mask & Passthrough Controls</h2>
@@ -108,6 +119,47 @@
         document.body.ondragover = (e) => {
             document.getElementById('draginfo').innerHTML = 'Drag position: ' + e.clientX + ', ' + e.clientY;
         };
+
+        // Navigation state check
+        async function checkNavState() {
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            try {
+                const canBack = await wv.canGoBack();
+                const canForward = await wv.canGoForward();
+                document.getElementById('navState').textContent =
+                    `canGoBack: ${canBack}, canGoForward: ${canForward}`;
+            } catch (e) {
+                document.getElementById('navState').textContent = 'Error: ' + e.message;
+            }
+        }
+
+        // Find in page functions
+        function findInPage() {
+            const text = document.getElementById('findInput').value;
+            if (!text) return;
+            const wv = document.querySelector('electrobun-webview');
+            // Note: findInPage is on BrowserView (bun side), not webview tag
+            // This demonstrates the API exists but may need RPC to work
+            console.log('Find in page:', text);
+            alert('findInPage requires bun-side API call via RPC');
+        }
+
+        function findNext() {
+            const text = document.getElementById('findInput').value;
+            if (!text) return;
+            console.log('Find next:', text);
+        }
+
+        function findPrev() {
+            const text = document.getElementById('findInput').value;
+            if (!text) return;
+            console.log('Find prev:', text);
+        }
+
+        function stopFind() {
+            console.log('Stop find');
+        }
 
         // Webview event listeners
         const webview = document.querySelector('electrobun-webview');

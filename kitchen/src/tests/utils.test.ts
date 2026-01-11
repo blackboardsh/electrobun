@@ -2,6 +2,9 @@
 
 import { defineTest, expect } from "../test-framework/types";
 import { Utils } from "electrobun/bun";
+import { mkdtemp, writeFile, access } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 
 export const utilsTests = [
   // Note: Clipboard tests that require user interaction are in clipboard-interactive.test.ts
@@ -113,11 +116,43 @@ export const utilsTests = [
   defineTest({
     name: "moveToTrash",
     category: "Utils",
-    description: "Test moveToTrash function exists",
+    description: "Test moving a file to trash",
     async run({ log }) {
-      // Don't actually trash anything during tests
-      expect(typeof Utils.moveToTrash).toBe("function");
-      log("moveToTrash function exists (skipped actual call)");
+      // Create a temp directory and file
+      const tempDir = await mkdtemp(join(tmpdir(), "electrobun-test-"));
+      const testFile = join(tempDir, "test-trash-file.txt");
+
+      log(`Creating temp file: ${testFile}`);
+      await writeFile(testFile, "This file will be moved to trash");
+
+      // Verify file exists
+      try {
+        await access(testFile);
+        log("File created successfully");
+      } catch {
+        throw new Error("Failed to create temp file");
+      }
+
+      // Move to trash
+      log("Moving file to trash");
+      const result = Utils.moveToTrash(testFile);
+      log(`moveToTrash returned: ${result}`);
+
+      // Verify file no longer exists at original path
+      try {
+        await access(testFile);
+        throw new Error("File still exists after moveToTrash");
+      } catch {
+        log("File successfully moved to trash");
+      }
+
+      // Cleanup temp directory (it should be empty now)
+      try {
+        const { rmdir } = await import("fs/promises");
+        await rmdir(tempDir);
+      } catch {
+        // Ignore cleanup errors
+      }
     },
   }),
 

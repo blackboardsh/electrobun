@@ -63,6 +63,13 @@ export const shortcutTests = [
                 return { success: true };
               },
 
+              unregisterAllShortcuts: () => {
+                log(`Unregistering all ${registeredAccelerators.size} shortcuts`);
+                GlobalShortcut.unregisterAll();
+                registeredAccelerators.clear();
+                return { success: true };
+              },
+
               isRegistered: ({ accelerator }: { accelerator: string }) => {
                 return { registered: GlobalShortcut.isRegistered(accelerator) };
               },
@@ -119,6 +126,37 @@ export const shortcutTests = [
       expect(GlobalShortcut.isRegistered(accelerator)).toBe(false);
 
       log("isRegistered works correctly");
+    },
+  }),
+
+  defineTest({
+    name: "GlobalShortcut.unregisterAll API",
+    category: "Shortcuts (Automated)",
+    description: "Verify unregisterAll clears all registered shortcuts",
+    interactive: false,
+    async run({ log }) {
+      const shortcuts = [
+        "CommandOrControl+Shift+A",
+        "CommandOrControl+Shift+B",
+        "CommandOrControl+Shift+C",
+      ];
+
+      log("Registering multiple shortcuts");
+      for (const accelerator of shortcuts) {
+        GlobalShortcut.register(accelerator, () => {});
+        expect(GlobalShortcut.isRegistered(accelerator)).toBe(true);
+      }
+      log(`Registered ${shortcuts.length} shortcuts`);
+
+      log("Calling unregisterAll");
+      GlobalShortcut.unregisterAll();
+
+      log("Verifying all shortcuts are unregistered");
+      for (const accelerator of shortcuts) {
+        expect(GlobalShortcut.isRegistered(accelerator)).toBe(false);
+      }
+
+      log("unregisterAll works correctly");
     },
   }),
 ];

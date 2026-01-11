@@ -235,4 +235,76 @@ export const rpcTests = [
       log(`Document title: ${title}`);
     },
   }),
+
+  defineTest({
+    name: "BrowserView.getAll",
+    category: "BrowserView",
+    description: "Test getting all browser views",
+    async run({ createWindow, log }) {
+      const rpc = createTestHarnessRPC();
+
+      // Get count before creating windows
+      const viewsBefore = BrowserView.getAll();
+      const countBefore = viewsBefore.length;
+      log(`Views before: ${countBefore}`);
+
+      // Create two windows
+      const win1 = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "GetAll Test 1",
+      });
+      const win2 = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "GetAll Test 2",
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const viewsAfter = BrowserView.getAll();
+      log(`Views after creating 2 windows: ${viewsAfter.length}`);
+
+      // Should have at least 2 more views (the webviews for the windows we created)
+      expect(viewsAfter.length).toBeGreaterThanOrEqual(countBefore + 2);
+
+      // Verify our webviews are in the list
+      const found1 = viewsAfter.find((v) => v.id === win1.webview.id);
+      const found2 = viewsAfter.find((v) => v.id === win2.webview.id);
+
+      expect(found1).toBeTruthy();
+      expect(found2).toBeTruthy();
+
+      log("BrowserView.getAll works correctly");
+    },
+  }),
+
+  defineTest({
+    name: "BrowserView.getById",
+    category: "BrowserView",
+    description: "Test getting a browser view by ID",
+    async run({ createWindow, log }) {
+      const rpc = createTestHarnessRPC();
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "GetById Test",
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const webviewId = win.webview.id;
+      log(`Looking up webview with ID: ${webviewId}`);
+
+      const found = BrowserView.getById(webviewId);
+      expect(found).toBeTruthy();
+      expect(found?.id).toBe(webviewId);
+
+      // Test non-existent ID
+      const notFound = BrowserView.getById(999999);
+      expect(notFound).toBeFalsy();
+
+      log("BrowserView.getById works correctly");
+    },
+  }),
 ];

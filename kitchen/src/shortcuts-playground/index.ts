@@ -14,6 +14,7 @@ const electrobun = new Electrobun.Electroview({ rpc });
 let acceleratorInput: HTMLInputElement;
 let registerBtn: HTMLButtonElement;
 let unregisterBtn: HTMLButtonElement;
+let unregisterAllBtn: HTMLButtonElement;
 let activeShortcutsEl: HTMLElement;
 let eventLogEl: HTMLElement;
 let clearLogBtn: HTMLButtonElement;
@@ -29,8 +30,11 @@ function init() {
   eventLogEl = document.getElementById("eventLog") as HTMLElement;
   clearLogBtn = document.getElementById("clearLogBtn") as HTMLButtonElement;
 
+  unregisterAllBtn = document.getElementById("unregisterAllBtn") as HTMLButtonElement;
+
   registerBtn.addEventListener("click", registerShortcut);
   unregisterBtn.addEventListener("click", unregisterCurrent);
+  unregisterAllBtn.addEventListener("click", unregisterAllShortcuts);
   clearLogBtn.addEventListener("click", clearLog);
   document.getElementById("doneBtn")?.addEventListener("click", () => {
     electrobun.rpc?.request.closeWindow({});
@@ -94,6 +98,23 @@ async function unregisterByAccelerator(accelerator: string) {
     await electrobun.rpc?.request.unregisterShortcut({ accelerator });
     registeredShortcuts.delete(accelerator);
     addLog(`Unregistered: ${accelerator}`, "info");
+    updateActiveShortcuts();
+  } catch (err) {
+    addLog(`Error: ${err}`, "error");
+  }
+}
+
+async function unregisterAllShortcuts() {
+  if (registeredShortcuts.size === 0) {
+    addLog("No shortcuts to unregister", "warn");
+    return;
+  }
+
+  try {
+    await electrobun.rpc?.request.unregisterAllShortcuts({});
+    const count = registeredShortcuts.size;
+    registeredShortcuts.clear();
+    addLog(`Unregistered all ${count} shortcuts`, "success");
     updateActiveShortcuts();
   } catch (err) {
     addLog(`Error: ${err}`, "error");

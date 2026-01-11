@@ -2,6 +2,8 @@
 
 import { defineTest, expect } from "../../test-framework/types";
 import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
+import { homedir, tmpdir } from "os";
+import { join } from "path";
 
 export const dialogTests = [
   defineTest({
@@ -128,6 +130,110 @@ export const dialogTests = [
           resolve();
         });
       });
+    },
+  }),
+
+  defineTest({
+    name: "openExternal - open URL in browser",
+    category: "Dialogs (Interactive)",
+    description: "Test opening a URL in the default browser",
+    interactive: true,
+    async run({ log, showInstructions }) {
+      await showInstructions([
+        "This will open electrobun.dev in your browser",
+        "Verify the browser opens correctly",
+        "The test will auto-pass after attempting",
+      ]);
+
+      log("Opening https://electrobun.dev in default browser");
+      const result = Utils.openExternal("https://electrobun.dev");
+      log(`openExternal returned: ${result}`);
+
+      // Give time for browser to open
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      log("Test complete - verify browser opened");
+    },
+  }),
+
+  defineTest({
+    name: "openPath - open folder",
+    category: "Dialogs (Interactive)",
+    description: "Test opening a folder in Finder/Explorer",
+    interactive: true,
+    async run({ log, showInstructions }) {
+      const targetPath = homedir();
+
+      await showInstructions([
+        `This will open your home folder: ${targetPath}`,
+        "Verify Finder/Explorer opens correctly",
+        "The test will auto-pass after attempting",
+      ]);
+
+      log(`Opening folder: ${targetPath}`);
+      const result = Utils.openPath(targetPath);
+      log(`openPath returned: ${result}`);
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      log("Test complete - verify folder opened");
+    },
+  }),
+
+  defineTest({
+    name: "showItemInFolder",
+    category: "Dialogs (Interactive)",
+    description: "Test revealing an item in Finder/Explorer",
+    interactive: true,
+    async run({ log, showInstructions }) {
+      // Use a path that should exist on most systems
+      const targetPath = join(homedir(), ".zshrc");
+
+      await showInstructions([
+        `This will reveal ${targetPath} in Finder`,
+        "(Or fallback to home folder if file doesn't exist)",
+        "Verify Finder opens and highlights the item",
+      ]);
+
+      // Try the target path, fall back to home folder
+      let pathToReveal = targetPath;
+      try {
+        const { access } = await import("fs/promises");
+        await access(targetPath);
+      } catch {
+        pathToReveal = homedir();
+        log(`${targetPath} not found, using home folder instead`);
+      }
+
+      log(`Revealing: ${pathToReveal}`);
+      const result = Utils.showItemInFolder(pathToReveal);
+      log(`showItemInFolder returned: ${result}`);
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      log("Test complete - verify Finder opened");
+    },
+  }),
+
+  defineTest({
+    name: "showNotification - interactive",
+    category: "Dialogs (Interactive)",
+    description: "Test showing a desktop notification",
+    interactive: true,
+    async run({ log, showInstructions }) {
+      await showInstructions([
+        "A desktop notification will be shown",
+        "Verify the notification appears",
+        "The test will auto-pass after sending",
+      ]);
+
+      log("Showing notification");
+      Utils.showNotification({
+        title: "Electrobun Test Notification",
+        body: "This is a test notification from the kitchen sink",
+        subtitle: "Interactive Test",
+        silent: false, // Play sound so it's noticeable
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      log("Notification sent - test complete");
     },
   }),
 ];
