@@ -1810,12 +1810,25 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         return self;
     }
 
-    - (void)loadURL:(const char *)urlString {    
+    - (void)loadURL:(const char *)urlString {
+        // Copy the string since we're dispatching async
         NSString *urlNSString = (urlString ? [NSString stringWithUTF8String:urlString] : @"");
-        NSURL *url = [NSURL URLWithString:urlNSString];
-        if (!url) return;
-        NSURLRequest *request = [NSURLRequest requestWithURL:url];
-        [self.webView loadRequest:request];
+
+        // Ensure URL loading happens on the main queue (WKWebView requirement)
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!self.webView) {
+                NSLog(@"ERROR: WKWebView loadURL called but webview is nil for webview ID: %u", self.webviewId);
+                return;
+            }
+
+            NSURL *url = [NSURL URLWithString:urlNSString];
+            if (!url) {
+                NSLog(@"ERROR: WKWebView loadURL invalid URL for webview ID: %u", self.webviewId);
+                return;
+            }
+            NSURLRequest *request = [NSURLRequest requestWithURL:url];
+            [self.webView loadRequest:request];
+        });
     }
 
     - (void)loadHTML:(const char *)htmlString {
@@ -4165,11 +4178,33 @@ extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKW
 }
 
 extern "C" void loadURLInWebView(AbstractView *abstractView, const char *urlString) {
+    if (!abstractView) {
+        NSLog(@"loadURLInWebView: abstractView is null");
+        return;
+    }
+
+    // Check if webview still exists in global tracking
+    if (!globalAbstractViews[@(abstractView.webviewId)]) {
+        NSLog(@"loadURLInWebView: webview %u not in tracking, skipping", abstractView.webviewId);
+        return;
+    }
+
     NSLog(@"DEBUG loadURLInWebView: webview %u loading URL: %s", abstractView.webviewId, urlString);
     [abstractView loadURL:urlString];
 }
 
 extern "C" void loadHTMLInWebView(AbstractView *abstractView, const char *htmlString) {
+    if (!abstractView) {
+        NSLog(@"loadHTMLInWebView: abstractView is null");
+        return;
+    }
+
+    // Check if webview still exists in global tracking
+    if (!globalAbstractViews[@(abstractView.webviewId)]) {
+        NSLog(@"loadHTMLInWebView: webview %u not in tracking, skipping", abstractView.webviewId);
+        return;
+    }
+
     NSLog(@"DEBUG loadHTMLInWebView: webview %u loading HTML content", abstractView.webviewId);
     [abstractView loadHTML:htmlString];
 }
