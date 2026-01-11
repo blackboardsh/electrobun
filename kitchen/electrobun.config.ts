@@ -68,6 +68,10 @@ export default {
                 entrypoint: "src/webviewtag/index.ts",
                 external: [],
             },
+            "window-events-playground": {
+                entrypoint: "src/window-events-playground/index.ts",
+                external: [],
+            },
         },
         copy: {
             "src/test-runner/index.html": "views/test-runner/index.html",
@@ -95,6 +99,7 @@ export default {
             "src/webviewtag/host-message-test.html": "views/webviewtag/host-message-test.html",
             "src/webviewtag/electrobun.png": "views/webviewtag/electrobun.png",
             "assets/electrobun-logo-32-template.png": "views/assets/electrobun-logo-32-template.png",
+            "src/window-events-playground/index.html": "views/window-events-playground/index.html",
         },
         mac: {
             codesign: false,

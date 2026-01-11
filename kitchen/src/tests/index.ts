@@ -20,6 +20,7 @@ import { shortcutTests } from "./interactive/shortcuts.test";
 import { webviewTagTests } from "./interactive/webview-tag.test";
 import { clipboardInteractiveTests } from "./interactive/clipboard.test";
 import { menuTests } from "./interactive/menus.test";
+import { windowEventTests } from "./interactive/window-events.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -41,6 +42,7 @@ export const allTests: TestDefinition[] = [
   ...webviewTagTests,
   ...clipboardInteractiveTests,
   ...menuTests,
+  ...windowEventTests,
 ];
 
 // Export by category for selective running
@@ -64,4 +66,5 @@ export {
   webviewTagTests,
   clipboardInteractiveTests,
   menuTests,
+  windowEventTests,
 };
