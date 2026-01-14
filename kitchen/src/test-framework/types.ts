@@ -55,6 +55,7 @@ export interface WindowOptions {
   y?: number;
   title?: string;
   titleBarStyle?: 'default' | 'hiddenInset';
+  renderer?: 'cef' | 'native';
 }
 
 export interface TestWindow {

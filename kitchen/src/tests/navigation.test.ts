@@ -1,7 +1,6 @@
 // Navigation Tests - Tests for BrowserView navigation and events
 
 import { defineTest, expect } from "../test-framework/types";
-import Electrobun from "electrobun/bun";
 
 export const navigationTests = [
   defineTest({
@@ -23,7 +22,7 @@ export const navigationTests = [
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Use will-navigate to verify loadURL triggers navigation
-      win.webview.on("will-navigate", (e: any) => {
+      win.webview.on("will-navigate", () => {
         willNavigateFired = true;
       });
 
@@ -81,14 +80,21 @@ export const navigationTests = [
     timeout: 15000,
     async run({ createWindow, log }) {
       let willNavigateFired = false;
+      let didNavigateFired = false;
 
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Nav Rules Whitelist Test",
+        renderer: 'native', // Use native renderer - CEF doesn't support navigation rules
       });
 
       // Wait for initial load
       await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Reset any existing navigation rules first
+      log("Clearing any existing navigation rules");
+      win.webview.setNavigationRules([]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       log("Setting navigation rules: allow only views://test-runner/*");
       win.webview.setNavigationRules([
@@ -98,9 +104,13 @@ export const navigationTests = [
         "views://internal/*", // Allow internal views
       ]);
 
-      // Listen for will-navigate without filtering - just check it fires
+      // Listen for navigation events
       win.webview.on("will-navigate", () => {
         willNavigateFired = true;
+      });
+
+      win.webview.on("did-navigate", () => {
+        didNavigateFired = true;
       });
 
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -109,55 +119,78 @@ export const navigationTests = [
       win.webview.loadURL("views://test-runner/index.html");
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      // Verify navigation was attempted (will-navigate fires even for allowed URLs)
+      // Both events should fire for allowed navigation
       expect(willNavigateFired).toBe(true);
+      expect(didNavigateFired).toBe(true);
       log("Successfully navigated to whitelisted URL");
+
+      // Reset rules to allow normal navigation after test
+      win.webview.setNavigationRules([]);
     },
   }),
 
   defineTest({
     name: "Navigation rules - block",
-    category: "Navigation",
+    category: "Navigation", 
     description: "Test that navigation rules block non-whitelisted URLs",
+    timeout: 15000,
     async run({ createWindow, log }) {
-      let navigatedToGoogle = false;
+      let willNavigateFired = false;
+      let didNavigateFired = false;
+      let blockedUrl = "";
 
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Nav Rules Block Test",
+        renderer: 'native', // Use native renderer - CEF doesn't support navigation rules
       });
 
-      // Use global event system
-      // Event data: { id: webviewId, detail: urlString }
-      const handler = (e: any) => {
-        if (
-          e.data?.id === win.webviewId &&
-          e.data?.detail?.includes("google.com")
-        ) {
-          navigatedToGoogle = true;
-        }
-      };
-
-      Electrobun.events.on("did-navigate", handler);
-
+      // Wait for initial load
       await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Reset any existing navigation rules first
+      log("Clearing any existing navigation rules");
+      win.webview.setNavigationRules([]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Use webview-specific events for better isolation
+      win.webview.on("will-navigate", (e: any) => {
+        willNavigateFired = true;
+        blockedUrl = e.data?.detail || e.detail || "";
+        log(`will-navigate fired for: ${blockedUrl}`);
+      });
+
+      win.webview.on("did-navigate", (e: any) => {
+        didNavigateFired = true;
+        const url = e.data?.detail || e.detail || "";
+        log(`did-navigate fired for: ${url}`);
+      });
 
       log("Setting navigation rules: block all except example.com");
       win.webview.setNavigationRules([
         "^*", // Block all
-        "*://example.com/*", // Allow only example.com
+        "*://example.com/*", // Allow only example.com  
+        "views://*", // Allow views protocol for current page
       ]);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       log("Attempting to load google.com (should be blocked)");
       win.webview.loadURL("https://google.com");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      // Cleanup
-      Electrobun.events.off("did-navigate", handler);
-
-      // Navigation should have been blocked, so we didn't navigate to google
-      expect(navigatedToGoogle).toBe(false);
+      // will-navigate should fire (navigation attempt detected)
+      expect(willNavigateFired).toBe(true);
+      expect(blockedUrl).toContain("google.com");
+      
+      // did-navigate should NOT fire (navigation was blocked)
+      expect(didNavigateFired).toBe(false);
+      
       log("Navigation was blocked as expected");
+      log(`Blocked URL: ${blockedUrl}`);
+
+      // Reset rules to allow normal navigation after test
+      win.webview.setNavigationRules([]);
     },
   }),
 
@@ -175,7 +208,7 @@ export const navigationTests = [
       });
 
       // dom-ready fires on webview after load event
-      win.webview.on("dom-ready", (e: any) => {
+      win.webview.on("dom-ready", () => {
         domReadyCount++;
       });
 

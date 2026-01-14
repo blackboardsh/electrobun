@@ -525,6 +525,9 @@ bool isPointInMask(int x, int y, const std::vector<MaskRect>& masks) {
 // Forward declarations
 class AbstractView;
 
+// Helper function to check navigation rules - defined after AbstractView class
+bool checkNavigationRules(std::shared_ptr<AbstractView> view, const std::string& url);
+
 // CEF globals and implementation
 static bool g_cefInitialized = false;
 static bool g_useCEF = false;
@@ -1137,9 +1140,16 @@ public:
             }
         }
 
-        // Navigation is allowed by default
-        // TODO: Implement navigation rules check when navigation rules feature is added
+        // Check navigation rules synchronously from native-stored rules  
+        // Note: This mirrors the same logic in WebKit policy handler
         bool shouldAllow = true;
+        {
+            auto it = g_webviewMap.find(webview_id_);
+            if (it != g_webviewMap.end() && it->second != nullptr) {
+                // Forward to the navigation rules check method (defined later in this file)
+                shouldAllow = checkNavigationRules(it->second, url);
+            }
+        }
 
         // Fire will-navigate event with allowed status
         if (webview_event_handler_) {
@@ -2041,6 +2051,11 @@ public:
     virtual void findInPage(const char* searchText, bool forward, bool matchCase) = 0;
     virtual void stopFindInPage() = 0;
 };
+
+// Helper function implementation - calls AbstractView's navigation rules method
+bool checkNavigationRules(std::shared_ptr<AbstractView> view, const std::string& url) {
+    return view->shouldAllowNavigationToURL(url);
+}
 
 // WebKitGTK implementation
 class WebKitWebViewImpl : public AbstractView {
