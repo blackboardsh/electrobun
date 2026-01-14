@@ -3678,11 +3678,22 @@ public:
     }
 };
 
-// Window resize callback for auto-resizing webviews
+// Window configure callback for move and resize events
 static gboolean onWindowConfigure(GtkWidget* widget, GdkEventConfigure* event, gpointer user_data) {
     ContainerView* container = static_cast<ContainerView*>(user_data);
     if (container) {
+        // Handle resize events
         container->resizeAutoSizingViews(event->width, event->height);
+        
+        // Handle move events - call the move callback with position
+        if (container->moveCallback) {
+            container->moveCallback(container->windowId, event->x, event->y);
+        }
+        
+        // Handle resize events - call the resize callback with position and size
+        if (container->resizeCallback) {
+            container->resizeCallback(container->windowId, event->x, event->y, event->width, event->height);
+        }
     }
     return FALSE; // Let other handlers process this event too
 }
@@ -4432,6 +4443,11 @@ gboolean process_x11_events(gpointer data) {
                         targetWin->y = event.xconfigure.y;
                         targetWin->width = event.xconfigure.width;
                         targetWin->height = event.xconfigure.height;
+                        
+                        // Call move callback when position changes
+                        if (targetWin->moveCallback) {
+                            targetWin->moveCallback(targetWin->windowId, targetWin->x, targetWin->y);
+                        }
                         
                         if (targetWin->resizeCallback) {
                             targetWin->resizeCallback(targetWin->windowId, targetWin->x, targetWin->y, 
