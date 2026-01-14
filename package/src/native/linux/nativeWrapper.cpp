@@ -2105,7 +2105,7 @@ public:
         }
         webkit_settings_set_enable_developer_extras(settings, TRUE);
         webkit_settings_set_enable_javascript(settings, TRUE);
-        webkit_settings_set_javascript_can_access_clipboard(settings, TRUE);
+        webkit_settings_set_javascript_can_access_clipboard(settings, FALSE);
         webkit_settings_set_javascript_can_open_windows_automatically(settings, TRUE);
         webkit_settings_set_enable_back_forward_navigation_gestures(settings, TRUE);
         webkit_settings_set_enable_smooth_scrolling(settings, TRUE);
