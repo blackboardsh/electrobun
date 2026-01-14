@@ -12,6 +12,18 @@ export const menuTests = [
     interactive: true,
     timeout: 600000,
     async run({ log, showInstructions }) {
+      // Check if we're on Linux - application menus are not supported
+      if (process.platform === 'linux') {
+        await showInstructions([
+          "Application menus are not supported on Linux",
+          "This feature is available on macOS and Windows only",
+          "On Linux, application menus would overlay webview content",
+          "Implement menu UI directly in your HTML instead",
+        ]);
+        log("Application menu feature not supported on Linux - skipping test");
+        return;
+      }
+
       await showInstructions([
         "An application menu playground will open",
         "Click buttons to apply different menu configurations",
@@ -84,6 +96,17 @@ export const menuTests = [
     interactive: true,
     timeout: 600000,
     async run({ log, showInstructions }) {
+      // Check if we're on Linux - context menus are not supported
+      if (process.platform === 'linux') {
+        await showInstructions([
+          "Context menus are not supported on Linux",
+          "This feature is available on macOS only",
+          "On Linux, use application menus or system tray menus instead",
+        ]);
+        log("Context menu feature not supported on Linux - skipping test");
+        return;
+      }
+
       await showInstructions([
         "A context menu playground will open",
         "Click buttons to show different context menus",
