@@ -45,12 +45,18 @@ export const eventsTests = [
     description: "Test that multiple handlers can listen to same event",
     async run({ createWindow, log }) {
       let count = 0;
+      let handler1Count = 0;
+      let handler2Count = 0;
 
       const handler1 = () => {
+        handler1Count++;
         count++;
+        log(`Handler1 fired, total count: ${count}`);
       };
       const handler2 = () => {
+        handler2Count++;
         count++;
+        log(`Handler2 fired, total count: ${count}`);
       };
 
       const win = await createWindow({
@@ -58,6 +64,15 @@ export const eventsTests = [
         title: "Multi Handler Test",
       });
 
+      // Wait for window to stabilize after creation
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      
+      // Reset count in case focus events fired during window creation
+      count = 0;
+      handler1Count = 0;
+      handler2Count = 0;
+      
+      log("Registering focus handlers");
       win.window.on("focus", handler1);
       win.window.on("focus", handler2);
 
@@ -66,10 +81,17 @@ export const eventsTests = [
       log("Triggering focus event");
       win.window.focus();
 
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
+      log(`Handler1 fired ${handler1Count} times`);
+      log(`Handler2 fired ${handler2Count} times`);
+      log(`Total count: ${count}`);
+      
+      // Each handler should fire once
+      expect(handler1Count).toBe(1);
+      expect(handler2Count).toBe(1);
       expect(count).toBe(2);
-      log(`Both handlers fired, count: ${count}`);
+      log(`Both handlers fired correctly`);
     },
   }),
 
