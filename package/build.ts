@@ -1251,7 +1251,7 @@ async function buildNative() {
         if (!process.env['GITHUB_ACTIONS']) {
             try {
                 // Check if required packages are available first
-                await $`pkg-config --exists webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3`;
+                await $`pkg-config --exists webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`;
                 console.log('✓ All required packages found via pkg-config');
             } catch (error) {
                 console.warn('⚠️  Warning: Some packages might be missing (pkg-config check failed)');
@@ -1283,9 +1283,9 @@ async function buildNative() {
             
             try {
                 // Try to get flags for all packages
-                const cflagsResult = await $`pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3`.quiet();
+                const cflagsResult = await $`pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`.quiet();
                 pkgConfigCflags = cflagsResult.stdout.toString().trim();
-                const libsResult = await $`pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3`.quiet();
+                const libsResult = await $`pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`.quiet();
                 pkgConfigLibs = libsResult.stdout.toString().trim();
                 hasAppIndicator = true;
                 console.log('Successfully retrieved pkg-config flags');
@@ -1296,7 +1296,7 @@ async function buildNative() {
                     pkgConfigCflags = cflagsResult.stdout.toString().trim();
                     const libsResult = await $`pkg-config --libs webkit2gtk-4.1 gtk+-3.0`.quiet();
                     pkgConfigLibs = libsResult.stdout.toString().trim();
-                    console.warn('⚠️  Using pkg-config without ayatana-appindicator3');
+                    console.warn('⚠️  Using pkg-config without ayatana-appindicator3-0.1');
                     console.log('   cflags:', pkgConfigCflags.substring(0, 100) + '...');
                 } catch (error) {
                     // Fallback to manual flags if pkg-config fails entirely
