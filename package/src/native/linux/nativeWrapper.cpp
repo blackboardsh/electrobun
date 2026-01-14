@@ -6138,12 +6138,39 @@ ELECTROBUN_EXPORT void closeNSWindow(void* window) {
             // Check if it's a GTK window first
             if (GTK_IS_WIDGET(window)) {
                 GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+                printf("DEBUG: closeNSWindow called for GTK window\n");
+                
+                // Find the container for this window to get the windowId and callback
+                uint32_t windowId = 0;
+                WindowCloseCallback closeCallback = nullptr;
+                for (auto& [id, container] : g_containers) {
+                    if (container->window == gtkWindow) {
+                        windowId = id;
+                        closeCallback = container->closeCallback;
+                        break;
+                    }
+                }
+                
+                // Call the close callback before destroying the window
+                if (closeCallback && windowId > 0) {
+                    printf("DEBUG: Calling close callback for GTK window ID: %u\n", windowId);
+                    closeCallback(windowId);
+                }
+                
                 printf("DEBUG: Destroying GTK window\n");
                 gtk_widget_destroy(gtkWindow);
             } else {
                 // It's an X11 window
                 X11Window* x11win = static_cast<X11Window*>(window);
                 if (x11win && x11win->display && x11win->window) {
+                    printf("DEBUG: closeNSWindow called for X11 window ID: %u\n", x11win->windowId);
+                    
+                    // Call the close callback before destroying the window
+                    if (x11win->closeCallback) {
+                        printf("DEBUG: Calling close callback for X11 window ID: %u\n", x11win->windowId);
+                        x11win->closeCallback(x11win->windowId);
+                    }
+                    
                     printf("DEBUG: Destroying X11 window\n");
                     XDestroyWindow(x11win->display, x11win->window);
                     XFlush(x11win->display);
