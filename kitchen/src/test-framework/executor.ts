@@ -179,12 +179,20 @@ export class TestExecutor {
     const windows = this.testWindows.get(testId) || [];
     for (const win of windows) {
       try {
-        win.close();
+        // Check if window still exists before closing
+        if (win.window && typeof win.window.close === 'function') {
+          win.close();
+        }
       } catch (e) {
-        // Window might already be closed
+        // Window might already be closed or destroyed
+        console.debug(`Cleanup: Window ${win.id} already closed or invalid:`, e.message);
       }
     }
     this.testWindows.delete(testId);
+    
+    // Add delay to let CEF/WebKit finish async cleanup before next test
+    // This prevents X11 race conditions when tests run back-to-back
+    await new Promise(resolve => setTimeout(resolve, 200));
   }
 
   async runTest(test: TestDefinition): Promise<TestResult> {
