@@ -6165,19 +6165,25 @@ ELECTROBUN_EXPORT void closeNSWindow(void* window) {
                 if (x11win && x11win->display && x11win->window) {
                     printf("DEBUG: closeNSWindow called for X11 window ID: %u\n", x11win->windowId);
                     
-                    // Call the close callback before destroying the window
-                    if (x11win->closeCallback) {
-                        printf("DEBUG: Calling close callback for X11 window ID: %u\n", x11win->windowId);
-                        x11win->closeCallback(x11win->windowId);
+                    // Store callback and window info before any cleanup
+                    auto callback = x11win->closeCallback;
+                    auto windowId = x11win->windowId;
+                    auto display = x11win->display;
+                    auto window = x11win->window;
+                    
+                    // Remove from global maps first to prevent any access during callback
+                    g_x11_window_to_id.erase(window);
+                    g_x11_windows.erase(windowId);
+                    
+                    // Call the close callback
+                    if (callback) {
+                        printf("DEBUG: Calling close callback for X11 window ID: %u\n", windowId);
+                        callback(windowId);
                     }
                     
                     printf("DEBUG: Destroying X11 window\n");
-                    XDestroyWindow(x11win->display, x11win->window);
-                    XFlush(x11win->display);
-
-                    // Remove from global maps
-                    g_x11_window_to_id.erase(x11win->window);
-                    g_x11_windows.erase(x11win->windowId);
+                    XDestroyWindow(display, window);
+                    XFlush(display);
 
                     // Note: Don't close display here as it might be shared
                 }
@@ -6213,11 +6219,43 @@ ELECTROBUN_EXPORT void unminimizeNSWindow(void* window) {
             GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
             if (GTK_IS_WINDOW(gtkWindow)) {
                 gtk_window_deiconify(GTK_WINDOW(gtkWindow));
+                gtk_window_present(GTK_WINDOW(gtkWindow));
             }
         } else {
             X11Window* x11win = static_cast<X11Window*>(window);
             if (x11win && x11win->display && x11win->window) {
+                // First, map the window
                 XMapWindow(x11win->display, x11win->window);
+                
+                // Send a client message to change the WM_STATE from IconicState to NormalState
+                XEvent event;
+                memset(&event, 0, sizeof(event));
+                event.type = ClientMessage;
+                event.xclient.window = x11win->window;
+                event.xclient.message_type = XInternAtom(x11win->display, "WM_CHANGE_STATE", False);
+                event.xclient.format = 32;
+                event.xclient.data.l[0] = 1; // NormalState
+                
+                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                          SubstructureNotifyMask | SubstructureRedirectMask, &event);
+                
+                // Also use _NET_WM_STATE to ensure the window is not minimized
+                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+                Atom wmStateHidden = XInternAtom(x11win->display, "_NET_WM_STATE_HIDDEN", False);
+                
+                XEvent xev;
+                memset(&xev, 0, sizeof(xev));
+                xev.type = ClientMessage;
+                xev.xclient.window = x11win->window;
+                xev.xclient.message_type = wmState;
+                xev.xclient.format = 32;
+                xev.xclient.data.l[0] = 0; // _NET_WM_STATE_REMOVE
+                xev.xclient.data.l[1] = wmStateHidden;
+                xev.xclient.data.l[2] = 0;
+                
+                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                          SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+                
                 XFlush(x11win->display);
             }
         }
@@ -6252,8 +6290,36 @@ ELECTROBUN_EXPORT bool isNSWindowMinimized(void* window) {
                             0, 2, False, wmState, &actualType, &actualFormat,
                             &nItems, &bytesAfter, &propData) == Success && propData) {
                         // WM_STATE first element: WithdrawnState=0, NormalState=1, IconicState=3
-                        result = (propData[0] == 3); // IconicState
+                        if (nItems > 0) {
+                            result = (propData[0] == 3); // IconicState
+                        }
                         XFree(propData);
+                    }
+                    
+                    // Also check _NET_WM_STATE_HIDDEN as a fallback
+                    if (!result) {
+                        Atom netWmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+                        Atom netWmStateHidden = XInternAtom(x11win->display, "_NET_WM_STATE_HIDDEN", False);
+                        
+                        if (netWmState != None) {
+                            Atom actualType2;
+                            int actualFormat2;
+                            unsigned long nItems2, bytesAfter2;
+                            unsigned char* propData2 = nullptr;
+                            
+                            if (XGetWindowProperty(x11win->display, x11win->window, netWmState,
+                                    0, 1024, False, XA_ATOM, &actualType2, &actualFormat2,
+                                    &nItems2, &bytesAfter2, &propData2) == Success && propData2) {
+                                Atom* atoms = (Atom*)propData2;
+                                for (unsigned long i = 0; i < nItems2; i++) {
+                                    if (atoms[i] == netWmStateHidden) {
+                                        result = true;
+                                        break;
+                                    }
+                                }
+                                XFree(propData2);
+                            }
+                        }
                     }
                 }
             }
