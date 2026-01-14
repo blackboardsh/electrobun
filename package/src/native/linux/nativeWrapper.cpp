@@ -1195,7 +1195,8 @@ public:
                   CefRefPtr<CefFrame> frame,
                   int httpStatusCode) override {
         if (frame->IsMain() && webview_event_handler_) {
-            webview_event_handler_(webview_id_, "did-navigate", frame->GetURL().ToString().c_str());
+            std::string url = frame->GetURL().ToString();
+            webview_event_handler_(webview_id_, strdup("did-navigate"), strdup(url.c_str()));
         }
     }
 

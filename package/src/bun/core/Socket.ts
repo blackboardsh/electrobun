@@ -101,7 +101,7 @@ const startRPCServer = () => {
               return;
             }
             const { webviewId } = ws.data;
-            console.log("Closed:", webviewId, code, reason);
+            // console.log("Closed:", webviewId, code, reason);
             if (socketMap[webviewId]) {
               socketMap[webviewId].socket = null;
             }
