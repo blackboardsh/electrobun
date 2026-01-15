@@ -2202,10 +2202,8 @@ public:
             webkit_user_content_manager_register_script_message_handler(manager, "internalBridge");
         }
         
-        // Set up navigation callback
-        if (navigationCallback) {
-            g_signal_connect(webview, "decide-policy", G_CALLBACK(onDecidePolicy), this);
-        }
+        // Connect navigation decision handler for both navigation callbacks AND navigation rules
+        g_signal_connect(webview, "decide-policy", G_CALLBACK(onDecidePolicy), this);
         
         // Set up event handlers
         if (eventHandler) {
@@ -2623,6 +2621,8 @@ public:
                     break;
                 case WEBKIT_LOAD_FINISHED:
                     impl->eventHandler(impl->webviewId, "load-finished", uri);
+                    // Also fire did-navigate event for compatibility with CEF behavior
+                    impl->eventHandler(impl->webviewId, "did-navigate", uri);
                     break;
             }
         }
@@ -6556,6 +6556,10 @@ ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
             GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
             if (GTK_IS_WINDOW(gtkWindow)) {
                 gtk_window_set_keep_above(GTK_WINDOW(gtkWindow), alwaysOnTop ? TRUE : FALSE);
+                // Focus the window when setting always on top to ensure visibility
+                if (alwaysOnTop) {
+                    gtk_window_present(GTK_WINDOW(gtkWindow));
+                }
             }
         } else {
             X11Window* x11win = static_cast<X11Window*>(window);

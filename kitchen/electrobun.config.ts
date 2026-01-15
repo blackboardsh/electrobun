@@ -108,7 +108,7 @@ export default {
             entitlements: {},
         },
         linux: {
-            bundleCEF: true,
+            bundleCEF: false,
         },
         win: {
             bundleCEF: true,

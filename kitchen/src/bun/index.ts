@@ -18,6 +18,8 @@ console.log("╠═════════════════════�
 console.log("║  Run automated tests: Click 'Run All Automated' button    ║");
 console.log("║  Run interactive tests: Click 'Run Interactive Tests'     ║");
 console.log("║                                                            ║");
+console.log("║  Auto-run tests: AUTO_RUN=1 electrobun dev                 ║");
+console.log("║                                                            ║");
 console.log("║  Results will appear both in the UI and in this terminal  ║");
 console.log("╚════════════════════════════════════════════════════════════╝");
 console.log("\n");
@@ -207,8 +209,9 @@ testRunnerWindow.on("close", () => {
 console.log("Test Runner window opened.");
 console.log("Press Cmd+R to run all automated tests, or use the buttons in the UI.\n");
 
-// Auto-run tests if AUTO_RUN environment variable is set or --auto-run flag is passed
-const autoRun = process.env.AUTO_RUN === "1" || process.argv.includes("--auto-run");
+// Auto-run tests if AUTO_RUN environment variable is set
+// Usage: AUTO_RUN=1 electrobun dev
+const autoRun = process.env.AUTO_RUN === "1";
 if (autoRun) {
   console.log("Auto-running automated tests in 3 seconds...\n");
   setTimeout(async () => {

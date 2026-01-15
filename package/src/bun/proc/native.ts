@@ -1785,6 +1785,9 @@ const webviewEventHandler = (id, eventName, detail) => {
       "download-progress": "downloadProgress",
       "download-completed": "downloadCompleted",
       "download-failed": "downloadFailed",
+      "load-started": "loadStarted",
+      "load-committed": "loadCommitted", 
+      "load-finished": "loadFinished",
     };
 
   // todo: the events map should use the same hyphenated names instead of camelCase
