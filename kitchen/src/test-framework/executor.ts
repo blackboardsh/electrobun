@@ -264,15 +264,9 @@ export class TestExecutor {
     for (const [category, tests] of byCategory) {
       console.log(`\n\x1b[36m[${category}]\x1b[0m`);
 
-      // Run tests in this category sequentially to avoid GTK WebKit resource issues
-      const categoryResults: TestResult[] = [];
-      for (const test of tests) {
-        const result = await this.runTest(test);
-        categoryResults.push(result);
-        
-        // Add delay between tests to let GTK WebKit cleanup properly
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
+      // Run tests in this category in parallel
+      const categoryPromises = tests.map(test => this.runTest(test));
+      const categoryResults = await Promise.all(categoryPromises);
       results.push(...categoryResults);
     }
 
