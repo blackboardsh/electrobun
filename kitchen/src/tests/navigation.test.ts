@@ -154,6 +154,8 @@ export const navigationTests = [
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Use webview-specific events for better isolation
+      let navigatedUrls: string[] = [];
+      
       win.webview.on("will-navigate", (e: any) => {
         willNavigateFired = true;
         blockedUrl = e.data?.detail || e.detail || "";
@@ -163,6 +165,7 @@ export const navigationTests = [
       win.webview.on("did-navigate", (e: any) => {
         didNavigateFired = true;
         const url = e.data?.detail || e.detail || "";
+        navigatedUrls.push(url);
         log(`did-navigate fired for: ${url}`);
       });
 
@@ -184,6 +187,12 @@ export const navigationTests = [
       expect(blockedUrl).toContain("google.com");
       
       // did-navigate should NOT fire (navigation was blocked)
+      if (didNavigateFired) {
+        log(`WARNING: did-navigate fired with URLs: ${navigatedUrls.join(", ")}`);
+        // Check if it fired for the blocked URL or just the existing page
+        const hasGoogleUrl = navigatedUrls.some(url => url.includes("google.com"));
+        expect(hasGoogleUrl).toBe(false); // If did-navigate fired, it should NOT be for google.com
+      }
       expect(didNavigateFired).toBe(false);
       
       log("Navigation was blocked as expected");

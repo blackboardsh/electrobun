@@ -215,6 +215,16 @@ const autoRun = process.env.AUTO_RUN === "1";
 if (autoRun) {
   console.log("Auto-running automated tests in 3 seconds...\n");
   setTimeout(async () => {
-    await executor.runAllAutomated();
+    const results = await executor.runAllAutomated();
+    
+    // Exit with appropriate code when auto-run is complete
+    const failedCount = results.filter(r => r.status === 'failed').length;
+    const exitCode = failedCount > 0 ? 1 : 0;
+    console.log(`\nAuto-run complete. Exiting with code ${exitCode}...`);
+    
+    // Give a moment for final logs to flush
+    setTimeout(() => {
+      process.exit(exitCode);
+    }, 500);
   }, 3000);
 }

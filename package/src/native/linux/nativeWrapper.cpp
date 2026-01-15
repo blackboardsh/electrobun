@@ -2018,9 +2018,13 @@ public:
 
             if (electrobun::globMatch(pattern, url)) {
                 allowed = !isBlockRule; // Last match wins
+                fprintf(stderr, "DEBUG: Navigation rule '%s' matched URL '%s', allowed=%d\n", 
+                       rule.c_str(), url.c_str(), allowed);
             }
         }
 
+        fprintf(stderr, "DEBUG: Final navigation decision for URL '%s': allowed=%d\n", 
+               url.c_str(), allowed);
         return allowed;
     }
     
@@ -2069,6 +2073,9 @@ public:
     std::string electrobunPreloadScript;
     std::string customPreloadScript;
     std::string partition;
+    
+    // Navigation state tracking
+    bool lastNavigationWasBlocked = false;
     
     WebKitWebViewImpl(uint32_t webviewId, 
                       GtkWidget* window,
@@ -2576,7 +2583,11 @@ public:
             {
                 auto it = g_webviewMap.find(impl->webviewId);
                 if (it != g_webviewMap.end() && it->second != nullptr) {
+                    fprintf(stderr, "DEBUG: Found webview %u in map, checking navigation rules for URL: %s\n", 
+                           impl->webviewId, url.c_str());
                     shouldAllow = it->second->shouldAllowNavigationToURL(url);
+                } else {
+                    fprintf(stderr, "DEBUG: Webview %u NOT found in map!\n", impl->webviewId);
                 }
             }
 
@@ -2598,9 +2609,13 @@ public:
 
             // Block navigation if not allowed
             if (!shouldAllow) {
+                impl->lastNavigationWasBlocked = true;
                 webkit_policy_decision_ignore(decision);
                 return TRUE;
             }
+            
+            // Navigation is allowed, reset the flag
+            impl->lastNavigationWasBlocked = false;
         }
         return FALSE;
     }
@@ -2621,8 +2636,10 @@ public:
                     break;
                 case WEBKIT_LOAD_FINISHED:
                     impl->eventHandler(impl->webviewId, "load-finished", uri);
-                    // Also fire did-navigate event for compatibility with CEF behavior
-                    impl->eventHandler(impl->webviewId, "did-navigate", uri);
+                    // Only fire did-navigate event if navigation wasn't blocked
+                    if (!impl->lastNavigationWasBlocked) {
+                        impl->eventHandler(impl->webviewId, "did-navigate", uri);
+                    }
                     break;
             }
         }
@@ -4884,6 +4901,10 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
             
             // Set fullSize flag for auto-resize functionality
             webview->fullSize = autoResize;
+            
+            // Store the webview in global map to keep it alive and for navigation rules
+            g_webviewMap[webviewId] = webview;
+            
             // Webview created successfully
             
             for (auto& [id, container] : g_containers) {
