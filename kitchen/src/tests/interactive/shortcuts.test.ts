@@ -108,21 +108,47 @@ export const shortcutTests = [
     description: "Verify isRegistered correctly reports shortcut registration state",
     interactive: false,
     async run({ log }) {
-      const accelerator = "CommandOrControl+Shift+R";
+      // Clean up any shortcuts from previous test runs
+      log("Cleaning up any existing shortcuts");
+      GlobalShortcut.unregisterAll();
 
-      log("Checking unregistered shortcut");
-      expect(GlobalShortcut.isRegistered(accelerator)).toBe(false);
+      // Try shortcuts with 3 modifiers and uncommon keys
+      // Avoid using all 4 modifiers as Windows may block that combination
+      const candidates = [
+        "Alt+Shift+Super+F13",
+        "Alt+Shift+Super+F14",
+        "Alt+Shift+Super+F15",
+        "CommandOrControl+Shift+Super+F13",
+        "CommandOrControl+Alt+Super+F13",
+      ];
 
-      log("Registering shortcut");
-      GlobalShortcut.register(accelerator, () => {});
+      let accelerator = "";
+      let registered = false;
 
-      log("Checking registered shortcut");
+      for (const candidate of candidates) {
+        log(`Trying to register: ${candidate}`);
+        registered = GlobalShortcut.register(candidate, () => {});
+        if (registered) {
+          accelerator = candidate;
+          log(`Successfully registered: ${accelerator}`);
+          break;
+        } else {
+          log(`Failed to register ${candidate}, trying next...`);
+        }
+      }
+
+      if (!registered) {
+        log("ERROR: Could not register any test shortcuts - all candidates in use");
+        throw new Error("No shortcuts could be registered for testing");
+      }
+
+      log("Verifying isRegistered returns true");
       expect(GlobalShortcut.isRegistered(accelerator)).toBe(true);
 
       log("Unregistering shortcut");
       GlobalShortcut.unregister(accelerator);
 
-      log("Checking unregistered shortcut again");
+      log("Verifying isRegistered returns false after unregister");
       expect(GlobalShortcut.isRegistered(accelerator)).toBe(false);
 
       log("isRegistered works correctly");
@@ -135,24 +161,51 @@ export const shortcutTests = [
     description: "Verify unregisterAll clears all registered shortcuts",
     interactive: false,
     async run({ log }) {
-      const shortcuts = [
-        "CommandOrControl+Shift+A",
-        "CommandOrControl+Shift+B",
-        "CommandOrControl+Shift+C",
+      // Clean up any shortcuts from previous test runs
+      log("Cleaning up any existing shortcuts");
+      GlobalShortcut.unregisterAll();
+
+      // Try shortcuts with 3 modifiers and uncommon keys
+      // Avoid using all 4 modifiers as Windows may block that combination
+      const candidates = [
+        "Alt+Shift+Super+F16",
+        "Alt+Shift+Super+F17",
+        "Alt+Shift+Super+F18",
+        "CommandOrControl+Shift+Super+F16",
+        "CommandOrControl+Alt+Super+F16",
+        "CommandOrControl+Alt+Super+F17",
       ];
 
       log("Registering multiple shortcuts");
-      for (const accelerator of shortcuts) {
-        GlobalShortcut.register(accelerator, () => {});
-        expect(GlobalShortcut.isRegistered(accelerator)).toBe(true);
+      const registeredShortcuts: string[] = [];
+
+      for (const accelerator of candidates) {
+        const success = GlobalShortcut.register(accelerator, () => {});
+        if (success) {
+          registeredShortcuts.push(accelerator);
+          expect(GlobalShortcut.isRegistered(accelerator)).toBe(true);
+          log(`Registered: ${accelerator}`);
+          // Stop after successfully registering 3 shortcuts
+          if (registeredShortcuts.length >= 3) {
+            break;
+          }
+        } else {
+          log(`Could not register ${accelerator} (in use), trying next...`);
+        }
       }
-      log(`Registered ${shortcuts.length} shortcuts`);
+
+      if (registeredShortcuts.length === 0) {
+        log("ERROR: Could not register any shortcuts for testing");
+        throw new Error("No shortcuts could be registered - all candidates are in use");
+      }
+
+      log(`Registered ${registeredShortcuts.length} shortcuts`);
 
       log("Calling unregisterAll");
       GlobalShortcut.unregisterAll();
 
       log("Verifying all shortcuts are unregistered");
-      for (const accelerator of shortcuts) {
+      for (const accelerator of registeredShortcuts) {
         expect(GlobalShortcut.isRegistered(accelerator)).toBe(false);
       }
 
