@@ -2699,7 +2699,7 @@ public:
         if (webview_event_handler_) {
             std::string eventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":" +
                                    (shouldAllow ? "true" : "false") + "}";
-            webview_event_handler_(webview_id_, "will-navigate", eventData.c_str());
+            webview_event_handler_(webview_id_, strdup("will-navigate"), strdup(eventData.c_str()));
         }
         return !shouldAllow;  // Return true to cancel the navigation
     }
