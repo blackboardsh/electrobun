@@ -105,6 +105,7 @@
 
     <h2>Webview with Inline HTML</h2>
     <electrobun-webview
+        renderer="cef"
         style="width: 600px; height: 100px;"
         preload="window.onload = () => { document.body.innerHTML += '<br>Hello from preload script!'; }"
         html="<html><body style='font-family: sans-serif; padding: 10px;'><h3>Webview with inline HTML</h3><p>This webview was created with the html attribute instead of src.</p></body></html>">

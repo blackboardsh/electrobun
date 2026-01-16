@@ -40,6 +40,7 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "RPC Test",
+        renderer: 'cef',
       });
 
       // Wait for webview to be ready
@@ -63,6 +64,7 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "RPC Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -88,6 +90,7 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "RPC Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -115,6 +118,7 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "RPC Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -144,6 +148,7 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "RPC Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -168,6 +173,7 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "RPC Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -200,6 +206,7 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "RPC Test Window",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -224,6 +231,7 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "RPC Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -253,11 +261,13 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "GetAll Test 1",
+        renderer: 'cef',
       });
       const win2 = await createWindow({
         url: "views://test-harness/index.html",
         rpc,
         title: "GetAll Test 2",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -289,6 +299,7 @@ export const rpcTests = [
         url: "views://test-harness/index.html",
         rpc,
         title: "GetById Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 500));

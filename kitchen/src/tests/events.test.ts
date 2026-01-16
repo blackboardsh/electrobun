@@ -22,6 +22,7 @@ export const eventsTests = [
       const win = await createWindow({
         url: "about:blank",
         title: "Global Event Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -62,6 +63,7 @@ export const eventsTests = [
       const win = await createWindow({
         html: "<html><body>Test</body></html>",
         title: "Multi Handler Test",
+        renderer: 'cef',
       });
 
       // Wait for window to stabilize after creation
@@ -119,6 +121,7 @@ export const eventsTests = [
       const win = await createWindow({
         html: "<html><body>Test</body></html>",
         title: "Event Response Test",
+        renderer: 'cef',
       });
 
       // Block all navigation via event handler
@@ -152,6 +155,7 @@ export const eventsTests = [
         title: "Window 1",
         x: 100,
         y: 100,
+        renderer: 'cef',
       });
 
       const win2 = await createWindow({
@@ -159,6 +163,7 @@ export const eventsTests = [
         title: "Window 2",
         x: 300,
         y: 100,
+        renderer: 'cef',
       });
 
       // Clear any initial focus events from window creation

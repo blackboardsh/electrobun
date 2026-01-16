@@ -14,6 +14,7 @@ export const windowTests = [
         title: "URL Window Test",
         width: 400,
         height: 300,
+        renderer: 'cef',
       });
 
       expect(win.id).toBeGreaterThan(0);
@@ -30,6 +31,7 @@ export const windowTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Original Title",
+        renderer: 'cef',
       });
 
       log("Setting new title");
@@ -50,6 +52,7 @@ export const windowTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Minimize Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -101,6 +104,7 @@ export const windowTests = [
         title: "Maximize Test",
         width: 400,
         height: 300,
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -131,6 +135,7 @@ export const windowTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Fullscreen Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -160,6 +165,7 @@ export const windowTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Always On Top Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -207,6 +213,7 @@ export const windowTests = [
         title: "Focus Test 1",
         x: 100,
         y: 100,
+        renderer: 'cef',
       });
 
       const win2 = await createWindow({
@@ -214,6 +221,7 @@ export const windowTests = [
         title: "Focus Test 2",
         x: 200,
         y: 200,
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -241,6 +249,7 @@ export const windowTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Close Event Test",
+        renderer: 'cef',
       });
 
       win.window.on("close", () => {
@@ -270,6 +279,7 @@ export const windowTests = [
         title: "Resize Event Test",
         width: 400,
         height: 300,
+        renderer: 'cef',
       });
 
       win.window.on("resize", (event: any) => {
@@ -301,6 +311,7 @@ export const windowTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Focus Event Test",
+        renderer: 'cef',
       });
 
       win.window.on("focus", () => {
@@ -343,6 +354,7 @@ export const windowTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "GetById Test",
+        renderer: 'cef',
       });
 
       const retrieved = BrowserWindow.getById(win.id);
@@ -361,6 +373,7 @@ export const windowTests = [
         url: "views://test-harness/index.html",
         title: "Hidden Title Bar",
         titleBarStyle: "hiddenInset",
+        renderer: 'cef',
       });
 
       expect(win.id).toBeGreaterThan(0);

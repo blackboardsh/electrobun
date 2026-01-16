@@ -29,6 +29,7 @@ export const preloadTests = [
         html,
         preload: `data:text/javascript;base64,${btoa(preloadScript)}`,
         title: "Preload Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -54,6 +55,7 @@ export const preloadTests = [
         url: "https://example.com",
         preload: `data:text/javascript;base64,${btoa(preloadScript)}`,
         title: "Preload External URL Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -90,6 +92,7 @@ export const preloadTests = [
         html,
         preload: `data:text/javascript;base64,${btoa(preloadScript)}`,
         title: "Preload DOM Test",
+        renderer: 'cef',
       });
 
       await new Promise((resolve) => setTimeout(resolve, 500));
