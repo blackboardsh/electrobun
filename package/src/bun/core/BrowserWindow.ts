@@ -180,6 +180,10 @@ export class BrowserWindow<T> {
     return ffi.request.focusWindow({ winId: this.id });
   }
 
+  show() {
+    return ffi.native.symbols.showWindow(this.ptr);
+  }
+
   minimize() {
     return ffi.request.minimizeWindow({ winId: this.id });
   }

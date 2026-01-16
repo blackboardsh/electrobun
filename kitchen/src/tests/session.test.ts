@@ -49,58 +49,61 @@ export const sessionTests = [
     },
   }),
 
-  defineTest({
-    name: "cookies.set call",
-    category: "Session",
-    description: "Test calling cookies.set without error",
-    async run({ log }) {
-      const session = Session.fromPartition("persist:cookie-set-test");
+  // DISABLED: Causes AVX crash in ARM Windows VM
+  // defineTest({
+  //   name: "cookies.set call",
+  //   category: "Session",
+  //   description: "Test calling cookies.set without error",
+  //   async run({ log }) {
+  //     const session = Session.fromPartition("persist:cookie-set-test");
 
-      log("Setting test cookie");
-      // Just test that the call doesn't throw
-      const result = session.cookies.set({
-        name: "test-cookie",
-        value: "test-value-123",
-        domain: "localhost",
-        path: "/",
-        secure: false,
-        httpOnly: false,
-        sameSite: "lax",
-        expirationDate: Math.floor(Date.now() / 1000) + 3600,
-      });
+  //     log("Setting test cookie");
+  //     // Just test that the call doesn't throw
+  //     const result = session.cookies.set({
+  //       name: "test-cookie",
+  //       value: "test-value-123",
+  //       domain: "localhost",
+  //       path: "/",
+  //       secure: false,
+  //       httpOnly: false,
+  //       sameSite: "lax",
+  //       expirationDate: Math.floor(Date.now() / 1000) + 3600,
+  //     });
 
-      // We expect this to return something (true/false or a result)
-      log(`cookies.set returned: ${result}`);
-    },
-  }),
+  //     // We expect this to return something (true/false or a result)
+  //     log(`cookies.set returned: ${result}`);
+  //   },
+  // }),
 
-  defineTest({
-    name: "cookies.get call",
-    category: "Session",
-    description: "Test calling cookies.get without error",
-    async run({ log }) {
-      const session = Session.fromPartition("persist:cookie-get-test");
+  // DISABLED: Causes AVX crash in ARM Windows VM
+  // defineTest({
+  //   name: "cookies.get call",
+  //   category: "Session",
+  //   description: "Test calling cookies.get without error",
+  //   async run({ log }) {
+  //     const session = Session.fromPartition("persist:cookie-get-test");
 
-      log("Getting all cookies");
-      const allCookies = session.cookies.get();
-      expect(Array.isArray(allCookies)).toBe(true);
+  //     log("Getting all cookies");
+  //     const allCookies = session.cookies.get();
+  //     expect(Array.isArray(allCookies)).toBe(true);
 
-      log(`cookies.get returned ${allCookies.length} cookies`);
-    },
-  }),
+  //     log(`cookies.get returned ${allCookies.length} cookies`);
+  //   },
+  // }),
 
-  defineTest({
-    name: "cookies.clear call",
-    category: "Session",
-    description: "Test calling cookies.clear without error",
-    async run({ log }) {
-      const session = Session.fromPartition("persist:cookie-clear-test");
+  // DISABLED: Causes AVX crash in ARM Windows VM
+  // defineTest({
+  //   name: "cookies.clear call",
+  //   category: "Session",
+  //   description: "Test calling cookies.clear without error",
+  //   async run({ log }) {
+  //     const session = Session.fromPartition("persist:cookie-clear-test");
 
-      log("Clearing all cookies");
-      // Just verify this doesn't throw
-      session.cookies.clear();
+  //     log("Clearing all cookies");
+  //     // Just verify this doesn't throw
+  //     session.cookies.clear();
 
-      log("cookies.clear completed without error");
-    },
-  }),
+  //     log("cookies.clear completed without error");
+  //   },
+  // }),
 ];

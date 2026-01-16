@@ -85,7 +85,7 @@ export const navigationTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Nav Rules Whitelist Test",
-        renderer: 'native', // Use native renderer - CEF doesn't support navigation rules
+        renderer: 'cef', // Use CEF renderer
       });
 
       // Wait for initial load
@@ -142,7 +142,7 @@ export const navigationTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Nav Rules Block Test",
-        renderer: 'native', // Use native renderer - CEF doesn't support navigation rules
+        renderer: 'cef', // Use CEF renderer
       });
 
       // Wait for initial load

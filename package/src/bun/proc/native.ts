@@ -88,7 +88,13 @@ export const native = (() => {
       },
       makeNSWindowKeyAndOrderFront: {
         args: [
-          FFIType.ptr, // window ptr      
+          FFIType.ptr, // window ptr
+        ],
+        returns: FFIType.void,
+      },
+      showWindow: {
+        args: [
+          FFIType.ptr, // window ptr
         ],
         returns: FFIType.void,
       },

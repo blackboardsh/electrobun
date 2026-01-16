@@ -396,6 +396,9 @@ class AbstractView;
 static std::map<uint32_t, AbstractView*> g_abstractViews;
 static std::mutex g_abstractViewsMutex;
 
+// Forward declaration for navigation rules helper (defined after AbstractView class)
+bool checkNavigationRules(AbstractView* view, const std::string& url);
+
 // Forward declarations for HTML content management
 extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewId);
 extern "C" ELECTROBUN_EXPORT void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
@@ -547,6 +550,14 @@ private:
 // CEF Load Handler for debugging navigation
 class ElectrobunLoadHandler : public CefLoadHandler {
 public:
+    uint32_t webview_id_ = 0;
+    WebviewEventHandler webview_event_handler_ = nullptr;
+
+    ElectrobunLoadHandler() {}
+
+    void SetWebviewId(uint32_t id) { webview_id_ = id; }
+    void SetWebviewEventHandler(WebviewEventHandler handler) { webview_event_handler_ = handler; }
+
     void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override {
         
         // Execute preload scripts immediately at load start for main frame
@@ -561,13 +572,19 @@ public:
     }
     
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
-        
+
         // Also execute preload scripts at load end to ensure they're available
         if (frame->IsMain()) {
             int browserId = browser->GetIdentifier();
             auto scriptIt = g_preloadScripts.find(browserId);
             if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
                 frame->ExecuteJavaScript(scriptIt->second, "", 0);
+            }
+
+            // Fire did-navigate event
+            if (webview_event_handler_) {
+                std::string url = frame->GetURL().ToString();
+                webview_event_handler_(webview_id_, _strdup("did-navigate"), _strdup(url.c_str()));
             }
         }
     }
@@ -762,6 +779,7 @@ class ElectrobunRequestHandler : public CefRequestHandler {
 public:
     uint32_t webview_id_ = 0;
     WebviewEventHandler webview_event_handler_ = nullptr;
+    AbstractView* abstract_view_ = nullptr;
 
     // Static debounce timestamp for ctrl+click handling
     static double lastCtrlClickTime;
@@ -770,6 +788,7 @@ public:
 
     void SetWebviewId(uint32_t id) { webview_id_ = id; }
     void SetWebviewEventHandler(WebviewEventHandler handler) { webview_event_handler_ = handler; }
+    void SetAbstractView(AbstractView* view) { abstract_view_ = view; }
 
     // Handle navigation requests with Ctrl+click detection
     bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -820,8 +839,10 @@ public:
 
         // Check navigation rules synchronously from native-stored rules
         // Navigation is allowed by default
-        // TODO: Implement navigation rules check when navigation rules feature is added
         bool shouldAllow = true;
+        if (abstract_view_) {
+            shouldAllow = checkNavigationRules(abstract_view_, url);
+        }
 
         // Fire will-navigate event with allowed status
         if (webview_event_handler_) {
@@ -1318,6 +1339,16 @@ public:
         webview_event_handler_ = handler;
         if (m_requestHandler) {
             m_requestHandler->SetWebviewEventHandler(handler);
+        }
+        if (m_loadHandler) {
+            m_loadHandler->SetWebviewEventHandler(handler);
+            m_loadHandler->SetWebviewId(webview_id_);
+        }
+    }
+
+    void SetAbstractView(AbstractView* view) {
+        if (m_requestHandler) {
+            m_requestHandler->SetAbstractView(view);
         }
     }
 
@@ -1995,6 +2026,15 @@ public:
     virtual void findInPage(const char* searchText, bool forward, bool matchCase) = 0;
     virtual void stopFindInPage() = 0;
 };
+
+// Helper function to check navigation rules
+// This is defined here (after AbstractView) so it can call methods on AbstractView
+bool checkNavigationRules(AbstractView* view, const std::string& url) {
+    if (!view) {
+        return true; // Allow navigation if no view
+    }
+    return view->shouldAllowNavigationToURL(url);
+}
 
 // WebView2View class - implements AbstractView for WebView2
 class WebView2View : public AbstractView {
@@ -4808,6 +4848,9 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         // Set the webview event handler for ctrl+click handling
         client->SetWebviewEventHandler(webviewEventHandler);
 
+        // Set the abstract view pointer for navigation rules
+        client->SetAbstractView(view.get());
+
         view->setClient(client);
         
         // Store preload scripts before browser creation so they're available during LoadStart
@@ -5444,6 +5487,12 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         
     });
+}
+
+ELECTROBUN_EXPORT void showWindow(void* window) {
+    // On Windows, this is just an alias for makeNSWindowKeyAndOrderFront
+    // Added for Linux compatibility
+    makeNSWindowKeyAndOrderFront(static_cast<NSWindow*>(window));
 }
 
 ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
