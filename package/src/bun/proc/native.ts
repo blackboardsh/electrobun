@@ -86,12 +86,6 @@ export const native = (() => {
         ],
         returns: FFIType.void,
       },
-      makeNSWindowKeyAndOrderFront: {
-        args: [
-          FFIType.ptr, // window ptr
-        ],
-        returns: FFIType.void,
-      },
       showWindow: {
         args: [
           FFIType.ptr, // window ptr
@@ -584,11 +578,8 @@ export const ffi = {
           throw "Failed to create window"
         }
         
-        native.symbols.setNSWindowTitle(windowPtr, toCString(title));        
-        // setTimeout(() => {
-          // console.log('calling makeNSWindowKeyAndOrderFront', windowPtr)
-        native.symbols.makeNSWindowKeyAndOrderFront(windowPtr);
-        // }, 1000)
+        native.symbols.setNSWindowTitle(windowPtr, toCString(title));
+        native.symbols.showWindow(windowPtr);
 
         return windowPtr;
       },
@@ -624,7 +615,7 @@ export const ffi = {
           throw `Can't focus window. Window no longer exists`;
         }
 
-        native.symbols.makeNSWindowKeyAndOrderFront(windowPtr);
+        native.symbols.showWindow(windowPtr);
       },
 
       minimizeWindow: (params: {winId: number}) => {

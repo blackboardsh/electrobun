@@ -4738,11 +4738,6 @@ ELECTROBUN_EXPORT void setNSWindowTitle(void* window, const char* title) {
     
 }
 
-// Mac-compatible function for Linux
-ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(void* window) {
-    showWindow(window);
-}
-
 void showX11Window(void* window) {
     dispatch_sync_main_void([&]() {
         X11Window* x11win = static_cast<X11Window*>(window);

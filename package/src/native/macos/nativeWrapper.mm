@@ -4548,7 +4548,7 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
     return window;        
 }
 
-extern "C" void makeNSWindowKeyAndOrderFront(NSWindow *window) {
+extern "C" void showWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         // First ensure the window is visible
         [window orderFront:nil];

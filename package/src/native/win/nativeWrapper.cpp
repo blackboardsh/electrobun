@@ -5432,12 +5432,12 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     return hwnd;
 }
 
-ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
-    // On Windows, NSWindow* is actually HWND
+ELECTROBUN_EXPORT void showWindow(void *window) {
+    // On Windows, window ptr is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
-    
+
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in makeNSWindowKeyAndOrderFront");
+        ::log("ERROR: Invalid window handle in showWindow");
         return;
     }
     
@@ -5487,12 +5487,6 @@ ELECTROBUN_EXPORT void makeNSWindowKeyAndOrderFront(NSWindow *window) {
                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         
     });
-}
-
-ELECTROBUN_EXPORT void showWindow(void* window) {
-    // On Windows, this is just an alias for makeNSWindowKeyAndOrderFront
-    // Added for Linux compatibility
-    makeNSWindowKeyAndOrderFront(static_cast<NSWindow*>(window));
 }
 
 ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
