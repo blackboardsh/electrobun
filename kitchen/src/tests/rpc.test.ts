@@ -43,8 +43,9 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      // Wait for webview to be ready
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Wait longer for webview to be ready when running in parallel
+      // CEF takes longer to initialize under heavy load
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       log("Calling webview.multiply({ a: 6, b: 7 })");
       const result = await win.webview.rpc?.request.multiply({ a: 6, b: 7 });
@@ -176,7 +177,9 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Wait longer for webview to be ready when running in parallel
+      // CEF takes longer to initialize under heavy load
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       log("Evaluating async script with 200ms delay");
       const startTime = Date.now();
