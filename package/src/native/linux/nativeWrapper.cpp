@@ -4752,14 +4752,13 @@ void setGTKWindowTitle(void* window, const char* title) {
     });
 }
 
-// Mac-compatible function for Linux
-ELECTROBUN_EXPORT void setNSWindowTitle(void* window, const char* title) {
+// Cross-platform compatible function for Linux
+ELECTROBUN_EXPORT void setWindowTitle(void* window, const char* title) {
     if (isCEFAvailable()) {
         setX11WindowTitle(window, title);
     } else {
         setGTKWindowTitle(window, title);
     }
-    
 }
 
 void showX11Window(void* window) {
@@ -4799,11 +4798,11 @@ ELECTROBUN_EXPORT void showWindow(void* window) {
     }
 }
 
-// Mac-compatible function for Linux - return dummy style mask
-uint32_t getNSWindowStyleMask(bool borderless, bool titled, bool closable, bool miniaturizable, 
-                              bool resizable, bool unifiedTitleAndToolbar, bool fullScreen, 
-                              bool fullSizeContentView, bool utilityWindow, bool docModalWindow, 
-                              bool nonactivatingPanel, bool hudWindow) {
+// Cross-platform compatible function for Linux - return dummy style mask
+ELECTROBUN_EXPORT uint32_t getWindowStyle(bool borderless, bool titled, bool closable, bool miniaturizable,
+                        bool resizable, bool unifiedTitleAndToolbar, bool fullScreen,
+                        bool fullSizeContentView, bool utilityWindow, bool docModalWindow,
+                        bool nonactivatingPanel, bool hudWindow) {
     // Linux doesn't use style masks like macOS, so just return a dummy value
     // The actual window styling is handled in createWindow
     return 0;
@@ -6183,7 +6182,7 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
     }
 }
 
-ELECTROBUN_EXPORT void runNSApplication(const char* identifier, const char* channel) {
+ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* channel) {
     // Store identifier and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
@@ -6213,6 +6212,7 @@ void* createNSRectWrapper(double x, double y, double width, double height) {
 }
 
 
+<<<<<<< HEAD
 // Helper function to clean up webviews when a window is closed
 void cleanupWebviewsForWindow(uint32_t windowId) {
     // Find and remove the container
@@ -6238,12 +6238,15 @@ void cleanupWebviewsForWindow(uint32_t windowId) {
 }
 
 ELECTROBUN_EXPORT void closeNSWindow(void* window) {
+=======
+ELECTROBUN_EXPORT void closeWindow(void* window) {
+>>>>>>> aa31359 (rename CABI methods to be more generic)
     if (window) {
         dispatch_sync_main_void([&]() {
             // Check if it's a GTK window first
             if (GTK_IS_WIDGET(window)) {
                 GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
-                printf("DEBUG: closeNSWindow called for GTK window\n");
+                printf("DEBUG: closeWindow called for GTK window\n");
                 
                 // Find the container for this window to get the windowId and callback
                 uint32_t windowId = 0;
@@ -6276,7 +6279,7 @@ ELECTROBUN_EXPORT void closeNSWindow(void* window) {
                 // It's an X11 window
                 X11Window* x11win = static_cast<X11Window*>(window);
                 if (x11win && x11win->display && x11win->window) {
-                    printf("DEBUG: closeNSWindow called for X11 window ID: %u\n", x11win->windowId);
+                    printf("DEBUG: closeWindow called for X11 window ID: %u\n", x11win->windowId);
                     
                     // Store callback and window info before any cleanup
                     auto callback = x11win->closeCallback;
@@ -6311,7 +6314,7 @@ ELECTROBUN_EXPORT void closeNSWindow(void* window) {
     }
 }
 
-ELECTROBUN_EXPORT void minimizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void minimizeWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6330,7 +6333,7 @@ ELECTROBUN_EXPORT void minimizeNSWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT void unminimizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void restoreWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6381,7 +6384,7 @@ ELECTROBUN_EXPORT void unminimizeNSWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowMinimized(void* window) {
+ELECTROBUN_EXPORT bool isWindowMinimized(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6447,7 +6450,7 @@ ELECTROBUN_EXPORT bool isNSWindowMinimized(void* window) {
     return result;
 }
 
-ELECTROBUN_EXPORT void maximizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void maximizeWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6481,7 +6484,7 @@ ELECTROBUN_EXPORT void maximizeNSWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT void unmaximizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void unmaximizeWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6515,7 +6518,7 @@ ELECTROBUN_EXPORT void unmaximizeNSWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowMaximized(void* window) {
+ELECTROBUN_EXPORT bool isWindowMaximized(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6555,7 +6558,7 @@ ELECTROBUN_EXPORT bool isNSWindowMaximized(void* window) {
     return result;
 }
 
-ELECTROBUN_EXPORT void setNSWindowFullScreen(void* window, bool fullScreen) {
+ELECTROBUN_EXPORT void setWindowFullScreen(void* window, bool fullScreen) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6592,7 +6595,7 @@ ELECTROBUN_EXPORT void setNSWindowFullScreen(void* window, bool fullScreen) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowFullScreen(void* window) {
+ELECTROBUN_EXPORT bool isWindowFullScreen(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6635,7 +6638,7 @@ ELECTROBUN_EXPORT bool isNSWindowFullScreen(void* window) {
     return result;
 }
 
-ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
+ELECTROBUN_EXPORT void setWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6672,7 +6675,7 @@ ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowAlwaysOnTop(void* window) {
+ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(void* window) {
     if (!window) return false;
 
     bool result = false;

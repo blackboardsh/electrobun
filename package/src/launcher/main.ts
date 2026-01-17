@@ -63,7 +63,7 @@ function main() {
         }
         
         lib = dlopen(libPath, {
-            runNSApplication: { args: ["cstring", "cstring"], returns: "void" }
+            startEventLoop: { args: ["cstring", "cstring"], returns: "void" }
         });
     } catch (error) {
         console.error(`[LAUNCHER] Failed to load library: ${error.message}`);
@@ -71,7 +71,7 @@ function main() {
         // Try with absolute path as fallback
         try {
             lib = dlopen(absoluteLibPath, {
-                runNSApplication: { args: ["cstring", "cstring"], returns: "void" }
+                startEventLoop: { args: ["cstring", "cstring"], returns: "void" }
             });
         } catch (absError) {
             console.error(`[LAUNCHER] Library loading failed. Try running: ldd ${libPath}`);
@@ -157,7 +157,7 @@ function main() {
         appEntrypointPath = join(systemTmpDir, randomFileName);
 
         // Prepend code to delete the temp file after a short delay
-        // This runs in the Worker thread, not the main thread (which gets blocked by runNSApplication)
+        // This runs in the Worker thread, not the main thread (which gets blocked by startEventLoop)
         const wrappedFileData = `
 // Auto-delete temp file after Worker loads it
 const __tempFilePath = "${appEntrypointPath}";
@@ -196,7 +196,7 @@ ${fileData.toString('utf8')}
 
     // Pass identifier and channel as C strings using Buffer encoding
     // Bun FFI requires explicit encoding for cstring parameters
-    lib.symbols.runNSApplication(
+    lib.symbols.startEventLoop(
         ptr(Buffer.from(identifier + '\0', 'utf8')),
         ptr(Buffer.from(channel + '\0', 'utf8'))
     );

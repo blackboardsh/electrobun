@@ -192,7 +192,7 @@ export class BrowserWindow<T> {
   }
 
   unminimize() {
-    return ffi.request.unminimizeWindow({ winId: this.id });
+    return ffi.request.restoreWindow({ winId: this.id });
   }
 
   isMinimized(): boolean {

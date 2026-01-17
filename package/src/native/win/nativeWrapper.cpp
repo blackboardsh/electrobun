@@ -5056,7 +5056,7 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
 
 extern "C" {
 
-ELECTROBUN_EXPORT void runNSApplication(const char* identifier, const char* channel) {
+ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* channel) {
     // Store identifier and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
@@ -5578,12 +5578,12 @@ ELECTROBUN_EXPORT void showWindow(void *window) {
     });
 }
 
-ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
+ELECTROBUN_EXPORT void setWindowTitle(NSWindow *window, const char *title) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
-    
+
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in setNSWindowTitle");
+        ::log("ERROR: Invalid window handle in setWindowTitle");
         return;
     }
     
@@ -5621,12 +5621,12 @@ ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
     });
 }
 
-ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void closeWindow(NSWindow *window) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in closeNSWindow");
+        ::log("ERROR: Invalid window handle in closeWindow");
         return;
     }
 
@@ -5662,11 +5662,11 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT void minimizeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void minimizeWindow(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in minimizeNSWindow");
+        ::log("ERROR: Invalid window handle in minimizeWindow");
         return;
     }
 
@@ -5675,11 +5675,11 @@ ELECTROBUN_EXPORT void minimizeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT void unminimizeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void restoreWindow(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in unminimizeNSWindow");
+        ::log("ERROR: Invalid window handle in restoreWindow");
         return;
     }
 
@@ -5688,7 +5688,7 @@ ELECTROBUN_EXPORT void unminimizeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowMinimized(NSWindow *window) {
+ELECTROBUN_EXPORT bool isWindowMinimized(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
@@ -5698,11 +5698,11 @@ ELECTROBUN_EXPORT bool isNSWindowMinimized(NSWindow *window) {
     return IsIconic(hwnd) != 0;
 }
 
-ELECTROBUN_EXPORT void maximizeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void maximizeWindow(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in maximizeNSWindow");
+        ::log("ERROR: Invalid window handle in maximizeWindow");
         return;
     }
 
@@ -5711,11 +5711,11 @@ ELECTROBUN_EXPORT void maximizeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT void unmaximizeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void unmaximizeWindow(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in unmaximizeNSWindow");
+        ::log("ERROR: Invalid window handle in unmaximizeWindow");
         return;
     }
 
@@ -5724,7 +5724,7 @@ ELECTROBUN_EXPORT void unmaximizeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowMaximized(NSWindow *window) {
+ELECTROBUN_EXPORT bool isWindowMaximized(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
@@ -5734,11 +5734,11 @@ ELECTROBUN_EXPORT bool isNSWindowMaximized(NSWindow *window) {
     return IsZoomed(hwnd) != 0;
 }
 
-ELECTROBUN_EXPORT void setNSWindowFullScreen(NSWindow *window, bool fullScreen) {
+ELECTROBUN_EXPORT void setWindowFullScreen(NSWindow *window, bool fullScreen) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in setNSWindowFullScreen");
+        ::log("ERROR: Invalid window handle in setWindowFullScreen");
         return;
     }
 
@@ -5788,7 +5788,7 @@ ELECTROBUN_EXPORT void setNSWindowFullScreen(NSWindow *window, bool fullScreen) 
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowFullScreen(NSWindow *window) {
+ELECTROBUN_EXPORT bool isWindowFullScreen(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
@@ -5799,11 +5799,11 @@ ELECTROBUN_EXPORT bool isNSWindowFullScreen(NSWindow *window) {
     return (style & WS_POPUP) && !(style & WS_OVERLAPPEDWINDOW);
 }
 
-ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
+ELECTROBUN_EXPORT void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in setNSWindowAlwaysOnTop");
+        ::log("ERROR: Invalid window handle in setWindowAlwaysOnTop");
         return;
     }
 
@@ -5815,7 +5815,7 @@ ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowAlwaysOnTop(NSWindow *window) {
+ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
@@ -7128,7 +7128,7 @@ extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewI
 }
 
 // Adding a few Windows-specific functions for interop if needed
-ELECTROBUN_EXPORT uint32_t getNSWindowStyleMask(
+ELECTROBUN_EXPORT uint32_t getWindowStyle(
     bool Borderless,
     bool Titled,
     bool Closable,

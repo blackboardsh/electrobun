@@ -414,7 +414,7 @@ bool isCEFAvailable() {
     return [[NSFileManager defaultManager] fileExistsAtPath:frameworkPath];
 }
 
-extern "C" uint32_t getNSWindowStyleMask(
+extern "C" uint32_t getWindowStyle(
     bool Borderless,
     bool Titled,
     bool Closable,
@@ -4039,7 +4039,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
  */
 
 // Note: This is executed from the main bun thread
-extern "C" void runNSApplication(const char* identifier, const char* channel) {
+extern "C" void startEventLoop(const char* identifier, const char* channel) {
     // Store identifier and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
@@ -4561,33 +4561,33 @@ extern "C" void showWindow(NSWindow *window) {
     });
 }
 
-extern "C" void setNSWindowTitle(NSWindow *window, const char *title) {
+extern "C" void setWindowTitle(NSWindow *window, const char *title) {
     NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
-    
+
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window setTitle:titleString];
     });
 }
 
-extern "C" void closeNSWindow(NSWindow *window) {
+extern "C" void closeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window close];
     });
 }
 
-extern "C" void minimizeNSWindow(NSWindow *window) {
+extern "C" void minimizeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window miniaturize:nil];
     });
 }
 
-extern "C" void unminimizeNSWindow(NSWindow *window) {
+extern "C" void restoreWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window deminiaturize:nil];
     });
 }
 
-extern "C" bool isNSWindowMinimized(NSWindow *window) {
+extern "C" bool isWindowMinimized(NSWindow *window) {
     __block bool result = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
         result = [window isMiniaturized];
@@ -4595,7 +4595,7 @@ extern "C" bool isNSWindowMinimized(NSWindow *window) {
     return result;
 }
 
-extern "C" void maximizeNSWindow(NSWindow *window) {
+extern "C" void maximizeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         // Only zoom if not already zoomed
         if (![window isZoomed]) {
@@ -4604,7 +4604,7 @@ extern "C" void maximizeNSWindow(NSWindow *window) {
     });
 }
 
-extern "C" void unmaximizeNSWindow(NSWindow *window) {
+extern "C" void unmaximizeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         // Only unzoom if currently zoomed
         if ([window isZoomed]) {
@@ -4613,7 +4613,7 @@ extern "C" void unmaximizeNSWindow(NSWindow *window) {
     });
 }
 
-extern "C" bool isNSWindowMaximized(NSWindow *window) {
+extern "C" bool isWindowMaximized(NSWindow *window) {
     __block bool result = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
         result = [window isZoomed];
@@ -4621,7 +4621,7 @@ extern "C" bool isNSWindowMaximized(NSWindow *window) {
     return result;
 }
 
-extern "C" void setNSWindowFullScreen(NSWindow *window, bool fullScreen) {
+extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         bool isCurrentlyFullScreen = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
         if (fullScreen != isCurrentlyFullScreen) {
@@ -4630,7 +4630,7 @@ extern "C" void setNSWindowFullScreen(NSWindow *window, bool fullScreen) {
     });
 }
 
-extern "C" bool isNSWindowFullScreen(NSWindow *window) {
+extern "C" bool isWindowFullScreen(NSWindow *window) {
     __block bool result = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
         result = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
@@ -4638,7 +4638,7 @@ extern "C" bool isNSWindowFullScreen(NSWindow *window) {
     return result;
 }
 
-extern "C" void setNSWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
+extern "C" void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         if (alwaysOnTop) {
             [window setLevel:NSFloatingWindowLevel];
@@ -4648,7 +4648,7 @@ extern "C" void setNSWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
     });
 }
 
-extern "C" bool isNSWindowAlwaysOnTop(NSWindow *window) {
+extern "C" bool isWindowAlwaysOnTop(NSWindow *window) {
     __block bool result = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
         result = [window level] >= NSFloatingWindowLevel;
@@ -5393,6 +5393,8 @@ static unsigned short keyCodeFromString(NSString *key) {
             @"f1": @(0x7A), @"f2": @(0x78), @"f3": @(0x63), @"f4": @(0x76),
             @"f5": @(0x60), @"f6": @(0x61), @"f7": @(0x62), @"f8": @(0x64),
             @"f9": @(0x65), @"f10": @(0x6D), @"f11": @(0x67), @"f12": @(0x6F),
+            @"f13": @(0x69), @"f14": @(0x6B), @"f15": @(0x71), @"f16": @(0x6A),
+            @"f17": @(0x40), @"f18": @(0x4F), @"f19": @(0x50), @"f20": @(0x5A),
             // Special keys
             @"space": @(0x31), @" ": @(0x31),
             @"return": @(0x24), @"enter": @(0x24),

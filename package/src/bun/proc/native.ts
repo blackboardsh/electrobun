@@ -79,7 +79,7 @@ export const native = (() => {
         ],
         returns: FFIType.ptr
       },
-      setNSWindowTitle: {
+      setWindowTitle: {
         args: [
           FFIType.ptr, // window ptr
           FFIType.cstring, // title
@@ -92,49 +92,49 @@ export const native = (() => {
         ],
         returns: FFIType.void,
       },
-      closeNSWindow: {
+      closeWindow: {
         args: [
           FFIType.ptr, // window ptr
         ],
         returns: FFIType.void,
       },
-      minimizeNSWindow: {
+      minimizeWindow: {
         args: [FFIType.ptr],
         returns: FFIType.void,
       },
-      unminimizeNSWindow: {
+      restoreWindow: {
         args: [FFIType.ptr],
         returns: FFIType.void,
       },
-      isNSWindowMinimized: {
+      isWindowMinimized: {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
-      maximizeNSWindow: {
+      maximizeWindow: {
         args: [FFIType.ptr],
         returns: FFIType.void,
       },
-      unmaximizeNSWindow: {
+      unmaximizeWindow: {
         args: [FFIType.ptr],
         returns: FFIType.void,
       },
-      isNSWindowMaximized: {
+      isWindowMaximized: {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
-      setNSWindowFullScreen: {
+      setWindowFullScreen: {
         args: [FFIType.ptr, FFIType.bool],
         returns: FFIType.void,
       },
-      isNSWindowFullScreen: {
+      isWindowFullScreen: {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
-      setNSWindowAlwaysOnTop: {
+      setWindowAlwaysOnTop: {
         args: [FFIType.ptr, FFIType.bool],
         returns: FFIType.void,
       },
-      isNSWindowAlwaysOnTop: {
+      isWindowAlwaysOnTop: {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
@@ -440,8 +440,8 @@ export const native = (() => {
         returns: FFIType.void
       },
 
-      // MacOS specific native utils
-      getNSWindowStyleMask: {
+      // Window style utilities
+      getWindowStyle: {
         args: [
           FFIType.bool,
           FFIType.bool,
@@ -544,7 +544,7 @@ export const ffi = {
           }, 
           titleBarStyle} = params
           
-          const styleMask = native.symbols.getNSWindowStyleMask(
+          const styleMask = native.symbols.getWindowStyle(
             Borderless,
             Titled,
             Closable,
@@ -578,7 +578,7 @@ export const ffi = {
           throw "Failed to create window"
         }
         
-        native.symbols.setNSWindowTitle(windowPtr, toCString(title));
+        native.symbols.setWindowTitle(windowPtr, toCString(title));
         native.symbols.showWindow(windowPtr);
 
         return windowPtr;
@@ -592,7 +592,7 @@ export const ffi = {
           throw `Can't add webview to window. window no longer exists`;
         }
         
-        native.symbols.setNSWindowTitle(windowPtr, toCString(title));        
+        native.symbols.setWindowTitle(windowPtr, toCString(title));        
       },
       
       closeWindow: (params: {winId: number}) => {
@@ -603,7 +603,7 @@ export const ffi = {
           throw `Can't close window. Window no longer exists`;
         }
         
-        native.symbols.closeNSWindow(windowPtr);
+        native.symbols.closeWindow(windowPtr);
         // Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
       },
 
@@ -626,18 +626,18 @@ export const ffi = {
           throw `Can't minimize window. Window no longer exists`;
         }
 
-        native.symbols.minimizeNSWindow(windowPtr);
+        native.symbols.minimizeWindow(windowPtr);
       },
 
-      unminimizeWindow: (params: {winId: number}) => {
+      restoreWindow: (params: {winId: number}) => {
         const {winId} = params;
         const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
         if (!windowPtr) {
-          throw `Can't unminimize window. Window no longer exists`;
+          throw `Can't restore window. Window no longer exists`;
         }
 
-        native.symbols.unminimizeNSWindow(windowPtr);
+        native.symbols.restoreWindow(windowPtr);
       },
 
       isWindowMinimized: (params: {winId: number}): boolean => {
@@ -648,7 +648,7 @@ export const ffi = {
           return false;
         }
 
-        return native.symbols.isNSWindowMinimized(windowPtr);
+        return native.symbols.isWindowMinimized(windowPtr);
       },
 
       maximizeWindow: (params: {winId: number}) => {
@@ -659,7 +659,7 @@ export const ffi = {
           throw `Can't maximize window. Window no longer exists`;
         }
 
-        native.symbols.maximizeNSWindow(windowPtr);
+        native.symbols.maximizeWindow(windowPtr);
       },
 
       unmaximizeWindow: (params: {winId: number}) => {
@@ -670,7 +670,7 @@ export const ffi = {
           throw `Can't unmaximize window. Window no longer exists`;
         }
 
-        native.symbols.unmaximizeNSWindow(windowPtr);
+        native.symbols.unmaximizeWindow(windowPtr);
       },
 
       isWindowMaximized: (params: {winId: number}): boolean => {
@@ -681,7 +681,7 @@ export const ffi = {
           return false;
         }
 
-        return native.symbols.isNSWindowMaximized(windowPtr);
+        return native.symbols.isWindowMaximized(windowPtr);
       },
 
       setWindowFullScreen: (params: {winId: number; fullScreen: boolean}) => {
@@ -692,7 +692,7 @@ export const ffi = {
           throw `Can't set fullscreen. Window no longer exists`;
         }
 
-        native.symbols.setNSWindowFullScreen(windowPtr, fullScreen);
+        native.symbols.setWindowFullScreen(windowPtr, fullScreen);
       },
 
       isWindowFullScreen: (params: {winId: number}): boolean => {
@@ -703,7 +703,7 @@ export const ffi = {
           return false;
         }
 
-        return native.symbols.isNSWindowFullScreen(windowPtr);
+        return native.symbols.isWindowFullScreen(windowPtr);
       },
 
       setWindowAlwaysOnTop: (params: {winId: number; alwaysOnTop: boolean}) => {
@@ -714,7 +714,7 @@ export const ffi = {
           throw `Can't set always on top. Window no longer exists`;
         }
 
-        native.symbols.setNSWindowAlwaysOnTop(windowPtr, alwaysOnTop);
+        native.symbols.setWindowAlwaysOnTop(windowPtr, alwaysOnTop);
       },
 
       isWindowAlwaysOnTop: (params: {winId: number}): boolean => {
@@ -725,7 +725,7 @@ export const ffi = {
           return false;
         }
 
-        return native.symbols.isNSWindowAlwaysOnTop(windowPtr);
+        return native.symbols.isWindowAlwaysOnTop(windowPtr);
       },
 
       createWebview: (params: {
