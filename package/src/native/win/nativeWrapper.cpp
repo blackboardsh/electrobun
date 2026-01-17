@@ -2121,8 +2121,46 @@ public:
     
     void loadURL(const char* urlString) override {
         if (webview) {
+            std::string urlStr(urlString);
             std::wstring url = std::wstring(urlString, urlString + strlen(urlString));
+            bool isViewsUrl = (urlStr.substr(0, 8) == "views://");
+
+            // For all URLs, fire will-navigate event before Navigate()
+            // WebView2 doesn't fire NavigationStarting consistently, especially for blocked navigations
+            if (webviewEventHandler) {
+                // Escape URL for JSON
+                std::string escapedUrl;
+                for (char c : urlStr) {
+                    switch (c) {
+                        case '"': escapedUrl += "\\\""; break;
+                        case '\\': escapedUrl += "\\\\"; break;
+                        default: escapedUrl += c; break;
+                    }
+                }
+
+                // Fire will-navigate synchronously before Navigate()
+                std::string willNavEventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":true}";
+                webviewEventHandler(webviewId, _strdup("will-navigate"), _strdup(willNavEventData.c_str()));
+            }
+
             webview->Navigate(url.c_str());
+
+            // Fire did-navigate after Navigate() for views:// URLs only
+            // For https:// URLs, NavigationCompleted will fire did-navigate
+            if (isViewsUrl && webviewEventHandler) {
+                // Escape URL for JSON
+                std::string escapedUrl;
+                for (char c : urlStr) {
+                    switch (c) {
+                        case '"': escapedUrl += "\\\""; break;
+                        case '\\': escapedUrl += "\\\\"; break;
+                        default: escapedUrl += c; break;
+                    }
+                }
+
+                std::string didNavEventData = "{\"url\":\"" + escapedUrl + "\"}";
+                webviewEventHandler(webviewId, _strdup("did-navigate"), _strdup(didNavEventData.c_str()));
+            }
         }
     }
     
@@ -4250,14 +4288,18 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             // Make sure the controller is visible
                             ctrl->put_IsVisible(TRUE);
-                            
+
+                            // Capture webviewId and handler for event handlers
+                            uint32_t capturedWebviewId = view->webviewId;
+                            WebviewEventHandler capturedHandler = view->webviewEventHandler;
+
                             // Add views:// scheme support - TEST ADDITION
                             webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-                            
+
                             // Set up WebResourceRequested event handler for views:// scheme
                             webview->add_WebResourceRequested(
                                 Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-                                    [env](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                                    [env, capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
                                         // ::log("[WebView2] WebResourceRequested event triggered");
                                         ComPtr<ICoreWebView2WebResourceRequest> request;
                                         args->get_Request(&request);
@@ -4278,18 +4320,31 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         if (uriStr.substr(0, 8) == "views://") {
                                             std::string filePath = uriStr.substr(8);
                                             std::string content = loadViewsFile(filePath);
-                                            
+
                                             if (!content.empty()) {
                                                 // ::log("[WebView2] Loaded views file content, creating response");
-                                                
+
                                                 // Create response (simplified)
                                                 std::string mimeType = "text/html";
+                                                bool isDocument = false;
                                                 if (filePath.find(".js") != std::string::npos) mimeType = "application/javascript";
                                                 else if (filePath.find(".css") != std::string::npos) mimeType = "text/css";
                                                 else if (filePath.find(".png") != std::string::npos) mimeType = "image/png";
-                                                
+                                                else {
+                                                    isDocument = true; // HTML document
+                                                }
+
+                                                // For HTML documents (main frame navigation), fire navigation events manually
+                                                // since WebResourceRequested bypasses NavigationStarting/NavigationCompleted
+                                                // These events are already fired in loadURL, so we don't need to fire them here
+                                                // This block can be removed if we want to clean up
+                                                if (isDocument && capturedHandler) {
+                                                    // Events are now fired in loadURL() for consistency
+                                                    // This avoids duplicate events and ensures proper timing
+                                                }
+
                                                 std::wstring wMimeType(mimeType.begin(), mimeType.end());
-                                                
+
                                                 // Create memory stream
                                                 ComPtr<IStream> contentStream;
                                                 HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, content.size());
@@ -4299,9 +4354,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                     GlobalUnlock(hGlobal);
                                                     CreateStreamOnHGlobal(hGlobal, TRUE, &contentStream);
                                                 }
-                                                
+
                                                 std::wstring headers = L"Content-Type: " + wMimeType + L"\r\nAccess-Control-Allow-Origin: *";
-                                                
+
                                                 ComPtr<ICoreWebView2WebResourceResponse> response;
                                                 env->CreateWebResourceResponse(
                                                     contentStream.Get(),
@@ -4309,7 +4364,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                     L"OK",
                                                     headers.c_str(),
                                                     &response);
-                                                
+
                                                 args->put_Response(response.Get());
                                                 // ::log("[WebView2] Successfully served views:// file");
                                             }
@@ -4332,15 +4387,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 }
                                 combinedScript += view->customScript;
                             }
-                            
-                            // Add Ctrl+Click detection and navigation rules handler
-                            // Capture webviewId and handler separately to avoid shared_ptr issues
-                            uint32_t capturedWebviewId = view->webviewId;
-                            WebviewEventHandler capturedHandler = view->webviewEventHandler;
 
+                            // Add Ctrl+Click detection and navigation rules handler
                             webview->add_NavigationStarting(
                                 Callback<ICoreWebView2NavigationStartingEventHandler>(
                                     [capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                        printf("[WebView2] NavigationStarting fired for webview %u\n", capturedWebviewId);
                                         // Get URL first - needed for both ctrl+click and navigation rules
                                         wchar_t* uriWStr = nullptr;
                                         args->get_Uri(&uriWStr);
@@ -4420,6 +4472,43 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         // Cancel navigation if not allowed
                                         if (!shouldAllow) {
                                             args->put_Cancel(TRUE);
+                                        }
+
+                                        return S_OK;
+                                    }).Get(),
+                                nullptr);
+
+                            // Add NavigationCompleted handler for did-navigate event
+                            webview->add_NavigationCompleted(
+                                Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                    [capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                        printf("[WebView2] NavigationCompleted fired for webview %u\n", capturedWebviewId);
+                                        // Get current URL
+                                        wchar_t* uriWStr = nullptr;
+                                        sender->get_Source(&uriWStr);
+                                        std::string uri;
+                                        if (uriWStr) {
+                                            int size = WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, nullptr, 0, nullptr, nullptr);
+                                            if (size > 0) {
+                                                uri.resize(size - 1);
+                                                WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, &uri[0], size, nullptr, nullptr);
+                                            }
+                                            CoTaskMemFree(uriWStr);
+                                        }
+
+                                        // Fire did-navigate event
+                                        if (capturedHandler && !uri.empty()) {
+                                            // Escape URL for JSON
+                                            std::string escapedUrl;
+                                            for (char c : uri) {
+                                                switch (c) {
+                                                    case '"': escapedUrl += "\\\""; break;
+                                                    case '\\': escapedUrl += "\\\\"; break;
+                                                    default: escapedUrl += c; break;
+                                                }
+                                            }
+                                            std::string eventData = "{\"url\":\"" + escapedUrl + "\"}";
+                                            capturedHandler(capturedWebviewId, _strdup("did-navigate"), _strdup(eventData.c_str()));
                                         }
 
                                         return S_OK;

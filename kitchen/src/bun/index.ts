@@ -211,7 +211,9 @@ console.log("Press Cmd+R to run all automated tests, or use the buttons in the U
 
 // Auto-run tests if AUTO_RUN environment variable is set
 // Usage: AUTO_RUN=1 electrobun dev
-const autoRun = process.env.AUTO_RUN === "1";
+console.log(`DEBUG: AUTO_RUN env var = "${process.env.AUTO_RUN}"`);
+const autoRun = !!process.env.AUTO_RUN;
+console.log(`DEBUG: autoRun = ${autoRun}`);
 if (autoRun) {
   console.log("Auto-running automated tests in 3 seconds...\n");
   setTimeout(async () => {

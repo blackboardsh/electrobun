@@ -67,8 +67,8 @@ pub fn main() !void {
     // Create an instance of ChildProcess
     var child_process = std.process.Child.init(argv, alloc);
     child_process.cwd = exe_dir;
-    
-    // Handle Linux-specific environment setup
+
+    // Handle platform-specific environment setup
     if (builtin.os.tag == .linux) {
         // Check for CEF libraries that need LD_PRELOAD
         const cef_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libcef.so" });
@@ -107,10 +107,14 @@ pub fn main() !void {
             try env_map.put("LD_PRELOAD", ld_preload);
             std.debug.print("Setting LD_PRELOAD: {s}\n", .{ld_preload});
         }
-        
+
+        child_process.env_map = &env_map;
+    } else {
+        // On Windows and macOS, get environment and inherit it
+        var env_map = try std.process.getEnvMap(arena_alloc);
         child_process.env_map = &env_map;
     }
-    
+
     // Inherit stdout/stderr so we can see any errors
     child_process.stdout_behavior = .Inherit;
     child_process.stderr_behavior = .Inherit;
