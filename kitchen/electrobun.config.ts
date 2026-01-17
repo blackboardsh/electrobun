@@ -56,14 +56,6 @@ export default {
                 entrypoint: "src/playgrounds/context-menu/index.ts",
                 external: [],
             },
-            mainview: {
-                entrypoint: "src/mainview/index.ts",
-                external: [],
-            },
-            myextension: {
-                entrypoint: "src/myextension/preload.ts",
-                external: [],
-            },
             "playgrounds/webviewtag": {
                 entrypoint: "src/playgrounds/webviewtag/index.ts",
                 external: [],
@@ -92,9 +84,7 @@ export default {
             "src/playgrounds/application-menu/index.html": "views/playgrounds/application-menu/index.html",
             "src/playgrounds/application-menu/index.css": "views/playgrounds/application-menu/index.css",
             "src/playgrounds/context-menu/index.html": "views/playgrounds/context-menu/index.html",
-            "src/playgrounds/context-menu/index.css": "views/playgrounds/context-menu/index.css",
-            "src/mainview/index.html": "views/mainview/index.html",
-            "src/mainview/index.css": "views/mainview/index.css",
+            "src/playgrounds/context-menu/index.css": "views/playgrounds/context-menu/index.css",            
             "src/playgrounds/webviewtag/index.html": "views/playgrounds/webviewtag/index.html",
             "src/playgrounds/webviewtag/host-message-test.html": "views/playgrounds/webviewtag/host-message-test.html",
             "src/playgrounds/webviewtag/electrobun.png": "views/playgrounds/webviewtag/electrobun.png",
