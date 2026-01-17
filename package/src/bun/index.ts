@@ -14,12 +14,14 @@ import * as Socket from "./core/Socket";
 import type { ElectrobunConfig } from "./ElectrobunConfig";
 import { GlobalShortcut, Screen, Session } from "./proc/native";
 import type { Display, Rectangle, Point, Cookie, CookieFilter, StorageType } from "./proc/native";
+import { BuildConfig, type BuildConfigType } from "./core/BuildConfig";
 
 // Named Exports
 export {
   type RPCSchema,
   type ElectrobunEvent,
   type ElectrobunConfig,
+  type BuildConfigType,
   type MessageBoxOptions,
   type MessageBoxResponse,
   type Display,
@@ -41,6 +43,7 @@ export {
   GlobalShortcut,
   Screen,
   Session,
+  BuildConfig,
 };
 
 // Default Export
@@ -55,6 +58,7 @@ const Electrobun = {
   GlobalShortcut,
   Screen,
   Session,
+  BuildConfig,
   events: electobunEventEmmitter,
   PATHS,
   Socket,

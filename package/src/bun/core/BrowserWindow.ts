@@ -3,6 +3,9 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type RPC } from "rpc-anywhere";
 import {FFIType} from 'bun:ffi'
+import { BuildConfig } from "./BuildConfig";
+
+const buildConfig = await BuildConfig.get();
 
 let nextWindowId = 1;
 
@@ -26,7 +29,7 @@ type WindowOptionsType<T = undefined> = {
 };
 
 const defaultOptions: WindowOptionsType = {
-  title: "Electrobun",  
+  title: "Electrobun",
   frame: {
     x: 0,
     y: 0,
@@ -36,7 +39,7 @@ const defaultOptions: WindowOptionsType = {
   url: "https://electrobun.dev",
   html: null,
   preload: null,
-  renderer: 'native',
+  renderer: buildConfig.defaultRenderer,
   titleBarStyle: "default",
   navigationRules: null,
 };
@@ -74,7 +77,7 @@ export class BrowserWindow<T> {
     this.url = options.url || null;
     this.html = options.html || null;
     this.preload = options.preload || null;
-    this.renderer = options.renderer === 'cef' ? 'cef' : 'native';
+    this.renderer = options.renderer || defaultOptions.renderer;
     this.navigationRules = options.navigationRules || null;
     
     this.init(options);

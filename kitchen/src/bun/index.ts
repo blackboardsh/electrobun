@@ -6,6 +6,7 @@ import Electrobun, {
   BrowserView,
   ApplicationMenu,
   Utils,
+  BuildConfig,
 } from "electrobun/bun";
 import { executor } from "../test-framework/executor";
 import { allTests } from "../tests";
@@ -23,6 +24,13 @@ console.log("║                                                            ║"
 console.log("║  Results will appear both in the UI and in this terminal  ║");
 console.log("╚════════════════════════════════════════════════════════════╝");
 console.log("\n");
+
+// Log build configuration
+const buildConfig = await BuildConfig.get();
+console.log("📦 Build Configuration:");
+console.log(`   Default Renderer: ${buildConfig.defaultRenderer}`);
+console.log(`   Available Renderers: ${buildConfig.availableRenderers.join(', ')}`);
+console.log("");
 
 // Register all tests
 executor.registerTests(allTests);
@@ -146,6 +154,14 @@ const testRunnerWindow = new BrowserWindow({
 
 // Keep test runner on top so results are visible while tests run
 testRunnerWindow.setAlwaysOnTop(true);
+
+// Send build config to the UI when ready
+testRunnerWindow.webview.on("dom-ready", () => {
+  testRunnerWindow.webview.rpc?.send.buildConfig({
+    defaultRenderer: buildConfig.defaultRenderer,
+    availableRenderers: buildConfig.availableRenderers,
+  });
+});
 
 // Forward test events to the UI
 executor.onEvent((event) => {

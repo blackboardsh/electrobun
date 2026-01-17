@@ -11,6 +11,7 @@ import {
   createRPC,
 } from "rpc-anywhere";
 import { Updater } from "./Updater";
+import { BuildConfig } from "./BuildConfig";
 import type { BuiltinBunToWebviewSchema,BuiltinWebviewToBunSchema } from "../../browser/builtinrpcSchema";
 import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
 import { randomBytes } from "crypto";
@@ -49,11 +50,14 @@ interface ElectrobunWebviewRPCSChema {
   webview: RPCSchema;
 }
 
+const hash = await Updater.localInfo.hash();
+const buildConfig = await BuildConfig.get();
+
 const defaultOptions: Partial<BrowserViewOptions> = {
   url: null,
   html: null,
   preload: null,
-  renderer: 'native',
+  renderer: buildConfig.defaultRenderer,
   frame: {
     x: 0,
     y: 0,
@@ -61,10 +65,6 @@ const defaultOptions: Partial<BrowserViewOptions> = {
     height: 600,
   },
 };
-
-
-
-const hash = await Updater.localInfo.hash();
 // Note: we use the build's hash to separate from different apps and different builds
 // but we also want a randomId to separate different instances of the same app
 const randomId = Math.random().toString(36).substring(7);

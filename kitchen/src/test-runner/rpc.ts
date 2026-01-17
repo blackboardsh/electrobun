@@ -76,6 +76,10 @@ export type TestRunnerRPC = {
       interactiveVerify: {
         testId: string;
       };
+      buildConfig: {
+        defaultRenderer: 'native' | 'cef';
+        availableRenderers: ('native' | 'cef')[];
+      };
     };
   }>;
 };
