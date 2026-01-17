@@ -8,6 +8,8 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/shape.h>
 #include <X11/Xatom.h>
+#include <X11/keysymdef.h>
+#include <X11/XF86keysym.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -6751,10 +6753,13 @@ static KeySym getKeySym(const std::string& key) {
     if (lowerKey.length() == 1 && lowerKey[0] >= '0' && lowerKey[0] <= '9') {
         return XK_0 + (lowerKey[0] - '0');
     }
-    // Function keys
+    // Function keys (F1-F24)
     if (lowerKey[0] == 'f' && lowerKey.length() >= 2) {
         int fNum = std::stoi(lowerKey.substr(1));
-        if (fNum >= 1 && fNum <= 12) return XK_F1 + (fNum - 1);
+        if (fNum >= 1 && fNum <= 24) {
+            if (fNum <= 12) return XK_F1 + (fNum - 1);
+            else return XK_F13 + (fNum - 13);  // F13-F24
+        }
     }
     // Special keys
     if (lowerKey == "space" || lowerKey == " ") return XK_space;
@@ -6763,6 +6768,7 @@ static KeySym getKeySym(const std::string& key) {
     if (lowerKey == "escape" || lowerKey == "esc") return XK_Escape;
     if (lowerKey == "backspace") return XK_BackSpace;
     if (lowerKey == "delete") return XK_Delete;
+    if (lowerKey == "insert") return XK_Insert;
     if (lowerKey == "up") return XK_Up;
     if (lowerKey == "down") return XK_Down;
     if (lowerKey == "left") return XK_Left;
@@ -6771,6 +6777,22 @@ static KeySym getKeySym(const std::string& key) {
     if (lowerKey == "end") return XK_End;
     if (lowerKey == "pageup") return XK_Page_Up;
     if (lowerKey == "pagedown") return XK_Page_Down;
+    if (lowerKey == "print") return XK_Print;
+    // Additional special keys
+    if (lowerKey == "scrolllock") return XK_Scroll_Lock;
+    if (lowerKey == "pause") return XK_Pause;
+    if (lowerKey == "break") return XK_Break;
+    if (lowerKey == "sysreq") return XK_Sys_Req;
+    if (lowerKey == "numlock") return XK_Num_Lock;
+    if (lowerKey == "capslock") return XK_Caps_Lock;
+    if (lowerKey == "menu") return XK_Menu;
+    if (lowerKey == "apps") return XK_Menu;  // Same as Menu
+    if (lowerKey == "printscreen") return XK_Print;
+    if (lowerKey == "cancel") return XK_Cancel;
+    // Media keys (may not be available on all systems)
+    if (lowerKey == "mediaselect") return XK_Select;  // Closest equivalent
+    if (lowerKey == "calculator") return 0x1008ff1d;  // XF86Calculator
+    if (lowerKey == "sleep") return 0x1008ff2f;  // XF86Sleep
     // Symbols
     if (lowerKey == "-") return XK_minus;
     if (lowerKey == "=") return XK_equal;
@@ -6829,8 +6851,11 @@ static void shortcutEventLoop() {
     g_shortcutDisplay = XOpenDisplay(nullptr);
     if (!g_shortcutDisplay) {
         fprintf(stderr, "ERROR: Failed to open X11 display for shortcuts\n");
+        g_shortcutThreadRunning = false;
         return;
     }
+    
+    printf("GlobalShortcut: X11 display opened successfully for shortcuts\n");
 
     Window root = DefaultRootWindow(g_shortcutDisplay);
 
@@ -6863,23 +6888,40 @@ static void shortcutEventLoop() {
 
 // Set the callback for global shortcut events
 ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
+    printf("GlobalShortcut: Setting callback (callback=%p)\n", callback);
     g_globalShortcutCallback = callback;
 
     // Start the event loop thread if not running
     if (!g_shortcutThreadRunning && callback) {
+        printf("GlobalShortcut: Starting event loop thread\n");
         g_shortcutThreadRunning = true;
         g_shortcutThread = std::thread(shortcutEventLoop);
         // Wait for display to be opened
-        while (!g_shortcutDisplay && g_shortcutThreadRunning) {
+        int attempts = 0;
+        while (!g_shortcutDisplay && g_shortcutThreadRunning && attempts < 100) {
             usleep(10000);
+            attempts++;
+        }
+        if (g_shortcutDisplay) {
+            printf("GlobalShortcut: Event loop ready\n");
+        } else {
+            fprintf(stderr, "ERROR: GlobalShortcut event loop failed to initialize\n");
         }
     }
 }
 
 // Register a global keyboard shortcut
 ELECTROBUN_EXPORT bool registerGlobalShortcut(const char* accelerator) {
-    if (!accelerator || !g_shortcutDisplay) {
-        fprintf(stderr, "ERROR: Cannot register shortcut - invalid accelerator or display not ready\n");
+    printf("GlobalShortcut: registerGlobalShortcut called for '%s'\n", accelerator ? accelerator : "(null)");
+    
+    if (!accelerator) {
+        fprintf(stderr, "ERROR: Cannot register shortcut - accelerator is null\n");
+        return false;
+    }
+    
+    if (!g_shortcutDisplay) {
+        fprintf(stderr, "ERROR: Cannot register shortcut '%s' - display not ready (g_shortcutDisplay=%p)\n", 
+                accelerator, g_shortcutDisplay);
         return false;
     }
 
@@ -6917,12 +6959,15 @@ ELECTROBUN_EXPORT bool registerGlobalShortcut(const char* accelerator) {
         modifiers | Mod2Mask | LockMask
     };
 
-    bool success = false;
+    // Just try to grab the key - if it fails, XGrabKey will generate an X11 error
+    // but won't crash the program. We'll optimistically assume success.
     for (unsigned int mods : modifierVariants) {
-        int result = XGrabKey(g_shortcutDisplay, keycode, mods, root, True, GrabModeAsync, GrabModeAsync);
-        if (result == 0) success = true;  // At least one succeeded
+        XGrabKey(g_shortcutDisplay, keycode, mods, root, True, GrabModeAsync, GrabModeAsync);
     }
     XFlush(g_shortcutDisplay);
+
+    // Since we can't easily detect if XGrabKey failed without complex error handling,
+    // we'll assume success and let the user know if the shortcut doesn't work
 
     ShortcutInfo info;
     info.keycode = keycode;
