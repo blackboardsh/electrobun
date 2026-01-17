@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <sstream>
 #include <thread>
+#include <atomic>
 #include <chrono>
 #include <unistd.h>
 #include <functional>
@@ -111,6 +112,7 @@ struct MenuItemData {
 // Global menu item counter and storage
 static uint32_t g_nextMenuId = 1;
 static std::map<uint32_t, std::shared_ptr<MenuItemData>> g_menuItems;
+static std::mutex g_menuItemsMutex;
 
 // Global application menu storage
 static std::string g_applicationMenuConfig;
@@ -233,6 +235,7 @@ struct PermissionCacheEntry {
 };
 
 static std::map<std::pair<std::string, PermissionType>, PermissionCacheEntry> g_permissionCache;
+static std::mutex g_permissionCacheMutex;
 
 // Helper functions for permission management
 std::string getOriginFromPermissionRequest(WebKitPermissionRequest* request) {
@@ -242,6 +245,7 @@ std::string getOriginFromPermissionRequest(WebKitPermissionRequest* request) {
 }
 
 PermissionStatus getPermissionFromCache(const std::string& origin, PermissionType type) {
+    std::lock_guard<std::mutex> lock(g_permissionCacheMutex);
     auto key = std::make_pair(origin, type);
     auto it = g_permissionCache.find(key);
     
@@ -260,6 +264,7 @@ PermissionStatus getPermissionFromCache(const std::string& origin, PermissionTyp
 }
 
 void cachePermission(const std::string& origin, PermissionType type, PermissionStatus status) {
+    std::lock_guard<std::mutex> lock(g_permissionCacheMutex);
     auto key = std::make_pair(origin, type);
     
     // Cache permission for 24 hours
@@ -529,12 +534,13 @@ class AbstractView;
 bool checkNavigationRules(std::shared_ptr<AbstractView> view, const std::string& url);
 
 // CEF globals and implementation
-static bool g_cefInitialized = false;
-static bool g_useCEF = false;
-static bool g_checkedForCEF = false;
+static std::atomic<bool> g_cefInitialized{false};
+static std::atomic<bool> g_useCEF{false};
+static std::atomic<bool> g_checkedForCEF{false};
 
 // Global webview storage to keep shared_ptr alive
 static std::map<uint32_t, std::shared_ptr<AbstractView>> g_webviewMap;
+static std::mutex g_webviewMapMutex;
 
 // Global map to store preload scripts by browser ID (for multi-process CEF)
 static std::map<int, std::string> g_preloadScripts;
@@ -1144,6 +1150,7 @@ public:
         // Note: This mirrors the same logic in WebKit policy handler
         bool shouldAllow = true;
         {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
             auto it = g_webviewMap.find(webview_id_);
             if (it != g_webviewMap.end() && it->second != nullptr) {
                 // Forward to the navigation rules check method (defined later in this file)
@@ -2581,6 +2588,7 @@ public:
             std::string url = uri ? uri : "";
             bool shouldAllow = true;
             {
+                std::lock_guard<std::mutex> lock(g_webviewMapMutex);
                 auto it = g_webviewMap.find(impl->webviewId);
                 if (it != g_webviewMap.end() && it->second != nullptr) {
                     fprintf(stderr, "DEBUG: Found webview %u in map, checking navigation rules for URL: %s\n", 
@@ -3874,8 +3882,10 @@ private:
 
 // Global state
 static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
+static std::mutex g_containersMutex;
 #ifndef NO_APPINDICATOR
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
+static std::mutex g_traysMutex;
 #endif
 static bool g_gtkInitialized = false;
 static std::mutex g_gtkInitMutex;
@@ -3891,9 +3901,11 @@ static guint g_buttonReleaseHandlerId = 0;
 // X11 window management
 static std::map<uint32_t, std::shared_ptr<X11Window>> g_x11_windows;
 static std::map<Window, uint32_t> g_x11_window_to_id;
+static std::mutex g_x11WindowsMutex;
 
 // Helper function to get ContainerView overlay for a window
 GtkWidget* getContainerViewOverlay(GtkWidget* window) {
+    std::lock_guard<std::mutex> lock(g_containersMutex);
     for (auto& [id, container] : g_containers) {
         if (container->window == window) {
             return container->overlay;
@@ -4370,30 +4382,36 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
     g_lastResizeSize[windowId] = {width, height};
     
     // Find the X11 window handle for this window ID
-    auto windowIt = g_x11_windows.find(windowId);
-    if (windowIt == g_x11_windows.end()) {
-        return;
+    Window x11WindowHandle;
+    {
+        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+        auto windowIt = g_x11_windows.find(windowId);
+        if (windowIt == g_x11_windows.end()) {
+            return;
+        }
+        x11WindowHandle = windowIt->second->window;
     }
     
-    Window x11WindowHandle = windowIt->second->window;
-    
     // Find all webviews that belong to this window and have fullSize=true
-    for (auto& [webviewId, webview] : g_webviewMap) {
-        if (webview && webview->fullSize) {
-            // Check if this webview belongs to the specified window
-            // For CEF webviews, we need to check their parent window
-            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
-            if (cefView && cefView->parentXWindow == x11WindowHandle) {
-                // Check if the webview is already the right size to avoid infinite resize loops
-                GdkRectangle currentBounds = webview->visualBounds;
-                if (currentBounds.width == width && currentBounds.height == height) {
-                    continue;
+    {
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        for (auto& [webviewId, webview] : g_webviewMap) {
+            if (webview && webview->fullSize) {
+                // Check if this webview belongs to the specified window
+                // For CEF webviews, we need to check their parent window
+                CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
+                if (cefView && cefView->parentXWindow == x11WindowHandle) {
+                    // Check if the webview is already the right size to avoid infinite resize loops
+                    GdkRectangle currentBounds = webview->visualBounds;
+                    if (currentBounds.width == width && currentBounds.height == height) {
+                        continue;
+                    }
+                    
+                    
+                    // For auto-resize, typically want to fill the entire window starting from (0,0)
+                    GdkRectangle frame = { 0, 0, width, height };
+                    webview->resize(frame, "");
                 }
-                
-                
-                // For auto-resize, typically want to fill the entire window starting from (0,0)
-                GdkRectangle frame = { 0, 0, width, height };
-                webview->resize(frame, "");
             }
         }
     }
@@ -4604,8 +4622,11 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->focusCallback = focusCallback;
 
             // Store in global maps
-            g_x11_windows[windowId] = x11win;
-            g_x11_window_to_id[x11_window] = windowId;
+            {
+                std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+                g_x11_windows[windowId] = x11win;
+                g_x11_window_to_id[x11_window] = windowId;
+            }
             
             // X11/CEF mode doesn't need GTK containers - CEF manages its own windows
             // CEF webviews will be direct children of the X11 window
@@ -4649,7 +4670,10 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         // Create container with callbacks
         auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback);
 
-        g_containers[windowId] = container;
+        {
+            std::lock_guard<std::mutex> lock(g_containersMutex);
+            g_containers[windowId] = container;
+        }
 
         // Apply application menu to new window if one is configured
         applyApplicationMenuToWindow(window);
@@ -4854,7 +4878,10 @@ AbstractView* initCEFWebview(uint32_t webviewId,
            
             
             // Store the webview in global map to keep it alive
-            g_webviewMap[webviewId] = webview;
+            {
+                std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+                g_webviewMap[webviewId] = webview;
+            }
             
             return webview.get();
         } catch (const std::exception& e) {
@@ -4898,14 +4925,20 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
             webview->fullSize = autoResize;
             
             // Store the webview in global map to keep it alive and for navigation rules
-            g_webviewMap[webviewId] = webview;
+            {
+                std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+                g_webviewMap[webviewId] = webview;
+            }
             
             // Webview created successfully
             
-            for (auto& [id, container] : g_containers) {
-                if (container->window == GTK_WIDGET(window)) {
-                    container->addWebview(webview, x, y);
-                    break;
+            {
+                std::lock_guard<std::mutex> lock(g_containersMutex);
+                for (auto& [id, container] : g_containers) {
+                    if (container->window == GTK_WIDGET(window)) {
+                        container->addWebview(webview, x, y);
+                        break;
+                    }
                 }
             }
             
@@ -6180,6 +6213,30 @@ void* createNSRectWrapper(double x, double y, double width, double height) {
 }
 
 
+// Helper function to clean up webviews when a window is closed
+void cleanupWebviewsForWindow(uint32_t windowId) {
+    // Find and remove the container
+    std::shared_ptr<ContainerView> container;
+    {
+        std::lock_guard<std::mutex> lock(g_containersMutex);
+        auto it = g_containers.find(windowId);
+        if (it != g_containers.end()) {
+            container = it->second;
+            g_containers.erase(it);
+        }
+    }
+    
+    if (container) {
+        // Clean up all webviews in this container
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        for (auto& webview : container->abstractViews) {
+            if (webview) {
+                g_webviewMap.erase(webview->webviewId);
+            }
+        }
+    }
+}
+
 ELECTROBUN_EXPORT void closeNSWindow(void* window) {
     if (window) {
         dispatch_sync_main_void([&]() {
@@ -6191,12 +6248,20 @@ ELECTROBUN_EXPORT void closeNSWindow(void* window) {
                 // Find the container for this window to get the windowId and callback
                 uint32_t windowId = 0;
                 WindowCloseCallback closeCallback = nullptr;
-                for (auto& [id, container] : g_containers) {
-                    if (container->window == gtkWindow) {
-                        windowId = id;
-                        closeCallback = container->closeCallback;
-                        break;
+                {
+                    std::lock_guard<std::mutex> lock(g_containersMutex);
+                    for (auto& [id, container] : g_containers) {
+                        if (container->window == gtkWindow) {
+                            windowId = id;
+                            closeCallback = container->closeCallback;
+                            break;
+                        }
                     }
+                }
+                
+                // Clean up webviews first
+                if (windowId > 0) {
+                    cleanupWebviewsForWindow(windowId);
                 }
                 
                 // Call the close callback before destroying the window
@@ -6219,9 +6284,15 @@ ELECTROBUN_EXPORT void closeNSWindow(void* window) {
                     auto display = x11win->display;
                     auto window = x11win->window;
                     
+                    // Clean up webviews first
+                    cleanupWebviewsForWindow(windowId);
+                    
                     // Remove from global maps first to prevent any access during callback
-                    g_x11_window_to_id.erase(window);
-                    g_x11_windows.erase(windowId);
+                    {
+                        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+                        g_x11_window_to_id.erase(window);
+                        g_x11_windows.erase(windowId);
+                    }
                     
                     // Call the close callback
                     if (callback) {

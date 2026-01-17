@@ -226,7 +226,8 @@ if (autoRun) {
     
     // Give a moment for final logs to flush
     setTimeout(() => {
-      process.exit(exitCode);
+      // Use Utils.quit() for graceful shutdown with proper CEF cleanup
+      Utils.quit();
     }, 500);
   }, 3000);
 }
