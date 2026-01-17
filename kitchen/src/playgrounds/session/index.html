@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Session & Partition Playground</title>
-    <script src="views://session-playground/index.js"></script>
+    <script src="views://playgrounds/session/index.js"></script>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -122,11 +122,11 @@
         <div class="webview-grid">
             <div class="webview-container">
                 <div class="webview-label">Webview A - <code>partition=""</code></div>
-                <electrobun-webview id="wv-a" src="views://session-playground/counter.html" renderer="cef" partition=""></electrobun-webview>
+                <electrobun-webview id="wv-a" src="views://playgrounds/session/counter.html" renderer="cef" partition=""></electrobun-webview>
             </div>
             <div class="webview-container">
                 <div class="webview-label">Webview B - <code>partition=""</code></div>
-                <electrobun-webview id="wv-b" src="views://session-playground/counter.html" renderer="cef" partition=""></electrobun-webview>
+                <electrobun-webview id="wv-b" src="views://playgrounds/session/counter.html" renderer="cef" partition=""></electrobun-webview>
             </div>
         </div>
     </div>
@@ -137,11 +137,11 @@
         <div class="webview-grid">
             <div class="webview-container">
                 <div class="webview-label">Webview C - <code>partition="persist:test1"</code></div>
-                <electrobun-webview id="wv-c" src="views://session-playground/counter.html" renderer="cef" partition="persist:test1"></electrobun-webview>
+                <electrobun-webview id="wv-c" src="views://playgrounds/session/counter.html" renderer="cef" partition="persist:test1"></electrobun-webview>
             </div>
             <div class="webview-container">
                 <div class="webview-label">Webview D - <code>partition="persist:test1"</code></div>
-                <electrobun-webview id="wv-d" src="views://session-playground/counter.html" renderer="cef" partition="persist:test1"></electrobun-webview>
+                <electrobun-webview id="wv-d" src="views://playgrounds/session/counter.html" renderer="cef" partition="persist:test1"></electrobun-webview>
             </div>
         </div>
     </div>
@@ -152,11 +152,11 @@
         <div class="webview-grid">
             <div class="webview-container">
                 <div class="webview-label"><span class="match-indicator match-test2"></span>Webview E - <code>partition="persist:test2"</code></div>
-                <electrobun-webview id="wv-e" src="views://session-playground/counter.html" renderer="cef" partition="persist:test2"></electrobun-webview>
+                <electrobun-webview id="wv-e" src="views://playgrounds/session/counter.html" renderer="cef" partition="persist:test2"></electrobun-webview>
             </div>
             <div class="webview-container">
                 <div class="webview-label"><span class="match-indicator match-temp"></span>Webview F - <code>partition="temp:session1"</code></div>
-                <electrobun-webview id="wv-f" src="views://session-playground/counter.html" renderer="cef" partition="temp:session1"></electrobun-webview>
+                <electrobun-webview id="wv-f" src="views://playgrounds/session/counter.html" renderer="cef" partition="temp:session1"></electrobun-webview>
             </div>
         </div>
     </div>

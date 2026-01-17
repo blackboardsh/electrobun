@@ -49,7 +49,7 @@ export const windowEventTests = [
 
         winRef = new BrowserWindow({
           title: "Move & Resize Test",
-          url: "views://window-events-playground/index.html",
+          url: "views://playgrounds/window-events/index.html",
           renderer: "cef",
           frame: { width: 350, height: 400, x: 200, y: 200 },
           rpc,

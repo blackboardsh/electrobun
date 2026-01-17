@@ -37,7 +37,7 @@ export const webviewTagTests = [
 
         winRef = new BrowserWindow({
           title: "Webview Tag Playground",
-          url: "views://webviewtag/index.html",
+          url: "views://playgrounds/webviewtag/index.html",
           renderer: "cef",
           frame: { width: 800, height: 900, x: 100, y: 50 },
           rpc,
@@ -88,7 +88,7 @@ export const webviewTagTests = [
 
         winRef = new BrowserWindow({
           title: "Draggable Region Test",
-          url: "views://draggable-playground/index.html",
+          url: "views://playgrounds/draggable/index.html",
           renderer: "cef",
           frame: { width: 500, height: 450, x: 200, y: 100 },
           frameless: true,
@@ -140,7 +140,7 @@ export const webviewTagTests = [
 
         winRef = new BrowserWindow({
           title: "Host Message Playground",
-          url: "views://host-message-playground/index.html",
+          url: "views://playgrounds/host-message/index.html",
           renderer: "cef",
           frame: { width: 700, height: 600, x: 150, y: 80 },
           rpc,
@@ -191,7 +191,7 @@ export const webviewTagTests = [
 
         winRef = new BrowserWindow({
           title: "Session & Partition Playground",
-          url: "views://session-playground/index.html",
+          url: "views://playgrounds/session/index.html",
           renderer: "cef",
           frame: { width: 900, height: 800, x: 100, y: 50 },
           rpc,

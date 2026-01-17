@@ -122,7 +122,7 @@ export const trayTests = [
 
         winRef = new BrowserWindow({
           title: "Tray Playground",
-          url: "views://tray-playground/index.html",
+          url: "views://playgrounds/tray/index.html",
           renderer: "cef",
           frame: { width: 500, height: 750, x: 200, y: 50 },
           rpc,

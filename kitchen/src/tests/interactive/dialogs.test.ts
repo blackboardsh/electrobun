@@ -115,7 +115,7 @@ export const dialogTests = [
 
         winRef = new BrowserWindow({
           title: "File Dialog Playground",
-          url: "views://file-dialog-playground/index.html",
+          url: "views://playgrounds/file-dialog/index.html",
           renderer: "cef",
           frame: { width: 600, height: 850, x: 200, y: 50 },
           rpc,

@@ -80,7 +80,7 @@ export const shortcutTests = [
 
         winRef = new BrowserWindow({
           title: "Global Shortcuts Playground",
-          url: "views://shortcuts-playground/index.html",
+          url: "views://playgrounds/shortcuts/index.html",
           renderer: "cef",
           frame: { width: 550, height: 750, x: 200, y: 50 },
           rpc,
