@@ -572,6 +572,34 @@ const ConfigureWebviewTags = (
         rules: rules,
       });
     }
+
+    findInPage(searchText: string, options?: {forward?: boolean; matchCase?: boolean}) {
+      if (!this.webviewId) {
+        console.warn('findInPage called on removed webview');
+        return;
+      }
+
+      const forward = options?.forward ?? true;
+      const matchCase = options?.matchCase ?? false;
+
+      this.internalRpc.send.webviewTagFindInPage({
+        id: this.webviewId,
+        searchText,
+        forward,
+        matchCase,
+      });
+    }
+
+    stopFindInPage() {
+      if (!this.webviewId) {
+        console.warn('stopFindInPage called on removed webview');
+        return;
+      }
+
+      this.internalRpc.send.webviewTagStopFind({
+        id: this.webviewId,
+      });
+    }
   }
 
   customElements.define("electrobun-webview", WebviewTag);

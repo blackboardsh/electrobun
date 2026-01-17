@@ -140,26 +140,30 @@
             const text = document.getElementById('findInput').value;
             if (!text) return;
             const wv = document.querySelector('electrobun-webview');
-            // Note: findInPage is on BrowserView (bun side), not webview tag
-            // This demonstrates the API exists but may need RPC to work
-            console.log('Find in page:', text);
-            alert('findInPage requires bun-side API call via RPC');
+            if (!wv) return;
+            wv.findInPage(text);
         }
 
         function findNext() {
             const text = document.getElementById('findInput').value;
             if (!text) return;
-            console.log('Find next:', text);
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            wv.findInPage(text, { forward: true });
         }
 
         function findPrev() {
             const text = document.getElementById('findInput').value;
             if (!text) return;
-            console.log('Find prev:', text);
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            wv.findInPage(text, { forward: false });
         }
 
         function stopFind() {
-            console.log('Stop find');
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            wv.stopFindInPage();
         }
 
         // Webview event listeners

@@ -78,6 +78,15 @@ export type InternalWebviewHandlers = RPCSchema<{
         id: number;
         rules: string[];
       };
+      webviewTagFindInPage: {
+        id: number;
+        searchText: string;
+        forward: boolean;
+        matchCase: boolean;
+      };
+      webviewTagStopFind: {
+        id: number;
+      };
     };
   }>;
   
