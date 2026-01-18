@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "ag-grid-community": ["node_modules/ag-grid-community"],
+      "ag-grid-community/*": ["node_modules/ag-grid-community/*"],
+      "@/*": ["src/mainview/*"],
+      "@bun/*": ["src/bun/*"],
+      "electrobun/view": ["src/types/electrobun.d.ts"],
+      "electrobun/bun": ["src/types/electrobun.d.ts"]
+    }
+  },
+  "include": ["src", "scripts"]
+}

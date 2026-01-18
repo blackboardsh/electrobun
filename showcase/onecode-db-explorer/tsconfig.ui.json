@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "ag-grid-community": ["node_modules/ag-grid-community"],
+      "ag-grid-community/*": ["node_modules/ag-grid-community/*"],
+      "@/*": ["src/mainview/*"],
+      "@bun/*": ["src/bun/*"]
+    },
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js"
+  }
+}

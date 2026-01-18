@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b0b10" />
+    <title>1Code DB Explorer</title>
+    <script>
+      (() => {
+        try {
+          const raw = localStorage.getItem("onecodeDbExplorer.theme");
+          const parsed = raw ? JSON.parse(raw) : null;
+          const value = typeof parsed === "string" ? parsed : raw;
+          const theme = value === "light" || value === "dark" ? value : "dark";
+          if (theme === "dark") document.documentElement.classList.add("dark");
+          else document.documentElement.classList.remove("dark");
+        } catch {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="tailwind.css" />
+    <link rel="stylesheet" href="index.css" />
+    <link rel="stylesheet" href="ag-grid.css" />
+    <link rel="stylesheet" href="ag-theme.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

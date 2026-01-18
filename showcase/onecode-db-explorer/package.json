@@ -1,0 +1,37 @@
+{
+  "name": "onecode-db-explorer",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "High-performance DB explorer desktop app (Electrobun + SolidJS + Bun.SQL, no Vite)",
+  "scripts": {
+    "ui:build": "bun scripts/build-ui.ts",
+    "ui:build:prod": "bun scripts/build-ui.ts --minify",
+    "typecheck": "bunx tsc -p tsconfig.typecheck.json",
+    "build": "bun run ui:build && electrobun build",
+    "build:prod": "bun run ui:build:prod && electrobun build --env=stable",
+    "dev": "bun run build && electrobun dev",
+    "start": "bun run dev"
+  },
+  "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^1.7.7",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/state": "^6.5.4",
+    "@corvu/dialog": "^0.2.4",
+    "@solid-primitives/storage": "^4.3.3",
+    "ag-grid-community": "31.1.1",
+    "codemirror": "^6.0.2",
+    "electrobun": "latest",
+    "solid-ag-grid": "^0.0.260",
+    "solid-js": "^1.9.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.26.0",
+    "@babel/preset-typescript": "^7.26.0",
+    "@types/bun": "latest",
+    "babel-preset-solid": "^1.9.0",
+    "bun-plugin-tailwind": "^0.1.2",
+    "solid-jsx-oxc": "file:../../../../rs/solid-jsx-oxc/packages/solid-jsx-oxc",
+    "tailwindcss": "3.4.17",
+    "typescript": "^5.7.2"
+  }
+}
