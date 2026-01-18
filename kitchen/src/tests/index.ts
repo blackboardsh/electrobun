@@ -21,6 +21,7 @@ import { webviewTagTests } from "./interactive/webview-tag.test";
 import { clipboardInteractiveTests } from "./interactive/clipboard.test";
 import { menuTests } from "./interactive/menus.test";
 import { windowEventTests } from "./interactive/window-events.test";
+import { chromelessTests } from "./interactive/chromeless.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -43,6 +44,7 @@ export const allTests: TestDefinition[] = [
   ...clipboardInteractiveTests,
   ...menuTests,
   ...windowEventTests,
+  ...chromelessTests,
 ];
 
 // Export by category for selective running
@@ -67,4 +69,5 @@ export {
   clipboardInteractiveTests,
   menuTests,
   windowEventTests,
+  chromelessTests,
 };

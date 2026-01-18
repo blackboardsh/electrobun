@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Titlebar</title>
+    <script src="views://playgrounds/custom-titlebar/index.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+        }
+
+        /* Custom titlebar - draggable region */
+        .titlebar {
+            height: 38px;
+            background: rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            cursor: grab;
+        }
+
+        .titlebar:active {
+            cursor: grabbing;
+        }
+
+        /* Window controls container (macOS style - left side) */
+        .window-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .window-btn {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .close-btn {
+            background: #ff5f57;
+        }
+
+        .close-btn:hover {
+            background: #ff3b30;
+            transform: scale(1.15);
+        }
+
+        .minimize-btn {
+            background: #febc2e;
+        }
+
+        .minimize-btn:hover {
+            background: #f5a623;
+            transform: scale(1.15);
+        }
+
+        .maximize-btn {
+            background: #28c840;
+        }
+
+        .maximize-btn:hover {
+            background: #1db954;
+            transform: scale(1.15);
+        }
+
+        /* Title in the center */
+        .title {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 13px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        /* Content area */
+        .content {
+            padding: 20px;
+            height: calc(100% - 38px);
+            overflow-y: auto;
+        }
+
+        .info-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .info-card h3 {
+            font-size: 14px;
+            margin-bottom: 8px;
+            color: #4ade80;
+        }
+
+        .info-card p {
+            font-size: 13px;
+            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .info-card code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, Consolas, monospace;
+            font-size: 12px;
+            color: #f472b6;
+        }
+
+        .test-area {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px dashed rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .test-area h4 {
+            font-size: 13px;
+            margin-bottom: 8px;
+            color: #60a5fa;
+        }
+
+        .test-area input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            font-size: 14px;
+        }
+
+        .test-area input:focus {
+            outline: none;
+            border-color: #60a5fa;
+        }
+
+        .done-btn {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            background: #4ade80;
+            border: none;
+            border-radius: 6px;
+            color: #1a1a2e;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .done-btn:hover {
+            background: #22c55e;
+        }
+
+        .checklist {
+            list-style: none;
+            margin-top: 12px;
+        }
+
+        .checklist li {
+            padding: 8px 0;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.8);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checklist li:last-child {
+            border-bottom: none;
+        }
+
+        .check-icon {
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Custom titlebar with draggable region -->
+    <div class="titlebar electrobun-webkit-app-region-drag">
+        <!-- Window controls - excluded from drag -->
+        <div class="window-controls electrobun-webkit-app-region-no-drag">
+            <button id="closeBtn" class="window-btn close-btn" title="Close"></button>
+            <button id="minimizeBtn" class="window-btn minimize-btn" title="Minimize"></button>
+            <button id="maximizeBtn" class="window-btn maximize-btn" title="Maximize"></button>
+        </div>
+        <span class="title">Custom Titlebar Demo</span>
+        <div style="width: 60px;"></div> <!-- Spacer for balance -->
+    </div>
+
+    <div class="content">
+        <div class="info-card">
+            <h3>Custom Titlebar Implementation</h3>
+            <p>
+                This window uses <code>titleBarStyle: "hidden"</code> to hide both the native titlebar
+                and window controls. The custom titlebar above is a regular HTML element
+                with the <code>.electrobun-webkit-app-region-drag</code> class to make it draggable.
+            </p>
+        </div>
+
+        <div class="info-card">
+            <h3>Window Controls</h3>
+            <p>
+                The close, minimize, and maximize buttons are custom HTML elements styled like macOS window controls.
+                They use <code>.electrobun-webkit-app-region-no-drag</code> to remain clickable within the draggable region.
+            </p>
+        </div>
+
+        <div class="info-card">
+            <h3>Test Checklist</h3>
+            <ul class="checklist">
+                <li><span class="check-icon"></span> Drag the window by the titlebar area</li>
+                <li><span class="check-icon"></span> Click the red button to close</li>
+                <li><span class="check-icon"></span> Click the yellow button to minimize</li>
+                <li><span class="check-icon"></span> Click the green button to maximize/restore</li>
+                <li><span class="check-icon"></span> Text input below should work normally</li>
+            </ul>
+        </div>
+
+        <div class="test-area">
+            <h4>Interactive Area (not draggable)</h4>
+            <input type="text" placeholder="Type here to verify text input works...">
+        </div>
+
+        <button id="doneBtn" class="done-btn">Done - Close Window</button>
+    </div>
+</body>
+</html>

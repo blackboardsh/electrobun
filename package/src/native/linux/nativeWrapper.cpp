@@ -4725,9 +4725,9 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 
 // Mac-compatible function for Linux
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
-                                             uint32_t styleMask, const char* titleBarStyle,
+                                             uint32_t styleMask, const char* titleBarStyle, bool transparent,
                                              WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
-
+    // TODO: Implement transparent and titleBarStyle handling for Linux
     // On Linux, ignore styleMask and titleBarStyle for now, just create basic window
     if (isCEFAvailable()) {
         return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback);
@@ -4965,7 +4965,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          HandlePostMessage bunBridgeHandler,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
-                         const char* customPreloadScript) {
+                         const char* customPreloadScript,
+                         bool transparent) {
+    // TODO: Implement transparent handling for Linux
     
     // Null pointer checks
     if (!window) {

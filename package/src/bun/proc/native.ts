@@ -72,6 +72,7 @@ export const native = (() => {
           FFIType.f64, FFIType.f64,    // width, height
           FFIType.u32,           // styleMask
           FFIType.cstring,       // titleBarStyle
+          FFIType.bool,          // transparent
           FFIType.function,      // closeHandler
           FFIType.function,      // moveHandler
           FFIType.function,      // resizeHandler
@@ -143,18 +144,19 @@ export const native = (() => {
         args: [
           FFIType.u32, // webviewId
           FFIType.ptr, // windowPtr
-          FFIType.cstring, // renderer          
-          FFIType.cstring, // url                              
+          FFIType.cstring, // renderer
+          FFIType.cstring, // url
           FFIType.f64, FFIType.f64,    // x, y
-          FFIType.f64, FFIType.f64,    // width, height              
+          FFIType.f64, FFIType.f64,    // width, height
           FFIType.bool, // autoResize
-          FFIType.cstring, // partition                    
+          FFIType.cstring, // partition
           FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
           FFIType.function, // webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
           FFIType.function, //  bunBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
           FFIType.function, //  internalBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
           FFIType.cstring, // electrobunPreloadScript
           FFIType.cstring, // customPreloadScript
+          FFIType.bool, // transparent
         ],
         returns: FFIType.ptr
       },
@@ -504,7 +506,7 @@ export const ffi = {
   request: {
     createWindow: (params: {
         id: number,
-        url: string | null,        
+        url: string | null,
         title: string,
         frame: {
           width: number,
@@ -527,6 +529,7 @@ export const ffi = {
           HUDWindow: boolean,
         },
         titleBarStyle: string,
+        transparent: boolean,
       }): FFIType.ptr => {
         const {id, url, title, frame: {x, y, width, height}, styleMask: {
             Borderless,
@@ -541,9 +544,10 @@ export const ffi = {
             DocModalWindow,
             NonactivatingPanel,
             HUDWindow
-          }, 
-          titleBarStyle} = params
-          
+          },
+          titleBarStyle,
+          transparent} = params
+
           const styleMask = native.symbols.getWindowStyle(
             Borderless,
             Titled,
@@ -557,8 +561,8 @@ export const ffi = {
             DocModalWindow,
             NonactivatingPanel,
             HUDWindow
-          )          
-     
+          )
+
         const windowPtr = native.symbols.createWindowWithFrameAndStyleFromWorker(
           id,
           // frame
@@ -566,6 +570,7 @@ export const ffi = {
           styleMask,
           // style
           toCString(titleBarStyle),
+          transparent,
           // callbacks
           windowCloseCallback,
           windowMoveCallback,
@@ -736,8 +741,8 @@ export const ffi = {
         secretKey: string;
         hostWebviewId: number | null;
         pipePrefix: string;
-        url: string | null;    
-        html: string | null;    
+        url: string | null;
+        html: string | null;
         partition: string | null;
         preload: string | null;
         frame: {
@@ -758,7 +763,7 @@ export const ffi = {
           // hostWebviewId: number | null;
           // pipePrefix: string;
           url,
-          // html: string | null;    
+          // html: string | null;
           partition,
           preload,
           frame: {
@@ -769,7 +774,10 @@ export const ffi = {
           },
           autoResize} = params
 
-          const windowPtr = BrowserWindow.getById(windowId)?.ptr;
+          const parentWindow = BrowserWindow.getById(windowId);
+          const windowPtr = parentWindow?.ptr;
+          // Get transparent flag from parent window
+          const transparent = parentWindow?.transparent ?? false;
           
 
         if (!windowPtr) {          
@@ -980,9 +988,9 @@ export const ffi = {
           id,
           windowPtr,
           toCString(renderer),
-          toCString(url || ''),                          
-          x, y,  
-          width, height,             
+          toCString(url || ''),
+          x, y,
+          width, height,
           autoResize,
           toCString(partition || 'persist:default'),
           webviewDecideNavigation,
@@ -990,7 +998,8 @@ export const ffi = {
           bunBridgePostmessageHandler,
           internalBridgeHandler,
           toCString(electrobunPreload),
-          toCString(customPreload || ''),        
+          toCString(customPreload || ''),
+          transparent,
         )        
 
         if (!webviewPtr) {

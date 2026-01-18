@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transparent Window</title>
+    <script src="views://playgrounds/transparent-window/index.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
+            overflow: hidden;
+            /* Transparent background - lets desktop show through */
+            background: transparent;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding: 20px;
+        }
+
+        /* Floating card with custom shape */
+        .floating-card {
+            background: rgba(30, 30, 50, 0.95);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow:
+                0 20px 60px rgba(0, 0, 0, 0.5),
+                0 0 0 1px rgba(255, 255, 255, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            color: #fff;
+            cursor: move;
+        }
+
+        .floating-card h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .floating-card p {
+            font-size: 13px;
+            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .floating-card code {
+            background: rgba(0, 0, 0, 0.4);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, Consolas, monospace;
+            font-size: 11px;
+            color: #f472b6;
+        }
+
+        /* Status indicator - circular floating element */
+        .status-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #4ade80, #22c55e);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            box-shadow:
+                0 10px 40px rgba(74, 222, 128, 0.4),
+                0 0 0 2px rgba(255, 255, 255, 0.2);
+            cursor: move;
+        }
+
+        .status-indicator .icon {
+            font-size: 24px;
+        }
+
+        .status-indicator .label {
+            font-size: 10px;
+            font-weight: 600;
+            color: #064e3b;
+            margin-top: 2px;
+        }
+
+        /* Notification-style card */
+        .notification-card {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.95), rgba(139, 92, 246, 0.95));
+            border-radius: 12px;
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            box-shadow:
+                0 15px 50px rgba(99, 102, 241, 0.4),
+                0 0 0 1px rgba(255, 255, 255, 0.2);
+            cursor: move;
+        }
+
+        .notification-card .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .notification-card .content {
+            flex: 1;
+        }
+
+        .notification-card .content h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+
+        .notification-card .content p {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        /* Close button */
+        .close-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: rgba(239, 68, 68, 0.9);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow:
+                0 8px 30px rgba(239, 68, 68, 0.4),
+                0 0 0 2px rgba(255, 255, 255, 0.2);
+            transition: transform 0.15s, background 0.15s;
+        }
+
+        .close-btn:hover {
+            transform: scale(1.1);
+            background: rgba(220, 38, 38, 1);
+        }
+
+        /* Info panel at bottom */
+        .info-panel {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            right: 80px;
+            background: rgba(0, 0, 0, 0.8);
+            border-radius: 12px;
+            padding: 16px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+
+        .info-panel h3 {
+            font-size: 13px;
+            color: #4ade80;
+            margin-bottom: 8px;
+        }
+
+        .info-panel p {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.7);
+            line-height: 1.5;
+        }
+
+        .electrobun-webkit-app-region-no-drag {
+            cursor: default;
+        }
+
+        .electrobun-webkit-app-region-drag {
+            cursor: grab;
+        }
+
+        .electrobun-webkit-app-region-drag:active {
+            cursor: grabbing;
+        }
+    </style>
+</head>
+<body>
+    <!-- Circular status indicator -->
+    <div class="status-indicator electrobun-webkit-app-region-drag">
+        <span class="icon">&#x2714;</span>
+        <span class="label">ACTIVE</span>
+    </div>
+
+    <!-- Main info card -->
+    <div class="floating-card electrobun-webkit-app-region-drag">
+        <h2>&#x1F50D; Transparent Window Demo</h2>
+        <p>
+            This demonstrates a transparent window where you can create custom-shaped UI elements
+            that float over other content. The window background is transparent, and individual
+            elements create the visual appearance.
+        </p>
+        <p style="margin-top: 12px;">
+            Configuration: <code>styleMask.Borderless: true</code> and HTML/CSS with
+            <code>background: transparent</code>
+        </p>
+    </div>
+
+    <!-- Notification-style card -->
+    <div class="notification-card electrobun-webkit-app-region-drag">
+        <div class="avatar">&#x1F44B;</div>
+        <div class="content electrobun-webkit-app-region-no-drag">
+            <h4>Floating Notification</h4>
+            <p>This card demonstrates custom-shaped notifications</p>
+        </div>
+    </div>
+
+    <!-- Info panel -->
+    <div class="info-panel electrobun-webkit-app-region-drag">
+        <h3>How It Works</h3>
+        <p>
+            The window uses a borderless style mask with transparent background. Each UI element
+            is styled individually. Drag any card to move the window. Click the red button to close.
+        </p>
+    </div>
+
+    <!-- Close button -->
+    <button id="closeBtn" class="close-btn electrobun-webkit-app-region-no-drag">&#x2715;</button>
+</body>
+</html>

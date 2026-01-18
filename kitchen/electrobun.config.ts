@@ -64,6 +64,14 @@ export default {
                 entrypoint: "src/playgrounds/window-events/index.ts",
                 external: [],
             },
+            "playgrounds/custom-titlebar": {
+                entrypoint: "src/playgrounds/custom-titlebar/index.ts",
+                external: [],
+            },
+            "playgrounds/transparent-window": {
+                entrypoint: "src/playgrounds/transparent-window/index.ts",
+                external: [],
+            },
         },
         copy: {
             "src/test-runner/index.html": "views/test-runner/index.html",
@@ -90,6 +98,8 @@ export default {
             "src/playgrounds/webviewtag/electrobun.png": "views/playgrounds/webviewtag/electrobun.png",
             "assets/electrobun-logo-32-template.png": "views/assets/electrobun-logo-32-template.png",
             "src/playgrounds/window-events/index.html": "views/playgrounds/window-events/index.html",
+            "src/playgrounds/custom-titlebar/index.html": "views/playgrounds/custom-titlebar/index.html",
+            "src/playgrounds/transparent-window/index.html": "views/playgrounds/transparent-window/index.html",
         },
         mac: {
             codesign: false,

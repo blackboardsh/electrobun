@@ -136,22 +136,22 @@ export class BrowserView<T> {
     }
   }
 
-  init() {    
+  init() {
     this.createStreams();
-       
+
     // TODO: add a then to this that fires an onReady event
     return ffi.request.createWebview({
       id: this.id,
       windowId: this.windowId,
-      renderer: this.renderer, 
+      renderer: this.renderer,
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),
       hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
-      partition: this.partition,      
+      partition: this.partition,
       // Only pass URL if no HTML content is provided to avoid conflicts
-      url: this.html ? null : this.url,      
+      url: this.html ? null : this.url,
       html: this.html,
       preload: this.preload,
       frame: {
@@ -162,6 +162,7 @@ export class BrowserView<T> {
       },
       autoResize: this.autoResize,
       navigationRules: this.navigationRules,
+      // transparent is looked up from parent window in native.ts
     });
 
     

@@ -21,10 +21,15 @@ type WindowOptionsType<T = undefined> = {
   html: string | null;
   preload: string | null;
   renderer: 'native' | 'cef';
-  rpc?: T;  
+  rpc?: T;
   styleMask?: {};
-  // TODO: implement all of them
-  titleBarStyle: "hiddenInset" | "default";
+  // titleBarStyle options:
+  // - 'default': normal titlebar with native window controls
+  // - 'hidden': no titlebar, no native window controls (for fully custom chrome)
+  // - 'hiddenInset': transparent titlebar with inset native controls
+  titleBarStyle: "hidden" | "hiddenInset" | "default";
+  // transparent: when true, window background is transparent (see-through)
+  transparent: boolean;
   navigationRules: string | null;
 };
 
@@ -41,6 +46,7 @@ const defaultOptions: WindowOptionsType = {
   preload: null,
   renderer: buildConfig.defaultRenderer,
   titleBarStyle: "default",
+  transparent: false,
   navigationRules: null,
 };
 
@@ -55,6 +61,7 @@ export class BrowserWindow<T> {
   html: string | null = null;
   preload: string | null = null;
   renderer:  'native' | 'cef';
+  transparent: boolean = false;
   frame: {
     x: number;
     y: number;
@@ -78,21 +85,23 @@ export class BrowserWindow<T> {
     this.html = options.html || null;
     this.preload = options.preload || null;
     this.renderer = options.renderer || defaultOptions.renderer;
+    this.transparent = options.transparent ?? false;
     this.navigationRules = options.navigationRules || null;
-    
+
     this.init(options);
   }
 
   init({
-    rpc,    
+    rpc,
     styleMask,
     titleBarStyle,
+    transparent,
   }: Partial<WindowOptionsType<T>>) {
-    
+
     this.ptr = ffi.request.createWindow({
       id: this.id,
       title: this.title,
-      url: this.url || "",      
+      url: this.url || "",
       frame: {
         width: this.frame.width,
         height: this.frame.height,
@@ -113,14 +122,23 @@ export class BrowserWindow<T> {
         NonactivatingPanel: false,
         HUDWindow: false,
         ...(styleMask || {}),
+        // hiddenInset: transparent titlebar with inset native controls
         ...(titleBarStyle === "hiddenInset"
           ? {
               Titled: true,
               FullSizeContentView: true,
             }
           : {}),
+        // hidden: no titlebar, no native controls (for fully custom chrome)
+        ...(titleBarStyle === "hidden"
+          ? {
+              Titled: false,
+              FullSizeContentView: true,
+            }
+          : {}),
       },
       titleBarStyle: titleBarStyle || "default",
+      transparent: transparent ?? false,
     });
 
     BrowserWindowMap[this.id] = this;

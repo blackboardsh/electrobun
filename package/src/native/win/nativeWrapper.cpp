@@ -5186,7 +5186,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          HandlePostMessage bunBridgeHandler,
                          HandlePostMessage internalBridgeHandler,
                          const char *electrobunPreloadScript,
-                         const char *customPreloadScript) {
+                         const char *customPreloadScript,
+                         bool transparent) {
+    // TODO: Implement transparent handling for Windows
     
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
@@ -5449,10 +5451,12 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     double width, double height,
     uint32_t styleMask,
     const char* titleBarStyle,
+    bool transparent,
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler) {
+    // TODO: Implement transparent and titleBarStyle handling for Windows
     
     // Everything GUI-related needs to be dispatched to main thread
     HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
