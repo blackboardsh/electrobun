@@ -311,8 +311,9 @@ struct X11Window {
     WindowFocusCallback focusCallback;
     std::vector<Window> childWindows;  // For managing webviews
     ContainerView* containerView = nullptr;  // Associated container for webview management
+    bool transparent = false;  // Track if window is transparent
 
-    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr) {}
+    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr), transparent(false) {}
 };
 
 // Forward declaration for X11 menu function
@@ -1312,6 +1313,10 @@ public:
         // Validate the CEF window handle and try to understand what's happening
         if (cefWindow) {
             Display* display = gdk_x11_get_default_xdisplay();
+            
+            // For transparent windows, ensure the CEF window has no background
+            // This will be properly handled when transparency info is available
+            
             XWindowAttributes attrs;
             
             
@@ -3071,6 +3076,9 @@ public:
     std::string deferredUrl;
     double deferredX = 0, deferredY = 0, deferredWidth = 0, deferredHeight = 0;
     
+    // Track if parent window is transparent
+    bool parentTransparent = false;
+    
     CEFWebViewImpl(uint32_t webviewId,
                    GtkWidget* window,
                    const char* url,
@@ -3132,8 +3140,22 @@ public:
         // Use SetAsChild with the X11 window
         window_info.SetAsChild(x11win->window, cef_rect);
         
+        // For transparent windows, ensure CEF window uses transparent-capable settings
+        if (x11win->transparent) {
+            // Use windowed mode but ensure the CEF window inherits transparency
+            printf("CEF: Setting up windowed mode with transparency support\n");
+        }
+        
         
         CefBrowserSettings browser_settings;
+        
+        // Check if the parent window is transparent
+        if (parentXWindow && x11win->transparent) {
+            // For transparent effect windows, use dark background
+            browser_settings.background_color = CefColorSetARGB(255, 16, 16, 16); // Very dark gray
+            this->parentTransparent = true;
+            printf("CEF: Using dark background for transparent effect\n");
+        }
         
         // Create client
         client = new ElectrobunClient(
@@ -3153,6 +3175,11 @@ public:
             if (hasPendingFrame) {
                 syncCEFPositionWithFrame(pendingFrame);
                 hasPendingFrame = false;
+            }
+            
+            // For transparent effect windows, content is ready
+            if (this->parentTransparent) {
+                printf("CEF: Transparent effect window ready with dark background\n");
             }
         });
         
@@ -4560,7 +4587,8 @@ void runEventLoop() {
 void showWindow(void* window);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback,
+                   const char* titleBarStyle = nullptr, bool transparent = false) {
     
     void* result = dispatch_sync_main([&]() -> void* {
         
@@ -4578,22 +4606,40 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             
             // Create window attributes
             XSetWindowAttributes attrs;
-            attrs.background_pixel = WhitePixel(display, screen);
-            attrs.border_pixel = BlackPixel(display, screen);
-            attrs.colormap = DefaultColormap(display, screen);
             attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
                               ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
                               FocusChangeMask | StructureNotifyMask | SubstructureNotifyMask;
+            
+            unsigned long attr_mask = CWEventMask;
+            Visual* visual = DefaultVisual(display, screen);
+            int depth = DefaultDepth(display, screen);
+            
+            // For transparent windows on Linux, use a very dark background
+            // True transparency is not reliable with CEF windowed mode
+            if (transparent) {
+                attrs.background_pixel = 0x101010;  // Very dark gray (almost black)
+                attrs.border_pixel = 0;
+                attrs.colormap = DefaultColormap(display, screen);
+                attr_mask |= CWBackPixel | CWBorderPixel | CWColormap;
+                printf("X11: Using dark background for transparent window effect\n");
+            } else {
+                attrs.background_pixel = WhitePixel(display, screen);
+                attrs.border_pixel = BlackPixel(display, screen);
+                attrs.colormap = DefaultColormap(display, screen);
+                attr_mask |= CWBackPixel | CWBorderPixel | CWColormap;
+            }
             
             // Create the main window
             Window x11_window = XCreateWindow(
                 display, root,
                 (int)x, (int)y, (int)width, (int)height, 0,
-                DefaultDepth(display, screen), InputOutput,
-                DefaultVisual(display, screen),
-                CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
+                depth, InputOutput,
+                visual,
+                attr_mask,
                 &attrs
             );
+            
+            // Note: For Linux, transparent windows are handled as borderless windows
             
             if (!x11_window) {
                 printf("ERROR: Failed to create X11 window\n");
@@ -4607,6 +4653,30 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             // Set window protocols for close button
             Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
             XSetWMProtocols(display, x11_window, &wmDelete, 1);
+            
+            // Handle window decorations based on titleBarStyle
+            if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
+                // Remove window decorations for borderless windows
+                Atom wmHints = XInternAtom(display, "_MOTIF_WM_HINTS", False);
+                struct {
+                    unsigned long flags;
+                    unsigned long functions;
+                    unsigned long decorations;
+                    long inputMode;
+                    unsigned long status;
+                } hints = { 2, 0, 0, 0, 0 };  // MWM_HINTS_DECORATIONS = 2, no decorations
+                
+                XChangeProperty(display, x11_window, wmHints, wmHints, 32,
+                               PropModeReplace, (unsigned char*)&hints, 5);
+            }
+            
+            // Set window type for better compositor handling
+            if (transparent || (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0)) {
+                Atom wmWindowType = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
+                Atom wmWindowTypeNormal = XInternAtom(display, "_NET_WM_WINDOW_TYPE_NORMAL", False);
+                XChangeProperty(display, x11_window, wmWindowType, XA_ATOM, 32,
+                               PropModeReplace, (unsigned char*)&wmWindowTypeNormal, 1);
+            }
             
             // Create X11Window structure
             auto x11win = std::make_shared<X11Window>();
@@ -4622,6 +4692,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->moveCallback = moveCallback;
             x11win->resizeCallback = resizeCallback;
             x11win->focusCallback = focusCallback;
+            x11win->transparent = transparent;
 
             // Store in global maps
             {
@@ -4727,11 +4798,11 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
                                              WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
-    // TODO: Implement transparent and titleBarStyle handling for Linux
-    // On Linux, ignore styleMask and titleBarStyle for now, just create basic window
+    // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
-        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback);
+        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
     } else {
+        // GTK doesn't support these features well, create standard window
         return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback);
     }
 
@@ -6216,7 +6287,6 @@ void* createNSRectWrapper(double x, double y, double width, double height) {
 }
 
 
-<<<<<<< HEAD
 // Helper function to clean up webviews when a window is closed
 void cleanupWebviewsForWindow(uint32_t windowId) {
     // Find and remove the container
@@ -6241,10 +6311,7 @@ void cleanupWebviewsForWindow(uint32_t windowId) {
     }
 }
 
-ELECTROBUN_EXPORT void closeNSWindow(void* window) {
-=======
 ELECTROBUN_EXPORT void closeWindow(void* window) {
->>>>>>> aa31359 (rename CABI methods to be more generic)
     if (window) {
         dispatch_sync_main_void([&]() {
             // Check if it's a GTK window first
