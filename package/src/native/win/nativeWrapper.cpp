@@ -1314,6 +1314,144 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunDownloadHandler);
 };
 
+// OSR (Off-Screen Rendering) Window for transparent CEF windows
+// Renders directly to the parent layered window
+class OSRWindow {
+public:
+    OSRWindow(HWND parent, int x, int y, int width, int height)
+        : parent_(parent), pixel_buffer_(nullptr),
+          buffer_width_(0), buffer_height_(0), buffer_size_(0) {
+    }
+
+    ~OSRWindow() {
+        if (pixel_buffer_) {
+            free(pixel_buffer_);
+            pixel_buffer_ = nullptr;
+        }
+    }
+
+    void UpdateBuffer(const void* buffer, int width, int height) {
+        if (!buffer || width <= 0 || height <= 0 || !parent_) {
+            return;
+        }
+
+        size_t required_size = (size_t)width * (size_t)height * 4; // BGRA
+
+        // Reallocate buffer if needed
+        if (buffer_size_ < required_size) {
+            if (pixel_buffer_) {
+                free(pixel_buffer_);
+            }
+            pixel_buffer_ = (unsigned char*)malloc(required_size);
+            if (!pixel_buffer_) {
+                buffer_size_ = 0;
+                return;
+            }
+            buffer_size_ = required_size;
+        }
+
+        memcpy(pixel_buffer_, buffer, required_size);
+        buffer_width_ = width;
+        buffer_height_ = height;
+
+        UpdateLayeredWindow();
+    }
+
+    void UpdateLayeredWindow() {
+        if (!parent_ || !pixel_buffer_ || buffer_width_ == 0 || buffer_height_ == 0) {
+            return;
+        }
+
+        HDC hdc = GetDC(NULL);
+        HDC memDC = CreateCompatibleDC(hdc);
+
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = buffer_width_;
+        bmi.bmiHeader.biHeight = -buffer_height_; // Top-down DIB
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        void* bits = nullptr;
+        HBITMAP hBitmap = CreateDIBSection(memDC, &bmi, DIB_RGB_COLORS, &bits, NULL, 0);
+
+        if (hBitmap && bits) {
+            // Copy pixel buffer to DIB section
+            memcpy(bits, pixel_buffer_, buffer_size_);
+
+            HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, hBitmap);
+
+            POINT ptSrc = {0, 0};
+            SIZE size = {buffer_width_, buffer_height_};
+            BLENDFUNCTION blend = {};
+            blend.BlendOp = AC_SRC_OVER;
+            blend.SourceConstantAlpha = 255;
+            blend.AlphaFormat = AC_SRC_ALPHA;
+
+            // Get the window's current position for UpdateLayeredWindow
+            RECT rect;
+            GetWindowRect(parent_, &rect);
+            POINT ptDest = {rect.left, rect.top};
+
+            // Update the parent window's layer with the CEF-rendered content
+            ::UpdateLayeredWindow(parent_, hdc, &ptDest, &size, memDC, &ptSrc, 0, &blend, ULW_ALPHA);
+
+            SelectObject(memDC, oldBitmap);
+            DeleteObject(hBitmap);
+        }
+
+        DeleteDC(memDC);
+        ReleaseDC(NULL, hdc);
+    }
+
+    HWND GetHWND() const { return parent_; }
+
+private:
+    HWND parent_;
+    unsigned char* pixel_buffer_;
+    int buffer_width_;
+    int buffer_height_;
+    size_t buffer_size_;
+};
+
+// CEF Render Handler for off-screen rendering (OSR) mode
+class ElectrobunRenderHandler : public CefRenderHandler {
+public:
+    ElectrobunRenderHandler() : view_width_(800), view_height_(600), osr_window_(nullptr) {}
+
+    void SetOSRWindow(OSRWindow* window) {
+        osr_window_ = window;
+    }
+
+    void SetViewSize(int width, int height) {
+        view_width_ = width;
+        view_height_ = height;
+    }
+
+    // CefRenderHandler methods
+    void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
+        rect.x = 0;
+        rect.y = 0;
+        rect.width = view_width_ > 0 ? view_width_ : 800;
+        rect.height = view_height_ > 0 ? view_height_ : 600;
+    }
+
+    void OnPaint(CefRefPtr<CefBrowser> browser,
+                 PaintElementType type,
+                 const RectList& dirtyRects,
+                 const void* buffer,
+                 int width,
+                 int height) override;
+
+private:
+    int view_width_;
+    int view_height_;
+    OSRWindow* osr_window_;
+
+    IMPLEMENT_REFCOUNTING(ElectrobunRenderHandler);
+};
+
 // CEF Client class with load and life span handlers
 class ElectrobunCefClient : public CefClient {
 public:
@@ -1324,7 +1462,8 @@ public:
                        HandlePostMessage internalBridgeHandler)
         : webview_id_(webviewId),
           bun_bridge_handler_(bunBridgeHandler),
-          webview_tag_handler_(internalBridgeHandler) {
+          webview_tag_handler_(internalBridgeHandler),
+          osr_enabled_(false) {
         m_loadHandler = new ElectrobunLoadHandler();
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
         m_requestHandler = new ElectrobunRequestHandler();
@@ -1333,6 +1472,23 @@ public:
         m_permissionHandler = new ElectrobunPermissionHandler();
         m_dialogHandler = new ElectrobunDialogHandler();
         m_downloadHandler = new ElectrobunDownloadHandler();
+        m_renderHandler = nullptr; // Created only when OSR is enabled
+    }
+
+    void EnableOSR(int width, int height) {
+        osr_enabled_ = true;
+        m_renderHandler = new ElectrobunRenderHandler();
+        m_renderHandler->SetViewSize(width, height);
+    }
+
+    void SetOSRWindow(OSRWindow* window) {
+        if (m_renderHandler) {
+            m_renderHandler->SetOSRWindow(window);
+        }
+    }
+
+    bool IsOSREnabled() const {
+        return osr_enabled_;
     }
 
     void SetWebviewEventHandler(WebviewEventHandler handler) {
@@ -1386,6 +1542,10 @@ public:
 
     CefRefPtr<CefDownloadHandler> GetDownloadHandler() override {
         return m_downloadHandler;
+    }
+
+    CefRefPtr<CefRenderHandler> GetRenderHandler() override {
+        return m_renderHandler;
     }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -1449,8 +1609,22 @@ private:
     CefRefPtr<ElectrobunPermissionHandler> m_permissionHandler;
     CefRefPtr<ElectrobunDialogHandler> m_dialogHandler;
     CefRefPtr<ElectrobunDownloadHandler> m_downloadHandler;
+    CefRefPtr<ElectrobunRenderHandler> m_renderHandler;
+    bool osr_enabled_;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
+
+// ElectrobunRenderHandler::OnPaint implementation
+void ElectrobunRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser,
+                                       PaintElementType type,
+                                       const RectList& dirtyRects,
+                                       const void* buffer,
+                                       int width,
+                                       int height) {
+    if (osr_window_ && buffer && width > 0 && height > 0) {
+        osr_window_->UpdateBuffer(buffer, width, height);
+    }
+}
 
 // Helper function implementation (defined after ElectrobunCefClient class)
 void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser) {
@@ -2406,10 +2580,28 @@ class CEFView : public AbstractView {
 private:
     CefRefPtr<CefBrowser> browser;
     CefRefPtr<ElectrobunCefClient> client;
-    
+    OSRWindow* osr_window;
+    bool is_osr_mode;
+
 public:
-    CEFView(uint32_t webviewId) {
+    CEFView(uint32_t webviewId) : osr_window(nullptr), is_osr_mode(false) {
         this->webviewId = webviewId;
+    }
+
+    ~CEFView() {
+        if (osr_window) {
+            delete osr_window;
+            osr_window = nullptr;
+        }
+    }
+
+    void setOSRWindow(OSRWindow* window) {
+        osr_window = window;
+        is_osr_mode = true;
+    }
+
+    bool isOSRMode() const {
+        return is_osr_mode;
     }
     
     void loadURL(const char* urlString) override {
@@ -4106,7 +4298,8 @@ ELECTROBUN_EXPORT bool initCEF() {
     CefSettings settings;
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single-threaded message loop
-    
+    settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
+
     // Set the subprocess path to the helper executable
     CefString(&settings.browser_subprocess_path) = std::string(exePath) + "\\bun Helper.exe";
     
@@ -4877,7 +5070,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     return view;
 }
 
-// Internal factory method for creating CEF instances  
+// Internal factory method for creating CEF instances
 static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                                        HWND hwnd,
                                        const char *url,
@@ -4890,7 +5083,8 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                                        HandlePostMessage bunBridgeHandler,
                                        HandlePostMessage internalBridgeHandler,
                                        const char *electrobunPreloadScript,
-                                       const char *customPreloadScript) {
+                                       const char *customPreloadScript,
+                                       bool transparent) {
     
     auto view = std::make_shared<CEFView>(webviewId);
     view->hwnd = hwnd;
@@ -4918,13 +5112,35 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         CefWindowInfo windowInfo;
         CefRect cefBounds((int)x, (int)y, (int)width, (int)height);
 
-        windowInfo.SetAsChild(container->GetHwnd(), cefBounds);
-        
         CefBrowserSettings browserSettings;
         // Note: web_security setting for CEF would need correct API
-        
+
+        // Set transparent background if requested
+        if (transparent) {
+            // CEF uses ARGB format: 0x00000000 = fully transparent
+            browserSettings.background_color = 0;
+        }
+
         // Create CEF client with bridge handlers
         auto client = new ElectrobunCefClient(webviewId, bunBridgeHandler, internalBridgeHandler);
+
+        // Configure OSR mode for transparent windows
+        if (transparent) {
+            // Enable OSR mode
+            client->EnableOSR((int)width, (int)height);
+
+            // Create OSR window for rendering
+            // For OSR, the window should fill the parent window's client area (0, 0)
+            OSRWindow* osrWindow = new OSRWindow(hwnd, 0, 0, (int)width, (int)height);
+            view->setOSRWindow(osrWindow);
+            client->SetOSRWindow(osrWindow);
+
+            // Use windowless (off-screen) rendering
+            windowInfo.SetAsWindowless(hwnd);
+        } else {
+            // Use windowed mode
+            windowInfo.SetAsChild(container->GetHwnd(), cefBounds);
+        }
         
         // Set up preload scripts
         if (electrobunPreloadScript && strlen(electrobunPreloadScript) > 0) {
@@ -5188,8 +5404,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript,
                          bool transparent) {
-    // TODO: Implement transparent handling for Windows
-    
+
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
 
@@ -5203,7 +5418,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         auto cefView = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     bunBridgeHandler, internalBridgeHandler,
-                                    electrobunPreloadScript, customPreloadScript);
+                                    electrobunPreloadScript, customPreloadScript, transparent);
         view = cefView.get();
     } else {
         auto webview2View = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
@@ -5456,11 +5671,10 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler) {
-    // TODO: Implement transparent and titleBarStyle handling for Windows
-    
+
     // Everything GUI-related needs to be dispatched to main thread
     HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
-        
+
         // Register window class with our custom procedure
         static bool classRegistered = false;
         if (!classRegistered) {
@@ -5471,11 +5685,11 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             RegisterClassA(&wc);  // Use ANSI version
             classRegistered = true;
         }
-        
+
         // Create window data structure to store callbacks
         WindowData* data = (WindowData*)malloc(sizeof(WindowData));
         if (!data) return NULL;
-        
+
         data->windowId = windowId;
         data->closeHandler = zigCloseHandler;
         data->moveHandler = zigMoveHandler;
@@ -5484,9 +5698,30 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
 
         // Map style mask to Windows style
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
-        
+        DWORD windowExStyle = WS_EX_APPWINDOW;
+
+        // Handle titleBarStyle options
+        if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
+            // "hidden" = borderless window (no titlebar, no native controls)
+            // This is for completely custom chrome
+            windowStyle = WS_POPUP | WS_VISIBLE;
+        } else if (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0) {
+            // "hiddenInset" = window with border but custom titlebar area
+            // On Windows, we can't easily do the exact macOS inset style,
+            // so we provide a borderless window with shadow for similar effect
+            windowStyle = WS_POPUP | WS_VISIBLE | WS_THICKFRAME;
+        }
+        // else: default titleBarStyle = WS_OVERLAPPEDWINDOW (standard window)
+
+        // Handle transparent windows
+        if (transparent) {
+            // For transparent windows, we need WS_EX_LAYERED to support per-pixel alpha
+            windowExStyle |= WS_EX_LAYERED;
+        }
+
         // Create the window
-        HWND hwnd = CreateWindowA(  // Use ANSI version
+        HWND hwnd = CreateWindowExA(  // Use CreateWindowExA to support extended styles
+            windowExStyle,
             "BasicWindowClass",  // Use ANSI string
             "",
             windowStyle,
@@ -5494,12 +5729,25 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             (int)width, (int)height,
             NULL, NULL, GetModuleHandle(NULL), NULL
         );
-        
+
         if (hwnd) {
             // Store our data with the window
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
 
-             if (g_applicationMenu) {
+            // Apply transparent window background if requested
+            if (transparent) {
+                // For transparent windows using OSR, UpdateLayeredWindow will handle
+                // the rendering with per-pixel alpha. We don't use SetLayeredWindowAttributes.
+                // The OSRWindow will call UpdateLayeredWindow with the CEF-rendered content.
+            }
+
+            // Don't apply application menu to transparent or custom chrome windows
+            // Only apply to windows with default titleBarStyle
+            bool isCustomChrome = transparent ||
+                                 (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) ||
+                                 (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0);
+
+            if (!isCustomChrome && g_applicationMenu) {
                 if (SetMenu(hwnd, g_applicationMenu)) {
                     DrawMenuBar(hwnd);
                     // char logMsg[256];
@@ -5509,8 +5757,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
                     ::log("Failed to apply application menu to new window");
                 }
             }
-            
-            
+
+
             // Show the window
             ShowWindow(hwnd, SW_SHOW);
             UpdateWindow(hwnd);
@@ -5518,10 +5766,10 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             // Clean up if window creation failed
             free(data);
         }
-        
+
         return hwnd;
     });
-    
+
     return hwnd;
 }
 
