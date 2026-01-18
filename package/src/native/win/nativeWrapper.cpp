@@ -4343,7 +4343,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  HandlePostMessage bunBridgeHandler,
                                                  HandlePostMessage internalBridgeHandler,
                                                  const char *electrobunPreloadScript,
-                                                 const char *customPreloadScript) {
+                                                 const char *customPreloadScript,
+                                                 bool transparent) {
     // Check if WebView2 runtime is available
     LPWSTR versionInfo = nullptr;
     HRESULT result = GetAvailableCoreWebView2BrowserVersionString(nullptr, &versionInfo);
@@ -4375,7 +4376,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->customScript = customScript;
 
     // Create WebView2 on main thread
-    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr]() {
+    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr, transparent]() {
         // Initialize COM for this thread
         HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
@@ -4422,7 +4423,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         HWND parentHwnd = hwnd;
         
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [view, container, x, y, width, height](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+            [view, container, x, y, width, height, transparent](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -4442,7 +4443,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                        [view, container, x, y, width, height, env, transparent](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
                                 char errorMsg[256];
                                 sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
@@ -4478,9 +4479,20 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Set bounds and visibility
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                             ctrl->put_Bounds(bounds);
-                            
+
                             // Make sure the controller is visible
                             ctrl->put_IsVisible(TRUE);
+
+                            // Set transparent background if requested
+                            if (transparent) {
+                                ComPtr<ICoreWebView2Controller2> ctrl2;
+                                HRESULT hr = ctrl->QueryInterface(IID_PPV_ARGS(&ctrl2));
+                                if (SUCCEEDED(hr) && ctrl2) {
+                                    // Set background color to transparent (0x00000000 = ARGB fully transparent)
+                                    COREWEBVIEW2_COLOR transparentColor = {0, 0, 0, 0}; // A, R, G, B
+                                    ctrl2->put_DefaultBackgroundColor(transparentColor);
+                                }
+                            }
 
                             // Capture webviewId and handler for event handlers
                             uint32_t capturedWebviewId = view->webviewId;
@@ -5424,7 +5436,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         auto webview2View = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
                                               partitionIdentifier, navigationCallback, webviewEventHandler,
                                               bunBridgeHandler, internalBridgeHandler,
-                                              electrobunPreloadScript, customPreloadScript);
+                                              electrobunPreloadScript, customPreloadScript, transparent);
         view = webview2View.get();
     }
     
