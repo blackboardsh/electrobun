@@ -1,6 +1,4 @@
-import { combine } from "@atlaskit/pragmatic-drag-and-drop/combine";
-import { draggable, dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createSignal, onCleanup } from "solid-js";
 import type { SqlDocument } from "../types";
 
 type TabDropEdge = "left" | "right";
@@ -14,17 +12,19 @@ type SqlWorkspaceTabsProps = {
   onReorder: (args: { startId: string; targetId: string; edge: TabDropEdge }) => void;
 };
 
-function getDragId(source: { data?: Record<string, unknown> }) {
-  const kind = source.data?.kind;
-  const id = source.data?.id;
-  if (kind !== "sql-doc-tab") return null;
-  return typeof id === "string" ? id : null;
-}
-
 function getClosestEdge(element: Element, clientX: number): TabDropEdge {
   const rect = element.getBoundingClientRect();
   const mid = rect.left + rect.width / 2;
   return clientX < mid ? "left" : "right";
+}
+
+function getTabTargetFromPoint(clientX: number, clientY: number): null | { id: string; edge: TabDropEdge } {
+  const el = document.elementFromPoint(clientX, clientY);
+  const tabEl = el?.closest?.(".sql-doc-tab");
+  if (!(tabEl instanceof HTMLElement)) return null;
+  const id = tabEl.getAttribute("data-doc-id");
+  if (!id) return null;
+  return { id, edge: getClosestEdge(tabEl, clientX) };
 }
 
 function SqlWorkspaceTab(props: {
@@ -39,68 +39,52 @@ function SqlWorkspaceTab(props: {
   onClose: (id: string) => void;
   onReorder: (args: { startId: string; targetId: string; edge: TabDropEdge }) => void;
 }) {
-  let rootEl: HTMLDivElement | undefined;
   let handleEl: HTMLButtonElement | undefined;
 
   const isIndicator = () => props.indicator?.id === props.doc.id;
   const indicatorEdge = () => props.indicator?.edge ?? "left";
 
-  onMount(() => {
-    if (!rootEl) return;
+  const dragState: {
+    mode: "pointer" | "mouse" | null;
+    pointerId: number | null;
+    startX: number;
+    startY: number;
+    dragging: boolean;
+  } = {
+    mode: null,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    dragging: false,
+  };
 
-    const cleanup = combine(
-      draggable({
-        element: rootEl,
-        dragHandle: handleEl,
-        getInitialData: () => ({ kind: "sql-doc-tab", id: props.doc.id }),
-        onDragStart: () => {
-          props.setDraggingId(props.doc.id);
-        },
-        onDrop: () => {
-          props.setDraggingId(null);
-          props.setIndicator(null);
-        },
-      }),
-      dropTargetForElements({
-        element: rootEl,
-        canDrop: ({ source }) => {
-          const id = getDragId(source);
-          return Boolean(id) && id !== props.doc.id;
-        },
-        onDragEnter: ({ source, self, location }) => {
-          const startId = getDragId(source);
-          if (!startId || startId === props.doc.id) return;
-          const edge = getClosestEdge(self.element, location.current.input.clientX);
-          props.setIndicator({ id: props.doc.id, edge });
-        },
-        onDrag: ({ source, self, location }) => {
-          const startId = getDragId(source);
-          if (!startId || startId === props.doc.id) return;
-          const edge = getClosestEdge(self.element, location.current.input.clientX);
-          props.setIndicator({ id: props.doc.id, edge });
-        },
-        onDragLeave: () => {
-          if (props.indicator?.id !== props.doc.id) return;
-          props.setIndicator(null);
-        },
-        onDrop: ({ source, self, location }) => {
-          const startId = getDragId(source);
-          if (!startId || startId === props.doc.id) return;
-          const edge = getClosestEdge(self.element, location.current.input.clientX);
-          props.onReorder({ startId, targetId: props.doc.id, edge });
-        },
-      })
-    );
+  const DRAG_THRESHOLD_PX = 6;
 
-    onCleanup(cleanup);
-  });
+  const updateIndicatorFromPoint = (clientX: number, clientY: number) => {
+    const target = getTabTargetFromPoint(clientX, clientY);
+    if (!target || target.id === props.doc.id) {
+      if (props.indicator) props.setIndicator(null);
+      return;
+    }
+    props.setIndicator(target);
+  };
+
+  const finishDrag = (clientX: number, clientY: number) => {
+    if (!dragState.dragging) return;
+
+    const drop = getTabTargetFromPoint(clientX, clientY);
+    if (!drop || drop.id === props.doc.id) return;
+
+    props.onReorder({ startId: props.doc.id, targetId: drop.id, edge: drop.edge });
+  };
+
+  let cleanupMouseListeners: (() => void) | null = null;
+  onCleanup(() => cleanupMouseListeners?.());
 
   return (
     <div
-      ref={(el) => {
-        rootEl = el;
-      }}
       class="sql-doc-tab"
+      data-doc-id={props.doc.id}
       data-active={props.isActive ? "true" : "false"}
       data-dragging={props.draggingId === props.doc.id ? "true" : "false"}
     >
@@ -109,6 +93,108 @@ function SqlWorkspaceTab(props: {
           handleEl = el;
         }}
         class="sql-doc-tab-button"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          if (!handleEl) return;
+          if (dragState.mode !== null) return;
+
+          dragState.mode = "pointer";
+          dragState.pointerId = e.pointerId;
+          dragState.startX = e.clientX;
+          dragState.startY = e.clientY;
+          dragState.dragging = false;
+
+          try {
+            handleEl.setPointerCapture(e.pointerId);
+          } catch {
+            // ignore
+          }
+        }}
+        onPointerMove={(e) => {
+          if (dragState.mode !== "pointer") return;
+
+          const dx = e.clientX - dragState.startX;
+          const dy = e.clientY - dragState.startY;
+
+          if (!dragState.dragging) {
+            if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+            dragState.dragging = true;
+            props.setDraggingId(props.doc.id);
+          }
+
+          updateIndicatorFromPoint(e.clientX, e.clientY);
+        }}
+        onPointerUp={(e) => {
+          if (dragState.mode !== "pointer") return;
+
+          try {
+            handleEl?.releasePointerCapture(e.pointerId);
+          } catch {
+            // ignore
+          }
+
+          finishDrag(e.clientX, e.clientY);
+
+          dragState.mode = null;
+          dragState.pointerId = null;
+          dragState.dragging = false;
+          props.setDraggingId(null);
+          props.setIndicator(null);
+        }}
+        onPointerCancel={() => {
+          if (dragState.mode !== "pointer") return;
+          dragState.mode = null;
+          dragState.pointerId = null;
+          dragState.dragging = false;
+          props.setDraggingId(null);
+          props.setIndicator(null);
+        }}
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          if (dragState.mode !== null) return;
+
+          dragState.mode = "mouse";
+          dragState.pointerId = null;
+          dragState.startX = e.clientX;
+          dragState.startY = e.clientY;
+          dragState.dragging = false;
+
+          const onMove = (ev: MouseEvent) => {
+            if (dragState.mode !== "mouse") return;
+
+            const dx = ev.clientX - dragState.startX;
+            const dy = ev.clientY - dragState.startY;
+
+            if (!dragState.dragging) {
+              if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+              dragState.dragging = true;
+              props.setDraggingId(props.doc.id);
+            }
+
+            updateIndicatorFromPoint(ev.clientX, ev.clientY);
+          };
+
+          const onUp = (ev: MouseEvent) => {
+            if (dragState.mode !== "mouse") return;
+
+            cleanupMouseListeners?.();
+            cleanupMouseListeners = null;
+
+            finishDrag(ev.clientX, ev.clientY);
+
+            dragState.mode = null;
+            dragState.dragging = false;
+            props.setDraggingId(null);
+            props.setIndicator(null);
+          };
+
+          window.addEventListener("mousemove", onMove);
+          window.addEventListener("mouseup", onUp, { once: true });
+
+          cleanupMouseListeners = () => {
+            window.removeEventListener("mousemove", onMove);
+          };
+        }}
         onClick={() => props.onSelect(props.doc.id)}
         title={props.doc.query}
       >

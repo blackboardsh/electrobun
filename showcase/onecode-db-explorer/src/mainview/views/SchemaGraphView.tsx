@@ -22,6 +22,7 @@ type SchemaGraphViewProps = {
   visibleGraphTables: TableInfo[];
   visibleGraphRelationships: RelationshipInfo[];
   graphLoading: boolean;
+  error: string | null;
   loadSchemaGraph: (opts?: { force?: boolean }) => void | Promise<void>;
   setGraphScale: Setter<number>;
   clampFloat: (value: number, min: number, max: number) => number;
@@ -52,11 +53,15 @@ type SchemaGraphViewProps = {
 export default function SchemaGraphView(props: SchemaGraphViewProps) {
   const graphDragState = {
     dragging: false,
+    suppressClick: false,
     startX: 0,
     startY: 0,
     originX: 0,
     originY: 0,
   };
+
+  let cleanupMousePan: (() => void) | null = null;
+  onCleanup(() => cleanupMousePan?.());
 
   return (
     <div class="view graph-view">
@@ -71,6 +76,11 @@ export default function SchemaGraphView(props: SchemaGraphViewProps) {
           />
           <div class="pill">{props.visibleGraphTables.length} tables</div>
           <div class="pill">{props.visibleGraphRelationships.length} relationships</div>
+          <Show when={props.error}>
+            <div class="pill pill-error graph-error-pill" title={props.error ?? undefined}>
+              {props.error}
+            </div>
+          </Show>
         </div>
 
         <div class="graph-toolbar-right">
@@ -107,30 +117,49 @@ export default function SchemaGraphView(props: SchemaGraphViewProps) {
         <div
           class="graph-viewport"
           ref={(el) => {
-            const ro = new ResizeObserver((entries) => {
-              const entry = entries[0];
-              if (!entry) return;
-              const rect = entry.contentRect;
+            const updateViewport = () => {
+              const rect = el.getBoundingClientRect();
               props.setGraphViewport({ width: rect.width, height: rect.height });
-            });
-            ro.observe(el);
-            onCleanup(() => ro.disconnect());
+            };
+
+            updateViewport();
+
+            if (typeof ResizeObserver === "function") {
+              const ro = new ResizeObserver((entries) => {
+                const entry = entries[0];
+                if (!entry) return;
+                const rect = entry.contentRect;
+                props.setGraphViewport({ width: rect.width, height: rect.height });
+              });
+              ro.observe(el);
+              onCleanup(() => ro.disconnect());
+              return;
+            }
+
+            window.addEventListener("resize", updateViewport);
+            onCleanup(() => window.removeEventListener("resize", updateViewport));
           }}
           onPointerDown={(e) => {
             if (e.button !== 0) return;
             props.setGraphHasFit(true);
             graphDragState.dragging = true;
+            graphDragState.suppressClick = false;
             graphDragState.startX = e.clientX;
             graphDragState.startY = e.clientY;
             const pan = props.graphPan;
             graphDragState.originX = pan.x;
             graphDragState.originY = pan.y;
-            (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+            try {
+              (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+            } catch {
+              // ignore
+            }
           }}
           onPointerMove={(e) => {
             if (!graphDragState.dragging) return;
             const dx = e.clientX - graphDragState.startX;
             const dy = e.clientY - graphDragState.startY;
+            if (!graphDragState.suppressClick && Math.hypot(dx, dy) > 2) graphDragState.suppressClick = true;
             props.setGraphPan({ x: graphDragState.originX + dx, y: graphDragState.originY + dy });
           }}
           onPointerUp={(e) => {
@@ -144,6 +173,45 @@ export default function SchemaGraphView(props: SchemaGraphViewProps) {
           onPointerCancel={() => {
             graphDragState.dragging = false;
           }}
+          onMouseDown={(e) => {
+            if (typeof PointerEvent === "function") return;
+            if (e.button !== 0) return;
+
+            cleanupMousePan?.();
+            cleanupMousePan = null;
+
+            props.setGraphHasFit(true);
+            graphDragState.dragging = true;
+            graphDragState.suppressClick = false;
+            graphDragState.startX = e.clientX;
+            graphDragState.startY = e.clientY;
+            const pan = props.graphPan;
+            graphDragState.originX = pan.x;
+            graphDragState.originY = pan.y;
+
+            const onMove = (ev: MouseEvent) => {
+              if (!graphDragState.dragging) return;
+              const dx = ev.clientX - graphDragState.startX;
+              const dy = ev.clientY - graphDragState.startY;
+              if (!graphDragState.suppressClick && Math.hypot(dx, dy) > 2) graphDragState.suppressClick = true;
+              props.setGraphPan({ x: graphDragState.originX + dx, y: graphDragState.originY + dy });
+            };
+
+            const onUp = () => {
+              graphDragState.dragging = false;
+              cleanupMousePan?.();
+              cleanupMousePan = null;
+            };
+
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp, { once: true });
+
+            cleanupMousePan = () => {
+              window.removeEventListener("mousemove", onMove);
+            };
+
+            e.preventDefault();
+          }}
           onWheel={(e) => {
             if (!(e.ctrlKey || e.metaKey)) return;
             e.preventDefault();
@@ -152,6 +220,10 @@ export default function SchemaGraphView(props: SchemaGraphViewProps) {
             props.setGraphHasFit(true);
           }}
           onClick={() => {
+            if (graphDragState.suppressClick) {
+              graphDragState.suppressClick = false;
+              return;
+            }
             props.setGraphSelectedTable(null);
             props.setGraphSelectedRelationship(null);
           }}

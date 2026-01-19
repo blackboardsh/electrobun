@@ -67,6 +67,7 @@ declare module "electrobun/bun" {
       title?: string;
       url?: string;
       frame?: { width: number; height: number; x?: number; y?: number };
+      titleBarStyle?: "hiddenInset" | "default";
       rpc?: unknown;
     });
     on(event: "close", handler: () => void): void;

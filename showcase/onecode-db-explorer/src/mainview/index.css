@@ -719,12 +719,26 @@ code {
 
 .tabbar {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 6px 12px 10px;
   border-bottom: 1px solid hsl(var(--border));
   background: hsl(var(--background));
+  overflow: hidden;
+}
+
+.tabbar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.tabbar-toolbar {
+  padding-top: 8px;
+  border-top: 1px solid hsl(var(--border) / 0.65);
 }
 
 .tab {
@@ -792,7 +806,7 @@ code {
 }
 
 .tab-spacer {
-  flex: 1;
+  display: none;
 }
 
 .tab-sep {
@@ -1366,6 +1380,86 @@ code {
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid hsl(var(--border));
+  position: relative;
+  background: hsl(var(--background));
+}
+
+.grid-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: hsl(var(--background) / 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.grid-overlay-card {
+  width: min(560px, 100%);
+  border-radius: calc(var(--radius) + 6px);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--surface-1));
+  box-shadow: var(--shadow-soft);
+  padding: 14px 14px 12px;
+}
+
+.grid-overlay-title {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: -0.2px;
+}
+
+.grid-overlay-text {
+  margin-top: 6px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.45;
+}
+
+.grid-overlay-table {
+  font-family: var(--font-mono);
+  color: hsl(var(--foreground));
+}
+
+.grid-overlay-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.grid-overlay-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+}
+
+.grid-overlay-error {
+  margin-top: 10px;
+  border-radius: calc(var(--radius) + 6px);
+  padding: 10px 12px;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid hsl(var(--border));
+  border-top-color: hsl(var(--primary));
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .col-header {
@@ -1478,6 +1572,13 @@ code {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.graph-error-pill {
+  max-width: min(520px, 40vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .graph-search {

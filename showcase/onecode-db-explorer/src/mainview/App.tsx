@@ -24,6 +24,7 @@ import TableToolbar from "./components/TableToolbar";
 import TablesSidebar from "./components/TablesSidebar";
 import TypedColumnHeader from "./components/TypedColumnHeader";
 import TitleBar from "./components/TitleBar";
+import type { SqlEditorHandle } from "./components/SqlEditor";
 import {
   buildSqlCompletionSchema,
   clampFloat,
@@ -85,6 +86,9 @@ const staticTabs: Array<{ id: Exclude<TabId, `table:${string}`>; label: string }
   { id: "logs", label: "Recent logs" },
   { id: "newTable", label: "New Table" },
 ];
+
+const INTERNAL_SQLITE_ROWID = "__eb_rowid";
+const INTERNAL_POSTGRES_CTID = "__eb_ctid";
 
 let pushLog: ((entry: LogEntry) => void) | undefined;
 
@@ -196,6 +200,7 @@ export default function App() {
   const [snippetQuery, setSnippetQuery] = createSignal("");
   const [snippetError, setSnippetError] = createSignal<string | null>(null);
   const [activeQueryId, setActiveQueryId] = createSignal<string | null>(null);
+  const [sqlEditorHandle, setSqlEditorHandle] = createSignal<SqlEditorHandle | null>(null);
 
   const [adapter, setAdapter] = createSignal<string>("—");
   const [tables, setTables] = createSignal<string[]>([]);
@@ -708,6 +713,9 @@ export default function App() {
     const conn = activeConnectionString().trim();
     if (!tableName || !conn) return null;
 
+    const schema = tableSchemas()[tableName];
+    if (!schema || schema.length === 0) return null;
+
     return {
       getRows: (params: IGetRowsParams) => {
         void (async () => {
@@ -913,16 +921,52 @@ export default function App() {
     }
   };
 
+  type RowIdentityKind = "primaryKey" | "rowid" | "ctid";
+
+  function buildRowIdentityFor(args: {
+    operation?: "update" | "delete";
+    adapter: string;
+    tableName: string;
+    row: Record<string, unknown>;
+    primaryKeyColumns: string[];
+  }): { ok: true; primaryKey: Record<string, unknown>; kind: RowIdentityKind } | { ok: false; error: string } {
+    const op = args.operation ?? "update";
+    if (args.primaryKeyColumns.length > 0) {
+      const primaryKey: Record<string, unknown> = {};
+      for (const col of args.primaryKeyColumns) primaryKey[col] = args.row[col];
+      for (const [k, v] of Object.entries(primaryKey)) {
+        if (v === null || v === undefined) {
+          return { ok: false, error: `Cannot ${op} ${args.tableName}: missing PK value for ${k}.` };
+        }
+      }
+      return { ok: true, primaryKey, kind: "primaryKey" };
+    }
+
+    if (args.adapter === "sqlite") {
+      const rowid = args.row[INTERNAL_SQLITE_ROWID];
+      if (rowid === null || rowid === undefined) {
+        return { ok: false, error: `Cannot ${op} ${args.tableName}: no primary key (and no rowid).` };
+      }
+      return { ok: true, primaryKey: { [INTERNAL_SQLITE_ROWID]: rowid }, kind: "rowid" };
+    }
+
+    if (args.adapter === "postgres") {
+      const ctid = args.row[INTERNAL_POSTGRES_CTID];
+      if (ctid === null || ctid === undefined) {
+        return { ok: false, error: `Cannot ${op} ${args.tableName}: no primary key (and no ctid).` };
+      }
+      return { ok: true, primaryKey: { [INTERNAL_POSTGRES_CTID]: ctid }, kind: "ctid" };
+    }
+
+    return { ok: false, error: `Cannot ${op} ${args.tableName}: no primary key detected.` };
+  }
+
   const handleTableCellDoubleClicked = (e: CellDoubleClickedEvent<Record<string, unknown>, unknown>) => {
     const tableName = activeTableTab();
     const field = String(e.colDef?.field ?? "");
     if (!tableName || !field) return;
 
     const pkCols = activePrimaryKeyColumns();
-    if (pkCols.length === 0) {
-      setError(`Cannot update ${tableName}: no primary key detected.`);
-      return;
-    }
     if (pkCols.includes(field)) return;
 
     const typeText = activeColumnTypeMap()[field] ?? "";
@@ -930,13 +974,10 @@ export default function App() {
     if (!kind) return;
 
     const row = (e.data ?? {}) as Record<string, unknown>;
-    const primaryKey: Record<string, unknown> = {};
-    for (const col of pkCols) primaryKey[col] = row[col];
-    for (const [k, v] of Object.entries(primaryKey)) {
-      if (v === null || v === undefined) {
-        setError(`Cannot update ${tableName}: missing PK value for ${k}.`);
-        return;
-      }
+    const identity = buildRowIdentityFor({ adapter: adapter(), tableName, row, primaryKeyColumns: pkCols });
+    if (!identity.ok) {
+      setError(identity.error);
+      return;
     }
 
     const currentValue = row[field];
@@ -948,7 +989,7 @@ export default function App() {
     ) {
       return;
     }
-    setCellEditContext({ table: tableName, column: field, typeText, kind, primaryKey });
+    setCellEditContext({ table: tableName, column: field, typeText, kind, primaryKey: identity.primaryKey });
     setCellEditMode(currentValue === null || currentValue === undefined ? "null" : "value");
     setCellEditValue(formatCellEditorValue(kind, currentValue));
     setCellEditError(null);
@@ -998,7 +1039,9 @@ export default function App() {
       const node = cellEditNode;
       handleCellEditOpenChange(false);
 
-      if (ctx.kind === "blob") {
+      const usesCtid = Object.prototype.hasOwnProperty.call(ctx.primaryKey, INTERNAL_POSTGRES_CTID);
+
+      if (ctx.kind === "blob" || usesCtid) {
         refreshActiveTableGrid({ resetScroll: false });
         return;
       }
@@ -1023,28 +1066,16 @@ export default function App() {
     if (!tableName || !field) return;
 
     const pkCols = activePrimaryKeyColumns();
-    if (pkCols.length === 0) {
-      setError(`Cannot update ${tableName}: no primary key detected.`);
+    const row = (e.data ?? {}) as Record<string, unknown>;
+    const identity = buildRowIdentityFor({ adapter: adapter(), tableName, row, primaryKeyColumns: pkCols });
+    if (!identity.ok) {
+      setError(identity.error);
       suppressEditRollback = true;
       e.node?.setDataValue?.(field, e.oldValue);
       queueMicrotask(() => {
         suppressEditRollback = false;
       });
       return;
-    }
-
-    const pk: Record<string, unknown> = {};
-    for (const col of pkCols) pk[col] = e.data?.[col];
-    for (const [k, v] of Object.entries(pk)) {
-      if (v === null || v === undefined) {
-        setError(`Cannot update ${tableName}: missing PK value for ${k}.`);
-        suppressEditRollback = true;
-        e.node?.setDataValue?.(field, e.oldValue);
-        queueMicrotask(() => {
-          suppressEditRollback = false;
-        });
-        return;
-      }
     }
 
     const conn = activeConnectionString().trim();
@@ -1055,7 +1086,7 @@ export default function App() {
     const res = await electrobun.rpc!.request.updateCell({
       connectionString: conn,
       table: tableName,
-      primaryKey: pk,
+      primaryKey: identity.primaryKey,
       column: field,
       value: nextValue,
     });
@@ -1071,6 +1102,10 @@ export default function App() {
     }
 
     setError(null);
+
+    if (identity.kind === "ctid") {
+      refreshActiveTableGrid({ resetScroll: false });
+    }
   };
 
   const schemaInFlight = new Map<string, Promise<void>>();
@@ -1098,6 +1133,14 @@ export default function App() {
 
     schemaInFlight.set(tableName, task);
     return task;
+  }
+
+  async function retryActiveTableSchema() {
+    const tableName = activeTableTab();
+    if (!tableName) return;
+    setError(null);
+    await ensureSchema(tableName);
+    refreshActiveTableGrid({ resetScroll: false });
   }
 
   async function connectAndRefresh() {
@@ -1278,10 +1321,14 @@ export default function App() {
     type ViewTransitionDoc = { startViewTransition?: (cb: () => void) => unknown };
     const start = (document as unknown as ViewTransitionDoc).startViewTransition;
     if (typeof start === "function") {
-      start(() => {
-        update();
-      });
-      return;
+      try {
+        start(() => {
+          update();
+        });
+        return;
+      } catch {
+        // Some embedded WebKit builds expose `startViewTransition` but throw when invoked.
+      }
     }
     update();
   }
@@ -1410,7 +1457,7 @@ export default function App() {
   function loadQueryIntoEditor(queryText: string, opts: { run?: boolean } = {}) {
     setActiveSqlQuery(queryText);
     setActiveTab("sql");
-    if (opts.run) void runSql(queryText);
+    if (opts.run) void runSql();
   }
 
   function startNewSnippet(queryText: string) {
@@ -1495,7 +1542,7 @@ export default function App() {
     }
   }
 
-  async function runSql(queryText?: string) {
+  async function runSqlFromText(args: { text: string; updateTitle: boolean }) {
     if (isRunning()) return;
     setIsRunning(true);
     setError(null);
@@ -1504,6 +1551,7 @@ export default function App() {
     try {
       const doc = activeSqlDocument();
       if (!doc) return;
+      const docId = doc.id;
 
       const conn = activeConnectionString().trim();
       if (!conn) {
@@ -1511,11 +1559,7 @@ export default function App() {
         return;
       }
 
-      if (typeof queryText === "string" && queryText !== doc.query) {
-        setActiveSqlQuery(queryText);
-      }
-
-      const text = (queryText ?? doc.query).trim();
+      const text = args.text.trim();
       const statements = splitSqlStatements(text);
       if (statements.length === 0) {
         setError("Query is empty.");
@@ -1543,10 +1587,10 @@ export default function App() {
       const now = Date.now();
       setSqlDocuments((prev) =>
         prev.map((d) =>
-          d.id === doc.id
+          d.id === docId
             ? {
                 ...d,
-                title: summarizeQuery(text, 42),
+                title: args.updateTitle ? summarizeQuery(text, 42) : d.title,
                 runs,
                 activeRunIndex: Math.max(0, runs.length - 1),
                 lastRunAt: now,
@@ -1576,12 +1620,22 @@ export default function App() {
       }
 
       setSqlDocuments((prev) =>
-        prev.map((d) => (d.id === doc.id ? { ...d, typeMap: nextTypeMap } : d))
+        prev.map((d) => (d.id === docId ? { ...d, typeMap: nextTypeMap } : d))
       );
     } finally {
       setActiveQueryId(null);
       setIsRunning(false);
     }
+  }
+
+  async function runSql() {
+    const doc = activeSqlDocument();
+    if (!doc) return;
+    await runSqlFromText({ text: doc.query, updateTitle: true });
+  }
+
+  async function runSqlText(queryText: string) {
+    await runSqlFromText({ text: queryText, updateTitle: false });
   }
 
   async function prefetchSchemas(tableList: string[]) {
@@ -1888,6 +1942,7 @@ export default function App() {
   }
 
   async function openTable(tableName: string) {
+    setError(null);
     setActiveTable(tableName);
     setActiveTab(`table:${tableName}`);
     setOpenTables((prev) => (prev.includes(tableName) ? prev : [...prev, tableName]));
@@ -2002,6 +2057,15 @@ export default function App() {
     URL.revokeObjectURL(url);
   }
 
+  function stripInternalRowFields(row: Record<string, unknown>) {
+    const next: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (key.startsWith("__eb_")) continue;
+      next[key] = value;
+    }
+    return next;
+  }
+
   async function copyToClipboard(text: string) {
     try {
       if (!navigator.clipboard?.writeText) {
@@ -2048,7 +2112,7 @@ export default function App() {
       return;
     }
 
-    const json = JSON.stringify(rows, null, 2);
+    const json = JSON.stringify(rows.map(stripInternalRowFields), null, 2);
     downloadTextFile(`${tableName}.json`, json, "application/json");
   }
 
@@ -2082,7 +2146,7 @@ export default function App() {
       setError("No rows loaded to copy.");
       return;
     }
-    void copyToClipboard(JSON.stringify(rows, null, 2));
+    void copyToClipboard(JSON.stringify(rows.map(stripInternalRowFields), null, 2));
   }
 
   async function deleteSelectedRows() {
@@ -2096,22 +2160,21 @@ export default function App() {
     if (selected.length === 0) return;
 
     const pkCols = activePrimaryKeyColumns();
-    if (pkCols.length === 0) {
-      setError(`Cannot delete from ${tableName}: no primary key detected.`);
-      return;
-    }
-
     const primaryKeys: Array<Record<string, unknown>> = [];
     for (const row of selected) {
-      const pk: Record<string, unknown> = {};
-      for (const col of pkCols) pk[col] = row?.[col];
-      for (const [k, v] of Object.entries(pk)) {
-        if (v === null || v === undefined) {
-          setError(`Cannot delete from ${tableName}: missing PK value for ${k}.`);
-          return;
-        }
+      const identity = buildRowIdentityFor({
+        operation: "delete",
+        adapter: adapter(),
+        tableName,
+        row,
+        primaryKeyColumns: pkCols,
+      });
+      if (!identity.ok) {
+        setError(identity.error);
+        return;
       }
-      primaryKeys.push(pk);
+
+      primaryKeys.push(identity.primaryKey);
     }
 
     const proceed = window.confirm(`Delete ${primaryKeys.length} row(s) from ${tableName}?`);
@@ -2235,7 +2298,7 @@ export default function App() {
     {
       id: "run",
       name: "Run",
-      description: "Run current view query",
+      description: isTableTab(activeTab()) ? "Refresh table rows" : "Run selection / statement",
       shortcut: isTableTab(activeTab()) ? "⏎" : "⌘/Ctrl+⏎",
       disabled: isRunning(),
       run: async () => {
@@ -2246,6 +2309,22 @@ export default function App() {
           refreshActiveTableGrid();
           return;
         }
+        const handle = sqlEditorHandle();
+        if (handle) {
+          handle.runSelectionOrStatement();
+          return;
+        }
+        await runSql();
+      },
+    },
+    {
+      id: "run-all",
+      name: "Run All",
+      description: "Run all statements in the SQL editor",
+      shortcut: isTableTab(activeTab()) ? undefined : "⇧⌘/Ctrl+⏎",
+      disabled: isRunning() || isTableTab(activeTab()),
+      run: async () => {
+        setPaletteOpen(false);
         await runSql();
       },
     },
@@ -2785,6 +2864,7 @@ export default function App() {
                 sqlQuery={activeSqlQueryText()}
                 setSqlQuery={setActiveSqlQuery}
                 runSql={runSql}
+                runSqlText={runSqlText}
                 cancelActiveQuery={cancelActiveQuery}
                 canCancelQuery={canCancelQuery()}
                 isRunning={isRunning()}
@@ -2818,6 +2898,7 @@ export default function App() {
                 truncateText={truncateText}
                 startEditSnippet={startEditSnippet}
                 deleteSnippet={deleteSnippet}
+                setSqlEditorHandle={setSqlEditorHandle}
               />
             </Match>
 
@@ -2828,6 +2909,7 @@ export default function App() {
                 visibleGraphTables={visibleGraphTables()}
                 visibleGraphRelationships={visibleGraphRelationships()}
                 graphLoading={graphLoading()}
+                error={error()}
                 loadSchemaGraph={loadSchemaGraph}
                 setGraphScale={setGraphScale}
                 clampFloat={clampFloat}
@@ -2858,6 +2940,10 @@ export default function App() {
 
             <Match when={activeTableTab()}>
               <TableDataView
+                tableName={activeTableTab() ?? ""}
+                columnCount={activeTableSchema()?.length ?? 0}
+                onRetrySchema={retryActiveTableSchema}
+                onOpenSchemaManager={() => setActiveTab("schema")}
                 error={error()}
                 statusText={statusText()}
                 adapter={adapter()}

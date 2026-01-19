@@ -6,12 +6,23 @@ import { EditorView, minimalSetup } from "codemirror";
 import { keymap, placeholder } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { createEffect, onCleanup, onMount } from "solid-js";
-import { inferSqlAliasMap, resolveTableReference } from "../lib/app-helpers";
+import { getSqlStatementAtCursor, inferSqlAliasMap, resolveTableReference } from "../lib/app-helpers";
+
+export type SqlEditorRunRequest =
+  | { kind: "all" }
+  | { kind: "selection"; query: string }
+  | { kind: "statement"; query: string };
+
+export type SqlEditorHandle = {
+  runSelectionOrStatement: () => void;
+  runAll: () => void;
+  focus: () => void;
+};
 
 type SqlEditorProps = {
   value: string;
   onChange: (nextValue: string) => void;
-  onRun?: () => void;
+  onRun?: (request: SqlEditorRunRequest) => void;
   placeholder?: string;
   readOnly?: boolean;
   dialect?: "postgres" | "mysql" | "sqlite";
@@ -20,6 +31,7 @@ type SqlEditorProps = {
   defaultTable?: string;
   knownTables?: string[];
   ensureTableSchema?: (tableName: string) => void | Promise<void>;
+  setHandle?: (handle: SqlEditorHandle | null) => void;
 };
 
 const editorTheme = EditorView.theme({
@@ -145,11 +157,41 @@ export default function SqlEditor(props: SqlEditorProps) {
     };
   };
 
+  const getRunRequest = (): SqlEditorRunRequest => {
+    if (!view) return { kind: "all" };
+
+    const main = view.state.selection.main;
+    if (main.from !== main.to) {
+      const selected = view.state.sliceDoc(main.from, main.to).trim();
+      if (selected) return { kind: "selection", query: selected };
+    }
+
+    const statement = getSqlStatementAtCursor(view.state.doc.toString(), main.head);
+    if (statement) return { kind: "statement", query: statement };
+
+    return { kind: "all" };
+  };
+
+  const runSelectionOrStatement = () => {
+    props.onRun?.(getRunRequest());
+  };
+
+  const runAll = () => {
+    props.onRun?.({ kind: "all" });
+  };
+
   const runKeymap = keymap.of([
+    {
+      key: "Shift-Mod-Enter",
+      run: () => {
+        runAll();
+        return true;
+      },
+    },
     {
       key: "Mod-Enter",
       run: () => {
-        props.onRun?.();
+        runSelectionOrStatement();
         return true;
       },
     },
@@ -200,7 +242,14 @@ export default function SqlEditor(props: SqlEditorProps) {
       parent: mountEl,
     });
 
+    props.setHandle?.({
+      runSelectionOrStatement,
+      runAll,
+      focus: () => view?.focus(),
+    });
+
     onCleanup(() => {
+      props.setHandle?.(null);
       view?.destroy();
       view = undefined;
     });

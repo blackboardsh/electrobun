@@ -7,8 +7,8 @@ This folder is a **real showcase app**, not a toy template. Changes should push 
 
 ### Build Tooling
 - **No Vite.** UI bundling uses `Bun.build` (see `scripts/build-ui.ts`).
-- Solid JSX compilation uses the local **`solid-jsx-oxc`** rewrite at `/Users/new/projects/rs/solid-jsx-oxc`.
-- If you hit compiler bugs, fix them in `solid-jsx-oxc` directly.
+- Solid JSX compilation is **currently handled by a temporary Babel plugin** (see `scripts/solid-plugin.ts`).
+- `solid-jsx-oxc` is included as a dev dependency but **is not wired into the build yet**.
 
 ### UI Libraries
 - Prefer **Corvu** for unstyled, accessible primitives (dialogs, popovers, tooltips).

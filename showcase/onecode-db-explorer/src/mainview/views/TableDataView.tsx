@@ -11,6 +11,10 @@ import { Show } from "solid-js";
 import type { LogEntry } from "../types";
 
 type TableDataViewProps = {
+  tableName: string;
+  columnCount: number;
+  onRetrySchema: () => void | Promise<void>;
+  onOpenSchemaManager: () => void;
   error: string | null;
   statusText: string;
   adapter: string;
@@ -27,6 +31,7 @@ type TableDataViewProps = {
 };
 
 export default function TableDataView(props: TableDataViewProps) {
+  const schemaLoaded = () => props.columnCount > 0;
   return (
     <div class="view">
       <div class="results">
@@ -36,28 +41,66 @@ export default function TableDataView(props: TableDataViewProps) {
         </div>
 
         <div class="grid">
-          <AgGridSolid
-            class={props.gridThemeClass}
-            rowModelType="infinite"
-            cacheBlockSize={props.clampInt(Number(props.tableLimit) || 100, 1, 1000)}
-            maxBlocksInCache={6}
-            datasource={props.tableDatasource ?? undefined}
-            rowSelection="multiple"
-            suppressRowClickSelection={true}
-            columnDefs={props.columnDefs}
-            defaultColDef={{
-              sortable: true,
-              filter: true,
-              resizable: true,
-              autoHeaderHeight: true,
-            }}
-            onGridReady={props.onGridReady}
-            onSelectionChanged={props.onSelectionChanged}
-            onCellValueChanged={props.onCellValueChanged}
-            onCellDoubleClicked={props.onCellDoubleClicked}
-            animateRows={true}
-            suppressFieldDotNotation={true}
-          />
+          <Show when={schemaLoaded()}>
+            <AgGridSolid
+              class={props.gridThemeClass}
+              rowModelType="infinite"
+              cacheBlockSize={props.clampInt(Number(props.tableLimit) || 100, 1, 1000)}
+              maxBlocksInCache={6}
+              datasource={props.tableDatasource ?? undefined}
+              rowSelection="multiple"
+              suppressRowClickSelection={true}
+              singleClickEdit={true}
+              stopEditingWhenCellsLoseFocus={true}
+              columnDefs={props.columnDefs}
+              defaultColDef={{
+                sortable: true,
+                filter: true,
+                resizable: true,
+                autoHeaderHeight: true,
+              }}
+              onGridReady={props.onGridReady}
+              onSelectionChanged={props.onSelectionChanged}
+              onCellValueChanged={props.onCellValueChanged}
+              onCellDoubleClicked={props.onCellDoubleClicked}
+              animateRows={true}
+              suppressFieldDotNotation={true}
+            />
+          </Show>
+
+          <Show when={!schemaLoaded()}>
+            <div class="grid-overlay" role="status" aria-live="polite">
+              <div class="grid-overlay-card">
+                <div class="grid-overlay-title">
+                  {props.error ? "Couldn’t load table schema" : "Loading table schema…"}
+                </div>
+                <div class="grid-overlay-text">
+                  <span class="grid-overlay-table">{props.tableName}</span>
+                  <span> needs column metadata before rows can render.</span>
+                </div>
+
+                <Show when={props.error}>
+                  <div class="pill pill-error grid-overlay-error">{props.error}</div>
+                </Show>
+
+                <div class="grid-overlay-actions">
+                  <button class="btn btn-primary" onClick={() => void props.onRetrySchema()}>
+                    Retry
+                  </button>
+                  <button class="btn btn-secondary" onClick={props.onOpenSchemaManager}>
+                    Schema
+                  </button>
+                </div>
+
+                <Show when={!props.error}>
+                  <div class="grid-overlay-status">
+                    <span class="spinner" aria-hidden="true" />
+                    Fetching columns…
+                  </div>
+                </Show>
+              </div>
+            </div>
+          </Show>
         </div>
 
         <Show when={props.logs.length > 0}>

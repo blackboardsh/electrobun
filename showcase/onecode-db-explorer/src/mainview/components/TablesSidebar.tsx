@@ -1,5 +1,5 @@
 import { makePersisted } from "@solid-primitives/storage";
-import { For, Show, createEffect, createMemo, createSignal, type Setter } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, type Setter } from "solid-js";
 import type { ColumnInfo } from "../../bun/index";
 import { classifyColumnType } from "../lib/app-helpers";
 
@@ -108,6 +108,9 @@ export default function TablesSidebar(props: TablesSidebarProps) {
     startX: 0,
     startWidth: 0,
   };
+
+  let cleanupMouseResize: (() => void) | null = null;
+  onCleanup(() => cleanupMouseResize?.());
 
   const [expandedSchemas, setExpandedSchemas] = makePersisted(createSignal<string[]>([]), {
     name: "onecodeDbExplorer.schemaSidebar.expandedSchemas",
@@ -323,7 +326,7 @@ export default function TablesSidebar(props: TablesSidebarProps) {
                                 when={props.tableSchemas[table.fullName]}
                                 fallback={
                                   <div class="schema-tree-row schema-tree-column-row schema-tree-loading" data-level="2">
-                                    {isLoading() ? "Loading…" : "No columns"}
+                                    {isLoading() ? "Loading…" : "Columns unavailable"}
                                   </div>
                                 }
                               >
@@ -368,7 +371,11 @@ export default function TablesSidebar(props: TablesSidebarProps) {
           resizeState.dragging = true;
           resizeState.startX = e.clientX;
           resizeState.startWidth = props.sidebarWidth;
-          (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+          try {
+            (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+          } catch {
+            // ignore
+          }
         }}
         onPointerMove={(e) => {
           if (!resizeState.dragging) return;
@@ -386,6 +393,39 @@ export default function TablesSidebar(props: TablesSidebarProps) {
         }}
         onPointerCancel={() => {
           resizeState.dragging = false;
+        }}
+        onMouseDown={(e) => {
+          if (typeof PointerEvent === "function") return;
+          if (e.button !== 0) return;
+
+          cleanupMouseResize?.();
+          cleanupMouseResize = null;
+
+          resizeState.dragging = true;
+          resizeState.startX = e.clientX;
+          resizeState.startWidth = props.sidebarWidth;
+
+          const onMove = (ev: MouseEvent) => {
+            if (!resizeState.dragging) return;
+            const delta = ev.clientX - resizeState.startX;
+            const next = Math.max(180, Math.min(420, resizeState.startWidth + delta));
+            props.setSidebarWidth(next);
+          };
+
+          const onUp = () => {
+            resizeState.dragging = false;
+            cleanupMouseResize?.();
+            cleanupMouseResize = null;
+          };
+
+          window.addEventListener("mousemove", onMove);
+          window.addEventListener("mouseup", onUp, { once: true });
+
+          cleanupMouseResize = () => {
+            window.removeEventListener("mousemove", onMove);
+          };
+
+          e.preventDefault();
         }}
       />
     </div>

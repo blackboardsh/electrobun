@@ -3,6 +3,9 @@ import { BrowserView, BrowserWindow, Utils, type RPCSchema } from "electrobun/bu
 
 type Adapter = "sqlite" | "postgres" | "mysql";
 
+const INTERNAL_SQLITE_ROWID = "__eb_rowid";
+const INTERNAL_POSTGRES_CTID = "__eb_ctid";
+
 const KEYCHAIN_SERVICE = "electrobun.onecode-db-explorer.connectionString";
 const securityCmd = "/usr/bin/security";
 const textDecoder = new TextDecoder();
@@ -241,6 +244,7 @@ const runningQueries = new Map<
     startedAt: number;
   }
 >();
+const sqliteRowidCache = new Map<string, Map<string, boolean>>();
 
 function getClient(connectionString: string): SQL {
   const existing = clients.get(connectionString);
@@ -341,6 +345,39 @@ function countFromResult(result: unknown, fallback: number) {
   const raw = objectProp(result, "count");
   const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
+}
+
+async function sqliteTableHasRowid(connectionString: string, tableName: string): Promise<boolean> {
+  const cached = sqliteRowidCache.get(connectionString);
+  if (cached?.has(tableName)) return cached.get(tableName)!;
+
+  const client = getClient(connectionString);
+  const { schema, table } = splitSchemaTable(tableName);
+  const sqliteMaster = schema ? `${quoteIdentifier("sqlite", schema)}.sqlite_master` : "sqlite_master";
+
+  let hasRowid = true;
+  try {
+    const rows = await client.unsafe(
+      `SELECT sql FROM ${sqliteMaster} WHERE type = 'table' AND name = $1 LIMIT 1;`,
+      [table]
+    );
+    const sql = toStringOrEmpty(Array.isArray(rows) ? objectProp(rows[0], "sql") : undefined).toUpperCase();
+    if (sql && sql.includes("WITHOUT ROWID")) hasRowid = false;
+  } catch {
+    hasRowid = true;
+  }
+
+  const map = cached ?? new Map<string, boolean>();
+  map.set(tableName, hasRowid);
+  if (!cached) sqliteRowidCache.set(connectionString, map);
+
+  return hasRowid;
+}
+
+function resolveRowIdentityColumn(adapter: Adapter, column: string) {
+  if (adapter === "sqlite" && column === INTERNAL_SQLITE_ROWID) return "_rowid_";
+  if (adapter === "postgres" && column === INTERNAL_POSTGRES_CTID) return "ctid";
+  return quoteIdentifier(adapter, column);
 }
 
 function buildAgGridFilterClause(args: {
@@ -578,7 +615,7 @@ async function describeTableFor(connectionString: string, tableName: string): Pr
     // PRAGMA functions don't support parameterized queries, so we use a quoted string literal
     const quotedTable = quoteIdentifier(adapter, tableName);
     const rows = await client.unsafe(`
-      SELECT cid, name, type, notnull, dflt_value, pk
+      SELECT *
       FROM pragma_table_info(${quotedTable})
       ORDER BY cid;
     `);
@@ -710,11 +747,11 @@ async function updateCellFor(args: {
   const adapter = detectAdapter(args.connectionString);
   const client = getClient(args.connectionString);
 
-  const pkEntries = Object.entries(args.primaryKey).filter(([k]) => k.trim().length > 0);
+  const pkEntries = Object.entries(args.primaryKey).filter(([k]) => k.trim().length > 0 && !k.includes("."));
   if (pkEntries.length === 0) throw new Error("Missing primary key values for update.");
 
   const where = pkEntries
-    .map(([col], idx) => `${quoteIdentifier(adapter, col)} = $${idx + 2}`)
+    .map(([col], idx) => `${resolveRowIdentityColumn(adapter, col)} = $${idx + 2}`)
     .join(" AND ");
 
   const sql = `UPDATE ${quoteQualified(adapter, args.table)} SET ${quoteIdentifier(
@@ -775,12 +812,12 @@ async function deleteRowsFor(args: {
   let total = 0;
   for (const pk of args.primaryKeys) {
     const pkEntries = Object.entries(pk)
-      .filter(([k]) => k.trim().length > 0)
+      .filter(([k]) => k.trim().length > 0 && !k.includes("."))
       .sort(([a], [b]) => a.localeCompare(b));
     if (pkEntries.length === 0) continue;
 
     const where = pkEntries
-      .map(([col], idx) => `${quoteIdentifier(adapter, col)} = $${idx + 1}`)
+      .map(([col], idx) => `${resolveRowIdentityColumn(adapter, col)} = $${idx + 1}`)
       .join(" AND ");
 
     const sql = `DELETE FROM ${quoteQualified(adapter, args.table)} WHERE ${where};`;
@@ -1236,7 +1273,16 @@ function createAppWindow(
             const limitParam = addParam(limit);
             const offsetParam = addParam(offset);
 
-            const sql = `SELECT * FROM ${quoteQualified(adapter, table)}${whereSql}${orderSql} LIMIT ${limitParam} OFFSET ${offsetParam};`;
+            const selectPrefix = await (async () => {
+              if (adapter === "postgres") return `ctid AS ${quoteIdentifier(adapter, INTERNAL_POSTGRES_CTID)}, *`;
+              if (adapter === "sqlite") {
+                const hasRowid = await sqliteTableHasRowid(connectionString, table);
+                if (hasRowid) return `_rowid_ AS ${quoteIdentifier(adapter, INTERNAL_SQLITE_ROWID)}, *`;
+              }
+              return "*";
+            })();
+
+            const sql = `SELECT ${selectPrefix} FROM ${quoteQualified(adapter, table)}${whereSql}${orderSql} LIMIT ${limitParam} OFFSET ${offsetParam};`;
             const rows = await client.unsafe(sql, params);
             return { ok: true, rows: Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [] };
           } catch (error) {

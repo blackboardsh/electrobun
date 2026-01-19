@@ -358,6 +358,157 @@ export function splitSqlStatements(input: string) {
   return out;
 }
 
+export function getSqlStatementAtCursor(input: string, cursorIndex: number): string | null {
+  const source = input ?? "";
+  if (!source.trim()) return null;
+
+  const len = source.length;
+  const cursor = Math.max(0, Math.min(len, Math.trunc(cursorIndex)));
+
+  const segments: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  let i = 0;
+
+  let inSingle = false;
+  let inDouble = false;
+  let inBacktick = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let dollarDelim: string | null = null;
+
+  const pushSegment = (endIndex: number) => {
+    segments.push({ start, end: endIndex });
+  };
+
+  while (i < len) {
+    const ch = source[i];
+    const next = source[i + 1];
+
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+      i += 1;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (dollarDelim) {
+      const delim = dollarDelim;
+      if (source.startsWith(delim, i)) {
+        dollarDelim = null;
+        i += delim.length;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (inSingle) {
+      if (ch === "'") {
+        if (next === "'") {
+          i += 2;
+          continue;
+        }
+        inSingle = false;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (inDouble) {
+      if (ch === '"') inDouble = false;
+      i += 1;
+      continue;
+    }
+
+    if (inBacktick) {
+      if (ch === "`") inBacktick = false;
+      i += 1;
+      continue;
+    }
+
+    if (ch === "-" && next === "-") {
+      inLineComment = true;
+      i += 2;
+      continue;
+    }
+
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i += 2;
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      inDouble = true;
+      i += 1;
+      continue;
+    }
+
+    if (ch === "`") {
+      inBacktick = true;
+      i += 1;
+      continue;
+    }
+
+    if (ch === "$") {
+      const rest = source.slice(i);
+      const match = rest.match(/^\$[A-Za-z_][A-Za-z0-9_]*\$/) ?? rest.match(/^\$\$/);
+      if (match) {
+        dollarDelim = match[0];
+        i += dollarDelim.length;
+        continue;
+      }
+    }
+
+    if (ch === ";") {
+      pushSegment(i);
+      start = i + 1;
+      i += 1;
+      continue;
+    }
+
+    i += 1;
+  }
+
+  pushSegment(len);
+  if (segments.length === 0) return null;
+
+  const rawIndex = segments.findIndex((s) => cursor >= s.start && cursor <= s.end);
+  const segIndex = rawIndex === -1 ? Math.max(0, segments.length - 1) : rawIndex;
+
+  const getText = (idx: number) => source.slice(segments[idx]!.start, segments[idx]!.end).trim();
+
+  const initial = segIndex >= 0 ? getText(segIndex) : "";
+  if (initial) return initial;
+
+  for (let j = segIndex + 1; j < segments.length; j++) {
+    const nextText = getText(j);
+    if (nextText) return nextText;
+  }
+
+  for (let j = segIndex - 1; j >= 0; j--) {
+    const prevText = getText(j);
+    if (prevText) return prevText;
+  }
+
+  return null;
+}
+
 export function normalizeEditedValue(typeText: string, oldValue: unknown, nextValue: unknown) {
   if (typeof nextValue !== "string") return nextValue;
 

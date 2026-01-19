@@ -1,10 +1,8 @@
 import { type SQLNamespace } from "@codemirror/lang-sql";
-import { combine } from "@atlaskit/pragmatic-drag-and-drop/combine";
-import { draggable, dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { type ColDef } from "ag-grid-community";
 import AgGridSolid from "solid-ag-grid";
-import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
-import SqlEditor from "../components/SqlEditor";
+import { For, Show, createSignal, onCleanup, type JSX } from "solid-js";
+import SqlEditor, { type SqlEditorHandle, type SqlEditorRunRequest } from "../components/SqlEditor";
 import SqlWorkspaceTabs from "../components/SqlWorkspaceTabs";
 import type { LogEntry, QueryResult, SqlDocument, SqlHistoryItem, SqlPanelId, SqlRun, SqlSnippet } from "../types";
 
@@ -22,6 +20,7 @@ type SqlViewProps = {
   sqlQuery: string;
   setSqlQuery: (next: string) => void;
   runSql: () => void | Promise<void>;
+  runSqlText: (query: string) => void | Promise<void>;
   cancelActiveQuery: () => void | Promise<void>;
   canCancelQuery: boolean;
   isRunning: boolean;
@@ -55,20 +54,22 @@ type SqlViewProps = {
   truncateText: (value: string, maxChars: number) => string;
   startEditSnippet: (snippet: SqlSnippet) => void;
   deleteSnippet: (id: string) => void;
+  setSqlEditorHandle?: (handle: SqlEditorHandle | null) => void;
 };
-
-function getPanelDragId(source: { data?: Record<string, unknown> }) {
-  const kind = source.data?.kind;
-  const id = source.data?.id;
-  if (kind !== "sql-panel") return null;
-  if (id !== "editor" && id !== "results") return null;
-  return id as SqlPanelId;
-}
 
 function getClosestVerticalEdge(element: Element, clientY: number): PanelDropEdge {
   const rect = element.getBoundingClientRect();
   const mid = rect.top + rect.height / 2;
   return clientY < mid ? "top" : "bottom";
+}
+
+function getPanelTargetFromPoint(clientX: number, clientY: number): null | { id: SqlPanelId; edge: PanelDropEdge } {
+  const el = document.elementFromPoint(clientX, clientY);
+  const panelEl = el?.closest?.(".sql-panel");
+  if (!(panelEl instanceof HTMLElement)) return null;
+  const id = panelEl.getAttribute("data-panel");
+  if (id !== "editor" && id !== "results") return null;
+  return { id, edge: getClosestVerticalEdge(panelEl, clientY) };
 }
 
 function DraggablePanel(props: {
@@ -81,67 +82,53 @@ function DraggablePanel(props: {
   header: JSX.Element;
   children: JSX.Element;
 }) {
-  let rootEl: HTMLDivElement | undefined;
   let handleEl: HTMLDivElement | undefined;
 
   const isIndicator = () => props.indicator?.id === props.id;
   const indicatorEdge = () => props.indicator?.edge ?? "top";
 
-  onMount(() => {
-    if (!rootEl) return;
+  const dragState: {
+    mode: "pointer" | "mouse" | null;
+    pointerId: number | null;
+    startX: number;
+    startY: number;
+    dragging: boolean;
+  } = {
+    mode: null,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    dragging: false,
+  };
 
-    const cleanup = combine(
-      draggable({
-        element: rootEl,
-        dragHandle: handleEl,
-        getInitialData: () => ({ kind: "sql-panel", id: props.id }),
-        onDragStart: () => {
-          props.setDraggingId(props.id);
-        },
-        onDrop: () => {
-          props.setDraggingId(null);
-          props.setIndicator(null);
-        },
-      }),
-      dropTargetForElements({
-        element: rootEl,
-        canDrop: ({ source }) => {
-          const startId = getPanelDragId(source);
-          return Boolean(startId) && startId !== props.id;
-        },
-        onDragEnter: ({ source, self, location }) => {
-          const startId = getPanelDragId(source);
-          if (!startId || startId === props.id) return;
-          const edge = getClosestVerticalEdge(self.element, location.current.input.clientY);
-          props.setIndicator({ id: props.id, edge });
-        },
-        onDrag: ({ source, self, location }) => {
-          const startId = getPanelDragId(source);
-          if (!startId || startId === props.id) return;
-          const edge = getClosestVerticalEdge(self.element, location.current.input.clientY);
-          props.setIndicator({ id: props.id, edge });
-        },
-        onDragLeave: () => {
-          if (props.indicator?.id !== props.id) return;
-          props.setIndicator(null);
-        },
-        onDrop: ({ source, self, location }) => {
-          const startId = getPanelDragId(source);
-          if (!startId || startId === props.id) return;
-          const edge = getClosestVerticalEdge(self.element, location.current.input.clientY);
-          props.reorderPanels({ startId, targetId: props.id, edge });
-        },
-      })
-    );
+  const DRAG_THRESHOLD_PX = 6;
 
-    onCleanup(cleanup);
-  });
+  const isInteractiveTarget = (target: EventTarget | null) =>
+    target instanceof Element && Boolean(target.closest("button, input, textarea, select, a, [role='button']"));
+
+  const updateIndicatorFromPoint = (clientX: number, clientY: number) => {
+    const target = getPanelTargetFromPoint(clientX, clientY);
+    if (!target || target.id === props.id) {
+      if (props.indicator) props.setIndicator(null);
+      return;
+    }
+    props.setIndicator(target);
+  };
+
+  const finishDrag = (clientX: number, clientY: number) => {
+    if (!dragState.dragging) return;
+
+    const drop = getPanelTargetFromPoint(clientX, clientY);
+    if (!drop || drop.id === props.id) return;
+
+    props.reorderPanels({ startId: props.id, targetId: drop.id, edge: drop.edge });
+  };
+
+  let cleanupMouseListeners: (() => void) | null = null;
+  onCleanup(() => cleanupMouseListeners?.());
 
   return (
     <div
-      ref={(el) => {
-        rootEl = el;
-      }}
       class="sql-panel"
       data-panel={props.id}
       data-dragging={props.draggingId === props.id ? "true" : "false"}
@@ -151,6 +138,110 @@ function DraggablePanel(props: {
           handleEl = el;
         }}
         class="sql-panel-handle"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          if (!handleEl) return;
+          if (dragState.mode !== null) return;
+          if (isInteractiveTarget(e.target)) return;
+
+          dragState.mode = "pointer";
+          dragState.pointerId = e.pointerId;
+          dragState.startX = e.clientX;
+          dragState.startY = e.clientY;
+          dragState.dragging = false;
+
+          try {
+            handleEl.setPointerCapture(e.pointerId);
+          } catch {
+            // ignore
+          }
+        }}
+        onPointerMove={(e) => {
+          if (dragState.mode !== "pointer") return;
+
+          const dx = e.clientX - dragState.startX;
+          const dy = e.clientY - dragState.startY;
+
+          if (!dragState.dragging) {
+            if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+            dragState.dragging = true;
+            props.setDraggingId(props.id);
+          }
+
+          updateIndicatorFromPoint(e.clientX, e.clientY);
+        }}
+        onPointerUp={(e) => {
+          if (dragState.mode !== "pointer") return;
+
+          try {
+            handleEl?.releasePointerCapture(e.pointerId);
+          } catch {
+            // ignore
+          }
+
+          finishDrag(e.clientX, e.clientY);
+
+          dragState.mode = null;
+          dragState.pointerId = null;
+          dragState.dragging = false;
+          props.setDraggingId(null);
+          props.setIndicator(null);
+        }}
+        onPointerCancel={() => {
+          if (dragState.mode !== "pointer") return;
+          dragState.mode = null;
+          dragState.pointerId = null;
+          dragState.dragging = false;
+          props.setDraggingId(null);
+          props.setIndicator(null);
+        }}
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          if (dragState.mode !== null) return;
+          if (isInteractiveTarget(e.target)) return;
+
+          dragState.mode = "mouse";
+          dragState.pointerId = null;
+          dragState.startX = e.clientX;
+          dragState.startY = e.clientY;
+          dragState.dragging = false;
+
+          const onMove = (ev: MouseEvent) => {
+            if (dragState.mode !== "mouse") return;
+
+            const dx = ev.clientX - dragState.startX;
+            const dy = ev.clientY - dragState.startY;
+
+            if (!dragState.dragging) {
+              if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+              dragState.dragging = true;
+              props.setDraggingId(props.id);
+            }
+
+            updateIndicatorFromPoint(ev.clientX, ev.clientY);
+          };
+
+          const onUp = (ev: MouseEvent) => {
+            if (dragState.mode !== "mouse") return;
+
+            cleanupMouseListeners?.();
+            cleanupMouseListeners = null;
+
+            finishDrag(ev.clientX, ev.clientY);
+
+            dragState.mode = null;
+            dragState.dragging = false;
+            props.setDraggingId(null);
+            props.setIndicator(null);
+          };
+
+          window.addEventListener("mousemove", onMove);
+          window.addEventListener("mouseup", onUp, { once: true });
+
+          cleanupMouseListeners = () => {
+            window.removeEventListener("mousemove", onMove);
+          };
+        }}
       >
         {props.header}
       </div>
@@ -168,8 +259,23 @@ export default function SqlView(props: SqlViewProps) {
     return value === "postgres" || value === "mysql" || value === "sqlite" ? value : undefined;
   };
 
+  const [editorHandle, setEditorHandle] = createSignal<SqlEditorHandle | null>(null);
   const [panelDraggingId, setPanelDraggingId] = createSignal<SqlPanelId | null>(null);
   const [panelIndicator, setPanelIndicator] = createSignal<null | { id: SqlPanelId; edge: PanelDropEdge }>(null);
+
+  const emitEditorHandle = (handle: SqlEditorHandle | null) => {
+    setEditorHandle(handle);
+    props.setSqlEditorHandle?.(handle);
+  };
+
+  const handleSqlEditorRun = (request: SqlEditorRunRequest) => {
+    if (request.kind === "all") {
+      void props.runSql();
+      return;
+    }
+
+    void props.runSqlText(request.query);
+  };
 
   return (
     <div class="view">
@@ -250,7 +356,8 @@ export default function SqlView(props: SqlViewProps) {
                   header={
                     <div class="pane-title">
                       <div class="pane-title-left">
-                        SQL <span class="kbd">⌘/Ctrl</span>+<span class="kbd">Enter</span>
+                        SQL <span class="kbd">⌘/Ctrl</span>+<span class="kbd">Enter</span> • <span class="kbd">⇧</span>
+                        <span class="kbd">⌘/Ctrl</span>+<span class="kbd">Enter</span>
                       </div>
                       <div class="pane-actions">
                         <button
@@ -275,7 +382,21 @@ export default function SqlView(props: SqlViewProps) {
                         >
                           Cancel
                         </button>
-                        <button class="btn btn-primary" onClick={() => void props.runSql()} disabled={props.isRunning}>
+                        <button class="btn btn-secondary" onClick={() => void props.runSql()} disabled={props.isRunning}>
+                          Run all
+                        </button>
+                        <button
+                          class="btn btn-primary"
+                          onClick={() => {
+                            const handle = editorHandle();
+                            if (handle) {
+                              handle.runSelectionOrStatement();
+                              return;
+                            }
+                            void props.runSql();
+                          }}
+                          disabled={props.isRunning}
+                        >
                           {props.isRunning ? "Running…" : "Run"}
                         </button>
                       </div>
@@ -294,7 +415,8 @@ export default function SqlView(props: SqlViewProps) {
                       <SqlEditor
                         value={props.sqlQuery}
                         onChange={props.setSqlQuery}
-                        onRun={() => void props.runSql()}
+                        onRun={handleSqlEditorRun}
+                        setHandle={emitEditorHandle}
                         placeholder="Write SQL…"
                         dialect={resolvedDialect()}
                         schema={props.sqlCompletionSchema}
