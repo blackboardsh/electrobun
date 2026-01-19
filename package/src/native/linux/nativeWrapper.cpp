@@ -2325,6 +2325,20 @@ public:
         // Set size
         gtk_widget_set_size_request(webview, (int)width, (int)height);
         
+        // Check if parent window is transparent and apply transparency to webview
+        GtkWidget* toplevel = gtk_widget_get_toplevel(window);
+        if (GTK_IS_WINDOW(toplevel)) {
+            // Check if window has RGBA visual (transparent)
+            GdkScreen* screen = gtk_window_get_screen(GTK_WINDOW(toplevel));
+            GdkVisual* visual = gtk_widget_get_visual(toplevel);
+            if (visual && gdk_screen_get_rgba_visual(screen) == visual) {
+                // Window is transparent, make webview transparent too
+                GdkRGBA transparent_color = {0.0, 0.0, 0.0, 0.0};
+                webkit_web_view_set_background_color(WEBKIT_WEB_VIEW(webview), &transparent_color);
+                printf("GTK WebKit: Applied transparent background to webview\n");
+            }
+        }
+        
         // Add preload scripts
         if (!this->electrobunPreloadScript.empty()) {
             addPreloadScriptToWebView(this->electrobunPreloadScript.c_str());
@@ -5043,7 +5057,8 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 }
 
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback,
+                   const char* titleBarStyle = nullptr, bool transparent = false) {
     
    
     
@@ -5054,16 +5069,46 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         
         GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
        
-        
         gtk_window_set_title(GTK_WINDOW(window), title);
-     
-        
         gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
        
-        
         if (x >= 0 && y >= 0) {
             gtk_window_move(GTK_WINDOW(window), (int)x, (int)y);
-           
+        }
+        
+        // Handle titleBarStyle for custom titlebars
+        if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
+            // Remove window decorations for borderless windows
+            gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
+            printf("GTK: Created window without decorations (custom titlebar)\n");
+        }
+        
+        // Handle transparency
+        if (transparent) {
+            // Enable RGBA visual for transparency
+            GdkScreen* screen = gtk_window_get_screen(GTK_WINDOW(window));
+            GdkVisual* visual = gdk_screen_get_rgba_visual(screen);
+            
+            if (visual && gdk_screen_is_composited(screen)) {
+                gtk_widget_set_visual(window, visual);
+                gtk_widget_set_app_paintable(window, TRUE);
+                
+                // Connect to draw signal to paint transparent background
+                g_signal_connect(window, "draw", G_CALLBACK(+[](GtkWidget* widget, cairo_t* cr, gpointer data) -> gboolean {
+                    // Clear the window with transparent background
+                    cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.0);
+                    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+                    cairo_paint(cr);
+                    
+                    // Let child widgets draw themselves
+                    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+                    return FALSE;  // Continue with default drawing
+                }), nullptr);
+                
+                printf("GTK: Created transparent window\n");
+            } else {
+                printf("GTK WARNING: Transparency not supported (no RGBA visual or compositor)\n");
+            }
         }
         
         // Create container with callbacks
@@ -5128,8 +5173,8 @@ ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowI
     if (isCEFAvailable()) {
         return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
     } else {
-        // GTK doesn't support these features well, create standard window
-        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback);
+        // Pass titleBarStyle and transparent to GTK window creation
+        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
     }
 
 }
