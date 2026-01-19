@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <pthread.h>
 #include <map>
 #include <iostream>
 #include <cstring>
@@ -999,7 +1000,8 @@ class ElectrobunClient : public CefClient,
                         public CefLifeSpanHandler,
                         public CefPermissionHandler,
                         public CefDialogHandler,
-                        public CefDownloadHandler {
+                        public CefDownloadHandler,
+                        public CefRenderHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -1014,6 +1016,12 @@ private:
     GtkWidget* gtk_widget_;
     std::function<void()> positioning_callback_;
     std::function<void(CefRefPtr<CefBrowser>)> browser_created_callback_;
+    
+    // OSR (Off-Screen Rendering) members for transparency
+    Window x11_window_;
+    Display* display_;
+    bool osr_enabled_;
+    int osr_width_, osr_height_;
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -1027,7 +1035,12 @@ public:
         , webview_tag_handler_(internalBridgeHandler)
         , webview_event_handler_(webviewEventHandler)
         , navigation_callback_(navigationCallback)
-        , gtk_widget_(gtkWidget) {}
+        , gtk_widget_(gtkWidget)
+        , x11_window_(0)
+        , display_(nullptr)
+        , osr_enabled_(false)
+        , osr_width_(0)
+        , osr_height_(0) {}
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
         electrobun_script_ = script;
@@ -1049,6 +1062,10 @@ public:
         browser_ = browser;
     }
     
+    CefRefPtr<CefBrowser> GetBrowser() {
+        return browser_;
+    }
+    
     void SetBrowserCreatedCallback(std::function<void(CefRefPtr<CefBrowser>)> callback) {
         browser_created_callback_ = callback;
     }
@@ -1059,6 +1076,30 @@ public:
     
     void SetPositioningCallback(std::function<void()> callback) {
         positioning_callback_ = callback;
+    }
+    
+    void EnableOSR(Window x11_window, Display* display, int width, int height) {
+        x11_window_ = x11_window;
+        display_ = display;
+        osr_enabled_ = true;
+        osr_width_ = width;
+        osr_height_ = height;
+        printf("CEF: OSR enabled for window %lu, size %dx%d\n", x11_window, width, height);
+    }
+    
+    void SendMouseEvent(const CefMouseEvent& event, bool mouse_down, int click_count) {
+        if (browser_ && osr_enabled_) {
+            browser_->GetHost()->SendMouseMoveEvent(event, false);
+            if (mouse_down) {
+                browser_->GetHost()->SendMouseClickEvent(event, MBT_LEFT, false, click_count);
+            }
+        }
+    }
+    
+    void SendKeyEvent(const CefKeyEvent& event) {
+        if (browser_ && osr_enabled_) {
+            browser_->GetHost()->SendKeyEvent(event);
+        }
     }
 
     virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override {
@@ -1090,6 +1131,10 @@ public:
     }
 
     virtual CefRefPtr<CefDownloadHandler> GetDownloadHandler() override {
+        return this;
+    }
+
+    virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override {
         return this;
     }
 
@@ -1841,6 +1886,83 @@ public:
         }
     }
 
+    // CefRenderHandler methods for OSR (Off-Screen Rendering)
+    void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
+        if (osr_enabled_) {
+            rect.Set(0, 0, osr_width_, osr_height_);
+            printf("CEF OSR GetViewRect: returning %dx%d\n", osr_width_, osr_height_);
+        } else {
+            rect.Set(0, 0, 800, 600); // Default fallback
+            printf("CEF OSR GetViewRect: fallback 800x600\n");
+        }
+    }
+
+    void OnPaint(CefRefPtr<CefBrowser> browser,
+                 PaintElementType type,
+                 const RectList& dirtyRects,
+                 const void* buffer,
+                 int width,
+                 int height) override {
+        
+        if (!osr_enabled_ || !display_ || !x11_window_ || type != PET_VIEW) {
+            printf("CEF OSR OnPaint: skipping (enabled=%d, display=%p, window=%lu, type=%d)\n", 
+                   osr_enabled_, display_, x11_window_, type);
+            return;
+        }
+        
+
+        // Convert BGRA to ARGB format for X11
+        const uint32_t* src = static_cast<const uint32_t*>(buffer);
+        std::vector<uint32_t> converted_buffer(width * height);
+        
+        for (int i = 0; i < width * height; i++) {
+            uint32_t bgra = src[i];
+            uint32_t b = (bgra >> 0) & 0xFF;
+            uint32_t g = (bgra >> 8) & 0xFF;
+            uint32_t r = (bgra >> 16) & 0xFF;
+            uint32_t a = (bgra >> 24) & 0xFF;
+            
+            // Convert BGRA to ARGB
+            converted_buffer[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+        
+        // Get window attributes to ensure we have the right visual
+        XWindowAttributes win_attrs;
+        XGetWindowAttributes(display_, x11_window_, &win_attrs);
+        
+        // Create XImage with the window's visual for proper transparency support
+        XImage* image = XCreateImage(display_,
+                                   win_attrs.visual,
+                                   win_attrs.depth, // Use window's depth
+                                   ZPixmap,
+                                   0,
+                                   reinterpret_cast<char*>(converted_buffer.data()),
+                                   width,
+                                   height,
+                                   32, // bitmap_pad
+                                   width * 4); // bytes_per_line
+        
+        if (image) {
+            // Create a GC compatible with the window's visual
+            GC gc = XCreateGC(display_, x11_window_, 0, nullptr);
+            
+            // Draw the image to the window
+            XPutImage(display_, x11_window_, gc,
+                     image, 0, 0, 0, 0, width, height);
+            
+            XFlush(display_);
+            XFreeGC(display_, gc);
+            
+            // Clean up (don't free the data since it's from converted_buffer)
+            image->data = nullptr;
+            XDestroyImage(image);
+            
+            
+        }
+        
+       
+    }
+
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
@@ -1902,6 +2024,7 @@ bool initializeCEF() {
    
     CefSettings settings;
     settings.no_sandbox = true;
+    settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows
     // settings.remote_debugging_port = 9222;
     // printf("CEF: Remote debugging enabled on port 9222\n");
     
@@ -3050,6 +3173,16 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     return CefRequestContext::CreateContext(globalContext, nullptr);
 }
 
+// Forward declaration for X11 event processing
+void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> client);
+
+// OSR event handling data structure
+struct OSREventData {
+    uint32_t windowId;
+    CefRefPtr<ElectrobunClient> client;
+    bool active;
+};
+
 // CEF WebView implementation
 class CEFWebViewImpl : public AbstractView {
 public:
@@ -3078,6 +3211,13 @@ public:
     
     // Track if parent window is transparent
     bool parentTransparent = false;
+    
+    // OSR event handling data
+    void* osr_event_data_ = nullptr;
+    
+    // X11 event handling for OSR windows is now handled via processX11EventsForOSR
+    Window osr_x11_window_ = 0;
+    Display* osr_display_ = nullptr;
     
     CEFWebViewImpl(uint32_t webviewId,
                    GtkWidget* window,
@@ -3110,6 +3250,16 @@ public:
         // Browser creation happens immediately in createCEFBrowser
     }
     
+    ~CEFWebViewImpl() {
+        // Clean up OSR event handling
+        if (osr_event_data_) {
+            auto* eventData = static_cast<OSREventData*>(osr_event_data_);
+            eventData->active = false;  // Stop the timer
+            delete eventData;
+            osr_event_data_ = nullptr;
+        }
+    }
+    
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
         
         // NO GTK widget needed - CEF will be a direct child of the X11 window
@@ -3140,10 +3290,11 @@ public:
         // Use SetAsChild with the X11 window
         window_info.SetAsChild(x11win->window, cef_rect);
         
-        // For transparent windows, ensure CEF window uses transparent-capable settings
+        // For transparent windows, use windowless/OSR mode like macOS and Windows
         if (x11win->transparent) {
-            // Use windowed mode but ensure the CEF window inherits transparency
-            printf("CEF: Setting up windowed mode with transparency support\n");
+            // Use windowless (off-screen) rendering for transparency
+            window_info.SetAsWindowless(x11win->window);
+            printf("CEF: Using windowless (OSR) mode for transparency\n");
         }
         
         
@@ -3151,10 +3302,10 @@ public:
         
         // Check if the parent window is transparent
         if (parentXWindow && x11win->transparent) {
-            // For transparent effect windows, use dark background
-            browser_settings.background_color = CefColorSetARGB(255, 16, 16, 16); // Very dark gray
+            // For OSR transparent windows, use fully transparent background
+            browser_settings.background_color = CefColorSetARGB(0, 0, 0, 0); // Fully transparent
             this->parentTransparent = true;
-            printf("CEF: Using dark background for transparent effect\n");
+            printf("CEF: Using transparent background for OSR mode\n");
         }
         
         // Create client
@@ -3167,8 +3318,13 @@ public:
             nullptr  // No GTK window needed
         );
         
+        // Enable OSR for transparent windows
+        if (x11win->transparent) {
+            client->EnableOSR(x11win->window, x11win->display, (int)width, (int)height);
+        }
+        
         // Set up browser creation callback to notify CEFWebViewImpl when browser is ready
-        client->SetBrowserCreatedCallback([this](CefRefPtr<CefBrowser> browser) {
+        client->SetBrowserCreatedCallback([this, x11win](CefRefPtr<CefBrowser> browser) {
             this->browser = browser;
             
             // Handle pending frame positioning now that browser is available
@@ -3177,9 +3333,24 @@ public:
                 hasPendingFrame = false;
             }
             
-            // For transparent effect windows, content is ready
-            if (this->parentTransparent) {
-                printf("CEF: Transparent effect window ready with dark background\n");
+            // For transparent OSR windows, setup event handling
+            if (this->parentTransparent && x11win && x11win->transparent) {
+                // Create a data structure to pass to the timer callback
+                auto* eventData = new OSREventData{x11win->windowId, this->client, true};
+                
+                // Store event data in the webview for cleanup
+                this->osr_event_data_ = eventData;
+                
+                g_timeout_add(16, [](gpointer data) -> gboolean {  // ~60fps
+                    auto* osrData = static_cast<OSREventData*>(data);
+                    if (osrData && osrData->active) {
+                        processX11EventsForOSR(osrData->windowId, osrData->client);
+                        return TRUE; // Continue timer
+                    }
+                    return FALSE; // Stop timer
+                }, eventData);
+                
+                printf("CEF: Transparent window input handling enabled for window %u\n", x11win->windowId);
             }
         });
         
@@ -3247,6 +3418,8 @@ public:
         }
         
     }
+    
+    // Event handling will be implemented separately after global declarations
     
     void syncCEFPositionWithWidget() {
         if (!browser || !widget) {
@@ -3932,6 +4105,72 @@ static std::map<uint32_t, std::shared_ptr<X11Window>> g_x11_windows;
 static std::map<Window, uint32_t> g_x11_window_to_id;
 static std::mutex g_x11WindowsMutex;
 
+// X11 event processing for OSR windows
+void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> client) {
+    std::shared_ptr<X11Window> x11win;
+    {
+        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+        auto it = g_x11_windows.find(windowId);
+        if (it != g_x11_windows.end() && it->second && it->second->transparent) {
+            x11win = it->second;
+        }
+    }
+    
+    if (!x11win) return;
+    
+    Display* display = x11win->display;
+    Window window = x11win->window;
+    
+    // Process X11 events
+    XEvent event;
+    while (XPending(display) > 0) {
+        XNextEvent(display, &event);
+        
+        if (event.xany.window != window) continue;
+        
+        switch (event.type) {
+            case ButtonPress:
+            case ButtonRelease: {
+                CefMouseEvent mouse_event;
+                mouse_event.x = event.xbutton.x;
+                mouse_event.y = event.xbutton.y;
+                mouse_event.modifiers = 0; // TODO: Convert X11 modifiers
+                
+                // Forward to CEF
+                if (client && client->GetBrowser()) {
+                    auto browser = client->GetBrowser();
+                    auto host = browser->GetHost();
+                    host->SendMouseClickEvent(mouse_event, 
+                                            event.xbutton.button == Button1 ? MBT_LEFT : MBT_RIGHT,
+                                            event.type == ButtonRelease, 1);
+                    
+                    // Temporary debug for close button clicks
+                    if (event.type == ButtonPress && event.xbutton.button == Button1) {
+                        // printf("CEF OSR: Left click at (%d, %d)\n", event.xbutton.x, event.xbutton.y);
+                    }
+                }
+                break;
+            }
+            case MotionNotify: {
+                CefMouseEvent mouse_event;
+                mouse_event.x = event.xmotion.x;
+                mouse_event.y = event.xmotion.y;
+                mouse_event.modifiers = 0;
+                
+                // Forward to CEF
+                if (client && client->GetBrowser()) {
+                    auto browser = client->GetBrowser();
+                    auto host = browser->GetHost();
+                    host->SendMouseMoveEvent(mouse_event, false);
+                }
+                break;
+            }
+        }
+    }
+    
+    XFlush(display);
+}
+
 // Helper function to get ContainerView overlay for a window
 GtkWidget* getContainerViewOverlay(GtkWidget* window) {
     std::lock_guard<std::mutex> lock(g_containersMutex);
@@ -4608,20 +4847,35 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             XSetWindowAttributes attrs;
             attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
                               ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-                              FocusChangeMask | StructureNotifyMask | SubstructureNotifyMask;
+                              FocusChangeMask | StructureNotifyMask | SubstructureNotifyMask |
+                              EnterWindowMask | LeaveWindowMask;
             
             unsigned long attr_mask = CWEventMask;
             Visual* visual = DefaultVisual(display, screen);
             int depth = DefaultDepth(display, screen);
             
-            // For transparent windows on Linux, use a very dark background
-            // True transparency is not reliable with CEF windowed mode
+            // For transparent windows, use ARGB visual for true transparency
             if (transparent) {
-                attrs.background_pixel = 0x101010;  // Very dark gray (almost black)
-                attrs.border_pixel = 0;
-                attrs.colormap = DefaultColormap(display, screen);
-                attr_mask |= CWBackPixel | CWBorderPixel | CWColormap;
-                printf("X11: Using dark background for transparent window effect\n");
+                // Find ARGB visual for transparency  
+                XVisualInfo vinfo;
+                if (XMatchVisualInfo(display, screen, 32, TrueColor, &vinfo)) {
+                    visual = vinfo.visual;
+                    depth = vinfo.depth;
+                    attrs.colormap = XCreateColormap(display, root, visual, AllocNone);
+                    attr_mask |= CWColormap;
+                    // Use transparent background pixel
+                    attrs.background_pixel = 0x00000000;  // Fully transparent
+                    attr_mask |= CWBackPixel;
+                    attrs.border_pixel = 0;
+                    attr_mask |= CWBorderPixel;
+                    printf("X11: Created transparent window with 32-bit ARGB visual\n");
+                } else {
+                    printf("WARNING: 32-bit visual not available, using dark background fallback\n");
+                    attrs.background_pixel = 0x101010;  // Very dark gray fallback
+                    attrs.border_pixel = 0;
+                    attrs.colormap = DefaultColormap(display, screen);
+                    attr_mask |= CWBackPixel | CWBorderPixel | CWColormap;
+                }
             } else {
                 attrs.background_pixel = WhitePixel(display, screen);
                 attrs.border_pixel = BlackPixel(display, screen);
@@ -4639,6 +4893,8 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
                 &attrs
             );
             
+            // Window created successfully
+            
             // Note: For Linux, transparent windows are handled as borderless windows
             
             if (!x11_window) {
@@ -4653,6 +4909,13 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             // Set window protocols for close button
             Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
             XSetWMProtocols(display, x11_window, &wmDelete, 1);
+            
+            // Select input events for interaction
+            long event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
+                             ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
+                             FocusChangeMask | EnterWindowMask | LeaveWindowMask |
+                             StructureNotifyMask;
+            XSelectInput(display, x11_window, event_mask);
             
             // Handle window decorations based on titleBarStyle
             if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
@@ -4676,6 +4939,18 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
                 Atom wmWindowTypeNormal = XInternAtom(display, "_NET_WM_WINDOW_TYPE_NORMAL", False);
                 XChangeProperty(display, x11_window, wmWindowType, XA_ATOM, 32,
                                PropModeReplace, (unsigned char*)&wmWindowTypeNormal, 1);
+            }
+            
+            // Set size and position hints to ensure window manager honors our positioning
+            XSizeHints* sizeHints = XAllocSizeHints();
+            if (sizeHints) {
+                sizeHints->flags = PPosition | PSize;
+                sizeHints->x = (int)x;
+                sizeHints->y = (int)y;
+                sizeHints->width = (int)width;
+                sizeHints->height = (int)height;
+                XSetWMNormalHints(display, x11_window, sizeHints);
+                XFree(sizeHints);
             }
             
             // Create X11Window structure
