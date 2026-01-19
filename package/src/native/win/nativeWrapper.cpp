@@ -1320,7 +1320,8 @@ class OSRWindow {
 public:
     OSRWindow(HWND parent, int x, int y, int width, int height)
         : parent_(parent), pixel_buffer_(nullptr),
-          buffer_width_(0), buffer_height_(0), buffer_size_(0) {
+          buffer_width_(0), buffer_height_(0), buffer_size_(0),
+          browser_(nullptr) {
     }
 
     ~OSRWindow() {
@@ -1328,6 +1329,10 @@ public:
             free(pixel_buffer_);
             pixel_buffer_ = nullptr;
         }
+    }
+
+    void SetBrowser(CefRefPtr<CefBrowser> browser) {
+        browser_ = browser;
     }
 
     void UpdateBuffer(const void* buffer, int width, int height) {
@@ -1407,12 +1412,101 @@ public:
 
     HWND GetHWND() const { return parent_; }
 
+    // Handle mouse events and forward to CEF
+    void HandleMouseEvent(UINT message, WPARAM wParam, LPARAM lParam) {
+        if (!browser_) {
+            printf("OSRWindow: No browser set!\n");
+            return;
+        }
+
+        CefRefPtr<CefBrowserHost> host = browser_->GetHost();
+        if (!host) {
+            printf("OSRWindow: No browser host!\n");
+            return;
+        }
+
+        CefMouseEvent mouse_event;
+        mouse_event.x = GET_X_LPARAM(lParam);
+        mouse_event.y = GET_Y_LPARAM(lParam);
+
+        // Set modifiers
+        mouse_event.modifiers = 0;
+        if (wParam & MK_CONTROL) mouse_event.modifiers |= EVENTFLAG_CONTROL_DOWN;
+        if (wParam & MK_SHIFT) mouse_event.modifiers |= EVENTFLAG_SHIFT_DOWN;
+        if (GetKeyState(VK_MENU) & 0x8000) mouse_event.modifiers |= EVENTFLAG_ALT_DOWN;
+
+        switch (message) {
+            case WM_MOUSEMOVE:
+                host->SendMouseMoveEvent(mouse_event, false);
+                break;
+
+            case WM_LBUTTONDOWN:
+            case WM_RBUTTONDOWN:
+            case WM_MBUTTONDOWN: {
+                CefBrowserHost::MouseButtonType btn_type =
+                    (message == WM_LBUTTONDOWN) ? MBT_LEFT :
+                    (message == WM_RBUTTONDOWN) ? MBT_RIGHT : MBT_MIDDLE;
+
+                printf("OSRWindow: Sending click at (%d, %d)\n", mouse_event.x, mouse_event.y);
+
+                host->SendMouseClickEvent(mouse_event, btn_type, false, 1);
+                break;
+            }
+
+            case WM_LBUTTONUP:
+            case WM_RBUTTONUP:
+            case WM_MBUTTONUP: {
+                CefBrowserHost::MouseButtonType btn_type =
+                    (message == WM_LBUTTONUP) ? MBT_LEFT :
+                    (message == WM_RBUTTONUP) ? MBT_RIGHT : MBT_MIDDLE;
+                host->SendMouseClickEvent(mouse_event, btn_type, true, 1);
+                break;
+            }
+
+            case WM_MOUSEWHEEL: {
+                int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                host->SendMouseWheelEvent(mouse_event, 0, delta);
+                break;
+            }
+        }
+    }
+
+    // Handle keyboard events and forward to CEF
+    void HandleKeyEvent(UINT message, WPARAM wParam, LPARAM lParam) {
+        if (!browser_) return;
+
+        CefRefPtr<CefBrowserHost> host = browser_->GetHost();
+        if (!host) return;
+
+        CefKeyEvent key_event;
+        key_event.windows_key_code = (int)wParam;
+        key_event.native_key_code = (int)lParam;
+        key_event.is_system_key = (message == WM_SYSCHAR || message == WM_SYSKEYDOWN || message == WM_SYSKEYUP);
+
+        if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
+            key_event.type = KEYEVENT_RAWKEYDOWN;
+        } else if (message == WM_KEYUP || message == WM_SYSKEYUP) {
+            key_event.type = KEYEVENT_KEYUP;
+        } else if (message == WM_CHAR || message == WM_SYSCHAR) {
+            key_event.type = KEYEVENT_CHAR;
+        }
+
+        // Set modifiers
+        key_event.modifiers = 0;
+        if (GetKeyState(VK_SHIFT) & 0x8000) key_event.modifiers |= EVENTFLAG_SHIFT_DOWN;
+        if (GetKeyState(VK_CONTROL) & 0x8000) key_event.modifiers |= EVENTFLAG_CONTROL_DOWN;
+        if (GetKeyState(VK_MENU) & 0x8000) key_event.modifiers |= EVENTFLAG_ALT_DOWN;
+
+        host->SendKeyEvent(key_event);
+    }
+
 private:
     HWND parent_;
     unsigned char* pixel_buffer_;
     int buffer_width_;
     int buffer_height_;
     size_t buffer_size_;
+    CefRefPtr<CefBrowser> browser_;
 };
 
 // CEF Render Handler for off-screen rendering (OSR) mode
@@ -2710,6 +2804,10 @@ public:
     // CEF-specific methods
     void setBrowser(CefRefPtr<CefBrowser> br) {
         browser = br;
+        // If OSR mode, also set the browser on the OSR window for event handling
+        if (osr_window && br) {
+            osr_window->SetBrowser(br);
+        }
     }
     
     void setClient(CefRefPtr<ElectrobunCefClient> cl) {
@@ -2943,6 +3041,17 @@ public:
 
         // Also handle the container window using base implementation
         AbstractView::setHidden(hidden);
+    }
+
+    // Forward window messages to OSR window for event handling
+    void HandleWindowMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+        if (osr_window) {
+            if (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) {
+                osr_window->HandleMouseEvent(message, wParam, lParam);
+            } else if (message >= WM_KEYFIRST && message <= WM_KEYLAST) {
+                osr_window->HandleKeyEvent(message, wParam, lParam);
+            }
+        }
     }
 
     void findInPage(const char* searchText, bool forward, bool matchCase) override {
@@ -3561,6 +3670,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             break;
         }
+        case WM_NCHITTEST:
+            {
+                // For layered windows, we need to handle hit testing to receive mouse events
+                // Check if this is a CEF OSR window
+                auto viewIt = g_cefViews.find(hwnd);
+                if (viewIt != g_cefViews.end()) {
+                    auto cefView = static_cast<CEFView*>(viewIt->second);
+                    if (cefView && cefView->isOSRMode()) {
+                        // Return HTCLIENT to indicate this is the client area and should receive mouse events
+                        return HTCLIENT;
+                    }
+                }
+            }
+            break;
+
         case WM_COMMAND:
             // Check if this is an application menu command
             if (HIWORD(wParam) == 0) { // Menu item selected
@@ -3569,7 +3693,37 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             break;
-            
+
+        // Forward mouse and keyboard events to CEF OSR view if present
+        case WM_MOUSEMOVE:
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+        case WM_RBUTTONDOWN:
+        case WM_RBUTTONUP:
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONUP:
+        case WM_MOUSEWHEEL:
+        case WM_KEYDOWN:
+        case WM_KEYUP:
+        case WM_CHAR:
+        case WM_SYSKEYDOWN:
+        case WM_SYSKEYUP:
+        case WM_SYSCHAR:
+            {
+                // Check if this window has a CEF OSR view
+                auto viewIt = g_cefViews.find(hwnd);
+                if (viewIt != g_cefViews.end()) {
+                    auto cefView = static_cast<CEFView*>(viewIt->second);
+                    if (cefView && cefView->isOSRMode()) {
+                        if (msg == WM_LBUTTONDOWN) {
+                            printf("WindowProc: WM_LBUTTONDOWN received for OSR window\n");
+                        }
+                        cefView->HandleWindowMessage(msg, wParam, lParam);
+                    }
+                }
+            }
+            break;
+
         case WM_CLOSE:
             if (data && data->closeHandler) {
                 data->closeHandler(data->windowId);
@@ -5205,10 +5359,14 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             }
 
             // Add client to global map
+            // For OSR mode, use the main window hwnd; for normal mode, use container hwnd
             HWND containerHwnd = container->GetHwnd();
-            g_cefClients[containerHwnd] = client;
-                // Add CEFView to global map
-            g_cefViews[containerHwnd] = view.get();
+            HWND mapKey = transparent ? hwnd : containerHwnd;
+
+            g_cefClients[mapKey] = client;
+            g_cefViews[mapKey] = view.get();
+
+            printf("CEF: Registered view with hwnd=%p (transparent=%d)\n", mapKey, transparent);
             
             // Set browser on client for script execution
             client->SetBrowser(browser);
