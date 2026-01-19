@@ -1890,10 +1890,10 @@ public:
     void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
         if (osr_enabled_) {
             rect.Set(0, 0, osr_width_, osr_height_);
-            printf("CEF OSR GetViewRect: returning %dx%d\n", osr_width_, osr_height_);
+            // printf("CEF OSR GetViewRect: returning %dx%d\n", osr_width_, osr_height_);
         } else {
             rect.Set(0, 0, 800, 600); // Default fallback
-            printf("CEF OSR GetViewRect: fallback 800x600\n");
+            // printf("CEF OSR GetViewRect: fallback 800x600\n");
         }
     }
 
@@ -3341,13 +3341,24 @@ public:
                 // Store event data in the webview for cleanup
                 this->osr_event_data_ = eventData;
                 
-                g_timeout_add(16, [](gpointer data) -> gboolean {  // ~60fps
+                // Use a higher frequency timer for better responsiveness
+                g_timeout_add(5, [](gpointer data) -> gboolean {  // 200fps - process events more frequently
                     auto* osrData = static_cast<OSREventData*>(data);
                     if (osrData && osrData->active) {
                         processX11EventsForOSR(osrData->windowId, osrData->client);
                         return TRUE; // Continue timer
                     }
                     return FALSE; // Stop timer
+                }, eventData);
+                
+                // Also use idle processing for immediate event handling
+                g_idle_add([](gpointer data) -> gboolean {
+                    auto* osrData = static_cast<OSREventData*>(data);
+                    if (osrData && osrData->active) {
+                        processX11EventsForOSR(osrData->windowId, osrData->client);
+                        return TRUE; // Continue processing
+                    }
+                    return FALSE; // Stop
                 }, eventData);
                 
                 printf("CEF: Transparent window input handling enabled for window %u\n", x11win->windowId);
@@ -4121,10 +4132,16 @@ void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> clien
     Display* display = x11win->display;
     Window window = x11win->window;
     
-    // Process X11 events
+    // Process ALL pending X11 events to avoid missing any
     XEvent event;
+    int events_processed = 0;
+    
+    // Sync to ensure we get all events
+    XSync(display, False);
+    
     while (XPending(display) > 0) {
         XNextEvent(display, &event);
+        events_processed++;
         
         if (event.xany.window != window) continue;
         
@@ -4140,13 +4157,21 @@ void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> clien
                 if (client && client->GetBrowser()) {
                     auto browser = client->GetBrowser();
                     auto host = browser->GetHost();
-                    host->SendMouseClickEvent(mouse_event, 
-                                            event.xbutton.button == Button1 ? MBT_LEFT : MBT_RIGHT,
-                                            event.type == ButtonRelease, 1);
                     
-                    // Temporary debug for close button clicks
-                    if (event.type == ButtonPress && event.xbutton.button == Button1) {
-                        // printf("CEF OSR: Left click at (%d, %d)\n", event.xbutton.x, event.xbutton.y);
+                    // Determine mouse button type
+                    cef_mouse_button_type_t button_type = MBT_LEFT;
+                    if (event.xbutton.button == Button1) button_type = MBT_LEFT;
+                    else if (event.xbutton.button == Button3) button_type = MBT_RIGHT;
+                    else if (event.xbutton.button == Button2) button_type = MBT_MIDDLE;
+                    
+                    bool mouse_up = (event.type == ButtonRelease);
+                    
+                    // Send the mouse click event
+                    host->SendMouseClickEvent(mouse_event, button_type, mouse_up, 1);
+                    
+                    // Debug: only log button presses for now
+                    if (event.type == ButtonPress) {
+                        printf("CEF OSR: Click at (%d, %d)\n", event.xbutton.x, event.xbutton.y);
                     }
                 }
                 break;
@@ -4163,6 +4188,32 @@ void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> clien
                     auto host = browser->GetHost();
                     host->SendMouseMoveEvent(mouse_event, false);
                 }
+                break;
+            }
+            case FocusIn:
+            case FocusOut: {
+                // Handle focus events for OSR windows
+                if (client && client->GetBrowser()) {
+                    auto browser = client->GetBrowser();
+                    auto host = browser->GetHost();
+                    host->SetFocus(event.type == FocusIn);
+                }
+                break;
+            }
+            case EnterNotify: {
+                // Focus window on mouse enter for better responsiveness
+                if (client && client->GetBrowser()) {
+                    auto browser = client->GetBrowser();
+                    auto host = browser->GetHost();
+                    host->SetFocus(true);
+                    
+                    // Also ensure the X11 window has focus
+                    XSetInputFocus(display, window, RevertToParent, CurrentTime);
+                }
+                break;
+            }
+            case LeaveNotify: {
+                // Optional: Could unfocus on leave, but keeping focus is usually better
                 break;
             }
         }
