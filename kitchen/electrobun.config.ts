@@ -20,56 +20,56 @@ export default {
                 entrypoint: "src/test-harness/index.ts",
                 external: [],
             },
-            "file-dialog-playground": {
-                entrypoint: "src/file-dialog-playground/index.ts",
+            "playgrounds/file-dialog": {
+                entrypoint: "src/playgrounds/file-dialog/index.ts",
                 external: [],
             },
-            "tray-playground": {
-                entrypoint: "src/tray-playground/index.ts",
+            "playgrounds/tray": {
+                entrypoint: "src/playgrounds/tray/index.ts",
                 external: [],
             },
-            "shortcuts-playground": {
-                entrypoint: "src/shortcuts-playground/index.ts",
+            "playgrounds/shortcuts": {
+                entrypoint: "src/playgrounds/shortcuts/index.ts",
                 external: [],
             },
-            "clipboard-playground": {
-                entrypoint: "src/clipboard-playground/index.ts",
+            "playgrounds/clipboard": {
+                entrypoint: "src/playgrounds/clipboard/index.ts",
                 external: [],
             },
-            "host-message-playground": {
-                entrypoint: "src/host-message-playground/index.ts",
+            "playgrounds/host-message": {
+                entrypoint: "src/playgrounds/host-message/index.ts",
                 external: [],
             },
-            "session-playground": {
-                entrypoint: "src/session-playground/index.ts",
+            "playgrounds/session": {
+                entrypoint: "src/playgrounds/session/index.ts",
                 external: [],
             },
-            "draggable-playground": {
-                entrypoint: "src/draggable-playground/index.ts",
+            "playgrounds/draggable": {
+                entrypoint: "src/playgrounds/draggable/index.ts",
                 external: [],
             },
-            "application-menu-playground": {
-                entrypoint: "src/application-menu-playground/index.ts",
+            "playgrounds/application-menu": {
+                entrypoint: "src/playgrounds/application-menu/index.ts",
                 external: [],
             },
-            "context-menu-playground": {
-                entrypoint: "src/context-menu-playground/index.ts",
+            "playgrounds/context-menu": {
+                entrypoint: "src/playgrounds/context-menu/index.ts",
                 external: [],
             },
-            mainview: {
-                entrypoint: "src/mainview/index.ts",
+            "playgrounds/webviewtag": {
+                entrypoint: "src/playgrounds/webviewtag/index.ts",
                 external: [],
             },
-            myextension: {
-                entrypoint: "src/myextension/preload.ts",
+            "playgrounds/window-events": {
+                entrypoint: "src/playgrounds/window-events/index.ts",
                 external: [],
             },
-            webviewtag: {
-                entrypoint: "src/webviewtag/index.ts",
+            "playgrounds/custom-titlebar": {
+                entrypoint: "src/playgrounds/custom-titlebar/index.ts",
                 external: [],
             },
-            "window-events-playground": {
-                entrypoint: "src/window-events-playground/index.ts",
+            "playgrounds/transparent-window": {
+                entrypoint: "src/playgrounds/transparent-window/index.ts",
                 external: [],
             },
         },
@@ -77,29 +77,29 @@ export default {
             "src/test-runner/index.html": "views/test-runner/index.html",
             "src/test-runner/index.css": "views/test-runner/index.css",
             "src/test-harness/index.html": "views/test-harness/index.html",
-            "src/file-dialog-playground/index.html": "views/file-dialog-playground/index.html",
-            "src/file-dialog-playground/index.css": "views/file-dialog-playground/index.css",
-            "src/tray-playground/index.html": "views/tray-playground/index.html",
-            "src/tray-playground/index.css": "views/tray-playground/index.css",
-            "src/shortcuts-playground/index.html": "views/shortcuts-playground/index.html",
-            "src/shortcuts-playground/index.css": "views/shortcuts-playground/index.css",
-            "src/clipboard-playground/index.html": "views/clipboard-playground/index.html",
-            "src/clipboard-playground/index.css": "views/clipboard-playground/index.css",
-            "src/host-message-playground/index.html": "views/host-message-playground/index.html",
-            "src/session-playground/index.html": "views/session-playground/index.html",
-            "src/session-playground/counter.html": "views/session-playground/counter.html",
-            "src/draggable-playground/index.html": "views/draggable-playground/index.html",
-            "src/application-menu-playground/index.html": "views/application-menu-playground/index.html",
-            "src/application-menu-playground/index.css": "views/application-menu-playground/index.css",
-            "src/context-menu-playground/index.html": "views/context-menu-playground/index.html",
-            "src/context-menu-playground/index.css": "views/context-menu-playground/index.css",
-            "src/mainview/index.html": "views/mainview/index.html",
-            "src/mainview/index.css": "views/mainview/index.css",
-            "src/webviewtag/index.html": "views/webviewtag/index.html",
-            "src/webviewtag/host-message-test.html": "views/webviewtag/host-message-test.html",
-            "src/webviewtag/electrobun.png": "views/webviewtag/electrobun.png",
+            "src/playgrounds/file-dialog/index.html": "views/playgrounds/file-dialog/index.html",
+            "src/playgrounds/file-dialog/index.css": "views/playgrounds/file-dialog/index.css",
+            "src/playgrounds/tray/index.html": "views/playgrounds/tray/index.html",
+            "src/playgrounds/tray/index.css": "views/playgrounds/tray/index.css",
+            "src/playgrounds/shortcuts/index.html": "views/playgrounds/shortcuts/index.html",
+            "src/playgrounds/shortcuts/index.css": "views/playgrounds/shortcuts/index.css",
+            "src/playgrounds/clipboard/index.html": "views/playgrounds/clipboard/index.html",
+            "src/playgrounds/clipboard/index.css": "views/playgrounds/clipboard/index.css",
+            "src/playgrounds/host-message/index.html": "views/playgrounds/host-message/index.html",
+            "src/playgrounds/session/index.html": "views/playgrounds/session/index.html",
+            "src/playgrounds/session/counter.html": "views/playgrounds/session/counter.html",
+            "src/playgrounds/draggable/index.html": "views/playgrounds/draggable/index.html",
+            "src/playgrounds/application-menu/index.html": "views/playgrounds/application-menu/index.html",
+            "src/playgrounds/application-menu/index.css": "views/playgrounds/application-menu/index.css",
+            "src/playgrounds/context-menu/index.html": "views/playgrounds/context-menu/index.html",
+            "src/playgrounds/context-menu/index.css": "views/playgrounds/context-menu/index.css",            
+            "src/playgrounds/webviewtag/index.html": "views/playgrounds/webviewtag/index.html",
+            "src/playgrounds/webviewtag/host-message-test.html": "views/playgrounds/webviewtag/host-message-test.html",
+            "src/playgrounds/webviewtag/electrobun.png": "views/playgrounds/webviewtag/electrobun.png",
             "assets/electrobun-logo-32-template.png": "views/assets/electrobun-logo-32-template.png",
-            "src/window-events-playground/index.html": "views/window-events-playground/index.html",
+            "src/playgrounds/window-events/index.html": "views/playgrounds/window-events/index.html",
+            "src/playgrounds/custom-titlebar/index.html": "views/playgrounds/custom-titlebar/index.html",
+            "src/playgrounds/transparent-window/index.html": "views/playgrounds/transparent-window/index.html",
         },
         mac: {
             codesign: false,

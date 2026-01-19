@@ -1314,6 +1314,238 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunDownloadHandler);
 };
 
+// OSR (Off-Screen Rendering) Window for transparent CEF windows
+// Renders directly to the parent layered window
+class OSRWindow {
+public:
+    OSRWindow(HWND parent, int x, int y, int width, int height)
+        : parent_(parent), pixel_buffer_(nullptr),
+          buffer_width_(0), buffer_height_(0), buffer_size_(0),
+          browser_(nullptr) {
+    }
+
+    ~OSRWindow() {
+        if (pixel_buffer_) {
+            free(pixel_buffer_);
+            pixel_buffer_ = nullptr;
+        }
+    }
+
+    void SetBrowser(CefRefPtr<CefBrowser> browser) {
+        browser_ = browser;
+    }
+
+    void UpdateBuffer(const void* buffer, int width, int height) {
+        if (!buffer || width <= 0 || height <= 0 || !parent_) {
+            return;
+        }
+
+        size_t required_size = (size_t)width * (size_t)height * 4; // BGRA
+
+        // Reallocate buffer if needed
+        if (buffer_size_ < required_size) {
+            if (pixel_buffer_) {
+                free(pixel_buffer_);
+            }
+            pixel_buffer_ = (unsigned char*)malloc(required_size);
+            if (!pixel_buffer_) {
+                buffer_size_ = 0;
+                return;
+            }
+            buffer_size_ = required_size;
+        }
+
+        memcpy(pixel_buffer_, buffer, required_size);
+        buffer_width_ = width;
+        buffer_height_ = height;
+
+        UpdateLayeredWindow();
+    }
+
+    void UpdateLayeredWindow() {
+        if (!parent_ || !pixel_buffer_ || buffer_width_ == 0 || buffer_height_ == 0) {
+            return;
+        }
+
+        HDC hdc = GetDC(NULL);
+        HDC memDC = CreateCompatibleDC(hdc);
+
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = buffer_width_;
+        bmi.bmiHeader.biHeight = -buffer_height_; // Top-down DIB
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        void* bits = nullptr;
+        HBITMAP hBitmap = CreateDIBSection(memDC, &bmi, DIB_RGB_COLORS, &bits, NULL, 0);
+
+        if (hBitmap && bits) {
+            // Copy pixel buffer to DIB section
+            memcpy(bits, pixel_buffer_, buffer_size_);
+
+            HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, hBitmap);
+
+            POINT ptSrc = {0, 0};
+            SIZE size = {buffer_width_, buffer_height_};
+            BLENDFUNCTION blend = {};
+            blend.BlendOp = AC_SRC_OVER;
+            blend.SourceConstantAlpha = 255;
+            blend.AlphaFormat = AC_SRC_ALPHA;
+
+            // Get the window's current position for UpdateLayeredWindow
+            RECT rect;
+            GetWindowRect(parent_, &rect);
+            POINT ptDest = {rect.left, rect.top};
+
+            // Update the parent window's layer with the CEF-rendered content
+            ::UpdateLayeredWindow(parent_, hdc, &ptDest, &size, memDC, &ptSrc, 0, &blend, ULW_ALPHA);
+
+            SelectObject(memDC, oldBitmap);
+            DeleteObject(hBitmap);
+        }
+
+        DeleteDC(memDC);
+        ReleaseDC(NULL, hdc);
+    }
+
+    HWND GetHWND() const { return parent_; }
+
+    // Handle mouse events and forward to CEF
+    void HandleMouseEvent(UINT message, WPARAM wParam, LPARAM lParam) {
+        if (!browser_) {
+            printf("OSRWindow: No browser set!\n");
+            return;
+        }
+
+        CefRefPtr<CefBrowserHost> host = browser_->GetHost();
+        if (!host) {
+            printf("OSRWindow: No browser host!\n");
+            return;
+        }
+
+        CefMouseEvent mouse_event;
+        mouse_event.x = GET_X_LPARAM(lParam);
+        mouse_event.y = GET_Y_LPARAM(lParam);
+
+        // Set modifiers
+        mouse_event.modifiers = 0;
+        if (wParam & MK_CONTROL) mouse_event.modifiers |= EVENTFLAG_CONTROL_DOWN;
+        if (wParam & MK_SHIFT) mouse_event.modifiers |= EVENTFLAG_SHIFT_DOWN;
+        if (GetKeyState(VK_MENU) & 0x8000) mouse_event.modifiers |= EVENTFLAG_ALT_DOWN;
+
+        switch (message) {
+            case WM_MOUSEMOVE:
+                host->SendMouseMoveEvent(mouse_event, false);
+                break;
+
+            case WM_LBUTTONDOWN:
+            case WM_RBUTTONDOWN:
+            case WM_MBUTTONDOWN: {
+                CefBrowserHost::MouseButtonType btn_type =
+                    (message == WM_LBUTTONDOWN) ? MBT_LEFT :
+                    (message == WM_RBUTTONDOWN) ? MBT_RIGHT : MBT_MIDDLE;
+
+                printf("OSRWindow: Sending click at (%d, %d)\n", mouse_event.x, mouse_event.y);
+
+                host->SendMouseClickEvent(mouse_event, btn_type, false, 1);
+                break;
+            }
+
+            case WM_LBUTTONUP:
+            case WM_RBUTTONUP:
+            case WM_MBUTTONUP: {
+                CefBrowserHost::MouseButtonType btn_type =
+                    (message == WM_LBUTTONUP) ? MBT_LEFT :
+                    (message == WM_RBUTTONUP) ? MBT_RIGHT : MBT_MIDDLE;
+                host->SendMouseClickEvent(mouse_event, btn_type, true, 1);
+                break;
+            }
+
+            case WM_MOUSEWHEEL: {
+                int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                host->SendMouseWheelEvent(mouse_event, 0, delta);
+                break;
+            }
+        }
+    }
+
+    // Handle keyboard events and forward to CEF
+    void HandleKeyEvent(UINT message, WPARAM wParam, LPARAM lParam) {
+        if (!browser_) return;
+
+        CefRefPtr<CefBrowserHost> host = browser_->GetHost();
+        if (!host) return;
+
+        CefKeyEvent key_event;
+        key_event.windows_key_code = (int)wParam;
+        key_event.native_key_code = (int)lParam;
+        key_event.is_system_key = (message == WM_SYSCHAR || message == WM_SYSKEYDOWN || message == WM_SYSKEYUP);
+
+        if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
+            key_event.type = KEYEVENT_RAWKEYDOWN;
+        } else if (message == WM_KEYUP || message == WM_SYSKEYUP) {
+            key_event.type = KEYEVENT_KEYUP;
+        } else if (message == WM_CHAR || message == WM_SYSCHAR) {
+            key_event.type = KEYEVENT_CHAR;
+        }
+
+        // Set modifiers
+        key_event.modifiers = 0;
+        if (GetKeyState(VK_SHIFT) & 0x8000) key_event.modifiers |= EVENTFLAG_SHIFT_DOWN;
+        if (GetKeyState(VK_CONTROL) & 0x8000) key_event.modifiers |= EVENTFLAG_CONTROL_DOWN;
+        if (GetKeyState(VK_MENU) & 0x8000) key_event.modifiers |= EVENTFLAG_ALT_DOWN;
+
+        host->SendKeyEvent(key_event);
+    }
+
+private:
+    HWND parent_;
+    unsigned char* pixel_buffer_;
+    int buffer_width_;
+    int buffer_height_;
+    size_t buffer_size_;
+    CefRefPtr<CefBrowser> browser_;
+};
+
+// CEF Render Handler for off-screen rendering (OSR) mode
+class ElectrobunRenderHandler : public CefRenderHandler {
+public:
+    ElectrobunRenderHandler() : view_width_(800), view_height_(600), osr_window_(nullptr) {}
+
+    void SetOSRWindow(OSRWindow* window) {
+        osr_window_ = window;
+    }
+
+    void SetViewSize(int width, int height) {
+        view_width_ = width;
+        view_height_ = height;
+    }
+
+    // CefRenderHandler methods
+    void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
+        rect.x = 0;
+        rect.y = 0;
+        rect.width = view_width_ > 0 ? view_width_ : 800;
+        rect.height = view_height_ > 0 ? view_height_ : 600;
+    }
+
+    void OnPaint(CefRefPtr<CefBrowser> browser,
+                 PaintElementType type,
+                 const RectList& dirtyRects,
+                 const void* buffer,
+                 int width,
+                 int height) override;
+
+private:
+    int view_width_;
+    int view_height_;
+    OSRWindow* osr_window_;
+
+    IMPLEMENT_REFCOUNTING(ElectrobunRenderHandler);
+};
+
 // CEF Client class with load and life span handlers
 class ElectrobunCefClient : public CefClient {
 public:
@@ -1324,7 +1556,8 @@ public:
                        HandlePostMessage internalBridgeHandler)
         : webview_id_(webviewId),
           bun_bridge_handler_(bunBridgeHandler),
-          webview_tag_handler_(internalBridgeHandler) {
+          webview_tag_handler_(internalBridgeHandler),
+          osr_enabled_(false) {
         m_loadHandler = new ElectrobunLoadHandler();
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
         m_requestHandler = new ElectrobunRequestHandler();
@@ -1333,6 +1566,23 @@ public:
         m_permissionHandler = new ElectrobunPermissionHandler();
         m_dialogHandler = new ElectrobunDialogHandler();
         m_downloadHandler = new ElectrobunDownloadHandler();
+        m_renderHandler = nullptr; // Created only when OSR is enabled
+    }
+
+    void EnableOSR(int width, int height) {
+        osr_enabled_ = true;
+        m_renderHandler = new ElectrobunRenderHandler();
+        m_renderHandler->SetViewSize(width, height);
+    }
+
+    void SetOSRWindow(OSRWindow* window) {
+        if (m_renderHandler) {
+            m_renderHandler->SetOSRWindow(window);
+        }
+    }
+
+    bool IsOSREnabled() const {
+        return osr_enabled_;
     }
 
     void SetWebviewEventHandler(WebviewEventHandler handler) {
@@ -1386,6 +1636,10 @@ public:
 
     CefRefPtr<CefDownloadHandler> GetDownloadHandler() override {
         return m_downloadHandler;
+    }
+
+    CefRefPtr<CefRenderHandler> GetRenderHandler() override {
+        return m_renderHandler;
     }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -1449,8 +1703,22 @@ private:
     CefRefPtr<ElectrobunPermissionHandler> m_permissionHandler;
     CefRefPtr<ElectrobunDialogHandler> m_dialogHandler;
     CefRefPtr<ElectrobunDownloadHandler> m_downloadHandler;
+    CefRefPtr<ElectrobunRenderHandler> m_renderHandler;
+    bool osr_enabled_;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
+
+// ElectrobunRenderHandler::OnPaint implementation
+void ElectrobunRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser,
+                                       PaintElementType type,
+                                       const RectList& dirtyRects,
+                                       const void* buffer,
+                                       int width,
+                                       int height) {
+    if (osr_window_ && buffer && width > 0 && height > 0) {
+        osr_window_->UpdateBuffer(buffer, width, height);
+    }
+}
 
 // Helper function implementation (defined after ElectrobunCefClient class)
 void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrowser> browser) {
@@ -2121,8 +2389,46 @@ public:
     
     void loadURL(const char* urlString) override {
         if (webview) {
+            std::string urlStr(urlString);
             std::wstring url = std::wstring(urlString, urlString + strlen(urlString));
+            bool isViewsUrl = (urlStr.substr(0, 8) == "views://");
+
+            // For all URLs, fire will-navigate event before Navigate()
+            // WebView2 doesn't fire NavigationStarting consistently, especially for blocked navigations
+            if (webviewEventHandler) {
+                // Escape URL for JSON
+                std::string escapedUrl;
+                for (char c : urlStr) {
+                    switch (c) {
+                        case '"': escapedUrl += "\\\""; break;
+                        case '\\': escapedUrl += "\\\\"; break;
+                        default: escapedUrl += c; break;
+                    }
+                }
+
+                // Fire will-navigate synchronously before Navigate()
+                std::string willNavEventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":true}";
+                webviewEventHandler(webviewId, _strdup("will-navigate"), _strdup(willNavEventData.c_str()));
+            }
+
             webview->Navigate(url.c_str());
+
+            // Fire did-navigate after Navigate() for views:// URLs only
+            // For https:// URLs, NavigationCompleted will fire did-navigate
+            if (isViewsUrl && webviewEventHandler) {
+                // Escape URL for JSON
+                std::string escapedUrl;
+                for (char c : urlStr) {
+                    switch (c) {
+                        case '"': escapedUrl += "\\\""; break;
+                        case '\\': escapedUrl += "\\\\"; break;
+                        default: escapedUrl += c; break;
+                    }
+                }
+
+                std::string didNavEventData = "{\"url\":\"" + escapedUrl + "\"}";
+                webviewEventHandler(webviewId, _strdup("did-navigate"), _strdup(didNavEventData.c_str()));
+            }
         }
     }
     
@@ -2368,10 +2674,28 @@ class CEFView : public AbstractView {
 private:
     CefRefPtr<CefBrowser> browser;
     CefRefPtr<ElectrobunCefClient> client;
-    
+    OSRWindow* osr_window;
+    bool is_osr_mode;
+
 public:
-    CEFView(uint32_t webviewId) {
+    CEFView(uint32_t webviewId) : osr_window(nullptr), is_osr_mode(false) {
         this->webviewId = webviewId;
+    }
+
+    ~CEFView() {
+        if (osr_window) {
+            delete osr_window;
+            osr_window = nullptr;
+        }
+    }
+
+    void setOSRWindow(OSRWindow* window) {
+        osr_window = window;
+        is_osr_mode = true;
+    }
+
+    bool isOSRMode() const {
+        return is_osr_mode;
     }
     
     void loadURL(const char* urlString) override {
@@ -2480,6 +2804,10 @@ public:
     // CEF-specific methods
     void setBrowser(CefRefPtr<CefBrowser> br) {
         browser = br;
+        // If OSR mode, also set the browser on the OSR window for event handling
+        if (osr_window && br) {
+            osr_window->SetBrowser(br);
+        }
     }
     
     void setClient(CefRefPtr<ElectrobunCefClient> cl) {
@@ -2713,6 +3041,17 @@ public:
 
         // Also handle the container window using base implementation
         AbstractView::setHidden(hidden);
+    }
+
+    // Forward window messages to OSR window for event handling
+    void HandleWindowMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+        if (osr_window) {
+            if (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) {
+                osr_window->HandleMouseEvent(message, wParam, lParam);
+            } else if (message >= WM_KEYFIRST && message <= WM_KEYLAST) {
+                osr_window->HandleKeyEvent(message, wParam, lParam);
+            }
+        }
     }
 
     void findInPage(const char* searchText, bool forward, bool matchCase) override {
@@ -3331,6 +3670,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             break;
         }
+        case WM_NCHITTEST:
+            {
+                // For layered windows, we need to handle hit testing to receive mouse events
+                // Check if this is a CEF OSR window
+                auto viewIt = g_cefViews.find(hwnd);
+                if (viewIt != g_cefViews.end()) {
+                    auto cefView = static_cast<CEFView*>(viewIt->second);
+                    if (cefView && cefView->isOSRMode()) {
+                        // Return HTCLIENT to indicate this is the client area and should receive mouse events
+                        return HTCLIENT;
+                    }
+                }
+            }
+            break;
+
         case WM_COMMAND:
             // Check if this is an application menu command
             if (HIWORD(wParam) == 0) { // Menu item selected
@@ -3339,7 +3693,37 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             break;
-            
+
+        // Forward mouse and keyboard events to CEF OSR view if present
+        case WM_MOUSEMOVE:
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+        case WM_RBUTTONDOWN:
+        case WM_RBUTTONUP:
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONUP:
+        case WM_MOUSEWHEEL:
+        case WM_KEYDOWN:
+        case WM_KEYUP:
+        case WM_CHAR:
+        case WM_SYSKEYDOWN:
+        case WM_SYSKEYUP:
+        case WM_SYSCHAR:
+            {
+                // Check if this window has a CEF OSR view
+                auto viewIt = g_cefViews.find(hwnd);
+                if (viewIt != g_cefViews.end()) {
+                    auto cefView = static_cast<CEFView*>(viewIt->second);
+                    if (cefView && cefView->isOSRMode()) {
+                        if (msg == WM_LBUTTONDOWN) {
+                            printf("WindowProc: WM_LBUTTONDOWN received for OSR window\n");
+                        }
+                        cefView->HandleWindowMessage(msg, wParam, lParam);
+                    }
+                }
+            }
+            break;
+
         case WM_CLOSE:
             if (data && data->closeHandler) {
                 data->closeHandler(data->windowId);
@@ -4068,7 +4452,8 @@ ELECTROBUN_EXPORT bool initCEF() {
     CefSettings settings;
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single-threaded message loop
-    
+    settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
+
     // Set the subprocess path to the helper executable
     CefString(&settings.browser_subprocess_path) = std::string(exePath) + "\\bun Helper.exe";
     
@@ -4112,7 +4497,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  HandlePostMessage bunBridgeHandler,
                                                  HandlePostMessage internalBridgeHandler,
                                                  const char *electrobunPreloadScript,
-                                                 const char *customPreloadScript) {
+                                                 const char *customPreloadScript,
+                                                 bool transparent) {
     // Check if WebView2 runtime is available
     LPWSTR versionInfo = nullptr;
     HRESULT result = GetAvailableCoreWebView2BrowserVersionString(nullptr, &versionInfo);
@@ -4144,7 +4530,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->customScript = customScript;
 
     // Create WebView2 on main thread
-    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr]() {
+    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr, transparent]() {
         // Initialize COM for this thread
         HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
@@ -4191,7 +4577,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         HWND parentHwnd = hwnd;
         
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [view, container, x, y, width, height](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+            [view, container, x, y, width, height, transparent](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -4211,7 +4597,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [view, container, x, y, width, height, env](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                        [view, container, x, y, width, height, env, transparent](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
                                 char errorMsg[256];
                                 sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
@@ -4247,17 +4633,32 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Set bounds and visibility
                             RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
                             ctrl->put_Bounds(bounds);
-                            
+
                             // Make sure the controller is visible
                             ctrl->put_IsVisible(TRUE);
-                            
+
+                            // Set transparent background if requested
+                            if (transparent) {
+                                ComPtr<ICoreWebView2Controller2> ctrl2;
+                                HRESULT hr = ctrl->QueryInterface(IID_PPV_ARGS(&ctrl2));
+                                if (SUCCEEDED(hr) && ctrl2) {
+                                    // Set background color to transparent (0x00000000 = ARGB fully transparent)
+                                    COREWEBVIEW2_COLOR transparentColor = {0, 0, 0, 0}; // A, R, G, B
+                                    ctrl2->put_DefaultBackgroundColor(transparentColor);
+                                }
+                            }
+
+                            // Capture webviewId and handler for event handlers
+                            uint32_t capturedWebviewId = view->webviewId;
+                            WebviewEventHandler capturedHandler = view->webviewEventHandler;
+
                             // Add views:// scheme support - TEST ADDITION
                             webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-                            
+
                             // Set up WebResourceRequested event handler for views:// scheme
                             webview->add_WebResourceRequested(
                                 Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-                                    [env](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                                    [env, capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
                                         // ::log("[WebView2] WebResourceRequested event triggered");
                                         ComPtr<ICoreWebView2WebResourceRequest> request;
                                         args->get_Request(&request);
@@ -4278,18 +4679,31 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         if (uriStr.substr(0, 8) == "views://") {
                                             std::string filePath = uriStr.substr(8);
                                             std::string content = loadViewsFile(filePath);
-                                            
+
                                             if (!content.empty()) {
                                                 // ::log("[WebView2] Loaded views file content, creating response");
-                                                
+
                                                 // Create response (simplified)
                                                 std::string mimeType = "text/html";
+                                                bool isDocument = false;
                                                 if (filePath.find(".js") != std::string::npos) mimeType = "application/javascript";
                                                 else if (filePath.find(".css") != std::string::npos) mimeType = "text/css";
                                                 else if (filePath.find(".png") != std::string::npos) mimeType = "image/png";
-                                                
+                                                else {
+                                                    isDocument = true; // HTML document
+                                                }
+
+                                                // For HTML documents (main frame navigation), fire navigation events manually
+                                                // since WebResourceRequested bypasses NavigationStarting/NavigationCompleted
+                                                // These events are already fired in loadURL, so we don't need to fire them here
+                                                // This block can be removed if we want to clean up
+                                                if (isDocument && capturedHandler) {
+                                                    // Events are now fired in loadURL() for consistency
+                                                    // This avoids duplicate events and ensures proper timing
+                                                }
+
                                                 std::wstring wMimeType(mimeType.begin(), mimeType.end());
-                                                
+
                                                 // Create memory stream
                                                 ComPtr<IStream> contentStream;
                                                 HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, content.size());
@@ -4299,9 +4713,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                     GlobalUnlock(hGlobal);
                                                     CreateStreamOnHGlobal(hGlobal, TRUE, &contentStream);
                                                 }
-                                                
+
                                                 std::wstring headers = L"Content-Type: " + wMimeType + L"\r\nAccess-Control-Allow-Origin: *";
-                                                
+
                                                 ComPtr<ICoreWebView2WebResourceResponse> response;
                                                 env->CreateWebResourceResponse(
                                                     contentStream.Get(),
@@ -4309,7 +4723,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                     L"OK",
                                                     headers.c_str(),
                                                     &response);
-                                                
+
                                                 args->put_Response(response.Get());
                                                 // ::log("[WebView2] Successfully served views:// file");
                                             }
@@ -4332,15 +4746,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 }
                                 combinedScript += view->customScript;
                             }
-                            
-                            // Add Ctrl+Click detection and navigation rules handler
-                            // Capture webviewId and handler separately to avoid shared_ptr issues
-                            uint32_t capturedWebviewId = view->webviewId;
-                            WebviewEventHandler capturedHandler = view->webviewEventHandler;
 
+                            // Add Ctrl+Click detection and navigation rules handler
                             webview->add_NavigationStarting(
                                 Callback<ICoreWebView2NavigationStartingEventHandler>(
                                     [capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                        printf("[WebView2] NavigationStarting fired for webview %u\n", capturedWebviewId);
                                         // Get URL first - needed for both ctrl+click and navigation rules
                                         wchar_t* uriWStr = nullptr;
                                         args->get_Uri(&uriWStr);
@@ -4420,6 +4831,43 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         // Cancel navigation if not allowed
                                         if (!shouldAllow) {
                                             args->put_Cancel(TRUE);
+                                        }
+
+                                        return S_OK;
+                                    }).Get(),
+                                nullptr);
+
+                            // Add NavigationCompleted handler for did-navigate event
+                            webview->add_NavigationCompleted(
+                                Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                    [capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                        printf("[WebView2] NavigationCompleted fired for webview %u\n", capturedWebviewId);
+                                        // Get current URL
+                                        wchar_t* uriWStr = nullptr;
+                                        sender->get_Source(&uriWStr);
+                                        std::string uri;
+                                        if (uriWStr) {
+                                            int size = WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, nullptr, 0, nullptr, nullptr);
+                                            if (size > 0) {
+                                                uri.resize(size - 1);
+                                                WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, &uri[0], size, nullptr, nullptr);
+                                            }
+                                            CoTaskMemFree(uriWStr);
+                                        }
+
+                                        // Fire did-navigate event
+                                        if (capturedHandler && !uri.empty()) {
+                                            // Escape URL for JSON
+                                            std::string escapedUrl;
+                                            for (char c : uri) {
+                                                switch (c) {
+                                                    case '"': escapedUrl += "\\\""; break;
+                                                    case '\\': escapedUrl += "\\\\"; break;
+                                                    default: escapedUrl += c; break;
+                                                }
+                                            }
+                                            std::string eventData = "{\"url\":\"" + escapedUrl + "\"}";
+                                            capturedHandler(capturedWebviewId, _strdup("did-navigate"), _strdup(eventData.c_str()));
                                         }
 
                                         return S_OK;
@@ -4788,7 +5236,75 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     return view;
 }
 
-// Internal factory method for creating CEF instances  
+// Utility function for creating CEF request contexts with partition support
+CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
+                                                               uint32_t webviewId) {
+    printf("DEBUG CEF: CreateRequestContextForPartition called for webview %u, partition: %s\n",
+           webviewId, partitionIdentifier ? partitionIdentifier : "null");
+
+    CefRequestContextSettings settings;
+
+    if (!partitionIdentifier || !partitionIdentifier[0]) {
+        // No partition - use in-memory session
+        settings.persist_session_cookies = false;
+        settings.persist_user_preferences = false;
+    } else {
+        std::string identifier(partitionIdentifier);
+        bool isPersistent = identifier.substr(0, 8) == "persist:";
+
+        if (isPersistent) {
+            // Persistent partition - create cache directory
+            std::string partitionName = identifier.substr(8);
+
+            // Get %LOCALAPPDATA% path
+            char* localAppData = getenv("LOCALAPPDATA");
+            if (!localAppData) {
+                printf("ERROR CEF: LOCALAPPDATA not found, falling back to in-memory session\n");
+                settings.persist_session_cookies = false;
+                settings.persist_user_preferences = false;
+            } else {
+                // Build app identifier from version.json to match root_cache_path logic
+                std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+                if (!g_electrobunChannel.empty()) {
+                    appIdentifier += "-" + g_electrobunChannel;
+                }
+
+                // Build cache path: %LOCALAPPDATA%\{appIdentifier}\CEF\Partitions\{partitionName}
+                std::string cachePath = std::string(localAppData) + "\\" + appIdentifier + "\\CEF\\Partitions\\" + partitionName;
+
+                // Create directory if it doesn't exist
+                std::wstring wideCachePath(cachePath.begin(), cachePath.end());
+                SHCreateDirectoryExW(NULL, wideCachePath.c_str(), NULL);
+
+                settings.persist_session_cookies = true;
+                settings.persist_user_preferences = true;
+                CefString(&settings.cache_path).FromString(cachePath);
+
+                printf("DEBUG CEF: Persistent partition '%s' using cache path: %s\n",
+                       partitionName.c_str(), cachePath.c_str());
+            }
+        } else {
+            // Non-persistent partition - in-memory session
+            settings.persist_session_cookies = false;
+            settings.persist_user_preferences = false;
+            printf("DEBUG CEF: In-memory partition '%s'\n", identifier.c_str());
+        }
+    }
+
+    // Create the request context
+    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
+
+    // Register scheme handler factory for this request context
+    // Note: Each CefRequestContext needs its own registration - it's not global
+    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
+    bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
+    printf("DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s\n",
+           partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
+
+    return context;
+}
+
+// Internal factory method for creating CEF instances
 static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                                        HWND hwnd,
                                        const char *url,
@@ -4801,7 +5317,8 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                                        HandlePostMessage bunBridgeHandler,
                                        HandlePostMessage internalBridgeHandler,
                                        const char *electrobunPreloadScript,
-                                       const char *customPreloadScript) {
+                                       const char *customPreloadScript,
+                                       bool transparent) {
     
     auto view = std::make_shared<CEFView>(webviewId);
     view->hwnd = hwnd;
@@ -4829,13 +5346,35 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         CefWindowInfo windowInfo;
         CefRect cefBounds((int)x, (int)y, (int)width, (int)height);
 
-        windowInfo.SetAsChild(container->GetHwnd(), cefBounds);
-        
         CefBrowserSettings browserSettings;
         // Note: web_security setting for CEF would need correct API
-        
+
+        // Set transparent background if requested
+        if (transparent) {
+            // CEF uses ARGB format: 0x00000000 = fully transparent
+            browserSettings.background_color = 0;
+        }
+
         // Create CEF client with bridge handlers
         auto client = new ElectrobunCefClient(webviewId, bunBridgeHandler, internalBridgeHandler);
+
+        // Configure OSR mode for transparent windows
+        if (transparent) {
+            // Enable OSR mode
+            client->EnableOSR((int)width, (int)height);
+
+            // Create OSR window for rendering
+            // For OSR, the window should fill the parent window's client area (0, 0)
+            OSRWindow* osrWindow = new OSRWindow(hwnd, 0, 0, (int)width, (int)height);
+            view->setOSRWindow(osrWindow);
+            client->SetOSRWindow(osrWindow);
+
+            // Use windowless (off-screen) rendering
+            windowInfo.SetAsWindowless(hwnd);
+        } else {
+            // Use windowed mode
+            windowInfo.SetAsChild(container->GetHwnd(), cefBounds);
+        }
         
         // Set up preload scripts
         if (electrobunPreloadScript && strlen(electrobunPreloadScript) > 0) {
@@ -4861,10 +5400,16 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             static std::map<ElectrobunCefClient*, std::string> g_tempPreloadScripts;
             g_tempPreloadScripts[client] = combinedScript;
         }
-        
+
+        // Create request context for partition isolation
+        CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(
+            partitionIdentifier,
+            webviewId
+        );
+
         // Create browser synchronously (like Mac implementation)
         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
-            windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, nullptr);
+            windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, requestContext);
         
         if (browser) {
             // Now store the script with the actual browser ID
@@ -4888,10 +5433,14 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             }
 
             // Add client to global map
+            // For OSR mode, use the main window hwnd; for normal mode, use container hwnd
             HWND containerHwnd = container->GetHwnd();
-            g_cefClients[containerHwnd] = client;
-                // Add CEFView to global map
-            g_cefViews[containerHwnd] = view.get();
+            HWND mapKey = transparent ? hwnd : containerHwnd;
+
+            g_cefClients[mapKey] = client;
+            g_cefViews[mapKey] = view.get();
+
+            printf("CEF: Registered view with hwnd=%p (transparent=%d)\n", mapKey, transparent);
             
             // Set browser on client for script execution
             client->SetBrowser(browser);
@@ -4967,7 +5516,7 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
 
 extern "C" {
 
-ELECTROBUN_EXPORT void runNSApplication(const char* identifier, const char* channel) {
+ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* channel) {
     // Store identifier and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
@@ -5097,8 +5646,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          HandlePostMessage bunBridgeHandler,
                          HandlePostMessage internalBridgeHandler,
                          const char *electrobunPreloadScript,
-                         const char *customPreloadScript) {
-    
+                         const char *customPreloadScript,
+                         bool transparent) {
+
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
 
@@ -5112,13 +5662,13 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         auto cefView = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     bunBridgeHandler, internalBridgeHandler,
-                                    electrobunPreloadScript, customPreloadScript);
+                                    electrobunPreloadScript, customPreloadScript, transparent);
         view = cefView.get();
     } else {
         auto webview2View = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
                                               partitionIdentifier, navigationCallback, webviewEventHandler,
                                               bunBridgeHandler, internalBridgeHandler,
-                                              electrobunPreloadScript, customPreloadScript);
+                                              electrobunPreloadScript, customPreloadScript, transparent);
         view = webview2View.get();
     }
     
@@ -5360,14 +5910,15 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     double width, double height,
     uint32_t styleMask,
     const char* titleBarStyle,
+    bool transparent,
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler) {
-    
+
     // Everything GUI-related needs to be dispatched to main thread
     HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
-        
+
         // Register window class with our custom procedure
         static bool classRegistered = false;
         if (!classRegistered) {
@@ -5378,11 +5929,11 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             RegisterClassA(&wc);  // Use ANSI version
             classRegistered = true;
         }
-        
+
         // Create window data structure to store callbacks
         WindowData* data = (WindowData*)malloc(sizeof(WindowData));
         if (!data) return NULL;
-        
+
         data->windowId = windowId;
         data->closeHandler = zigCloseHandler;
         data->moveHandler = zigMoveHandler;
@@ -5391,9 +5942,30 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
 
         // Map style mask to Windows style
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
-        
+        DWORD windowExStyle = WS_EX_APPWINDOW;
+
+        // Handle titleBarStyle options
+        if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
+            // "hidden" = borderless window (no titlebar, no native controls)
+            // This is for completely custom chrome
+            windowStyle = WS_POPUP | WS_VISIBLE;
+        } else if (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0) {
+            // "hiddenInset" = window with border but custom titlebar area
+            // On Windows, we can't easily do the exact macOS inset style,
+            // so we provide a borderless window with shadow for similar effect
+            windowStyle = WS_POPUP | WS_VISIBLE | WS_THICKFRAME;
+        }
+        // else: default titleBarStyle = WS_OVERLAPPEDWINDOW (standard window)
+
+        // Handle transparent windows
+        if (transparent) {
+            // For transparent windows, we need WS_EX_LAYERED to support per-pixel alpha
+            windowExStyle |= WS_EX_LAYERED;
+        }
+
         // Create the window
-        HWND hwnd = CreateWindowA(  // Use ANSI version
+        HWND hwnd = CreateWindowExA(  // Use CreateWindowExA to support extended styles
+            windowExStyle,
             "BasicWindowClass",  // Use ANSI string
             "",
             windowStyle,
@@ -5401,12 +5973,25 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             (int)width, (int)height,
             NULL, NULL, GetModuleHandle(NULL), NULL
         );
-        
+
         if (hwnd) {
             // Store our data with the window
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
 
-             if (g_applicationMenu) {
+            // Apply transparent window background if requested
+            if (transparent) {
+                // For transparent windows using OSR, UpdateLayeredWindow will handle
+                // the rendering with per-pixel alpha. We don't use SetLayeredWindowAttributes.
+                // The OSRWindow will call UpdateLayeredWindow with the CEF-rendered content.
+            }
+
+            // Don't apply application menu to transparent or custom chrome windows
+            // Only apply to windows with default titleBarStyle
+            bool isCustomChrome = transparent ||
+                                 (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) ||
+                                 (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0);
+
+            if (!isCustomChrome && g_applicationMenu) {
                 if (SetMenu(hwnd, g_applicationMenu)) {
                     DrawMenuBar(hwnd);
                     // char logMsg[256];
@@ -5416,8 +6001,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
                     ::log("Failed to apply application menu to new window");
                 }
             }
-            
-            
+
+
             // Show the window
             ShowWindow(hwnd, SW_SHOW);
             UpdateWindow(hwnd);
@@ -5425,10 +6010,10 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             // Clean up if window creation failed
             free(data);
         }
-        
+
         return hwnd;
     });
-    
+
     return hwnd;
 }
 
@@ -5489,12 +6074,12 @@ ELECTROBUN_EXPORT void showWindow(void *window) {
     });
 }
 
-ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
+ELECTROBUN_EXPORT void setWindowTitle(NSWindow *window, const char *title) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
-    
+
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in setNSWindowTitle");
+        ::log("ERROR: Invalid window handle in setWindowTitle");
         return;
     }
     
@@ -5532,12 +6117,12 @@ ELECTROBUN_EXPORT void setNSWindowTitle(NSWindow *window, const char *title) {
     });
 }
 
-ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void closeWindow(NSWindow *window) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in closeNSWindow");
+        ::log("ERROR: Invalid window handle in closeWindow");
         return;
     }
 
@@ -5573,11 +6158,11 @@ ELECTROBUN_EXPORT void closeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT void minimizeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void minimizeWindow(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in minimizeNSWindow");
+        ::log("ERROR: Invalid window handle in minimizeWindow");
         return;
     }
 
@@ -5586,11 +6171,11 @@ ELECTROBUN_EXPORT void minimizeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT void unminimizeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void restoreWindow(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in unminimizeNSWindow");
+        ::log("ERROR: Invalid window handle in restoreWindow");
         return;
     }
 
@@ -5599,7 +6184,7 @@ ELECTROBUN_EXPORT void unminimizeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowMinimized(NSWindow *window) {
+ELECTROBUN_EXPORT bool isWindowMinimized(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
@@ -5609,11 +6194,11 @@ ELECTROBUN_EXPORT bool isNSWindowMinimized(NSWindow *window) {
     return IsIconic(hwnd) != 0;
 }
 
-ELECTROBUN_EXPORT void maximizeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void maximizeWindow(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in maximizeNSWindow");
+        ::log("ERROR: Invalid window handle in maximizeWindow");
         return;
     }
 
@@ -5622,11 +6207,11 @@ ELECTROBUN_EXPORT void maximizeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT void unmaximizeNSWindow(NSWindow *window) {
+ELECTROBUN_EXPORT void unmaximizeWindow(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in unmaximizeNSWindow");
+        ::log("ERROR: Invalid window handle in unmaximizeWindow");
         return;
     }
 
@@ -5635,7 +6220,7 @@ ELECTROBUN_EXPORT void unmaximizeNSWindow(NSWindow *window) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowMaximized(NSWindow *window) {
+ELECTROBUN_EXPORT bool isWindowMaximized(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
@@ -5645,11 +6230,11 @@ ELECTROBUN_EXPORT bool isNSWindowMaximized(NSWindow *window) {
     return IsZoomed(hwnd) != 0;
 }
 
-ELECTROBUN_EXPORT void setNSWindowFullScreen(NSWindow *window, bool fullScreen) {
+ELECTROBUN_EXPORT void setWindowFullScreen(NSWindow *window, bool fullScreen) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in setNSWindowFullScreen");
+        ::log("ERROR: Invalid window handle in setWindowFullScreen");
         return;
     }
 
@@ -5699,7 +6284,7 @@ ELECTROBUN_EXPORT void setNSWindowFullScreen(NSWindow *window, bool fullScreen) 
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowFullScreen(NSWindow *window) {
+ELECTROBUN_EXPORT bool isWindowFullScreen(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
@@ -5710,11 +6295,11 @@ ELECTROBUN_EXPORT bool isNSWindowFullScreen(NSWindow *window) {
     return (style & WS_POPUP) && !(style & WS_OVERLAPPEDWINDOW);
 }
 
-ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
+ELECTROBUN_EXPORT void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
-        ::log("ERROR: Invalid window handle in setNSWindowAlwaysOnTop");
+        ::log("ERROR: Invalid window handle in setWindowAlwaysOnTop");
         return;
     }
 
@@ -5726,7 +6311,7 @@ ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowAlwaysOnTop(NSWindow *window) {
+ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(NSWindow *window) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
     if (!IsWindow(hwnd)) {
@@ -7039,7 +7624,7 @@ extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewI
 }
 
 // Adding a few Windows-specific functions for interop if needed
-ELECTROBUN_EXPORT uint32_t getNSWindowStyleMask(
+ELECTROBUN_EXPORT uint32_t getWindowStyle(
     bool Borderless,
     bool Titled,
     bool Closable,

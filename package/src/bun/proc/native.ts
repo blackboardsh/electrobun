@@ -72,6 +72,7 @@ export const native = (() => {
           FFIType.f64, FFIType.f64,    // width, height
           FFIType.u32,           // styleMask
           FFIType.cstring,       // titleBarStyle
+          FFIType.bool,          // transparent
           FFIType.function,      // closeHandler
           FFIType.function,      // moveHandler
           FFIType.function,      // resizeHandler
@@ -79,7 +80,7 @@ export const native = (() => {
         ],
         returns: FFIType.ptr
       },
-      setNSWindowTitle: {
+      setWindowTitle: {
         args: [
           FFIType.ptr, // window ptr
           FFIType.cstring, // title
@@ -92,49 +93,49 @@ export const native = (() => {
         ],
         returns: FFIType.void,
       },
-      closeNSWindow: {
+      closeWindow: {
         args: [
           FFIType.ptr, // window ptr
         ],
         returns: FFIType.void,
       },
-      minimizeNSWindow: {
+      minimizeWindow: {
         args: [FFIType.ptr],
         returns: FFIType.void,
       },
-      unminimizeNSWindow: {
+      restoreWindow: {
         args: [FFIType.ptr],
         returns: FFIType.void,
       },
-      isNSWindowMinimized: {
+      isWindowMinimized: {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
-      maximizeNSWindow: {
+      maximizeWindow: {
         args: [FFIType.ptr],
         returns: FFIType.void,
       },
-      unmaximizeNSWindow: {
+      unmaximizeWindow: {
         args: [FFIType.ptr],
         returns: FFIType.void,
       },
-      isNSWindowMaximized: {
+      isWindowMaximized: {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
-      setNSWindowFullScreen: {
+      setWindowFullScreen: {
         args: [FFIType.ptr, FFIType.bool],
         returns: FFIType.void,
       },
-      isNSWindowFullScreen: {
+      isWindowFullScreen: {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
-      setNSWindowAlwaysOnTop: {
+      setWindowAlwaysOnTop: {
         args: [FFIType.ptr, FFIType.bool],
         returns: FFIType.void,
       },
-      isNSWindowAlwaysOnTop: {
+      isWindowAlwaysOnTop: {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
@@ -143,18 +144,19 @@ export const native = (() => {
         args: [
           FFIType.u32, // webviewId
           FFIType.ptr, // windowPtr
-          FFIType.cstring, // renderer          
-          FFIType.cstring, // url                              
+          FFIType.cstring, // renderer
+          FFIType.cstring, // url
           FFIType.f64, FFIType.f64,    // x, y
-          FFIType.f64, FFIType.f64,    // width, height              
+          FFIType.f64, FFIType.f64,    // width, height
           FFIType.bool, // autoResize
-          FFIType.cstring, // partition                    
+          FFIType.cstring, // partition
           FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
           FFIType.function, // webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
           FFIType.function, //  bunBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
           FFIType.function, //  internalBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
           FFIType.cstring, // electrobunPreloadScript
           FFIType.cstring, // customPreloadScript
+          FFIType.bool, // transparent
         ],
         returns: FFIType.ptr
       },
@@ -440,8 +442,8 @@ export const native = (() => {
         returns: FFIType.void
       },
 
-      // MacOS specific native utils
-      getNSWindowStyleMask: {
+      // Window style utilities
+      getWindowStyle: {
         args: [
           FFIType.bool,
           FFIType.bool,
@@ -504,7 +506,7 @@ export const ffi = {
   request: {
     createWindow: (params: {
         id: number,
-        url: string | null,        
+        url: string | null,
         title: string,
         frame: {
           width: number,
@@ -527,6 +529,7 @@ export const ffi = {
           HUDWindow: boolean,
         },
         titleBarStyle: string,
+        transparent: boolean,
       }): FFIType.ptr => {
         const {id, url, title, frame: {x, y, width, height}, styleMask: {
             Borderless,
@@ -541,10 +544,11 @@ export const ffi = {
             DocModalWindow,
             NonactivatingPanel,
             HUDWindow
-          }, 
-          titleBarStyle} = params
-          
-          const styleMask = native.symbols.getNSWindowStyleMask(
+          },
+          titleBarStyle,
+          transparent} = params
+
+          const styleMask = native.symbols.getWindowStyle(
             Borderless,
             Titled,
             Closable,
@@ -557,8 +561,8 @@ export const ffi = {
             DocModalWindow,
             NonactivatingPanel,
             HUDWindow
-          )          
-     
+          )
+
         const windowPtr = native.symbols.createWindowWithFrameAndStyleFromWorker(
           id,
           // frame
@@ -566,6 +570,7 @@ export const ffi = {
           styleMask,
           // style
           toCString(titleBarStyle),
+          transparent,
           // callbacks
           windowCloseCallback,
           windowMoveCallback,
@@ -578,7 +583,7 @@ export const ffi = {
           throw "Failed to create window"
         }
         
-        native.symbols.setNSWindowTitle(windowPtr, toCString(title));
+        native.symbols.setWindowTitle(windowPtr, toCString(title));
         native.symbols.showWindow(windowPtr);
 
         return windowPtr;
@@ -592,7 +597,7 @@ export const ffi = {
           throw `Can't add webview to window. window no longer exists`;
         }
         
-        native.symbols.setNSWindowTitle(windowPtr, toCString(title));        
+        native.symbols.setWindowTitle(windowPtr, toCString(title));        
       },
       
       closeWindow: (params: {winId: number}) => {
@@ -603,7 +608,7 @@ export const ffi = {
           throw `Can't close window. Window no longer exists`;
         }
         
-        native.symbols.closeNSWindow(windowPtr);
+        native.symbols.closeWindow(windowPtr);
         // Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
       },
 
@@ -626,18 +631,18 @@ export const ffi = {
           throw `Can't minimize window. Window no longer exists`;
         }
 
-        native.symbols.minimizeNSWindow(windowPtr);
+        native.symbols.minimizeWindow(windowPtr);
       },
 
-      unminimizeWindow: (params: {winId: number}) => {
+      restoreWindow: (params: {winId: number}) => {
         const {winId} = params;
         const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
         if (!windowPtr) {
-          throw `Can't unminimize window. Window no longer exists`;
+          throw `Can't restore window. Window no longer exists`;
         }
 
-        native.symbols.unminimizeNSWindow(windowPtr);
+        native.symbols.restoreWindow(windowPtr);
       },
 
       isWindowMinimized: (params: {winId: number}): boolean => {
@@ -648,7 +653,7 @@ export const ffi = {
           return false;
         }
 
-        return native.symbols.isNSWindowMinimized(windowPtr);
+        return native.symbols.isWindowMinimized(windowPtr);
       },
 
       maximizeWindow: (params: {winId: number}) => {
@@ -659,7 +664,7 @@ export const ffi = {
           throw `Can't maximize window. Window no longer exists`;
         }
 
-        native.symbols.maximizeNSWindow(windowPtr);
+        native.symbols.maximizeWindow(windowPtr);
       },
 
       unmaximizeWindow: (params: {winId: number}) => {
@@ -670,7 +675,7 @@ export const ffi = {
           throw `Can't unmaximize window. Window no longer exists`;
         }
 
-        native.symbols.unmaximizeNSWindow(windowPtr);
+        native.symbols.unmaximizeWindow(windowPtr);
       },
 
       isWindowMaximized: (params: {winId: number}): boolean => {
@@ -681,7 +686,7 @@ export const ffi = {
           return false;
         }
 
-        return native.symbols.isNSWindowMaximized(windowPtr);
+        return native.symbols.isWindowMaximized(windowPtr);
       },
 
       setWindowFullScreen: (params: {winId: number; fullScreen: boolean}) => {
@@ -692,7 +697,7 @@ export const ffi = {
           throw `Can't set fullscreen. Window no longer exists`;
         }
 
-        native.symbols.setNSWindowFullScreen(windowPtr, fullScreen);
+        native.symbols.setWindowFullScreen(windowPtr, fullScreen);
       },
 
       isWindowFullScreen: (params: {winId: number}): boolean => {
@@ -703,7 +708,7 @@ export const ffi = {
           return false;
         }
 
-        return native.symbols.isNSWindowFullScreen(windowPtr);
+        return native.symbols.isWindowFullScreen(windowPtr);
       },
 
       setWindowAlwaysOnTop: (params: {winId: number; alwaysOnTop: boolean}) => {
@@ -714,7 +719,7 @@ export const ffi = {
           throw `Can't set always on top. Window no longer exists`;
         }
 
-        native.symbols.setNSWindowAlwaysOnTop(windowPtr, alwaysOnTop);
+        native.symbols.setWindowAlwaysOnTop(windowPtr, alwaysOnTop);
       },
 
       isWindowAlwaysOnTop: (params: {winId: number}): boolean => {
@@ -725,7 +730,7 @@ export const ffi = {
           return false;
         }
 
-        return native.symbols.isNSWindowAlwaysOnTop(windowPtr);
+        return native.symbols.isWindowAlwaysOnTop(windowPtr);
       },
 
       createWebview: (params: {
@@ -736,8 +741,8 @@ export const ffi = {
         secretKey: string;
         hostWebviewId: number | null;
         pipePrefix: string;
-        url: string | null;    
-        html: string | null;    
+        url: string | null;
+        html: string | null;
         partition: string | null;
         preload: string | null;
         frame: {
@@ -758,7 +763,7 @@ export const ffi = {
           // hostWebviewId: number | null;
           // pipePrefix: string;
           url,
-          // html: string | null;    
+          // html: string | null;
           partition,
           preload,
           frame: {
@@ -769,7 +774,10 @@ export const ffi = {
           },
           autoResize} = params
 
-          const windowPtr = BrowserWindow.getById(windowId)?.ptr;
+          const parentWindow = BrowserWindow.getById(windowId);
+          const windowPtr = parentWindow?.ptr;
+          // Get transparent flag from parent window
+          const transparent = parentWindow?.transparent ?? false;
           
 
         if (!windowPtr) {          
@@ -980,9 +988,9 @@ export const ffi = {
           id,
           windowPtr,
           toCString(renderer),
-          toCString(url || ''),                          
-          x, y,  
-          width, height,             
+          toCString(url || ''),
+          x, y,
+          width, height,
           autoResize,
           toCString(partition || 'persist:default'),
           webviewDecideNavigation,
@@ -990,7 +998,8 @@ export const ffi = {
           bunBridgePostmessageHandler,
           internalBridgeHandler,
           toCString(electrobunPreload),
-          toCString(customPreload || ''),        
+          toCString(customPreload || ''),
+          transparent,
         )        
 
         if (!webviewPtr) {

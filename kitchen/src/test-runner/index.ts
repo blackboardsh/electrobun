@@ -34,6 +34,10 @@ const rpc = Electroview.defineRPC<TestRunnerRPC>({
       interactiveVerify: ({ testId }) => {
         showVerificationModal(testId);
       },
+      buildConfig: (config) => {
+        updateBuildConfigUI(config);
+        console.log(`Build config: defaultRenderer=${config.defaultRenderer}, available=[${config.availableRenderers.join(', ')}]`);
+      },
     },
   },
 });
@@ -399,6 +403,19 @@ async function submitVerification(action: 'pass' | 'fail' | 'retest') {
 
   if (action !== 'retest') {
     hideInteractiveModal();
+  }
+}
+
+// Build Config UI
+function updateBuildConfigUI(config: { defaultRenderer: string; availableRenderers: string[] }) {
+  const defaultRendererEl = document.getElementById('default-renderer');
+  const availableRenderersEl = document.getElementById('available-renderers');
+
+  if (defaultRendererEl) {
+    defaultRendererEl.textContent = config.defaultRenderer;
+  }
+  if (availableRenderersEl) {
+    availableRenderersEl.textContent = config.availableRenderers.join(', ');
   }
 }
 

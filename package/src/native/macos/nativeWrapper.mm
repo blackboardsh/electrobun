@@ -414,7 +414,7 @@ bool isCEFAvailable() {
     return [[NSFileManager defaultManager] fileExistsAtPath:frameworkPath];
 }
 
-extern "C" uint32_t getNSWindowStyleMask(
+extern "C" uint32_t getWindowStyle(
     bool Borderless,
     bool Titled,
     bool Closable,
@@ -624,6 +624,24 @@ void releaseObjCObject(id objcObject) {
 // Global map to track all AbstractView instances by their webviewId
 static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = nil;
 
+// OSR (Off-Screen Rendering) View for transparent CEF windows
+@interface CEFOSRView : NSView {
+    @private
+    NSLock *_bufferLock;
+    void *_pixelBuffer;
+    void *_renderBuffer;  // Double buffer for thread safety
+    size_t _pixelBufferSize;
+    int _bufferWidth;
+    int _bufferHeight;
+    BOOL _hasNewFrame;
+}
+@property (nonatomic, assign) void* cefBrowser;  // CefRefPtr<CefBrowser> stored as void*
+@property (nonatomic, strong) NSTrackingArea *trackingArea;
+
+- (void)updateBuffer:(const void*)buffer width:(int)width height:(int)height;
+- (void)setCefBrowser:(void*)browser;
+@end
+
 @interface ContainerView : NSView
     /// An reverse ordered array of abstractViews (newest first)
     @property (nonatomic, strong) NSMutableArray<AbstractView *> *abstractViews;
@@ -666,9 +684,9 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, strong) WKWebView *webView;    
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
-                            window:(NSWindow *)window   
-                            url:(const char *)url                                                
-                                frame:(NSRect)frame                    
+                            window:(NSWindow *)window
+                            url:(const char *)url
+                                frame:(NSRect)frame
                         autoResize:(bool)autoResize
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
@@ -676,7 +694,8 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
                 internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
-                customPreloadScript:(const char *)customPreloadScript;
+                customPreloadScript:(const char *)customPreloadScript
+                transparent:(bool)transparent;
 @end
 
 
@@ -1154,6 +1173,389 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 @end
 
+// ----------------------- CEF OSR View Implementation -----------------------
+
+@implementation CEFOSRView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        self.wantsLayer = YES;
+        self.layer.backgroundColor = [[NSColor clearColor] CGColor];
+        self.layer.opaque = NO;
+
+        _bufferLock = [[NSLock alloc] init];
+        _pixelBuffer = NULL;
+        _renderBuffer = NULL;
+        _pixelBufferSize = 0;
+        _bufferWidth = 0;
+        _bufferHeight = 0;
+        _hasNewFrame = NO;
+
+        // Set up tracking area for mouse events
+        [self updateTrackingAreas];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [_bufferLock lock];
+    if (_pixelBuffer) {
+        free(_pixelBuffer);
+        _pixelBuffer = NULL;
+    }
+    if (_renderBuffer) {
+        free(_renderBuffer);
+        _renderBuffer = NULL;
+    }
+    [_bufferLock unlock];
+
+    // Clean up the heap-allocated browser pointer
+    if (_cefBrowser) {
+        CefRefPtr<CefBrowser>* browserPtr = (CefRefPtr<CefBrowser>*)_cefBrowser;
+        delete browserPtr;
+        _cefBrowser = NULL;
+    }
+}
+
+- (void)updateTrackingAreas {
+    if (self.trackingArea) {
+        [self removeTrackingArea:self.trackingArea];
+    }
+    self.trackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
+        options:(NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect)
+        owner:self
+        userInfo:nil];
+    [self addTrackingArea:self.trackingArea];
+}
+
+- (BOOL)isFlipped {
+    return YES;  // CEF uses top-left origin
+}
+
+- (BOOL)acceptsFirstResponder {
+    return YES;
+}
+
+- (BOOL)canBecomeKeyView {
+    return YES;
+}
+
+- (void)setCefBrowser:(void*)browser {
+    _cefBrowser = browser;  // Use backing ivar directly to avoid recursive setter call
+}
+
+- (void)updateBuffer:(const void*)buffer width:(int)width height:(int)height {
+    NSLog(@"DEBUG OSR updateBuffer: Enter, buffer=%p, width=%d, height=%d", buffer, width, height);
+
+    if (!buffer || width <= 0 || height <= 0) {
+        NSLog(@"DEBUG OSR updateBuffer: Invalid params, returning");
+        return;
+    }
+
+    // Sanity check for reasonable buffer sizes (max 8K resolution)
+    if (width > 8192 || height > 8192) {
+        NSLog(@"DEBUG OSR updateBuffer: Size too large, returning");
+        return;
+    }
+
+    size_t requiredSize = (size_t)width * (size_t)height * 4;  // BGRA
+
+    // Sanity check for allocation size (max 256MB)
+    if (requiredSize > 256 * 1024 * 1024) {
+        NSLog(@"DEBUG OSR updateBuffer: Required size too large, returning");
+        return;
+    }
+
+    NSLog(@"DEBUG OSR updateBuffer: About to lock, _bufferLock=%p", _bufferLock);
+    [_bufferLock lock];
+    NSLog(@"DEBUG OSR updateBuffer: Lock acquired");
+
+    // Reallocate buffer if needed
+    if (_pixelBufferSize < requiredSize) {
+        NSLog(@"DEBUG OSR updateBuffer: Reallocating buffer from %zu to %zu", _pixelBufferSize, requiredSize);
+        if (_pixelBuffer) {
+            free(_pixelBuffer);
+            _pixelBuffer = NULL;
+        }
+        _pixelBuffer = malloc(requiredSize);
+        if (_pixelBuffer) {
+            _pixelBufferSize = requiredSize;
+            NSLog(@"DEBUG OSR updateBuffer: Buffer allocated at %p", _pixelBuffer);
+        } else {
+            _pixelBufferSize = 0;
+            NSLog(@"DEBUG OSR updateBuffer: Buffer allocation failed!");
+            [_bufferLock unlock];
+            return;
+        }
+    }
+
+    NSLog(@"DEBUG OSR updateBuffer: About to memcpy %zu bytes", requiredSize);
+    memcpy(_pixelBuffer, buffer, requiredSize);
+    _bufferWidth = width;
+    _bufferHeight = height;
+    _hasNewFrame = YES;
+
+    [_bufferLock unlock];
+    NSLog(@"DEBUG OSR updateBuffer: Lock released, requesting redraw");
+
+    // Request redraw on main thread
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self setNeedsDisplay:YES];
+    });
+    NSLog(@"DEBUG OSR updateBuffer: Exit");
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    NSLog(@"DEBUG OSR drawRect: Enter");
+    [_bufferLock lock];
+
+    if (!_pixelBuffer || _bufferWidth == 0 || _bufferHeight == 0) {
+        [_bufferLock unlock];
+        NSLog(@"DEBUG OSR drawRect: No buffer, returning");
+        return;
+    }
+
+    // Copy to render buffer to minimize lock time
+    size_t bufferSize = (size_t)_bufferWidth * (size_t)_bufferHeight * 4;
+    if (!_renderBuffer || _hasNewFrame) {
+        if (_renderBuffer) free(_renderBuffer);
+        _renderBuffer = malloc(bufferSize);
+        if (_renderBuffer) {
+            memcpy(_renderBuffer, _pixelBuffer, bufferSize);
+        }
+        _hasNewFrame = NO;
+    }
+
+    int width = _bufferWidth;
+    int height = _bufferHeight;
+    void *renderData = _renderBuffer;
+
+    [_bufferLock unlock];
+
+    if (!renderData) {
+        NSLog(@"DEBUG OSR drawRect: No render data, returning");
+        return;
+    }
+
+    CGContextRef context = [[NSGraphicsContext currentContext] CGContext];
+    if (!context) {
+        NSLog(@"DEBUG OSR drawRect: No context, returning");
+        return;
+    }
+
+    NSLog(@"DEBUG OSR drawRect: Creating bitmap context %dx%d", width, height);
+
+    // Create a CGImage from the pixel buffer (BGRA format)
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef bitmapContext = CGBitmapContextCreate(
+        renderData,
+        width,
+        height,
+        8,  // bits per component
+        width * 4,  // bytes per row
+        colorSpace,
+        kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little  // BGRA
+    );
+
+    if (bitmapContext) {
+        CGImageRef image = CGBitmapContextCreateImage(bitmapContext);
+        if (image) {
+            // CGContextDrawImage draws with origin at bottom-left, but CEF renders with origin at top-left
+            // We need to flip the context to draw correctly
+            CGContextSaveGState(context);
+
+            // Flip the context: translate to bottom and scale y by -1
+            CGContextTranslateCTM(context, 0, self.bounds.size.height);
+            CGContextScaleCTM(context, 1.0, -1.0);
+
+            CGRect drawRect = CGRectMake(0, 0, self.bounds.size.width, self.bounds.size.height);
+            CGContextDrawImage(context, drawRect, image);
+
+            CGContextRestoreGState(context);
+            CGImageRelease(image);
+        }
+        CGContextRelease(bitmapContext);
+    }
+    CGColorSpaceRelease(colorSpace);
+    NSLog(@"DEBUG OSR drawRect: Exit");
+}
+
+// Mouse event handling - forward to CEF
+- (void)sendMouseEvent:(NSEvent*)event type:(int)type {
+    if (!self.cefBrowser) return;
+
+    CefRefPtr<CefBrowser>* browserPtr = (CefRefPtr<CefBrowser>*)self.cefBrowser;
+    if (!browserPtr || !(*browserPtr)) return;
+
+    CefRefPtr<CefBrowserHost> host = (*browserPtr)->GetHost();
+    if (!host) return;
+
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+
+    CefMouseEvent cefEvent;
+    cefEvent.x = (int)point.x;
+    cefEvent.y = (int)point.y;
+    cefEvent.modifiers = 0;
+
+    if ([event modifierFlags] & NSEventModifierFlagShift) cefEvent.modifiers |= EVENTFLAG_SHIFT_DOWN;
+    if ([event modifierFlags] & NSEventModifierFlagControl) cefEvent.modifiers |= EVENTFLAG_CONTROL_DOWN;
+    if ([event modifierFlags] & NSEventModifierFlagOption) cefEvent.modifiers |= EVENTFLAG_ALT_DOWN;
+    if ([event modifierFlags] & NSEventModifierFlagCommand) cefEvent.modifiers |= EVENTFLAG_COMMAND_DOWN;
+
+    CefBrowserHost::MouseButtonType buttonType = MBT_LEFT;
+    if ([event type] == NSEventTypeRightMouseDown || [event type] == NSEventTypeRightMouseUp) {
+        buttonType = MBT_RIGHT;
+    } else if ([event type] == NSEventTypeOtherMouseDown || [event type] == NSEventTypeOtherMouseUp) {
+        buttonType = MBT_MIDDLE;
+    }
+
+    if (type == 0) {  // Move
+        host->SendMouseMoveEvent(cefEvent, false);
+    } else if (type == 1) {  // Down
+        host->SendMouseClickEvent(cefEvent, buttonType, false, 1);
+    } else if (type == 2) {  // Up
+        host->SendMouseClickEvent(cefEvent, buttonType, true, 1);
+    }
+}
+
+- (void)mouseDown:(NSEvent*)event { [self sendMouseEvent:event type:1]; }
+- (void)mouseUp:(NSEvent*)event { [self sendMouseEvent:event type:2]; }
+- (void)mouseMoved:(NSEvent*)event { [self sendMouseEvent:event type:0]; }
+- (void)mouseDragged:(NSEvent*)event { [self sendMouseEvent:event type:0]; }
+- (void)rightMouseDown:(NSEvent*)event { [self sendMouseEvent:event type:1]; }
+- (void)rightMouseUp:(NSEvent*)event { [self sendMouseEvent:event type:2]; }
+- (void)rightMouseDragged:(NSEvent*)event { [self sendMouseEvent:event type:0]; }
+
+- (void)scrollWheel:(NSEvent*)event {
+    if (!self.cefBrowser) return;
+
+    CefRefPtr<CefBrowser>* browserPtr = (CefRefPtr<CefBrowser>*)self.cefBrowser;
+    if (!browserPtr || !(*browserPtr)) return;
+
+    CefRefPtr<CefBrowserHost> host = (*browserPtr)->GetHost();
+    if (!host) return;
+
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+
+    CefMouseEvent cefEvent;
+    cefEvent.x = (int)point.x;
+    cefEvent.y = (int)point.y;
+    cefEvent.modifiers = 0;
+
+    int deltaX = (int)([event scrollingDeltaX] * 10);
+    int deltaY = (int)([event scrollingDeltaY] * 10);
+
+    host->SendMouseWheelEvent(cefEvent, deltaX, deltaY);
+}
+
+// Keyboard event handling
+- (void)keyDown:(NSEvent*)event {
+    if (!self.cefBrowser) return;
+
+    CefRefPtr<CefBrowser>* browserPtr = (CefRefPtr<CefBrowser>*)self.cefBrowser;
+    if (!browserPtr || !(*browserPtr)) return;
+
+    CefRefPtr<CefBrowserHost> host = (*browserPtr)->GetHost();
+    if (!host) return;
+
+    CefKeyEvent cefEvent;
+    cefEvent.type = KEYEVENT_RAWKEYDOWN;
+    cefEvent.native_key_code = [event keyCode];
+    cefEvent.windows_key_code = [event keyCode];
+    cefEvent.modifiers = 0;
+
+    if ([event modifierFlags] & NSEventModifierFlagShift) cefEvent.modifiers |= EVENTFLAG_SHIFT_DOWN;
+    if ([event modifierFlags] & NSEventModifierFlagControl) cefEvent.modifiers |= EVENTFLAG_CONTROL_DOWN;
+    if ([event modifierFlags] & NSEventModifierFlagOption) cefEvent.modifiers |= EVENTFLAG_ALT_DOWN;
+    if ([event modifierFlags] & NSEventModifierFlagCommand) cefEvent.modifiers |= EVENTFLAG_COMMAND_DOWN;
+
+    host->SendKeyEvent(cefEvent);
+
+    // Also send char event for text input
+    NSString *chars = [event characters];
+    if ([chars length] > 0) {
+        cefEvent.type = KEYEVENT_CHAR;
+        cefEvent.character = [chars characterAtIndex:0];
+        cefEvent.unmodified_character = cefEvent.character;
+        host->SendKeyEvent(cefEvent);
+    }
+}
+
+- (void)keyUp:(NSEvent*)event {
+    if (!self.cefBrowser) return;
+
+    CefRefPtr<CefBrowser>* browserPtr = (CefRefPtr<CefBrowser>*)self.cefBrowser;
+    if (!browserPtr || !(*browserPtr)) return;
+
+    CefRefPtr<CefBrowserHost> host = (*browserPtr)->GetHost();
+    if (!host) return;
+
+    CefKeyEvent cefEvent;
+    cefEvent.type = KEYEVENT_KEYUP;
+    cefEvent.native_key_code = [event keyCode];
+    cefEvent.windows_key_code = [event keyCode];
+    cefEvent.modifiers = 0;
+
+    host->SendKeyEvent(cefEvent);
+}
+
+- (void)flagsChanged:(NSEvent*)event {
+    // Handle modifier key changes if needed
+}
+
+- (BOOL)becomeFirstResponder {
+    BOOL result = [super becomeFirstResponder];
+    if (result && self.cefBrowser) {
+        CefRefPtr<CefBrowser>* browserPtr = (CefRefPtr<CefBrowser>*)self.cefBrowser;
+        if (browserPtr && *browserPtr) {
+            CefRefPtr<CefBrowserHost> host = (*browserPtr)->GetHost();
+            if (host) {
+                host->SetFocus(true);
+            }
+        }
+    }
+    return result;
+}
+
+- (BOOL)resignFirstResponder {
+    if (self.cefBrowser) {
+        CefRefPtr<CefBrowser>* browserPtr = (CefRefPtr<CefBrowser>*)self.cefBrowser;
+        if (browserPtr && *browserPtr) {
+            CefRefPtr<CefBrowserHost> host = (*browserPtr)->GetHost();
+            if (host) {
+                host->SetFocus(false);
+            }
+        }
+    }
+    return [super resignFirstResponder];
+}
+
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    if (self.window) {
+        // Request focus when added to window
+        [self.window makeFirstResponder:self];
+    }
+}
+
+- (void)setFrameSize:(NSSize)newSize {
+    [super setFrameSize:newSize];
+
+    // Notify CEF of size change
+    if (self.cefBrowser) {
+        CefRefPtr<CefBrowser>* browserPtr = (CefRefPtr<CefBrowser>*)self.cefBrowser;
+        if (browserPtr && *browserPtr) {
+            CefRefPtr<CefBrowserHost> host = (*browserPtr)->GetHost();
+            if (host) {
+                host->WasResized();
+            }
+        }
+    }
+}
+
+@end
+
 // ----------------------- URL Scheme & Navigation Delegates -----------------------
 
 @implementation MyURLSchemeHandler
@@ -1277,7 +1679,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             NSString *eventData = [NSString stringWithFormat:@"{\"url\":\"%@\",\"isCmdClick\":true,\"modifierFlags\":%lu}",
                                  newURL.absoluteString,
                                  (unsigned long)navigationAction.modifierFlags];
-            self.zigEventHandler(self.webviewId, "new-window-open", [eventData UTF8String]);
+            self.zigEventHandler(self.webviewId, strdup("new-window-open"), strdup([eventData UTF8String]));
             decisionHandler(WKNavigationActionPolicyCancel);
             return;
         }
@@ -1290,7 +1692,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         NSString *eventData = [NSString stringWithFormat:@"{\"url\":\"%@\",\"allowed\":%@}",
                              newURL.absoluteString,
                              shouldAllow ? @"true" : @"false"];
-        self.zigEventHandler(self.webviewId, "will-navigate", [eventData UTF8String]);
+        self.zigEventHandler(self.webviewId, strdup("will-navigate"), strdup([eventData UTF8String]));
 
         // Check if this navigation action should trigger a download
         if (navigationAction.shouldPerformDownload) {
@@ -1313,10 +1715,16 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
     - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-        self.zigEventHandler(self.webviewId, "did-navigate", webView.URL.absoluteString.UTF8String);
+        NSString *urlString = webView.URL.absoluteString ?: @"";
+        if (urlString.length > 0) {
+            self.zigEventHandler(self.webviewId, strdup("did-navigate"), strdup(urlString.UTF8String));
+        }
     }
     - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
-        self.zigEventHandler(self.webviewId, "did-commit-navigation", webView.URL.absoluteString.UTF8String);
+        NSString *urlString = webView.URL.absoluteString ?: @"";
+        if (urlString.length > 0) {
+            self.zigEventHandler(self.webviewId, strdup("did-commit-navigation"), strdup(urlString.UTF8String));
+        }
     }
 
     // Called when navigationAction policy returns .download
@@ -1674,8 +2082,8 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window
-                            url:(const char *)url                                                   
-                                frame:(NSRect)frame                    
+                            url:(const char *)url
+                                frame:(NSRect)frame
                         autoResize:(bool)autoResize
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
@@ -1684,9 +2092,10 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript
+                transparent:(bool)transparent
     {
         self = [super init];
-        if (self) {        
+        if (self) {
             self.webviewId = webviewId;
             
             // TODO: rewrite this so we can return a reference to the AbstractRenderer and then call
@@ -2194,16 +2603,19 @@ public:
         
     }
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
-        command_line->AppendSwitchWithValue("custom-scheme", "views"); 
+        command_line->AppendSwitchWithValue("custom-scheme", "views");
         // Note: This stops CEF (Chromium) trying to access Chromium's storage for system-level things
         // like credential management. Using a mock keychain just means it doesn't use keychain
-        // for credential storage. Other security features like cookies, https, etc. are unaffected.                
+        // for credential storage. Other security features like cookies, https, etc. are unaffected.
         command_line->AppendSwitch("use-mock-keychain");
-        
+
         // Enable fullscreen support for videos
         command_line->AppendSwitch("enable-features=PictureInPicture");
-        command_line->AppendSwitch("enable-fullscreen");       
-                
+        command_line->AppendSwitch("enable-fullscreen");
+
+        // Note: CEF transparency is handled via OSR (off-screen rendering) mode
+        // which is enabled when transparent:true is set in the window options
+
     }
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {        
         registrar->AddCustomScheme("views", 
@@ -2409,6 +2821,11 @@ private:
     WebviewEventHandler webview_event_handler_;
     DecideNavigationCallback navigation_callback_;
 
+    // OSR (Off-Screen Rendering) support
+    CEFOSRView* osr_view_ = nullptr;
+    int view_width_ = 800;
+    int view_height_ = 600;
+    bool osr_enabled_ = false;
 
     PreloadScript electrobun_script_;
     PreloadScript custom_script_;
@@ -2469,6 +2886,21 @@ public:
         custom_script_ = {script, true};
     }
 
+    // OSR configuration methods
+    void SetOSRView(CEFOSRView* view) {
+        osr_view_ = view;
+        osr_enabled_ = (view != nullptr);
+    }
+
+    void SetViewSize(int width, int height) {
+        view_width_ = width;
+        view_height_ = height;
+    }
+
+    bool IsOSREnabled() const {
+        return osr_enabled_;
+    }
+
     virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override { 
         return this; 
     }
@@ -2502,8 +2934,10 @@ public:
     virtual void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
         rect.x = 0;
         rect.y = 0;
-        rect.width = 800;
-        rect.height = 600;
+        // Always use stored dimensions (thread-safe)
+        // These are set when the view is created and updated on resize
+        rect.width = view_width_ > 0 ? view_width_ : 800;
+        rect.height = view_height_ > 0 ? view_height_ : 600;
     }
 
     virtual void OnPaint(CefRefPtr<CefBrowser> browser,
@@ -2511,7 +2945,15 @@ public:
                         const RectList& dirtyRects,
                         const void* buffer,
                         int width,
-                        int height) override {}
+                        int height) override {
+        NSLog(@"DEBUG CEF OnPaint: osr_enabled=%d, osr_view=%p, buffer=%p, width=%d, height=%d",
+              osr_enabled_, osr_view_, buffer, width, height);
+        if (osr_enabled_ && osr_view_ && buffer && width > 0 && height > 0) {
+            NSLog(@"DEBUG CEF OnPaint: Calling updateBuffer");
+            [osr_view_ updateBuffer:buffer width:width height:height];
+            NSLog(@"DEBUG CEF OnPaint: updateBuffer completed");
+        }
+    }
 
     // CefDownloadHandler methods
     bool OnBeforeDownload(CefRefPtr<CefBrowser> browser,
@@ -3275,12 +3717,14 @@ NSTimeInterval ElectrobunClient::lastCmdClickTime = 0;
 
     @property (nonatomic, assign) CefRefPtr<CefBrowser> browser;
     @property (nonatomic, assign) CefRefPtr<ElectrobunClient> client;
+    @property (nonatomic, strong) CEFOSRView *osrView;  // For transparent/OSR mode
+    @property (nonatomic, assign) BOOL isOSRMode;
 
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
-                            window:(NSWindow *)window   
-                            url:(const char *)url                                                
-                                frame:(NSRect)frame                    
+                            window:(NSWindow *)window
+                            url:(const char *)url
+                                frame:(NSRect)frame
                         autoResize:(bool)autoResize
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
@@ -3288,7 +3732,8 @@ NSTimeInterval ElectrobunClient::lastCmdClickTime = 0;
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
                 internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
-                customPreloadScript:(const char *)customPreloadScript;
+                customPreloadScript:(const char *)customPreloadScript
+                transparent:(bool)transparent;
 
 @end
 
@@ -3315,6 +3760,7 @@ bool initializeCEF() {
     CefSettings settings;
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single threaded message loop on macOS
+    settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
     // settings.log_severity = LOGSEVERITY_VERBOSE;
 
     // // Set explicit path to this app's own CEF helper process
@@ -3625,8 +4071,8 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window
-                                url:(const char *)url                           
-                            frame:(NSRect)frame                    
+                                url:(const char *)url
+                            frame:(NSRect)frame
                         autoResize:(bool)autoResize
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
@@ -3635,9 +4081,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
             electrobunPreloadScript:(const char *)electrobunPreloadScript
             customPreloadScript:(const char *)customPreloadScript
+            transparent:(bool)transparent
     {
         self = [super init];
-        if (self) {        
+        if (self) {
             self.webviewId = webviewId;
 
             if (autoResize) {
@@ -3646,37 +4093,64 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 self.fullSize = NO;
             }
 
-            void (^createCEFBrowser)(void) = ^{                
+            void (^createCEFBrowser)(void) = ^{
                 [window makeKeyAndOrderFront:nil];
                 CefBrowserSettings browserSettings;
-                // Using default settings for now to avoid crashes               
+
+                // Set transparent background if requested
+                if (transparent) {
+                    // CEF uses ARGB format: 0x00000000 = fully transparent
+                    browserSettings.background_color = 0;
+                }
 
                 CefWindowInfo window_info;
-                
-                NSView *contentView = window.contentView;            
-                
+
+                NSView *contentView = window.contentView;
+
                 CGFloat adjustedY = contentView.bounds.size.height - frame.origin.y - frame.size.height;
                 CefRect cefBounds((int)frame.origin.x,
                                 (int)adjustedY,
                                 (int)frame.size.width,
                                 (int)frame.size.height);
-                window_info.SetAsChild((__bridge void*)contentView, cefBounds);
+
+                // Use OSR (windowless) mode for transparent windows
+                if (transparent) {
+                    self.isOSRMode = YES;
+                    // Create OSR view
+                    NSRect osrFrame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+                    self.osrView = [[CEFOSRView alloc] initWithFrame:osrFrame];
+                    [contentView addSubview:self.osrView];
+                    self.nsView = self.osrView;
+
+                    // Use windowless (off-screen) rendering for transparency
+                    // Pass the window handle for context menu positioning, etc.
+                    window_info.SetAsWindowless((__bridge void*)window);
+                } else {
+                    self.isOSRMode = NO;
+                    window_info.SetAsChild((__bridge void*)contentView, cefBounds);
+                }
 
                 CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(
-                    partitionIdentifier,                    
+                    partitionIdentifier,
                     webviewId
                 );
 
-                
+
                 // Global scheme handler is already registered in getOrCreateRequestContext()
-                
+
                 self.client = new ElectrobunClient(
-                    webviewId,  
-                    bunBridgeHandler, 
+                    webviewId,
+                    bunBridgeHandler,
                     internalBridgeHandler,
                     webviewEventHandler,
-                    navigationCallback 
-                );                
+                    navigationCallback
+                );
+
+                // Configure OSR if enabled
+                if (transparent && self.osrView) {
+                    self.client->SetOSRView(self.osrView);
+                    self.client->SetViewSize((int)frame.size.width, (int)frame.size.height);
+                }                
 
                 // store the script values
                 [self addPreloadScriptToWebView:electrobunPreloadScript];
@@ -3694,13 +4168,17 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                     [self updateCustomPreloadScript:customPreloadScript];
                 }                            
 
-                
+
                 // Note: We must create a browser with about:blank first so that self.browser can be set
                 // Otherwise we get a race condition where OOPIF events hit bun then get passed to the parent
                 // webview which is still in the middle of a CreateBrowserSync and fails to call
                 // self.browser->GetMainFrame()->ExecuteJavascript.
+                NSLog(@"DEBUG CEF: Creating browser, OSR mode: %@, view size: %dx%d",
+                      self.isOSRMode ? @"YES" : @"NO",
+                      (int)frame.size.width, (int)frame.size.height);
                 self.browser = CefBrowserHost::CreateBrowserSync(
                     window_info, self.client, CefString("about:blank"), browserSettings, nullptr, requestContext);
+                NSLog(@"DEBUG CEF: Browser created successfully");
 
                 if (self.browser) {
                     // Register browser-to-webview mapping for global scheme handler
@@ -3710,13 +4188,19 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                         browserToWebviewMap[browserId] = self.webviewId;
                     }
                     NSLog(@"DEBUG CEF Mapping: Registered browser %d -> webview %u", browserId, self.webviewId);
-                    CefWindowHandle handle = self.browser->GetHost()->GetWindowHandle();
-                    self.nsView = (__bridge NSView *)handle;                
-                    self.nsView.autoresizingMask = NSViewNotSizable;
-                    
-                    
-                    self.nsView.layer.backgroundColor = [[NSColor clearColor] CGColor];
-                    self.nsView.layer.opaque = NO;                                
+
+                    if (self.isOSRMode) {
+                        // In OSR mode, pass browser reference to the OSR view for event handling
+                        // Allocate a CefRefPtr on heap that lives with this webview instance
+                        CefRefPtr<CefBrowser>* browserPtr = new CefRefPtr<CefBrowser>(self.browser);
+                        [self.osrView setCefBrowser:browserPtr];
+                        NSLog(@"DEBUG CEF OSR: Browser created in OSR mode for transparent window");
+                    } else {
+                        // In windowed mode, get the native view handle
+                        CefWindowHandle handle = self.browser->GetHost()->GetWindowHandle();
+                        self.nsView = (__bridge NSView *)handle;
+                        self.nsView.autoresizingMask = NSViewNotSizable;
+                    }
                 }
 
 
@@ -4039,7 +4523,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
  */
 
 // Note: This is executed from the main bun thread
-extern "C" void runNSApplication(const char* identifier, const char* channel) {
+extern "C" void startEventLoop(const char* identifier, const char* channel) {
     // Store identifier and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
@@ -4135,7 +4619,8 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         HandlePostMessage bunBridgeHandler,
                         HandlePostMessage internalBridgeHandler,
                         const char *electrobunPreloadScript,
-                        const char *customPreloadScript ) {
+                        const char *customPreloadScript,
+                        bool transparent ) {
 
     // Validate frame values - use defaults if NaN or invalid
     if (isnan(x) || isinf(x)) {
@@ -4165,7 +4650,7 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
         impl = [[ImplClass alloc] initWithWebviewId:webviewId
                                         window:window
                                         url:strdup(url)
-                                        frame:frame                                        
+                                        frame:frame
                                         autoResize:autoResize
                                         partitionIdentifier:strdup(partitionIdentifier)
                                         navigationCallback:navigationCallback
@@ -4173,7 +4658,8 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                                         bunBridgeHandler:bunBridgeHandler
                                         internalBridgeHandler:internalBridgeHandler
                                         electrobunPreloadScript:strdup(electrobunPreloadScript)
-                                        customPreloadScript:strdup(customPreloadScript)];
+                                        customPreloadScript:strdup(customPreloadScript)
+                                        transparent:transparent];
 
     });
 
@@ -4509,6 +4995,7 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   double width, double height,
   uint32_t styleMask,
   const char* titleBarStyle,
+  bool transparent,
   WindowCloseHandler zigCloseHandler,
   WindowMoveHandler zigMoveHandler,
   WindowResizeHandler zigResizeHandler,
@@ -4522,7 +5009,7 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
     if (isnan(height) || isinf(height) || height <= 0) height = 600;
 
     NSRect frame = NSMakeRect(x, y, width, height);
-  
+
     // Create the params struct
     createNSWindowWithFrameAndStyleParams config = {
         .frame = frame,
@@ -4531,8 +5018,6 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
     };
 
     // Use a dispatch semaphore to wait for the window creation to complete
-
-
     __block NSWindow* window = nil;
     dispatch_sync(dispatch_get_main_queue(), ^{
         window = createNSWindowWithFrameAndStyle(
@@ -4543,9 +5028,29 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             zigResizeHandler,
             zigFocusHandler
         );
+
+        // Handle transparent window background
+        if (transparent) {
+            window.backgroundColor = [NSColor clearColor];
+            window.opaque = NO;
+            window.hasShadow = NO;
+
+            // Also configure the content view for transparency
+            NSView *contentView = window.contentView;
+            contentView.wantsLayer = YES;
+            contentView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+            contentView.layer.opaque = NO;
+        }
+
+        // Handle hidden titleBarStyle - hide native window controls (traffic lights)
+        if (strcmp(titleBarStyle, "hidden") == 0) {
+            [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
+        }
     });
 
-    return window;        
+    return window;
 }
 
 extern "C" void showWindow(NSWindow *window) {
@@ -4561,33 +5066,33 @@ extern "C" void showWindow(NSWindow *window) {
     });
 }
 
-extern "C" void setNSWindowTitle(NSWindow *window, const char *title) {
+extern "C" void setWindowTitle(NSWindow *window, const char *title) {
     NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
-    
+
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window setTitle:titleString];
     });
 }
 
-extern "C" void closeNSWindow(NSWindow *window) {
+extern "C" void closeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window close];
     });
 }
 
-extern "C" void minimizeNSWindow(NSWindow *window) {
+extern "C" void minimizeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window miniaturize:nil];
     });
 }
 
-extern "C" void unminimizeNSWindow(NSWindow *window) {
+extern "C" void restoreWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window deminiaturize:nil];
     });
 }
 
-extern "C" bool isNSWindowMinimized(NSWindow *window) {
+extern "C" bool isWindowMinimized(NSWindow *window) {
     __block bool result = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
         result = [window isMiniaturized];
@@ -4595,7 +5100,7 @@ extern "C" bool isNSWindowMinimized(NSWindow *window) {
     return result;
 }
 
-extern "C" void maximizeNSWindow(NSWindow *window) {
+extern "C" void maximizeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         // Only zoom if not already zoomed
         if (![window isZoomed]) {
@@ -4604,7 +5109,7 @@ extern "C" void maximizeNSWindow(NSWindow *window) {
     });
 }
 
-extern "C" void unmaximizeNSWindow(NSWindow *window) {
+extern "C" void unmaximizeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         // Only unzoom if currently zoomed
         if ([window isZoomed]) {
@@ -4613,7 +5118,7 @@ extern "C" void unmaximizeNSWindow(NSWindow *window) {
     });
 }
 
-extern "C" bool isNSWindowMaximized(NSWindow *window) {
+extern "C" bool isWindowMaximized(NSWindow *window) {
     __block bool result = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
         result = [window isZoomed];
@@ -4621,7 +5126,7 @@ extern "C" bool isNSWindowMaximized(NSWindow *window) {
     return result;
 }
 
-extern "C" void setNSWindowFullScreen(NSWindow *window, bool fullScreen) {
+extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         bool isCurrentlyFullScreen = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
         if (fullScreen != isCurrentlyFullScreen) {
@@ -4630,7 +5135,7 @@ extern "C" void setNSWindowFullScreen(NSWindow *window, bool fullScreen) {
     });
 }
 
-extern "C" bool isNSWindowFullScreen(NSWindow *window) {
+extern "C" bool isWindowFullScreen(NSWindow *window) {
     __block bool result = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
         result = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
@@ -4638,7 +5143,7 @@ extern "C" bool isNSWindowFullScreen(NSWindow *window) {
     return result;
 }
 
-extern "C" void setNSWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
+extern "C" void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         if (alwaysOnTop) {
             [window setLevel:NSFloatingWindowLevel];
@@ -4648,7 +5153,7 @@ extern "C" void setNSWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
     });
 }
 
-extern "C" bool isNSWindowAlwaysOnTop(NSWindow *window) {
+extern "C" bool isWindowAlwaysOnTop(NSWindow *window) {
     __block bool result = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
         result = [window level] >= NSFloatingWindowLevel;
@@ -5393,6 +5898,8 @@ static unsigned short keyCodeFromString(NSString *key) {
             @"f1": @(0x7A), @"f2": @(0x78), @"f3": @(0x63), @"f4": @(0x76),
             @"f5": @(0x60), @"f6": @(0x61), @"f7": @(0x62), @"f8": @(0x64),
             @"f9": @(0x65), @"f10": @(0x6D), @"f11": @(0x67), @"f12": @(0x6F),
+            @"f13": @(0x69), @"f14": @(0x6B), @"f15": @(0x71), @"f16": @(0x6A),
+            @"f17": @(0x40), @"f18": @(0x4F), @"f19": @(0x50), @"f20": @(0x5A),
             // Special keys
             @"space": @(0x31), @" ": @(0x31),
             @"return": @(0x24), @"enter": @(0x24),

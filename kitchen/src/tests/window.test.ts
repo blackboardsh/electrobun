@@ -365,20 +365,20 @@ export const windowTests = [
   }),
 
   defineTest({
-    name: "Window with hiddenInset titleBarStyle",
+    name: "Window with inset titlebar style",
     category: "BrowserWindow",
-    description: "Test creating a window with hidden title bar",
+    description: "Test creating a window with inset titlebar (transparent titlebar, native controls visible)",
     async run({ createWindow, log }) {
       const win = await createWindow({
         url: "views://test-harness/index.html",
-        title: "Hidden Title Bar",
+        title: "Inset Titlebar",
         titleBarStyle: "hiddenInset",
         renderer: 'cef',
       });
 
       expect(win.id).toBeGreaterThan(0);
       await new Promise((resolve) => setTimeout(resolve, 300));
-      log("Window with hiddenInset title bar created successfully");
+      log("Window with inset titlebar style created successfully");
     },
   }),
 ];

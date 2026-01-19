@@ -59,7 +59,7 @@ export const menuTests = [
 
         winRef = new BrowserWindow({
           title: "Application Menu Playground",
-          url: "views://application-menu-playground/index.html",
+          url: "views://playgrounds/application-menu/index.html",
           renderer: "cef",
           frame: { width: 800, height: 600, x: 100, y: 50 },
           rpc,
@@ -142,7 +142,7 @@ export const menuTests = [
 
         winRef = new BrowserWindow({
           title: "Context Menu Playground",
-          url: "views://context-menu-playground/index.html",
+          url: "views://playgrounds/context-menu/index.html",
           renderer: "cef",
           frame: { width: 800, height: 600, x: 150, y: 80 },
           rpc,

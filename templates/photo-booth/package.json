@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "A photo booth app demonstrating getUserMedia with Electrobun",
   "scripts": {
+    "build": "electrobun build",
     "dev": "electrobun dev",
-    "build:dev": "electrobun build",
-    "build:canary": "electrobun build --env=canary",
-    "start": "bun run build:dev && bun run dev"
+    "start": "bun run build && bun run dev",
+    "build:canary": "electrobun build --env=canary"
   },
   "dependencies": {
     "electrobun": "latest"

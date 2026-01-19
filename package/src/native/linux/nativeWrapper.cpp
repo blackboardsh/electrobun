@@ -8,9 +8,12 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/shape.h>
 #include <X11/Xatom.h>
+#include <X11/keysymdef.h>
+#include <X11/XF86keysym.h>
 #include <string>
 #include <vector>
 #include <memory>
+#include <pthread.h>
 #include <map>
 #include <iostream>
 #include <cstring>
@@ -18,6 +21,7 @@
 #include <algorithm>
 #include <sstream>
 #include <thread>
+#include <atomic>
 #include <chrono>
 #include <unistd.h>
 #include <functional>
@@ -92,6 +96,9 @@ typedef void (*WindowFocusCallback)(uint32_t windowId);
 // Forward declaration for WebKit scheme handler
 static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data);
 
+// Forward declaration for partition context management
+static WebKitWebContext* getContextForPartition(const char* partitionIdentifier);
+
 // Webview callback types
 typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
 typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
@@ -111,6 +118,7 @@ struct MenuItemData {
 // Global menu item counter and storage
 static uint32_t g_nextMenuId = 1;
 static std::map<uint32_t, std::shared_ptr<MenuItemData>> g_menuItems;
+static std::mutex g_menuItemsMutex;
 
 // Global application menu storage
 static std::string g_applicationMenuConfig;
@@ -233,6 +241,7 @@ struct PermissionCacheEntry {
 };
 
 static std::map<std::pair<std::string, PermissionType>, PermissionCacheEntry> g_permissionCache;
+static std::mutex g_permissionCacheMutex;
 
 // Helper functions for permission management
 std::string getOriginFromPermissionRequest(WebKitPermissionRequest* request) {
@@ -242,6 +251,7 @@ std::string getOriginFromPermissionRequest(WebKitPermissionRequest* request) {
 }
 
 PermissionStatus getPermissionFromCache(const std::string& origin, PermissionType type) {
+    std::lock_guard<std::mutex> lock(g_permissionCacheMutex);
     auto key = std::make_pair(origin, type);
     auto it = g_permissionCache.find(key);
     
@@ -260,6 +270,7 @@ PermissionStatus getPermissionFromCache(const std::string& origin, PermissionTyp
 }
 
 void cachePermission(const std::string& origin, PermissionType type, PermissionStatus status) {
+    std::lock_guard<std::mutex> lock(g_permissionCacheMutex);
     auto key = std::make_pair(origin, type);
     
     // Cache permission for 24 hours
@@ -304,8 +315,9 @@ struct X11Window {
     WindowFocusCallback focusCallback;
     std::vector<Window> childWindows;  // For managing webviews
     ContainerView* containerView = nullptr;  // Associated container for webview management
+    bool transparent = false;  // Track if window is transparent
 
-    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr) {}
+    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr), transparent(false) {}
 };
 
 // Forward declaration for X11 menu function
@@ -529,12 +541,13 @@ class AbstractView;
 bool checkNavigationRules(std::shared_ptr<AbstractView> view, const std::string& url);
 
 // CEF globals and implementation
-static bool g_cefInitialized = false;
-static bool g_useCEF = false;
-static bool g_checkedForCEF = false;
+static std::atomic<bool> g_cefInitialized{false};
+static std::atomic<bool> g_useCEF{false};
+static std::atomic<bool> g_checkedForCEF{false};
 
 // Global webview storage to keep shared_ptr alive
 static std::map<uint32_t, std::shared_ptr<AbstractView>> g_webviewMap;
+static std::mutex g_webviewMapMutex;
 
 // Global map to store preload scripts by browser ID (for multi-process CEF)
 static std::map<int, std::string> g_preloadScripts;
@@ -990,7 +1003,8 @@ class ElectrobunClient : public CefClient,
                         public CefLifeSpanHandler,
                         public CefPermissionHandler,
                         public CefDialogHandler,
-                        public CefDownloadHandler {
+                        public CefDownloadHandler,
+                        public CefRenderHandler {
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -1005,6 +1019,12 @@ private:
     GtkWidget* gtk_widget_;
     std::function<void()> positioning_callback_;
     std::function<void(CefRefPtr<CefBrowser>)> browser_created_callback_;
+    
+    // OSR (Off-Screen Rendering) members for transparency
+    Window x11_window_;
+    Display* display_;
+    bool osr_enabled_;
+    int osr_width_, osr_height_;
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -1018,7 +1038,12 @@ public:
         , webview_tag_handler_(internalBridgeHandler)
         , webview_event_handler_(webviewEventHandler)
         , navigation_callback_(navigationCallback)
-        , gtk_widget_(gtkWidget) {}
+        , gtk_widget_(gtkWidget)
+        , x11_window_(0)
+        , display_(nullptr)
+        , osr_enabled_(false)
+        , osr_width_(0)
+        , osr_height_(0) {}
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
         electrobun_script_ = script;
@@ -1040,6 +1065,10 @@ public:
         browser_ = browser;
     }
     
+    CefRefPtr<CefBrowser> GetBrowser() {
+        return browser_;
+    }
+    
     void SetBrowserCreatedCallback(std::function<void(CefRefPtr<CefBrowser>)> callback) {
         browser_created_callback_ = callback;
     }
@@ -1050,6 +1079,30 @@ public:
     
     void SetPositioningCallback(std::function<void()> callback) {
         positioning_callback_ = callback;
+    }
+    
+    void EnableOSR(Window x11_window, Display* display, int width, int height) {
+        x11_window_ = x11_window;
+        display_ = display;
+        osr_enabled_ = true;
+        osr_width_ = width;
+        osr_height_ = height;
+        printf("CEF: OSR enabled for window %lu, size %dx%d\n", x11_window, width, height);
+    }
+    
+    void SendMouseEvent(const CefMouseEvent& event, bool mouse_down, int click_count) {
+        if (browser_ && osr_enabled_) {
+            browser_->GetHost()->SendMouseMoveEvent(event, false);
+            if (mouse_down) {
+                browser_->GetHost()->SendMouseClickEvent(event, MBT_LEFT, false, click_count);
+            }
+        }
+    }
+    
+    void SendKeyEvent(const CefKeyEvent& event) {
+        if (browser_ && osr_enabled_) {
+            browser_->GetHost()->SendKeyEvent(event);
+        }
     }
 
     virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override {
@@ -1081,6 +1134,10 @@ public:
     }
 
     virtual CefRefPtr<CefDownloadHandler> GetDownloadHandler() override {
+        return this;
+    }
+
+    virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override {
         return this;
     }
 
@@ -1144,6 +1201,7 @@ public:
         // Note: This mirrors the same logic in WebKit policy handler
         bool shouldAllow = true;
         {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
             auto it = g_webviewMap.find(webview_id_);
             if (it != g_webviewMap.end() && it->second != nullptr) {
                 // Forward to the navigation rules check method (defined later in this file)
@@ -1303,6 +1361,10 @@ public:
         // Validate the CEF window handle and try to understand what's happening
         if (cefWindow) {
             Display* display = gdk_x11_get_default_xdisplay();
+            
+            // For transparent windows, ensure the CEF window has no background
+            // This will be properly handled when transparency info is available
+            
             XWindowAttributes attrs;
             
             
@@ -1827,6 +1889,83 @@ public:
         }
     }
 
+    // CefRenderHandler methods for OSR (Off-Screen Rendering)
+    void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
+        if (osr_enabled_) {
+            rect.Set(0, 0, osr_width_, osr_height_);
+            // printf("CEF OSR GetViewRect: returning %dx%d\n", osr_width_, osr_height_);
+        } else {
+            rect.Set(0, 0, 800, 600); // Default fallback
+            // printf("CEF OSR GetViewRect: fallback 800x600\n");
+        }
+    }
+
+    void OnPaint(CefRefPtr<CefBrowser> browser,
+                 PaintElementType type,
+                 const RectList& dirtyRects,
+                 const void* buffer,
+                 int width,
+                 int height) override {
+        
+        if (!osr_enabled_ || !display_ || !x11_window_ || type != PET_VIEW) {
+            printf("CEF OSR OnPaint: skipping (enabled=%d, display=%p, window=%lu, type=%d)\n", 
+                   osr_enabled_, display_, x11_window_, type);
+            return;
+        }
+        
+
+        // Convert BGRA to ARGB format for X11
+        const uint32_t* src = static_cast<const uint32_t*>(buffer);
+        std::vector<uint32_t> converted_buffer(width * height);
+        
+        for (int i = 0; i < width * height; i++) {
+            uint32_t bgra = src[i];
+            uint32_t b = (bgra >> 0) & 0xFF;
+            uint32_t g = (bgra >> 8) & 0xFF;
+            uint32_t r = (bgra >> 16) & 0xFF;
+            uint32_t a = (bgra >> 24) & 0xFF;
+            
+            // Convert BGRA to ARGB
+            converted_buffer[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+        
+        // Get window attributes to ensure we have the right visual
+        XWindowAttributes win_attrs;
+        XGetWindowAttributes(display_, x11_window_, &win_attrs);
+        
+        // Create XImage with the window's visual for proper transparency support
+        XImage* image = XCreateImage(display_,
+                                   win_attrs.visual,
+                                   win_attrs.depth, // Use window's depth
+                                   ZPixmap,
+                                   0,
+                                   reinterpret_cast<char*>(converted_buffer.data()),
+                                   width,
+                                   height,
+                                   32, // bitmap_pad
+                                   width * 4); // bytes_per_line
+        
+        if (image) {
+            // Create a GC compatible with the window's visual
+            GC gc = XCreateGC(display_, x11_window_, 0, nullptr);
+            
+            // Draw the image to the window
+            XPutImage(display_, x11_window_, gc,
+                     image, 0, 0, 0, 0, width, height);
+            
+            XFlush(display_);
+            XFreeGC(display_, gc);
+            
+            // Clean up (don't free the data since it's from converted_buffer)
+            image->data = nullptr;
+            XDestroyImage(image);
+            
+            
+        }
+        
+       
+    }
+
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunClient);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunClient);
@@ -1888,6 +2027,7 @@ bool initializeCEF() {
    
     CefSettings settings;
     settings.no_sandbox = true;
+    settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows
     // settings.remote_debugging_port = 9222;
     // printf("CEF: Remote debugging enabled on port 9222\n");
     
@@ -2125,54 +2265,8 @@ public:
         // Try to improve offscreen rendering without breaking stability
         // webkit_settings_set_enable_accelerated_2d_canvas is deprecated - removed
 
-        // Create web context with partition-specific data manager
-        WebKitWebContext* context = nullptr;
-
-        if (!partition.empty()) {
-            // Get app identifier for base path
-            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-            if (!g_electrobunChannel.empty()) {
-                appIdentifier += "-" + g_electrobunChannel;
-            }
-
-            char* home = getenv("HOME");
-            std::string basePath = home ? std::string(home) : "/tmp";
-
-            bool isPersistent = partition.substr(0, 8) == "persist:";
-
-            if (isPersistent) {
-                // Persistent partition: use named directory in ~/.local/share and ~/.cache
-                std::string partitionName = partition.substr(8);
-                std::string dataPath = basePath + "/.local/share/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
-                std::string cachePath = basePath + "/.cache/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
-
-                // Create directories
-                g_mkdir_with_parents(dataPath.c_str(), 0755);
-                g_mkdir_with_parents(cachePath.c_str(), 0755);
-
-                WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new(
-                    "base-data-directory", dataPath.c_str(),
-                    "base-cache-directory", cachePath.c_str(),
-                    NULL
-                );
-                context = webkit_web_context_new_with_website_data_manager(dataManager);
-                g_object_unref(dataManager);
-                
-                // Register views:// scheme handler for this partition context
-                webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
-            } else {
-                // Ephemeral partition: use non-persistent (in-memory) data manager
-                WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new_ephemeral();
-                context = webkit_web_context_new_with_website_data_manager(dataManager);
-                g_object_unref(dataManager);
-                
-                // Register views:// scheme handler for this partition context
-                webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
-            }
-        } else {
-            // No partition: use default context
-            context = webkit_web_context_get_default();
-        }
+        // Get or create shared context for this partition
+        WebKitWebContext* context = getContextForPartition(partition.empty() ? nullptr : partition.c_str());
 
         // Create webview with context and user content manager
         webview = GTK_WIDGET(g_object_new(WEBKIT_TYPE_WEB_VIEW,
@@ -2187,6 +2281,20 @@ public:
 
         // Set size
         gtk_widget_set_size_request(webview, (int)width, (int)height);
+        
+        // Check if parent window is transparent and apply transparency to webview
+        GtkWidget* toplevel = gtk_widget_get_toplevel(window);
+        if (GTK_IS_WINDOW(toplevel)) {
+            // Check if window has RGBA visual (transparent)
+            GdkScreen* screen = gtk_window_get_screen(GTK_WINDOW(toplevel));
+            GdkVisual* visual = gtk_widget_get_visual(toplevel);
+            if (visual && gdk_screen_get_rgba_visual(screen) == visual) {
+                // Window is transparent, make webview transparent too
+                GdkRGBA transparent_color = {0.0, 0.0, 0.0, 0.0};
+                webkit_web_view_set_background_color(WEBKIT_WEB_VIEW(webview), &transparent_color);
+                printf("GTK WebKit: Applied transparent background to webview\n");
+            }
+        }
         
         // Add preload scripts
         if (!this->electrobunPreloadScript.empty()) {
@@ -2581,6 +2689,7 @@ public:
             std::string url = uri ? uri : "";
             bool shouldAllow = true;
             {
+                std::lock_guard<std::mutex> lock(g_webviewMapMutex);
                 auto it = g_webviewMap.find(impl->webviewId);
                 if (it != g_webviewMap.end() && it->second != nullptr) {
                     fprintf(stderr, "DEBUG: Found webview %u in map, checking navigation rules for URL: %s\n", 
@@ -3026,14 +3135,30 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         }
     }
 
-    // Create context with proper partition isolation and scheme handler inheritance
+    // Create isolated context with partition-specific settings
+    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
     
-    // Create context that inherits the global scheme handler registration
+    // Register the views:// scheme handler factory on this context
+    // This ensures the context can load views:// URLs while maintaining partition isolation
+    static CefRefPtr<ViewsSchemeHandlerFactory> schemeFactory = new ViewsSchemeHandlerFactory();
+    bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
     
-    // Use the global context as the parent to ensure scheme handler inheritance
-    CefRefPtr<CefRequestContext> globalContext = CefRequestContext::GetGlobalContext();
-    return CefRequestContext::CreateContext(globalContext, nullptr);
+    if (!registered) {
+        fprintf(stderr, "WARNING: Failed to register views:// scheme handler for partition context\n");
+    }
+    
+    return context;
 }
+
+// Forward declaration for X11 event processing
+void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> client);
+
+// OSR event handling data structure
+struct OSREventData {
+    uint32_t windowId;
+    CefRefPtr<ElectrobunClient> client;
+    bool active;
+};
 
 // CEF WebView implementation
 class CEFWebViewImpl : public AbstractView {
@@ -3060,6 +3185,16 @@ public:
     GtkWidget* gtkWindow = nullptr;
     std::string deferredUrl;
     double deferredX = 0, deferredY = 0, deferredWidth = 0, deferredHeight = 0;
+    
+    // Track if parent window is transparent
+    bool parentTransparent = false;
+    
+    // OSR event handling data
+    void* osr_event_data_ = nullptr;
+    
+    // X11 event handling for OSR windows is now handled via processX11EventsForOSR
+    Window osr_x11_window_ = 0;
+    Display* osr_display_ = nullptr;
     
     CEFWebViewImpl(uint32_t webviewId,
                    GtkWidget* window,
@@ -3092,6 +3227,16 @@ public:
         // Browser creation happens immediately in createCEFBrowser
     }
     
+    ~CEFWebViewImpl() {
+        // Clean up OSR event handling
+        if (osr_event_data_) {
+            auto* eventData = static_cast<OSREventData*>(osr_event_data_);
+            eventData->active = false;  // Stop the timer
+            delete eventData;
+            osr_event_data_ = nullptr;
+        }
+    }
+    
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
         
         // NO GTK widget needed - CEF will be a direct child of the X11 window
@@ -3122,8 +3267,23 @@ public:
         // Use SetAsChild with the X11 window
         window_info.SetAsChild(x11win->window, cef_rect);
         
+        // For transparent windows, use windowless/OSR mode like macOS and Windows
+        if (x11win->transparent) {
+            // Use windowless (off-screen) rendering for transparency
+            window_info.SetAsWindowless(x11win->window);
+            printf("CEF: Using windowless (OSR) mode for transparency\n");
+        }
+        
         
         CefBrowserSettings browser_settings;
+        
+        // Check if the parent window is transparent
+        if (parentXWindow && x11win->transparent) {
+            // For OSR transparent windows, use fully transparent background
+            browser_settings.background_color = CefColorSetARGB(0, 0, 0, 0); // Fully transparent
+            this->parentTransparent = true;
+            printf("CEF: Using transparent background for OSR mode\n");
+        }
         
         // Create client
         client = new ElectrobunClient(
@@ -3135,14 +3295,50 @@ public:
             nullptr  // No GTK window needed
         );
         
+        // Enable OSR for transparent windows
+        if (x11win->transparent) {
+            client->EnableOSR(x11win->window, x11win->display, (int)width, (int)height);
+        }
+        
         // Set up browser creation callback to notify CEFWebViewImpl when browser is ready
-        client->SetBrowserCreatedCallback([this](CefRefPtr<CefBrowser> browser) {
+        client->SetBrowserCreatedCallback([this, x11win](CefRefPtr<CefBrowser> browser) {
             this->browser = browser;
             
             // Handle pending frame positioning now that browser is available
             if (hasPendingFrame) {
                 syncCEFPositionWithFrame(pendingFrame);
                 hasPendingFrame = false;
+            }
+            
+            // For transparent OSR windows, setup event handling
+            if (this->parentTransparent && x11win && x11win->transparent) {
+                // Create a data structure to pass to the timer callback
+                auto* eventData = new OSREventData{x11win->windowId, this->client, true};
+                
+                // Store event data in the webview for cleanup
+                this->osr_event_data_ = eventData;
+                
+                // Use a higher frequency timer for better responsiveness
+                g_timeout_add(5, [](gpointer data) -> gboolean {  // 200fps - process events more frequently
+                    auto* osrData = static_cast<OSREventData*>(data);
+                    if (osrData && osrData->active) {
+                        processX11EventsForOSR(osrData->windowId, osrData->client);
+                        return TRUE; // Continue timer
+                    }
+                    return FALSE; // Stop timer
+                }, eventData);
+                
+                // Also use idle processing for immediate event handling
+                g_idle_add([](gpointer data) -> gboolean {
+                    auto* osrData = static_cast<OSREventData*>(data);
+                    if (osrData && osrData->active) {
+                        processX11EventsForOSR(osrData->windowId, osrData->client);
+                        return TRUE; // Continue processing
+                    }
+                    return FALSE; // Stop
+                }, eventData);
+                
+                printf("CEF: Transparent window input handling enabled for window %u\n", x11win->windowId);
             }
         });
         
@@ -3210,6 +3406,8 @@ public:
         }
         
     }
+    
+    // Event handling will be implemented separately after global declarations
     
     void syncCEFPositionWithWidget() {
         if (!browser || !widget) {
@@ -3874,8 +4072,10 @@ private:
 
 // Global state
 static std::map<uint32_t, std::shared_ptr<ContainerView>> g_containers;
+static std::mutex g_containersMutex;
 #ifndef NO_APPINDICATOR
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
+static std::mutex g_traysMutex;
 #endif
 static bool g_gtkInitialized = false;
 static std::mutex g_gtkInitMutex;
@@ -3891,9 +4091,117 @@ static guint g_buttonReleaseHandlerId = 0;
 // X11 window management
 static std::map<uint32_t, std::shared_ptr<X11Window>> g_x11_windows;
 static std::map<Window, uint32_t> g_x11_window_to_id;
+static std::mutex g_x11WindowsMutex;
+
+// X11 event processing for OSR windows
+void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> client) {
+    std::shared_ptr<X11Window> x11win;
+    {
+        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+        auto it = g_x11_windows.find(windowId);
+        if (it != g_x11_windows.end() && it->second && it->second->transparent) {
+            x11win = it->second;
+        }
+    }
+    
+    if (!x11win) return;
+    
+    Display* display = x11win->display;
+    Window window = x11win->window;
+    
+    // Process ALL pending X11 events to avoid missing any
+    XEvent event;
+    int events_processed = 0;
+    
+    // Sync to ensure we get all events
+    XSync(display, False);
+    
+    while (XPending(display) > 0) {
+        XNextEvent(display, &event);
+        events_processed++;
+        
+        if (event.xany.window != window) continue;
+        
+        switch (event.type) {
+            case ButtonPress:
+            case ButtonRelease: {
+                CefMouseEvent mouse_event;
+                mouse_event.x = event.xbutton.x;
+                mouse_event.y = event.xbutton.y;
+                mouse_event.modifiers = 0; // TODO: Convert X11 modifiers
+                
+                // Forward to CEF
+                if (client && client->GetBrowser()) {
+                    auto browser = client->GetBrowser();
+                    auto host = browser->GetHost();
+                    
+                    // Determine mouse button type
+                    cef_mouse_button_type_t button_type = MBT_LEFT;
+                    if (event.xbutton.button == Button1) button_type = MBT_LEFT;
+                    else if (event.xbutton.button == Button3) button_type = MBT_RIGHT;
+                    else if (event.xbutton.button == Button2) button_type = MBT_MIDDLE;
+                    
+                    bool mouse_up = (event.type == ButtonRelease);
+                    
+                    // Send the mouse click event
+                    host->SendMouseClickEvent(mouse_event, button_type, mouse_up, 1);
+                    
+                    // Debug: only log button presses for now
+                    if (event.type == ButtonPress) {
+                        printf("CEF OSR: Click at (%d, %d)\n", event.xbutton.x, event.xbutton.y);
+                    }
+                }
+                break;
+            }
+            case MotionNotify: {
+                CefMouseEvent mouse_event;
+                mouse_event.x = event.xmotion.x;
+                mouse_event.y = event.xmotion.y;
+                mouse_event.modifiers = 0;
+                
+                // Forward to CEF
+                if (client && client->GetBrowser()) {
+                    auto browser = client->GetBrowser();
+                    auto host = browser->GetHost();
+                    host->SendMouseMoveEvent(mouse_event, false);
+                }
+                break;
+            }
+            case FocusIn:
+            case FocusOut: {
+                // Handle focus events for OSR windows
+                if (client && client->GetBrowser()) {
+                    auto browser = client->GetBrowser();
+                    auto host = browser->GetHost();
+                    host->SetFocus(event.type == FocusIn);
+                }
+                break;
+            }
+            case EnterNotify: {
+                // Focus window on mouse enter for better responsiveness
+                if (client && client->GetBrowser()) {
+                    auto browser = client->GetBrowser();
+                    auto host = browser->GetHost();
+                    host->SetFocus(true);
+                    
+                    // Also ensure the X11 window has focus
+                    XSetInputFocus(display, window, RevertToParent, CurrentTime);
+                }
+                break;
+            }
+            case LeaveNotify: {
+                // Optional: Could unfocus on leave, but keeping focus is usually better
+                break;
+            }
+        }
+    }
+    
+    XFlush(display);
+}
 
 // Helper function to get ContainerView overlay for a window
 GtkWidget* getContainerViewOverlay(GtkWidget* window) {
+    std::lock_guard<std::mutex> lock(g_containersMutex);
     for (auto& [id, container] : g_containers) {
         if (container->window == window) {
             return container->overlay;
@@ -4331,6 +4639,64 @@ dispatch_sync_main_void(Func&& func) {
     }
 }
 
+// Store for partition-specific contexts (for session storage synchronization)
+static std::map<std::string, WebKitWebContext*> g_partitionContexts;
+
+// Get or create a WebKit context for a partition
+static WebKitWebContext* getContextForPartition(const char* partitionIdentifier) {
+    std::string partition = partitionIdentifier ? partitionIdentifier : "";
+
+    auto it = g_partitionContexts.find(partition);
+    if (it != g_partitionContexts.end()) {
+        return it->second;
+    }
+
+    WebKitWebContext* context = nullptr;
+
+    if (partition.empty()) {
+        // Default: use default context
+        context = webkit_web_context_get_default();
+        g_object_ref(context); // Keep consistent reference counting
+    } else {
+        bool isPersistent = partition.substr(0, 8) == "persist:";
+
+        if (isPersistent) {
+            std::string partitionName = partition.substr(8);
+            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+            if (!g_electrobunChannel.empty()) {
+                appIdentifier += "-" + g_electrobunChannel;
+            }
+
+            char* home = getenv("HOME");
+            std::string basePath = home ? std::string(home) : "/tmp";
+            std::string dataPath = basePath + "/.local/share/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+            std::string cachePath = basePath + "/.cache/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+
+            g_mkdir_with_parents(dataPath.c_str(), 0755);
+            g_mkdir_with_parents(cachePath.c_str(), 0755);
+
+            WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new(
+                "base-data-directory", dataPath.c_str(),
+                "base-cache-directory", cachePath.c_str(),
+                NULL
+            );
+            context = webkit_web_context_new_with_website_data_manager(dataManager);
+            g_object_unref(dataManager);
+        } else {
+            WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new_ephemeral();
+            context = webkit_web_context_new_with_website_data_manager(dataManager);
+            g_object_unref(dataManager);
+        }
+
+        // Register views:// scheme handler for this partition context
+        webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
+        
+        g_partitionContexts[partition] = context;
+    }
+
+    return context;
+}
+
 extern "C" {
 
 // Constructor to run when library is loaded
@@ -4370,30 +4736,36 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
     g_lastResizeSize[windowId] = {width, height};
     
     // Find the X11 window handle for this window ID
-    auto windowIt = g_x11_windows.find(windowId);
-    if (windowIt == g_x11_windows.end()) {
-        return;
+    Window x11WindowHandle;
+    {
+        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+        auto windowIt = g_x11_windows.find(windowId);
+        if (windowIt == g_x11_windows.end()) {
+            return;
+        }
+        x11WindowHandle = windowIt->second->window;
     }
     
-    Window x11WindowHandle = windowIt->second->window;
-    
     // Find all webviews that belong to this window and have fullSize=true
-    for (auto& [webviewId, webview] : g_webviewMap) {
-        if (webview && webview->fullSize) {
-            // Check if this webview belongs to the specified window
-            // For CEF webviews, we need to check their parent window
-            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
-            if (cefView && cefView->parentXWindow == x11WindowHandle) {
-                // Check if the webview is already the right size to avoid infinite resize loops
-                GdkRectangle currentBounds = webview->visualBounds;
-                if (currentBounds.width == width && currentBounds.height == height) {
-                    continue;
+    {
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        for (auto& [webviewId, webview] : g_webviewMap) {
+            if (webview && webview->fullSize) {
+                // Check if this webview belongs to the specified window
+                // For CEF webviews, we need to check their parent window
+                CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
+                if (cefView && cefView->parentXWindow == x11WindowHandle) {
+                    // Check if the webview is already the right size to avoid infinite resize loops
+                    GdkRectangle currentBounds = webview->visualBounds;
+                    if (currentBounds.width == width && currentBounds.height == height) {
+                        continue;
+                    }
+                    
+                    
+                    // For auto-resize, typically want to fill the entire window starting from (0,0)
+                    GdkRectangle frame = { 0, 0, width, height };
+                    webview->resize(frame, "");
                 }
-                
-                
-                // For auto-resize, typically want to fill the entire window starting from (0,0)
-                GdkRectangle frame = { 0, 0, width, height };
-                webview->resize(frame, "");
             }
         }
     }
@@ -4540,7 +4912,8 @@ void runEventLoop() {
 void showWindow(void* window);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback,
+                   const char* titleBarStyle = nullptr, bool transparent = false) {
     
     void* result = dispatch_sync_main([&]() -> void* {
         
@@ -4558,22 +4931,57 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             
             // Create window attributes
             XSetWindowAttributes attrs;
-            attrs.background_pixel = WhitePixel(display, screen);
-            attrs.border_pixel = BlackPixel(display, screen);
-            attrs.colormap = DefaultColormap(display, screen);
             attrs.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
                               ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-                              FocusChangeMask | StructureNotifyMask | SubstructureNotifyMask;
+                              FocusChangeMask | StructureNotifyMask | SubstructureNotifyMask |
+                              EnterWindowMask | LeaveWindowMask;
+            
+            unsigned long attr_mask = CWEventMask;
+            Visual* visual = DefaultVisual(display, screen);
+            int depth = DefaultDepth(display, screen);
+            
+            // For transparent windows, use ARGB visual for true transparency
+            if (transparent) {
+                // Find ARGB visual for transparency  
+                XVisualInfo vinfo;
+                if (XMatchVisualInfo(display, screen, 32, TrueColor, &vinfo)) {
+                    visual = vinfo.visual;
+                    depth = vinfo.depth;
+                    attrs.colormap = XCreateColormap(display, root, visual, AllocNone);
+                    attr_mask |= CWColormap;
+                    // Use transparent background pixel
+                    attrs.background_pixel = 0x00000000;  // Fully transparent
+                    attr_mask |= CWBackPixel;
+                    attrs.border_pixel = 0;
+                    attr_mask |= CWBorderPixel;
+                    printf("X11: Created transparent window with 32-bit ARGB visual\n");
+                } else {
+                    printf("WARNING: 32-bit visual not available, using dark background fallback\n");
+                    attrs.background_pixel = 0x101010;  // Very dark gray fallback
+                    attrs.border_pixel = 0;
+                    attrs.colormap = DefaultColormap(display, screen);
+                    attr_mask |= CWBackPixel | CWBorderPixel | CWColormap;
+                }
+            } else {
+                attrs.background_pixel = WhitePixel(display, screen);
+                attrs.border_pixel = BlackPixel(display, screen);
+                attrs.colormap = DefaultColormap(display, screen);
+                attr_mask |= CWBackPixel | CWBorderPixel | CWColormap;
+            }
             
             // Create the main window
             Window x11_window = XCreateWindow(
                 display, root,
                 (int)x, (int)y, (int)width, (int)height, 0,
-                DefaultDepth(display, screen), InputOutput,
-                DefaultVisual(display, screen),
-                CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
+                depth, InputOutput,
+                visual,
+                attr_mask,
                 &attrs
             );
+            
+            // Window created successfully
+            
+            // Note: For Linux, transparent windows are handled as borderless windows
             
             if (!x11_window) {
                 printf("ERROR: Failed to create X11 window\n");
@@ -4587,6 +4995,49 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             // Set window protocols for close button
             Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
             XSetWMProtocols(display, x11_window, &wmDelete, 1);
+            
+            // Select input events for interaction
+            long event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | 
+                             ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
+                             FocusChangeMask | EnterWindowMask | LeaveWindowMask |
+                             StructureNotifyMask;
+            XSelectInput(display, x11_window, event_mask);
+            
+            // Handle window decorations based on titleBarStyle
+            if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
+                // Remove window decorations for borderless windows
+                Atom wmHints = XInternAtom(display, "_MOTIF_WM_HINTS", False);
+                struct {
+                    unsigned long flags;
+                    unsigned long functions;
+                    unsigned long decorations;
+                    long inputMode;
+                    unsigned long status;
+                } hints = { 2, 0, 0, 0, 0 };  // MWM_HINTS_DECORATIONS = 2, no decorations
+                
+                XChangeProperty(display, x11_window, wmHints, wmHints, 32,
+                               PropModeReplace, (unsigned char*)&hints, 5);
+            }
+            
+            // Set window type for better compositor handling
+            if (transparent || (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0)) {
+                Atom wmWindowType = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
+                Atom wmWindowTypeNormal = XInternAtom(display, "_NET_WM_WINDOW_TYPE_NORMAL", False);
+                XChangeProperty(display, x11_window, wmWindowType, XA_ATOM, 32,
+                               PropModeReplace, (unsigned char*)&wmWindowTypeNormal, 1);
+            }
+            
+            // Set size and position hints to ensure window manager honors our positioning
+            XSizeHints* sizeHints = XAllocSizeHints();
+            if (sizeHints) {
+                sizeHints->flags = PPosition | PSize;
+                sizeHints->x = (int)x;
+                sizeHints->y = (int)y;
+                sizeHints->width = (int)width;
+                sizeHints->height = (int)height;
+                XSetWMNormalHints(display, x11_window, sizeHints);
+                XFree(sizeHints);
+            }
             
             // Create X11Window structure
             auto x11win = std::make_shared<X11Window>();
@@ -4602,10 +5053,14 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->moveCallback = moveCallback;
             x11win->resizeCallback = resizeCallback;
             x11win->focusCallback = focusCallback;
+            x11win->transparent = transparent;
 
             // Store in global maps
-            g_x11_windows[windowId] = x11win;
-            g_x11_window_to_id[x11_window] = windowId;
+            {
+                std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+                g_x11_windows[windowId] = x11win;
+                g_x11_window_to_id[x11_window] = windowId;
+            }
             
             // X11/CEF mode doesn't need GTK containers - CEF manages its own windows
             // CEF webviews will be direct children of the X11 window
@@ -4623,7 +5078,8 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 }
 
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback,
+                   const char* titleBarStyle = nullptr, bool transparent = false) {
     
    
     
@@ -4634,22 +5090,55 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         
         GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
        
-        
         gtk_window_set_title(GTK_WINDOW(window), title);
-     
-        
         gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
        
-        
         if (x >= 0 && y >= 0) {
             gtk_window_move(GTK_WINDOW(window), (int)x, (int)y);
-           
+        }
+        
+        // Handle titleBarStyle for custom titlebars
+        if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
+            // Remove window decorations for borderless windows
+            gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
+            printf("GTK: Created window without decorations (custom titlebar)\n");
+        }
+        
+        // Handle transparency
+        if (transparent) {
+            // Enable RGBA visual for transparency
+            GdkScreen* screen = gtk_window_get_screen(GTK_WINDOW(window));
+            GdkVisual* visual = gdk_screen_get_rgba_visual(screen);
+            
+            if (visual && gdk_screen_is_composited(screen)) {
+                gtk_widget_set_visual(window, visual);
+                gtk_widget_set_app_paintable(window, TRUE);
+                
+                // Connect to draw signal to paint transparent background
+                g_signal_connect(window, "draw", G_CALLBACK(+[](GtkWidget* widget, cairo_t* cr, gpointer data) -> gboolean {
+                    // Clear the window with transparent background
+                    cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.0);
+                    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+                    cairo_paint(cr);
+                    
+                    // Let child widgets draw themselves
+                    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+                    return FALSE;  // Continue with default drawing
+                }), nullptr);
+                
+                printf("GTK: Created transparent window\n");
+            } else {
+                printf("GTK WARNING: Transparency not supported (no RGBA visual or compositor)\n");
+            }
         }
         
         // Create container with callbacks
         auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback);
 
-        g_containers[windowId] = container;
+        {
+            std::lock_guard<std::mutex> lock(g_containersMutex);
+            g_containers[windowId] = container;
+        }
 
         // Apply application menu to new window if one is configured
         applyApplicationMenuToWindow(window);
@@ -4699,14 +5188,14 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 
 // Mac-compatible function for Linux
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
-                                             uint32_t styleMask, const char* titleBarStyle,
+                                             uint32_t styleMask, const char* titleBarStyle, bool transparent,
                                              WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
-
-    // On Linux, ignore styleMask and titleBarStyle for now, just create basic window
+    // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
-        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback);
+        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
     } else {
-        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback);
+        // Pass titleBarStyle and transparent to GTK window creation
+        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
     }
 
 }
@@ -4728,14 +5217,13 @@ void setGTKWindowTitle(void* window, const char* title) {
     });
 }
 
-// Mac-compatible function for Linux
-ELECTROBUN_EXPORT void setNSWindowTitle(void* window, const char* title) {
+// Cross-platform compatible function for Linux
+ELECTROBUN_EXPORT void setWindowTitle(void* window, const char* title) {
     if (isCEFAvailable()) {
         setX11WindowTitle(window, title);
     } else {
         setGTKWindowTitle(window, title);
     }
-    
 }
 
 void showX11Window(void* window) {
@@ -4775,11 +5263,11 @@ ELECTROBUN_EXPORT void showWindow(void* window) {
     }
 }
 
-// Mac-compatible function for Linux - return dummy style mask
-uint32_t getNSWindowStyleMask(bool borderless, bool titled, bool closable, bool miniaturizable, 
-                              bool resizable, bool unifiedTitleAndToolbar, bool fullScreen, 
-                              bool fullSizeContentView, bool utilityWindow, bool docModalWindow, 
-                              bool nonactivatingPanel, bool hudWindow) {
+// Cross-platform compatible function for Linux - return dummy style mask
+ELECTROBUN_EXPORT uint32_t getWindowStyle(bool borderless, bool titled, bool closable, bool miniaturizable,
+                        bool resizable, bool unifiedTitleAndToolbar, bool fullScreen,
+                        bool fullSizeContentView, bool utilityWindow, bool docModalWindow,
+                        bool nonactivatingPanel, bool hudWindow) {
     // Linux doesn't use style masks like macOS, so just return a dummy value
     // The actual window styling is handled in createWindow
     return 0;
@@ -4854,7 +5342,10 @@ AbstractView* initCEFWebview(uint32_t webviewId,
            
             
             // Store the webview in global map to keep it alive
-            g_webviewMap[webviewId] = webview;
+            {
+                std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+                g_webviewMap[webviewId] = webview;
+            }
             
             return webview.get();
         } catch (const std::exception& e) {
@@ -4898,14 +5389,20 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
             webview->fullSize = autoResize;
             
             // Store the webview in global map to keep it alive and for navigation rules
-            g_webviewMap[webviewId] = webview;
+            {
+                std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+                g_webviewMap[webviewId] = webview;
+            }
             
             // Webview created successfully
             
-            for (auto& [id, container] : g_containers) {
-                if (container->window == GTK_WIDGET(window)) {
-                    container->addWebview(webview, x, y);
-                    break;
+            {
+                std::lock_guard<std::mutex> lock(g_containersMutex);
+                for (auto& [id, container] : g_containers) {
+                    if (container->window == GTK_WIDGET(window)) {
+                        container->addWebview(webview, x, y);
+                        break;
+                    }
                 }
             }
             
@@ -4931,7 +5428,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          HandlePostMessage bunBridgeHandler,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
-                         const char* customPreloadScript) {
+                         const char* customPreloadScript,
+                         bool transparent) {
+    // TODO: Implement transparent handling for Linux
     
     // Null pointer checks
     if (!window) {
@@ -6150,7 +6649,7 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
     }
 }
 
-ELECTROBUN_EXPORT void runNSApplication(const char* identifier, const char* channel) {
+ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* channel) {
     // Store identifier and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
@@ -6180,23 +6679,55 @@ void* createNSRectWrapper(double x, double y, double width, double height) {
 }
 
 
-ELECTROBUN_EXPORT void closeNSWindow(void* window) {
+// Helper function to clean up webviews when a window is closed
+void cleanupWebviewsForWindow(uint32_t windowId) {
+    // Find and remove the container
+    std::shared_ptr<ContainerView> container;
+    {
+        std::lock_guard<std::mutex> lock(g_containersMutex);
+        auto it = g_containers.find(windowId);
+        if (it != g_containers.end()) {
+            container = it->second;
+            g_containers.erase(it);
+        }
+    }
+    
+    if (container) {
+        // Clean up all webviews in this container
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        for (auto& webview : container->abstractViews) {
+            if (webview) {
+                g_webviewMap.erase(webview->webviewId);
+            }
+        }
+    }
+}
+
+ELECTROBUN_EXPORT void closeWindow(void* window) {
     if (window) {
         dispatch_sync_main_void([&]() {
             // Check if it's a GTK window first
             if (GTK_IS_WIDGET(window)) {
                 GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
-                printf("DEBUG: closeNSWindow called for GTK window\n");
+                printf("DEBUG: closeWindow called for GTK window\n");
                 
                 // Find the container for this window to get the windowId and callback
                 uint32_t windowId = 0;
                 WindowCloseCallback closeCallback = nullptr;
-                for (auto& [id, container] : g_containers) {
-                    if (container->window == gtkWindow) {
-                        windowId = id;
-                        closeCallback = container->closeCallback;
-                        break;
+                {
+                    std::lock_guard<std::mutex> lock(g_containersMutex);
+                    for (auto& [id, container] : g_containers) {
+                        if (container->window == gtkWindow) {
+                            windowId = id;
+                            closeCallback = container->closeCallback;
+                            break;
+                        }
                     }
+                }
+                
+                // Clean up webviews first
+                if (windowId > 0) {
+                    cleanupWebviewsForWindow(windowId);
                 }
                 
                 // Call the close callback before destroying the window
@@ -6211,7 +6742,7 @@ ELECTROBUN_EXPORT void closeNSWindow(void* window) {
                 // It's an X11 window
                 X11Window* x11win = static_cast<X11Window*>(window);
                 if (x11win && x11win->display && x11win->window) {
-                    printf("DEBUG: closeNSWindow called for X11 window ID: %u\n", x11win->windowId);
+                    printf("DEBUG: closeWindow called for X11 window ID: %u\n", x11win->windowId);
                     
                     // Store callback and window info before any cleanup
                     auto callback = x11win->closeCallback;
@@ -6219,9 +6750,15 @@ ELECTROBUN_EXPORT void closeNSWindow(void* window) {
                     auto display = x11win->display;
                     auto window = x11win->window;
                     
+                    // Clean up webviews first
+                    cleanupWebviewsForWindow(windowId);
+                    
                     // Remove from global maps first to prevent any access during callback
-                    g_x11_window_to_id.erase(window);
-                    g_x11_windows.erase(windowId);
+                    {
+                        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+                        g_x11_window_to_id.erase(window);
+                        g_x11_windows.erase(windowId);
+                    }
                     
                     // Call the close callback
                     if (callback) {
@@ -6240,7 +6777,7 @@ ELECTROBUN_EXPORT void closeNSWindow(void* window) {
     }
 }
 
-ELECTROBUN_EXPORT void minimizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void minimizeWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6259,7 +6796,7 @@ ELECTROBUN_EXPORT void minimizeNSWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT void unminimizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void restoreWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6310,7 +6847,7 @@ ELECTROBUN_EXPORT void unminimizeNSWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowMinimized(void* window) {
+ELECTROBUN_EXPORT bool isWindowMinimized(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6376,7 +6913,7 @@ ELECTROBUN_EXPORT bool isNSWindowMinimized(void* window) {
     return result;
 }
 
-ELECTROBUN_EXPORT void maximizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void maximizeWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6410,7 +6947,7 @@ ELECTROBUN_EXPORT void maximizeNSWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT void unmaximizeNSWindow(void* window) {
+ELECTROBUN_EXPORT void unmaximizeWindow(void* window) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6444,7 +6981,7 @@ ELECTROBUN_EXPORT void unmaximizeNSWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowMaximized(void* window) {
+ELECTROBUN_EXPORT bool isWindowMaximized(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6484,7 +7021,7 @@ ELECTROBUN_EXPORT bool isNSWindowMaximized(void* window) {
     return result;
 }
 
-ELECTROBUN_EXPORT void setNSWindowFullScreen(void* window, bool fullScreen) {
+ELECTROBUN_EXPORT void setWindowFullScreen(void* window, bool fullScreen) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6521,7 +7058,7 @@ ELECTROBUN_EXPORT void setNSWindowFullScreen(void* window, bool fullScreen) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowFullScreen(void* window) {
+ELECTROBUN_EXPORT bool isWindowFullScreen(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6564,7 +7101,7 @@ ELECTROBUN_EXPORT bool isNSWindowFullScreen(void* window) {
     return result;
 }
 
-ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
+ELECTROBUN_EXPORT void setWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
@@ -6601,7 +7138,7 @@ ELECTROBUN_EXPORT void setNSWindowAlwaysOnTop(void* window, bool alwaysOnTop) {
     });
 }
 
-ELECTROBUN_EXPORT bool isNSWindowAlwaysOnTop(void* window) {
+ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(void* window) {
     if (!window) return false;
 
     bool result = false;
@@ -6677,10 +7214,13 @@ static KeySym getKeySym(const std::string& key) {
     if (lowerKey.length() == 1 && lowerKey[0] >= '0' && lowerKey[0] <= '9') {
         return XK_0 + (lowerKey[0] - '0');
     }
-    // Function keys
+    // Function keys (F1-F24)
     if (lowerKey[0] == 'f' && lowerKey.length() >= 2) {
         int fNum = std::stoi(lowerKey.substr(1));
-        if (fNum >= 1 && fNum <= 12) return XK_F1 + (fNum - 1);
+        if (fNum >= 1 && fNum <= 24) {
+            if (fNum <= 12) return XK_F1 + (fNum - 1);
+            else return XK_F13 + (fNum - 13);  // F13-F24
+        }
     }
     // Special keys
     if (lowerKey == "space" || lowerKey == " ") return XK_space;
@@ -6689,6 +7229,7 @@ static KeySym getKeySym(const std::string& key) {
     if (lowerKey == "escape" || lowerKey == "esc") return XK_Escape;
     if (lowerKey == "backspace") return XK_BackSpace;
     if (lowerKey == "delete") return XK_Delete;
+    if (lowerKey == "insert") return XK_Insert;
     if (lowerKey == "up") return XK_Up;
     if (lowerKey == "down") return XK_Down;
     if (lowerKey == "left") return XK_Left;
@@ -6697,6 +7238,22 @@ static KeySym getKeySym(const std::string& key) {
     if (lowerKey == "end") return XK_End;
     if (lowerKey == "pageup") return XK_Page_Up;
     if (lowerKey == "pagedown") return XK_Page_Down;
+    if (lowerKey == "print") return XK_Print;
+    // Additional special keys
+    if (lowerKey == "scrolllock") return XK_Scroll_Lock;
+    if (lowerKey == "pause") return XK_Pause;
+    if (lowerKey == "break") return XK_Break;
+    if (lowerKey == "sysreq") return XK_Sys_Req;
+    if (lowerKey == "numlock") return XK_Num_Lock;
+    if (lowerKey == "capslock") return XK_Caps_Lock;
+    if (lowerKey == "menu") return XK_Menu;
+    if (lowerKey == "apps") return XK_Menu;  // Same as Menu
+    if (lowerKey == "printscreen") return XK_Print;
+    if (lowerKey == "cancel") return XK_Cancel;
+    // Media keys (may not be available on all systems)
+    if (lowerKey == "mediaselect") return XK_Select;  // Closest equivalent
+    if (lowerKey == "calculator") return 0x1008ff1d;  // XF86Calculator
+    if (lowerKey == "sleep") return 0x1008ff2f;  // XF86Sleep
     // Symbols
     if (lowerKey == "-") return XK_minus;
     if (lowerKey == "=") return XK_equal;
@@ -6755,8 +7312,11 @@ static void shortcutEventLoop() {
     g_shortcutDisplay = XOpenDisplay(nullptr);
     if (!g_shortcutDisplay) {
         fprintf(stderr, "ERROR: Failed to open X11 display for shortcuts\n");
+        g_shortcutThreadRunning = false;
         return;
     }
+    
+    printf("GlobalShortcut: X11 display opened successfully for shortcuts\n");
 
     Window root = DefaultRootWindow(g_shortcutDisplay);
 
@@ -6789,23 +7349,40 @@ static void shortcutEventLoop() {
 
 // Set the callback for global shortcut events
 ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
+    printf("GlobalShortcut: Setting callback (callback=%p)\n", callback);
     g_globalShortcutCallback = callback;
 
     // Start the event loop thread if not running
     if (!g_shortcutThreadRunning && callback) {
+        printf("GlobalShortcut: Starting event loop thread\n");
         g_shortcutThreadRunning = true;
         g_shortcutThread = std::thread(shortcutEventLoop);
         // Wait for display to be opened
-        while (!g_shortcutDisplay && g_shortcutThreadRunning) {
+        int attempts = 0;
+        while (!g_shortcutDisplay && g_shortcutThreadRunning && attempts < 100) {
             usleep(10000);
+            attempts++;
+        }
+        if (g_shortcutDisplay) {
+            printf("GlobalShortcut: Event loop ready\n");
+        } else {
+            fprintf(stderr, "ERROR: GlobalShortcut event loop failed to initialize\n");
         }
     }
 }
 
 // Register a global keyboard shortcut
 ELECTROBUN_EXPORT bool registerGlobalShortcut(const char* accelerator) {
-    if (!accelerator || !g_shortcutDisplay) {
-        fprintf(stderr, "ERROR: Cannot register shortcut - invalid accelerator or display not ready\n");
+    printf("GlobalShortcut: registerGlobalShortcut called for '%s'\n", accelerator ? accelerator : "(null)");
+    
+    if (!accelerator) {
+        fprintf(stderr, "ERROR: Cannot register shortcut - accelerator is null\n");
+        return false;
+    }
+    
+    if (!g_shortcutDisplay) {
+        fprintf(stderr, "ERROR: Cannot register shortcut '%s' - display not ready (g_shortcutDisplay=%p)\n", 
+                accelerator, g_shortcutDisplay);
         return false;
     }
 
@@ -6843,12 +7420,15 @@ ELECTROBUN_EXPORT bool registerGlobalShortcut(const char* accelerator) {
         modifiers | Mod2Mask | LockMask
     };
 
-    bool success = false;
+    // Just try to grab the key - if it fails, XGrabKey will generate an X11 error
+    // but won't crash the program. We'll optimistically assume success.
     for (unsigned int mods : modifierVariants) {
-        int result = XGrabKey(g_shortcutDisplay, keycode, mods, root, True, GrabModeAsync, GrabModeAsync);
-        if (result == 0) success = true;  // At least one succeeded
+        XGrabKey(g_shortcutDisplay, keycode, mods, root, True, GrabModeAsync, GrabModeAsync);
     }
     XFlush(g_shortcutDisplay);
+
+    // Since we can't easily detect if XGrabKey failed without complex error handling,
+    // we'll assume success and let the user know if the shortcut doesn't work
 
     ShortcutInfo info;
     info.keycode = keycode;
@@ -7120,6 +7700,7 @@ static WebKitWebsiteDataManager* getDataManagerForPartition(const char* partitio
 
     return dataManager;
 }
+
 
 // Helper struct for async cookie operations
 struct CookieCallbackData {

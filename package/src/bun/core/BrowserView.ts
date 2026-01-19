@@ -11,6 +11,7 @@ import {
   createRPC,
 } from "rpc-anywhere";
 import { Updater } from "./Updater";
+import { BuildConfig } from "./BuildConfig";
 import type { BuiltinBunToWebviewSchema,BuiltinWebviewToBunSchema } from "../../browser/builtinrpcSchema";
 import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
 import { randomBytes } from "crypto";
@@ -49,11 +50,14 @@ interface ElectrobunWebviewRPCSChema {
   webview: RPCSchema;
 }
 
+const hash = await Updater.localInfo.hash();
+const buildConfig = await BuildConfig.get();
+
 const defaultOptions: Partial<BrowserViewOptions> = {
   url: null,
   html: null,
   preload: null,
-  renderer: 'native',
+  renderer: buildConfig.defaultRenderer,
   frame: {
     x: 0,
     y: 0,
@@ -61,10 +65,6 @@ const defaultOptions: Partial<BrowserViewOptions> = {
     height: 600,
   },
 };
-
-
-
-const hash = await Updater.localInfo.hash();
 // Note: we use the build's hash to separate from different apps and different builds
 // but we also want a randomId to separate different instances of the same app
 const randomId = Math.random().toString(36).substring(7);
@@ -136,22 +136,22 @@ export class BrowserView<T> {
     }
   }
 
-  init() {    
+  init() {
     this.createStreams();
-       
+
     // TODO: add a then to this that fires an onReady event
     return ffi.request.createWebview({
       id: this.id,
       windowId: this.windowId,
-      renderer: this.renderer, 
+      renderer: this.renderer,
       rpcPort: rpcPort,
       // todo: consider sending secretKey as base64
       secretKey: this.secretKey.toString(),
       hostWebviewId: this.hostWebviewId || null,
       pipePrefix: this.pipePrefix,
-      partition: this.partition,      
+      partition: this.partition,
       // Only pass URL if no HTML content is provided to avoid conflicts
-      url: this.html ? null : this.url,      
+      url: this.html ? null : this.url,
       html: this.html,
       preload: this.preload,
       frame: {
@@ -162,6 +162,7 @@ export class BrowserView<T> {
       },
       autoResize: this.autoResize,
       navigationRules: this.navigationRules,
+      // transparent is looked up from parent window in native.ts
     });
 
     

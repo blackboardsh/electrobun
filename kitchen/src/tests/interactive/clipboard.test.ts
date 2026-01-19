@@ -48,7 +48,7 @@ export const clipboardInteractiveTests = [
 
         winRef = new BrowserWindow({
           title: "Clipboard Playground",
-          url: "views://clipboard-playground/index.html",
+          url: "views://playgrounds/clipboard/index.html",
           renderer: "cef",
           frame: { width: 550, height: 800, x: 200, y: 50 },
           rpc,

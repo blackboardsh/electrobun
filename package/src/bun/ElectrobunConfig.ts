@@ -129,24 +129,30 @@ export interface ElectrobunConfig {
        * @default false
        */
       codesign?: boolean;
-      
+
       /**
        * Enable notarization for macOS builds (requires codesign)
        * @default false
        */
       notarize?: boolean;
-      
+
       /**
        * Bundle CEF (Chromium Embedded Framework) instead of using system WebView
        * @default false
        */
       bundleCEF?: boolean;
-      
+
+      /**
+       * Default renderer for webviews when not explicitly specified
+       * @default 'native'
+       */
+      defaultRenderer?: 'native' | 'cef';
+
       /**
        * macOS entitlements for code signing
        */
       entitlements?: Record<string, boolean | string>;
-      
+
       /**
        * Path to .iconset folder containing app icons
        * @default "icon.iconset"
@@ -163,6 +169,12 @@ export interface ElectrobunConfig {
        * @default false
        */
       bundleCEF?: boolean;
+
+      /**
+       * Default renderer for webviews when not explicitly specified
+       * @default 'native'
+       */
+      defaultRenderer?: 'native' | 'cef';
     };
 
     /**
@@ -175,6 +187,12 @@ export interface ElectrobunConfig {
        * @default false
        */
       bundleCEF?: boolean;
+
+      /**
+       * Default renderer for webviews when not explicitly specified
+       * @default 'native'
+       */
+      defaultRenderer?: 'native' | 'cef';
     };
   };
 

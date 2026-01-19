@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Webview Tag Playground</title>
-    <script src="views://webviewtag/index.js"></script>
+    <script src="views://playgrounds/webviewtag/index.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -112,8 +112,8 @@
     </electrobun-webview>
 
     <h2>Test: Bundled Asset via views:// Scheme</h2>
-    <p>This image is loaded from <code>views://webviewtag/electrobun.png</code>:</p>
-    <img src="views://webviewtag/electrobun.png" style="max-width: 200px; border: 1px solid #ccc;" />
+    <p>This image is loaded from <code>views://playgrounds/webviewtag/electrobun.png</code>:</p>
+    <img src="views://playgrounds/webviewtag/electrobun.png" style="max-width: 200px; border: 1px solid #ccc;" />
 
     <script>
         // Drag info display
@@ -140,26 +140,30 @@
             const text = document.getElementById('findInput').value;
             if (!text) return;
             const wv = document.querySelector('electrobun-webview');
-            // Note: findInPage is on BrowserView (bun side), not webview tag
-            // This demonstrates the API exists but may need RPC to work
-            console.log('Find in page:', text);
-            alert('findInPage requires bun-side API call via RPC');
+            if (!wv) return;
+            wv.findInPage(text);
         }
 
         function findNext() {
             const text = document.getElementById('findInput').value;
             if (!text) return;
-            console.log('Find next:', text);
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            wv.findInPage(text, { forward: true });
         }
 
         function findPrev() {
             const text = document.getElementById('findInput').value;
             if (!text) return;
-            console.log('Find prev:', text);
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            wv.findInPage(text, { forward: false });
         }
 
         function stopFind() {
-            console.log('Stop find');
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            wv.stopFindInPage();
         }
 
         // Webview event listeners

@@ -6,6 +6,7 @@ import Electrobun, {
   BrowserView,
   ApplicationMenu,
   Utils,
+  BuildConfig,
 } from "electrobun/bun";
 import { executor } from "../test-framework/executor";
 import { allTests } from "../tests";
@@ -23,6 +24,13 @@ console.log("║                                                            ║"
 console.log("║  Results will appear both in the UI and in this terminal  ║");
 console.log("╚════════════════════════════════════════════════════════════╝");
 console.log("\n");
+
+// Log build configuration
+const buildConfig = await BuildConfig.get();
+console.log("📦 Build Configuration:");
+console.log(`   Default Renderer: ${buildConfig.defaultRenderer}`);
+console.log(`   Available Renderers: ${buildConfig.availableRenderers.join(', ')}`);
+console.log("");
 
 // Register all tests
 executor.registerTests(allTests);
@@ -147,6 +155,14 @@ const testRunnerWindow = new BrowserWindow({
 // Keep test runner on top so results are visible while tests run
 testRunnerWindow.setAlwaysOnTop(true);
 
+// Send build config to the UI when ready
+testRunnerWindow.webview.on("dom-ready", () => {
+  testRunnerWindow.webview.rpc?.send.buildConfig({
+    defaultRenderer: buildConfig.defaultRenderer,
+    availableRenderers: buildConfig.availableRenderers,
+  });
+});
+
 // Forward test events to the UI
 executor.onEvent((event) => {
   switch (event.type) {
@@ -211,7 +227,9 @@ console.log("Press Cmd+R to run all automated tests, or use the buttons in the U
 
 // Auto-run tests if AUTO_RUN environment variable is set
 // Usage: AUTO_RUN=1 electrobun dev
-const autoRun = process.env.AUTO_RUN === "1";
+console.log(`DEBUG: AUTO_RUN env var = "${process.env.AUTO_RUN}"`);
+const autoRun = !!process.env.AUTO_RUN;
+console.log(`DEBUG: autoRun = ${autoRun}`);
 if (autoRun) {
   console.log("Auto-running automated tests in 3 seconds...\n");
   setTimeout(async () => {
@@ -224,7 +242,8 @@ if (autoRun) {
     
     // Give a moment for final logs to flush
     setTimeout(() => {
-      process.exit(exitCode);
+      // Use Utils.quit() for graceful shutdown with proper CEF cleanup
+      Utils.quit();
     }, 500);
   }, 3000);
 }

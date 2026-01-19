@@ -1778,6 +1778,23 @@ if (commandArg === "init") {
     versionJsonContent
   );
 
+  // build.json inside the app bundle - runtime build configuration
+  const platformConfig = targetOS === 'macos' ? config.build?.mac :
+                         targetOS === 'win' ? config.build?.win :
+                         config.build?.linux;
+
+  const bundlesCEF = platformConfig?.bundleCEF ?? false;
+
+  const buildJsonContent = JSON.stringify({
+    defaultRenderer: platformConfig?.defaultRenderer ?? 'native',
+    availableRenderers: bundlesCEF ? ['native', 'cef'] : ['native'],
+  });
+
+  await Bun.write(
+    join(appBundleFolderResourcesPath, "build.json"),
+    buildJsonContent
+  );
+
   // todo (yoav): add these to config
   // Only codesign/notarize when building macOS targets on macOS host
   const shouldCodesign =
