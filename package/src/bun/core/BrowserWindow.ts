@@ -245,6 +245,40 @@ export class BrowserWindow<T> {
     return ffi.request.isWindowAlwaysOnTop({ winId: this.id });
   }
 
+  setPosition(x: number, y: number) {
+    this.frame.x = x;
+    this.frame.y = y;
+    return ffi.request.setWindowPosition({ winId: this.id, x, y });
+  }
+
+  setSize(width: number, height: number) {
+    this.frame.width = width;
+    this.frame.height = height;
+    return ffi.request.setWindowSize({ winId: this.id, width, height });
+  }
+
+  setFrame(x: number, y: number, width: number, height: number) {
+    this.frame = { x, y, width, height };
+    return ffi.request.setWindowFrame({ winId: this.id, x, y, width, height });
+  }
+
+  getFrame(): { x: number; y: number; width: number; height: number } {
+    const frame = ffi.request.getWindowFrame({ winId: this.id });
+    // Update internal state
+    this.frame = frame;
+    return frame;
+  }
+
+  getPosition(): { x: number; y: number } {
+    const frame = this.getFrame();
+    return { x: frame.x, y: frame.y };
+  }
+
+  getSize(): { width: number; height: number } {
+    const frame = this.getFrame();
+    return { width: frame.width, height: frame.height };
+  }
+
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserWindow events
   on(name, handler) {

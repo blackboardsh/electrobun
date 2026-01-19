@@ -5161,6 +5161,61 @@ extern "C" bool isWindowAlwaysOnTop(NSWindow *window) {
     return result;
 }
 
+extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!window) return;
+        // macOS uses bottom-left origin, so we need to convert from top-left
+        NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
+        CGFloat screenHeight = screen.frame.size.height;
+        CGFloat windowHeight = window.frame.size.height;
+        // Convert from top-left origin (what users expect) to bottom-left origin (what macOS uses)
+        CGFloat adjustedY = screenHeight - y - windowHeight;
+        [window setFrameOrigin:NSMakePoint(x, adjustedY)];
+    });
+}
+
+extern "C" void setWindowSize(NSWindow *window, double width, double height) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!window) return;
+        NSRect frame = window.frame;
+        // Keep the top-left corner fixed when resizing
+        CGFloat oldHeight = frame.size.height;
+        frame.size.width = width;
+        frame.size.height = height;
+        // Adjust y to keep top-left corner fixed (macOS uses bottom-left origin)
+        frame.origin.y += (oldHeight - height);
+        [window setFrame:frame display:YES animate:NO];
+    });
+}
+
+extern "C" void setWindowFrame(NSWindow *window, double x, double y, double width, double height) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!window) return;
+        // macOS uses bottom-left origin, convert from top-left
+        NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
+        CGFloat screenHeight = screen.frame.size.height;
+        CGFloat adjustedY = screenHeight - y - height;
+        NSRect frame = NSMakeRect(x, adjustedY, width, height);
+        [window setFrame:frame display:YES animate:NO];
+    });
+}
+
+extern "C" void getWindowFrame(NSWindow *window, double *outX, double *outY, double *outWidth, double *outHeight) {
+    __block NSRect frame = NSZeroRect;
+    __block CGFloat screenHeight = 0;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if (!window) return;
+        frame = window.frame;
+        NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
+        screenHeight = screen.frame.size.height;
+    });
+    // Convert from bottom-left origin to top-left origin
+    *outX = frame.origin.x;
+    *outY = screenHeight - frame.origin.y - frame.size.height;
+    *outWidth = frame.size.width;
+    *outHeight = frame.size.height;
+}
+
 extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
     // Validate frame values - use defaults if NaN or invalid
     if (isnan(x) || isinf(x)) x = 0;

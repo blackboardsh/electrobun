@@ -7181,6 +7181,110 @@ ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(void* window) {
     return result;
 }
 
+ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
+    if (!window) return;
+
+    dispatch_async_main_void([=]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                gtk_window_move(GTK_WINDOW(gtkWindow), (int)x, (int)y);
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                XMoveWindow(x11win->display, x11win->window, (int)x, (int)y);
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) {
+    if (!window) return;
+
+    dispatch_async_main_void([=]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                gtk_window_resize(GTK_WINDOW(gtkWindow), (int)width, (int)height);
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                XResizeWindow(x11win->display, x11win->window, (unsigned int)width, (unsigned int)height);
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+ELECTROBUN_EXPORT void setWindowFrame(void* window, double x, double y, double width, double height) {
+    if (!window) return;
+
+    dispatch_async_main_void([=]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                gtk_window_move(GTK_WINDOW(gtkWindow), (int)x, (int)y);
+                gtk_window_resize(GTK_WINDOW(gtkWindow), (int)width, (int)height);
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                XMoveResizeWindow(x11win->display, x11win->window, (int)x, (int)y, (unsigned int)width, (unsigned int)height);
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+ELECTROBUN_EXPORT void getWindowFrame(void* window, double* outX, double* outY, double* outWidth, double* outHeight) {
+    if (!window) {
+        *outX = 0;
+        *outY = 0;
+        *outWidth = 0;
+        *outHeight = 0;
+        return;
+    }
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                gint wx, wy, ww, wh;
+                gtk_window_get_position(GTK_WINDOW(gtkWindow), &wx, &wy);
+                gtk_window_get_size(GTK_WINDOW(gtkWindow), &ww, &wh);
+                *outX = (double)wx;
+                *outY = (double)wy;
+                *outWidth = (double)ww;
+                *outHeight = (double)wh;
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                XWindowAttributes attrs;
+                if (XGetWindowAttributes(x11win->display, x11win->window, &attrs)) {
+                    // Get the window's position relative to root
+                    Window child;
+                    int rx, ry;
+                    XTranslateCoordinates(x11win->display, x11win->window,
+                        DefaultRootWindow(x11win->display), 0, 0, &rx, &ry, &child);
+                    *outX = (double)rx;
+                    *outY = (double)ry;
+                    *outWidth = (double)attrs.width;
+                    *outHeight = (double)attrs.height;
+                } else {
+                    *outX = 0;
+                    *outY = 0;
+                    *outWidth = 0;
+                    *outHeight = 0;
+                }
+            }
+        }
+    });
+}
+
 /*
  * =============================================================================
  * GLOBAL KEYBOARD SHORTCUTS

@@ -6322,6 +6322,45 @@ ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(NSWindow *window) {
     return (exStyle & WS_EX_TOPMOST) != 0;
 }
 
+ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) return;
+
+    SetWindowPos(hwnd, NULL, (int)x, (int)y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+ELECTROBUN_EXPORT void setWindowSize(NSWindow *window, double width, double height) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) return;
+
+    SetWindowPos(hwnd, NULL, 0, 0, (int)width, (int)height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+ELECTROBUN_EXPORT void setWindowFrame(NSWindow *window, double x, double y, double width, double height) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) return;
+
+    SetWindowPos(hwnd, NULL, (int)x, (int)y, (int)width, (int)height, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+ELECTROBUN_EXPORT void getWindowFrame(NSWindow *window, double *outX, double *outY, double *outWidth, double *outHeight) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) {
+        *outX = 0;
+        *outY = 0;
+        *outWidth = 0;
+        *outHeight = 0;
+        return;
+    }
+
+    RECT rect;
+    GetWindowRect(hwnd, &rect);
+    *outX = (double)rect.left;
+    *outY = (double)rect.top;
+    *outWidth = (double)(rect.right - rect.left);
+    *outHeight = (double)(rect.bottom - rect.top);
+}
+
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
     if (!abstractView) {
         ::log("ERROR: Invalid AbstractView in resizeWebview");

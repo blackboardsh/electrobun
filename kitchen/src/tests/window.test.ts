@@ -381,4 +381,210 @@ export const windowTests = [
       log("Window with inset titlebar style created successfully");
     },
   }),
+
+  defineTest({
+    name: "Window setPosition",
+    category: "BrowserWindow",
+    description: "Test programmatically moving a window",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "SetPosition Test",
+        x: 100,
+        y: 100,
+        width: 400,
+        height: 300,
+        renderer: 'cef',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      log("Getting initial frame");
+      const initialFrame = win.window.getFrame();
+      log(`Initial position: (${initialFrame.x}, ${initialFrame.y})`);
+
+      log("Moving window to (200, 200)");
+      win.window.setPosition(200, 200);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const newFrame = win.window.getFrame();
+      log(`New position: (${newFrame.x}, ${newFrame.y})`);
+
+      // Allow some tolerance for window manager decorations
+      expect(Math.abs(newFrame.x - 200)).toBeLessThan(50);
+      expect(Math.abs(newFrame.y - 200)).toBeLessThan(50);
+
+      log("Window position updated successfully");
+    },
+  }),
+
+  defineTest({
+    name: "Window setSize",
+    category: "BrowserWindow",
+    description: "Test programmatically resizing a window",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "SetSize Test",
+        x: 100,
+        y: 100,
+        width: 400,
+        height: 300,
+        renderer: 'cef',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      log("Getting initial frame");
+      const initialFrame = win.window.getFrame();
+      log(`Initial size: ${initialFrame.width}x${initialFrame.height}`);
+
+      log("Resizing window to 600x500");
+      win.window.setSize(600, 500);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const newFrame = win.window.getFrame();
+      log(`New size: ${newFrame.width}x${newFrame.height}`);
+
+      // Allow some tolerance for window manager decorations
+      expect(Math.abs(newFrame.width - 600)).toBeLessThan(50);
+      expect(Math.abs(newFrame.height - 500)).toBeLessThan(50);
+
+      log("Window size updated successfully");
+    },
+  }),
+
+  defineTest({
+    name: "Window setFrame",
+    category: "BrowserWindow",
+    description: "Test programmatically setting window position and size together",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "SetFrame Test",
+        x: 100,
+        y: 100,
+        width: 400,
+        height: 300,
+        renderer: 'cef',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      log("Getting initial frame");
+      const initialFrame = win.window.getFrame();
+      log(`Initial frame: (${initialFrame.x}, ${initialFrame.y}) ${initialFrame.width}x${initialFrame.height}`);
+
+      log("Setting frame to (300, 250) 500x400");
+      win.window.setFrame(300, 250, 500, 400);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const newFrame = win.window.getFrame();
+      log(`New frame: (${newFrame.x}, ${newFrame.y}) ${newFrame.width}x${newFrame.height}`);
+
+      // Allow some tolerance for window manager decorations
+      expect(Math.abs(newFrame.x - 300)).toBeLessThan(50);
+      expect(Math.abs(newFrame.y - 250)).toBeLessThan(50);
+      expect(Math.abs(newFrame.width - 500)).toBeLessThan(50);
+      expect(Math.abs(newFrame.height - 400)).toBeLessThan(50);
+
+      log("Window frame updated successfully");
+    },
+  }),
+
+  defineTest({
+    name: "Window getFrame",
+    category: "BrowserWindow",
+    description: "Test getting the current window frame",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "GetFrame Test",
+        x: 150,
+        y: 150,
+        width: 500,
+        height: 400,
+        renderer: 'cef',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const frame = win.window.getFrame();
+      log(`Frame: (${frame.x}, ${frame.y}) ${frame.width}x${frame.height}`);
+
+      expect(frame.x).toBeGreaterThanOrEqual(0);
+      expect(frame.y).toBeGreaterThanOrEqual(0);
+      expect(frame.width).toBeGreaterThan(0);
+      expect(frame.height).toBeGreaterThan(0);
+
+      // Values should be somewhat close to what we requested
+      // (accounting for window manager decorations and constraints)
+      expect(Math.abs(frame.width - 500)).toBeLessThan(100);
+      expect(Math.abs(frame.height - 400)).toBeLessThan(100);
+
+      log("Window frame retrieved successfully");
+    },
+  }),
+
+  defineTest({
+    name: "Window getPosition",
+    category: "BrowserWindow",
+    description: "Test getting the current window position",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "GetPosition Test",
+        x: 200,
+        y: 180,
+        width: 400,
+        height: 300,
+        renderer: 'cef',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const pos = win.window.getPosition();
+      log(`Position: (${pos.x}, ${pos.y})`);
+
+      expect(pos.x).toBeGreaterThanOrEqual(0);
+      expect(pos.y).toBeGreaterThanOrEqual(0);
+
+      // Verify it returns x and y
+      expect(pos.x).toBeDefined();
+      expect(pos.y).toBeDefined();
+
+      log("Window position retrieved successfully");
+    },
+  }),
+
+  defineTest({
+    name: "Window getSize",
+    category: "BrowserWindow",
+    description: "Test getting the current window size",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "GetSize Test",
+        x: 100,
+        y: 100,
+        width: 600,
+        height: 450,
+        renderer: 'cef',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const size = win.window.getSize();
+      log(`Size: ${size.width}x${size.height}`);
+
+      expect(size.width).toBeGreaterThan(0);
+      expect(size.height).toBeGreaterThan(0);
+
+      // Values should be somewhat close to what we requested
+      expect(Math.abs(size.width - 600)).toBeLessThan(100);
+      expect(Math.abs(size.height - 450)).toBeLessThan(100);
+
+      log("Window size retrieved successfully");
+    },
+  }),
 ];

@@ -139,6 +139,22 @@ export const native = (() => {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
+      setWindowPosition: {
+        args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+        returns: FFIType.void,
+      },
+      setWindowSize: {
+        args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+        returns: FFIType.void,
+      },
+      setWindowFrame: {
+        args: [FFIType.ptr, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64],
+        returns: FFIType.void,
+      },
+      getWindowFrame: {
+        args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
+        returns: FFIType.void,
+      },
       // webview
       initWebview: {
         args: [
@@ -731,6 +747,69 @@ export const ffi = {
         }
 
         return native.symbols.isWindowAlwaysOnTop(windowPtr);
+      },
+
+      setWindowPosition: (params: {winId: number; x: number; y: number}) => {
+        const {winId, x, y} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't set window position. Window no longer exists`;
+        }
+
+        native.symbols.setWindowPosition(windowPtr, x, y);
+      },
+
+      setWindowSize: (params: {winId: number; width: number; height: number}) => {
+        const {winId, width, height} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't set window size. Window no longer exists`;
+        }
+
+        native.symbols.setWindowSize(windowPtr, width, height);
+      },
+
+      setWindowFrame: (params: {winId: number; x: number; y: number; width: number; height: number}) => {
+        const {winId, x, y, width, height} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          throw `Can't set window frame. Window no longer exists`;
+        }
+
+        native.symbols.setWindowFrame(windowPtr, x, y, width, height);
+      },
+
+      getWindowFrame: (params: {winId: number}): {x: number; y: number; width: number; height: number} => {
+        const {winId} = params;
+        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+        if (!windowPtr) {
+          return {x: 0, y: 0, width: 0, height: 0};
+        }
+
+        // Create buffers to receive the output values
+        const xBuf = new Float64Array(1);
+        const yBuf = new Float64Array(1);
+        const widthBuf = new Float64Array(1);
+        const heightBuf = new Float64Array(1);
+
+        native.symbols.getWindowFrame(
+          windowPtr,
+          ptr(xBuf),
+          ptr(yBuf),
+          ptr(widthBuf),
+          ptr(heightBuf)
+        );
+
+        return {
+          x: xBuf[0],
+          y: yBuf[0],
+          width: widthBuf[0],
+          height: heightBuf[0],
+        };
       },
 
       createWebview: (params: {
