@@ -4,10 +4,11 @@
   "description": "Interactive playground for exploring Electrobun features",
   "type": "module",
   "scripts": {
-    "build:dev": "electrobun build",
+    "build": "electrobun build",
+    "dev": "electrobun dev",
+    "start": "bun run build && bun run dev",
     "build:canary": "electrobun build --canary",
-    "start": "electrobun build && electrobun dev",
-    "start:canary": "electrobun build --canary && electrobun dev --canary"
+    "start:canary": "bun run build:canary && electrobun dev --canary"
   },
   "dependencies": {
     "electrobun": "latest"

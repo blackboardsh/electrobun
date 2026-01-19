@@ -4,7 +4,9 @@
   "description": "A multi-tab browser demo for Electrobun",
   "type": "module",
   "scripts": {
-    "start": "electrobun build && electrobun dev"    
+    "build": "electrobun build",
+    "dev": "electrobun dev",
+    "start": "bun run build && bun run dev"
   },
   "dependencies": {
     "electrobun": "latest"
