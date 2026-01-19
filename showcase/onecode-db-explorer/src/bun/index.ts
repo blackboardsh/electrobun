@@ -575,14 +575,13 @@ async function describeTableFor(connectionString: string, tableName: string): Pr
   const client = getClient(connectionString);
 
   if (adapter === "sqlite") {
-    const rows = await client.unsafe(
-      `
-        SELECT cid, name, type, notnull, dflt_value, pk
-        FROM pragma_table_info($1)
-        ORDER BY cid;
-      `,
-      [tableName]
-    );
+    // PRAGMA functions don't support parameterized queries, so we use a quoted string literal
+    const quotedTable = quoteIdentifier(adapter, tableName);
+    const rows = await client.unsafe(`
+      SELECT cid, name, type, notnull, dflt_value, pk
+      FROM pragma_table_info(${quotedTable})
+      ORDER BY cid;
+    `);
 
     if (!Array.isArray(rows)) return [];
     return rows.flatMap((r) => {
@@ -802,14 +801,13 @@ async function listRelationshipsFor(connectionString: string): Promise<Relations
     const out: RelationshipInfo[] = [];
 
     for (const tableName of tables) {
-      const rows = await client.unsafe(
-        `
-          SELECT id, seq, "table" as to_table, "from" as from_column, "to" as to_column
-          FROM pragma_foreign_key_list($1)
-          ORDER BY id, seq;
-      `,
-        [tableName]
-      );
+      // PRAGMA functions don't support parameterized queries, so we use a quoted string literal
+      const quotedTable = quoteIdentifier(adapter, tableName);
+      const rows = await client.unsafe(`
+        SELECT id, seq, "table" as to_table, "from" as from_column, "to" as to_column
+        FROM pragma_foreign_key_list(${quotedTable})
+        ORDER BY id, seq;
+      `);
 
       if (!Array.isArray(rows)) continue;
       for (const r of rows) {
