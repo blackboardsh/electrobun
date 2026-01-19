@@ -96,6 +96,9 @@ typedef void (*WindowFocusCallback)(uint32_t windowId);
 // Forward declaration for WebKit scheme handler
 static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data);
 
+// Forward declaration for partition context management
+static WebKitWebContext* getContextForPartition(const char* partitionIdentifier);
+
 // Webview callback types
 typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
 typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
@@ -2262,54 +2265,8 @@ public:
         // Try to improve offscreen rendering without breaking stability
         // webkit_settings_set_enable_accelerated_2d_canvas is deprecated - removed
 
-        // Create web context with partition-specific data manager
-        WebKitWebContext* context = nullptr;
-
-        if (!partition.empty()) {
-            // Get app identifier for base path
-            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-            if (!g_electrobunChannel.empty()) {
-                appIdentifier += "-" + g_electrobunChannel;
-            }
-
-            char* home = getenv("HOME");
-            std::string basePath = home ? std::string(home) : "/tmp";
-
-            bool isPersistent = partition.substr(0, 8) == "persist:";
-
-            if (isPersistent) {
-                // Persistent partition: use named directory in ~/.local/share and ~/.cache
-                std::string partitionName = partition.substr(8);
-                std::string dataPath = basePath + "/.local/share/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
-                std::string cachePath = basePath + "/.cache/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
-
-                // Create directories
-                g_mkdir_with_parents(dataPath.c_str(), 0755);
-                g_mkdir_with_parents(cachePath.c_str(), 0755);
-
-                WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new(
-                    "base-data-directory", dataPath.c_str(),
-                    "base-cache-directory", cachePath.c_str(),
-                    NULL
-                );
-                context = webkit_web_context_new_with_website_data_manager(dataManager);
-                g_object_unref(dataManager);
-                
-                // Register views:// scheme handler for this partition context
-                webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
-            } else {
-                // Ephemeral partition: use non-persistent (in-memory) data manager
-                WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new_ephemeral();
-                context = webkit_web_context_new_with_website_data_manager(dataManager);
-                g_object_unref(dataManager);
-                
-                // Register views:// scheme handler for this partition context
-                webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
-            }
-        } else {
-            // No partition: use default context
-            context = webkit_web_context_get_default();
-        }
+        // Get or create shared context for this partition
+        WebKitWebContext* context = getContextForPartition(partition.empty() ? nullptr : partition.c_str());
 
         // Create webview with context and user content manager
         webview = GTK_WIDGET(g_object_new(WEBKIT_TYPE_WEB_VIEW,
@@ -3178,13 +3135,19 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         }
     }
 
-    // Create context with proper partition isolation and scheme handler inheritance
+    // Create isolated context with partition-specific settings
+    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
     
-    // Create context that inherits the global scheme handler registration
+    // Register the views:// scheme handler factory on this context
+    // This ensures the context can load views:// URLs while maintaining partition isolation
+    static CefRefPtr<ViewsSchemeHandlerFactory> schemeFactory = new ViewsSchemeHandlerFactory();
+    bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
     
-    // Use the global context as the parent to ensure scheme handler inheritance
-    CefRefPtr<CefRequestContext> globalContext = CefRequestContext::GetGlobalContext();
-    return CefRequestContext::CreateContext(globalContext, nullptr);
+    if (!registered) {
+        fprintf(stderr, "WARNING: Failed to register views:// scheme handler for partition context\n");
+    }
+    
+    return context;
 }
 
 // Forward declaration for X11 event processing
@@ -4674,6 +4637,64 @@ dispatch_sync_main_void(Func&& func) {
     if (data->exception) {
         std::rethrow_exception(data->exception);
     }
+}
+
+// Store for partition-specific contexts (for session storage synchronization)
+static std::map<std::string, WebKitWebContext*> g_partitionContexts;
+
+// Get or create a WebKit context for a partition
+static WebKitWebContext* getContextForPartition(const char* partitionIdentifier) {
+    std::string partition = partitionIdentifier ? partitionIdentifier : "";
+
+    auto it = g_partitionContexts.find(partition);
+    if (it != g_partitionContexts.end()) {
+        return it->second;
+    }
+
+    WebKitWebContext* context = nullptr;
+
+    if (partition.empty()) {
+        // Default: use default context
+        context = webkit_web_context_get_default();
+        g_object_ref(context); // Keep consistent reference counting
+    } else {
+        bool isPersistent = partition.substr(0, 8) == "persist:";
+
+        if (isPersistent) {
+            std::string partitionName = partition.substr(8);
+            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+            if (!g_electrobunChannel.empty()) {
+                appIdentifier += "-" + g_electrobunChannel;
+            }
+
+            char* home = getenv("HOME");
+            std::string basePath = home ? std::string(home) : "/tmp";
+            std::string dataPath = basePath + "/.local/share/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+            std::string cachePath = basePath + "/.cache/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+
+            g_mkdir_with_parents(dataPath.c_str(), 0755);
+            g_mkdir_with_parents(cachePath.c_str(), 0755);
+
+            WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new(
+                "base-data-directory", dataPath.c_str(),
+                "base-cache-directory", cachePath.c_str(),
+                NULL
+            );
+            context = webkit_web_context_new_with_website_data_manager(dataManager);
+            g_object_unref(dataManager);
+        } else {
+            WebKitWebsiteDataManager* dataManager = webkit_website_data_manager_new_ephemeral();
+            context = webkit_web_context_new_with_website_data_manager(dataManager);
+            g_object_unref(dataManager);
+        }
+
+        // Register views:// scheme handler for this partition context
+        webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
+        
+        g_partitionContexts[partition] = context;
+    }
+
+    return context;
 }
 
 extern "C" {
@@ -7679,6 +7700,7 @@ static WebKitWebsiteDataManager* getDataManagerForPartition(const char* partitio
 
     return dataManager;
 }
+
 
 // Helper struct for async cookie operations
 struct CookieCallbackData {
