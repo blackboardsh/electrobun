@@ -7184,7 +7184,7 @@ ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(void* window) {
 ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
     if (!window) return;
 
-    dispatch_async_main_void([=]() {
+    dispatch_sync_main_void([=]() {
         if (GTK_IS_WIDGET(window)) {
             GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
             if (GTK_IS_WINDOW(gtkWindow)) {
@@ -7193,7 +7193,18 @@ ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
         } else {
             X11Window* x11win = static_cast<X11Window*>(window);
             if (x11win && x11win->display && x11win->window) {
+                // Set window position, accounting for window manager
                 XMoveWindow(x11win->display, x11win->window, (int)x, (int)y);
+                
+                // Also send a ConfigureRequest event to ensure window manager compliance
+                XEvent event;
+                memset(&event, 0, sizeof(event));
+                event.xconfigure.type = ConfigureNotify;
+                event.xconfigure.window = x11win->window;
+                event.xconfigure.x = (int)x;
+                event.xconfigure.y = (int)y;
+                XSendEvent(x11win->display, x11win->window, False, StructureNotifyMask, &event);
+                
                 XFlush(x11win->display);
             }
         }
@@ -7203,7 +7214,7 @@ ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
 ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) {
     if (!window) return;
 
-    dispatch_async_main_void([=]() {
+    dispatch_sync_main_void([=]() {
         if (GTK_IS_WIDGET(window)) {
             GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
             if (GTK_IS_WINDOW(gtkWindow)) {
@@ -7222,7 +7233,7 @@ ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) 
 ELECTROBUN_EXPORT void setWindowFrame(void* window, double x, double y, double width, double height) {
     if (!window) return;
 
-    dispatch_async_main_void([=]() {
+    dispatch_sync_main_void([=]() {
         if (GTK_IS_WIDGET(window)) {
             GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
             if (GTK_IS_WINDOW(gtkWindow)) {
@@ -7265,13 +7276,39 @@ ELECTROBUN_EXPORT void getWindowFrame(void* window, double* outX, double* outY, 
             if (x11win && x11win->display && x11win->window) {
                 XWindowAttributes attrs;
                 if (XGetWindowAttributes(x11win->display, x11win->window, &attrs)) {
-                    // Get the window's position relative to root
+                    // Get the absolute position of the window
+                    int abs_x = 0, abs_y = 0;
                     Window child;
-                    int rx, ry;
+                    
+                    // Translate from window coordinates (0,0) to root window coordinates
                     XTranslateCoordinates(x11win->display, x11win->window,
-                        DefaultRootWindow(x11win->display), 0, 0, &rx, &ry, &child);
-                    *outX = (double)rx;
-                    *outY = (double)ry;
+                        DefaultRootWindow(x11win->display), 
+                        0, 0, &abs_x, &abs_y, &child);
+                    
+                    // For windows with decorations, we need to get the frame extents
+                    Atom actualType;
+                    int actualFormat;
+                    unsigned long nItems, bytesAfter;
+                    unsigned char* data = nullptr;
+                    
+                    Atom frameExtents = XInternAtom(x11win->display, "_NET_FRAME_EXTENTS", False);
+                    if (frameExtents != None) {
+                        if (XGetWindowProperty(x11win->display, x11win->window, frameExtents,
+                                             0, 4, False, XA_CARDINAL,
+                                             &actualType, &actualFormat, &nItems, &bytesAfter,
+                                             &data) == Success && data) {
+                            if (nItems == 4 && actualFormat == 32) {
+                                long* extents = (long*)data;
+                                // Adjust position by left and top frame extents
+                                abs_x -= extents[0]; // left
+                                abs_y -= extents[2]; // top
+                            }
+                            XFree(data);
+                        }
+                    }
+                    
+                    *outX = (double)abs_x;
+                    *outY = (double)abs_y;
                     *outWidth = (double)attrs.width;
                     *outHeight = (double)attrs.height;
                 } else {
@@ -7283,6 +7320,16 @@ ELECTROBUN_EXPORT void getWindowFrame(void* window, double* outX, double* outY, 
             }
         }
     });
+}
+
+ELECTROBUN_EXPORT void getWindowPosition(void* window, double* outX, double* outY) {
+    double width, height;
+    getWindowFrame(window, outX, outY, &width, &height);
+}
+
+ELECTROBUN_EXPORT void getWindowSize(void* window, double* outWidth, double* outHeight) {
+    double x, y;
+    getWindowFrame(window, &x, &y, outWidth, outHeight);
 }
 
 /*
