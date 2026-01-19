@@ -5236,6 +5236,74 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     return view;
 }
 
+// Utility function for creating CEF request contexts with partition support
+CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
+                                                               uint32_t webviewId) {
+    printf("DEBUG CEF: CreateRequestContextForPartition called for webview %u, partition: %s\n",
+           webviewId, partitionIdentifier ? partitionIdentifier : "null");
+
+    CefRequestContextSettings settings;
+
+    if (!partitionIdentifier || !partitionIdentifier[0]) {
+        // No partition - use in-memory session
+        settings.persist_session_cookies = false;
+        settings.persist_user_preferences = false;
+    } else {
+        std::string identifier(partitionIdentifier);
+        bool isPersistent = identifier.substr(0, 8) == "persist:";
+
+        if (isPersistent) {
+            // Persistent partition - create cache directory
+            std::string partitionName = identifier.substr(8);
+
+            // Get %LOCALAPPDATA% path
+            char* localAppData = getenv("LOCALAPPDATA");
+            if (!localAppData) {
+                printf("ERROR CEF: LOCALAPPDATA not found, falling back to in-memory session\n");
+                settings.persist_session_cookies = false;
+                settings.persist_user_preferences = false;
+            } else {
+                // Build app identifier from version.json to match root_cache_path logic
+                std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+                if (!g_electrobunChannel.empty()) {
+                    appIdentifier += "-" + g_electrobunChannel;
+                }
+
+                // Build cache path: %LOCALAPPDATA%\{appIdentifier}\CEF\Partitions\{partitionName}
+                std::string cachePath = std::string(localAppData) + "\\" + appIdentifier + "\\CEF\\Partitions\\" + partitionName;
+
+                // Create directory if it doesn't exist
+                std::wstring wideCachePath(cachePath.begin(), cachePath.end());
+                SHCreateDirectoryExW(NULL, wideCachePath.c_str(), NULL);
+
+                settings.persist_session_cookies = true;
+                settings.persist_user_preferences = true;
+                CefString(&settings.cache_path).FromString(cachePath);
+
+                printf("DEBUG CEF: Persistent partition '%s' using cache path: %s\n",
+                       partitionName.c_str(), cachePath.c_str());
+            }
+        } else {
+            // Non-persistent partition - in-memory session
+            settings.persist_session_cookies = false;
+            settings.persist_user_preferences = false;
+            printf("DEBUG CEF: In-memory partition '%s'\n", identifier.c_str());
+        }
+    }
+
+    // Create the request context
+    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
+
+    // Register scheme handler factory for this request context
+    // Note: Each CefRequestContext needs its own registration - it's not global
+    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
+    bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
+    printf("DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s\n",
+           partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
+
+    return context;
+}
+
 // Internal factory method for creating CEF instances
 static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                                        HWND hwnd,
@@ -5332,10 +5400,16 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             static std::map<ElectrobunCefClient*, std::string> g_tempPreloadScripts;
             g_tempPreloadScripts[client] = combinedScript;
         }
-        
+
+        // Create request context for partition isolation
+        CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(
+            partitionIdentifier,
+            webviewId
+        );
+
         // Create browser synchronously (like Mac implementation)
         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
-            windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, nullptr);
+            windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, requestContext);
         
         if (browser) {
             // Now store the script with the actual browser ID
