@@ -1679,7 +1679,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             NSString *eventData = [NSString stringWithFormat:@"{\"url\":\"%@\",\"isCmdClick\":true,\"modifierFlags\":%lu}",
                                  newURL.absoluteString,
                                  (unsigned long)navigationAction.modifierFlags];
-            self.zigEventHandler(self.webviewId, "new-window-open", [eventData UTF8String]);
+            self.zigEventHandler(self.webviewId, strdup("new-window-open"), strdup([eventData UTF8String]));
             decisionHandler(WKNavigationActionPolicyCancel);
             return;
         }
@@ -1692,7 +1692,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         NSString *eventData = [NSString stringWithFormat:@"{\"url\":\"%@\",\"allowed\":%@}",
                              newURL.absoluteString,
                              shouldAllow ? @"true" : @"false"];
-        self.zigEventHandler(self.webviewId, "will-navigate", [eventData UTF8String]);
+        self.zigEventHandler(self.webviewId, strdup("will-navigate"), strdup([eventData UTF8String]));
 
         // Check if this navigation action should trigger a download
         if (navigationAction.shouldPerformDownload) {
@@ -1715,10 +1715,16 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
     - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-        self.zigEventHandler(self.webviewId, "did-navigate", webView.URL.absoluteString.UTF8String);
+        NSString *urlString = webView.URL.absoluteString ?: @"";
+        if (urlString.length > 0) {
+            self.zigEventHandler(self.webviewId, strdup("did-navigate"), strdup(urlString.UTF8String));
+        }
     }
     - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
-        self.zigEventHandler(self.webviewId, "did-commit-navigation", webView.URL.absoluteString.UTF8String);
+        NSString *urlString = webView.URL.absoluteString ?: @"";
+        if (urlString.length > 0) {
+            self.zigEventHandler(self.webviewId, strdup("did-commit-navigation"), strdup(urlString.UTF8String));
+        }
     }
 
     // Called when navigationAction policy returns .download
