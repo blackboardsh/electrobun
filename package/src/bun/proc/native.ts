@@ -484,6 +484,13 @@ export const native = (() => {
         ],
         returns: FFIType.void
       },   
+      setWindowIcon: {
+        args: [
+          FFIType.ptr, // window pointer
+          FFIType.cstring, // icon path
+        ],
+        returns: FFIType.void
+      },
       killApp: {
         args: [],
         returns: FFIType.void

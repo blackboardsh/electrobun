@@ -1,9 +1,11 @@
-import { ffi } from "../proc/native";
+import { ffi, toCString } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type RPC } from "rpc-anywhere";
 import {FFIType} from 'bun:ffi'
 import { BuildConfig } from "./BuildConfig";
+import { existsSync } from "fs";
+import { join } from "path";
 
 const buildConfig = await BuildConfig.get();
 
@@ -175,7 +177,55 @@ export class BrowserWindow<T> {
 
     this.webviewId = webview.id;   
 
+    // Automatically set window icon on Linux
+    if (process.platform === 'linux') {
+      this.setLinuxIcon();
+    }
+  }
+
+  private setLinuxIcon() {
+    // Try to find and set icon in order of preference:
+    // 1. Check for icon.png in Resources folder (standard location after build)
+    // 2. Check for appIcon.png in Resources folder
+    // 3. Check for icon specified in config during development
     
+    const possiblePaths = [
+      'Resources/icon.png',
+      'Resources/appIcon.png', 
+      'Resources/app/icon.png',
+      'Resources/app/appIcon.png',
+      // During development, check relative paths
+      'icon.png',
+      'appIcon.png',
+      'assets/icon.png',
+      'assets/appIcon.png',
+    ];
+
+    // Try views:// protocol paths (these don't need file system checks)
+    const viewsPaths = [
+      'views://icon.png',
+      'views://appIcon.png',
+      'views://assets/icon.png',
+    ];
+
+    // First try regular file paths
+    for (const iconPath of possiblePaths) {
+      if (existsSync(iconPath)) {
+        this.setIcon(iconPath);
+        console.log(`[Electrobun] Set window icon from file: ${iconPath}`);
+        return;
+      }
+    }
+
+    // Then try views:// paths (these are handled by the native code)
+    for (const iconPath of viewsPaths) {
+      // We can't check if views:// paths exist from here, so just try the first one
+      this.setIcon(iconPath);
+      console.log(`[Electrobun] Attempting to set window icon from: ${iconPath}`);
+      return;
+    }
+
+    console.log('[Electrobun] No icon found for Linux window. Place icon.png in Resources folder or views folder.');
   }
 
   get webview() {    
@@ -277,6 +327,10 @@ export class BrowserWindow<T> {
   getSize(): { width: number; height: number } {
     const frame = this.getFrame();
     return { width: frame.width, height: frame.height };
+  }
+
+  setIcon(iconPath: string) {
+    return ffi.native.symbols.setWindowIcon(this.ptr, toCString(iconPath));
   }
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
