@@ -57,6 +57,34 @@ exec ./launcher "$@"
   console.log(`Created/updated Linux launcher script: ${launcherPath}`);
 }
 
+// Create launcher script for AppImage
+async function createLinuxAppImageLauncherScript(appImagePath: string): Promise<void> {
+  const parentDir = dirname(appImagePath);
+  const launcherPath = join(parentDir, "run.sh");
+  
+  const launcherContent = `#!/bin/bash
+# Electrobun AppImage Launcher
+# This script launches the AppImage
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+APPIMAGE_PATH="$SCRIPT_DIR/$(basename "${appImagePath}")"
+
+# Force X11 backend for compatibility
+export GDK_BACKEND=x11
+
+# Launch the AppImage
+exec "$APPIMAGE_PATH" "$@"
+`;
+
+  await Bun.write(launcherPath, launcherContent);
+  
+  // Make it executable
+  execSync(`chmod +x "${launcherPath}"`);
+  
+  console.log(`Created/updated Linux AppImage launcher script: ${launcherPath}`);
+}
+
 // Cross-platform app data directory
 function getAppDataDir(): string {
   switch (currentOS) {
@@ -450,10 +478,28 @@ const Updater = {
         
         // Platform-specific path handling
         let newAppBundlePath: string;
-        if (currentOS === 'linux' || currentOS === 'win') {
-          // On Linux/Windows, the actual app is inside a subdirectory
+        if (currentOS === 'linux') {
+          // On Linux, look for the .AppImage file in the extraction directory
+          const appImageName = `${localInfo.name.replace(/ /g, "").replace(/\./g, "-")}.AppImage`;
+          newAppBundlePath = join(extractionDir, appImageName);
+          
+          // Verify the AppImage exists
+          if (!statSync(newAppBundlePath, { throwIfNoEntry: false })) {
+            console.error(`AppImage not found at: ${newAppBundlePath}`);
+            console.log("Contents of extraction directory:");
+            try {
+              const files = readdirSync(extractionDir);
+              for (const file of files) {
+                console.log(`  - ${file}`);
+              }
+            } catch (e) {
+              console.log("Could not list directory contents:", e);
+            }
+            return;
+          }
+        } else if (currentOS === 'win') {
+          // On Windows, the actual app is inside a subdirectory
           // Use same sanitization as extractor: remove spaces and dots
-          // Note: localInfo.name already includes the channel (e.g., "test1-canary")
           const appBundleName = localInfo.name.replace(/ /g, "").replace(/\./g, "-");
           newAppBundlePath = join(extractionDir, appBundleName);
           
@@ -485,10 +531,12 @@ const Updater = {
             ".."
           );
         } else {
-          // On Linux/Windows, calculate app path using app data directory structure
+          // Platform-specific app path calculation
           const appDataFolder = await Updater.appDataFolder();
           if (currentOS === 'linux') {
-            runningAppBundlePath = join(appDataFolder, "app");
+            // On Linux, store AppImage as a single file
+            const appImageName = `${localInfo.name.replace(/ /g, "").replace(/\./g, "-")}.AppImage`;
+            runningAppBundlePath = join(appDataFolder, appImageName);
           } else {
             // On Windows, use versioned app folders
             const currentHash = (await Updater.getLocallocalInfo()).hash;
@@ -519,29 +567,25 @@ const Updater = {
             // Move new app to running location
             renameSync(newAppBundlePath, runningAppBundlePath);
           } else if (currentOS === 'linux') {
-            // On Linux, create tar backup and replace
-            // Remove existing backup.tar if it exists
+            // On Linux, backup and replace AppImage file
+            // Remove existing backup if it exists
             if (statSync(backupPath, { throwIfNoEntry: false })) {
               unlinkSync(backupPath);
             }
             
-            // Create tar backup of current app
-            await tar.c(
-              {
-                file: backupPath,
-                cwd: dirname(runningAppBundlePath),
-              },
-              [basename(runningAppBundlePath)]
-            );
+            // Create backup of current AppImage (if it exists)
+            if (statSync(runningAppBundlePath, { throwIfNoEntry: false })) {
+              renameSync(runningAppBundlePath, backupPath);
+            }
             
-            // Remove current app
-            rmdirSync(runningAppBundlePath, { recursive: true });
-            
-            // Move new app to app location
+            // Move new AppImage to app location
             renameSync(newAppBundlePath, runningAppBundlePath);
             
-            // Recreate run.sh launcher script
-            await createLinuxLauncherScript(runningAppBundlePath);
+            // Make AppImage executable
+            execSync(`chmod +x "${runningAppBundlePath}"`);
+            
+            // Create/update launcher script that points to the AppImage
+            await createLinuxAppImageLauncherScript(runningAppBundlePath);
           } else {
             // On Windows, use versioned app folders
             const parentDir = dirname(runningAppBundlePath);
@@ -630,9 +674,8 @@ start "" launcher.exe
             await Bun.spawn(["cmd", "/c", runBatPath], { detached: true });
             break;
           case 'linux':
-            // On Linux, use shell backgrounding to detach the process
-            const linuxLauncher = join(runningAppBundlePath, "bin", "launcher");
-            Bun.spawn(["sh", "-c", `${linuxLauncher} &`], { detached: true});
+            // On Linux, launch the AppImage directly
+            Bun.spawn(["sh", "-c", `"${runningAppBundlePath}" &`], { detached: true});
             break;
         }
         // Use native killApp to properly clean up all resources        

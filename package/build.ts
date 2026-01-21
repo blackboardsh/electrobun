@@ -1179,7 +1179,7 @@ async function vendorLinuxDeps() {
         // We can't check the package manager of every Linux distro,
         // so lets just do Ubuntu/Debian for now since thats what CI uses.
 
-        const requiredPackages = ['build-essential', 'cmake', 'pkg-config', 'libgtk-3-dev', 'libwebkit2gtk-4.1-dev', 'libayatana-appindicator3-dev', 'librsvg2-dev'];
+        const requiredPackages = ['build-essential', 'cmake', 'pkg-config', 'libgtk-3-dev', 'libwebkit2gtk-4.1-dev', 'libayatana-appindicator3-dev', 'librsvg2-dev', 'fuse', 'libfuse2'];
 
         const distroInfo = await $`grep -E '^(ID|ID_LIKE)=' /etc/os-release`.catch(() => null);
         if (!distroInfo||  !(String(distroInfo.stdout).includes('debian') || String(distroInfo.stdout).includes('ubuntu'))) {
@@ -1197,17 +1197,33 @@ async function vendorLinuxDeps() {
             }
         }
         if (missingPackages.length > 0) {
+            console.log('');
+            console.log('═══════════════════════════════════════════════════════════════');
+            console.log('🚨 MISSING REQUIRED LINUX DEPENDENCIES');
+            console.log('═══════════════════════════════════════════════════════════════');
             console.log(`Missing packages: ${missingPackages.join(', ')}`);
+            console.log('');
             console.log('Please install them using:');
-            console.log(`sudo apt update && sudo apt install -y ${missingPackages.join(' ')}`);
+            console.log(`   sudo apt update && sudo apt install -y ${missingPackages.join(' ')}`);
+            console.log('');
             
-            // In CI, just warn but continue; locally throw an error
+            // Check specifically for libfuse2 since it affects AppImage creation
+            if (missingPackages.includes('libfuse2')) {
+                console.log('⚠️  libfuse2 is required for AppImage creation');
+                console.log('   Without it, AppImage generation will fail with FUSE errors');
+                console.log('');
+            }
+            
+            // In CI, just warn but continue; locally show message and continue 
             if (process.env['GITHUB_ACTIONS']) {
                 console.warn('⚠️  Running in CI - continuing despite missing packages');
                 console.warn('   The CI workflow should have already installed these packages');
             } else {
-                throw new Error('Missing required packages'); // This works, but the error does not propagate and thus doesn't stop execution
+                console.warn('⚠️  Some features may not work without these packages');
+                console.warn('   Continuing with build...');
             }
+            console.log('═══════════════════════════════════════════════════════════════');
+            console.log('');
         }
         console.log('All required packages are installed');
     }

@@ -1,7 +1,7 @@
 export default {
     app: {
-        name: "Electrobun (Playground)",
-        identifier: "dev.electrobun.playground",
+        name: "Electrobun Kitchen Sink",
+        identifier: "dev.electrobun.kitchen",
         version: "0.0.1",
         urlSchemes: ["electrobun-playground"],
     },
@@ -109,6 +109,7 @@ export default {
         },
         linux: {
             bundleCEF: true,
+            icon: "icon.iconset/icon_256x256.png",
         },
         win: {
             bundleCEF: true,
@@ -118,6 +119,6 @@ export default {
         postBuild: "./buildScript.ts",
     },
     release: {
-        bucketUrl: "https://static.electrobun.dev/playground/",
+        bucketUrl: "https://static.electrobun.dev/kitchen/",
     },
 };

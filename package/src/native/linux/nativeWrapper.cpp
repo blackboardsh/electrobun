@@ -99,6 +99,7 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
 // Forward declaration for partition context management
 static WebKitWebContext* getContextForPartition(const char* partitionIdentifier);
 
+
 // Webview callback types
 typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
 typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
@@ -319,6 +320,10 @@ struct X11Window {
 
     X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr), transparent(false) {}
 };
+
+// Forward declarations for icon management
+static void autoSetWindowIcon(void* window);
+static void setX11WindowIcon(X11Window* x11win, GdkPixbuf* pixbuf);
 
 // Forward declaration for X11 menu function
 void applyApplicationMenuToX11Window(X11Window* x11win);
@@ -4642,6 +4647,89 @@ dispatch_sync_main_void(Func&& func) {
 // Store for partition-specific contexts (for session storage synchronization)
 static std::map<std::string, WebKitWebContext*> g_partitionContexts;
 
+// Helper function to automatically set window icon from standard location
+static void autoSetWindowIcon(void* window) {
+    if (!window) return;
+    
+    // Standard icon location: Resources/appIcon.png
+    const char* iconPath = "Resources/appIcon.png";
+    
+    // Check if icon exists
+    struct stat buffer;
+    if (stat(iconPath, &buffer) != 0) {
+        // Icon doesn't exist, nothing to do
+        return;
+    }
+    
+    GError* error = nullptr;
+    GdkPixbuf* pixbuf = gdk_pixbuf_new_from_file(iconPath, &error);
+    
+    if (pixbuf) {
+        if (GTK_IS_WIDGET(window)) {
+            gtk_window_set_icon(GTK_WINDOW(window), pixbuf);
+        } else {
+            // For X11/CEF windows
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                setX11WindowIcon(x11win, pixbuf);
+            }
+        }
+        g_object_unref(pixbuf);
+    } else {
+        if (error) {
+            g_error_free(error);
+        }
+    }
+}
+
+// Helper function to set X11 window icon from GdkPixbuf
+static void setX11WindowIcon(X11Window* x11win, GdkPixbuf* pixbuf) {
+    if (!x11win || !x11win->display || !x11win->window || !pixbuf) return;
+    
+    // Get pixel data
+    int width = gdk_pixbuf_get_width(pixbuf);
+    int height = gdk_pixbuf_get_height(pixbuf);
+    int channels = gdk_pixbuf_get_n_channels(pixbuf);
+    guchar* pixels = gdk_pixbuf_get_pixels(pixbuf);
+    int rowstride = gdk_pixbuf_get_rowstride(pixbuf);
+    
+    // Convert to ARGB format for X11
+    std::vector<unsigned long> icon_data;
+    icon_data.push_back(width);
+    icon_data.push_back(height);
+    
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            guchar* pixel = pixels + y * rowstride + x * channels;
+            unsigned long argb = 0;
+            
+            if (channels == 4) {
+                // RGBA
+                argb = ((unsigned long)pixel[3] << 24) | // A
+                       ((unsigned long)pixel[0] << 16) | // R
+                       ((unsigned long)pixel[1] << 8)  | // G
+                       ((unsigned long)pixel[2]);        // B
+            } else if (channels == 3) {
+                // RGB (no alpha)
+                argb = (0xFFUL << 24) |                  // A (opaque)
+                       ((unsigned long)pixel[0] << 16) | // R
+                       ((unsigned long)pixel[1] << 8)  | // G
+                       ((unsigned long)pixel[2]);        // B
+            }
+            
+            icon_data.push_back(argb);
+        }
+    }
+    
+    // Set _NET_WM_ICON property
+    Atom net_wm_icon = XInternAtom(x11win->display, "_NET_WM_ICON", False);
+    XChangeProperty(x11win->display, x11win->window, net_wm_icon,
+                  XA_CARDINAL, 32, PropModeReplace,
+                  (unsigned char*)icon_data.data(), icon_data.size());
+    
+    XFlush(x11win->display);
+}
+
 // Get or create a WebKit context for a partition
 static WebKitWebContext* getContextForPartition(const char* partitionIdentifier) {
     std::string partition = partitionIdentifier ? partitionIdentifier : "";
@@ -4992,6 +5080,12 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             // Set window title
             XStoreName(display, x11_window, title);
             
+            // Set WM_CLASS for proper taskbar icon matching
+            XClassHint class_hint;
+            class_hint.res_name = (char*)"ElectrobunKitchenSink-dev";
+            class_hint.res_class = (char*)"ElectrobunKitchenSink-dev";
+            XSetClassHint(display, x11_window, &class_hint);
+            
             // Set window protocols for close button
             Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
             XSetWMProtocols(display, x11_window, &wmDelete, 1);
@@ -5091,6 +5185,10 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
        
         gtk_window_set_title(GTK_WINDOW(window), title);
+        
+        // Set WM_CLASS for proper taskbar icon matching
+        gtk_window_set_wmclass(GTK_WINDOW(window), "ElectrobunKitchenSink-dev", "ElectrobunKitchenSink-dev");
+        
         gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
        
         if (x >= 0 && y >= 0) {
@@ -5230,6 +5328,8 @@ void showX11Window(void* window) {
     dispatch_sync_main_void([&]() {
         X11Window* x11win = static_cast<X11Window*>(window);
         if (x11win && x11win->display && x11win->window) {
+            // Automatically set icon from standard location
+            autoSetWindowIcon(window);
             XMapWindow(x11win->display, x11win->window);
             
             // Raise the window to the front
@@ -5248,6 +5348,8 @@ void showX11Window(void* window) {
 
 void showGTKWindow(void* window) {
     dispatch_sync_main_void([&]() {
+        // Automatically set icon from standard location
+        autoSetWindowIcon(window);
         gtk_widget_show_all(GTK_WIDGET(window));
         
         // Bring the window to the front and give it focus
@@ -7330,6 +7432,92 @@ ELECTROBUN_EXPORT void getWindowPosition(void* window, double* outX, double* out
 ELECTROBUN_EXPORT void getWindowSize(void* window, double* outWidth, double* outHeight) {
     double x, y;
     getWindowFrame(window, &x, &y, outWidth, outHeight);
+}
+
+ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
+    if (!window || !iconPath) return;
+
+    dispatch_sync_main_void([=]() {
+        std::string actualPath(iconPath);
+        
+        // Handle views:// protocol
+        if (actualPath.substr(0, 8) == "views://") {
+            std::string viewPath = actualPath.substr(8);
+            
+            // Try to load from ASAR archive first if available
+            if (g_asarArchive) {
+                size_t fileSize = 0;
+                const uint8_t* fileData = asar_read_file(g_asarArchive, 
+                    ("views/" + viewPath).c_str(), &fileSize);
+                
+                if (fileData && fileSize > 0) {
+                    // Create pixbuf from memory
+                    GError* error = nullptr;
+                    GdkPixbufLoader* loader = gdk_pixbuf_loader_new();
+                    
+                    if (gdk_pixbuf_loader_write(loader, fileData, fileSize, &error)) {
+                        gdk_pixbuf_loader_close(loader, nullptr);
+                        GdkPixbuf* pixbuf = gdk_pixbuf_loader_get_pixbuf(loader);
+                        
+                        if (pixbuf) {
+                            g_object_ref(pixbuf); // Keep a reference
+                            
+                            if (GTK_IS_WIDGET(window)) {
+                                gtk_window_set_icon(GTK_WINDOW(window), pixbuf);
+                            } else {
+                                // Handle X11 window icon setting (moved to separate function)
+                                setX11WindowIcon(static_cast<X11Window*>(window), pixbuf);
+                            }
+                            
+                            g_object_unref(pixbuf);
+                        }
+                    }
+                    
+                    g_object_unref(loader);
+                    asar_free_buffer(fileData, fileSize);
+                    if (error) g_error_free(error);
+                    return;
+                }
+            }
+            
+            // Fallback to file system
+            actualPath = "Resources/app/views/" + viewPath;
+        }
+        
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                GError* error = nullptr;
+                
+                // Load icon from file
+                GdkPixbuf* pixbuf = gdk_pixbuf_new_from_file(actualPath.c_str(), &error);
+                if (pixbuf) {
+                    gtk_window_set_icon(GTK_WINDOW(gtkWindow), pixbuf);
+                    g_object_unref(pixbuf);
+                } else {
+                    fprintf(stderr, "Failed to load icon from %s: %s\n", actualPath.c_str(), 
+                            error ? error->message : "Unknown error");
+                    if (error) g_error_free(error);
+                }
+            }
+        } else {
+            // For X11/CEF windows
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                GError* error = nullptr;
+                GdkPixbuf* pixbuf = gdk_pixbuf_new_from_file(actualPath.c_str(), &error);
+                
+                if (pixbuf) {
+                    setX11WindowIcon(x11win, pixbuf);
+                    g_object_unref(pixbuf);
+                } else {
+                    fprintf(stderr, "Failed to load icon from %s: %s\n", actualPath.c_str(), 
+                            error ? error->message : "Unknown error");
+                    if (error) g_error_free(error);
+                }
+            }
+        }
+    });
 }
 
 /*

@@ -1,4 +1,5 @@
 import { join, dirname, basename, relative } from "path";
+import * as path from "path";
 import {
   existsSync,
   readFileSync,
@@ -606,6 +607,255 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;');
 }
 
+// Helper functions
+function escapePathForTerminal(path: string): string {
+  return `"${path.replace(/"/g, '\\"')}"`;
+}
+
+// AppImage tooling functions
+async function ensureAppImageTooling(): Promise<void> {
+  // First check if FUSE2 is available
+  try {
+    execSync('ls /usr/lib/*/libfuse.so.2 || ls /lib/*/libfuse.so.2', { stdio: 'ignore' });
+  } catch (error) {
+    console.log('');
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log('🚨 FUSE2 DEPENDENCY MISSING');
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log('AppImage creation requires libfuse2, but it was not found on your system.');
+    console.log('');
+    console.log('Please install it using:');
+    console.log('   sudo apt update && sudo apt install -y libfuse2');
+    console.log('');
+    console.log('Without libfuse2, AppImage creation will fail with FUSE errors.');
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log('');
+    throw new Error('libfuse2 is required for AppImage creation but not found. Please install it first.');
+  }
+
+  try {
+    // Check if appimagetool is available
+    execSync('which appimagetool', { stdio: 'ignore' });
+    console.log('✓ appimagetool found');
+    return;
+  } catch (error) {
+    // appimagetool not found, download it automatically
+    console.log('📥 appimagetool not found, downloading...');
+    
+    try {
+      // Determine architecture-specific download URL
+      const downloadUrl = ARCH === 'arm64' 
+        ? 'https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage'
+        : 'https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage';
+      
+      // Download appimagetool
+      console.log(`Downloading appimagetool from ${downloadUrl}...`);
+      execSync(`wget -q "${downloadUrl}" -O /tmp/appimagetool.AppImage`, { stdio: 'inherit' });
+      
+      // Make it executable
+      execSync('chmod +x /tmp/appimagetool.AppImage', { stdio: 'inherit' });
+      
+      // Try to move to /usr/local/bin (with sudo)
+      try {
+        execSync('sudo mv /tmp/appimagetool.AppImage /usr/local/bin/appimagetool', { stdio: 'inherit' });
+        console.log('✓ appimagetool installed to /usr/local/bin/appimagetool');
+      } catch (sudoError) {
+        // Fallback: extract and place in user's local bin
+        console.log('sudo not available, installing to ~/.local/bin/...');
+        execSync('mkdir -p ~/.local/bin', { stdio: 'inherit' });
+        
+        // Extract the AppImage to get the binary
+        execSync('cd /tmp && ./appimagetool.AppImage --appimage-extract >/dev/null 2>&1', { stdio: 'inherit' });
+        execSync('cp /tmp/squashfs-root/usr/bin/appimagetool ~/.local/bin/appimagetool', { stdio: 'inherit' });
+        execSync('chmod +x ~/.local/bin/appimagetool', { stdio: 'inherit' });
+        
+        // Set up symlink for mksquashfs dependency
+        execSync('mkdir -p ~/.local/lib/appimagekit', { stdio: 'inherit' });
+        execSync('ln -sf /usr/bin/mksquashfs ~/.local/lib/appimagekit/mksquashfs', { stdio: 'inherit' });
+        
+        // Clean up
+        execSync('rm -rf /tmp/appimagetool.AppImage /tmp/squashfs-root', { stdio: 'inherit' });
+        
+        console.log('✓ appimagetool installed to ~/.local/bin/appimagetool');
+        console.log('Note: Make sure ~/.local/bin is in your PATH for future use');
+      }
+      
+    } catch (downloadError) {
+      console.error('Failed to download appimagetool:', downloadError);
+      throw new Error('Failed to install appimagetool automatically. Please install it manually.');
+    }
+  }
+}
+
+async function createAppImage(
+  appBundlePath: string,
+  appFileName: string,
+  config: any,
+  buildFolder: string
+): Promise<string> {
+  console.log(`🚀 CREATING APPIMAGE WITH PATH: ${appBundlePath}`);
+  console.log(`DEBUG: createAppImage called with:`);
+  console.log(`  appBundlePath: ${appBundlePath}`);
+  console.log(`  appFileName: ${appFileName}`);
+  console.log(`  buildFolder: ${buildFolder}`);
+  console.log(`  current working directory: ${process.cwd()}`);
+  
+  // Ensure appBundlePath is absolute - fix for when it's passed as basename only
+  let resolvedAppBundlePath = appBundlePath;
+  if (!path.isAbsolute(appBundlePath)) {
+    resolvedAppBundlePath = join(buildFolder, appBundlePath);
+    console.log(`DEBUG: Converted relative path to absolute: ${resolvedAppBundlePath}`);
+  }
+  
+  // Create AppDir structure
+  const appDirPath = join(buildFolder, `${appFileName}.AppDir`);
+  if (existsSync(appDirPath)) {
+    rmSync(appDirPath, { recursive: true, force: true });
+  }
+  mkdirSync(appDirPath, { recursive: true });
+  
+  // Copy the entire app bundle to AppDir/usr/bin/
+  const usrBinPath = join(appDirPath, 'usr', 'bin');
+  mkdirSync(usrBinPath, { recursive: true });
+  
+  console.log(`DEBUG: Attempting to copy from: ${resolvedAppBundlePath}`);
+  console.log(`DEBUG: Does source exist? ${existsSync(resolvedAppBundlePath)}`);
+  console.log(`DEBUG: To destination: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
+  
+  if (!existsSync(resolvedAppBundlePath)) {
+    throw new Error(`Source bundle does not exist: ${resolvedAppBundlePath}`);
+  }
+  
+  console.log(`DEBUG: About to copy with cpSync:`);
+  console.log(`  from: ${resolvedAppBundlePath} (exists: ${existsSync(resolvedAppBundlePath)})`);
+  console.log(`  to: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
+  
+  cpSync(resolvedAppBundlePath, join(usrBinPath, basename(resolvedAppBundlePath)), {
+    recursive: true,
+    dereference: true
+  });
+  
+  // Create AppRun script (the entry point)
+  const appBundleBasename = basename(resolvedAppBundlePath);
+  const appRunContent = `#!/bin/bash
+# AppRun script for ${appFileName}
+HERE="$(dirname "$(readlink -f "\${0}")")"
+EXEC="\${HERE}/usr/bin/${appBundleBasename}/bin/launcher"
+
+# Set up library path for CEF
+export LD_LIBRARY_PATH="\${HERE}/usr/bin/${appBundleBasename}/bin:\${HERE}/usr/bin/${appBundleBasename}/lib:\${LD_LIBRARY_PATH}"
+
+# Execute the application
+exec "\${EXEC}" "\$@"
+`;
+  
+  const appRunPath = join(appDirPath, 'AppRun');
+  writeFileSync(appRunPath, appRunContent);
+  execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
+  
+  // Create .desktop file in AppDir root
+  const desktopContent = `[Desktop Entry]
+Version=1.0
+Type=Application
+Name=${config.app.name}
+Comment=${config.app.description || ''}
+Exec=${appFileName}
+Icon=${appFileName}
+Terminal=false
+StartupWMClass=${appFileName}
+Categories=Utility;
+`;
+  
+  const desktopPath = join(appDirPath, `${appFileName}.desktop`);
+  writeFileSync(desktopPath, desktopContent);
+  
+  // Copy icon if available
+  if (config.build.linux?.icon && existsSync(join(projectRoot, config.build.linux.icon))) {
+    const iconSourcePath = join(projectRoot, config.build.linux.icon);
+    const iconDestPath = join(appDirPath, `${appFileName}.png`);
+    const dirIconPath = join(appDirPath, '.DirIcon');
+    
+    cpSync(iconSourcePath, iconDestPath, { dereference: true });
+    cpSync(iconSourcePath, dirIconPath, { dereference: true });
+    
+    console.log(`Copied icon for AppImage: ${iconSourcePath} -> ${iconDestPath}`);
+    console.log(`Created .DirIcon: ${iconSourcePath} -> ${dirIconPath}`);
+  }
+  
+  // Generate the AppImage using appimagetool
+  const appImagePath = join(buildFolder, `${appFileName}.AppImage`);
+  if (existsSync(appImagePath)) {
+    unlinkSync(appImagePath);
+  }
+  
+  console.log(`DEBUG: AppDir path: ${appDirPath}`);
+  console.log(`DEBUG: Does AppDir exist? ${existsSync(appDirPath)}`);
+  console.log(`Generating AppImage: ${appImagePath}`);
+  const appImageArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
+  
+  // Use full path to appimagetool if not in PATH
+  let appimagetoolCmd = 'appimagetool';
+  try {
+    execSync('which appimagetool', { stdio: 'ignore' });
+  } catch {
+    // Try ~/.local/bin/appimagetool
+    const localBinPath = join(process.env['HOME'] || '', '.local', 'bin', 'appimagetool');
+    if (existsSync(localBinPath)) {
+      appimagetoolCmd = localBinPath;
+    }
+  }
+  
+  try {
+    // First try with --no-appstream flag to avoid some FUSE-related issues
+    execSync(`ARCH=${appImageArch} ${appimagetoolCmd} --no-appstream ${escapePathForTerminal(appDirPath)} ${escapePathForTerminal(appImagePath)}`, {
+      stdio: 'inherit',
+      env: { ...process.env, ARCH: appImageArch }
+    });
+  } catch (error) {
+    console.error('Failed to create AppImage:', error);
+    console.log('Note: If you see FUSE errors, you may need to install libfuse2:');
+    console.log('  sudo apt update && sudo apt install -y libfuse2');
+    throw error;
+  }
+  
+  // Verify the AppImage was created
+  if (!existsSync(appImagePath)) {
+    throw new Error(`AppImage was not created at expected path: ${appImagePath}`);
+  }
+  
+  // Extract and copy icon for desktop shortcut
+  const iconExtractPath = join(buildFolder, `${appFileName}.png`);
+  if (config.build.linux?.icon && existsSync(join(projectRoot, config.build.linux.icon))) {
+    const iconSourcePath = join(projectRoot, config.build.linux.icon);
+    cpSync(iconSourcePath, iconExtractPath, { dereference: true });
+    console.log(`✓ Icon extracted for desktop shortcut: ${iconExtractPath}`);
+  }
+  
+  // Create desktop shortcut alongside the AppImage
+  const desktopShortcutPath = join(buildFolder, `${appFileName}.desktop`);
+  const desktopShortcutContent = `[Desktop Entry]
+Version=1.0
+Type=Application
+Name=${config.app.name}
+Comment=${config.app.description || ''}
+Exec=${appImagePath}
+Icon=${iconExtractPath}
+Terminal=false
+StartupWMClass=${appFileName}
+Categories=Utility;
+`;
+  
+  writeFileSync(desktopShortcutPath, desktopShortcutContent);
+  execSync(`chmod +x ${escapePathForTerminal(desktopShortcutPath)}`);
+  console.log(`✓ Desktop shortcut created: ${desktopShortcutPath}`);
+  
+  // Clean up AppDir
+  rmSync(appDirPath, { recursive: true, force: true });
+  
+  console.log(`✓ AppImage created: ${appImagePath}`);
+  return appImagePath;
+}
+
 // Helper function to generate usage description entries for Info.plist
 function generateUsageDescriptions(entitlements: Record<string, boolean | string>): string {
   const usageEntries: string[] = [];
@@ -648,286 +898,8 @@ ${schemesXml}
     </array>`;
 }
 
-const command = commandDefaults[commandArg];
-
-if (!command) {
-  console.error("Invalid command: ", commandArg);
-  process.exit(1);
-}
-
-// Main execution function
-async function main() {
-  const config = await getConfig();
-
-  const envArg =
-    process.argv.find((arg) => arg.startsWith("--env="))?.split("=")[1] || "";
-
-  const targetsArg =
-    process.argv.find((arg) => arg.startsWith("--targets="))?.split("=")[1] || "";
-
-  const validEnvironments = ["dev", "canary", "stable"];
-
-  // todo (yoav): dev, canary, and stable;
-  const buildEnvironment: "dev" | "canary" | "stable" =
-    validEnvironments.includes(envArg || "dev") ? (envArg || "dev") : "dev";
-
-// Determine build targets
-type BuildTarget = { os: 'macos' | 'win' | 'linux', arch: 'arm64' | 'x64' };
-
-function parseBuildTargets(): BuildTarget[] {
-  // If explicit targets provided via CLI
-  if (targetsArg) {
-    if (targetsArg === 'current') {
-      return [{ os: OS, arch: ARCH }];
-    } else if (targetsArg === 'all') {
-      return parseConfigTargets();
-    } else {
-      // Parse comma-separated targets like "macos-arm64,win-x64"
-      return targetsArg.split(',').map(target => {
-        const [os, arch] = target.trim().split('-') as [string, string];
-        if (!['macos', 'win', 'linux'].includes(os) || !['arm64', 'x64'].includes(arch)) {
-          console.error(`Invalid target: ${target}. Format should be: os-arch (e.g., macos-arm64)`);
-          process.exit(1);
-        }
-        return { os, arch } as BuildTarget;
-      });
-    }
-  }
-
-  // Default behavior: always build for current platform only
-  // This ensures predictable, fast builds unless explicitly requesting multi-platform
-  return [{ os: OS, arch: ARCH }];
-}
-
-function parseConfigTargets(): BuildTarget[] {
-  // If config has targets, use them
-  if (config.build.targets && config.build.targets.length > 0) {
-    return config.build.targets.map(target => {
-      if (target === 'current') {
-        return { os: OS, arch: ARCH };
-      }
-      const [os, arch] = target.split('-') as [string, string];
-      if (!['macos', 'win', 'linux'].includes(os) || !['arm64', 'x64'].includes(arch)) {
-        console.error(`Invalid target in config: ${target}. Format should be: os-arch (e.g., macos-arm64)`);
-        process.exit(1);
-      }
-      return { os, arch } as BuildTarget;
-    });
-  }
-  
-  // If no config targets and --targets=all, use all available platforms
-  if (targetsArg === 'all') {
-    console.log('No targets specified in config, using all available platforms');
-    return [
-      { os: 'macos', arch: 'arm64' },
-      { os: 'macos', arch: 'x64' },
-      { os: 'win', arch: 'x64' },
-      { os: 'linux', arch: 'x64' },
-      { os: 'linux', arch: 'arm64' }
-    ];
-  }
-  
-  // Default to current platform
-  return [{ os: OS, arch: ARCH }];
-}
-
-const buildTargets = parseBuildTargets();
-
-// Show build targets to user
-if (buildTargets.length === 1) {
-  console.log(`Building for ${buildTargets[0].os}-${buildTargets[0].arch} (${buildEnvironment})`);
-} else {
-  const targetList = buildTargets.map(t => `${t.os}-${t.arch}`).join(', ');
-  console.log(`Building for multiple targets: ${targetList} (${buildEnvironment})`);
-  console.log(`Running ${buildTargets.length} parallel builds...`);
-  
-  // Spawn parallel build processes
-  const buildPromises = buildTargets.map(async (target) => {
-    const targetString = `${target.os}-${target.arch}`;
-    const prefix = `[${targetString}]`;
-    
-    try {
-      // Try to find the electrobun binary in node_modules/.bin or use bunx
-      const electrobunBin = join(projectRoot, 'node_modules', '.bin', 'electrobun');
-      let command: string[];
-      
-      if (existsSync(electrobunBin)) {
-        command = [electrobunBin, 'build', `--env=${buildEnvironment}`, `--targets=${targetString}`];
-      } else {
-        // Fallback to bunx which should resolve node_modules binaries
-        command = ['bunx', 'electrobun', 'build', `--env=${buildEnvironment}`, `--targets=${targetString}`];
-      }
-      
-      console.log(`${prefix} Running:`, command.join(' '));
-      
-      const result = await Bun.spawn(command, {
-        stdio: ['inherit', 'pipe', 'pipe'],
-        env: process.env,
-        cwd: projectRoot // Ensure we're in the right directory
-      });
-
-      // Pipe output with prefix
-      if (result.stdout) {
-        const reader = result.stdout.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const text = new TextDecoder().decode(value);
-          // Add prefix to each line
-          const prefixedText = text.split('\n').map(line => 
-            line ? `${prefix} ${line}` : line
-          ).join('\n');
-          process.stdout.write(prefixedText);
-        }
-      }
-
-      if (result.stderr) {
-        const reader = result.stderr.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const text = new TextDecoder().decode(value);
-          const prefixedText = text.split('\n').map(line => 
-            line ? `${prefix} ${line}` : line
-          ).join('\n');
-          process.stderr.write(prefixedText);
-        }
-      }
-
-      const exitCode = await result.exited;
-      return { target, exitCode, success: exitCode === 0 };
-      
-    } catch (error) {
-      console.error(`${prefix} Failed to start build:`, error);
-      return { target, exitCode: 1, success: false, error };
-    }
-  });
-
-  // Wait for all builds to complete
-  const results = await Promise.allSettled(buildPromises);
-  
-  // Report final results
-  console.log('\n=== Build Results ===');
-  let allSucceeded = true;
-  
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      const { target, success, exitCode } = result.value;
-      const status = success ? '✅ SUCCESS' : '❌ FAILED';
-      console.log(`${target.os}-${target.arch}: ${status} (exit code: ${exitCode})`);
-      if (!success) allSucceeded = false;
-    } else {
-      console.log(`Build rejected: ${result.reason}`);
-      allSucceeded = false;
-    }
-  }
-  
-  if (!allSucceeded) {
-    console.log('\nSome builds failed. Check the output above for details.');
-    process.exit(1);
-  } else {
-    console.log('\nAll builds completed successfully! 🎉');
-  }
-  
-  process.exit(0);
-}
-
-// todo (yoav): dev builds should include the branch name, and/or allow configuration via external config
-// For now, assume single target build (we'll refactor for multi-target later)
-const currentTarget = buildTargets[0];
-const buildSubFolder = `${buildEnvironment}-${currentTarget.os}-${currentTarget.arch}`;
-
-// Use target OS/ARCH for build logic (instead of current machine's OS/ARCH)
-const targetOS = currentTarget.os;
-const targetARCH = currentTarget.arch;
-const targetBinExt = targetOS === 'win' ? '.exe' : '';
-
-const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
-
-const artifactFolder = join(
-  projectRoot,
-  config.build.artifactFolder,
-  buildSubFolder
-);
-
-const buildIcons = (appBundleFolderResourcesPath: string) => {
-  if (OS === 'macos' && config.build.mac.icons) {
-    const iconSourceFolder = join(projectRoot, config.build.mac.icons);
-    const iconDestPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
-    if (existsSync(iconSourceFolder)) {
-      Bun.spawnSync(
-        ["iconutil", "-c", "icns", "-o", iconDestPath, iconSourceFolder],
-        {
-          cwd: appBundleFolderResourcesPath,
-          stdio: ["ignore", "inherit", "inherit"],
-          env: {
-            ...process.env,
-            ELECTROBUN_BUILD_ENV: buildEnvironment,
-          },
-        }
-      );
-    }
-  }
-};
-
-function escapePathForTerminal(filePath: string) {
-  // List of special characters to escape
-  const specialChars = [
-    " ",
-    "(",
-    ")",
-    "&",
-    "|",
-    ";",
-    "<",
-    ">",
-    "`",
-    "\\",
-    '"',
-    "'",
-    "$",
-    "*",
-    "?",
-    "[",
-    "]",
-    "#",
-  ];
-
-  let escapedPath = "";
-  for (const char of filePath) {
-    if (specialChars.includes(char)) {
-      escapedPath += `\\${char}`;
-    } else {
-      escapedPath += char;
-    }
-  }
-
-  return escapedPath;
-}
-
-function sanitizeVolumeNameForHdiutil(volumeName: string) {
-  // Remove or replace characters that cause issues with hdiutil volume mounting
-  // Parentheses and other special characters can cause "Operation not permitted" errors
-  return volumeName.replace(/[()]/g, '');
-}
-
-// MyApp
-
-// const appName = config.app.name.replace(/\s/g, '-').toLowerCase();
-
-const appFileName = (
-  buildEnvironment === "stable"
-    ? config.app.name
-    : `${config.app.name}-${buildEnvironment}`
-)
-  .replace(/\s/g, "")
-  .replace(/\./g, "-");
-const bundleFileName = targetOS === 'macos' ? `${appFileName}.app` : appFileName;
-
-// const logPath = `/Library/Logs/Electrobun/ExampleApp/dev/out.log`;
-
-let proc = null;
-
+// Execute command handling
+(async () => {
 if (commandArg === "init") {
   await (async () => {
     const secondArg = process.argv[indexOfElectrobun + 2];
@@ -1041,11 +1013,73 @@ if (commandArg === "init") {
     console.log("🎉 Happy building with Electrobun!");
   })();
 } else if (commandArg === "build") {
+  // Get config
+  const config = await getConfig();
+  
+  // Get environment
+  const envArg = process.argv.find((arg) => arg.startsWith("--env="))?.split("=")[1] || "";
+  const buildEnvironment = ["dev", "canary", "stable"].includes(envArg) ? envArg : "dev";
+  
+  // Determine current platform as default target
+  const currentTarget = { os: OS, arch: ARCH };
+  
+  // Set up build variables
+  const targetOS = currentTarget.os;
+  const targetARCH = currentTarget.arch;
+  const targetBinExt = targetOS === 'win' ? '.exe' : '';
+  const appFileName = `${config.app.name.replace(/ /g, "")}-${buildEnvironment}`;
+  const buildSubFolder = `${buildEnvironment}-${currentTarget.os}-${currentTarget.arch}`;
+  const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
+  const bundleFileName = targetOS === 'macos' ? `${appFileName}.app` : appFileName;
+  const artifactFolder = join(projectRoot, config.build.artifactFolder, buildSubFolder);
+  
   // Ensure core binaries are available for the target platform before starting build
   await ensureCoreDependencies(currentTarget.os, currentTarget.arch);
   
   // Get platform-specific paths for the current target
   const targetPaths = getPlatformPaths(currentTarget.os, currentTarget.arch);
+  
+  // Helper functions
+  const sanitizeVolumeNameForHdiutil = (name: string) => {
+    return name.replace(/[^a-zA-Z0-9 ]/g, '').trim();
+  };
+  
+  const buildIcons = (appBundleFolderResourcesPath: string) => {
+    // Platform-specific icon handling
+    if (targetOS === 'macos' && config.build.mac?.icon) {
+      const iconPath = join(projectRoot, config.build.mac.icon);
+      if (existsSync(iconPath)) {
+        const targetIconPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
+        cpSync(iconPath, targetIconPath, { dereference: true });
+      }
+    } else if (targetOS === 'linux' && config.build.linux?.icon) {
+      const iconSourcePath = join(projectRoot, config.build.linux.icon);
+      if (existsSync(iconSourcePath)) {
+        const standardIconPath = join(appBundleFolderResourcesPath, 'appIcon.png');
+        
+        // Ensure Resources directory exists
+        mkdirSync(appBundleFolderResourcesPath, { recursive: true });
+        
+        // Copy the icon to standard location
+        cpSync(iconSourcePath, standardIconPath, { dereference: true });
+        console.log(`Copied Linux icon from ${iconSourcePath} to ${standardIconPath}`);
+        
+        // Also copy icon for the extractor (expects it in Resources/app/icon.png before ASAR packaging)
+        const extractorIconPath = join(appBundleFolderResourcesPath, 'app', 'icon.png');
+        mkdirSync(join(appBundleFolderResourcesPath, 'app'), { recursive: true });
+        cpSync(iconSourcePath, extractorIconPath, { dereference: true });
+        console.log(`Copied Linux icon for extractor from ${iconSourcePath} to ${extractorIconPath}`);
+      } else {
+        console.log(`WARNING: Linux icon not found: ${iconSourcePath}`);
+      }
+    } else if (targetOS === 'win' && config.build.win?.icon) {
+      const iconPath = join(projectRoot, config.build.win.icon);
+      if (existsSync(iconPath)) {
+        const targetIconPath = join(appBundleFolderResourcesPath, "app.ico");
+        cpSync(iconPath, targetIconPath, { dereference: true });
+      }
+    }
+  };
   
   // refresh build folder  
   if (existsSync(buildFolder)) {
@@ -1217,6 +1251,29 @@ if (commandArg === "init") {
     console.log(`Using ${useCEF ? 'CEF' : 'GTK'} native wrapper for Linux`);
   } else {
     throw new Error(`Native wrapper not found: ${nativeWrapperLinuxSource}`);
+  }
+  
+  // Copy icon if specified for Linux to a standard location
+  if (config.build.linux?.icon) {
+    const iconSourcePath = join(projectRoot, config.build.linux.icon);
+    if (existsSync(iconSourcePath)) {
+      const standardIconPath = join(appBundleFolderResourcesPath, 'appIcon.png');
+      
+      // Ensure Resources directory exists
+      mkdirSync(appBundleFolderResourcesPath, { recursive: true });
+      
+      // Copy the icon to standard location
+      cpSync(iconSourcePath, standardIconPath, { dereference: true });
+      console.log(`Copied Linux icon from ${iconSourcePath} to ${standardIconPath}`);
+      
+      // Also copy icon for the extractor (expects it in Resources/app/icon.png before ASAR packaging)
+      const extractorIconPath = join(appBundleFolderResourcesPath, 'app', 'icon.png');
+      mkdirSync(join(appBundleFolderResourcesPath, 'app'), { recursive: true });
+      cpSync(iconSourcePath, extractorIconPath, { dereference: true });
+      console.log(`Copied Linux icon for extractor from ${iconSourcePath} to ${extractorIconPath}`);
+    } else {
+      console.log(`WARNING: Linux icon not found: ${iconSourcePath}`);
+    }
   }
 }
   
@@ -1818,8 +1875,62 @@ if (commandArg === "init") {
   } else {
     console.log("skipping notarization");
   }
+  
+  const artifactsToUpload = [];
+
+  console.log(`DEBUG: Checking for Linux AppImage creation - targetOS: ${targetOS}, buildEnvironment: ${buildEnvironment}`);
+  
+  // Linux AppImage creation (for all build environments including dev)
+  if (targetOS === 'linux') {
+    console.log("DEBUG: Creating Linux AppImage...");
+    // Ensure AppImage tooling is available
+    await ensureAppImageTooling();
+    
+    // Create AppImage from the app bundle (for both dev and production builds)
+    console.log(`🔍 CALLING createAppImage with appBundleFolderPath: ${appBundleFolderPath}`);
+    console.log(`🔍 buildFolder: ${buildFolder}`);
+    console.log(`🔍 appFileName: ${appFileName}`);
+    const appImagePath = await createAppImage(
+      appBundleFolderPath,
+      appFileName,
+      config,
+      buildFolder
+    );
+
+    console.log(`✓ Linux AppImage created at: ${appImagePath}`);
+    
+    // Only create compressed tar for non-dev builds
+    if (buildEnvironment !== "dev") {
+      // Now we tar the AppImage just like we do with .app bundles on macOS
+      // This allows the existing update system to work unchanged
+      const appImageTarPath = join(buildFolder, `${appFileName}.tar.zst`);
+      console.log(`Creating compressed tar of AppImage: ${appImageTarPath}`);
+      
+      // Use existing tar compression logic (similar to macOS approach)
+      await tar.create(
+        {
+          file: appImageTarPath,
+          cwd: buildFolder,
+          gzip: false, // We'll compress with zstd after
+        },
+        [basename(appImagePath)]
+      );
+      
+      // Compress with Zstandard (matching existing update system format)
+      const uncompressedTarData = readFileSync(appImageTarPath);
+      await ZstdInit().then(async ({ ZstdSimple }) => {
+        const data = new Uint8Array(uncompressedTarData);
+        const compressionLevel = 22;
+        const compressedData = ZstdSimple.compress(data, compressionLevel);
+        writeFileSync(appImageTarPath, compressedData);
+      });
+      
+      // Add AppImage to artifacts for distribution  
+      artifactsToUpload.push(appImagePath);
+    }
+  }
+
   if (buildEnvironment !== "dev")  {
-    const artifactsToUpload = [];
     // zstd wasm https://github.com/OneIdentity/zstd-js
     // tar https://github.com/isaacs/node-tar
 
@@ -2015,50 +2126,6 @@ if (commandArg === "init") {
         
         // Also keep the raw exe for backwards compatibility (optional)
         // artifactsToUpload.push(selfExtractingExePath);
-      } else if (targetOS === 'linux') {
-        // Create desktop file for Linux
-        const desktopFileContent = `[Desktop Entry]
-Version=1.0
-Type=Application
-Name=${config.package?.name || config.app.name}
-Comment=${config.package?.description || config.app.description || ''}
-Exec=${appFileName}
-Icon=${appFileName}
-Terminal=false
-StartupWMClass=${appFileName}
-Categories=Application;
-`;
-        
-        const desktopFilePath = join(appBundleFolderPath, `${appFileName}.desktop`);
-        writeFileSync(desktopFilePath, desktopFileContent);
-        
-        // Make desktop file executable
-        execSync(`chmod +x ${escapePathForTerminal(desktopFilePath)}`);
-        
-        // Note: No longer creating shell script wrapper - users can run bin/launcher directly 
-        // or use the symlink created by the self-extractor
-        
-        // Create self-extracting Linux binary (similar to Windows approach)
-        const selfExtractingLinuxPath = await createLinuxSelfExtractingBinary(
-          buildFolder,
-          compressedTarPath,
-          appFileName,
-          targetPaths,
-          buildEnvironment
-        );
-        
-        // Wrap Linux .run file in tar.gz to preserve permissions
-        const wrappedRunPath = await wrapInArchive(selfExtractingLinuxPath, buildFolder, 'tar.gz');
-        artifactsToUpload.push(wrappedRunPath);
-        
-        // Also keep the raw .run for backwards compatibility (optional)
-        // artifactsToUpload.push(selfExtractingLinuxPath);
-        
-        // On Linux, create a tar.gz of the bundle (for build process, not uploaded to artifacts)
-        const linuxTarPath = join(buildFolder, `${appFileName}.tar.gz`);
-        execSync(`tar -czf ${escapePathForTerminal(linuxTarPath)} -C ${escapePathForTerminal(buildFolder)} ${escapePathForTerminal(basename(appBundleFolderPath))}`);
-        // Note: Not adding to artifactsToUpload - we use .tar.zst for updates and .run.tar.gz for distribution
-      }
     }
 
     // refresh artifacts folder
@@ -2225,11 +2292,25 @@ Categories=Application;
   let mainProc;
   let bundleExecPath: string;
   let bundleResourcesPath: string;
+  let isAppImage = false;
   
   if (OS === 'macos') {
     bundleExecPath = join(buildFolder, bundleFileName, "Contents", 'MacOS');
     bundleResourcesPath = join(buildFolder, bundleFileName, "Contents", 'Resources');
-  } else if (OS === 'linux' || OS === 'win') {
+  } else if (OS === 'linux') {
+    // Check if we have an AppImage or directory bundle
+    const appImagePath = join(buildFolder, `${bundleFileName}.AppImage`);
+    if (existsSync(appImagePath)) {
+      // AppImage mode
+      bundleExecPath = appImagePath;
+      bundleResourcesPath = join(buildFolder, bundleFileName, "Resources"); // For compatibility
+      isAppImage = true;
+    } else {
+      // Directory bundle mode (fallback)
+      bundleExecPath = join(buildFolder, bundleFileName, "bin");
+      bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
+    }
+  } else if (OS === 'win') {
     bundleExecPath = join(buildFolder, bundleFileName, "bin");
     bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
   } else {
@@ -2238,7 +2319,8 @@ Categories=Application;
 
   if (OS === 'macos' || OS === 'linux') {
     // For Linux dev mode, update libNativeWrapper.so based on bundleCEF setting
-    if (OS === 'linux') {
+    if (OS === 'linux' && !isAppImage) {
+      // Only update libNativeWrapper for directory bundle mode
       const currentLibPath = join(bundleExecPath, 'libNativeWrapper.so');
       const targetPaths = getPlatformPaths('linux', ARCH);
       const correctLibSource = config.build.linux?.bundleCEF 
@@ -2255,11 +2337,20 @@ Categories=Application;
       }
     }
     
-    // Use the zig launcher for macOS and Linux
-    mainProc = Bun.spawn([join(bundleExecPath, 'launcher')], {
-      stdio: ['inherit', 'inherit', 'inherit'],
-      cwd: bundleExecPath
-    })
+    if (OS === 'linux' && isAppImage) {
+      // For Linux AppImage mode, execute the AppImage directly
+      console.log(`Running AppImage: ${bundleExecPath}`);
+      mainProc = Bun.spawn([bundleExecPath], {
+        stdio: ['inherit', 'inherit', 'inherit'],
+        cwd: dirname(bundleExecPath)
+      });
+    } else {
+      // Use the zig launcher for macOS and directory bundle Linux
+      mainProc = Bun.spawn([join(bundleExecPath, 'launcher')], {
+        stdio: ['inherit', 'inherit', 'inherit'],
+        cwd: bundleExecPath
+      });
+    }
   } else if (OS === 'win') {  
     // Windows: Use launcher if available, otherwise fallback to direct execution
     const launcherPath = join(bundleExecPath, 'launcher.exe');
@@ -2301,7 +2392,9 @@ Categories=Application;
     }
   });
 
-} 
+}
+
+// Helper functions
 
 async function getConfig() {
   let loadedConfig = {};
@@ -2617,80 +2710,6 @@ async function wrapInArchive(filePath: string, buildFolder: string, archiveType:
   }
 }
 
-async function createAppImage(buildFolder: string, appBundlePath: string, appFileName: string, config: any): Promise<string | null> {
-  try {
-    console.log("Creating AppImage...");
-    
-    // Create AppDir structure
-    const appDirPath = join(buildFolder, `${appFileName}.AppDir`);
-    mkdirSync(appDirPath, { recursive: true });
-    
-    // Copy app bundle contents to AppDir
-    const appDirAppPath = join(appDirPath, "app");
-    cpSync(appBundlePath, appDirAppPath, { recursive: true, dereference: true });
-    
-    // Create AppRun script (main executable for AppImage)
-    const appRunContent = `#!/bin/bash
-HERE="$(dirname "$(readlink -f "\${0}")")"
-export APPDIR="\$HERE"
-cd "\$HERE"
-exec "\$HERE/app/bin/launcher" "\$@"
-`;
-    
-    const appRunPath = join(appDirPath, "AppRun");
-    writeFileSync(appRunPath, appRunContent);
-    execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
-    
-    // Create desktop file in AppDir root
-    const desktopContent = `[Desktop Entry]
-Version=1.0
-Type=Application
-Name=${config.package?.name || config.app.name}
-Comment=${config.package?.description || config.app.description || ''}
-Exec=AppRun
-Icon=${appFileName}
-Terminal=false
-StartupWMClass=${appFileName}
-Categories=Application;
-`;
-    
-    const appDirDesktopPath = join(appDirPath, `${appFileName}.desktop`);
-    writeFileSync(appDirDesktopPath, desktopContent);
-    
-    // Copy icon if it exists
-    const iconPath = config.build.linux?.appImageIcon;
-    if (iconPath && existsSync(iconPath)) {
-      const iconDestPath = join(appDirPath, `${appFileName}.png`);
-      cpSync(iconPath, iconDestPath, { dereference: true });
-    }
-    
-    // Try to create AppImage using available tools
-    const appImagePath = join(buildFolder, `${appFileName}.AppImage`);
-    
-    // Check for appimagetool
-    try {
-      execSync('which appimagetool', { stdio: 'pipe' });
-      console.log("Using appimagetool to create AppImage...");
-      execSync(`appimagetool ${escapePathForTerminal(appDirPath)} ${escapePathForTerminal(appImagePath)}`, { stdio: 'inherit' });
-      return appImagePath;
-    } catch {
-      // Check for Docker
-      try {
-        execSync('which docker', { stdio: 'pipe' });
-        console.log("Using Docker to create AppImage...");
-        execSync(`docker run --rm -v "${buildFolder}:/workspace" linuxserver/appimagetool "/workspace/${basename(appDirPath)}" "/workspace/${basename(appImagePath)}"`, { stdio: 'inherit' });
-        return appImagePath;
-      } catch {
-        console.warn("Neither appimagetool nor Docker found. AppImage creation skipped.");
-        console.warn("To create AppImages, install appimagetool or Docker.");
-        return null;
-      }
-    }
-  } catch (error) {
-    console.error("Failed to create AppImage:", error);
-    return null;
-  }
-}
 
 function codesignAppBundle(
   appBundleOrDmgPath: string,
@@ -3030,10 +3049,12 @@ function createAppBundle(bundleName: string, parentFolder: string, targetOS: 'ma
   }
 }
 
-} // End of main() function
+// Close the command handling if/else chain
+} // End of command if/else chain
 
-// Run the main function
-main().catch((error) => {
+// Close and execute the async IIFE
+})().catch((error) => {
   console.error('Fatal error:', error);
   process.exit(1);
 });
+

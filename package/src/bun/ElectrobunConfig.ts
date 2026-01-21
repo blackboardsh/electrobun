@@ -193,6 +193,14 @@ export interface ElectrobunConfig {
        * @default 'native'
        */
       defaultRenderer?: 'native' | 'cef';
+
+      /**
+       * Path to application icon (PNG format recommended)
+       * Used for desktop entries, window icons, and taskbar
+       * Should be at least 256x256 pixels for best results
+       * @example "assets/icon.png"
+       */
+      icon?: string;
     };
   };
 
