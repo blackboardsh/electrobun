@@ -218,7 +218,7 @@ executor.onEvent((event) => {
 // Handle window close
 testRunnerWindow.on("close", () => {
   console.log("\nTest runner closed. Exiting...\n");
-  process.exit(0);
+  Utils.quit();
 });
 
 // Print instructions
