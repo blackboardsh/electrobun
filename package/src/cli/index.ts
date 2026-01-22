@@ -2352,6 +2352,17 @@ if (commandArg === "init") {
   // run the project in dev mode
   // this runs the bundled bun binary with main.js directly
 
+  // Get config for dev mode
+  const config = await getConfig();
+  
+  // Set up dev build variables (similar to build mode)
+  const buildEnvironment = "dev";
+  const currentTarget = { os: OS, arch: ARCH };
+  const appFileName = `${config.app.name.replace(/ /g, "")}-${buildEnvironment}`;
+  const buildSubFolder = `${buildEnvironment}-${currentTarget.os}-${currentTarget.arch}`;
+  const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
+  const bundleFileName = OS === 'macos' ? `${appFileName}.app` : appFileName;
+
   // Note: this cli will be a bun single-file-executable
   // Note: we want to use the version of bun that's packaged with electrobun
   // const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
