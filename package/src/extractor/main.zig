@@ -313,7 +313,6 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
                 
                 // Continue with decompression (shared code path)
                 const result = try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
-                
                 // Clean up metadata fields
                 allocator.free(metadata.identifier);
                 allocator.free(metadata.name);
@@ -374,11 +373,27 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     
     // Read metadata
     const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
-    defer allocator.free(metadata.identifier);
-    defer allocator.free(metadata.name);
-    defer allocator.free(metadata.channel);
-    if (metadata.hash) |hash| {
-        defer allocator.free(hash);
+    
+    // Create a completely independent copy of the hash to prevent corruption
+    const backup_hash = if (metadata.hash) |h| try allocator.dupe(u8, h) else null;
+    defer if (backup_hash) |h| allocator.free(h);
+    
+    // Create a new metadata struct with the backup hash
+    const safe_metadata = AppMetadata{
+        .identifier = metadata.identifier,
+        .name = metadata.name,
+        .channel = metadata.channel,
+        .hash = backup_hash,
+    };
+    
+    // Defer cleanup until after extractAndInstall is done
+    defer {
+        allocator.free(metadata.identifier);
+        allocator.free(metadata.name);
+        allocator.free(metadata.channel);
+        if (metadata.hash) |hash| {
+            allocator.free(hash);
+        }
     }
     
     try self_file.seekTo(archive_offset + ARCHIVE_MARKER.len);
@@ -414,10 +429,11 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     _ = try self_file.read(compressed_data);
     
     // Continue with decompression (shared code path)
-    return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
+    return try extractAndInstall(allocator, compressed_data, safe_metadata, self_extraction_dir, app_dir);
 }
 
 fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, metadata: AppMetadata, self_extraction_dir: []const u8, app_dir: []const u8) !bool {
+    
     // Initialize progress indicator
     var progress = ProgressIndicator.init(allocator, metadata.name);
     defer progress.deinit();
@@ -445,6 +461,45 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         const read_size = try decompressor.reader().read(&buffer);
         if (read_size == 0) break;
         try decompressed_data.appendSlice(buffer[0..read_size]);
+    }
+    
+    // For Linux: Save the compressed archive to self-extraction directory (for future updates)
+    // This is similar to what macOS does to enable the Updater API to apply patches
+    if (builtin.os.tag == .linux) {
+        // Make a defensive copy of the hash to prevent memory corruption
+        const safe_hash = if (metadata.hash) |h| try allocator.dupe(u8, h) else null;
+        defer if (safe_hash != null) allocator.free(safe_hash.?);
+        
+        // Save compressed tar.zst file with hash as filename (for Updater API compatibility)
+        const compressed_filename = if (safe_hash) |hash| 
+            try std.fmt.allocPrint(allocator, "{s}.tar.zst", .{hash})
+        else 
+            "current.tar.zst";
+        defer if (safe_hash != null) allocator.free(compressed_filename);
+        
+        const compressed_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, compressed_filename });
+        defer allocator.free(compressed_path);
+        
+        // Ensure self-extraction directory exists
+        try std.fs.cwd().makePath(self_extraction_dir);
+        
+        const compressed_file = try std.fs.cwd().createFile(compressed_path, .{});
+        defer compressed_file.close();
+        try compressed_file.writeAll(compressed_data);
+        
+        // Also save decompressed tar for immediate use
+        const tar_filename = if (safe_hash) |hash|
+            try std.fmt.allocPrint(allocator, "{s}.tar", .{hash})
+        else
+            "current.tar";
+        defer if (safe_hash != null) allocator.free(tar_filename);
+        
+        const tar_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, tar_filename });
+        defer allocator.free(tar_path);
+        
+        const tar_file = try std.fs.cwd().createFile(tar_path, .{});
+        defer tar_file.close();
+        try tar_file.writeAll(decompressed_data.items);
     }
     
     // Extract tar archive to self-extraction directory first
@@ -1093,29 +1148,72 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     defer allocator.free(wrapper_script_path_z);
     _ = std.c.chmod(wrapper_script_path_z.ptr, 0o755);
     
-    // Escape the name for desktop file (handle special characters)
-    const escaped_name = try escapeDesktopString(allocator, metadata.name);
-    defer allocator.free(escaped_name);
+    // Look for the desktop file in the extracted app directory and copy it
+    var app_dir_handle = try std.fs.cwd().openDir(app_dir, .{ .iterate = true });
+    defer app_dir_handle.close();
     
-    // Create desktop file content pointing to wrapper script
-    const desktop_content = try std.fmt.allocPrint(allocator,
-        \\[Desktop Entry]
-        \\Version=1.0
-        \\Type=Application
-        \\Name={s}
-        \\Comment=Electrobun Application
-        \\Exec="{s}"
-        \\Icon={s}/Resources/app/icon.png
-        \\Terminal=false
-        \\Categories=Application;
-        \\
-    , .{ escaped_name, wrapper_script_path, app_dir });
-    defer allocator.free(desktop_content);
+    var found_desktop_file = false;
+    var iterator = app_dir_handle.iterate();
+    while (try iterator.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".desktop")) {
+            // Copy the desktop file from app dir to Desktop
+            const source_desktop = try std.fs.path.join(allocator, &.{ app_dir, entry.name });
+            defer allocator.free(source_desktop);
+            
+            // Read the desktop file content
+            const desktop_content = try std.fs.cwd().readFileAlloc(allocator, source_desktop, 4096);
+            defer allocator.free(desktop_content);
+            
+            // Find icon file in app directory
+            var icon_path: []const u8 = undefined;
+            var icon_path_allocated = false;
+            
+            var icon_iterator = app_dir_handle.iterate();
+            while (try icon_iterator.next()) |icon_entry| {
+                if (icon_entry.kind == .file and std.mem.endsWith(u8, icon_entry.name, ".png")) {
+                    icon_path = try std.fs.path.join(allocator, &.{ app_dir, icon_entry.name });
+                    icon_path_allocated = true;
+                    break;
+                }
+            }
+            defer if (icon_path_allocated) allocator.free(icon_path);
+            
+            // Update the Exec and Icon lines in the desktop file
+            var lines = std.mem.tokenize(u8, desktop_content, "\n");
+            var result = std.ArrayList(u8).init(allocator);
+            defer result.deinit();
+            
+            while (lines.next()) |line| {
+                if (std.mem.startsWith(u8, line, "Exec=")) {
+                    // Replace with new Exec line - point directly to AppImage
+                    try result.appendSlice("Exec=\"");
+                    try result.appendSlice(appimage_path);
+                    try result.appendSlice("\"\n");
+                } else if (std.mem.startsWith(u8, line, "Icon=") and icon_path_allocated) {
+                    // Replace with new Icon line
+                    try result.appendSlice("Icon=");
+                    try result.appendSlice(icon_path);
+                    try result.appendSlice("\n");
+                } else {
+                    try result.appendSlice(line);
+                    try result.appendSlice("\n");
+                }
+            }
+            
+            // Write the updated desktop file to Desktop
+            const desktop_file = try std.fs.cwd().createFile(desktop_file_path, .{});
+            defer desktop_file.close();
+            try desktop_file.writeAll(result.items);
+            
+            found_desktop_file = true;
+            std.debug.print("Copied desktop shortcut to: {s}\n", .{desktop_file_path});
+            break;
+        }
+    }
     
-    // Write desktop file
-    const desktop_file = try std.fs.cwd().createFile(desktop_file_path, .{});
-    defer desktop_file.close();
-    try desktop_file.writeAll(desktop_content);
+    if (!found_desktop_file) {
+        std.debug.print("Warning: No desktop file found in extracted app directory\n", .{});
+    }
     
     // Make desktop file executable (required for some desktop environments)
     const desktop_file_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{desktop_file_path});
