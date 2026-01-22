@@ -8920,3 +8920,9 @@ extern "C" ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*
     // Not supported on Windows - stub to prevent dlopen failure
     // Windows URL protocol handling is done via registry
 }
+
+// Window icon - Linux only, no-op for Windows
+extern "C" ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
+    // Not yet implemented on Windows
+    // TODO: Implement using SetWindowIcon/LoadImage APIs
+}

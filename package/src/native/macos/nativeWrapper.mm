@@ -6559,8 +6559,9 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
     dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
 }
 
-
-
-
+// Window icon - Linux only, no-op for macOS (macOS uses app bundle icon)
+extern "C" void setWindowIcon(void* window, const char* iconPath) {
+    // Not supported on macOS - macOS windows use the app bundle icon
+}
 
 
