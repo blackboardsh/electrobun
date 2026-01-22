@@ -570,7 +570,13 @@ const defaultConfig = {
     },
   },
   scripts: {
+    preBuild: "",
+    postBundle: "",
     postBuild: "",
+    preSign: "",
+    preWrap: "",
+    postWrap: "",
+    postPackage: "",
   },
   release: {
     bucketUrl: "",
@@ -1043,7 +1049,45 @@ if (commandArg === "init") {
   const sanitizeVolumeNameForHdiutil = (name: string) => {
     return name.replace(/[^a-zA-Z0-9 ]/g, '').trim();
   };
-  
+
+  // Helper to run lifecycle hook scripts
+  const runHook = (hookName: keyof typeof config.scripts, extraEnv: Record<string, string> = {}) => {
+    const hookScript = config.scripts[hookName];
+    if (!hookScript) return;
+
+    console.log(`Running ${hookName} script:`, hookScript);
+    // Use host platform's bun binary for running scripts, not target platform's
+    const hostPaths = getPlatformPaths(OS, ARCH);
+
+    const result = Bun.spawnSync([hostPaths.BUN_BINARY, hookScript], {
+      stdio: ["ignore", "inherit", "inherit"],
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        ELECTROBUN_BUILD_ENV: buildEnvironment,
+        ELECTROBUN_OS: targetOS,
+        ELECTROBUN_ARCH: targetARCH,
+        ELECTROBUN_BUILD_DIR: buildFolder,
+        ELECTROBUN_APP_NAME: appFileName,
+        ELECTROBUN_APP_VERSION: config.app.version,
+        ELECTROBUN_APP_IDENTIFIER: config.app.identifier,
+        ELECTROBUN_ARTIFACT_DIR: artifactFolder,
+        ...extraEnv,
+      },
+    });
+
+    if (result.exitCode !== 0) {
+      console.error(`${hookName} script failed with exit code:`, result.exitCode);
+      if (result.stderr) {
+        console.error("stderr:", result.stderr.toString());
+      }
+      console.error("Tried to run with bun at:", hostPaths.BUN_BINARY);
+      console.error("Script path:", hookScript);
+      console.error("Working directory:", projectRoot);
+      process.exit(1);
+    }
+  };
+
   const buildIcons = (appBundleFolderResourcesPath: string) => {
     // Platform-specific icon handling
     if (targetOS === 'macos' && config.build.mac?.icon) {
@@ -1080,8 +1124,11 @@ if (commandArg === "init") {
       }
     }
   };
-  
-  // refresh build folder  
+
+  // Run preBuild hook before anything starts
+  runHook('preBuild');
+
+  // refresh build folder
   if (existsSync(buildFolder)) {
     rmdirSync(buildFolder, { recursive: true });
   }  
@@ -1634,6 +1681,10 @@ if (commandArg === "init") {
       continue;
     }
   }
+
+  // Run postBundle hook after code bundling, before copying assets
+  runHook('postBundle');
+
   // Copy assets like html, css, images, and other files
   for (const relSource in config.build.copy) {
     const source = join(projectRoot, relSource);
@@ -1662,39 +1713,7 @@ if (commandArg === "init") {
   
   
   // Run postBuild script
-  if (config.scripts.postBuild) {
-    console.log("Running postBuild script:", config.scripts.postBuild);
-    // Use host platform's bun binary for running scripts, not target platform's
-    const hostPaths = getPlatformPaths(OS, ARCH);
-    
-    const result = Bun.spawnSync([hostPaths.BUN_BINARY, config.scripts.postBuild], {
-      stdio: ["ignore", "inherit", "inherit"],
-      cwd: projectRoot, // Add cwd to ensure script runs from project root
-      env: {
-        ...process.env,
-        ELECTROBUN_BUILD_ENV: buildEnvironment,
-        ELECTROBUN_OS: targetOS, // Use target OS for environment variables
-        ELECTROBUN_ARCH: targetARCH, // Use target ARCH for environment variables
-        ELECTROBUN_BUILD_DIR: buildFolder,
-        ELECTROBUN_APP_NAME: appFileName,
-        ELECTROBUN_APP_VERSION: config.app.version,
-        ELECTROBUN_APP_IDENTIFIER: config.app.identifier,
-        ELECTROBUN_ARTIFACT_DIR: artifactFolder,
-      },
-    });
-    
-    if (result.exitCode !== 0) {
-      console.error("postBuild script failed with exit code:", result.exitCode);
-      if (result.stderr) {
-        console.error("stderr:", result.stderr.toString());
-      }
-      // Also log which bun binary we're trying to use
-      console.error("Tried to run with bun at:", hostPaths.BUN_BINARY);
-      console.error("Script path:", config.scripts.postBuild);
-      console.error("Working directory:", projectRoot);
-      process.exit(1);
-    }
-  }
+  runHook('postBuild');
 
   // Pack app resources into ASAR archive if enabled
   if (config.build.useAsar) {
@@ -1857,6 +1876,9 @@ if (commandArg === "init") {
   const shouldCodesign =
     buildEnvironment !== "dev" && targetOS === 'macos' && OS === 'macos' && config.build.mac.codesign;
   const shouldNotarize = shouldCodesign && config.build.mac.notarize;
+
+  // Run preSign hook before code signing the inner bundle
+  runHook('preSign', { ELECTROBUN_APP_BUNDLE_PATH: appBundleFolderPath });
 
   if (shouldCodesign) {
     codesignAppBundle(
@@ -2067,6 +2089,9 @@ if (commandArg === "init") {
       rmdirSync(appBundleFolderPath, { recursive: true });
     }
 
+    // Run preWrap hook before creating the self-extracting bundle
+    runHook('preWrap');
+
     const selfExtractingBundle = createAppBundle(appFileName, buildFolder, targetOS);
     const compressedTarballInExtractingBundlePath = join(
       selfExtractingBundle.appBundleFolderResourcesPath,
@@ -2091,6 +2116,10 @@ if (commandArg === "init") {
       join(selfExtractingBundle.appBundleFolderContentsPath, "Info.plist"),
       InfoPlistContents
     );
+
+    // Run postWrap hook after self-extracting bundle is created, before code signing
+    // This is where you can add files to the wrapper (e.g., for liquid glass support)
+    runHook('postWrap', { ELECTROBUN_WRAPPER_BUNDLE_PATH: selfExtractingBundle.appBundleFolderPath });
 
     if (shouldCodesign) {
       codesignAppBundle(
@@ -2334,6 +2363,9 @@ if (commandArg === "init") {
     // todo: now just upload the artifacts to your bucket replacing the ones that exist
     // you'll end up with a sequence of patch files that will
   }
+
+  // Run postPackage hook at the very end of the build process
+  runHook('postPackage');
 
   // NOTE: verify codesign
   //  codesign --verify --deep --strict --verbose=2 <app path>
