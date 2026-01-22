@@ -954,32 +954,39 @@ fn createLocalLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8, 
         const symlink_path = try std.fs.path.join(allocator, &.{ extractor_dir, symlink_name });
         defer allocator.free(symlink_path);
         
-        const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
-        defer allocator.free(launcher_path);
+        // On Linux, look for an AppImage in the app directory
+        const app_name_with_channel = try std.fmt.allocPrint(allocator, "{s}-{s}.AppImage", .{ 
+            try std.mem.replaceOwned(u8, allocator, metadata.name, " ", ""),
+            metadata.channel 
+        });
+        defer allocator.free(app_name_with_channel);
         
-        // Check if launcher exists
-        std.fs.cwd().access(launcher_path, .{}) catch |err| {
-            std.debug.print("Warning: Launcher not found at {s}: {}\n", .{ launcher_path, err });
+        const appimage_path = try std.fs.path.join(allocator, &.{ app_dir, app_name_with_channel });
+        defer allocator.free(appimage_path);
+        
+        // Check if AppImage exists
+        std.fs.cwd().access(appimage_path, .{}) catch |err| {
+            std.debug.print("Warning: AppImage not found at {s}: {}\n", .{ appimage_path, err });
             return;
         };
         
         // Remove existing symlink if it exists
         std.fs.cwd().deleteFile(symlink_path) catch {};
         
-        // Create symlink to the launcher binary
-        const launcher_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{launcher_path});
-        defer allocator.free(launcher_path_z);
+        // Create symlink to the AppImage
+        const appimage_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{appimage_path});
+        defer allocator.free(appimage_path_z);
         
         const symlink_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{symlink_path});
         defer allocator.free(symlink_path_z);
         
-        const result = std.c.symlink(launcher_path_z.ptr, symlink_path_z.ptr);
+        const result = std.c.symlink(appimage_path_z.ptr, symlink_path_z.ptr);
         if (result != 0) {
-            std.debug.print("Warning: Failed to create symlink {s} -> {s}: errno={}\n", .{ symlink_path, launcher_path, result });
+            std.debug.print("Warning: Failed to create symlink {s} -> {s}: errno={}\n", .{ symlink_path, appimage_path, result });
             return;
         }
         
-        std.debug.print("Created launcher symlink: {s} -> {s}\n", .{ symlink_path, launcher_path });
+        std.debug.print("Created launcher symlink: {s} -> {s}\n", .{ symlink_path, appimage_path });
     } else if (builtin.os.tag == .windows) {
         const script_name = try std.fmt.allocPrint(allocator, "Launch {s}.vbs", .{metadata.name});
         defer allocator.free(script_name);
@@ -1033,12 +1040,19 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
         return;
     };
     
-    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
-    defer allocator.free(launcher_path);
+    // On Linux, look for an AppImage in the app directory
+    const app_name_with_channel = try std.fmt.allocPrint(allocator, "{s}-{s}.AppImage", .{ 
+        try std.mem.replaceOwned(u8, allocator, metadata.name, " ", ""),
+        metadata.channel 
+    });
+    defer allocator.free(app_name_with_channel);
     
-    // Check if launcher exists
-    std.fs.cwd().access(launcher_path, .{}) catch |err| {
-        std.debug.print("Warning: Launcher not found at {s}: {}\n", .{ launcher_path, err });
+    const appimage_path = try std.fs.path.join(allocator, &.{ app_dir, app_name_with_channel });
+    defer allocator.free(appimage_path);
+    
+    // Check if AppImage exists
+    std.fs.cwd().access(appimage_path, .{}) catch |err| {
+        std.debug.print("Warning: AppImage not found at {s}: {}\n", .{ appimage_path, err });
         return;
     };
     
@@ -1057,36 +1071,17 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     
     const wrapper_content = try std.fmt.allocPrint(allocator,
         \\#!/bin/bash
-        \\# Electrobun App Launcher
-        \\# This script sets up the environment and launches the app
+        \\# Electrobun App Launcher for AppImage
+        \\# This script launches the AppImage
         \\
         \\# Get the directory where this script is located
         \\SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}})" && pwd)"
         \\APP_DIR="$SCRIPT_DIR/app"
         \\
-        \\cd "$APP_DIR/bin"
-        \\export LD_LIBRARY_PATH=".:$LD_LIBRARY_PATH"
+        \\# Execute the AppImage
+        \\exec "$APP_DIR/{s}" "$@"
         \\
-        \\# Force X11 backend for compatibility
-        \\export GDK_BACKEND=x11
-        \\
-        \\# Check if CEF libraries exist and set LD_PRELOAD
-        \\if [ -f "./libcef.so" ] || [ -f "./libvk_swiftshader.so" ]; then
-        \\    CEF_LIBS=""
-        \\    [ -f "./libcef.so" ] && CEF_LIBS="./libcef.so"
-        \\    if [ -f "./libvk_swiftshader.so" ]; then
-        \\        if [ -n "$CEF_LIBS" ]; then
-        \\            CEF_LIBS="$CEF_LIBS:./libvk_swiftshader.so"
-        \\        else
-        \\            CEF_LIBS="./libvk_swiftshader.so"
-        \\        fi
-        \\    fi
-        \\    export LD_PRELOAD="$CEF_LIBS"
-        \\fi
-        \\
-        \\exec ./launcher "$@"
-        \\
-    , .{});
+    , .{app_name_with_channel});
     defer allocator.free(wrapper_content);
     
     const wrapper_file = try std.fs.cwd().createFile(wrapper_script_path, .{});

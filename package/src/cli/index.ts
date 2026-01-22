@@ -1901,31 +1901,82 @@ if (commandArg === "init") {
     
     // Only create compressed tar for non-dev builds
     if (buildEnvironment !== "dev") {
-      // Now we tar the AppImage just like we do with .app bundles on macOS
-      // This allows the existing update system to work unchanged
-      const appImageTarPath = join(buildFolder, `${appFileName}.tar.zst`);
-      console.log(`Creating compressed tar of AppImage: ${appImageTarPath}`);
+      // For Linux, create a compressed tar containing:
+      // 1. The AppImage
+      // 2. Desktop shortcut file
+      // 3. Icon file
+      // 4. Metadata
       
-      // Use existing tar compression logic (similar to macOS approach)
+      const tempDirName = `${appFileName}-installer-contents`;
+      const tempDirPath = join(buildFolder, tempDirName);
+      
+      // Clean up any existing temp directory
+      if (existsSync(tempDirPath)) {
+        rmSync(tempDirPath, { recursive: true });
+      }
+      
+      // Create temp directory structure
+      mkdirSync(tempDirPath, { recursive: true });
+      const innerDirPath = join(tempDirPath, appFileName);
+      mkdirSync(innerDirPath, { recursive: true });
+      
+      // Copy AppImage
+      const appImageDestPath = join(innerDirPath, `${appFileName}.AppImage`);
+      cpSync(appImagePath, appImageDestPath, { dereference: true });
+      
+      // Copy desktop shortcut and icon (they were created alongside the AppImage)
+      const desktopPath = join(buildFolder, `${appFileName}.desktop`);
+      const iconPath = join(buildFolder, `${appFileName}.png`);
+      
+      if (existsSync(desktopPath)) {
+        cpSync(desktopPath, join(innerDirPath, `${appFileName}.desktop`));
+      }
+      
+      if (existsSync(iconPath)) {
+        cpSync(iconPath, join(innerDirPath, `${appFileName}.png`));
+      }
+      
+      // Create metadata file
+      const metadata = {
+        identifier: config.app.identifier,
+        name: config.app.name,
+        version: config.app.version,
+        channel: buildEnvironment
+      };
+      writeFileSync(join(innerDirPath, 'metadata.json'), JSON.stringify(metadata, null, 2));
+      
+      const appImageTarPath = join(buildFolder, `${appFileName}.tar`);
+      console.log(`Creating tar of installer contents: ${appImageTarPath}`);
+      
+      // Tar the inner directory
       await tar.create(
         {
           file: appImageTarPath,
-          cwd: buildFolder,
+          cwd: tempDirPath,
           gzip: false, // We'll compress with zstd after
         },
-        [basename(appImagePath)]
+        [appFileName]
       );
       
-      // Compress with Zstandard (matching existing update system format)
+      // Clean up temp directory
+      rmSync(tempDirPath, { recursive: true });
+      
+      // Compress with Zstandard
+      console.log(`Compressing tar with zstd...`);
       const uncompressedTarData = readFileSync(appImageTarPath);
       await ZstdInit().then(async ({ ZstdSimple }) => {
         const data = new Uint8Array(uncompressedTarData);
         const compressionLevel = 22;
         const compressedData = ZstdSimple.compress(data, compressionLevel);
-        writeFileSync(appImageTarPath, compressedData);
+        const compressedPath = `${appImageTarPath}.zst`;
+        writeFileSync(compressedPath, compressedData);
+        console.log(`✓ Created compressed tar: ${compressedPath} (${(compressedData.length / 1024 / 1024).toFixed(2)} MB)`);
       });
       
-      // Add AppImage to artifacts for distribution  
+      // Remove uncompressed tar
+      unlinkSync(appImageTarPath);
+      
+      // Add AppImage to artifacts for distribution (for direct download)
       artifactsToUpload.push(appImagePath);
     }
   }
@@ -1948,61 +1999,73 @@ if (commandArg === "init") {
     const platformSuffix = `-${targetOS}-${targetARCH}`;
     const tarPath = `${appBundleFolderPath}.tar`;
 
-    // tar the signed and notarized app bundle
-    await tar.c(
-      {
-        gzip: false,
-        file: tarPath,
-        cwd: buildFolder,
-      },
-      [basename(appBundleFolderPath)]
-    );
-
-    const tarball = Bun.file(tarPath);
-    const tarBuffer = await tarball.arrayBuffer();
-
-    // Note: The playground app bundle is around 48MB.
-    // compression on m1 max with 64GB ram:
-    //   brotli: 1min 38s, 48MB -> 11.1MB
-    //   zstd: 15s, 48MB -> 12.1MB
-    // zstd is the clear winner here. dev iteration speed gain of 1min 15s per build is much more valubale
-    // than saving 1 more MB of space/bandwidth.
+    // For Linux, we've already created the tar in the AppImage section above
+    // For macOS/Windows, tar the signed and notarized app bundle
+    if (targetOS !== 'linux') {
+      await tar.c(
+        {
+          gzip: false,
+          file: tarPath,
+          cwd: buildFolder,
+        },
+        [basename(appBundleFolderPath)]
+      );
+    }
 
     let compressedTarPath = `${tarPath}.zst`;
-    artifactsToUpload.push(compressedTarPath);
+    
+    // For Linux, skip compression as we already have the compressed tar
+    if (targetOS === 'linux') {
+      console.log("Linux tar.zst already created, skipping general compression step");
+      // compressedTarPath already points to the right file
+    } else {
+      const tarball = Bun.file(tarPath);
+      const tarBuffer = await tarball.arrayBuffer();
 
-    // zstd compress tarball
-    // todo (yoav): consider using c bindings for zstd for speed instead of wasm
-    // we already have it in the bsdiff binary
-    console.log("compressing tarball...");
-    await ZstdInit().then(async ({ ZstdSimple, ZstdStream }) => {
-      // Note: Simple is much faster than stream, but stream is better for large files
-      // todo (yoav): consider a file size cutoff to switch to stream instead of simple.
-      const useStream = tarball.size > 100 * 1024 * 1024;
-      
-      if (tarball.size > 0) {
-        // Uint8 array filestream of the tar file
-        const data = new Uint8Array(tarBuffer);
+      // Note: The playground app bundle is around 48MB.
+      // compression on m1 max with 64GB ram:
+      //   brotli: 1min 38s, 48MB -> 11.1MB
+      //   zstd: 15s, 48MB -> 12.1MB
+      // zstd is the clear winner here. dev iteration speed gain of 1min 15s per build is much more valubale
+      // than saving 1 more MB of space/bandwidth.
+
+      artifactsToUpload.push(compressedTarPath);
+
+      // zstd compress tarball
+      // todo (yoav): consider using c bindings for zstd for speed instead of wasm
+      // we already have it in the bsdiff binary
+      console.log("compressing tarball...");
+      await ZstdInit().then(async ({ ZstdSimple, ZstdStream }) => {
+        // Note: Simple is much faster than stream, but stream is better for large files
+        // todo (yoav): consider a file size cutoff to switch to stream instead of simple.
+        const useStream = tarball.size > 100 * 1024 * 1024;
         
-        const compressionLevel = 22;  // Maximum compression - now safe with stripped CEF libraries
-        const compressedData = ZstdSimple.compress(data, compressionLevel);
+        if (tarball.size > 0) {
+          // Uint8 array filestream of the tar file
+          const data = new Uint8Array(tarBuffer);
+          
+          const compressionLevel = 22;  // Maximum compression - now safe with stripped CEF libraries
+          const compressedData = ZstdSimple.compress(data, compressionLevel);
 
-        console.log(
-          "compressed",
-          data.length,
-          "bytes",
-          "from",
-          tarBuffer.byteLength,
-          "bytes"
-        );
+          console.log(
+            "compressed",
+            data.length,
+            "bytes",
+            "from",
+            tarBuffer.byteLength,
+            "bytes"
+          );
 
-        await Bun.write(compressedTarPath, compressedData);
-      }
-    });
+          await Bun.write(compressedTarPath, compressedData);
+        }
+      });
+    }
 
-    // we can delete the original app bundle since we've tarred and zstd it. We need to create the self-extracting app bundle
-    // now and it needs the same name as the original app bundle.
-    rmdirSync(appBundleFolderPath, { recursive: true });
+    // For macOS/Windows, delete the original app bundle since we've tarred it
+    // For Linux, the app bundle was already converted to AppImage, so the directory might not exist
+    if (targetOS !== 'linux') {
+      rmdirSync(appBundleFolderPath, { recursive: true });
+    }
 
     const selfExtractingBundle = createAppBundle(appFileName, buildFolder, targetOS);
     const compressedTarballInExtractingBundlePath = join(
@@ -2126,6 +2189,21 @@ if (commandArg === "init") {
         
         // Also keep the raw exe for backwards compatibility (optional)
         // artifactsToUpload.push(selfExtractingExePath);
+      } else if (targetOS === 'linux') {
+        // On Linux, create a self-extracting AppImage with embedded archive
+        // Use the Linux-specific compressed tar path
+        const linuxCompressedTarPath = join(buildFolder, `${appFileName}.tar.zst`);
+        const selfExtractingAppImagePath = await createLinuxSelfExtractingAppImage(
+          buildFolder,
+          linuxCompressedTarPath,
+          appFileName,
+          config,
+          buildEnvironment,
+          hash
+        );
+        
+        artifactsToUpload.push(selfExtractingAppImagePath);
+      }
     }
 
     // refresh artifacts folder
@@ -2710,6 +2788,158 @@ async function wrapInArchive(filePath: string, buildFolder: string, archiveType:
   }
 }
 
+async function createLinuxSelfExtractingAppImage(
+  buildFolder: string,
+  compressedTarPath: string,
+  appFileName: string,
+  config: any,
+  buildEnvironment: string,
+  hash: string
+): Promise<string> {
+  console.log('Creating Linux AppImage wrapper...');
+
+  // Create wrapper AppImage filename
+  const wrapperName = buildEnvironment === 'stable' 
+    ? `${config.app.name}-Setup`
+    : `${config.app.name}-Setup-${buildEnvironment}`;
+  
+  const wrapperAppImagePath = join(buildFolder, `${wrapperName}.AppImage`);
+  const wrapperAppDirPath = join(buildFolder, `${wrapperName}.AppDir`);
+
+  // Clean up any existing AppDir
+  if (existsSync(wrapperAppDirPath)) {
+    rmSync(wrapperAppDirPath, { recursive: true, force: true });
+  }
+  mkdirSync(wrapperAppDirPath, { recursive: true });
+
+  // Create usr/bin directory structure
+  const usrBinPath = join(wrapperAppDirPath, 'usr', 'bin');
+  mkdirSync(usrBinPath, { recursive: true });
+
+  // Create self-extracting binary with embedded archive (following magic markers pattern)
+  const targetPaths = getPlatformPaths('linux', ARCH);
+  
+  // Read the extractor binary
+  const extractorBinary = readFileSync(targetPaths.EXTRACTOR);
+  
+  // Read the compressed archive
+  const compressedArchive = readFileSync(compressedTarPath);
+  
+  // Create metadata JSON
+  const metadata = {
+    identifier: config.app.identifier,
+    name: config.app.name,
+    channel: buildEnvironment,
+    hash: hash
+  };
+  const metadataJson = JSON.stringify(metadata);
+  const metadataBuffer = Buffer.from(metadataJson, 'utf8');
+  
+  // Create marker buffers
+  const metadataMarker = Buffer.from('ELECTROBUN_METADATA_V1', 'utf8');
+  const archiveMarker = Buffer.from('ELECTROBUN_ARCHIVE_V1', 'utf8');
+  
+  // Combine extractor + metadata marker + metadata + archive marker + archive
+  const combinedBuffer = Buffer.concat([
+    extractorBinary,
+    metadataMarker,
+    metadataBuffer,
+    archiveMarker,
+    compressedArchive
+  ]);
+  
+  // Write the self-extracting binary to AppImage/usr/bin/
+  const wrapperExtractorPath = join(usrBinPath, wrapperName);
+  writeFileSync(wrapperExtractorPath, combinedBuffer, { mode: 0o755 });
+  execSync(`chmod +x ${escapePathForTerminal(wrapperExtractorPath)}`);
+
+  // Create AppRun script
+  const appRunContent = `#!/bin/bash
+# AppRun script for ${wrapperName}
+HERE="$(dirname "$(readlink -f "\${0}")")"
+EXEC="\${HERE}/usr/bin/${wrapperName}"
+
+# Execute the wrapper extractor
+exec "\${EXEC}" "\$@"
+`;
+  
+  const appRunPath = join(wrapperAppDirPath, 'AppRun');
+  writeFileSync(appRunPath, appRunContent);
+  execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
+
+  // Create desktop file
+  const desktopContent = `[Desktop Entry]
+Version=1.0
+Type=Application
+Name=${config.app.name} Installer
+Comment=Install ${config.app.name}
+Exec=${wrapperName}
+Icon=${wrapperName}
+Terminal=false
+Categories=Utility;
+`;
+  
+  const desktopPath = join(wrapperAppDirPath, `${wrapperName}.desktop`);
+  writeFileSync(desktopPath, desktopContent);
+
+  // Copy icon if available
+  if (config.build.linux?.icon && existsSync(join(projectRoot, config.build.linux.icon))) {
+    const iconSourcePath = join(projectRoot, config.build.linux.icon);
+    const iconDestPath = join(wrapperAppDirPath, `${wrapperName}.png`);
+    const dirIconPath = join(wrapperAppDirPath, '.DirIcon');
+    
+    cpSync(iconSourcePath, iconDestPath, { dereference: true });
+    cpSync(iconSourcePath, dirIconPath, { dereference: true });
+    
+    console.log(`Copied icon for wrapper AppImage: ${iconSourcePath} -> ${iconDestPath}`);
+  }
+
+  // Ensure appimagetool is available
+  await ensureAppImageTooling();
+
+  // Generate the wrapper AppImage
+  if (existsSync(wrapperAppImagePath)) {
+    unlinkSync(wrapperAppImagePath);
+  }
+
+  console.log(`Creating wrapper AppImage: ${wrapperAppImagePath}`);
+  const appImageArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
+  
+  // Use appimagetool to create the wrapper AppImage
+  let appimagetoolCmd = 'appimagetool';
+  try {
+    execSync('which appimagetool', { stdio: 'ignore' });
+  } catch {
+    const localBinPath = join(process.env['HOME'] || '', '.local', 'bin', 'appimagetool');
+    if (existsSync(localBinPath)) {
+      appimagetoolCmd = localBinPath;
+    }
+  }
+
+  try {
+    execSync(`ARCH=${appImageArch} ${appimagetoolCmd} --no-appstream ${escapePathForTerminal(wrapperAppDirPath)} ${escapePathForTerminal(wrapperAppImagePath)}`, {
+      stdio: 'inherit',
+      env: { ...process.env, ARCH: appImageArch }
+    });
+  } catch (error) {
+    console.error('Failed to create wrapper AppImage:', error);
+    throw error;
+  }
+
+  // Clean up AppDir
+  rmSync(wrapperAppDirPath, { recursive: true, force: true });
+
+  // Verify the wrapper AppImage was created
+  if (!existsSync(wrapperAppImagePath)) {
+    throw new Error(`Wrapper AppImage was not created at expected path: ${wrapperAppImagePath}`);
+  }
+
+  const stats = statSync(wrapperAppImagePath);
+  console.log(`✓ Linux wrapper AppImage created: ${wrapperAppImagePath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+  
+  return wrapperAppImagePath;
+}
+
 
 function codesignAppBundle(
   appBundleOrDmgPath: string,
@@ -3050,7 +3280,6 @@ function createAppBundle(bundleName: string, parentFolder: string, targetOS: 'ma
 }
 
 // Close the command handling if/else chain
-} // End of command if/else chain
 
 // Close and execute the async IIFE
 })().catch((error) => {
