@@ -571,10 +571,7 @@ const defaultConfig = {
   },
   scripts: {
     preBuild: "",
-    postBundle: "",
     postBuild: "",
-    preSign: "",
-    preWrap: "",
     postWrap: "",
     postPackage: "",
   },
@@ -1682,9 +1679,6 @@ if (commandArg === "init") {
     }
   }
 
-  // Run postBundle hook after code bundling, before copying assets
-  runHook('postBundle');
-
   // Copy assets like html, css, images, and other files
   for (const relSource in config.build.copy) {
     const source = join(projectRoot, relSource);
@@ -1876,9 +1870,6 @@ if (commandArg === "init") {
   const shouldCodesign =
     buildEnvironment !== "dev" && targetOS === 'macos' && OS === 'macos' && config.build.mac.codesign;
   const shouldNotarize = shouldCodesign && config.build.mac.notarize;
-
-  // Run preSign hook before code signing the inner bundle
-  runHook('preSign', { ELECTROBUN_APP_BUNDLE_PATH: appBundleFolderPath });
 
   if (shouldCodesign) {
     codesignAppBundle(
@@ -2088,9 +2079,6 @@ if (commandArg === "init") {
     if (targetOS !== 'linux') {
       rmdirSync(appBundleFolderPath, { recursive: true });
     }
-
-    // Run preWrap hook before creating the self-extracting bundle
-    runHook('preWrap');
 
     const selfExtractingBundle = createAppBundle(appFileName, buildFolder, targetOS);
     const compressedTarballInExtractingBundlePath = join(
