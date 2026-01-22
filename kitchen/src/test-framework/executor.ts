@@ -264,10 +264,12 @@ export class TestExecutor {
     for (const [category, tests] of byCategory) {
       console.log(`\n\x1b[36m[${category}]\x1b[0m`);
 
-      // Run tests in this category in parallel
-      const categoryPromises = tests.map(test => this.runTest(test));
-      const categoryResults = await Promise.all(categoryPromises);
-      results.push(...categoryResults);
+      // Run tests in this category sequentially to avoid resource exhaustion
+      // Running 30+ CEF browser instances in parallel causes crashes on Linux
+      for (const test of tests) {
+        const result = await this.runTest(test);
+        results.push(result);
+      }
     }
 
     // Summary
