@@ -55,6 +55,8 @@
   "dependencies": {
     "@oneidentity/zstd-js": "^1.0.3",
     "archiver": "^7.0.1",
+    "png-to-ico": "^2.1.8",
+    "rcedit": "^4.0.1",
     "rpc-anywhere": "1.5.0",
     "tar": "^6.2.1"
   }

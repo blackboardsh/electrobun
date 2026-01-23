@@ -5,7 +5,66 @@ const c = @cImport({
     @cInclude("unistd.h");
 });
 
-var child_pid: std.process.Child.Id = undefined;
+// Windows-specific imports for hiding console
+const windows = if (builtin.os.tag == .windows) struct {
+    const BOOL = c_int;
+    const DWORD = u32;
+    const HANDLE = *anyopaque;
+    const LPVOID = *anyopaque;
+    const LPWSTR = [*:0]u16;
+    const LPSTR = [*:0]u8;
+
+    const STARTUPINFOW = extern struct {
+        cb: DWORD,
+        lpReserved: ?LPWSTR,
+        lpDesktop: ?LPWSTR,
+        lpTitle: ?LPWSTR,
+        dwX: DWORD,
+        dwY: DWORD,
+        dwXSize: DWORD,
+        dwYSize: DWORD,
+        dwXCountChars: DWORD,
+        dwYCountChars: DWORD,
+        dwFillAttribute: DWORD,
+        dwFlags: DWORD,
+        wShowWindow: u16,
+        cbReserved2: u16,
+        lpReserved2: ?*u8,
+        hStdInput: ?HANDLE,
+        hStdOutput: ?HANDLE,
+        hStdError: ?HANDLE,
+    };
+
+    const PROCESS_INFORMATION = extern struct {
+        hProcess: HANDLE,
+        hThread: HANDLE,
+        dwProcessId: DWORD,
+        dwThreadId: DWORD,
+    };
+
+    const CREATE_NO_WINDOW: DWORD = 0x08000000;
+    const STARTF_USESTDHANDLES: DWORD = 0x00000100;
+    const INFINITE: DWORD = 0xFFFFFFFF;
+
+    extern "kernel32" fn CreateProcessW(
+        lpApplicationName: ?LPWSTR,
+        lpCommandLine: ?LPWSTR,
+        lpProcessAttributes: ?*anyopaque,
+        lpThreadAttributes: ?*anyopaque,
+        bInheritHandles: BOOL,
+        dwCreationFlags: DWORD,
+        lpEnvironment: ?*anyopaque,
+        lpCurrentDirectory: ?LPWSTR,
+        lpStartupInfo: *STARTUPINFOW,
+        lpProcessInformation: *PROCESS_INFORMATION,
+    ) callconv(.C) BOOL;
+
+    extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) callconv(.C) DWORD;
+    extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) callconv(.C) BOOL;
+    extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(.C) BOOL;
+} else struct {};
+
+var child_pid: if (builtin.os.tag == .windows) u32 else std.process.Child.Id = undefined;
 var should_exit: bool = false;
 
 // Signal handler that forwards signals to child process
@@ -115,38 +174,105 @@ pub fn main() !void {
         child_process.env_map = &env_map;
     }
 
-    // Inherit stdout/stderr so we can see any errors
-    child_process.stdout_behavior = .Inherit;
-    child_process.stderr_behavior = .Inherit;
+    // On Windows GUI builds, we can't inherit stdout/stderr when launched without a console
+    // because there's no console to inherit from. This would cause the child process to crash.
+    // Instead, ignore output (it will go to detached console or nowhere).
+    if (builtin.os.tag == .windows) {
+        // For Windows GUI apps, ignore stdout/stderr to avoid crashes
+        child_process.stdout_behavior = .Ignore;
+        child_process.stderr_behavior = .Ignore;
+    } else {
+        // On macOS/Linux, inherit stdout/stderr so we can see any errors
+        child_process.stdout_behavior = .Inherit;
+        child_process.stderr_behavior = .Inherit;
+    }
     
     std.debug.print("Spawning: {s} {s}\n", .{argv[0], if (argv.len > 1) argv[1] else ""});
 
-    // Spawn the child process
-    try child_process.spawn();
-    child_pid = child_process.id;
-    
-    std.debug.print("Child process spawned with PID {d}\n", .{child_pid});
+    // On Windows, use CreateProcessW with CREATE_NO_WINDOW to hide the console
+    if (builtin.os.tag == .windows) {
+        // Build command line: "path\to\bun.exe" "path\to\main.js"
+        const cmd_line = try std.fmt.allocPrintZ(arena_alloc, "\"{s}\" \"{s}\"", .{argv[0], argv[1]});
+        const cmd_line_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, cmd_line);
 
-    // Wait for the subprocess to complete
-    const result = child_process.wait() catch |err| {
-        std.debug.print("Failed to wait for child process: {}\n", .{err});
-        return;
-    };
-    
-    switch (result) {
-        .Exited => |code| {
-            std.debug.print("Child process exited with code: {d}\n", .{code});
-            if (code != 0) {
-                std.process.exit(@intCast(code));
-            }
-        },
-        .Signal => |sig| {
-            std.debug.print("Child process terminated by signal: {d}\n", .{sig});
-            std.process.exit(128 + @as(u8, @intCast(sig)));
-        },
-        else => {
-            std.debug.print("Child process terminated unexpectedly\n", .{});
-            std.process.exit(1);
-        },
+        // Convert working directory to wide string
+        const cwd_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, exe_dir);
+
+        var startup_info = std.mem.zeroes(windows.STARTUPINFOW);
+        startup_info.cb = @sizeOf(windows.STARTUPINFOW);
+        startup_info.dwFlags = windows.STARTF_USESTDHANDLES;
+        startup_info.hStdInput = null;
+        startup_info.hStdOutput = null;
+        startup_info.hStdError = null;
+
+        var process_info: windows.PROCESS_INFORMATION = undefined;
+
+        const result = windows.CreateProcessW(
+            null, // lpApplicationName
+            @constCast(cmd_line_w.ptr), // lpCommandLine
+            null, // lpProcessAttributes
+            null, // lpThreadAttributes
+            0, // bInheritHandles = false
+            windows.CREATE_NO_WINDOW, // dwCreationFlags - this hides the console!
+            null, // lpEnvironment
+            cwd_w.ptr, // lpCurrentDirectory
+            &startup_info,
+            &process_info,
+        );
+
+        if (result == 0) {
+            std.debug.print("Failed to create process\n", .{});
+            return error.ProcessSpawnFailed;
+        }
+
+        child_pid = process_info.dwProcessId;
+        std.debug.print("Child process spawned with PID {d}\n", .{child_pid});
+
+        // Close thread handle as we don't need it
+        _ = windows.CloseHandle(process_info.hThread);
+
+        // Wait for process to complete
+        _ = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
+
+        // Get exit code
+        var exit_code: windows.DWORD = 0;
+        _ = windows.GetExitCodeProcess(process_info.hProcess, &exit_code);
+
+        // Close process handle
+        _ = windows.CloseHandle(process_info.hProcess);
+
+        std.debug.print("Child process exited with code: {d}\n", .{exit_code});
+        if (exit_code != 0) {
+            std.process.exit(@intCast(exit_code));
+        }
+    } else {
+        // On macOS/Linux, use standard spawn
+        try child_process.spawn();
+        child_pid = child_process.id;
+
+        std.debug.print("Child process spawned with PID {d}\n", .{child_pid});
+
+        // Wait for the subprocess to complete
+        const result = child_process.wait() catch |err| {
+            std.debug.print("Failed to wait for child process: {}\n", .{err});
+            return;
+        };
+
+        switch (result) {
+            .Exited => |code| {
+                std.debug.print("Child process exited with code: {d}\n", .{code});
+                if (code != 0) {
+                    std.process.exit(@intCast(code));
+                }
+            },
+            .Signal => |sig| {
+                std.debug.print("Child process terminated by signal: {d}\n", .{sig});
+                std.process.exit(128 + @as(u8, @intCast(sig)));
+            },
+            else => {
+                std.debug.print("Child process terminated unexpectedly\n", .{});
+                std.process.exit(1);
+            },
+        }
     }
 }

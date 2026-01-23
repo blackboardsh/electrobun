@@ -15,5 +15,10 @@ pub fn build(b: *std.Build) void {
     // Link libc for signal handling on Linux
     exe.linkLibC();
 
+    // On Windows, build as GUI application (no console window)
+    if (target.result.os.tag == .windows) {
+        exe.subsystem = .Windows;
+    }
+
     b.installArtifact(exe);
 }

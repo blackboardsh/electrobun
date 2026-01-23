@@ -175,6 +175,14 @@ export interface ElectrobunConfig {
        * @default 'native'
        */
       defaultRenderer?: 'native' | 'cef';
+
+      /**
+       * Path to application icon (.ico format)
+       * Used for the installer/extractor wrapper, desktop shortcuts, and taskbar
+       * Should include multiple sizes (16x16, 32x32, 48x48, 256x256) for best results
+       * @example "assets/icon.ico"
+       */
+      icon?: string;
     };
 
     /**

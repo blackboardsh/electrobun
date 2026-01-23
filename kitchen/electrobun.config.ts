@@ -113,6 +113,7 @@ export default {
         },
         win: {
             bundleCEF: true,
+            icon: "icon.iconset/icon_256x256.png",
         },
     },
     scripts: {

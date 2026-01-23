@@ -532,7 +532,7 @@ const commandDefaults = {
   },
 };
 
-// todo (yoav): add types for config
+// TODO (yoav): add types for config
 const defaultConfig = {
   app: {
     name: "MyApp",
@@ -1236,6 +1236,59 @@ if (commandArg === "init") {
     dereference: true,
   });
 
+  // On Windows, ensure launcher has .exe extension
+  // Bun's cpSync on Windows may create files without .exe despite the destination path having it
+  if (targetOS === 'win') {
+    const launcherWithoutExt = join(appBundleMacOSPath, "launcher");
+
+    // Use PowerShell to force rename and add .exe extension
+    // This bypasses Bun's PATHEXT behavior that treats launcher and launcher.exe as the same
+    try {
+      execSync(`powershell -Command "if (Test-Path '${launcherWithoutExt}') { Rename-Item -Path '${launcherWithoutExt}' -NewName 'launcher.exe' -Force }"`, { stdio: 'pipe' });
+      console.log(`Ensured launcher has .exe extension on Windows`);
+    } catch (error) {
+      console.warn(`Warning: Could not rename launcher to launcher.exe: ${error}`);
+    }
+  }
+
+  // Embed icon into launcher.exe on Windows
+  if (targetOS === 'win' && config.build.win?.icon) {
+    const iconSourcePath = config.build.win.icon.startsWith('/') || config.build.win.icon.match(/^[a-zA-Z]:/)
+      ? config.build.win.icon
+      : join(projectRoot, config.build.win.icon);
+
+    if (existsSync(iconSourcePath)) {
+      console.log(`Embedding icon into launcher.exe: ${iconSourcePath}`);
+      try {
+        let iconPath = iconSourcePath;
+
+        // Convert PNG to ICO if needed
+        if (iconSourcePath.toLowerCase().endsWith('.png')) {
+          const pngToIco = (await import('png-to-ico')).default;
+          const tempIcoPath = join(buildFolder, 'temp-launcher-icon.ico');
+          const icoBuffer = await pngToIco(iconSourcePath);
+          writeFileSync(tempIcoPath, icoBuffer);
+          iconPath = tempIcoPath;
+          console.log(`Converted PNG to ICO format for launcher: ${tempIcoPath}`);
+        }
+
+        // Use rcedit to embed the icon into launcher.exe
+        const rcedit = (await import('rcedit')).default;
+        await rcedit(bunCliLauncherDestination, {
+          icon: iconPath
+        });
+        console.log(`Successfully embedded icon into launcher.exe`);
+
+        // Clean up temp ICO file
+        if (iconPath !== iconSourcePath && existsSync(iconPath)) {
+          unlinkSync(iconPath);
+        }
+      } catch (error) {
+        console.warn(`Warning: Failed to embed icon into launcher.exe: ${error}`);
+      }
+    }
+  }
+
   cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, 'main.js'), { dereference: true });
 
   // Bun runtime binary
@@ -1250,6 +1303,44 @@ if (commandArg === "init") {
     mkdirSync(destFolder2, { recursive: true });
   }
   cpSync(bunBinarySourcePath, bunBinaryDestInBundlePath, { dereference: true });
+
+  // Embed icon into bun.exe on Windows
+  if (targetOS === 'win' && config.build.win?.icon) {
+    const iconSourcePath = config.build.win.icon.startsWith('/') || config.build.win.icon.match(/^[a-zA-Z]:/)
+      ? config.build.win.icon
+      : join(projectRoot, config.build.win.icon);
+
+    if (existsSync(iconSourcePath)) {
+      console.log(`Embedding icon into bun.exe: ${iconSourcePath}`);
+      try {
+        let iconPath = iconSourcePath;
+
+        // Convert PNG to ICO if needed
+        if (iconSourcePath.toLowerCase().endsWith('.png')) {
+          const pngToIco = (await import('png-to-ico')).default;
+          const tempIcoPath = join(buildFolder, 'temp-bun-icon.ico');
+          const icoBuffer = await pngToIco(iconSourcePath);
+          writeFileSync(tempIcoPath, icoBuffer);
+          iconPath = tempIcoPath;
+          console.log(`Converted PNG to ICO format for bun.exe: ${tempIcoPath}`);
+        }
+
+        // Use rcedit to embed the icon into bun.exe
+        const rcedit = (await import('rcedit')).default;
+        await rcedit(bunBinaryDestInBundlePath, {
+          icon: iconPath
+        });
+        console.log(`Successfully embedded icon into bun.exe`);
+
+        // Clean up temp ICO file
+        if (iconPath !== iconSourcePath && existsSync(iconPath)) {
+          unlinkSync(iconPath);
+        }
+      } catch (error) {
+        console.warn(`Warning: Failed to embed icon into bun.exe: ${error}`);
+      }
+    }
+  }
 
   // copy native wrapper dynamic library
   if (targetOS === 'macos') {
@@ -2197,7 +2288,9 @@ if (commandArg === "init") {
           appFileName,
           targetPaths,
           buildEnvironment,
-          hash
+          hash,
+          config,
+          projectRoot
         );
         
         // Wrap Windows installer files in zip for distribution
@@ -2460,7 +2553,7 @@ if (commandArg === "init") {
         cwd: bundleExecPath
       });
     }
-  } else if (OS === 'win') {  
+  } else if (OS === 'win') {
     // Windows: Use launcher if available, otherwise fallback to direct execution
     const launcherPath = join(bundleExecPath, 'launcher.exe');
     if (existsSync(launcherPath)) {
@@ -2603,21 +2696,63 @@ async function createWindowsSelfExtractingExe(
   appFileName: string,
   targetPaths: any,
   buildEnvironment: string,
-  hash: string
+  hash: string,
+  config: any,
+  projectRoot: string
 ): Promise<string> {
   console.log("Creating Windows installer with separate archive...");
-  
+
   // Format: MyApp-Setup.exe (stable) or MyApp-Setup-canary.exe (non-stable)
-  const setupFileName = buildEnvironment === "stable" 
+  const setupFileName = buildEnvironment === "stable"
     ? `${config.app.name}-Setup.exe`
     : `${config.app.name}-Setup-${buildEnvironment}.exe`;
-  
+
   const outputExePath = join(buildFolder, setupFileName);
-  
+
   // Copy the extractor exe
   const extractorExe = readFileSync(targetPaths.EXTRACTOR);
   writeFileSync(outputExePath, extractorExe);
-  
+
+  // Embed icon into the wrapper EXE if provided
+  if (config.build.win?.icon) {
+    const iconSourcePath = config.build.win.icon.startsWith('/') || config.build.win.icon.match(/^[a-zA-Z]:/)
+      ? config.build.win.icon
+      : join(projectRoot, config.build.win.icon);
+
+    if (existsSync(iconSourcePath)) {
+      console.log(`Embedding icon into Windows installer: ${iconSourcePath}`);
+      try {
+        let iconPath = iconSourcePath;
+
+        // Convert PNG to ICO if needed
+        if (iconSourcePath.toLowerCase().endsWith('.png')) {
+          const pngToIco = (await import('png-to-ico')).default;
+          const tempIcoPath = join(buildFolder, 'temp-icon.ico');
+          const icoBuffer = await pngToIco(iconSourcePath);
+          writeFileSync(tempIcoPath, icoBuffer);
+          iconPath = tempIcoPath;
+          console.log(`Converted PNG to ICO format: ${tempIcoPath}`);
+        }
+
+        // Use rcedit to embed the icon
+        const rcedit = (await import('rcedit')).default;
+        await rcedit(outputExePath, {
+          icon: iconPath
+        });
+        console.log(`Successfully embedded icon into ${setupFileName}`);
+
+        // Clean up temp ICO file
+        if (iconPath !== iconSourcePath && existsSync(iconPath)) {
+          unlinkSync(iconPath);
+        }
+      } catch (error) {
+        console.warn(`Warning: Failed to embed icon into Windows installer: ${error}`);
+      }
+    } else {
+      console.warn(`Warning: Windows icon not found at ${iconSourcePath}`);
+    }
+  }
+
   // Create metadata JSON file
   const metadata = {
     identifier: config.app.identifier,
@@ -2629,27 +2764,27 @@ async function createWindowsSelfExtractingExe(
   const metadataFileName = setupFileName.replace('.exe', '.metadata.json');
   const metadataPath = join(buildFolder, metadataFileName);
   writeFileSync(metadataPath, metadataJson);
-  
+
   // Copy the compressed archive with matching name
   const archiveFileName = setupFileName.replace('.exe', '.tar.zst');
   const archivePath = join(buildFolder, archiveFileName);
   copyFileSync(compressedTarPath, archivePath);
-  
+
   // Make the exe executable (though Windows doesn't need chmod)
   if (OS !== 'win') {
     execSync(`chmod +x ${escapePathForTerminal(outputExePath)}`);
   }
-  
+
   const exeSize = statSync(outputExePath).size;
   const archiveSize = statSync(archivePath).size;
   const totalSize = exeSize + archiveSize;
-  
+
   console.log(`Created Windows installer:`);
   console.log(`  - Extractor: ${outputExePath} (${(exeSize / 1024 / 1024).toFixed(2)} MB)`);
   console.log(`  - Archive: ${archivePath} (${(archiveSize / 1024 / 1024).toFixed(2)} MB)`);
   console.log(`  - Metadata: ${metadataPath}`);
   console.log(`  - Total size: ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
-  
+
   return outputExePath;
 }
 

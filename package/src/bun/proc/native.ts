@@ -1,4 +1,4 @@
-import { join, resolve } from "path";
+import { join } from "path";
 import { type RPCSchema, type RPCTransport, createRPC } from "rpc-anywhere";
 import { execSync } from "child_process";
 import * as fs from "fs";
@@ -62,7 +62,10 @@ import { BrowserWindow, BrowserWindowMap } from "../core/BrowserWindow";
 
 export const native = (() => {
   try {
-    return dlopen(`./libNativeWrapper.${suffix}`, {  
+    // Use absolute path to native wrapper DLL to avoid working directory issues
+    // On Windows shortcuts, the working directory may not be set correctly
+    const nativeWrapperPath = join(process.cwd(), `libNativeWrapper.${suffix}`);
+    return dlopen(nativeWrapperPath, {  
       // window
       createWindowWithFrameAndStyleFromWorker: {
         // Pass each parameter individually
