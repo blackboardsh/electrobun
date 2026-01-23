@@ -10,9 +10,10 @@ const absoluteLibPath = resolve(libPath);
 
 // Wrap main logic in a function to avoid top-level return
 function main() {
-    // Read version.json early to get identifier and channel for CEF initialization
+    // Read version.json early to get identifier, name, and channel for CEF initialization
     let channel = "";
     let identifier = "";
+    let name = "";
     try {
         const pathToLauncherBin = process.argv0;
         const pathToBinDir = dirname(pathToLauncherBin);
@@ -23,10 +24,13 @@ function main() {
             if (versionInfo.identifier) {
                 identifier = versionInfo.identifier;
             }
+            if (versionInfo.name) {
+                name = versionInfo.name;
+            }
             if (versionInfo.channel) {
                 channel = versionInfo.channel;
             }
-            console.log(`[LAUNCHER] Loaded identifier: ${identifier}, channel: ${channel}`);
+            console.log(`[LAUNCHER] Loaded identifier: ${identifier}, name: ${name}, channel: ${channel}`);
         }
     } catch (error) {
         console.error(`[LAUNCHER] Warning: Could not read version.json:`, error);
@@ -63,7 +67,7 @@ function main() {
         }
         
         lib = dlopen(libPath, {
-            startEventLoop: { args: ["cstring", "cstring"], returns: "void" }
+            startEventLoop: { args: ["cstring", "cstring", "cstring"], returns: "void" }
         });
     } catch (error) {
         console.error(`[LAUNCHER] Failed to load library: ${error.message}`);
@@ -71,7 +75,7 @@ function main() {
         // Try with absolute path as fallback
         try {
             lib = dlopen(absoluteLibPath, {
-                startEventLoop: { args: ["cstring", "cstring"], returns: "void" }
+                startEventLoop: { args: ["cstring", "cstring", "cstring"], returns: "void" }
             });
         } catch (absError) {
             console.error(`[LAUNCHER] Library loading failed. Try running: ldd ${libPath}`);
@@ -194,10 +198,11 @@ ${fileData.toString('utf8')}
         // preload: [''];
     });
 
-    // Pass identifier and channel as C strings using Buffer encoding
+    // Pass identifier, name, and channel as C strings using Buffer encoding
     // Bun FFI requires explicit encoding for cstring parameters
     lib.symbols.startEventLoop(
         ptr(Buffer.from(identifier + '\0', 'utf8')),
+        ptr(Buffer.from(name + '\0', 'utf8')),
         ptr(Buffer.from(channel + '\0', 'utf8'))
     );
 }

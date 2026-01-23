@@ -2880,12 +2880,14 @@ async function wrapWindowsInstallerInZip(exePath: string, buildFolder: string): 
     });
     
     archive.pipe(output);
-    
-    // Add all three files to the archive
+
+    // Add Setup.exe at the root level for easy access
     archive.file(exePath, { name: basename(exePath) });
-    archive.file(metadataPath, { name: basename(metadataPath) });
-    archive.file(archivePath, { name: basename(archivePath) });
-    
+
+    // Put metadata and archive in a subdirectory to discourage manual extraction
+    archive.file(metadataPath, { name: `.installer/${basename(metadataPath)}` });
+    archive.file(archivePath, { name: `.installer/${basename(archivePath)}` });
+
     archive.finalize();
   });
 }

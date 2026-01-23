@@ -384,6 +384,7 @@ static GetHTMLForWebviewSync g_getHTMLForWebviewSync = nullptr;
 // Global variables for CEF cache path isolation
 static std::string g_electrobunChannel = "";
 static std::string g_electrobunIdentifier = "";
+static std::string g_electrobunName = "";
 
 // Webview content storage (replaces JSCallback approach)
 static std::map<uint32_t, std::string> webviewHTMLContent;
@@ -4420,17 +4421,19 @@ ELECTROBUN_EXPORT bool initCEF() {
     // Set up CEF paths (resources are in ./cef relative to executable)
     std::string cefResourceDir = std::string(exePath) + "\\cef";
 
-    // Build cache path with identifier and channel to allow multiple apps/channels to run simultaneously
-    // Use %LOCALAPPDATA%/identifier-channel/CEF (similar to macOS pattern)
+    // Build cache path with namespaced directory structure to match installer and partition paths
+    // Use %LOCALAPPDATA%\{identifier}\{name-channel}\CEF
     std::string userDataDir;
     char* localAppData = getenv("LOCALAPPDATA");
     if (localAppData) {
         std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+        std::string appName = !g_electrobunName.empty() ? g_electrobunName : "App";
+        std::string appNameChannel = appName;
         if (!g_electrobunChannel.empty()) {
-            appIdentifier += "-" + g_electrobunChannel;
+            appNameChannel += "-" + g_electrobunChannel;
         }
-        userDataDir = std::string(localAppData) + "\\" + appIdentifier + "\\CEF";
-        std::cout << "[CEF] Using app: " << appIdentifier << std::endl;
+        userDataDir = std::string(localAppData) + "\\" + appIdentifier + "\\" + appNameChannel + "\\CEF";
+        std::cout << "[CEF] Using namespaced path: " << appIdentifier << "\\" << appNameChannel << std::endl;
     } else {
         // Fallback to executable directory if LOCALAPPDATA not available
         userDataDir = std::string(exePath) + "\\cef_cache";
@@ -5263,14 +5266,17 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 settings.persist_session_cookies = false;
                 settings.persist_user_preferences = false;
             } else {
-                // Build app identifier from version.json to match root_cache_path logic
+                // Build namespaced path to match installer structure
+                // Structure: %LOCALAPPDATA%\{identifier}\{name-channel}\CEF\Partitions\{partitionName}
                 std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+                std::string appName = !g_electrobunName.empty() ? g_electrobunName : "App";
+                std::string appNameChannel = appName;
                 if (!g_electrobunChannel.empty()) {
-                    appIdentifier += "-" + g_electrobunChannel;
+                    appNameChannel += "-" + g_electrobunChannel;
                 }
 
-                // Build cache path: %LOCALAPPDATA%\{appIdentifier}\CEF\Partitions\{partitionName}
-                std::string cachePath = std::string(localAppData) + "\\" + appIdentifier + "\\CEF\\Partitions\\" + partitionName;
+                // Build cache path with namespacing: %LOCALAPPDATA%\{identifier}\{name-channel}\CEF\Partitions\{partitionName}
+                std::string cachePath = std::string(localAppData) + "\\" + appIdentifier + "\\" + appNameChannel + "\\CEF\\Partitions\\" + partitionName;
 
                 // Create directory if it doesn't exist
                 std::wstring wideCachePath(cachePath.begin(), cachePath.end());
@@ -5516,10 +5522,13 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
 
 extern "C" {
 
-ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* channel) {
-    // Store identifier and channel globally for use in CEF initialization
+ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, const char* channel) {
+    // Store identifier, name, and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
+    }
+    if (name && name[0]) {
+        g_electrobunName = std::string(name);
     }
     if (channel && channel[0]) {
         g_electrobunChannel = std::string(channel);
