@@ -3081,14 +3081,20 @@ public:
                        bool is_redirect) override {
         std::string url = request->GetURL().ToString();
 
+       
         // Check if cmd key is held - if so, fire new-window-open event and block navigation
         // Use NSEvent to get current modifier flags since CEF doesn't provide them in OnBeforeBrowse
         // Note: We don't check user_gesture because SPA frameworks may trigger navigations
         // programmatically after a click, causing user_gesture to be false
         NSEventModifierFlags modifierFlags = [NSEvent modifierFlags];
-        bool isCmdClick = (modifierFlags & NSEventModifierFlagCommand) != 0;
+        bool isCmdClick = false;//(modifierFlags & NSEventModifierFlagCommand) != 0;
 
-        if (isCmdClick && !is_redirect) {
+        // Skip Cmd+click handling for initial page loads (navigating away from about:blank)
+        // This prevents keyboard shortcuts like Cmd+T from triggering double tab creation
+        std::string currentUrl = frame->GetURL().ToString();
+        bool isInitialLoad = (currentUrl == "about:blank" || currentUrl.empty());
+
+        if (isCmdClick && !is_redirect && !isInitialLoad) {
             // Debounce: ignore cmd+click navigations within 500ms of the last one
             // This prevents cascading new tabs when cmd is held during page load
             NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
