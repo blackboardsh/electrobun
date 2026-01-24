@@ -550,60 +550,33 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunCefApp);
 };
 
+// Forward declaration for CEF client (needed for load handler)
+class ElectrobunCefClient;
+
 // CEF Load Handler for debugging navigation
 class ElectrobunLoadHandler : public CefLoadHandler {
 public:
     uint32_t webview_id_ = 0;
     WebviewEventHandler webview_event_handler_ = nullptr;
+    CefRefPtr<ElectrobunCefClient> client_ = nullptr;
 
     ElectrobunLoadHandler() {}
 
     void SetWebviewId(uint32_t id) { webview_id_ = id; }
     void SetWebviewEventHandler(WebviewEventHandler handler) { webview_event_handler_ = handler; }
+    void SetClient(CefRefPtr<ElectrobunCefClient> client) { client_ = client; }
 
-    void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override {
-        
-        // Execute preload scripts immediately at load start for main frame
-        if (frame->IsMain()) {
-            int browserId = browser->GetIdentifier();
-            auto scriptIt = g_preloadScripts.find(browserId);
-            if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
-                // Execute with very high priority and immediate execution
-                frame->ExecuteJavaScript(scriptIt->second, "", 0);
-            }
-        }
-    }
-    
-    void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override {
-
-        // Also execute preload scripts at load end to ensure they're available
-        if (frame->IsMain()) {
-            int browserId = browser->GetIdentifier();
-            auto scriptIt = g_preloadScripts.find(browserId);
-            if (scriptIt != g_preloadScripts.end() && !scriptIt->second.empty()) {
-                frame->ExecuteJavaScript(scriptIt->second, "", 0);
-            }
-
-            // Fire did-navigate event
-            if (webview_event_handler_) {
-                std::string url = frame->GetURL().ToString();
-                webview_event_handler_(webview_id_, _strdup("did-navigate"), _strdup(url.c_str()));
-            }
-        }
-    }
-    
+    void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override;
+    void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override;
     void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override {
-        std::cout << "[CEF] LoadError: " << static_cast<int>(errorCode) 
-                  << " - " << errorText.ToString() 
+        std::cout << "[CEF] LoadError: " << static_cast<int>(errorCode)
+                  << " - " << errorText.ToString()
                   << " for URL: " << failedUrl.ToString() << std::endl;
     }
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunLoadHandler);
 };
-
-// Forward declaration for CEF client (needed for global map)
-class ElectrobunCefClient;
 
 // Global map to store CEF clients for browser connection
 static std::map<HWND, CefRefPtr<ElectrobunCefClient>> g_cefClients;
@@ -759,12 +732,27 @@ public:
     void ProcessAccumulatedData() {
         // Process accumulated data and inject script
         processed_data_ = data_buffer_;
-        
-        // Look for </head> tag and inject script before it
-        size_t head_pos = processed_data_.find("</head>");
+
+        // Look for <head> tag and inject script right after it (as first element in head)
+        // This ensures preload script executes before any other scripts in the page
+        size_t head_pos = processed_data_.find("<head>");
         if (head_pos != std::string::npos && !script_.empty()) {
+            // Insert after the <head> tag (head_pos + 6 to skip past "<head>")
+            size_t insert_pos = head_pos + 6;
             std::string script_tag = "<script>" + script_ + "</script>";
-            processed_data_.insert(head_pos, script_tag);
+            processed_data_.insert(insert_pos, script_tag);
+        } else {
+            // Fallback: try case-insensitive search for <head with attributes
+            size_t head_start = processed_data_.find("<head");
+            if (head_start != std::string::npos && !script_.empty()) {
+                // Find the end of the opening <head...> tag
+                size_t head_end = processed_data_.find(">", head_start);
+                if (head_end != std::string::npos) {
+                    size_t insert_pos = head_end + 1;
+                    std::string script_tag = "<script>" + script_ + "</script>";
+                    processed_data_.insert(insert_pos, script_tag);
+                }
+            }
         }
     }
 
@@ -777,12 +765,34 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunResponseFilter);
 };
 
+// Forward declaration for ElectrobunCefClient
+class ElectrobunCefClient;
+
+// CEF Resource Request Handler to inject preload scripts via response filter
+class ElectrobunResourceRequestHandler : public CefResourceRequestHandler {
+public:
+    CefRefPtr<ElectrobunCefClient> client_ = nullptr;
+
+    ElectrobunResourceRequestHandler(CefRefPtr<ElectrobunCefClient> client) : client_(client) {}
+
+    // Response filter to inject preload scripts into HTML before parsing
+    // This ensures scripts execute BEFORE any page JavaScript
+    CefRefPtr<CefResponseFilter> GetResourceResponseFilter(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        CefRefPtr<CefResponse> response) override;
+
+    IMPLEMENT_REFCOUNTING(ElectrobunResourceRequestHandler);
+};
+
 // CEF Request Handler for views:// scheme support
 class ElectrobunRequestHandler : public CefRequestHandler {
 public:
     uint32_t webview_id_ = 0;
     WebviewEventHandler webview_event_handler_ = nullptr;
     AbstractView* abstract_view_ = nullptr;
+    CefRefPtr<ElectrobunCefClient> client_ = nullptr;
 
     // Static debounce timestamp for ctrl+click handling
     static double lastCtrlClickTime;
@@ -792,6 +802,23 @@ public:
     void SetWebviewId(uint32_t id) { webview_id_ = id; }
     void SetWebviewEventHandler(WebviewEventHandler handler) { webview_event_handler_ = handler; }
     void SetAbstractView(AbstractView* view) { abstract_view_ = view; }
+    void SetClient(CefRefPtr<ElectrobunCefClient> client) { client_ = client; }
+
+    // Return resource request handler to enable response filtering
+    CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        bool is_navigation,
+        bool is_download,
+        const CefString& request_initiator,
+        bool& disable_default_handling) override {
+
+        if (client_) {
+            return new ElectrobunResourceRequestHandler(client_);
+        }
+        return nullptr;
+    }
 
     // Handle navigation requests with Ctrl+click detection
     bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -1562,9 +1589,11 @@ public:
           webview_tag_handler_(internalBridgeHandler),
           osr_enabled_(false) {
         m_loadHandler = new ElectrobunLoadHandler();
+        m_loadHandler->SetClient(this); // Set client reference for load handler
         m_lifeSpanHandler = new ElectrobunLifeSpanHandler();
         m_requestHandler = new ElectrobunRequestHandler();
         m_requestHandler->SetWebviewId(webviewId);
+        m_requestHandler->SetClient(this); // Set client reference for response filter
         m_contextMenuHandler = new ElectrobunContextMenuHandler();
         m_permissionHandler = new ElectrobunPermissionHandler();
         m_dialogHandler = new ElectrobunDialogHandler();
@@ -1733,6 +1762,51 @@ void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrow
             g_preloadScripts[browser->GetIdentifier()] = script;
         }
     }
+}
+
+// ElectrobunLoadHandler method implementations (defined after ElectrobunCefClient class)
+void ElectrobunLoadHandler::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) {
+    // NOTE: OnLoadStart is now a fallback - primary injection happens via GetResourceResponseFilter
+    // This ensures preload scripts are in the HTML before parsing, guaranteeing execution order
+}
+
+void ElectrobunLoadHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) {
+    // Fire did-navigate event
+    if (frame->IsMain() && webview_event_handler_) {
+        std::string url = frame->GetURL().ToString();
+        webview_event_handler_(webview_id_, _strdup("did-navigate"), _strdup(url.c_str()));
+    }
+}
+
+// ElectrobunResourceRequestHandler method implementations (defined after ElectrobunCefClient class)
+CefRefPtr<CefResponseFilter> ElectrobunResourceRequestHandler::GetResourceResponseFilter(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    CefRefPtr<CefRequest> request,
+    CefRefPtr<CefResponse> response) {
+
+    std::string url = request->GetURL().ToString();
+    std::string mimeType = response->GetMimeType().ToString();
+    bool isMain = frame->IsMain();
+    bool hasClient = client_ != nullptr;
+
+    std::cout << "[CEF] GetResourceResponseFilter called: url=" << url
+              << " mimeType=" << mimeType
+              << " isMain=" << isMain
+              << " hasClient=" << hasClient << std::endl;
+
+    // Only filter main frame HTML responses
+    if (isMain && hasClient && mimeType.find("html") != std::string::npos) {
+        std::string combinedScript = client_->GetCombinedScript();
+        std::cout << "[CEF] HTML response detected, scriptLength=" << combinedScript.length() << std::endl;
+
+        if (!combinedScript.empty()) {
+            std::cout << "[CEF] Installing response filter to inject preload scripts into HTML" << std::endl;
+            return new ElectrobunResponseFilter(combinedScript);
+        }
+    }
+
+    return nullptr;
 }
 
 // Runtime CEF availability detection - Windows equivalent of macOS isCEFAvailable()
@@ -5401,15 +5475,6 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         client->SetAbstractView(view.get());
 
         view->setClient(client);
-        
-        // Store preload scripts before browser creation so they're available during LoadStart
-        std::string combinedScript = client->GetCombinedScript();
-        if (!combinedScript.empty()) {
-            // We need to store by browser ID, but we don't have it yet
-            // Let's use a temporary approach - store by client pointer for now
-            static std::map<ElectrobunCefClient*, std::string> g_tempPreloadScripts;
-            g_tempPreloadScripts[client] = combinedScript;
-        }
 
         // Create request context for partition isolation
         CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(
@@ -5418,11 +5483,14 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         );
 
         // Create browser synchronously (like Mac implementation)
+        // Note: OnLoadStart will fire during this call, but the load handler has a direct
+        // reference to the client, so preload scripts are available immediately without race condition
         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
             windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, requestContext);
-        
+
         if (browser) {
-            // Now store the script with the actual browser ID
+            // Store preload script by browser ID for compatibility with other code paths
+            std::string combinedScript = client->GetCombinedScript();
             if (!combinedScript.empty()) {
                 g_preloadScripts[browser->GetIdentifier()] = combinedScript;
             }
