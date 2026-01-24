@@ -48,8 +48,9 @@ extern "C" {
     void asar_free_buffer(const uint8_t* buffer, size_t size);
 }
 
-// Global ASAR archive handle (lazy-loaded)
+// Global ASAR archive handle (lazy-loaded) with thread-safe initialization
 static AsarArchive* g_asarArchive = nullptr;
+static std::once_flag g_asarArchiveInitFlag;
 
 // Global shutdown flag to prevent race conditions during cleanup
 static std::atomic<bool> g_shuttingDown{false};
@@ -761,15 +762,13 @@ public:
 
         // Check if ASAR archive exists
         if (g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
-            // Lazy-load ASAR archive on first use
-            if (!g_asarArchive) {
+            // Thread-safe lazy-load ASAR archive on first use
+            std::call_once(g_asarArchiveInitFlag, [asarPath]() {
                 g_asarArchive = asar_open(asarPath);
-                if (g_asarArchive) {
-                } else {
+                if (!g_asarArchive) {
                     printf("ERROR CEF loadViewsFile: Failed to open ASAR archive at %s\n", asarPath);
-                    // Fall through to flat file reading
                 }
-            }
+            });
 
             // If ASAR archive is loaded, try to read from it
             if (g_asarArchive) {
@@ -4525,17 +4524,16 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
 
     // Check if ASAR archive exists
     if (g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
-        // Lazy-load ASAR archive on first use
-        if (!g_asarArchive) {
+        // Thread-safe lazy-load ASAR archive on first use
+        std::call_once(g_asarArchiveInitFlag, [asarPath]() {
             g_asarArchive = asar_open(asarPath);
             if (g_asarArchive) {
                 fflush(stdout);
             } else {
                 printf("ERROR WebKit loadViewsFile: Failed to open ASAR archive at %s\n", asarPath);
                 fflush(stdout);
-                // Fall through to flat file reading
             }
-        }
+        });
 
         // If ASAR archive is loaded, try to read from it
         if (g_asarArchive) {

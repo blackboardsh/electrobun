@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <shellapi.h>
 #include <commctrl.h>
+#include <mutex>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/base.h>
 #include <shobjidl.h>  // For IFileOpenDialog
@@ -266,8 +267,9 @@ private:
     }
 };
 
-// Global ASAR archive handle (lazy-loaded)
+// Global ASAR archive handle (lazy-loaded) with thread-safe initialization
 static AsarArchive* g_asarArchive = nullptr;
+static std::once_flag g_asarArchiveInitFlag;
 
 // Export ASAR functions for launcher to use (compatible with libasar.dll API)
 extern "C" __declspec(dllexport) void* asar_open(const char* path) {
@@ -7880,16 +7882,15 @@ std::string loadViewsFile(const std::string& path) {
     if (asarCheck.good()) {
         asarCheck.close();
 
-        // Lazy-load ASAR archive on first use
-        if (!g_asarArchive) {
+        // Thread-safe lazy-load ASAR archive on first use
+        std::call_once(g_asarArchiveInitFlag, [&asarPath]() {
             g_asarArchive = AsarArchive::open(asarPath);
             if (g_asarArchive) {
                 ::log("DEBUG loadViewsFile: Opened ASAR archive at " + asarPath);
             } else {
                 ::log("ERROR loadViewsFile: Failed to open ASAR archive at " + asarPath);
-                // Fall through to flat file reading
             }
-        }
+        });
 
         // If ASAR archive is loaded, try to read from it
         if (g_asarArchive) {

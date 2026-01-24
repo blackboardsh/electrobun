@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <chrono>
 #include <map>
+#include <mutex>
 
 // Shared cross-platform utilities
 #include "../shared/glob_match.h"
@@ -56,8 +57,9 @@ extern "C" {
     void asar_free_buffer(const uint8_t* buffer, size_t size);
 }
 
-// Global ASAR archive handle (lazy-loaded)
+// Global ASAR archive handle (lazy-loaded) with thread-safe initialization
 static AsarArchive* g_asarArchive = nullptr;
+static std::once_flag g_asarArchiveInitFlag;
 
 CGFloat OFFSCREEN_OFFSET = -20000;
 BOOL useCEF = false;
@@ -515,17 +517,16 @@ NSData* readViewsFile(const char* viewsUrl) {
 
     // Check if ASAR archive exists
     if ([[NSFileManager defaultManager] fileExistsAtPath:asarPath]) {
-        // Lazy-load ASAR archive on first use
-        if (!g_asarArchive) {
+        // Thread-safe lazy-load ASAR archive on first use
+        std::call_once(g_asarArchiveInitFlag, [asarPath]() {
             const char* asarPathCStr = [asarPath UTF8String];
             g_asarArchive = asar_open(asarPathCStr);
             if (g_asarArchive) {
                 NSLog(@"DEBUG readViewsFile: Opened ASAR archive at %@", asarPath);
             } else {
                 NSLog(@"ERROR readViewsFile: Failed to open ASAR archive at %@", asarPath);
-                // Fall through to flat file reading
             }
-        }
+        });
 
         // If ASAR archive is loaded, try to read from it
         if (g_asarArchive) {
