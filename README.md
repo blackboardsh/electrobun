@@ -32,6 +32,10 @@ Read about how Electrobun is designed, and why, in our <a href="https://www.elec
 
 See the <a href="https://github.com/orgs/blackboardsh/projects/5">roadmap</a>
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
+
 ## Contributing
 
 On the road to a stable 1.0.0 I'm probably going to just be pushing directly to main a lot.
