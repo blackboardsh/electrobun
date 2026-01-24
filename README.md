@@ -4,7 +4,11 @@
 <h1 align="center">Electrobun</h1>
 
 <div align="center">
+  Get started with a template <br />
+  <code><strong>npx electrobun init</strong></code>   
 </div>
+
+
 
 ## What is Electrobun?
 
