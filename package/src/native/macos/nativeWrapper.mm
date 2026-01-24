@@ -45,6 +45,13 @@
 #include "../shared/mime_types.h"
 #include "../shared/asar.h"
 #include "../shared/config.h"
+#include "../shared/preload_script.h"
+#include "../shared/webview_storage.h"
+#include "../shared/navigation_rules.h"
+#include "../shared/thread_safe_map.h"
+#include "../shared/shutdown_guard.h"
+#include "../shared/ffi_helpers.h"
+#include "../shared/download_event.h"
 
 using namespace electrobun;
 
@@ -2488,10 +2495,7 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ElectrobunApp);
 };
 
-struct PreloadScript {
-    std::string code;
-    bool mainFrameOnly;
-};
+// PreloadScript struct is now defined in shared/preload_script.h
 
 class ElectrobunResponseFilter : public CefResponseFilter {
 private:

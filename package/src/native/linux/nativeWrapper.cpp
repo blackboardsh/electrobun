@@ -42,6 +42,14 @@
 #include "../shared/mime_types.h"
 #include "../shared/asar.h"
 #include "../shared/config.h"
+#include "../shared/preload_script.h"
+#include "../shared/webview_storage.h"
+#include "../shared/navigation_rules.h"
+#include "../shared/thread_safe_map.h"
+#include "../shared/shutdown_guard.h"
+#include "../shared/ffi_helpers.h"
+#include "../shared/json_menu_parser.h"
+#include "../shared/download_event.h"
 
 using namespace electrobun;
 
@@ -51,13 +59,16 @@ static AsarArchive* g_asarArchive = nullptr;
 static std::once_flag g_asarArchiveInitFlag;
 
 // Global shutdown flag to prevent race conditions during cleanup
+// Note: shared/shutdown_guard.h provides ShutdownManager singleton for new code
+// This local atomic is kept for direct access patterns used throughout this file
 static std::atomic<bool> g_shuttingDown{false};
 
-// Additional race condition protection  
+// Additional race condition protection
 static std::atomic<int> g_activeOperations{0};
 static std::mutex g_cefBrowserMutex;
 
 // Lightweight operation guard - just check shutdown, don't track operations
+// Note: shared/shutdown_guard.h provides ShutdownCheckGuard with same interface
 class OperationGuard {
 public:
     OperationGuard() : valid_(!g_shuttingDown.load()) {}
@@ -159,18 +170,9 @@ std::string getOriginFromPermissionRequest(WebKitPermissionRequest* request) {
     return "views://";
 }
 
-// Simple JSON value structure for menu parsing
-struct MenuJsonValue {
-    std::string type;
-    std::string label;
-    std::string action; 
-    std::string role;
-    std::string tooltip;
-    bool enabled = true;
-    bool checked = false;
-    bool hidden = false;
-    std::vector<MenuJsonValue> submenu;
-};
+// Menu JSON structure is now defined in shared/json_menu_parser.h
+// Alias for backward compatibility with existing code
+using MenuJsonValue = MenuItemJson;
 
 // Forward declarations
 class ContainerView;
