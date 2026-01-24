@@ -67,15 +67,8 @@ static std::atomic<bool> g_shuttingDown{false};
 static std::atomic<int> g_activeOperations{0};
 static std::mutex g_cefBrowserMutex;
 
-// Lightweight operation guard - just check shutdown, don't track operations
-// Note: shared/shutdown_guard.h provides ShutdownCheckGuard with same interface
-class OperationGuard {
-public:
-    OperationGuard() : valid_(!g_shuttingDown.load()) {}
-    bool isValid() const { return valid_; }
-private:
-    bool valid_;
-};
+// Use OperationGuard from shared/shutdown_guard.h
+using electrobun::OperationGuard;
 
 // CEF includes - always include them even if it marginally increases binary size
 // we want a few binaries that will work whenever an electrobun developer
@@ -209,124 +202,8 @@ static void setX11WindowIcon(X11Window* x11win, GdkPixbuf* pixbuf);
 // Forward declaration for X11 menu function
 void applyApplicationMenuToX11Window(X11Window* x11win);
 
-// Parse JSON menu array (simplified parser for basic menu structure)
-std::vector<MenuJsonValue> parseMenuJson(const std::string& jsonStr) {
-    std::vector<MenuJsonValue> items;
-    
-    // This is a very basic parser - in production you'd want a proper JSON library
-    // For now, just create some test menu items if JSON parsing fails
-    
-    // Look for basic patterns in the JSON to extract menu items
-    size_t pos = 0;
-    while (pos < jsonStr.length()) {
-        size_t labelStart = jsonStr.find("\"label\":", pos);
-        if (labelStart == std::string::npos) break;
-        
-        size_t labelValueStart = jsonStr.find("\"", labelStart + 8);
-        if (labelValueStart == std::string::npos) break;
-        labelValueStart++;
-        
-        size_t labelValueEnd = jsonStr.find("\"", labelValueStart);
-        if (labelValueEnd == std::string::npos) break;
-        
-        MenuJsonValue item;
-        item.label = jsonStr.substr(labelValueStart, labelValueEnd - labelValueStart);
-        
-        // Look for action
-        size_t actionStart = jsonStr.find("\"action\":", labelStart);
-        if (actionStart != std::string::npos && actionStart < jsonStr.find("}", labelStart)) {
-            size_t actionValueStart = jsonStr.find("\"", actionStart + 9);
-            if (actionValueStart != std::string::npos) {
-                actionValueStart++;
-                size_t actionValueEnd = jsonStr.find("\"", actionValueStart);
-                if (actionValueEnd != std::string::npos) {
-                    item.action = jsonStr.substr(actionValueStart, actionValueEnd - actionValueStart);
-                }
-            }
-        }
-        
-        // Look for type
-        size_t typeStart = jsonStr.find("\"type\":", labelStart);
-        if (typeStart != std::string::npos && typeStart < jsonStr.find("}", labelStart)) {
-            size_t typeValueStart = jsonStr.find("\"", typeStart + 7);
-            if (typeValueStart != std::string::npos) {
-                typeValueStart++;
-                size_t typeValueEnd = jsonStr.find("\"", typeValueStart);
-                if (typeValueEnd != std::string::npos) {
-                    item.type = jsonStr.substr(typeValueStart, typeValueEnd - typeValueStart);
-                }
-            }
-        }
-        
-        // Find the end of this menu item object
-        size_t itemEnd = jsonStr.find("},{", labelStart);
-        if (itemEnd == std::string::npos) {
-            itemEnd = jsonStr.find("}]", labelStart);  // Last item in array
-        }
-        if (itemEnd == std::string::npos) {
-            itemEnd = jsonStr.find("}", labelStart);   // Single item
-        }
-        
-        // Look for enabled boolean within this item
-        size_t enabledStart = jsonStr.find("\"enabled\":", labelStart);
-        if (enabledStart != std::string::npos && enabledStart < itemEnd) {
-            size_t enabledValueStart = enabledStart + 10;  // Skip "enabled":
-            // Skip whitespace and colon
-            while (enabledValueStart < jsonStr.length() && (isspace(jsonStr[enabledValueStart]) || jsonStr[enabledValueStart] == ':')) {
-                enabledValueStart++;
-            }
-            if (jsonStr.substr(enabledValueStart, 4) == "true") {
-                item.enabled = true;
-            } else if (jsonStr.substr(enabledValueStart, 5) == "false") {
-                item.enabled = false;
-            }
-        }
-        
-        // Look for hidden boolean within this item
-        size_t hiddenStart = jsonStr.find("\"hidden\":", labelStart);
-        if (hiddenStart != std::string::npos && hiddenStart < itemEnd) {
-            size_t hiddenValueStart = hiddenStart + 9;  // Skip "hidden":
-            // Skip whitespace and colon
-            while (hiddenValueStart < jsonStr.length() && (isspace(jsonStr[hiddenValueStart]) || jsonStr[hiddenValueStart] == ':')) {
-                hiddenValueStart++;
-            }
-            if (jsonStr.substr(hiddenValueStart, 4) == "true") {
-                item.hidden = true;
-            } else if (jsonStr.substr(hiddenValueStart, 5) == "false") {
-                item.hidden = false;
-            }
-        }
-        
-        // Look for checked boolean within this item
-        size_t checkedStart = jsonStr.find("\"checked\":", labelStart);
-        if (checkedStart != std::string::npos && checkedStart < itemEnd) {
-            size_t checkedValueStart = checkedStart + 10;  // Skip "checked":
-            // Skip whitespace and colon
-            while (checkedValueStart < jsonStr.length() && (isspace(jsonStr[checkedValueStart]) || jsonStr[checkedValueStart] == ':')) {
-                checkedValueStart++;
-            }
-            if (jsonStr.substr(checkedValueStart, 4) == "true") {
-                item.checked = true;
-            } else if (jsonStr.substr(checkedValueStart, 5) == "false") {
-                item.checked = false;
-            }
-        }
-        
-        items.push_back(item);
-        pos = labelValueEnd + 1;
-    }
-    
-    // If no items found, create a basic test menu
-    if (items.empty()) {
-        MenuJsonValue testItem;
-        testItem.label = "Test Menu Item";
-        testItem.action = "test-action";
-        testItem.type = "normal";
-        items.push_back(testItem);
-    }
-    
-    return items;
-}
+// Use parseMenuJson from shared/json_menu_parser.h
+using electrobun::parseMenuJson;
 
 // Mask rectangle structure for X11 regions
 struct MaskRect {
