@@ -200,7 +200,7 @@ export class BrowserWindow<T> {
   }
 
   show() {
-    return ffi.native.symbols.showWindow(this.ptr);
+    return ffi.request.focusWindow({ winId: this.id });
   }
 
   minimize() {
