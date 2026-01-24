@@ -37,18 +37,16 @@
 
 // Shared cross-platform utilities
 #include "../shared/glob_match.h"
+#include "../shared/callbacks.h"
+#include "../shared/permissions.h"
+#include "../shared/mime_types.h"
+#include "../shared/asar.h"
+#include "../shared/config.h"
 
-// ASAR C FFI declarations
-extern "C" {
-    typedef struct AsarArchive AsarArchive;
-
-    AsarArchive* asar_open(const char* path);
-    void asar_close(AsarArchive* archive);
-    const uint8_t* asar_read_file(AsarArchive* archive, const char* path, size_t* size_out);
-    void asar_free_buffer(const uint8_t* buffer, size_t size);
-}
+using namespace electrobun;
 
 // Global ASAR archive handle (lazy-loaded) with thread-safe initialization
+// ASAR C FFI declarations are in shared/asar.h
 static AsarArchive* g_asarArchive = nullptr;
 static std::once_flag g_asarArchiveInitFlag;
 
@@ -118,13 +116,9 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
 static WebKitWebContext* getContextForPartition(const char* partitionIdentifier);
 
 
-// Webview callback types
-typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
-typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
-typedef uint32_t (*HandlePostMessage)(uint32_t webviewId, const char* message);
-
-// Tray callback types
-typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char* action);
+// Webview and tray callback types are defined in shared/callbacks.h
+// Platform-specific alias
+typedef StatusItemHandler ZigStatusItemHandler;
 
 // Menu item structure
 struct MenuItemData {
@@ -155,147 +149,14 @@ static std::string g_electrobunIdentifier = "";
 extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewId);
 extern "C" ELECTROBUN_EXPORT void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
 
-// Shared MIME type detection function
-// Based on Bun runtime supported file types and web development standards
-static std::string getMimeTypeFromUrl(const std::string& url) {
-    // Web/Code Files (Bun native support)
-    if (url.find(".html") != std::string::npos || url.find(".htm") != std::string::npos) {
-        return "text/html";
-    } else if (url.find(".js") != std::string::npos || url.find(".mjs") != std::string::npos || url.find(".cjs") != std::string::npos) {
-        return "text/javascript";
-    } else if (url.find(".ts") != std::string::npos || url.find(".mts") != std::string::npos || url.find(".cts") != std::string::npos) {
-        return "text/typescript";
-    } else if (url.find(".jsx") != std::string::npos) {
-        return "text/jsx";
-    } else if (url.find(".tsx") != std::string::npos) {
-        return "text/tsx";
-    } else if (url.find(".css") != std::string::npos) {
-        return "text/css";
-    } else if (url.find(".json") != std::string::npos) {
-        return "application/json";
-    } else if (url.find(".xml") != std::string::npos) {
-        return "application/xml";
-    } else if (url.find(".md") != std::string::npos) {
-        return "text/markdown";
-    } else if (url.find(".txt") != std::string::npos) {
-        return "text/plain";
-    } else if (url.find(".toml") != std::string::npos) {
-        return "application/toml";
-    } else if (url.find(".yaml") != std::string::npos || url.find(".yml") != std::string::npos) {
-        return "application/x-yaml";
-    
-    // Image Files
-    } else if (url.find(".png") != std::string::npos) {
-        return "image/png";
-    } else if (url.find(".jpg") != std::string::npos || url.find(".jpeg") != std::string::npos) {
-        return "image/jpeg";
-    } else if (url.find(".gif") != std::string::npos) {
-        return "image/gif";
-    } else if (url.find(".webp") != std::string::npos) {
-        return "image/webp";
-    } else if (url.find(".svg") != std::string::npos) {
-        return "image/svg+xml";
-    } else if (url.find(".ico") != std::string::npos) {
-        return "image/x-icon";
-    } else if (url.find(".avif") != std::string::npos) {
-        return "image/avif";
-    
-    // Font Files
-    } else if (url.find(".woff") != std::string::npos) {
-        return "font/woff";
-    } else if (url.find(".woff2") != std::string::npos) {
-        return "font/woff2";
-    } else if (url.find(".ttf") != std::string::npos) {
-        return "font/ttf";
-    } else if (url.find(".otf") != std::string::npos) {
-        return "font/otf";
-    
-    // Media Files
-    } else if (url.find(".mp3") != std::string::npos) {
-        return "audio/mpeg";
-    } else if (url.find(".mp4") != std::string::npos) {
-        return "video/mp4";
-    } else if (url.find(".webm") != std::string::npos) {
-        return "video/webm";
-    } else if (url.find(".ogg") != std::string::npos) {
-        return "audio/ogg";
-    } else if (url.find(".wav") != std::string::npos) {
-        return "audio/wav";
-    
-    // Document Files
-    } else if (url.find(".pdf") != std::string::npos) {
-        return "application/pdf";
-    
-    // WebAssembly (Bun support)
-    } else if (url.find(".wasm") != std::string::npos) {
-        return "application/wasm";
-    
-    // Compressed Files
-    } else if (url.find(".zip") != std::string::npos) {
-        return "application/zip";
-    } else if (url.find(".gz") != std::string::npos) {
-        return "application/gzip";
-    }
-    
-    return "application/octet-stream"; // default
-}
+// MIME type detection function is in shared/mime_types.h
+// Permission cache types and functions are in shared/permissions.h
 
-// Permission cache for user media requests
-enum class PermissionType {
-    USER_MEDIA,
-    GEOLOCATION,
-    NOTIFICATIONS,
-    OTHER
-};
-
-enum class PermissionStatus {
-    UNKNOWN,
-    ALLOWED,
-    DENIED
-};
-
-struct PermissionCacheEntry {
-    PermissionStatus status;
-    std::chrono::system_clock::time_point expiry;
-};
-
-static std::map<std::pair<std::string, PermissionType>, PermissionCacheEntry> g_permissionCache;
-static std::mutex g_permissionCacheMutex;
-
-// Helper functions for permission management
+// Linux-specific permission request helper
 std::string getOriginFromPermissionRequest(WebKitPermissionRequest* request) {
     // For views:// scheme, use a constant origin since these are local files
     // For other schemes, you would use webkit_permission_request_get_requesting_origin() when available
     return "views://";
-}
-
-PermissionStatus getPermissionFromCache(const std::string& origin, PermissionType type) {
-    std::lock_guard<std::mutex> lock(g_permissionCacheMutex);
-    auto key = std::make_pair(origin, type);
-    auto it = g_permissionCache.find(key);
-    
-    if (it != g_permissionCache.end()) {
-        // Check if permission hasn't expired
-        auto now = std::chrono::system_clock::now();
-        if (now < it->second.expiry) {
-            return it->second.status;
-        } else {
-            // Permission expired, remove from cache
-            g_permissionCache.erase(it);
-        }
-    }
-    
-    return PermissionStatus::UNKNOWN;
-}
-
-void cachePermission(const std::string& origin, PermissionType type, PermissionStatus status) {
-    std::lock_guard<std::mutex> lock(g_permissionCacheMutex);
-    auto key = std::make_pair(origin, type);
-    
-    // Cache permission for 24 hours
-    auto expiry = std::chrono::system_clock::now() + std::chrono::hours(24);
-    
-    g_permissionCache[key] = {status, expiry};
 }
 
 // Simple JSON value structure for menu parsing

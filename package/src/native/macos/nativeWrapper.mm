@@ -40,6 +40,13 @@
 
 // Shared cross-platform utilities
 #include "../shared/glob_match.h"
+#include "../shared/callbacks.h"
+#include "../shared/permissions.h"
+#include "../shared/mime_types.h"
+#include "../shared/asar.h"
+#include "../shared/config.h"
+
+using namespace electrobun;
 
 /*
  * =============================================================================
@@ -47,17 +54,8 @@
  * =============================================================================
  */
 
-// ASAR C FFI declarations
-extern "C" {
-    typedef struct AsarArchive AsarArchive;
-
-    AsarArchive* asar_open(const char* path);
-    void asar_close(AsarArchive* archive);
-    const uint8_t* asar_read_file(AsarArchive* archive, const char* path, size_t* size_out);
-    void asar_free_buffer(const uint8_t* buffer, size_t size);
-}
-
 // Global ASAR archive handle (lazy-loaded) with thread-safe initialization
+// ASAR C FFI declarations are in shared/asar.h
 static AsarArchive* g_asarArchive = nullptr;
 static std::once_flag g_asarArchiveInitFlag;
 
@@ -83,20 +81,10 @@ class ElectrobunSchemeHandler;
 class ElectrobunSchemeHandlerFactory;
 
 // Type definitions
-
-/** Generic bridging callback types. */
-// typedef BOOL (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
-// NOTE: Bun's FFIType.true doesn't play well with objective C's YES/NO char booleans
-// so when sending booleans from JSCallbacks we have to use u32 for now
-typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
-typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
-typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);
-typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
+// Core callback types are defined in shared/callbacks.h
+// Platform-specific aliases for Objective-C compatibility
+typedef BOOL (*HandlePostMessageObjC)(uint32_t webviewId, const char* message);
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
-
-// JS Utils - DEPRECATED: Now using map-based approach instead of callbacks
-typedef const char* (*GetMimeType)(const char* filePath);
-typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);
 
 static dispatch_queue_t jsWorkerQueue = NULL;
 
@@ -108,90 +96,7 @@ static NSLock *webviewHTMLLock = nil;
 extern "C" const char* getWebviewHTMLContent(uint32_t webviewId);
 extern "C" void setWebviewHTMLContent(uint32_t webviewId, const char* htmlContent);
 
-// Shared MIME type detection function
-// Based on Bun runtime supported file types and web development standards
-static std::string getMimeTypeFromUrl(const std::string& url) {
-    // Web/Code Files (Bun native support)
-    if (url.find(".html") != std::string::npos || url.find(".htm") != std::string::npos) {
-        return "text/html";
-    } else if (url.find(".js") != std::string::npos || url.find(".mjs") != std::string::npos || url.find(".cjs") != std::string::npos) {
-        return "text/javascript";
-    } else if (url.find(".ts") != std::string::npos || url.find(".mts") != std::string::npos || url.find(".cts") != std::string::npos) {
-        return "text/typescript";
-    } else if (url.find(".jsx") != std::string::npos) {
-        return "text/jsx";
-    } else if (url.find(".tsx") != std::string::npos) {
-        return "text/tsx";
-    } else if (url.find(".css") != std::string::npos) {
-        return "text/css";
-    } else if (url.find(".json") != std::string::npos) {
-        return "application/json";
-    } else if (url.find(".xml") != std::string::npos) {
-        return "application/xml";
-    } else if (url.find(".md") != std::string::npos) {
-        return "text/markdown";
-    } else if (url.find(".txt") != std::string::npos) {
-        return "text/plain";
-    } else if (url.find(".toml") != std::string::npos) {
-        return "application/toml";
-    } else if (url.find(".yaml") != std::string::npos || url.find(".yml") != std::string::npos) {
-        return "application/x-yaml";
-    
-    // Image Files
-    } else if (url.find(".png") != std::string::npos) {
-        return "image/png";
-    } else if (url.find(".jpg") != std::string::npos || url.find(".jpeg") != std::string::npos) {
-        return "image/jpeg";
-    } else if (url.find(".gif") != std::string::npos) {
-        return "image/gif";
-    } else if (url.find(".webp") != std::string::npos) {
-        return "image/webp";
-    } else if (url.find(".svg") != std::string::npos) {
-        return "image/svg+xml";
-    } else if (url.find(".ico") != std::string::npos) {
-        return "image/x-icon";
-    } else if (url.find(".avif") != std::string::npos) {
-        return "image/avif";
-    
-    // Font Files
-    } else if (url.find(".woff") != std::string::npos) {
-        return "font/woff";
-    } else if (url.find(".woff2") != std::string::npos) {
-        return "font/woff2";
-    } else if (url.find(".ttf") != std::string::npos) {
-        return "font/ttf";
-    } else if (url.find(".otf") != std::string::npos) {
-        return "font/otf";
-    
-    // Media Files
-    } else if (url.find(".mp3") != std::string::npos) {
-        return "audio/mpeg";
-    } else if (url.find(".mp4") != std::string::npos) {
-        return "video/mp4";
-    } else if (url.find(".webm") != std::string::npos) {
-        return "video/webm";
-    } else if (url.find(".ogg") != std::string::npos) {
-        return "audio/ogg";
-    } else if (url.find(".wav") != std::string::npos) {
-        return "audio/wav";
-    
-    // Document Files
-    } else if (url.find(".pdf") != std::string::npos) {
-        return "application/pdf";
-    
-    // WebAssembly (Bun support)
-    } else if (url.find(".wasm") != std::string::npos) {
-        return "application/wasm";
-    
-    // Compressed Files
-    } else if (url.find(".zip") != std::string::npos) {
-        return "application/zip";
-    } else if (url.find(".gz") != std::string::npos) {
-        return "application/gzip";
-    }
-    
-    return "application/octet-stream"; // default
-}
+// MIME type detection function is in shared/mime_types.h
 
 // Deadlock prevention for callJsCallbackFromMainSync
 static BOOL isInSyncCallback = NO;
@@ -309,98 +214,16 @@ typedef struct {
     const char *titleBarStyle;
 } createNSWindowWithFrameAndStyleParams;
 
-/** Window event callbacks. */
-// typedef void (*WindowCloseHandler)(uint32_t windowId);
-// typedef void (*WindowMoveHandler)(uint32_t windowId, CGFloat x, CGFloat y);
-// typedef void (*WindowResizeHandler)(uint32_t windowId, CGFloat x, CGFloat y, CGFloat width, CGFloat height);
-typedef void (*WindowCloseHandler)(uint32_t windowId);
-typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
-typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
-typedef void (*WindowFocusHandler)(uint32_t windowId);
-
-
-/** Tray and menu bridging. */
-typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
-typedef void (*MenuHandler)(const char *menuItemId);
-
-/** Snapshot callback. */
-typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
-
-/** URL open handler for deep linking. */
-typedef void (*URLOpenHandler)(const char *url);
+// Window, tray, menu, and snapshot callbacks are defined in shared/callbacks.h
+// Platform-specific aliases
+typedef SnapshotCallback zigSnapshotCallback;
+typedef StatusItemHandler ZigStatusItemHandler;
 static URLOpenHandler g_urlOpenHandler = nullptr;
 
-typedef struct {    
+typedef struct {
 } MenuItemConfig;
 
-// Permission cache for user media requests
-enum class PermissionType {
-    USER_MEDIA,
-    GEOLOCATION,
-    NOTIFICATIONS,
-    OTHER
-};
-
-enum class PermissionStatus {
-    UNKNOWN,
-    ALLOWED,
-    DENIED
-};
-
-struct PermissionCacheEntry {
-    PermissionStatus status;
-    std::chrono::system_clock::time_point expiry;
-};
-
-static std::map<std::pair<std::string, PermissionType>, PermissionCacheEntry> g_permissionCache;
-
-// Helper functions for permission management
-std::string getOriginFromUrl(const std::string& url) {
-    // For views:// scheme, use a constant origin since these are local files
-    if (url.find("views://") == 0) {
-        return "views://";
-    }
-    
-    // For other schemes, extract origin from URL
-    size_t protocolEnd = url.find("://");
-    if (protocolEnd == std::string::npos) return url;
-    
-    size_t domainStart = protocolEnd + 3;
-    size_t pathStart = url.find('/', domainStart);
-    
-    if (pathStart == std::string::npos) {
-        return url;
-    }
-    
-    return url.substr(0, pathStart);
-}
-
-PermissionStatus getPermissionFromCache(const std::string& origin, PermissionType type) {
-    auto key = std::make_pair(origin, type);
-    auto it = g_permissionCache.find(key);
-    
-    if (it != g_permissionCache.end()) {
-        // Check if permission hasn't expired
-        auto now = std::chrono::system_clock::now();
-        if (now < it->second.expiry) {
-            return it->second.status;
-        } else {
-            // Permission expired, remove from cache
-            g_permissionCache.erase(it);
-        }
-    }
-    
-    return PermissionStatus::UNKNOWN;
-}
-
-void cachePermission(const std::string& origin, PermissionType type, PermissionStatus status) {
-    auto key = std::make_pair(origin, type);
-    
-    // Cache permission for 24 hours
-    auto expiry = std::chrono::system_clock::now() + std::chrono::hours(24);
-    
-    g_permissionCache[key] = {status, expiry};
-}
+// Permission cache types and functions are defined in shared/permissions.h
 
 /*
  * =============================================================================

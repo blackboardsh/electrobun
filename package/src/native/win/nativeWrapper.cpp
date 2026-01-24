@@ -37,6 +37,12 @@
 
 // Shared cross-platform utilities
 #include "../shared/glob_match.h"
+#include "../shared/callbacks.h"
+#include "../shared/permissions.h"
+#include "../shared/mime_types.h"
+#include "../shared/config.h"
+
+using namespace electrobun;
 
 // Simple ASAR reader implementation for Windows (no external dependency)
 #include <fstream>
@@ -363,20 +369,12 @@ ELECTROBUN_EXPORT bool isCEFAvailable();
 // Type definitions to match macOS types
 typedef double CGFloat;
 
-// Function pointer type definitions
-typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
-typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
-typedef BOOL (*HandlePostMessage)(uint32_t webviewId, const char* message);
-typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
+// Function pointer type definitions are in shared/callbacks.h
+// Platform-specific aliases
+typedef BOOL (*HandlePostMessageWin)(uint32_t webviewId, const char* message);
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
-typedef void (*WindowCloseHandler)(uint32_t windowId);
-typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
-typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
-typedef void (*WindowFocusHandler)(uint32_t windowId);
-typedef void (*ZigStatusItemHandler)(uint32_t trayId, const char *action);
-typedef void (*zigSnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char * dataUrl);
-typedef const char* (*GetMimeType)(const char* filePath);
-typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);
+typedef SnapshotCallback zigSnapshotCallback;
+typedef StatusItemHandler ZigStatusItemHandler;
 
 // Global map to store container views by window handle
 static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
@@ -430,74 +428,8 @@ static std::map<HWND, std::string> g_pendingUrls;
 static ComPtr<ICoreWebView2Controller> g_controller;
 static ComPtr<ICoreWebView2> g_webview;
 
-// Permission cache for user media requests
-enum class PermissionType {
-    USER_MEDIA,
-    GEOLOCATION,
-    NOTIFICATIONS,
-    OTHER
-};
+// Permission cache types and functions are in shared/permissions.h
 
-enum class PermissionStatus {
-    UNKNOWN,
-    ALLOWED,
-    DENIED
-};
-
-struct PermissionCacheEntry {
-    PermissionStatus status;
-    std::chrono::system_clock::time_point expiry;
-};
-
-static std::map<std::pair<std::string, PermissionType>, PermissionCacheEntry> g_permissionCache;
-
-// Helper functions for permission management
-std::string getOriginFromUrl(const std::string& url) {
-    // For views:// scheme, use a constant origin since these are local files
-    if (url.find("views://") == 0) {
-        return "views://";
-    }
-    
-    // For other schemes, extract origin from URL
-    size_t protocolEnd = url.find("://");
-    if (protocolEnd == std::string::npos) return url;
-    
-    size_t domainStart = protocolEnd + 3;
-    size_t pathStart = url.find('/', domainStart);
-    
-    if (pathStart == std::string::npos) {
-        return url;
-    }
-    
-    return url.substr(0, pathStart);
-}
-
-PermissionStatus getPermissionFromCache(const std::string& origin, PermissionType type) {
-    auto key = std::make_pair(origin, type);
-    auto it = g_permissionCache.find(key);
-    
-    if (it != g_permissionCache.end()) {
-        // Check if permission hasn't expired
-        auto now = std::chrono::system_clock::now();
-        if (now < it->second.expiry) {
-            return it->second.status;
-        } else {
-            // Permission expired, remove from cache
-            g_permissionCache.erase(it);
-        }
-    }
-    
-    return PermissionStatus::UNKNOWN;
-}
-
-void cachePermission(const std::string& origin, PermissionType type, PermissionStatus status) {
-    auto key = std::make_pair(origin, type);
-    
-    // Cache permission for 24 hours
-    auto expiry = std::chrono::system_clock::now() + std::chrono::hours(24);
-    
-    g_permissionCache[key] = {status, expiry};
-}
 static ComPtr<ICoreWebView2Environment> g_environment;  // Add global environment
 static ComPtr<ICoreWebView2CustomSchemeRegistration> g_customScheme;
 static ComPtr<ICoreWebView2EnvironmentOptions> g_envOptions;
