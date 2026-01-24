@@ -25,34 +25,25 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - Even smaller app updates as small as 14KB (using bsdiff it only downloads tiny patches between versions)
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
-## Architecture
-
-Read about how Electrobun is designed, and why, in our <a href="https://www.electrobun.dev/docs/guides/Architecture/Overview">architecture docs</a>.
-
 ## Apps Built with Electrobun
 - [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
-
-## Roadmap
-
-See the <a href="https://github.com/orgs/blackboardsh/projects/5">roadmap</a>
 
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
 
 ## Contributing
-
-On the road to a stable 1.0.0 I'm probably going to just be pushing directly to main a lot.
-
-As we get closer to 1.0.0 I'll probably make guidelines for PRs and stuff. In the meantime if you find this project and want to contribute code it's probably best to create an issue first or ping me on twitter or discord to discuss when, what, and how is best to do that.
-
-Ways to get involved at this early stage:
+Ways to get involved:
 
 - Follow us on X for updates <a href="https://twitter.com/BlackboardTech">@BlackboardTech</a> or <a href="https://bsky.app/profile/yoav.codes">@yoav.codes</a>
 - Join the conversation on <a href="https://discord.gg/ueKE4tjaCE">Discord</a>
 - Create and participate in Github issues and discussions
+- Let me know what you're building with Electrobun
 
 ## Development Setup
+Building apps with Electrobun is as easy as updating your package.json dependencies with `npm add electrobun` or try one of our templates via `npx electrobun init`.
+
+**This section is for building Electrobun from source locally in order to contribute fixes to it.**
 
 ### Prerequisites
 
