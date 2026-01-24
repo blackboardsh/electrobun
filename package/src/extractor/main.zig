@@ -631,49 +631,49 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     if (builtin.os.tag == .windows) {
         try createWindowsShortcut(allocator, app_dir, metadata);
     }
-    
-    // Save tar files for Updater API on Linux after everything else is done
-    if (builtin.os.tag == .linux) {
+
+    // Save tar files for Updater API on Linux and Windows after everything else is done
+    if (builtin.os.tag == .linux or builtin.os.tag == .windows) {
         std.debug.print("\n✓ Saving tar files for Updater API...\n", .{});
         // Make a defensive copy of the hash to prevent memory corruption
         const safe_hash = if (metadata.hash) |h| try allocator.dupe(u8, h) else null;
         defer if (safe_hash != null) allocator.free(safe_hash.?);
-        
+
         // Save compressed tar.zst file with hash as filename (for Updater API compatibility)
-        const compressed_filename = if (safe_hash) |hash| 
+        const compressed_filename = if (safe_hash) |hash|
             try std.fmt.allocPrint(allocator, "{s}.tar.zst", .{hash})
-        else 
+        else
             "current.tar.zst";
         defer if (safe_hash != null) allocator.free(compressed_filename);
-        
+
         const compressed_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, compressed_filename });
         defer allocator.free(compressed_path);
-        
+
         // Ensure self-extraction directory exists
         try std.fs.cwd().makePath(self_extraction_dir);
-        
+
         std.debug.print("DEBUG: Creating compressed file at: {s}\n", .{compressed_path});
         const compressed_file = try std.fs.cwd().createFile(compressed_path, .{});
         defer compressed_file.close();
         try compressed_file.writeAll(compressed_data);
         std.debug.print("✓ Saved compressed tar.zst ({} bytes)\n", .{compressed_data.len});
-        
+
         // Also save decompressed tar for immediate use
         const tar_filename = if (safe_hash) |hash|
             try std.fmt.allocPrint(allocator, "{s}.tar", .{hash})
         else
             "current.tar";
         defer if (safe_hash != null) allocator.free(tar_filename);
-        
+
         const tar_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, tar_filename });
         defer allocator.free(tar_path);
-        
+
         std.debug.print("DEBUG: Creating tar file at: {s}\n", .{tar_path});
         const tar_file = try std.fs.cwd().createFile(tar_path, .{});
         defer tar_file.close();
         try tar_file.writeAll(decompressed_data.items);
         std.debug.print("✓ Saved decompressed tar ({} bytes)\n", .{decompressed_data.items.len});
-        
+
         // List files to confirm they're saved
         std.debug.print("\nDEBUG: Final files in self-extraction dir:\n", .{});
         var dir = try std.fs.cwd().openDir(self_extraction_dir, .{ .iterate = true });
