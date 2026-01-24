@@ -5,14 +5,24 @@ const c = @cImport({
     @cInclude("unistd.h");
 });
 
-// Windows-specific imports for hiding console
-const windows = if (builtin.os.tag == .windows) struct {
-    const BOOL = c_int;
-    const DWORD = u32;
-    const HANDLE = *anyopaque;
-    const LPVOID = *anyopaque;
-    const LPWSTR = [*:0]u16;
-    const LPSTR = [*:0]u8;
+var child_pid: std.process.Child.Id = undefined;
+var should_exit: bool = false;
+
+// Windows-specific imports for production builds (GUI subsystem with hidden console)
+const windows_imports = if (builtin.os.tag == .windows) struct {
+    const win = std.os.windows;
+    const BOOL = win.BOOL;
+    const DWORD = win.DWORD;
+    const HANDLE = win.HANDLE;
+    const LPWSTR = win.LPWSTR;
+    const LPVOID = win.LPVOID;
+
+    const PROCESS_INFORMATION = extern struct {
+        hProcess: HANDLE,
+        hThread: HANDLE,
+        dwProcessId: DWORD,
+        dwThreadId: DWORD,
+    };
 
     const STARTUPINFOW = extern struct {
         cb: DWORD,
@@ -27,24 +37,13 @@ const windows = if (builtin.os.tag == .windows) struct {
         dwYCountChars: DWORD,
         dwFillAttribute: DWORD,
         dwFlags: DWORD,
-        wShowWindow: u16,
-        cbReserved2: u16,
+        wShowWindow: win.WORD,
+        cbReserved2: win.WORD,
         lpReserved2: ?*u8,
         hStdInput: ?HANDLE,
         hStdOutput: ?HANDLE,
         hStdError: ?HANDLE,
     };
-
-    const PROCESS_INFORMATION = extern struct {
-        hProcess: HANDLE,
-        hThread: HANDLE,
-        dwProcessId: DWORD,
-        dwThreadId: DWORD,
-    };
-
-    const CREATE_NO_WINDOW: DWORD = 0x08000000;
-    const STARTF_USESTDHANDLES: DWORD = 0x00000100;
-    const INFINITE: DWORD = 0xFFFFFFFF;
 
     extern "kernel32" fn CreateProcessW(
         lpApplicationName: ?LPWSTR,
@@ -53,19 +52,19 @@ const windows = if (builtin.os.tag == .windows) struct {
         lpThreadAttributes: ?*anyopaque,
         bInheritHandles: BOOL,
         dwCreationFlags: DWORD,
-        lpEnvironment: ?*anyopaque,
+        lpEnvironment: ?LPVOID,
         lpCurrentDirectory: ?LPWSTR,
         lpStartupInfo: *STARTUPINFOW,
         lpProcessInformation: *PROCESS_INFORMATION,
-    ) callconv(.C) BOOL;
+    ) callconv(win.WINAPI) BOOL;
 
-    extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) callconv(.C) DWORD;
-    extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) callconv(.C) BOOL;
-    extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(.C) BOOL;
+    extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) callconv(win.WINAPI) DWORD;
+    extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) callconv(win.WINAPI) BOOL;
+    extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(win.WINAPI) BOOL;
+
+    const CREATE_NO_WINDOW: DWORD = 0x08000000;
+    const INFINITE: DWORD = 0xFFFFFFFF;
 } else struct {};
-
-var child_pid: if (builtin.os.tag == .windows) u32 else std.process.Child.Id = undefined;
-var should_exit: bool = false;
 
 // Signal handler that forwards signals to child process
 fn signalHandler(sig: c_int) callconv(.C) void {
@@ -174,79 +173,66 @@ pub fn main() !void {
         child_process.env_map = &env_map;
     }
 
-    // On Windows GUI builds, we can't inherit stdout/stderr when launched without a console
-    // because there's no console to inherit from. This would cause the child process to crash.
-    // Instead, ignore output (it will go to detached console or nowhere).
-    if (builtin.os.tag == .windows) {
-        // For Windows GUI apps, ignore stdout/stderr to avoid crashes
-        child_process.stdout_behavior = .Ignore;
-        child_process.stderr_behavior = .Ignore;
-    } else {
-        // On macOS/Linux, inherit stdout/stderr so we can see any errors
-        child_process.stdout_behavior = .Inherit;
-        child_process.stderr_behavior = .Inherit;
-    }
-    
     std.debug.print("Spawning: {s} {s}\n", .{argv[0], if (argv.len > 1) argv[1] else ""});
 
-    // On Windows, use CreateProcessW with CREATE_NO_WINDOW to hide the console
-    if (builtin.os.tag == .windows) {
-        // Build command line: "path\to\bun.exe" "path\to\main.js"
-        const cmd_line = try std.fmt.allocPrintZ(arena_alloc, "\"{s}\" \"{s}\"", .{argv[0], argv[1]});
+    // Production Windows builds (GUI subsystem): Use CreateProcessW with CREATE_NO_WINDOW
+    // Dev builds and other platforms: Use standard spawn with inherited I/O
+    const is_production_windows = builtin.os.tag == .windows and builtin.mode != .Debug;
+
+    if (is_production_windows) {
+        // Windows production build - use CreateProcessW with CREATE_NO_WINDOW
+        const win = windows_imports;
+
+        // Build command line (needs to be mutable for CreateProcessW)
+        const cmd_line = try std.fmt.allocPrintZ(arena_alloc, "\"{s}\" \"{s}\"", .{ argv[0], argv[1] });
         const cmd_line_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, cmd_line);
 
-        // Convert working directory to wide string
+        // Convert current directory to UTF-16
         const cwd_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, exe_dir);
 
-        var startup_info = std.mem.zeroes(windows.STARTUPINFOW);
-        startup_info.cb = @sizeOf(windows.STARTUPINFOW);
-        startup_info.dwFlags = windows.STARTF_USESTDHANDLES;
-        startup_info.hStdInput = null;
-        startup_info.hStdOutput = null;
-        startup_info.hStdError = null;
+        var si: win.STARTUPINFOW = std.mem.zeroes(win.STARTUPINFOW);
+        si.cb = @sizeOf(win.STARTUPINFOW);
 
-        var process_info: windows.PROCESS_INFORMATION = undefined;
+        var pi: win.PROCESS_INFORMATION = undefined;
 
-        const result = windows.CreateProcessW(
-            null, // lpApplicationName
-            @constCast(cmd_line_w.ptr), // lpCommandLine
-            null, // lpProcessAttributes
-            null, // lpThreadAttributes
-            0, // bInheritHandles = false
-            windows.CREATE_NO_WINDOW, // dwCreationFlags - this hides the console!
-            null, // lpEnvironment
-            cwd_w.ptr, // lpCurrentDirectory
-            &startup_info,
-            &process_info,
+        const success = win.CreateProcessW(
+            null,
+            @constCast(cmd_line_w.ptr),
+            null,
+            null,
+            0, // Don't inherit handles
+            win.CREATE_NO_WINDOW,
+            null,
+            cwd_w.ptr,
+            &si,
+            &pi,
         );
 
-        if (result == 0) {
+        if (success == 0) {
             std.debug.print("Failed to create process\n", .{});
-            return error.ProcessSpawnFailed;
+            return error.SpawnFailed;
         }
 
-        child_pid = process_info.dwProcessId;
-        std.debug.print("Child process spawned with PID {d}\n", .{child_pid});
+        std.debug.print("Child process spawned with PID {d}\n", .{pi.dwProcessId});
 
-        // Close thread handle as we don't need it
-        _ = windows.CloseHandle(process_info.hThread);
+        // Wait for the process to complete
+        _ = win.WaitForSingleObject(pi.hProcess, win.INFINITE);
 
-        // Wait for process to complete
-        _ = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
+        var exit_code: win.DWORD = 0;
+        _ = win.GetExitCodeProcess(pi.hProcess, &exit_code);
 
-        // Get exit code
-        var exit_code: windows.DWORD = 0;
-        _ = windows.GetExitCodeProcess(process_info.hProcess, &exit_code);
-
-        // Close process handle
-        _ = windows.CloseHandle(process_info.hProcess);
+        _ = win.CloseHandle(pi.hProcess);
+        _ = win.CloseHandle(pi.hThread);
 
         std.debug.print("Child process exited with code: {d}\n", .{exit_code});
         if (exit_code != 0) {
             std.process.exit(@intCast(exit_code));
         }
     } else {
-        // On macOS/Linux, use standard spawn
+        // Dev build or non-Windows: Use standard spawn with inherited I/O for CLI interaction
+        child_process.stdout_behavior = .Inherit;
+        child_process.stderr_behavior = .Inherit;
+
         try child_process.spawn();
         child_pid = child_process.id;
 
