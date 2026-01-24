@@ -15,10 +15,8 @@ pub fn build(b: *std.Build) void {
     // Link with libc for chmod and other system calls
     exe.linkLibC();
 
-    // On Windows, use GUI subsystem to hide console window
-    if (target.result.os.tag == .windows) {
-        exe.subsystem = .Windows;
-    }
+    // Use Console subsystem on all platforms so users can see extraction progress
+    // The console window will automatically close when extraction completes
 
     b.installArtifact(exe);
 }
