@@ -4436,12 +4436,9 @@ ELECTROBUN_EXPORT bool initCEF() {
     if (localAppData) {
         std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
         std::string appName = !g_electrobunName.empty() ? g_electrobunName : "App";
-        std::string appNameChannel = appName;
-        if (!g_electrobunChannel.empty()) {
-            appNameChannel += "-" + g_electrobunChannel;
-        }
-        userDataDir = std::string(localAppData) + "\\" + appIdentifier + "\\" + appNameChannel + "\\CEF";
-        std::cout << "[CEF] Using namespaced path: " << appIdentifier << "\\" << appNameChannel << std::endl;
+        // Note: g_electrobunName already includes the channel from version.json
+        userDataDir = std::string(localAppData) + "\\" + appIdentifier + "\\" + appName + "\\CEF";
+        std::cout << "[CEF] Using namespaced path: " << appIdentifier << "\\" << appName << std::endl;
     } else {
         // Fallback to executable directory if LOCALAPPDATA not available
         userDataDir = std::string(exePath) + "\\cef_cache";
@@ -5191,12 +5188,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             if (localAppData) {
                 std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
                 std::string appName = !g_electrobunName.empty() ? g_electrobunName : "App";
-                std::string appNameChannel = appName;
-                if (!g_electrobunChannel.empty()) {
-                    appNameChannel += "-" + g_electrobunChannel;
-                }
+                // Note: g_electrobunName already includes the channel from version.json
 
-                std::string userDataPath = std::string(localAppData) + "\\" + appIdentifier + "\\" + appNameChannel + "\\WebView2";
+                std::string userDataPath = std::string(localAppData) + "\\" + appIdentifier + "\\" + appName + "\\WebView2";
 
                 // Handle partition-specific storage
                 if (!partitionStr.empty()) {
@@ -5280,13 +5274,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 // Structure: %LOCALAPPDATA%\{identifier}\{name-channel}\CEF\Partitions\{partitionName}
                 std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
                 std::string appName = !g_electrobunName.empty() ? g_electrobunName : "App";
-                std::string appNameChannel = appName;
-                if (!g_electrobunChannel.empty()) {
-                    appNameChannel += "-" + g_electrobunChannel;
-                }
+                // Note: g_electrobunName already includes the channel from version.json
 
                 // Build cache path with namespacing: %LOCALAPPDATA%\{identifier}\{name-channel}\CEF\Partitions\{partitionName}
-                std::string cachePath = std::string(localAppData) + "\\" + appIdentifier + "\\" + appNameChannel + "\\CEF\\Partitions\\" + partitionName;
+                std::string cachePath = std::string(localAppData) + "\\" + appIdentifier + "\\" + appName + "\\CEF\\Partitions\\" + partitionName;
 
                 // Create directory if it doesn't exist
                 std::wstring wideCachePath(cachePath.begin(), cachePath.end());
