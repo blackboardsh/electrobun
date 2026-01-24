@@ -5182,11 +5182,13 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             char* localAppData = getenv("LOCALAPPDATA");
             if (localAppData) {
                 std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
+                std::string appName = !g_electrobunName.empty() ? g_electrobunName : "App";
+                std::string appNameChannel = appName;
                 if (!g_electrobunChannel.empty()) {
-                    appIdentifier += "-" + g_electrobunChannel;
+                    appNameChannel += "-" + g_electrobunChannel;
                 }
 
-                std::string userDataPath = std::string(localAppData) + "\\" + appIdentifier + "\\WebView2";
+                std::string userDataPath = std::string(localAppData) + "\\" + appIdentifier + "\\" + appNameChannel + "\\WebView2";
 
                 // Handle partition-specific storage
                 if (!partitionStr.empty()) {
