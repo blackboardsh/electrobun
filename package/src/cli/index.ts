@@ -1036,7 +1036,10 @@ if (commandArg === "init") {
   const targetOS = currentTarget.os;
   const targetARCH = currentTarget.arch;
   const targetBinExt = targetOS === 'win' ? '.exe' : '';
-  const appFileName = `${config.app.name.replace(/ /g, "")}-${buildEnvironment}`;
+  // Format: MyApp (stable) or MyApp-canary (non-stable)
+  const appFileName = buildEnvironment === "stable"
+    ? config.app.name.replace(/ /g, "")
+    : `${config.app.name.replace(/ /g, "")}-${buildEnvironment}`;
   const buildSubFolder = `${buildEnvironment}-${currentTarget.os}-${currentTarget.arch}`;
   const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
   const bundleFileName = targetOS === 'macos' ? `${appFileName}.app` : appFileName;
