@@ -1093,11 +1093,28 @@ if (commandArg === "init") {
 
   const buildIcons = (appBundleFolderResourcesPath: string) => {
     // Platform-specific icon handling
-    if (targetOS === 'macos' && config.build.mac?.icon) {
-      const iconPath = join(projectRoot, config.build.mac.icon);
-      if (existsSync(iconPath)) {
-        const targetIconPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
-        cpSync(iconPath, targetIconPath, { dereference: true });
+    if (targetOS === 'macos' && config.build.mac?.icons) {
+      // macOS uses .iconset folders that get converted to .icns using iconutil
+      // This only works when building on macOS since iconutil is a macOS-only tool
+      const iconSourceFolder = join(projectRoot, config.build.mac.icons);
+      const iconDestPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
+      if (existsSync(iconSourceFolder)) {
+        if (OS === 'macos') {
+          // Use iconutil to convert .iconset folder to .icns
+          Bun.spawnSync(
+            ["iconutil", "-c", "icns", "-o", iconDestPath, iconSourceFolder],
+            {
+              cwd: appBundleFolderResourcesPath,
+              stdio: ["ignore", "inherit", "inherit"],
+              env: {
+                ...process.env,
+                ELECTROBUN_BUILD_ENV: buildEnvironment,
+              },
+            }
+          );
+        } else {
+          console.log(`WARNING: Cannot build macOS icons on ${OS} - iconutil is only available on macOS`);
+        }
       }
     } else if (targetOS === 'linux' && config.build.linux?.icon) {
       const iconSourcePath = join(projectRoot, config.build.linux.icon);
