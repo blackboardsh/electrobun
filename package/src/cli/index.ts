@@ -22,6 +22,17 @@ import tar from "tar";
 import archiver from "archiver";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS, ARCH } from '../shared/platform';
+import {
+  getAppFileName,
+  getBundleFileName,
+  getPlatformFolder,
+  getTarballFileName,
+  getWindowsSetupFileName,
+  getLinuxSetupFileName,
+  getLinuxAppImageBaseName,
+  sanitizeVolumeNameForHdiutil,
+  getDmgVolumeName,
+} from '../shared/naming';
 import { getTemplate, getTemplateNames } from './templates/embedded';
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
 // MacOS named pipes hang at around 4KB
@@ -1036,13 +1047,10 @@ if (commandArg === "init") {
   const targetOS = currentTarget.os;
   const targetARCH = currentTarget.arch;
   const targetBinExt = targetOS === 'win' ? '.exe' : '';
-  // Format: MyApp (stable) or MyApp-canary (non-stable)
-  const appFileName = buildEnvironment === "stable"
-    ? config.app.name.replace(/ /g, "")
-    : `${config.app.name.replace(/ /g, "")}-${buildEnvironment}`;
-  const buildSubFolder = `${buildEnvironment}-${currentTarget.os}-${currentTarget.arch}`;
+  const appFileName = getAppFileName(config.app.name, buildEnvironment);
+  const buildSubFolder = getPlatformFolder(buildEnvironment, currentTarget.os, currentTarget.arch);
   const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
-  const bundleFileName = targetOS === 'macos' ? `${appFileName}.app` : appFileName;
+  const bundleFileName = getBundleFileName(config.app.name, buildEnvironment, targetOS);
   const artifactFolder = join(projectRoot, config.build.artifactFolder, buildSubFolder);
   
   // Ensure core binaries are available for the target platform before starting build
@@ -1050,11 +1058,6 @@ if (commandArg === "init") {
   
   // Get platform-specific paths for the current target
   const targetPaths = getPlatformPaths(currentTarget.os, currentTarget.arch);
-  
-  // Helper functions
-  const sanitizeVolumeNameForHdiutil = (name: string) => {
-    return name.replace(/[^a-zA-Z0-9 ]/g, '').trim();
-  };
 
   // Helper to run lifecycle hook scripts
   const runHook = (hookName: keyof typeof config.scripts, extraEnv: Record<string, string> = {}) => {
@@ -2257,11 +2260,7 @@ if (commandArg === "init") {
         buildEnvironment === "stable"
           ? join(buildFolder, `${appFileName}-stable.dmg`)
           : finalDmgPath;
-      const baseVolumeName = sanitizeVolumeNameForHdiutil(appFileName);
-      const dmgVolumeName =
-        buildEnvironment === "stable"
-          ? `${baseVolumeName}-stable`
-          : baseVolumeName;
+      const dmgVolumeName = getDmgVolumeName(appFileName, buildEnvironment);
 
       // Create a staging directory for DMG contents (app + Applications shortcut)
       const dmgStagingDir = join(buildFolder, '.dmg-staging');
@@ -2730,11 +2729,7 @@ async function createWindowsSelfExtractingExe(
 ): Promise<string> {
   console.log("Creating Windows installer with separate archive...");
 
-  // Format: MyApp-Setup.exe (stable) or MyApp-Setup-canary.exe (non-stable)
-  const setupFileName = buildEnvironment === "stable"
-    ? `${config.app.name}-Setup.exe`
-    : `${config.app.name}-Setup-${buildEnvironment}.exe`;
-
+  const setupFileName = getWindowsSetupFileName(config.app.name, buildEnvironment);
   const outputExePath = join(buildFolder, setupFileName);
 
   // Copy the extractor exe
@@ -2825,11 +2820,8 @@ async function createLinuxSelfExtractingBinary(
   config: Awaited<ReturnType<typeof getConfig>>
 ): Promise<string> {
   console.log("Creating self-extracting Linux binary...");
-  
-  // Format: MyApp-Setup.run (stable) or MyApp-Setup-canary.run (non-stable)
-  const setupFileName = buildEnvironment === "stable" 
-    ? `${config.app.name}-Setup.run`
-    : `${config.app.name}-Setup-${buildEnvironment}.run`;
+
+  const setupFileName = getLinuxSetupFileName(config.app.name, buildEnvironment);
   
   const outputPath = join(buildFolder, setupFileName);
   
@@ -2996,10 +2988,7 @@ async function createLinuxSelfExtractingAppImage(
   console.log('Creating Linux AppImage wrapper...');
 
   // Create wrapper AppImage filename
-  const wrapperName = buildEnvironment === 'stable' 
-    ? `${config.app.name}-Setup`
-    : `${config.app.name}-Setup-${buildEnvironment}`;
-  
+  const wrapperName = getLinuxAppImageBaseName(config.app.name, buildEnvironment);
   const wrapperAppImagePath = join(buildFolder, `${wrapperName}.AppImage`);
   const wrapperAppDirPath = join(buildFolder, `${wrapperName}.AppDir`);
 

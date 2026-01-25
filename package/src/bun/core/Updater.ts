@@ -5,6 +5,7 @@ import { execSync } from "child_process";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
+import { getPlatformFolder, getTarballFileName } from '../../shared/naming';
 import { native } from '../proc/native';
 
 // setTimeout(async () => {
@@ -142,7 +143,7 @@ const Updater = {
 
     const channelBucketUrl = await Updater.channelBucketUrl();
     const cacheBuster = Math.random().toString(36).substring(7);
-    const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
+    const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
     const updateInfoUrl = join(localInfo.bucketUrl, platformFolder, `update.json?${cacheBuster}`);
 
     try {
@@ -210,7 +211,7 @@ const Updater = {
         }
 
         // check if there's a patch file for it
-        const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
+        const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
         const patchResponse = await fetch(
           join(localInfo.bucketUrl, platformFolder, `${currentHash}.patch`)
         );
@@ -329,17 +330,8 @@ const Updater = {
       // then just download it and unpack it
       if (currentHash !== latestHash) {
         const cacheBuster = Math.random().toString(36).substring(7);
-        const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
-        // Platform-specific tarball naming
-        let tarballName: string;
-        if (currentOS === 'macos') {
-          tarballName = `${appFileName}.app.tar.zst`;
-        } else if (currentOS === 'win') {
-          tarballName = `${appFileName}.tar.zst`;
-        } else {
-          tarballName = `${appFileName}.tar.zst`;
-        }
-        
+        const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
+        const tarballName = getTarballFileName(appFileName, currentOS);
         const urlToLatestTarball = join(
           localInfo.bucketUrl,
           platformFolder,
@@ -694,7 +686,7 @@ start "" launcher.exe
 
   channelBucketUrl: async () => {
     await Updater.getLocallocalInfo();
-    const platformFolder = `${localInfo.channel}-${currentOS}-${currentArch}`;
+    const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
     return join(localInfo.bucketUrl, platformFolder);
   },
 

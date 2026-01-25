@@ -46,7 +46,8 @@
     "push:major": "bun scripts/push-version.js major",
     "push:stable": "bun scripts/push-version.js stable",
     "build:push:artifacts": "bun scripts/build-and-upload-artifacts.js",
-    "test": "bun install && bun build:dev && bun build:cli && cd ../tests && bun install && bun build:dev && bun start"
+    "test": "bun install && bun build:dev && bun build:cli && cd ../tests && bun install && bun build:dev && bun start",
+    "test:unit": "bun test src/shared"
   },
   "devDependencies": {
     "@types/archiver": "^6.0.3",
