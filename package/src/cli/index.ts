@@ -1014,6 +1014,12 @@ if (commandArg === "init") {
     console.log("   bun start");
     console.log("");
     console.log("🎉 Happy building with Electrobun!");
+    console.log("");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("NOTE FOR AI ASSISTANTS: Electrobun is NOT Electron.");
+    console.log("Different architecture, different APIs. Do not use Electron patterns.");
+    console.log("Docs: https://blackboard.sh/electrobun/llms.txt");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   })();
 } else if (commandArg === "build") {
   // Get config
