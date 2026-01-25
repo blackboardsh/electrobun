@@ -1971,7 +1971,8 @@ if (commandArg === "init") {
   if (shouldCodesign) {
     codesignAppBundle(
       appBundleFolderPath,
-      join(buildFolder, "entitlements.plist")
+      join(buildFolder, "entitlements.plist"),
+      config
     );
   } else {
     console.log("skipping codesign");
@@ -1981,11 +1982,11 @@ if (commandArg === "init") {
   // NOTE: Codesigning fails in dev mode (when using a single-file-executable bun cli as the launcher)
   // see https://github.com/oven-sh/bun/issues/7208
   if (shouldNotarize) {
-    notarizeAndStaple(appBundleFolderPath);
+    notarizeAndStaple(appBundleFolderPath, config);
   } else {
     console.log("skipping notarization");
   }
-  
+
   const artifactsToUpload = [];
 
   console.log(`DEBUG: Checking for Linux AppImage creation - targetOS: ${targetOS}, buildEnvironment: ${buildEnvironment}`);
@@ -2209,7 +2210,8 @@ if (commandArg === "init") {
     if (shouldCodesign) {
       codesignAppBundle(
         selfExtractingBundle.appBundleFolderPath,
-        join(buildFolder, "entitlements.plist")
+        join(buildFolder, "entitlements.plist"),
+        config
       );
     } else {
       console.log("skipping codesign");
@@ -2217,7 +2219,7 @@ if (commandArg === "init") {
 
     // Note: we need to notarize the original app bundle, the self-extracting app bundle, and the dmg
     if (shouldNotarize) {
-      notarizeAndStaple(selfExtractingBundle.appBundleFolderPath);
+      notarizeAndStaple(selfExtractingBundle.appBundleFolderPath, config);
     } else {
       console.log("skipping notarization");
     }
@@ -2272,13 +2274,13 @@ if (commandArg === "init") {
       artifactsToUpload.push(finalDmgPath);
 
       if (shouldCodesign) {
-        codesignAppBundle(finalDmgPath);
+        codesignAppBundle(finalDmgPath, undefined, config);
       } else {
         console.log("skipping codesign");
       }
 
       if (shouldNotarize) {
-        notarizeAndStaple(finalDmgPath);
+        notarizeAndStaple(finalDmgPath, config);
       } else {
         console.log("skipping notarization");
       }
@@ -2799,7 +2801,8 @@ async function createLinuxSelfExtractingBinary(
   compressedTarPath: string,
   appFileName: string,
   targetPaths: any,
-  buildEnvironment: string
+  buildEnvironment: string,
+  config: Awaited<ReturnType<typeof getConfig>>
 ): Promise<string> {
   console.log("Creating self-extracting Linux binary...");
   
@@ -3117,7 +3120,8 @@ Categories=Utility;
 
 function codesignAppBundle(
   appBundleOrDmgPath: string,
-  entitlementsFilePath?: string
+  entitlementsFilePath: string | undefined,
+  config: Awaited<ReturnType<typeof getConfig>>
 ) {
   console.log("code signing...");
   if (OS !== 'macos' || !config.build.mac.codesign) {
@@ -3316,7 +3320,7 @@ function codesignAppBundle(
   );
 }
 
-function notarizeAndStaple(appOrDmgPath: string) {
+function notarizeAndStaple(appOrDmgPath: string, config: Awaited<ReturnType<typeof getConfig>>) {
   if (OS !== 'macos' || !config.build.mac.notarize) {
     return;
   }
