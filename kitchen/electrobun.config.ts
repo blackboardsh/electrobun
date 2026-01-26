@@ -1,7 +1,7 @@
 export default {
     app: {
         name: "Electrobun Kitchen Sink",
-        identifier: "dev.electrobun.kitchen",
+        identifier: "sh.blackboard.electrobun-kitchen",
         version: "0.0.1",
         urlSchemes: ["electrobun-playground"],
     },
