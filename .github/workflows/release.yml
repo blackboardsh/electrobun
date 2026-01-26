@@ -110,9 +110,33 @@ jobs:
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Install Apple Certificate
+        if: matrix.platform == 'darwin'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          security delete-keychain build.keychain || true
+          echo $MACOS_CERTIFICATE | base64 --decode > certificate.p12
+          security create-keychain -p actions build.keychain
+          security list-keychains -d user -s build.keychain $(security list-keychains -d user | sed s/\"//g)
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import certificate.p12 -k build.keychain -P $MACOS_CERTIFICATE_PWD -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning build.keychain
+          rm certificate.p12
+
       - name: Build Kitchen
         run: cd ../kitchen && bun install && bun build:${{ steps.release-type.outputs.env }}
         working-directory: package
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '' }}
+          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID || '' }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS || '' }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID || '' }}
 
       - name: Upload Kitchen artifacts to R2
         env:
