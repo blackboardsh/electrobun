@@ -35,6 +35,7 @@
     "dev:clean": "cd ../kitchen && rm -rf node_modules && rm -rf vendors/cef && cd ../package && bun dev",
     "dev:rerun": "cd ../kitchen && bun start",
     "dev:canary": "bun install && bun build:release && bun build:cli && cd ../kitchen && bun install && bun build:canary",
+    "dev:stable": "bun install && bun build:release && bun build:cli && cd ../kitchen && bun install && bun build:stable",
     "run:template": "bun install && bun build:dev && bun build:cli && cd ../templates/interactive-playground && bun install && bun build:dev && bun start",
     "dev:docs": "cd ../documentation && bun start",
     "build:docs:release": "cd ../documentation && bun run build",
