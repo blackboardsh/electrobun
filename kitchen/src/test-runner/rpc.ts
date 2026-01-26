@@ -9,6 +9,21 @@ export interface TestInfo {
   interactive: boolean;
 }
 
+export type UpdateStatus =
+  | 'checking'
+  | 'update-available'
+  | 'downloading'
+  | 'update-ready'
+  | 'no-update'
+  | 'error';
+
+export interface UpdateInfo {
+  status: UpdateStatus;
+  currentVersion: string;
+  newVersion?: string;
+  error?: string;
+}
+
 export type TestRunnerRPC = {
   bun: RPCSchema<{
     requests: {
@@ -38,6 +53,10 @@ export type TestRunnerRPC = {
       };
       submitVerification: {
         params: { testId: string; action: 'pass' | 'fail' | 'retest'; notes?: string };
+        response: void;
+      };
+      applyUpdate: {
+        params: {};
         response: void;
       };
     };
@@ -80,6 +99,7 @@ export type TestRunnerRPC = {
         defaultRenderer: 'native' | 'cef';
         availableRenderers: ('native' | 'cef')[];
       };
+      updateStatus: UpdateInfo;
     };
   }>;
 };

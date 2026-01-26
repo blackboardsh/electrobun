@@ -8,9 +8,16 @@
     <link rel="stylesheet" href="views://test-runner/index.css">
 </head>
 <body>
+    <div class="update-banner" id="update-banner" style="display: none;">
+        <span class="update-message" id="update-message"></span>
+        <button class="update-btn" id="update-btn" style="display: none;">Update Now</button>
+    </div>
     <div class="container">
         <header>
-            <h1>Electrobun Integration Tests</h1>
+            <div class="header-row">
+                <h1>Electrobun Integration Tests</h1>
+                <span class="version-badge" id="version-badge">v0.0.0</span>
+            </div>
             <div class="build-config-bar" id="build-config-bar">
                 <span class="build-config-item">
                     <span class="build-config-label">Default Renderer:</span>

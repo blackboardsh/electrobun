@@ -1,5 +1,5 @@
 import Electrobun, { Electroview } from "electrobun/view";
-import type { TestRunnerRPC, TestInfo } from "./rpc";
+import type { TestRunnerRPC, TestInfo, UpdateInfo } from "./rpc";
 import type { TestResult, TestStatus } from "../test-framework/types";
 
 // RPC setup
@@ -37,6 +37,10 @@ const rpc = Electroview.defineRPC<TestRunnerRPC>({
       buildConfig: (config) => {
         updateBuildConfigUI(config);
         console.log(`Build config: defaultRenderer=${config.defaultRenderer}, available=[${config.availableRenderers.join(', ')}]`);
+      },
+      updateStatus: (info) => {
+        updateUpdateUI(info);
+        console.log(`Update status: ${info.status}, current=${info.currentVersion}, new=${info.newVersion || 'n/a'}`);
       },
     },
   },
@@ -104,6 +108,12 @@ async function init() {
   btnPass.addEventListener('click', () => submitVerification('pass'));
   btnFail.addEventListener('click', () => submitVerification('fail'));
   btnRetest.addEventListener('click', () => submitVerification('retest'));
+
+  // Update button handler
+  const updateBtn = document.getElementById('update-btn');
+  if (updateBtn) {
+    updateBtn.addEventListener('click', applyUpdate);
+  }
 
   // Use event delegation for run buttons (set up once)
   testList.addEventListener('click', async (e) => {
@@ -416,6 +426,73 @@ function updateBuildConfigUI(config: { defaultRenderer: string; availableRendere
   }
   if (availableRenderersEl) {
     availableRenderersEl.textContent = config.availableRenderers.join(', ');
+  }
+}
+
+// Update UI
+function updateUpdateUI(info: UpdateInfo) {
+  const banner = document.getElementById('update-banner');
+  const message = document.getElementById('update-message');
+  const btn = document.getElementById('update-btn') as HTMLButtonElement;
+  const versionBadge = document.getElementById('version-badge');
+
+  if (!banner || !message || !btn) return;
+
+  // Always show current version
+  if (versionBadge) {
+    versionBadge.textContent = `v${info.currentVersion}`;
+  }
+
+  // Reset classes
+  banner.className = 'update-banner';
+
+  switch (info.status) {
+    case 'checking':
+      banner.style.display = 'flex';
+      banner.classList.add('checking');
+      message.textContent = 'Checking for updates...';
+      btn.style.display = 'none';
+      break;
+
+    case 'update-available':
+      banner.style.display = 'flex';
+      message.textContent = `Update available: v${info.newVersion}`;
+      btn.style.display = 'none';
+      break;
+
+    case 'downloading':
+      banner.style.display = 'flex';
+      banner.classList.add('downloading');
+      message.textContent = `Downloading update v${info.newVersion}...`;
+      btn.style.display = 'none';
+      break;
+
+    case 'update-ready':
+      banner.style.display = 'flex';
+      banner.classList.add('ready');
+      message.textContent = `Update v${info.newVersion} ready to install`;
+      btn.style.display = 'inline-block';
+      btn.textContent = 'Update Now';
+      break;
+
+    case 'no-update':
+      banner.style.display = 'none';
+      break;
+
+    case 'error':
+      banner.style.display = 'flex';
+      banner.classList.add('error');
+      message.textContent = `Update error: ${info.error || 'Unknown error'}`;
+      btn.style.display = 'none';
+      break;
+  }
+}
+
+async function applyUpdate() {
+  try {
+    await electrobun.rpc?.request.applyUpdate({});
+  } catch (err) {
+    console.error('Failed to apply update:', err);
   }
 }
 

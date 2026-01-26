@@ -7,10 +7,11 @@ import Electrobun, {
   ApplicationMenu,
   Utils,
   BuildConfig,
+  Updater,
 } from "electrobun/bun";
 import { executor } from "../test-framework/executor";
 import { allTests } from "../tests";
-import type { TestRunnerRPC } from "../test-runner/rpc";
+import type { TestRunnerRPC, UpdateInfo } from "../test-runner/rpc";
 
 console.log("\n");
 console.log("╔════════════════════════════════════════════════════════════╗");
@@ -27,10 +28,76 @@ console.log("\n");
 
 // Log build configuration
 const buildConfig = await BuildConfig.get();
-console.log("📦 Build Configuration:");
+console.log("Build Configuration:");
 console.log(`   Default Renderer: ${buildConfig.defaultRenderer}`);
 console.log(`   Available Renderers: ${buildConfig.availableRenderers.join(', ')}`);
 console.log("");
+
+// Update state
+const localInfo = await Updater.getLocallocalInfo();
+let updateState: UpdateInfo = {
+  status: 'checking',
+  currentVersion: localInfo.version,
+};
+
+console.log(`Current version: ${localInfo.version} (${localInfo.channel})`);
+
+// Check for updates
+const checkForUpdate = async () => {
+  try {
+    updateState.status = 'checking';
+    broadcastUpdateStatus();
+
+    const updateInfo = await Updater.checkForUpdate();
+
+    if (updateInfo.error) {
+      console.log(`Update check error: ${updateInfo.error}`);
+      updateState.status = 'error';
+      updateState.error = updateInfo.error;
+      broadcastUpdateStatus();
+      return;
+    }
+
+    if (updateInfo.updateAvailable) {
+      console.log(`Update available: ${updateInfo.version}`);
+      updateState.status = 'update-available';
+      updateState.newVersion = updateInfo.version;
+      broadcastUpdateStatus();
+
+      // Start downloading
+      updateState.status = 'downloading';
+      broadcastUpdateStatus();
+
+      await Updater.downloadUpdate();
+
+      if (Updater.updateInfo().updateReady) {
+        console.log("Update downloaded and ready to install");
+        updateState.status = 'update-ready';
+        broadcastUpdateStatus();
+      } else {
+        console.log("Update download failed");
+        updateState.status = 'error';
+        updateState.error = 'Download failed';
+        broadcastUpdateStatus();
+      }
+    } else {
+      console.log("No update available");
+      updateState.status = 'no-update';
+      broadcastUpdateStatus();
+    }
+  } catch (err: any) {
+    console.log(`Update check failed: ${err.message}`);
+    updateState.status = 'error';
+    updateState.error = err.message;
+    broadcastUpdateStatus();
+  }
+};
+
+// Broadcast update status to all windows
+let testRunnerWindow: BrowserWindow | null = null;
+const broadcastUpdateStatus = () => {
+  testRunnerWindow?.webview.rpc?.send.updateStatus(updateState);
+};
 
 // Register all tests
 executor.registerTests(allTests);
@@ -129,6 +196,11 @@ const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
       submitVerification: ({ testId, action, notes }) => {
         executor.submitVerification(testId, action, notes);
       },
+
+      applyUpdate: () => {
+        console.log("Applying update...");
+        Updater.applyUpdate();
+      },
     },
     messages: {
       logToBun: ({ msg }) => {
@@ -139,7 +211,7 @@ const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
 });
 
 // Create the test runner window
-const testRunnerWindow = new BrowserWindow({
+testRunnerWindow = new BrowserWindow({
   title: "Electrobun Integration Tests",
   url: "views://test-runner/index.html",
   renderer: "cef",
@@ -155,13 +227,18 @@ const testRunnerWindow = new BrowserWindow({
 // Keep test runner on top so results are visible while tests run
 testRunnerWindow.setAlwaysOnTop(true);
 
-// Send build config to the UI when ready
+// Send build config and update status to the UI when ready
 testRunnerWindow.webview.on("dom-ready", () => {
-  testRunnerWindow.webview.rpc?.send.buildConfig({
+  testRunnerWindow!.webview.rpc?.send.buildConfig({
     defaultRenderer: buildConfig.defaultRenderer,
     availableRenderers: buildConfig.availableRenderers,
   });
+  // Send current update status
+  testRunnerWindow!.webview.rpc?.send.updateStatus(updateState);
 });
+
+// Check for updates on startup
+checkForUpdate();
 
 // Forward test events to the UI
 executor.onEvent((event) => {

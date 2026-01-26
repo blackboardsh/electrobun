@@ -120,6 +120,6 @@ export default {
         postBuild: "./buildScript.ts",
     },
     release: {
-        bucketUrl: "https://static.electrobun.dev/kitchen/",
+        bucketUrl: "https://electrobun-kitchen.blackboard.sh/",
     },
 };
