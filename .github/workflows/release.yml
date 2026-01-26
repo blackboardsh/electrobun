@@ -119,7 +119,7 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ secrets.R2_KITCHEN_BUCKET }}
+          R2_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
         run: |
           mkdir -p upload/${{ steps.release-type.outputs.env }}/${{ steps.release-type.outputs.version }}/${{ matrix.platform_name }}-${{ matrix.arch }}
           cp -r kitchen/artifacts/* upload/${{ steps.release-type.outputs.env }}/${{ steps.release-type.outputs.version }}/${{ matrix.platform_name }}-${{ matrix.arch }}/
