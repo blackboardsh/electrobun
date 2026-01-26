@@ -728,7 +728,7 @@ async function vendorZig() {
 }
 
 async function vendorBsdiff() {
-    const BSDIFF_VERSION = '0.1.14';
+    const BSDIFF_VERSION = '0.1.15';
     const bsdiffDir = join(process.cwd(), 'vendors', 'zig-bsdiff');
     const bsdiffBin = join(bsdiffDir, 'bsdiff' + binExt);
     const bspatchBin = join(bsdiffDir, 'bspatch' + binExt);
