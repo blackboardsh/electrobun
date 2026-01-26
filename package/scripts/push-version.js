@@ -56,10 +56,20 @@ const tagName = `v${newVersion}`;
 
 console.log(`New version: ${newVersion}`);
 
+// Update kitchen sink version to match
+const kitchenConfigPath = join(repoRoot, "kitchen", "electrobun.config.ts");
+let kitchenConfig = readFileSync(kitchenConfigPath, "utf-8");
+kitchenConfig = kitchenConfig.replace(
+  /version:\s*["'].*["']/,
+  `version: "${newVersion}"`
+);
+writeFileSync(kitchenConfigPath, kitchenConfig);
+console.log(`Updated kitchen/electrobun.config.ts version to ${newVersion}`);
+
 // Git operations from repo root
 console.log(`Creating commit and tag: ${tagName}`);
 
-execSync(`git add package/package.json`, { cwd: repoRoot, stdio: "inherit" });
+execSync(`git add package/package.json kitchen/electrobun.config.ts`, { cwd: repoRoot, stdio: "inherit" });
 execSync(`git commit -m "${tagName}"`, { cwd: repoRoot, stdio: "inherit" });
 execSync(`git tag ${tagName}`, { cwd: repoRoot, stdio: "inherit" });
 
