@@ -71,7 +71,8 @@ jobs:
             libayatana-appindicator3-dev \
             build-essential \
             cmake \
-            pkg-config
+            pkg-config \
+            libfuse2
 
       - name: Build for ${{ matrix.platform_name }}-${{ matrix.arch }}
         run: bun scripts/package-release.js
