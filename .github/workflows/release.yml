@@ -61,6 +61,19 @@ jobs:
         with:
           arch: x64
 
+      - name: Free disk space (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          # Remove large preinstalled software we don't need
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          echo "Disk space after cleanup:"
+          df -h /
+
       - name: Install Linux build dependencies
         if: matrix.platform == 'linux'
         run: |
@@ -96,6 +109,20 @@ jobs:
           name: electrobun-cef-${{ matrix.platform_name }}-${{ matrix.arch }}
           path: package/electrobun-cef-${{ matrix.platform_name }}-${{ matrix.arch }}.tar.gz
           if-no-files-found: ignore
+
+      - name: Clean up after artifact upload
+        shell: bash
+        run: |
+          echo "Disk space before cleanup:"
+          df -h . || true
+          # Remove uploaded tar.gz files
+          rm -f package/*.tar.gz
+          # Remove CEF vendors (very large)
+          rm -rf package/vendors/cef
+          # Remove build intermediates
+          rm -rf package/build
+          echo "Disk space after cleanup:"
+          df -h . || true
 
       - name: Determine release type
         id: release-type
@@ -145,6 +172,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
         run: bun scripts/upload-kitchen-artifacts.ts -- kitchen/artifacts
+
+      - name: Clean up kitchen artifacts
+        shell: bash
+        run: |
+          rm -rf kitchen/artifacts
+          rm -rf kitchen/build
 
   release:
     needs: build
