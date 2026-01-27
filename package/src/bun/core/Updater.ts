@@ -661,16 +661,22 @@ start "" launcher.exe
             // On Windows, launch the run.bat file which handles versioning
             const parentDir = dirname(runningAppBundlePath);
             const runBatPath = join(parentDir, "run.bat");
-            
-            
-            await Bun.spawn(["cmd", "/c", runBatPath], { detached: true });
+
+            // Use start command to launch detached process that survives parent termination
+            await Bun.spawn(["cmd", "/c", "start", "", "/d", parentDir, "run.bat"], { detached: true });
             break;
           case 'linux':
             // On Linux, launch the AppImage directly
             Bun.spawn(["sh", "-c", `"${runningAppBundlePath}" &`], { detached: true});
             break;
         }
-        // Use native killApp to properly clean up all resources        
+
+        // Small delay on Windows to ensure new process starts before we terminate
+        if (currentOS === 'win') {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        // Use native killApp to properly clean up all resources
         try {
           native.symbols.killApp();
           // Still call process.exit as a fallback
@@ -679,7 +685,7 @@ start "" launcher.exe
           // Fallback if native binding fails
           console.error('Failed to call native killApp:', e);
           process.exit(0);
-        }        
+        }
       }
     }
   },

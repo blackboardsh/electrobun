@@ -221,12 +221,16 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
 
                 std.debug.print("Found adjacent archive file: {s}\n", .{final_archive_path});
                 std.debug.print("Using metadata: identifier={s}, name={s}, channel={s}\n", .{ metadata.identifier, metadata.name, metadata.channel });
-                
+
                 // Build application support directory path
                 const app_data_dir = try getAppDataDir(allocator);
                 defer allocator.free(app_data_dir);
-                
-                const app_name_channel = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ metadata.name, metadata.channel });
+
+                // Sanitize app name (remove spaces) to match version.json naming
+                const sanitized_name = try std.mem.replaceOwned(u8, allocator, metadata.name, " ", "");
+                defer allocator.free(sanitized_name);
+
+                const app_name_channel = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ sanitized_name, metadata.channel });
                 defer allocator.free(app_name_channel);
                 
                 // Build paths for new directory structure
@@ -352,10 +356,14 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Build application support directory path
     const app_data_dir = try getAppDataDir(allocator);
     defer allocator.free(app_data_dir);
-    
-    const app_name_channel = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ metadata.name, metadata.channel });
+
+    // Sanitize app name (remove spaces) to match version.json naming
+    const sanitized_name = try std.mem.replaceOwned(u8, allocator, metadata.name, " ", "");
+    defer allocator.free(sanitized_name);
+
+    const app_name_channel = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ sanitized_name, metadata.channel });
     defer allocator.free(app_name_channel);
-    
+
     // Build paths for new directory structure
     const app_base_dir = try std.fs.path.join(allocator, &.{ app_data_dir, metadata.identifier, app_name_channel });
     defer allocator.free(app_base_dir);
