@@ -8,6 +8,28 @@ import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
 import { getPlatformFolder, getTarballFileName } from '../../shared/naming';
 import { native } from '../proc/native';
 
+// Helper to join URL paths without breaking the protocol (path.join mangles https:// to https:/)
+function urlJoin(...parts: string[]): string {
+  if (parts.length === 0) return '';
+
+  // Start with the first part (base URL)
+  let result = parts[0];
+
+  // Join remaining parts
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i];
+    if (!part) continue;
+
+    // Remove trailing slash from result and leading slash from part
+    const cleanResult = result.endsWith('/') ? result.slice(0, -1) : result;
+    const cleanPart = part.startsWith('/') ? part.slice(1) : part;
+
+    result = `${cleanResult}/${cleanPart}`;
+  }
+
+  return result;
+}
+
 // setTimeout(async () => {
 //   console.log('killing')
 //   const { native } = await import('../proc/native');
@@ -144,7 +166,7 @@ const Updater = {
     const channelBucketUrl = await Updater.channelBucketUrl();
     const cacheBuster = Math.random().toString(36).substring(7);
     const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
-    const updateInfoUrl = join(localInfo.bucketUrl, platformFolder, `update.json?${cacheBuster}`);
+    const updateInfoUrl = urlJoin(localInfo.bucketUrl, platformFolder, `update.json?${cacheBuster}`);
 
     try {
       const updateInfoResponse = await fetch(updateInfoUrl);
@@ -213,7 +235,7 @@ const Updater = {
         // check if there's a patch file for it
         const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
         const patchResponse = await fetch(
-          join(localInfo.bucketUrl, platformFolder, `${currentHash}.patch`)
+          urlJoin(localInfo.bucketUrl, platformFolder, `${currentHash}.patch`)
         );
 
         if (!patchResponse.ok) {
@@ -332,7 +354,7 @@ const Updater = {
         const cacheBuster = Math.random().toString(36).substring(7);
         const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
         const tarballName = getTarballFileName(appFileName, currentOS);
-        const urlToLatestTarball = join(
+        const urlToLatestTarball = urlJoin(
           localInfo.bucketUrl,
           platformFolder,
           tarballName
@@ -471,10 +493,12 @@ const Updater = {
         // Platform-specific path handling
         let newAppBundlePath: string;
         if (currentOS === 'linux') {
-          // On Linux, look for the .AppImage file in the extraction directory
+          // On Linux, the tarball contains a directory named {appFileName}, and inside it is the AppImage
+          // Structure: extractionDir/{appFileName}/{appFileName}.AppImage
+          const innerDirName = localInfo.name.replace(/ /g, "");
           const appImageName = `${localInfo.name.replace(/ /g, "").replace(/\./g, "-")}.AppImage`;
-          newAppBundlePath = join(extractionDir, appImageName);
-          
+          newAppBundlePath = join(extractionDir, innerDirName, appImageName);
+
           // Verify the AppImage exists
           if (!statSync(newAppBundlePath, { throwIfNoEntry: false })) {
             console.error(`AppImage not found at: ${newAppBundlePath}`);
@@ -483,6 +507,14 @@ const Updater = {
               const files = readdirSync(extractionDir);
               for (const file of files) {
                 console.log(`  - ${file}`);
+                // Also list contents of subdirectories
+                const subPath = join(extractionDir, file);
+                if (statSync(subPath).isDirectory()) {
+                  const subFiles = readdirSync(subPath);
+                  for (const subFile of subFiles) {
+                    console.log(`    - ${subFile}`);
+                  }
+                }
               }
             } catch (e) {
               console.log("Could not list directory contents:", e);
@@ -530,9 +562,8 @@ const Updater = {
             const appImageName = `${localInfo.name.replace(/ /g, "").replace(/\./g, "-")}.AppImage`;
             runningAppBundlePath = join(appDataFolder, appImageName);
           } else {
-            // On Windows, use versioned app folders
-            const currentHash = (await Updater.getLocallocalInfo()).hash;
-            runningAppBundlePath = join(appDataFolder, `app-${currentHash}`);
+            // On Windows, use fixed 'app' folder to match extractor
+            runningAppBundlePath = join(appDataFolder, 'app');
           }
         }
         // Platform-specific backup handling
@@ -588,20 +619,30 @@ const Updater = {
             // Create/update launcher script that points to the AppImage
             await createLinuxAppImageLauncherScript(runningAppBundlePath);
           } else {
-            // On Windows, use versioned app folders
+            // On Windows, use fixed 'app' folder to match extractor
             const parentDir = dirname(runningAppBundlePath);
-            const newVersionDir = join(parentDir, `app-${latestHash}`);
-            
-            // Create the versioned directory
-            mkdirSync(newVersionDir, { recursive: true });
-            
-            // Copy all contents from the extracted app to the versioned directory
+            const backupDir = join(parentDir, 'app-backup');
+
+            // Remove old backup if exists
+            if (statSync(backupDir, { throwIfNoEntry: false })) {
+              rmdirSync(backupDir, { recursive: true });
+            }
+
+            // Backup current app folder
+            if (statSync(runningAppBundlePath, { throwIfNoEntry: false })) {
+              renameSync(runningAppBundlePath, backupDir);
+            }
+
+            // Create the app directory
+            mkdirSync(runningAppBundlePath, { recursive: true });
+
+            // Copy all contents from the extracted app to the app directory
             const files = readdirSync(newAppBundlePath);
             for (const file of files) {
               const srcPath = join(newAppBundlePath, file);
-              const destPath = join(newVersionDir, file);
+              const destPath = join(runningAppBundlePath, file);
               const stats = statSync(srcPath);
-              
+
               if (stats.isDirectory()) {
                 // Recursively copy directories
                 cpSync(srcPath, destPath, { recursive: true });
@@ -610,43 +651,9 @@ const Updater = {
                 cpSync(srcPath, destPath);
               }
             }
-            
-            // Clean up the temporary extraction directory on Windows
-            if (currentOS === 'win') {
-              rmdirSync(extractionDir, { recursive: true });
-            }
-            
-            // Create/update the launcher batch file
-            const launcherPath = join(parentDir, "run.bat");
-            const launcherContent = `@echo off
-:: Electrobun App Launcher
-:: This file launches the current version
 
-:: Set current version
-set CURRENT_HASH=${latestHash}
-set APP_DIR=%~dp0app-%CURRENT_HASH%
-
-:: TODO: Implement proper cleanup mechanism that checks for running processes
-:: For now, old versions are kept to avoid race conditions during updates
-:: :: Clean up old app versions (keep current and one backup)
-:: for /d %%D in ("%~dp0app-*") do (
-::     if not "%%~nxD"=="app-%CURRENT_HASH%" (
-::         echo Removing old version: %%~nxD
-::         rmdir /s /q "%%D" 2>nul
-::     )
-:: )
-
-:: Launch the app
-cd /d "%APP_DIR%\\bin"
-start "" launcher.exe
-`;
-            
-            await Bun.write(launcherPath, launcherContent);
-            
-            // Update desktop shortcuts to point to run.bat
-            // This is handled by the running app, not the updater
-            
-            runningAppBundlePath = newVersionDir;
+            // Clean up the temporary extraction directory
+            rmdirSync(extractionDir, { recursive: true });
           }
         } catch (error) {
           console.error("Failed to replace app with new version", error);
@@ -667,12 +674,11 @@ start "" launcher.exe
             );
             break;
           case 'win':
-            // On Windows, launch the run.bat file which handles versioning
-            const parentDir = dirname(runningAppBundlePath);
-            const runBatPath = join(parentDir, "run.bat");
+            // On Windows, launch launcher.exe directly from the app folder
+            const binDir = join(runningAppBundlePath, "bin");
 
             // Use start command to launch detached process that survives parent termination
-            await Bun.spawn(["cmd", "/c", "start", "", "/d", parentDir, "run.bat"], { detached: true });
+            await Bun.spawn(["cmd", "/c", "start", "", "/d", binDir, "launcher.exe"], { detached: true });
             break;
           case 'linux':
             // On Linux, launch the AppImage directly
@@ -702,7 +708,7 @@ start "" launcher.exe
   channelBucketUrl: async () => {
     await Updater.getLocallocalInfo();
     const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
-    return join(localInfo.bucketUrl, platformFolder);
+    return urlJoin(localInfo.bucketUrl, platformFolder);
   },
 
   appDataFolder: async () => {
