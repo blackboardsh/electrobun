@@ -619,76 +619,92 @@ const Updater = {
             // Create/update launcher script that points to the AppImage
             await createLinuxAppImageLauncherScript(runningAppBundlePath);
           } else {
-            // On Windows, use fixed 'app' folder to match extractor
+            // On Windows, files are locked while in use, so we need a helper script
+            // that runs after the app exits to do the replacement
             const parentDir = dirname(runningAppBundlePath);
+            const updateScriptPath = join(parentDir, 'update.bat');
             const backupDir = join(parentDir, 'app-backup');
 
-            // Remove old backup if exists
-            if (statSync(backupDir, { throwIfNoEntry: false })) {
-              rmdirSync(backupDir, { recursive: true });
+            // Create a batch script that will:
+            // 1. Wait for the current app to exit
+            // 2. Remove old backup
+            // 3. Move current app to backup
+            // 4. Move new app to current location
+            // 5. Launch the new app
+            // 6. Clean up
+            const updateScript = `@echo off
+setlocal
+
+:: Wait for the app to fully exit (check if launcher.exe is still running)
+:waitloop
+tasklist /FI "IMAGENAME eq launcher.exe" 2>NUL | find /I /N "launcher.exe">NUL
+if "%ERRORLEVEL%"=="0" (
+    timeout /t 1 /nobreak >nul
+    goto waitloop
+)
+
+:: Small extra delay to ensure all file handles are released
+timeout /t 1 /nobreak >nul
+
+:: Remove old backup if exists
+if exist "${backupDir.replace(/\//g, '\\')}" (
+    rmdir /s /q "${backupDir.replace(/\//g, '\\')}"
+)
+
+:: Backup current app folder
+if exist "${runningAppBundlePath.replace(/\//g, '\\')}" (
+    move "${runningAppBundlePath.replace(/\//g, '\\')}" "${backupDir.replace(/\//g, '\\')}"
+)
+
+:: Move new app to current location
+move "${newAppBundlePath.replace(/\//g, '\\')}" "${runningAppBundlePath.replace(/\//g, '\\')}"
+
+:: Clean up extraction directory
+rmdir /s /q "${extractionDir.replace(/\//g, '\\')}" 2>nul
+
+:: Launch the new app
+start "" /d "${join(runningAppBundlePath, 'bin').replace(/\//g, '\\')}" launcher.exe
+
+:: Delete this update script
+del "%~f0"
+`;
+
+            await Bun.write(updateScriptPath, updateScript);
+
+            // Launch the update script detached - it will wait for us to exit
+            await Bun.spawn(["cmd", "/c", "start", "", "/min", updateScriptPath], { detached: true });
+
+            // Small delay to ensure the script starts
+            await new Promise(resolve => setTimeout(resolve, 200));
+
+            // Now exit - the script will take over
+            try {
+              native.symbols.killApp();
+              process.exit(0);
+            } catch (e) {
+              process.exit(0);
             }
-
-            // Backup current app folder
-            if (statSync(runningAppBundlePath, { throwIfNoEntry: false })) {
-              renameSync(runningAppBundlePath, backupDir);
-            }
-
-            // Create the app directory
-            mkdirSync(runningAppBundlePath, { recursive: true });
-
-            // Copy all contents from the extracted app to the app directory
-            const files = readdirSync(newAppBundlePath);
-            for (const file of files) {
-              const srcPath = join(newAppBundlePath, file);
-              const destPath = join(runningAppBundlePath, file);
-              const stats = statSync(srcPath);
-
-              if (stats.isDirectory()) {
-                // Recursively copy directories
-                cpSync(srcPath, destPath, { recursive: true });
-              } else {
-                // Copy files
-                cpSync(srcPath, destPath);
-              }
-            }
-
-            // Clean up the temporary extraction directory
-            rmdirSync(extractionDir, { recursive: true });
+            return; // Won't reach here, but for clarity
           }
         } catch (error) {
           console.error("Failed to replace app with new version", error);
           return;
         }
 
-        // Cross-platform app launch
-        switch (currentOS) {
-          case 'macos':
-            // Use a detached shell so relaunch survives after killApp terminates the current process
-            await Bun.spawn(
-              [
-                "sh",
-                "-c",
-                `open "${runningAppBundlePath}" &`,
-              ],
-              { detached: true }
-            );
-            break;
-          case 'win':
-            // On Windows, launch launcher.exe directly from the app folder
-            const binDir = join(runningAppBundlePath, "bin");
-
-            // Use start command to launch detached process that survives parent termination
-            await Bun.spawn(["cmd", "/c", "start", "", "/d", binDir, "launcher.exe"], { detached: true });
-            break;
-          case 'linux':
-            // On Linux, launch the AppImage directly
-            Bun.spawn(["sh", "-c", `"${runningAppBundlePath}" &`], { detached: true});
-            break;
-        }
-
-        // Small delay on Windows to ensure new process starts before we terminate
-        if (currentOS === 'win') {
-          await new Promise(resolve => setTimeout(resolve, 500));
+        // Cross-platform app launch (Windows is handled above with its own update script)
+        if (currentOS === 'macos') {
+          // Use a detached shell so relaunch survives after killApp terminates the current process
+          await Bun.spawn(
+            [
+              "sh",
+              "-c",
+              `open "${runningAppBundlePath}" &`,
+            ],
+            { detached: true }
+          );
+        } else if (currentOS === 'linux') {
+          // On Linux, launch the AppImage directly
+          Bun.spawn(["sh", "-c", `"${runningAppBundlePath}" &`], { detached: true});
         }
 
         // Use native killApp to properly clean up all resources
