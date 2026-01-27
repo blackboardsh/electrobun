@@ -7,6 +7,7 @@ import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
 import { getPlatformFolder, getTarballFileName } from '../../shared/naming';
 import { native } from '../proc/native';
+import { quit } from './Utils';
 
 // Helper to join URL paths without breaking the protocol (path.join mangles https:// to https:/)
 function urlJoin(...parts: string[]): string {
@@ -716,14 +717,8 @@ del "%~f0"
             // Small delay to ensure the script starts
             await new Promise(resolve => setTimeout(resolve, 500));
 
-            // Now exit - the script will take over
-            try {
-              native.symbols.killApp();
-              process.exit(0);
-            } catch (e) {
-              process.exit(0);
-            }
-            return; // Won't reach here, but for clarity
+            // Use quit() for graceful shutdown - this closes all windows and processes
+            quit();
           }
         } catch (error) {
           console.error("Failed to replace app with new version", error);
@@ -746,16 +741,8 @@ del "%~f0"
           Bun.spawn(["sh", "-c", `"${runningAppBundlePath}" &`], { detached: true});
         }
 
-        // Use native killApp to properly clean up all resources
-        try {
-          native.symbols.killApp();
-          // Still call process.exit as a fallback
-          process.exit(0);
-        } catch (e) {
-          // Fallback if native binding fails
-          console.error('Failed to call native killApp:', e);
-          process.exit(0);
-        }
+        // Use quit() for graceful shutdown
+        quit();
       }
     }
   },
