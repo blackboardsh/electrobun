@@ -2098,20 +2098,21 @@ if (commandArg === "init") {
       // Compress with Zstandard
       console.log(`Compressing tar with zstd...`);
       const uncompressedTarData = readFileSync(appImageTarPath);
+      const compressedTarPath = `${appImageTarPath}.zst`;
       await ZstdInit().then(async ({ ZstdSimple }) => {
         const data = new Uint8Array(uncompressedTarData);
         const compressionLevel = 22;
         const compressedData = ZstdSimple.compress(data, compressionLevel);
-        const compressedPath = `${appImageTarPath}.zst`;
-        writeFileSync(compressedPath, compressedData);
-        console.log(`✓ Created compressed tar: ${compressedPath} (${(compressedData.length / 1024 / 1024).toFixed(2)} MB)`);
+        writeFileSync(compressedTarPath, compressedData);
+        console.log(`✓ Created compressed tar: ${compressedTarPath} (${(compressedData.length / 1024 / 1024).toFixed(2)} MB)`);
       });
-      
+
       // Remove uncompressed tar
       unlinkSync(appImageTarPath);
-      
-      // Add AppImage to artifacts for distribution (for direct download)
-      artifactsToUpload.push(appImagePath);
+
+      // Add tar.zst for Updater API (delta updates)
+      // Note: raw AppImage is NOT added - only the Setup.AppImage (zipped) is distributed
+      artifactsToUpload.push(compressedTarPath);
     }
   }
 
@@ -2338,8 +2339,10 @@ if (commandArg === "init") {
           buildEnvironment,
           hash
         );
-        
-        artifactsToUpload.push(selfExtractingAppImagePath);
+
+        // Wrap the Setup.AppImage in a tar.gz to preserve executable permissions
+        const archivedAppImagePath = await wrapInArchive(selfExtractingAppImagePath, buildFolder, 'tar.gz');
+        artifactsToUpload.push(archivedAppImagePath);
       }
     }
 
@@ -2918,11 +2921,14 @@ async function wrapInArchive(filePath: string, buildFolder: string, archiveType:
   const fileDir = dirname(filePath);
   
   if (archiveType === 'tar.gz') {
-    // Output filename: Setup.exe -> Setup.exe.tar.gz or Setup.run -> Setup.run.tar.gz
-    const archivePath = filePath + '.tar.gz';
-    
+    // Output filename: Setup.exe -> Setup.exe.tar.gz, Setup.AppImage -> Setup.tar.gz
+    // For AppImage files, strip the .AppImage extension so archive extracts to .AppImage
+    const archivePath = fileName.endsWith('.AppImage')
+      ? filePath.replace(/\.AppImage$/, '.tar.gz')
+      : filePath + '.tar.gz';
+
     // For Linux files, ensure they have executable permissions before archiving
-    if (fileName.endsWith('.run')) {
+    if (fileName.endsWith('.run') || fileName.endsWith('.AppImage')) {
       try {
         // Try to set executable permissions (will only work on Unix-like systems)
         execSync(`chmod +x ${escapePathForTerminal(filePath)}`, { stdio: 'ignore' });
