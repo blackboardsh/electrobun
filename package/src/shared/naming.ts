@@ -28,6 +28,19 @@ export function getAppFileName(appName: string, buildEnvironment: BuildEnvironme
 }
 
 /**
+ * Generates the macOS bundle display name (with spaces preserved).
+ * Used for the actual .app folder name on macOS.
+ * Format: "App Name" (stable) or "App Name-channel" (non-stable)
+ *
+ * @example
+ * getMacOSBundleDisplayName("My App", "stable") // "My App"
+ * getMacOSBundleDisplayName("My App", "canary") // "My App-canary"
+ */
+export function getMacOSBundleDisplayName(appName: string, buildEnvironment: BuildEnvironment): string {
+  return buildEnvironment === 'stable' ? appName : `${appName}-${buildEnvironment}`;
+}
+
+/**
  * Generates the bundle file name (with platform-specific extension).
  * macOS: "AppName.app" or "AppName-channel.app"
  * Others: "AppName" or "AppName-channel"
@@ -103,13 +116,13 @@ export function sanitizeVolumeNameForHdiutil(name: string): string {
 }
 
 /**
- * Generates the DMG volume name for macOS during creation.
- * Uses sanitized name with "-stable" suffix for stable builds to avoid
- * CI volume mounting conflicts. The DMG is renamed after creation.
+ * Generates the DMG volume name for macOS.
+ * Takes the original app name (with spaces) and preserves them for display.
+ * Format: "App Name" (stable) or "App Name-channel" (non-stable)
  */
-export function getDmgVolumeName(appFileName: string, buildEnvironment: BuildEnvironment): string {
-  const baseName = sanitizeVolumeNameForHdiutil(appFileName);
-  return buildEnvironment === 'stable' ? `${baseName}-stable` : baseName;
+export function getDmgVolumeName(appName: string, buildEnvironment: BuildEnvironment): string {
+  const baseName = sanitizeVolumeNameForHdiutil(appName);
+  return buildEnvironment === 'stable' ? baseName : `${baseName}-${buildEnvironment}`;
 }
 
 /**

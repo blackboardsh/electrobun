@@ -32,6 +32,7 @@ import {
   getLinuxAppImageBaseName,
   sanitizeVolumeNameForHdiutil,
   getDmgVolumeName,
+  getMacOSBundleDisplayName,
 } from '../shared/naming';
 import { getTemplate, getTemplateNames } from './templates/embedded';
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
@@ -1048,6 +1049,8 @@ if (commandArg === "init") {
   const targetARCH = currentTarget.arch;
   const targetBinExt = targetOS === 'win' ? '.exe' : '';
   const appFileName = getAppFileName(config.app.name, buildEnvironment);
+  // macOS bundle display name preserves spaces for the actual .app folder
+  const macOSBundleDisplayName = getMacOSBundleDisplayName(config.app.name, buildEnvironment);
   const buildSubFolder = getPlatformFolder(buildEnvironment, currentTarget.os, currentTarget.arch);
   const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
   const bundleFileName = getBundleFileName(config.app.name, buildEnvironment, targetOS);
@@ -1171,13 +1174,15 @@ if (commandArg === "init") {
   }
 
   // build macos bundle
+  // Use display name (with spaces) for macOS bundle folders, sanitized name for other platforms
+  const bundleName = targetOS === 'macos' ? macOSBundleDisplayName : appFileName;
   const {
     appBundleFolderPath,
     appBundleFolderContentsPath,
     appBundleMacOSPath,
     appBundleFolderResourcesPath,
     appBundleFolderFrameworksPath,
-  } = createAppBundle(appFileName, buildFolder, targetOS);
+  } = createAppBundle(bundleName, buildFolder, targetOS);
 
   const appBundleAppCodePath = join(appBundleFolderResourcesPath, "app");
 
@@ -1206,7 +1211,7 @@ if (commandArg === "init") {
     <key>CFBundleIdentifier</key>
     <string>${config.app.identifier}</string>
     <key>CFBundleName</key>
-    <string>${appFileName}</string>
+    <string>${bundleName}</string>
     <key>CFBundleVersion</key>
     <string>${config.app.version}</string>
     <key>CFBundlePackageType</key>
@@ -1932,7 +1937,8 @@ if (commandArg === "init") {
   // All the unique files are in the bundle now. Create an initial temporary tar file
   // for hashing the contents
   // tar the signed and notarized app bundle
-  const tmpTarPath = `${appBundleFolderPath}-temp.tar`;
+  // Use sanitized appFileName for tarball paths (URL-safe), but tar content uses actual bundle folder
+  const tmpTarPath = join(buildFolder, `${appFileName}${targetOS === 'macos' ? '.app' : ''}-temp.tar`);
   await tar.c(
     {
       gzip: false,
@@ -2132,7 +2138,8 @@ if (commandArg === "init") {
 
     // Platform suffix is only used for folder names, not file names
     const platformSuffix = `-${targetOS}-${targetARCH}`;
-    const tarPath = `${appBundleFolderPath}.tar`;
+    // Use sanitized appFileName for tarball path (URL-safe), but tar content uses actual bundle folder name
+    const tarPath = join(buildFolder, `${appFileName}${targetOS === 'macos' ? '.app' : ''}.tar`);
 
     // For Linux, we've already created the tar in the AppImage section above
     // For macOS/Windows, tar the signed and notarized app bundle
@@ -2202,7 +2209,7 @@ if (commandArg === "init") {
       rmdirSync(appBundleFolderPath, { recursive: true });
     }
 
-    const selfExtractingBundle = createAppBundle(appFileName, buildFolder, targetOS);
+    const selfExtractingBundle = createAppBundle(bundleName, buildFolder, targetOS);
     const compressedTarballInExtractingBundlePath = join(
       selfExtractingBundle.appBundleFolderResourcesPath,
       `${hash}.tar.zst`
@@ -2261,7 +2268,7 @@ if (commandArg === "init") {
         buildEnvironment === "stable"
           ? join(buildFolder, `${appFileName}-stable.dmg`)
           : finalDmgPath;
-      const dmgVolumeName = getDmgVolumeName(appFileName, buildEnvironment);
+      const dmgVolumeName = getDmgVolumeName(config.app.name, buildEnvironment);
 
       // Create a staging directory for DMG contents (app + Applications shortcut)
       const dmgStagingDir = join(buildFolder, '.dmg-staging');
