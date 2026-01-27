@@ -555,9 +555,18 @@ const Updater = {
             
             // Move current running app to backup
             renameSync(runningAppBundlePath, backupPath);
-            
+
             // Move new app to running location
             renameSync(newAppBundlePath, runningAppBundlePath);
+
+            // Remove quarantine extended attributes to prevent "damaged" error
+            // The inner bundle is already signed/notarized, but macOS applies
+            // quarantine attributes when extracting from a downloaded archive
+            try {
+              execSync(`xattr -r -d com.apple.quarantine "${runningAppBundlePath}"`, { stdio: 'ignore' });
+            } catch (e) {
+              // Ignore errors - attribute may not exist
+            }
           } else if (currentOS === 'linux') {
             // On Linux, backup and replace AppImage file
             // Remove existing backup if it exists
