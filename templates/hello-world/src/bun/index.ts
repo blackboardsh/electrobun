@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow, Utils } from "electrobun/bun";
 
 // Create the main application window
 const mainWindow = new BrowserWindow({
@@ -10,6 +10,11 @@ const mainWindow = new BrowserWindow({
     x: 200,
     y: 200,
   },
+});
+
+// Quit the app when the main window is closed
+mainWindow.on("close", () => {
+  Utils.quit();
 });
 
 console.log("Hello Electrobun app started!");

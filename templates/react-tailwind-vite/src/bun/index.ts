@@ -1,4 +1,4 @@
-import { BrowserWindow, Updater } from "electrobun/bun";
+import { BrowserWindow, Updater, Utils } from "electrobun/bun";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
@@ -30,6 +30,11 @@ const mainWindow = new BrowserWindow({
     x: 200,
     y: 200,
   },
+});
+
+// Quit the app when the main window is closed
+mainWindow.on("close", () => {
+  Utils.quit();
 });
 
 console.log("React Tailwind Vite app started!");

@@ -89,4 +89,9 @@ const mainWindow = new BrowserWindow({
   rpc: photoBoothRPC,
 });
 
+// Quit the app when the main window is closed
+mainWindow.on("close", () => {
+  Utils.quit();
+});
+
 console.log("Photo Booth app started!");

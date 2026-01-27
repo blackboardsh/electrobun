@@ -1,4 +1,4 @@
-import Electrobun, { BrowserWindow, BrowserView } from "electrobun/bun";
+import Electrobun, { BrowserWindow, BrowserView, Utils } from "electrobun/bun";
 import { type PlaygroundRPC } from "./types/rpc";
 
 // Import demo modules
@@ -119,6 +119,11 @@ mainWindow.webview.on("dom-ready", () => {
     level: 'info', 
     message: 'Electrobun Interactive Playground loaded successfully!' 
   });
+});
+
+// Quit the app when the main window is closed
+mainWindow.on("close", () => {
+  Utils.quit();
 });
 
 console.log("🎮 Playground initialized successfully");
