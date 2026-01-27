@@ -702,6 +702,11 @@ start "" "${launcherPathWin}"
 :end
 echo [%date% %time%] Update script finished >> %LOGFILE%
 
+:: Clean up scheduled tasks starting with ElectrobunUpdate_
+for /f "tokens=1" %%t in ('schtasks /query /fo list ^| findstr /i "ElectrobunUpdate_"') do (
+    schtasks /delete /tn "%%t" /f >nul 2>&1
+)
+
 :: Delete this update script after a short delay
 ping -n 2 127.0.0.1 >nul
 del "%~f0"
@@ -709,13 +714,15 @@ del "%~f0"
 
             await Bun.write(updateScriptPath, updateScript);
 
-            // Launch the update script using wmic to create a truly independent process
-            // that survives even if killApp() terminates the process tree
+            // Use Windows Task Scheduler to run the update script independently
+            // This ensures the script runs even after the app exits
             const scriptPathWin = updateScriptPath.replace(/\//g, '\\');
-            execSync(`wmic process call create "cmd /c \\"${scriptPathWin}\\""`, { stdio: 'ignore' });
+            const taskName = `ElectrobunUpdate_${Date.now()}`;
 
-            // Small delay to ensure the script starts
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Create a scheduled task that runs immediately and deletes itself
+            execSync(`schtasks /create /tn "${taskName}" /tr "cmd /c \\"${scriptPathWin}\\"" /sc once /st 00:00 /f`, { stdio: 'ignore' });
+            execSync(`schtasks /run /tn "${taskName}"`, { stdio: 'ignore' });
+            // The task will be cleaned up by Windows after it runs, or we delete it in the batch script
 
             // Use quit() for graceful shutdown - this closes all windows and processes
             quit();
