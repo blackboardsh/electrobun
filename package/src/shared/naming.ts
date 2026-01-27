@@ -59,9 +59,10 @@ export function getTarballFileName(appFileName: string, os: SupportedOS): string
  * Format: "AppName-Setup.exe" (stable) or "AppName-Setup-channel.exe" (non-stable)
  */
 export function getWindowsSetupFileName(appName: string, buildEnvironment: BuildEnvironment): string {
+  const sanitized = sanitizeAppName(appName);
   return buildEnvironment === 'stable'
-    ? `${appName}-Setup.exe`
-    : `${appName}-Setup-${buildEnvironment}.exe`;
+    ? `${sanitized}-Setup.exe`
+    : `${sanitized}-Setup-${buildEnvironment}.exe`;
 }
 
 /**
@@ -69,9 +70,10 @@ export function getWindowsSetupFileName(appName: string, buildEnvironment: Build
  * Format: "AppName-Setup.run" (stable) or "AppName-Setup-channel.run" (non-stable)
  */
 export function getLinuxSetupFileName(appName: string, buildEnvironment: BuildEnvironment): string {
+  const sanitized = sanitizeAppName(appName);
   return buildEnvironment === 'stable'
-    ? `${appName}-Setup.run`
-    : `${appName}-Setup-${buildEnvironment}.run`;
+    ? `${sanitized}-Setup.run`
+    : `${sanitized}-Setup-${buildEnvironment}.run`;
 }
 
 /**
@@ -79,9 +81,10 @@ export function getLinuxSetupFileName(appName: string, buildEnvironment: BuildEn
  * Format: "AppName-Setup" (stable) or "AppName-Setup-channel" (non-stable)
  */
 export function getLinuxAppImageBaseName(appName: string, buildEnvironment: BuildEnvironment): string {
+  const sanitized = sanitizeAppName(appName);
   return buildEnvironment === 'stable'
-    ? `${appName}-Setup`
-    : `${appName}-Setup-${buildEnvironment}`;
+    ? `${sanitized}-Setup`
+    : `${sanitized}-Setup-${buildEnvironment}`;
 }
 
 /**
