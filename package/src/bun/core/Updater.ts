@@ -624,7 +624,6 @@ const Updater = {
             // that runs after the app exits to do the replacement
             const parentDir = dirname(runningAppBundlePath);
             const updateScriptPath = join(parentDir, 'update.bat');
-            const logPath = join(parentDir, 'update.log');
             const backupDir = join(parentDir, 'app-backup');
             const launcherPath = join(runningAppBundlePath, 'bin', 'launcher.exe');
 
@@ -634,7 +633,6 @@ const Updater = {
             const newAppWin = newAppBundlePath.replace(/\//g, '\\');
             const extractionDirWin = extractionDir.replace(/\//g, '\\');
             const launcherPathWin = launcherPath.replace(/\//g, '\\');
-            const logPathWin = logPath.replace(/\//g, '\\');
 
             // Create a batch script that will:
             // 1. Wait for the current app to exit
@@ -646,12 +644,7 @@ const Updater = {
             const updateScript = `@echo off
 setlocal
 
-set LOGFILE="${logPathWin}"
-
-echo [%date% %time%] Update script started >> %LOGFILE%
-
 :: Wait for the app to fully exit (check if launcher.exe is still running)
-echo [%date% %time%] Waiting for launcher.exe to exit... >> %LOGFILE%
 :waitloop
 tasklist /FI "IMAGENAME eq launcher.exe" 2>NUL | find /I /N "launcher.exe">NUL
 if "%ERRORLEVEL%"=="0" (
@@ -660,47 +653,26 @@ if "%ERRORLEVEL%"=="0" (
 )
 
 :: Small extra delay to ensure all file handles are released
-echo [%date% %time%] App exited, waiting for file handles... >> %LOGFILE%
 timeout /t 2 /nobreak >nul
 
 :: Remove old backup if exists
-echo [%date% %time%] Removing old backup... >> %LOGFILE%
 if exist "${backupDirWin}" (
-    rmdir /s /q "${backupDirWin}" >> %LOGFILE% 2>&1
+    rmdir /s /q "${backupDirWin}"
 )
 
 :: Backup current app folder
-echo [%date% %time%] Backing up current app... >> %LOGFILE%
 if exist "${runningAppWin}" (
-    move "${runningAppWin}" "${backupDirWin}" >> %LOGFILE% 2>&1
-    if errorlevel 1 (
-        echo [%date% %time%] ERROR: Failed to backup current app >> %LOGFILE%
-        goto end
-    )
+    move "${runningAppWin}" "${backupDirWin}"
 )
 
 :: Move new app to current location
-echo [%date% %time%] Installing new version... >> %LOGFILE%
-move "${newAppWin}" "${runningAppWin}" >> %LOGFILE% 2>&1
-if errorlevel 1 (
-    echo [%date% %time%] ERROR: Failed to install new version >> %LOGFILE%
-    :: Try to restore backup
-    if exist "${backupDirWin}" (
-        move "${backupDirWin}" "${runningAppWin}" >> %LOGFILE% 2>&1
-    )
-    goto end
-)
+move "${newAppWin}" "${runningAppWin}"
 
 :: Clean up extraction directory
-echo [%date% %time%] Cleaning up... >> %LOGFILE%
-rmdir /s /q "${extractionDirWin}" >> %LOGFILE% 2>&1
+rmdir /s /q "${extractionDirWin}" 2>nul
 
 :: Launch the new app
-echo [%date% %time%] Launching new version... >> %LOGFILE%
 start "" "${launcherPathWin}"
-
-:end
-echo [%date% %time%] Update script finished >> %LOGFILE%
 
 :: Clean up scheduled tasks starting with ElectrobunUpdate_
 for /f "tokens=1" %%t in ('schtasks /query /fo list ^| findstr /i "ElectrobunUpdate_"') do (
