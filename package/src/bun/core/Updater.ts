@@ -623,7 +623,17 @@ const Updater = {
             // that runs after the app exits to do the replacement
             const parentDir = dirname(runningAppBundlePath);
             const updateScriptPath = join(parentDir, 'update.bat');
+            const logPath = join(parentDir, 'update.log');
             const backupDir = join(parentDir, 'app-backup');
+            const launcherPath = join(runningAppBundlePath, 'bin', 'launcher.exe');
+
+            // Convert paths to Windows format
+            const backupDirWin = backupDir.replace(/\//g, '\\');
+            const runningAppWin = runningAppBundlePath.replace(/\//g, '\\');
+            const newAppWin = newAppBundlePath.replace(/\//g, '\\');
+            const extractionDirWin = extractionDir.replace(/\//g, '\\');
+            const launcherPathWin = launcherPath.replace(/\//g, '\\');
+            const logPathWin = logPath.replace(/\//g, '\\');
 
             // Create a batch script that will:
             // 1. Wait for the current app to exit
@@ -635,7 +645,12 @@ const Updater = {
             const updateScript = `@echo off
 setlocal
 
+set LOGFILE="${logPathWin}"
+
+echo [%date% %time%] Update script started >> %LOGFILE%
+
 :: Wait for the app to fully exit (check if launcher.exe is still running)
+echo [%date% %time%] Waiting for launcher.exe to exit... >> %LOGFILE%
 :waitloop
 tasklist /FI "IMAGENAME eq launcher.exe" 2>NUL | find /I /N "launcher.exe">NUL
 if "%ERRORLEVEL%"=="0" (
@@ -644,38 +659,62 @@ if "%ERRORLEVEL%"=="0" (
 )
 
 :: Small extra delay to ensure all file handles are released
-timeout /t 1 /nobreak >nul
+echo [%date% %time%] App exited, waiting for file handles... >> %LOGFILE%
+timeout /t 2 /nobreak >nul
 
 :: Remove old backup if exists
-if exist "${backupDir.replace(/\//g, '\\')}" (
-    rmdir /s /q "${backupDir.replace(/\//g, '\\')}"
+echo [%date% %time%] Removing old backup... >> %LOGFILE%
+if exist "${backupDirWin}" (
+    rmdir /s /q "${backupDirWin}" >> %LOGFILE% 2>&1
 )
 
 :: Backup current app folder
-if exist "${runningAppBundlePath.replace(/\//g, '\\')}" (
-    move "${runningAppBundlePath.replace(/\//g, '\\')}" "${backupDir.replace(/\//g, '\\')}"
+echo [%date% %time%] Backing up current app... >> %LOGFILE%
+if exist "${runningAppWin}" (
+    move "${runningAppWin}" "${backupDirWin}" >> %LOGFILE% 2>&1
+    if errorlevel 1 (
+        echo [%date% %time%] ERROR: Failed to backup current app >> %LOGFILE%
+        goto end
+    )
 )
 
 :: Move new app to current location
-move "${newAppBundlePath.replace(/\//g, '\\')}" "${runningAppBundlePath.replace(/\//g, '\\')}"
+echo [%date% %time%] Installing new version... >> %LOGFILE%
+move "${newAppWin}" "${runningAppWin}" >> %LOGFILE% 2>&1
+if errorlevel 1 (
+    echo [%date% %time%] ERROR: Failed to install new version >> %LOGFILE%
+    :: Try to restore backup
+    if exist "${backupDirWin}" (
+        move "${backupDirWin}" "${runningAppWin}" >> %LOGFILE% 2>&1
+    )
+    goto end
+)
 
 :: Clean up extraction directory
-rmdir /s /q "${extractionDir.replace(/\//g, '\\')}" 2>nul
+echo [%date% %time%] Cleaning up... >> %LOGFILE%
+rmdir /s /q "${extractionDirWin}" >> %LOGFILE% 2>&1
 
 :: Launch the new app
-start "" /d "${join(runningAppBundlePath, 'bin').replace(/\//g, '\\')}" launcher.exe
+echo [%date% %time%] Launching new version... >> %LOGFILE%
+start "" "${launcherPathWin}"
 
-:: Delete this update script
+:end
+echo [%date% %time%] Update script finished >> %LOGFILE%
+
+:: Delete this update script after a short delay
+ping -n 2 127.0.0.1 >nul
 del "%~f0"
 `;
 
             await Bun.write(updateScriptPath, updateScript);
 
-            // Launch the update script detached - it will wait for us to exit
-            await Bun.spawn(["cmd", "/c", "start", "", "/min", updateScriptPath], { detached: true });
+            // Launch the update script using wmic to create a truly independent process
+            // that survives even if killApp() terminates the process tree
+            const scriptPathWin = updateScriptPath.replace(/\//g, '\\');
+            execSync(`wmic process call create "cmd /c \\"${scriptPathWin}\\""`, { stdio: 'ignore' });
 
             // Small delay to ensure the script starts
-            await new Promise(resolve => setTimeout(resolve, 200));
+            await new Promise(resolve => setTimeout(resolve, 500));
 
             // Now exit - the script will take over
             try {
