@@ -130,7 +130,7 @@ function getAppDataDir(): string {
 let localInfo: {
   version: string;
   hash: string;
-  bucketUrl: string;
+  baseUrl: string;
   channel: string;
   name: string;
   identifier: string;
@@ -166,7 +166,7 @@ const Updater = {
 
     const cacheBuster = Math.random().toString(36).substring(7);
     const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
-    const updateInfoUrl = `${localInfo.bucketUrl}/${platformPrefix}-update.json?${cacheBuster}`;
+    const updateInfoUrl = `${localInfo.baseUrl}/${platformPrefix}-update.json?${cacheBuster}`;
 
     try {
       const updateInfoResponse = await fetch(updateInfoUrl);
@@ -235,7 +235,7 @@ const Updater = {
         // check if there's a patch file for it
         const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
         const patchResponse = await fetch(
-          `${localInfo.bucketUrl}/${platformPrefix}-${currentHash}.patch`
+          `${localInfo.baseUrl}/${platformPrefix}-${currentHash}.patch`
         );
 
         if (!patchResponse.ok) {
@@ -354,7 +354,7 @@ const Updater = {
         const cacheBuster = Math.random().toString(36).substring(7);
         const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
         const tarballName = getTarballFileName(appFileName, currentOS);
-        const urlToLatestTarball = `${localInfo.bucketUrl}/${platformPrefix}-${tarballName}`;
+        const urlToLatestTarball = `${localInfo.baseUrl}/${platformPrefix}-${tarballName}`;
         const prevVersionCompressedTarballPath = join(
           appDataFolder,
           "self-extraction",
@@ -723,9 +723,9 @@ del "%~f0"
 
   channelBucketUrl: async () => {
     await Updater.getLocallocalInfo();
-    // With flat prefix-based naming, channelBucketUrl is just the bucketUrl
-    // Users can also use Updater.localInfo.bucketUrl() directly
-    return localInfo.bucketUrl;
+    // With flat prefix-based naming, channelBucketUrl is just the baseUrl
+    // Users can also use Updater.localInfo.baseUrl() directly
+    return localInfo.baseUrl;
   },
 
   appDataFolder: async () => {
@@ -750,8 +750,8 @@ del "%~f0"
     channel: async () => {
       return (await Updater.getLocallocalInfo()).channel;
     },
-    bucketUrl: async () => {
-      return (await Updater.getLocallocalInfo()).bucketUrl;
+    baseUrl: async () => {
+      return (await Updater.getLocallocalInfo()).baseUrl;
     },
   },
 

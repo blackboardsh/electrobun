@@ -588,7 +588,7 @@ const defaultConfig = {
     postPackage: "",
   },
   release: {
-    bucketUrl: "",
+    baseUrl: "",
   },
 };
 
@@ -1964,7 +1964,7 @@ if (commandArg === "init") {
     // then gets used for patching and updating.
     hash: hash,
     channel: buildEnvironment,
-    bucketUrl: config.release.bucketUrl,
+    baseUrl: config.release.baseUrl,
     name: appFileName,
     identifier: config.app.identifier,
   });
@@ -2369,7 +2369,7 @@ if (commandArg === "init") {
       platform: OS,
       arch: ARCH,
       // channel: buildEnvironment,
-      // bucketUrl: config.release.bucketUrl
+      // baseUrl: config.release.baseUrl
     });
 
     // update.json with platform prefix for flat naming structure
@@ -2377,25 +2377,25 @@ if (commandArg === "init") {
 
     // generate bsdiff
     // https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst
-    console.log("bucketUrl: ", config.release.bucketUrl);
+    console.log("baseUrl: ", config.release.baseUrl);
 
     console.log("generating a patch from the previous version...");
-    
-    // Skip patch generation if bucketUrl is not configured
-    if (!config.release.bucketUrl || config.release.bucketUrl.trim() === '') {
-      console.log("No bucketUrl configured, skipping patch generation");
-      console.log("To enable patch generation, configure bucketUrl in your electrobun.config");
+
+    // Skip patch generation if baseUrl is not configured
+    if (!config.release.baseUrl || config.release.baseUrl.trim() === '') {
+      console.log("No baseUrl configured, skipping patch generation");
+      console.log("To enable patch generation, configure baseUrl in your electrobun.config");
     } else {
-      const urlToPrevUpdateJson = `${config.release.bucketUrl}/${platformPrefix}-update.json`;
+      const urlToPrevUpdateJson = `${config.release.baseUrl}/${platformPrefix}-update.json`;
       const cacheBuster = Math.random().toString(36).substring(7);
       const updateJsonResponse = await fetch(
         urlToPrevUpdateJson + `?${cacheBuster}`
       ).catch((err) => {
-        console.log("bucketURL not found: ", err);
+        console.log("baseUrl not found: ", err);
       });
 
     const tarballFileName = getTarballFileName(appFileName, OS);
-    const urlToLatestTarball = `${config.release.bucketUrl}/${platformPrefix}-${tarballFileName}`;
+    const urlToLatestTarball = `${config.release.baseUrl}/${platformPrefix}-${tarballFileName}`;
 
 
     // attempt to get the previous version to create a patch file
@@ -2458,7 +2458,7 @@ if (commandArg === "init") {
       console.log("prevoius version not found at: ", urlToLatestTarball);
       console.log("skipping diff generation");
     }
-    } // End of bucketUrl validation block
+    } // End of baseUrl validation block
 
     // compress all the upload files
     console.log("copying artifacts...");

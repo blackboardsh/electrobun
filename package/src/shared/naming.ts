@@ -130,22 +130,22 @@ export function getDmgVolumeName(appName: string, buildEnvironment: BuildEnviron
  * Constructs the full URL for the update.json file.
  * Uses flat prefix-based naming for compatibility with GitHub Releases and other hosts.
  */
-export function getUpdateInfoUrl(bucketUrl: string, platformPrefix: string): string {
-  return `${bucketUrl}/${platformPrefix}-update.json`;
+export function getUpdateInfoUrl(baseUrl: string, platformPrefix: string): string {
+  return `${baseUrl}/${platformPrefix}-update.json`;
 }
 
 /**
  * Constructs the full URL for a patch file.
  * Uses flat prefix-based naming for compatibility with GitHub Releases and other hosts.
  */
-export function getPatchFileUrl(bucketUrl: string, platformPrefix: string, hash: string): string {
-  return `${bucketUrl}/${platformPrefix}-${hash}.patch`;
+export function getPatchFileUrl(baseUrl: string, platformPrefix: string, hash: string): string {
+  return `${baseUrl}/${platformPrefix}-${hash}.patch`;
 }
 
 /**
  * Constructs the full URL for a tarball.
  * Uses flat prefix-based naming for compatibility with GitHub Releases and other hosts.
  */
-export function getTarballUrl(bucketUrl: string, platformPrefix: string, tarballFileName: string): string {
-  return `${bucketUrl}/${platformPrefix}-${tarballFileName}`;
+export function getTarballUrl(baseUrl: string, platformPrefix: string, tarballFileName: string): string {
+  return `${baseUrl}/${platformPrefix}-${tarballFileName}`;
 }

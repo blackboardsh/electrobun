@@ -210,12 +210,12 @@ describe('getDmgVolumeName', () => {
 });
 
 describe('URL construction functions', () => {
-  const bucketUrl = 'https://storage.example.com/releases';
+  const baseUrl = 'https://storage.example.com/releases';
   const platformPrefix = 'canary-macos-arm64';
 
   describe('getUpdateInfoUrl', () => {
     it('constructs correct flat URL with prefix', () => {
-      expect(getUpdateInfoUrl(bucketUrl, platformPrefix))
+      expect(getUpdateInfoUrl(baseUrl, platformPrefix))
         .toBe('https://storage.example.com/releases/canary-macos-arm64-update.json');
     });
 
@@ -227,19 +227,19 @@ describe('URL construction functions', () => {
 
   describe('getPatchFileUrl', () => {
     it('constructs correct flat URL with prefix and hash', () => {
-      expect(getPatchFileUrl(bucketUrl, platformPrefix, 'abc123def456'))
+      expect(getPatchFileUrl(baseUrl, platformPrefix, 'abc123def456'))
         .toBe('https://storage.example.com/releases/canary-macos-arm64-abc123def456.patch');
     });
   });
 
   describe('getTarballUrl', () => {
     it('constructs correct flat URL for macOS tarball', () => {
-      expect(getTarballUrl(bucketUrl, platformPrefix, 'MyApp.app.tar.zst'))
+      expect(getTarballUrl(baseUrl, platformPrefix, 'MyApp.app.tar.zst'))
         .toBe('https://storage.example.com/releases/canary-macos-arm64-MyApp.app.tar.zst');
     });
 
     it('constructs correct flat URL for Windows tarball', () => {
-      expect(getTarballUrl(bucketUrl, 'stable-win-x64', 'MyApp.tar.zst'))
+      expect(getTarballUrl(baseUrl, 'stable-win-x64', 'MyApp.tar.zst'))
         .toBe('https://storage.example.com/releases/stable-win-x64-MyApp.tar.zst');
     });
   });

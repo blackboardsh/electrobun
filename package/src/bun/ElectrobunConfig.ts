@@ -228,10 +228,10 @@ export interface ElectrobunConfig {
    */
   release?: {
     /**
-     * Base URL for artifact distribution (e.g., S3 bucket URL)
+     * Base URL for artifact distribution (e.g., S3 bucket, GitHub Releases)
      * Used for auto-updates and patch generation
      */
-    bucketUrl?: string;
+    baseUrl?: string;
   };
 }
 
