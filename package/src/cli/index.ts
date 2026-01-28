@@ -2536,10 +2536,13 @@ if (commandArg === "init") {
   // Set up dev build variables (similar to build mode)
   const buildEnvironment = "dev";
   const currentTarget = { os: OS, arch: ARCH };
-  const appFileName = `${config.app.name.replace(/ /g, "")}-${buildEnvironment}`;
+  const appFileName = getAppFileName(config.app.name, buildEnvironment);
+  // macOS uses display name with spaces for the actual .app folder
+  const macOSBundleDisplayName = getMacOSBundleDisplayName(config.app.name, buildEnvironment);
   const buildSubFolder = `${buildEnvironment}-${currentTarget.os}-${currentTarget.arch}`;
   const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
-  const bundleFileName = OS === 'macos' ? `${appFileName}.app` : appFileName;
+  // Use display name for macOS bundles (with spaces), sanitized name for other platforms
+  const bundleFileName = OS === 'macos' ? `${macOSBundleDisplayName}.app` : appFileName;
 
   // Note: this cli will be a bun single-file-executable
   // Note: we want to use the version of bun that's packaged with electrobun
