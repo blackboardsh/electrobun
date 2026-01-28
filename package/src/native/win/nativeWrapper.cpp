@@ -1520,6 +1520,50 @@ private:
     IMPLEMENT_REFCOUNTING(ElectrobunRenderHandler);
 };
 
+// Forward declaration
+void handleApplicationMenuSelection(UINT menuId);
+
+// CEF Keyboard Handler for menu accelerators
+class ElectrobunKeyboardHandler : public CefKeyboardHandler {
+public:
+    bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                      const CefKeyEvent& event,
+                      CefEventHandle os_event,
+                      bool* is_keyboard_shortcut) override {
+        // Only handle key down events
+        if (event.type != KEYEVENT_RAWKEYDOWN) {
+            return false;
+        }
+
+        // Check if we have accelerator entries
+        if (g_menuAccelerators.empty()) {
+            return false;
+        }
+
+        // Build the current modifier state from CEF event
+        BYTE modifiers = FVIRTKEY;
+        if (event.modifiers & EVENTFLAG_CONTROL_DOWN) modifiers |= FCONTROL;
+        if (event.modifiers & EVENTFLAG_ALT_DOWN) modifiers |= FALT;
+        if (event.modifiers & EVENTFLAG_SHIFT_DOWN) modifiers |= FSHIFT;
+
+        // Check if this key combination matches any accelerator
+        WORD vkCode = (WORD)event.windows_key_code;
+
+        for (const auto& accel : g_menuAccelerators) {
+            if (accel.key == vkCode && accel.fVirt == modifiers) {
+                // Found a match! Trigger the menu command directly
+                handleApplicationMenuSelection(accel.cmd);
+                return true;  // Prevent CEF from processing this key
+            }
+        }
+
+        return false;
+    }
+
+private:
+    IMPLEMENT_REFCOUNTING(ElectrobunKeyboardHandler);
+};
+
 // CEF Client class with load and life span handlers
 class ElectrobunCefClient : public CefClient {
 public:
@@ -1542,6 +1586,7 @@ public:
         m_permissionHandler = new ElectrobunPermissionHandler();
         m_dialogHandler = new ElectrobunDialogHandler();
         m_downloadHandler = new ElectrobunDownloadHandler();
+        m_keyboardHandler = new ElectrobunKeyboardHandler();
         m_renderHandler = nullptr; // Created only when OSR is enabled
     }
 
@@ -1618,6 +1663,10 @@ public:
         return m_renderHandler;
     }
 
+    CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override {
+        return m_keyboardHandler;
+    }
+
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                  CefRefPtr<CefFrame> frame,
                                  CefProcessId source_process,
@@ -1679,6 +1728,7 @@ private:
     CefRefPtr<ElectrobunPermissionHandler> m_permissionHandler;
     CefRefPtr<ElectrobunDialogHandler> m_dialogHandler;
     CefRefPtr<ElectrobunDownloadHandler> m_downloadHandler;
+    CefRefPtr<ElectrobunKeyboardHandler> m_keyboardHandler;
     CefRefPtr<ElectrobunRenderHandler> m_renderHandler;
     bool osr_enabled_;
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
@@ -4100,119 +4150,6 @@ SimpleJsonValue parseJson(const std::string& json) {
     return parseJsonValue(json, pos);
 }
 
-
-
-// Function to create Windows menu from JSON config (equivalent to createMenuFromConfig)
-HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* statusItem) {
-    HMENU menu = CreatePopupMenu();
-    if (!menu) {
-        ::log("ERROR: Failed to create popup menu");
-        return NULL;
-    }
-    
-    if (menuConfig.type != SimpleJsonValue::ARRAY) {
-        ::log("ERROR: Menu config is not an array");
-        return menu;
-    }
-    
-    for (const auto& itemValue : menuConfig.arrayValue) {
-        if (itemValue.type != SimpleJsonValue::OBJECT) continue;
-        
-        const auto& itemData = itemValue.objectValue;
-        
-        // Helper lambda to get string value
-        auto getString = [&](const std::string& key, const std::string& defaultVal = "") -> std::string {
-            auto it = itemData.find(key);
-            if (it != itemData.end() && it->second.type == SimpleJsonValue::STRING) {
-                return it->second.stringValue;
-            }
-            return defaultVal;
-        };
-        
-        // Helper lambda to get bool value
-        auto getBool = [&](const std::string& key, bool defaultVal = false) -> bool {
-            auto it = itemData.find(key);
-            if (it != itemData.end() && it->second.type == SimpleJsonValue::BOOL) {
-                return it->second.boolValue;
-            }
-            return defaultVal;
-        };
-        
-        std::string type = getString("type");
-        std::string label = getString("label");
-        std::string action = getString("action");
-        std::string role = getString("role");
-        std::string accelerator = getString("accelerator");
-        
-        bool enabled = getBool("enabled", true);
-        bool checked = getBool("checked", false);
-        bool hidden = getBool("hidden", false);
-        std::string tooltip = getString("tooltip");
-        
-        if (hidden) {
-            continue;
-        } else if (type == "divider") {
-            AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-        } else {
-            UINT flags = MF_STRING;
-            if (!enabled) flags |= MF_GRAYED;
-            
-            UINT menuId = g_nextMenuId++;
-            
-            // Store the action for this menu ID
-            if (!action.empty()) {
-                g_menuItemActions[menuId] = action;
-            }
-            
-            // Handle system roles (similar to macOS implementation)
-            if (!role.empty()) {
-                if (role == "quit") {
-                    // For quit, we'll handle it specially in the menu callback
-                    g_menuItemActions[menuId] = "__quit__";
-                }
-                // TODO: fill in other roles
-            }
-            
-            // Append the menu item
-            AppendMenuA(menu, flags, menuId, label.c_str());
-
-            if (checked) {
-                CheckMenuItem(menu, menuId, MF_BYCOMMAND | MF_CHECKED);
-            }
-            
-            // Handle submenus
-            auto submenuIt = itemData.find("submenu");
-            if (submenuIt != itemData.end() && submenuIt->second.type == SimpleJsonValue::ARRAY) {
-                HMENU submenu = createMenuFromConfig(submenuIt->second, statusItem);
-                if (submenu) {
-                    ModifyMenuA(menu, menuId, MF_BYCOMMAND | MF_POPUP, (UINT_PTR)submenu, label.c_str());
-                }
-            }
-        }
-    }
-    
-    return menu;
-}
-
-// Function to handle menu item selection
-void handleMenuItemSelection(UINT menuId, NSStatusItem* statusItem) {
-    auto it = g_menuItemActions.find(menuId);
-    if (it != g_menuItemActions.end()) {
-        const std::string& action = it->second;
-        
-        if (statusItem && statusItem->handler) {
-            if (action == "__quit__") {
-                // Handle quit specially
-                PostQuitMessage(0);
-            } else {
-                statusItem->handler(statusItem->trayId, action.c_str());
-            }
-        }
-    }
-}
-
-
-
 // Helper to parse virtual key code from key string for menu accelerators
 static UINT getMenuVirtualKeyCode(const std::string& key) {
     std::string lowerKey = key;
@@ -4350,6 +4287,177 @@ static std::string buildAcceleratorDisplayString(const std::string& accelerator)
 
     display += upperKey;
     return display;
+}
+
+// Function to create Windows menu from JSON config (equivalent to createMenuFromConfig)
+HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* statusItem) {
+    HMENU menu = CreatePopupMenu();
+    if (!menu) {
+        ::log("ERROR: Failed to create popup menu");
+        return NULL;
+    }
+    
+    if (menuConfig.type != SimpleJsonValue::ARRAY) {
+        ::log("ERROR: Menu config is not an array");
+        return menu;
+    }
+    
+    for (const auto& itemValue : menuConfig.arrayValue) {
+        if (itemValue.type != SimpleJsonValue::OBJECT) continue;
+        
+        const auto& itemData = itemValue.objectValue;
+        
+        // Helper lambda to get string value
+        auto getString = [&](const std::string& key, const std::string& defaultVal = "") -> std::string {
+            auto it = itemData.find(key);
+            if (it != itemData.end() && it->second.type == SimpleJsonValue::STRING) {
+                return it->second.stringValue;
+            }
+            return defaultVal;
+        };
+        
+        // Helper lambda to get bool value
+        auto getBool = [&](const std::string& key, bool defaultVal = false) -> bool {
+            auto it = itemData.find(key);
+            if (it != itemData.end() && it->second.type == SimpleJsonValue::BOOL) {
+                return it->second.boolValue;
+            }
+            return defaultVal;
+        };
+        
+        std::string type = getString("type");
+        std::string label = getString("label");
+        std::string action = getString("action");
+        std::string role = getString("role");
+        std::string accelerator = getString("accelerator");
+
+        bool enabled = getBool("enabled", true);
+        bool checked = getBool("checked", false);
+        bool hidden = getBool("hidden", false);
+        std::string tooltip = getString("tooltip");
+
+        if (hidden) {
+            continue;
+        } else if (type == "divider") {
+            AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+        } else {
+            UINT flags = MF_STRING;
+            if (!enabled) flags |= MF_GRAYED;
+
+            UINT menuId = g_nextMenuId++;
+
+            // Store the action for this menu ID
+            if (!action.empty()) {
+                g_menuItemActions[menuId] = action;
+            }
+
+            // Handle system roles (similar to macOS implementation)
+            if (!role.empty()) {
+                if (role == "quit") {
+                    // For quit, we'll handle it specially in the menu callback
+                    g_menuItemActions[menuId] = "__quit__";
+                }
+
+                // Set default accelerators for common roles if not specified
+                if (accelerator.empty()) {
+                    if (role == "undo") {
+                        accelerator = "z";
+                    } else if (role == "redo") {
+                        accelerator = "y";
+                    } else if (role == "cut") {
+                        accelerator = "x";
+                    } else if (role == "copy") {
+                        accelerator = "c";
+                    } else if (role == "paste") {
+                        accelerator = "v";
+                    } else if (role == "selectAll") {
+                        accelerator = "a";
+                    }
+                }
+            }
+
+            // Build the label with accelerator display for context menus
+            // On Windows, context menus use mnemonic keys (just the letter, not Ctrl+Letter)
+            std::string displayLabel = label;
+            if (!accelerator.empty()) {
+                // For context menus, display just the letter (mnemonic key)
+                // The user presses just the letter while the menu is open
+                if (accelerator.length() == 1 && isalpha(accelerator[0])) {
+                    displayLabel += "\t" + std::string(1, (char)toupper(accelerator[0]));
+                } else {
+                    // For complex accelerators, extract just the key part
+                    std::string accelDisplay = buildAcceleratorDisplayString(accelerator);
+                    // Remove "Ctrl+" prefix for context menus since they use mnemonics
+                    size_t ctrlPos = accelDisplay.find("Ctrl+");
+                    if (ctrlPos != std::string::npos) {
+                        accelDisplay = accelDisplay.substr(ctrlPos + 5); // Skip "Ctrl+"
+                    }
+                    if (!accelDisplay.empty()) {
+                        displayLabel += "\t" + accelDisplay;
+                    }
+                }
+            }
+
+            // Append the menu item
+            AppendMenuA(menu, flags, menuId, displayLabel.c_str());
+
+            if (checked) {
+                CheckMenuItem(menu, menuId, MF_BYCOMMAND | MF_CHECKED);
+            }
+
+            // Handle submenus
+            auto submenuIt = itemData.find("submenu");
+            if (submenuIt != itemData.end() && submenuIt->second.type == SimpleJsonValue::ARRAY) {
+                HMENU submenu = createMenuFromConfig(submenuIt->second, statusItem);
+                if (submenu) {
+                    ModifyMenuA(menu, menuId, MF_BYCOMMAND | MF_POPUP, (UINT_PTR)submenu, displayLabel.c_str());
+                }
+            }
+        }
+    }
+    
+    return menu;
+}
+
+// Function to handle menu item selection
+void handleMenuItemSelection(UINT menuId, NSStatusItem* statusItem) {
+    std::cout << "[MENU] handleMenuItemSelection called: menuId=" << menuId
+              << ", statusItem=" << (void*)statusItem << std::endl;
+
+    auto it = g_menuItemActions.find(menuId);
+    if (it != g_menuItemActions.end()) {
+        const std::string& action = it->second;
+
+        std::cout << "[MENU] Found action: " << action;
+        if (statusItem) {
+            std::cout << ", handler=" << (void*)statusItem->handler;
+        }
+        std::cout << std::endl;
+
+        if (statusItem && statusItem->handler) {
+            if (action == "__quit__") {
+                // Handle quit specially
+                std::cout << "[MENU] Triggering quit" << std::endl;
+                PostQuitMessage(0);
+            } else {
+                std::cout << "[MENU] About to call handler for action: " << action << std::endl;
+                std::cout.flush();
+
+                // Try-catch to prevent crashes
+                try {
+                    statusItem->handler(statusItem->trayId, action.c_str());
+                    std::cout << "[MENU] Handler call completed successfully" << std::endl;
+                } catch (...) {
+                    std::cout << "[MENU] ERROR: Handler call threw exception!" << std::endl;
+                }
+            }
+        } else {
+            std::cout << "[MENU] WARNING: No valid handler (statusItem="
+                      << (void*)statusItem << ")" << std::endl;
+        }
+    } else {
+        std::cout << "[MENU] ERROR: No action found for menuId=" << menuId << std::endl;
+    }
 }
 
 // Rebuild the accelerator table from collected accelerators
@@ -7851,12 +7959,12 @@ ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHand
     MainThreadDispatcher::dispatch_sync([=]() {
         try {
             SimpleJsonValue menuConfig = parseJson(std::string(jsonString));
-            
-            std::unique_ptr<StatusItemTarget> target = std::make_unique<StatusItemTarget>();
-            target->zigHandler = contextMenuHandler;
+
+            std::unique_ptr<NSStatusItem> target = std::make_unique<NSStatusItem>();
+            target->handler = contextMenuHandler;
             target->trayId = 0;
-            
-            HMENU menu = createMenuFromConfig(menuConfig, reinterpret_cast<NSStatusItem*>(target.get()));
+
+            HMENU menu = createMenuFromConfig(menuConfig, target.get());
             if (!menu) {
                 ::log("ERROR: Failed to create context menu");
                 return;
@@ -7885,7 +7993,7 @@ ELECTROBUN_EXPORT void showContextMenu(const char *jsonString, ZigStatusItemHand
             
             // Handle menu selection
             if (cmd != 0) {
-                handleMenuItemSelection(cmd, reinterpret_cast<NSStatusItem*>(target.get()));
+                handleMenuItemSelection(cmd, target.get());
             }
             
             // Required for proper cleanup
