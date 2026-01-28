@@ -50,6 +50,7 @@
 #include "../shared/ffi_helpers.h"
 #include "../shared/json_menu_parser.h"
 #include "../shared/download_event.h"
+#include "../shared/app_paths.h"
 
 using namespace electrobun;
 
@@ -1827,16 +1828,13 @@ bool initializeCEF() {
     // Set browser subprocess path to the main helper binary
     CefString(&settings.browser_subprocess_path) = execDir + "/bun Helper";
     
-    // Set cache path with identifier and channel to allow multiple apps/channels to run simultaneously
-    // Use ~/.cache/identifier-channel/CEF (similar to macOS pattern)
+    // Set cache path with identifier/channel structure (consistent with CLI and updater)
+    // Use ~/.cache/identifier/channel/CEF
     char* home = getenv("HOME");
     if (home) {
-        std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-        if (!g_electrobunChannel.empty()) {
-            appIdentifier += "-" + g_electrobunChannel;
-        }
-        std::string cachePath = std::string(home) + "/.cache/" + appIdentifier + "/CEF";
-        std::cout << "[CEF] Using app: " << appIdentifier << std::endl;
+        std::string basePath = std::string(home) + "/.cache";
+        std::string cachePath = buildAppDataPath(basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF");
+        std::cout << "[CEF] Using path: " << cachePath << std::endl;
         CefString(&settings.root_cache_path) = cachePath;
     }
     
@@ -2895,16 +2893,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         if (isPersistent) {
             std::string partitionName = identifier.substr(8);
 
-            // Build app identifier
-            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-            if (!g_electrobunChannel.empty()) {
-                appIdentifier += "-" + g_electrobunChannel;
-            }
-
-            // Build cache path
+            // Build cache path with identifier/channel structure (consistent with CLI and updater)
             char* home = getenv("HOME");
-            std::string basePath = home ? std::string(home) : "/tmp";
-            std::string cachePath = basePath + "/.cache/" + appIdentifier + "/CEF/Partitions/" + partitionName;
+            std::string basePath = home ? std::string(home) + "/.cache" : "/tmp";
+            std::string cachePath = buildPartitionPath(basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName);
 
             // Create directory
             g_mkdir_with_parents(cachePath.c_str(), 0755);
@@ -4614,15 +4606,12 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
 
         if (isPersistent) {
             std::string partitionName = partition.substr(8);
-            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-            if (!g_electrobunChannel.empty()) {
-                appIdentifier += "-" + g_electrobunChannel;
-            }
 
+            // Build paths with identifier/channel structure (consistent with CLI and updater)
             char* home = getenv("HOME");
-            std::string basePath = home ? std::string(home) : "/tmp";
-            std::string dataPath = basePath + "/.local/share/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
-            std::string cachePath = basePath + "/.cache/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+            std::string homeStr = home ? std::string(home) : "/tmp";
+            std::string dataPath = buildPartitionPath(homeStr + "/.local/share", g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
+            std::string cachePath = buildPartitionPath(homeStr + "/.cache", g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
 
             g_mkdir_with_parents(dataPath.c_str(), 0755);
             g_mkdir_with_parents(cachePath.c_str(), 0755);
@@ -6668,7 +6657,10 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
     }
 }
 
-ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* channel) {
+// Note: `name` parameter is accepted for API consistency with Windows but not used on Linux
+ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, const char* channel) {
+    (void)name; // Unused on Linux - kept for API consistency with Windows
+
     // Store identifier and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
@@ -8006,15 +7998,12 @@ static WebKitWebsiteDataManager* getDataManagerForPartition(const char* partitio
 
         if (isPersistent) {
             std::string partitionName = partition.substr(8);
-            std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-            if (!g_electrobunChannel.empty()) {
-                appIdentifier += "-" + g_electrobunChannel;
-            }
 
+            // Build paths with identifier/channel structure (consistent with CLI and updater)
             char* home = getenv("HOME");
-            std::string basePath = home ? std::string(home) : "/tmp";
-            std::string dataPath = basePath + "/.local/share/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
-            std::string cachePath = basePath + "/.cache/" + appIdentifier + "/WebKit/Partitions/" + partitionName;
+            std::string homeStr = home ? std::string(home) : "/tmp";
+            std::string dataPath = buildPartitionPath(homeStr + "/.local/share", g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
+            std::string cachePath = buildPartitionPath(homeStr + "/.cache", g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
 
             g_mkdir_with_parents(dataPath.c_str(), 0755);
             g_mkdir_with_parents(cachePath.c_str(), 0755);

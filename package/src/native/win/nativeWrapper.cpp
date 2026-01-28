@@ -49,6 +49,7 @@
 #include "../shared/ffi_helpers.h"
 #include "../shared/json_menu_parser.h"
 #include "../shared/download_event.h"
+#include "../shared/app_paths.h"
 
 using namespace electrobun;
 
@@ -4783,22 +4784,16 @@ ELECTROBUN_EXPORT bool initCEF() {
     // Set up CEF paths (resources are in ./cef relative to executable)
     std::string cefResourceDir = std::string(exePath) + "\\cef";
 
-    // Build cache path with namespaced directory structure to match installer and partition paths
-    // Use %LOCALAPPDATA%\{identifier}\{name-channel}\CEF
+    // Build cache path with identifier/channel structure (consistent with CLI and updater)
+    // Use %LOCALAPPDATA%\{identifier}\{channel}\CEF
     std::string userDataDir;
     char* localAppData = getenv("LOCALAPPDATA");
     if (localAppData) {
-        std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-        std::string appName = !g_electrobunName.empty() ? g_electrobunName : "App";
-        // Note: g_electrobunName already includes the channel from version.json
-        userDataDir = std::string(localAppData) + "\\" + appIdentifier + "\\" + appName + "\\CEF";
-        std::cout << "[CEF] Using namespaced path: " << appIdentifier << "\\" << appName << std::endl;
+        userDataDir = buildAppDataPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", '\\');
+        std::cout << "[CEF] Using path: " << userDataDir << std::endl;
     } else {
         // Fallback to executable directory if LOCALAPPDATA not available
-        userDataDir = std::string(exePath) + "\\cef_cache";
-        if (!g_electrobunChannel.empty()) {
-            userDataDir += "_" + g_electrobunChannel;
-        }
+        userDataDir = buildAppDataPath(exePath, g_electrobunIdentifier, g_electrobunChannel, "cef_cache", '\\');
     }
 
     // Create cache directory if it doesn't exist
@@ -5537,14 +5532,11 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             }
 
             // Create user data folder path based on partition
+            // Build path with identifier/channel structure (consistent with CLI and updater)
             std::wstring userDataFolder;
             char* localAppData = getenv("LOCALAPPDATA");
             if (localAppData) {
-                std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-                std::string appName = !g_electrobunName.empty() ? g_electrobunName : "App";
-                // Note: g_electrobunName already includes the channel from version.json
-
-                std::string userDataPath = std::string(localAppData) + "\\" + appIdentifier + "\\" + appName + "\\WebView2";
+                std::string userDataPath = buildAppDataPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "WebView2", '\\');
 
                 // Handle partition-specific storage
                 if (!partitionStr.empty()) {
@@ -5624,14 +5616,9 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 settings.persist_session_cookies = false;
                 settings.persist_user_preferences = false;
             } else {
-                // Build namespaced path to match installer structure
-                // Structure: %LOCALAPPDATA%\{identifier}\{name-channel}\CEF\Partitions\{partitionName}
-                std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-                std::string appName = !g_electrobunName.empty() ? g_electrobunName : "App";
-                // Note: g_electrobunName already includes the channel from version.json
-
-                // Build cache path with namespacing: %LOCALAPPDATA%\{identifier}\{name-channel}\CEF\Partitions\{partitionName}
-                std::string cachePath = std::string(localAppData) + "\\" + appIdentifier + "\\" + appName + "\\CEF\\Partitions\\" + partitionName;
+                // Build path with identifier/channel structure (consistent with CLI and updater)
+                // Structure: %LOCALAPPDATA%\{identifier}\{channel}\CEF\Partitions\{partitionName}
+                std::string cachePath = buildPartitionPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName, '\\');
 
                 // Create directory if it doesn't exist
                 std::wstring wideCachePath(cachePath.begin(), cachePath.end());

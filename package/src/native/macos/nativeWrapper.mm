@@ -52,6 +52,7 @@
 #include "../shared/shutdown_guard.h"
 #include "../shared/ffi_helpers.h"
 #include "../shared/download_event.h"
+#include "../shared/app_paths.h"
 
 using namespace electrobun;
 
@@ -3609,15 +3610,15 @@ bool initializeCEF() {
      // Use app-specific cache directory to allow multiple Electrobun apps to run simultaneously
     NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
 
-    // Build app identifier from version.json (consistent with Windows/Linux)
-    std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-    if (!g_electrobunChannel.empty()) {
-        appIdentifier += "-" + g_electrobunChannel;
-    }
-
-    NSString* appName = [NSString stringWithUTF8String:appIdentifier.c_str()];
-    NSString* cachePath = [appSupportPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@/CEF", appName]];
-    NSLog(@"[CEF] Using app: %s", appIdentifier.c_str());
+    // Build path with identifier/channel structure (consistent with CLI and updater)
+    std::string cachePathStr = buildAppDataPath(
+        [appSupportPath UTF8String],
+        g_electrobunIdentifier,
+        g_electrobunChannel,
+        "CEF"
+    );
+    NSString* cachePath = [NSString stringWithUTF8String:cachePathStr.c_str()];
+    NSLog(@"[CEF] Using path: %s", cachePathStr.c_str());
     CefString(&settings.root_cache_path) = [cachePath UTF8String];
 
     // Set log file path for debugging
@@ -3863,16 +3864,15 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
       std::string partitionName = identifier.substr(8);
       NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
 
-      // Build app identifier from version.json to match root_cache_path logic
-      std::string appIdentifier = !g_electrobunIdentifier.empty() ? g_electrobunIdentifier : "Electrobun";
-      if (!g_electrobunChannel.empty()) {
-          appIdentifier += "-" + g_electrobunChannel;
-      }
-
-      NSString* appName = [NSString stringWithUTF8String:appIdentifier.c_str()];
-      NSString* cachePath = [[[[appSupportPath stringByAppendingPathComponent:appName]
-                              stringByAppendingPathComponent:@"CEF/Partitions"]
-                              stringByAppendingPathComponent:[NSString stringWithUTF8String:partitionName.c_str()]] copy];
+      // Build path with identifier/channel structure to match root_cache_path logic
+      std::string cachePathStr = buildPartitionPath(
+          [appSupportPath UTF8String],
+          g_electrobunIdentifier,
+          g_electrobunChannel,
+          "CEF",
+          partitionName
+      );
+      NSString* cachePath = [NSString stringWithUTF8String:cachePathStr.c_str()];
       NSFileManager *fileManager = [NSFileManager defaultManager];
       if (![fileManager fileExistsAtPath:cachePath]) {
         [fileManager createDirectoryAtPath:cachePath withIntermediateDirectories:YES attributes:nil error:nil];
@@ -4357,7 +4357,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
  */
 
 // Note: This is executed from the main bun thread
-extern "C" void startEventLoop(const char* identifier, const char* channel) {
+// Note: `name` parameter is accepted for API consistency with Windows but not used on macOS
+extern "C" void startEventLoop(const char* identifier, const char* name, const char* channel) {
+    (void)name; // Unused on macOS - kept for API consistency with Windows/Linux
+
     // Store identifier and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
