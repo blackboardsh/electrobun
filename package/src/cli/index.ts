@@ -2484,7 +2484,7 @@ if (commandArg === "init") {
     console.log("copying artifacts...");
 
     artifactsToUpload.forEach((filePath) => {
-      const filename = basename(filePath);
+      const filename = basename(filePath).replace(/ /g, '-');
       cpSync(filePath, join(artifactFolder, `${platformPrefix}-${filename}`), { dereference: true });
     });
 
