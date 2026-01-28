@@ -1811,6 +1811,7 @@ bool initializeCEF() {
     CefSettings settings;
     settings.no_sandbox = true;
     settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows
+    settings.log_severity = LOGSEVERITY_ERROR;  // Suppress non-critical warnings like X11 window errors
     // settings.remote_debugging_port = 9222;
     // printf("CEF: Remote debugging enabled on port 9222\n");
     
