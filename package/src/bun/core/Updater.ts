@@ -172,8 +172,28 @@ const Updater = {
       const updateInfoResponse = await fetch(updateInfoUrl);
 
       if (updateInfoResponse.ok) {
-        // todo: this seems brittle
-        updateInfo = await updateInfoResponse.json();
+        const responseText = await updateInfoResponse.text();
+        try {
+          updateInfo = JSON.parse(responseText);
+        } catch {
+          return {
+            version: "",
+            hash: "",
+            updateAvailable: false,
+            updateReady: false,
+            error: `Invalid update.json: failed to parse JSON`,
+          };
+        }
+
+        if (!updateInfo.hash) {
+          return {
+            version: "",
+            hash: "",
+            updateAvailable: false,
+            updateReady: false,
+            error: `Invalid update.json: missing hash`,
+          };
+        }
 
         if (updateInfo.hash !== localInfo.hash) {
           updateInfo.updateAvailable = true;
