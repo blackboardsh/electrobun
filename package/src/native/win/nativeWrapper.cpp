@@ -4421,42 +4421,18 @@ HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* stat
 
 // Function to handle menu item selection
 void handleMenuItemSelection(UINT menuId, NSStatusItem* statusItem) {
-    std::cout << "[MENU] handleMenuItemSelection called: menuId=" << menuId
-              << ", statusItem=" << (void*)statusItem << std::endl;
-
     auto it = g_menuItemActions.find(menuId);
     if (it != g_menuItemActions.end()) {
         const std::string& action = it->second;
 
-        std::cout << "[MENU] Found action: " << action;
-        if (statusItem) {
-            std::cout << ", handler=" << (void*)statusItem->handler;
-        }
-        std::cout << std::endl;
-
         if (statusItem && statusItem->handler) {
             if (action == "__quit__") {
                 // Handle quit specially
-                std::cout << "[MENU] Triggering quit" << std::endl;
                 PostQuitMessage(0);
             } else {
-                std::cout << "[MENU] About to call handler for action: " << action << std::endl;
-                std::cout.flush();
-
-                // Try-catch to prevent crashes
-                try {
-                    statusItem->handler(statusItem->trayId, action.c_str());
-                    std::cout << "[MENU] Handler call completed successfully" << std::endl;
-                } catch (...) {
-                    std::cout << "[MENU] ERROR: Handler call threw exception!" << std::endl;
-                }
+                statusItem->handler(statusItem->trayId, action.c_str());
             }
-        } else {
-            std::cout << "[MENU] WARNING: No valid handler (statusItem="
-                      << (void*)statusItem << ")" << std::endl;
         }
-    } else {
-        std::cout << "[MENU] ERROR: No action found for menuId=" << menuId << std::endl;
     }
 }
 
