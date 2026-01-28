@@ -709,17 +709,17 @@ async function createAppImage(
   buildFolder: string
 ): Promise<string> {
   console.log(`🚀 CREATING APPIMAGE WITH PATH: ${appBundlePath}`);
-  console.log(`DEBUG: createAppImage called with:`);
-  console.log(`  appBundlePath: ${appBundlePath}`);
-  console.log(`  appFileName: ${appFileName}`);
-  console.log(`  buildFolder: ${buildFolder}`);
-  console.log(`  current working directory: ${process.cwd()}`);
+  // console.log(`DEBUG: createAppImage called with:`);
+  // console.log(`  appBundlePath: ${appBundlePath}`);
+  // console.log(`  appFileName: ${appFileName}`);
+  // console.log(`  buildFolder: ${buildFolder}`);
+  // console.log(`  current working directory: ${process.cwd()}`);
   
   // Ensure appBundlePath is absolute - fix for when it's passed as basename only
   let resolvedAppBundlePath = appBundlePath;
   if (!path.isAbsolute(appBundlePath)) {
     resolvedAppBundlePath = join(buildFolder, appBundlePath);
-    console.log(`DEBUG: Converted relative path to absolute: ${resolvedAppBundlePath}`);
+    // console.log(`DEBUG: Converted relative path to absolute: ${resolvedAppBundlePath}`);
   }
   
   // Create AppDir structure
@@ -733,17 +733,17 @@ async function createAppImage(
   const usrBinPath = join(appDirPath, 'usr', 'bin');
   mkdirSync(usrBinPath, { recursive: true });
   
-  console.log(`DEBUG: Attempting to copy from: ${resolvedAppBundlePath}`);
-  console.log(`DEBUG: Does source exist? ${existsSync(resolvedAppBundlePath)}`);
-  console.log(`DEBUG: To destination: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
+  // console.log(`DEBUG: Attempting to copy from: ${resolvedAppBundlePath}`);
+  // console.log(`DEBUG: Does source exist? ${existsSync(resolvedAppBundlePath)}`);
+  // console.log(`DEBUG: To destination: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
   
   if (!existsSync(resolvedAppBundlePath)) {
     throw new Error(`Source bundle does not exist: ${resolvedAppBundlePath}`);
   }
   
-  console.log(`DEBUG: About to copy with cpSync:`);
-  console.log(`  from: ${resolvedAppBundlePath} (exists: ${existsSync(resolvedAppBundlePath)})`);
-  console.log(`  to: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
+  // console.log(`DEBUG: About to copy with cpSync:`);
+  // console.log(`  from: ${resolvedAppBundlePath} (exists: ${existsSync(resolvedAppBundlePath)})`);
+  // console.log(`  to: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
   
   cpSync(resolvedAppBundlePath, join(usrBinPath, basename(resolvedAppBundlePath)), {
     recursive: true,
@@ -803,8 +803,8 @@ Categories=Utility;
     unlinkSync(appImagePath);
   }
   
-  console.log(`DEBUG: AppDir path: ${appDirPath}`);
-  console.log(`DEBUG: Does AppDir exist? ${existsSync(appDirPath)}`);
+  // console.log(`DEBUG: AppDir path: ${appDirPath}`);
+  // console.log(`DEBUG: Does AppDir exist? ${existsSync(appDirPath)}`);
   console.log(`Generating AppImage: ${appImagePath}`);
   const appImageArch = ARCH === 'arm64' ? 'aarch64' : 'x86_64';
   
@@ -2017,12 +2017,9 @@ if (commandArg === "init") {
   }
 
   const artifactsToUpload = [];
-
-  console.log(`DEBUG: Checking for Linux AppImage creation - targetOS: ${targetOS}, buildEnvironment: ${buildEnvironment}`);
   
   // Linux AppImage creation (for all build environments including dev)
-  if (targetOS === 'linux') {
-    console.log("DEBUG: Creating Linux AppImage...");
+  if (targetOS === 'linux') {    
     // Ensure AppImage tooling is available
     await ensureAppImageTooling();
     
