@@ -2253,6 +2253,18 @@ if (commandArg === "init") {
       InfoPlistContents
     );
 
+    // Write metadata.json to outer bundle (consistent with Windows/Linux)
+    const extractorMetadata = {
+      identifier: config.app.identifier,
+      name: config.app.name,
+      channel: buildEnvironment,
+      hash: hash
+    };
+    await Bun.write(
+      join(selfExtractingBundle.appBundleFolderResourcesPath, "metadata.json"),
+      JSON.stringify(extractorMetadata, null, 2)
+    );
+
     // Run postWrap hook after self-extracting bundle is created, before code signing
     // This is where you can add files to the wrapper (e.g., for liquid glass support)
     runHook('postWrap', { ELECTROBUN_WRAPPER_BUNDLE_PATH: selfExtractingBundle.appBundleFolderPath });

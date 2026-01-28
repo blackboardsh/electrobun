@@ -1264,29 +1264,33 @@ pub fn main() !void {
         return;
     }
     
-    // macOS uses the plist approach
+    // macOS reads metadata.json from outer bundle (consistent with Windows/Linux)
     const APPBUNDLE_PATH = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, "../../" });
-    const PLIST_PATH = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "Contents/Info.plist" });
 
-    const plistContents = std.fs.cwd().readFileAlloc(allocator, PLIST_PATH, std.math.maxInt(usize)) catch |err| {
-        std.debug.print("Failed to read plist at {s}: {}\n", .{ PLIST_PATH, err });
+    // Use identifier/channel structure for app data path (consistent with CLI, updater, and native wrappers)
+    // Read metadata.json from outer bundle's Resources folder (same format as Windows/Linux)
+    const metadataJsonPath = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "Contents/Resources/metadata.json" });
+    defer allocator.free(metadataJsonPath);
+
+    const metadataJsonContents = std.fs.cwd().readFileAlloc(allocator, metadataJsonPath, std.math.maxInt(usize)) catch |err| {
+        std.debug.print("Failed to read metadata.json at {s}: {}\n", .{ metadataJsonPath, err });
         return err;
     };
-    defer allocator.free(plistContents);
+    defer allocator.free(metadataJsonContents);
 
-    // Note: We want to use the app name, since electrobun cli adds the "- <channel name>" which allws dev, canary, and stable
-    // builds to coexist on a machine.
-    // todo: consider putting it in <app identifier>/<app name> for better organization and reduce namespace collisions with other
-    // apps that might use the same name. (CFBundleIdentifier)
-    const identifierName = try getPlistStringValue(plistContents, "CFBundleIdentifier") orelse {
-        return error.UnexpectedNull;
-    };
+    const metadataParsed = try std.json.parseFromSlice(struct {
+        identifier: []const u8,
+        channel: []const u8,
+    }, allocator, metadataJsonContents, .{ .ignore_unknown_fields = true });
+    defer metadataParsed.deinit();
 
-    const bundleName = try getPlistStringValue(plistContents, "CFBundleName") orelse {
-        return error.UnexpectedNull;
-    };
+    const identifierName = try allocator.dupe(u8, metadataParsed.value.identifier);
+    defer allocator.free(identifierName);
 
-    const appDataPathSegment = try std.fs.path.join(allocator, &.{ identifierName, bundleName });
+    const channelName = try allocator.dupe(u8, metadataParsed.value.channel);
+    defer allocator.free(channelName);
+
+    const appDataPathSegment = try std.fs.path.join(allocator, &.{ identifierName, channelName });
 
     const APPDATA_PATH = try std.fs.getAppDataDir(allocator, appDataPathSegment);
     defer allocator.free(APPDATA_PATH);
