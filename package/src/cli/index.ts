@@ -28,7 +28,6 @@ import {
   getPlatformPrefix,
   getTarballFileName,
   getWindowsSetupFileName,
-  getLinuxSetupFileName,
   getLinuxAppImageBaseName,
   sanitizeVolumeNameForHdiutil,
   getDmgVolumeName,
@@ -2811,59 +2810,6 @@ async function createWindowsSelfExtractingExe(
   return outputExePath;
 }
 
-async function createLinuxSelfExtractingBinary(
-  buildFolder: string,
-  compressedTarPath: string,
-  appFileName: string,
-  targetPaths: any,
-  buildEnvironment: string,
-  config: Awaited<ReturnType<typeof getConfig>>
-): Promise<string> {
-  console.log("Creating self-extracting Linux binary...");
-
-  const setupFileName = getLinuxSetupFileName(config.app.name, buildEnvironment);
-  
-  const outputPath = join(buildFolder, setupFileName);
-  
-  // Read the extractor binary
-  const extractorBinary = readFileSync(targetPaths.EXTRACTOR);
-  
-  // Read the compressed archive
-  const compressedArchive = readFileSync(compressedTarPath);
-  
-  // Create metadata JSON
-  const metadata = {
-    identifier: config.app.identifier,
-    name: config.app.name,
-    channel: buildEnvironment
-  };
-  const metadataJson = JSON.stringify(metadata);
-  const metadataBuffer = Buffer.from(metadataJson, 'utf8');
-  
-  // Create marker buffers
-  const metadataMarker = Buffer.from('ELECTROBUN_METADATA_V1', 'utf8');
-  const archiveMarker = Buffer.from('ELECTROBUN_ARCHIVE_V1', 'utf8');
-  
-  // Combine extractor + metadata marker + metadata + archive marker + archive
-  const combinedBuffer = Buffer.concat([
-    extractorBinary,
-    metadataMarker,
-    metadataBuffer,
-    archiveMarker,
-    compressedArchive
-  ]);
-  
-  // Write the self-extracting binary
-  writeFileSync(outputPath, combinedBuffer, { mode: 0o755 });
-  
-  // Ensure it's executable (redundant but explicit)
-  execSync(`chmod +x ${escapePathForTerminal(outputPath)}`);
-  
-  console.log(`Created self-extracting Linux binary: ${outputPath} (${(combinedBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
-  
-  return outputPath;
-}
-
 async function wrapWindowsInstallerInZip(exePath: string, buildFolder: string): Promise<string> {
   const exeName = basename(exePath);
   const exeStem = exeName.replace('.exe', '');
@@ -2924,8 +2870,8 @@ async function wrapInArchive(filePath: string, buildFolder: string, archiveType:
       ? filePath.replace(/\.AppImage$/, '.tar.gz')
       : filePath + '.tar.gz';
 
-    // For Linux files, ensure they have executable permissions before archiving
-    if (fileName.endsWith('.run') || fileName.endsWith('.AppImage')) {
+    // For Linux AppImage files, ensure they have executable permissions before archiving
+    if (fileName.endsWith('.AppImage')) {
       try {
         // Try to set executable permissions (will only work on Unix-like systems)
         execSync(`chmod +x ${escapePathForTerminal(filePath)}`, { stdio: 'ignore' });

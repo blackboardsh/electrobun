@@ -6,7 +6,6 @@ import {
   getPlatformPrefix,
   getTarballFileName,
   getWindowsSetupFileName,
-  getLinuxSetupFileName,
   getLinuxAppImageBaseName,
   getLinuxAppImageFileName,
   sanitizeVolumeNameForHdiutil,
@@ -140,25 +139,6 @@ describe('getWindowsSetupFileName', () => {
   it('preserves spaces in app name', () => {
     expect(getWindowsSetupFileName('My App', 'stable')).toBe('My App-Setup.exe');
     expect(getWindowsSetupFileName('My App', 'canary')).toBe('My App-Setup-canary.exe');
-  });
-});
-
-describe('getLinuxSetupFileName', () => {
-  it('returns AppName-Setup.run for stable builds', () => {
-    expect(getLinuxSetupFileName('MyApp', 'stable')).toBe('MyApp-Setup.run');
-  });
-
-  it('includes channel suffix for canary builds', () => {
-    expect(getLinuxSetupFileName('MyApp', 'canary')).toBe('MyApp-Setup-canary.run');
-  });
-
-  it('includes channel suffix for dev builds', () => {
-    expect(getLinuxSetupFileName('MyApp', 'dev')).toBe('MyApp-Setup-dev.run');
-  });
-
-  it('preserves spaces in app name', () => {
-    expect(getLinuxSetupFileName('My App', 'stable')).toBe('My App-Setup.run');
-    expect(getLinuxSetupFileName('My App', 'canary')).toBe('My App-Setup-canary.run');
   });
 });
 
@@ -301,6 +281,6 @@ describe('CLI and Updater consistency', () => {
     expect(getAppFileName('MyApp', 'stable')).not.toContain('-stable');
     expect(getTarballFileName(getAppFileName('MyApp', 'stable'), 'macos')).toBe('MyApp.app.tar.zst');
     expect(getWindowsSetupFileName('MyApp', 'stable')).toBe('MyApp-Setup.exe');
-    expect(getLinuxSetupFileName('MyApp', 'stable')).toBe('MyApp-Setup.run');
+    expect(getLinuxAppImageFileName('MyApp', 'stable')).toBe('MyApp-Setup.AppImage');
   });
 });

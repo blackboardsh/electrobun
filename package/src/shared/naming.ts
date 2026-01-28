@@ -80,17 +80,6 @@ export function getWindowsSetupFileName(appName: string, buildEnvironment: Build
 }
 
 /**
- * Generates the Linux self-extracting binary file name.
- * Preserves spaces in app name for user-friendly display.
- * Format: "App Name-Setup.run" (stable) or "App Name-Setup-channel.run" (non-stable)
- */
-export function getLinuxSetupFileName(appName: string, buildEnvironment: BuildEnvironment): string {
-  return buildEnvironment === 'stable'
-    ? `${appName}-Setup.run`
-    : `${appName}-Setup-${buildEnvironment}.run`;
-}
-
-/**
  * Generates the Linux AppImage wrapper name (without extension).
  * Preserves spaces in app name for user-friendly display.
  * Format: "App Name-Setup" (stable) or "App Name-Setup-channel" (non-stable)
