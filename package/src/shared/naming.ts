@@ -70,35 +70,35 @@ export function getTarballFileName(appFileName: string, os: SupportedOS): string
 
 /**
  * Generates the Windows installer setup file name.
- * Format: "AppName-Setup.exe" (stable) or "AppName-Setup-channel.exe" (non-stable)
+ * Preserves spaces in app name for user-friendly display.
+ * Format: "App Name-Setup.exe" (stable) or "App Name-Setup-channel.exe" (non-stable)
  */
 export function getWindowsSetupFileName(appName: string, buildEnvironment: BuildEnvironment): string {
-  const sanitized = sanitizeAppName(appName);
   return buildEnvironment === 'stable'
-    ? `${sanitized}-Setup.exe`
-    : `${sanitized}-Setup-${buildEnvironment}.exe`;
+    ? `${appName}-Setup.exe`
+    : `${appName}-Setup-${buildEnvironment}.exe`;
 }
 
 /**
  * Generates the Linux self-extracting binary file name.
- * Format: "AppName-Setup.run" (stable) or "AppName-Setup-channel.run" (non-stable)
+ * Preserves spaces in app name for user-friendly display.
+ * Format: "App Name-Setup.run" (stable) or "App Name-Setup-channel.run" (non-stable)
  */
 export function getLinuxSetupFileName(appName: string, buildEnvironment: BuildEnvironment): string {
-  const sanitized = sanitizeAppName(appName);
   return buildEnvironment === 'stable'
-    ? `${sanitized}-Setup.run`
-    : `${sanitized}-Setup-${buildEnvironment}.run`;
+    ? `${appName}-Setup.run`
+    : `${appName}-Setup-${buildEnvironment}.run`;
 }
 
 /**
  * Generates the Linux AppImage wrapper name (without extension).
- * Format: "AppName-Setup" (stable) or "AppName-Setup-channel" (non-stable)
+ * Preserves spaces in app name for user-friendly display.
+ * Format: "App Name-Setup" (stable) or "App Name-Setup-channel" (non-stable)
  */
 export function getLinuxAppImageBaseName(appName: string, buildEnvironment: BuildEnvironment): string {
-  const sanitized = sanitizeAppName(appName);
   return buildEnvironment === 'stable'
-    ? `${sanitized}-Setup`
-    : `${sanitized}-Setup-${buildEnvironment}`;
+    ? `${appName}-Setup`
+    : `${appName}-Setup-${buildEnvironment}`;
 }
 
 /**

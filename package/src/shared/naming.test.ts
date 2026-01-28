@@ -136,6 +136,11 @@ describe('getWindowsSetupFileName', () => {
   it('includes channel suffix for dev builds', () => {
     expect(getWindowsSetupFileName('MyApp', 'dev')).toBe('MyApp-Setup-dev.exe');
   });
+
+  it('preserves spaces in app name', () => {
+    expect(getWindowsSetupFileName('My App', 'stable')).toBe('My App-Setup.exe');
+    expect(getWindowsSetupFileName('My App', 'canary')).toBe('My App-Setup-canary.exe');
+  });
 });
 
 describe('getLinuxSetupFileName', () => {
@@ -150,6 +155,11 @@ describe('getLinuxSetupFileName', () => {
   it('includes channel suffix for dev builds', () => {
     expect(getLinuxSetupFileName('MyApp', 'dev')).toBe('MyApp-Setup-dev.run');
   });
+
+  it('preserves spaces in app name', () => {
+    expect(getLinuxSetupFileName('My App', 'stable')).toBe('My App-Setup.run');
+    expect(getLinuxSetupFileName('My App', 'canary')).toBe('My App-Setup-canary.run');
+  });
 });
 
 describe('getLinuxAppImageBaseName', () => {
@@ -160,6 +170,11 @@ describe('getLinuxAppImageBaseName', () => {
   it('includes channel suffix for canary builds', () => {
     expect(getLinuxAppImageBaseName('MyApp', 'canary')).toBe('MyApp-Setup-canary');
   });
+
+  it('preserves spaces in app name', () => {
+    expect(getLinuxAppImageBaseName('My App', 'stable')).toBe('My App-Setup');
+    expect(getLinuxAppImageBaseName('My App', 'canary')).toBe('My App-Setup-canary');
+  });
 });
 
 describe('getLinuxAppImageFileName', () => {
@@ -169,6 +184,11 @@ describe('getLinuxAppImageFileName', () => {
 
   it('returns full filename with .AppImage extension for canary', () => {
     expect(getLinuxAppImageFileName('MyApp', 'canary')).toBe('MyApp-Setup-canary.AppImage');
+  });
+
+  it('preserves spaces in app name', () => {
+    expect(getLinuxAppImageFileName('My App', 'stable')).toBe('My App-Setup.AppImage');
+    expect(getLinuxAppImageFileName('My App', 'canary')).toBe('My App-Setup-canary.AppImage');
   });
 });
 
