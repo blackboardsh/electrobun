@@ -3,7 +3,7 @@ import {
   sanitizeAppName,
   getAppFileName,
   getBundleFileName,
-  getPlatformFolder,
+  getPlatformPrefix,
   getTarballFileName,
   getWindowsSetupFileName,
   getLinuxSetupFileName,
@@ -82,13 +82,13 @@ describe('getBundleFileName', () => {
   });
 });
 
-describe('getPlatformFolder', () => {
-  it('constructs correct folder format for all platform combinations', () => {
-    expect(getPlatformFolder('stable', 'macos', 'arm64')).toBe('stable-macos-arm64');
-    expect(getPlatformFolder('stable', 'macos', 'x64')).toBe('stable-macos-x64');
-    expect(getPlatformFolder('canary', 'win', 'x64')).toBe('canary-win-x64');
-    expect(getPlatformFolder('dev', 'linux', 'arm64')).toBe('dev-linux-arm64');
-    expect(getPlatformFolder('dev', 'linux', 'x64')).toBe('dev-linux-x64');
+describe('getPlatformPrefix', () => {
+  it('constructs correct prefix format for all platform combinations', () => {
+    expect(getPlatformPrefix('stable', 'macos', 'arm64')).toBe('stable-macos-arm64');
+    expect(getPlatformPrefix('stable', 'macos', 'x64')).toBe('stable-macos-x64');
+    expect(getPlatformPrefix('canary', 'win', 'x64')).toBe('canary-win-x64');
+    expect(getPlatformPrefix('dev', 'linux', 'arm64')).toBe('dev-linux-arm64');
+    expect(getPlatformPrefix('dev', 'linux', 'x64')).toBe('dev-linux-x64');
   });
 });
 
@@ -195,63 +195,64 @@ describe('sanitizeVolumeNameForHdiutil', () => {
 });
 
 describe('getDmgVolumeName', () => {
-  it('adds -stable suffix for stable builds (to avoid CI volume conflicts)', () => {
-    expect(getDmgVolumeName('MyApp', 'stable')).toBe('MyApp-stable');
+  it('returns plain name for stable builds', () => {
+    expect(getDmgVolumeName('MyApp', 'stable')).toBe('MyApp');
   });
 
-  it('returns sanitized name for canary builds (already has suffix)', () => {
-    expect(getDmgVolumeName('MyApp-canary', 'canary')).toBe('MyAppcanary');
+  it('adds channel suffix for non-stable builds', () => {
+    expect(getDmgVolumeName('MyApp', 'canary')).toBe('MyApp-canary');
   });
 
   it('sanitizes special characters', () => {
-    expect(getDmgVolumeName('My-App', 'stable')).toBe('MyApp-stable');
+    expect(getDmgVolumeName('My-App', 'stable')).toBe('MyApp');
+    expect(getDmgVolumeName('My-App', 'canary')).toBe('MyApp-canary');
   });
 });
 
 describe('URL construction functions', () => {
   const bucketUrl = 'https://storage.example.com/releases';
-  const platformFolder = 'canary-macos-arm64';
+  const platformPrefix = 'canary-macos-arm64';
 
   describe('getUpdateInfoUrl', () => {
-    it('constructs correct URL', () => {
-      expect(getUpdateInfoUrl(bucketUrl, platformFolder))
-        .toBe('https://storage.example.com/releases/canary-macos-arm64/update.json');
+    it('constructs correct flat URL with prefix', () => {
+      expect(getUpdateInfoUrl(bucketUrl, platformPrefix))
+        .toBe('https://storage.example.com/releases/canary-macos-arm64-update.json');
     });
 
     it('handles bucket URLs with trailing content', () => {
       expect(getUpdateInfoUrl('https://example.com/bucket', 'stable-win-x64'))
-        .toBe('https://example.com/bucket/stable-win-x64/update.json');
+        .toBe('https://example.com/bucket/stable-win-x64-update.json');
     });
   });
 
   describe('getPatchFileUrl', () => {
-    it('constructs correct URL with hash', () => {
-      expect(getPatchFileUrl(bucketUrl, platformFolder, 'abc123def456'))
-        .toBe('https://storage.example.com/releases/canary-macos-arm64/abc123def456.patch');
+    it('constructs correct flat URL with prefix and hash', () => {
+      expect(getPatchFileUrl(bucketUrl, platformPrefix, 'abc123def456'))
+        .toBe('https://storage.example.com/releases/canary-macos-arm64-abc123def456.patch');
     });
   });
 
   describe('getTarballUrl', () => {
-    it('constructs correct URL for macOS tarball', () => {
-      expect(getTarballUrl(bucketUrl, platformFolder, 'MyApp.app.tar.zst'))
-        .toBe('https://storage.example.com/releases/canary-macos-arm64/MyApp.app.tar.zst');
+    it('constructs correct flat URL for macOS tarball', () => {
+      expect(getTarballUrl(bucketUrl, platformPrefix, 'MyApp.app.tar.zst'))
+        .toBe('https://storage.example.com/releases/canary-macos-arm64-MyApp.app.tar.zst');
     });
 
-    it('constructs correct URL for Windows tarball', () => {
+    it('constructs correct flat URL for Windows tarball', () => {
       expect(getTarballUrl(bucketUrl, 'stable-win-x64', 'MyApp.tar.zst'))
-        .toBe('https://storage.example.com/releases/stable-win-x64/MyApp.tar.zst');
+        .toBe('https://storage.example.com/releases/stable-win-x64-MyApp.tar.zst');
     });
   });
 });
 
 // Integration tests that verify CLI and Updater would produce matching values
 describe('CLI and Updater consistency', () => {
-  it('produces matching platform folders', () => {
+  it('produces matching platform prefixes', () => {
     // CLI uses: `${buildEnvironment}-${currentTarget.os}-${currentTarget.arch}`
     // Updater uses: `${localInfo.channel}-${currentOS}-${currentArch}`
-    // Both should use getPlatformFolder()
-    const cliResult = getPlatformFolder('canary', 'macos', 'arm64');
-    const updaterResult = getPlatformFolder('canary', 'macos', 'arm64');
+    // Both should use getPlatformPrefix()
+    const cliResult = getPlatformPrefix('canary', 'macos', 'arm64');
+    const updaterResult = getPlatformPrefix('canary', 'macos', 'arm64');
     expect(cliResult).toBe(updaterResult);
     expect(cliResult).toBe('canary-macos-arm64');
   });

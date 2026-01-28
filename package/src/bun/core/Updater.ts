@@ -5,7 +5,7 @@ import { execSync } from "child_process";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
-import { getPlatformFolder, getTarballFileName } from '../../shared/naming';
+import { getPlatformPrefix, getTarballFileName } from '../../shared/naming';
 import { native } from '../proc/native';
 import { quit } from './Utils';
 
@@ -164,10 +164,9 @@ const Updater = {
       };
     }
 
-    const channelBucketUrl = await Updater.channelBucketUrl();
     const cacheBuster = Math.random().toString(36).substring(7);
-    const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
-    const updateInfoUrl = urlJoin(localInfo.bucketUrl, platformFolder, `update.json?${cacheBuster}`);
+    const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
+    const updateInfoUrl = `${localInfo.bucketUrl}/${platformPrefix}-update.json?${cacheBuster}`;
 
     try {
       const updateInfoResponse = await fetch(updateInfoUrl);
@@ -234,9 +233,9 @@ const Updater = {
         }
 
         // check if there's a patch file for it
-        const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
+        const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
         const patchResponse = await fetch(
-          urlJoin(localInfo.bucketUrl, platformFolder, `${currentHash}.patch`)
+          `${localInfo.bucketUrl}/${platformPrefix}-${currentHash}.patch`
         );
 
         if (!patchResponse.ok) {
@@ -353,13 +352,9 @@ const Updater = {
       // then just download it and unpack it
       if (currentHash !== latestHash) {
         const cacheBuster = Math.random().toString(36).substring(7);
-        const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
+        const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
         const tarballName = getTarballFileName(appFileName, currentOS);
-        const urlToLatestTarball = urlJoin(
-          localInfo.bucketUrl,
-          platformFolder,
-          tarballName
-        );
+        const urlToLatestTarball = `${localInfo.bucketUrl}/${platformPrefix}-${tarballName}`;
         const prevVersionCompressedTarballPath = join(
           appDataFolder,
           "self-extraction",
@@ -728,8 +723,9 @@ del "%~f0"
 
   channelBucketUrl: async () => {
     await Updater.getLocallocalInfo();
-    const platformFolder = getPlatformFolder(localInfo.channel, currentOS, currentArch);
-    return urlJoin(localInfo.bucketUrl, platformFolder);
+    // With flat prefix-based naming, channelBucketUrl is just the bucketUrl
+    // Users can also use Updater.localInfo.bucketUrl() directly
+    return localInfo.bucketUrl;
   },
 
   appDataFolder: async () => {

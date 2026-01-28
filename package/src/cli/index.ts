@@ -25,7 +25,7 @@ import { OS, ARCH } from '../shared/platform';
 import {
   getAppFileName,
   getBundleFileName,
-  getPlatformFolder,
+  getPlatformPrefix,
   getTarballFileName,
   getWindowsSetupFileName,
   getLinuxSetupFileName,
@@ -1051,10 +1051,10 @@ if (commandArg === "init") {
   const appFileName = getAppFileName(config.app.name, buildEnvironment);
   // macOS bundle display name preserves spaces for the actual .app folder
   const macOSBundleDisplayName = getMacOSBundleDisplayName(config.app.name, buildEnvironment);
-  const buildSubFolder = getPlatformFolder(buildEnvironment, currentTarget.os, currentTarget.arch);
-  const buildFolder = join(projectRoot, config.build.buildFolder, buildSubFolder);
+  const platformPrefix = getPlatformPrefix(buildEnvironment, currentTarget.os, currentTarget.arch);
+  const buildFolder = join(projectRoot, config.build.buildFolder, platformPrefix);
   const bundleFileName = getBundleFileName(config.app.name, buildEnvironment, targetOS);
-  const artifactFolder = join(projectRoot, config.build.artifactFolder, buildSubFolder);
+  const artifactFolder = join(projectRoot, config.build.artifactFolder);
   
   // Ensure core binaries are available for the target platform before starting build
   await ensureCoreDependencies(currentTarget.os, currentTarget.arch);
@@ -2372,8 +2372,8 @@ if (commandArg === "init") {
       // bucketUrl: config.release.bucketUrl
     });
 
-    // update.json (no platform suffix in filename, platform is in folder name)
-    await Bun.write(join(artifactFolder, 'update.json'), updateJsonContent);
+    // update.json with platform prefix for flat naming structure
+    await Bun.write(join(artifactFolder, `${platformPrefix}-update.json`), updateJsonContent);
 
     // generate bsdiff
     // https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst
@@ -2386,11 +2386,7 @@ if (commandArg === "init") {
       console.log("No bucketUrl configured, skipping patch generation");
       console.log("To enable patch generation, configure bucketUrl in your electrobun.config");
     } else {
-      const urlToPrevUpdateJson = join(
-        config.release.bucketUrl,
-        buildSubFolder,
-        'update.json'
-      );
+      const urlToPrevUpdateJson = `${config.release.bucketUrl}/${platformPrefix}-update.json`;
       const cacheBuster = Math.random().toString(36).substring(7);
       const updateJsonResponse = await fetch(
         urlToPrevUpdateJson + `?${cacheBuster}`
@@ -2398,11 +2394,8 @@ if (commandArg === "init") {
         console.log("bucketURL not found: ", err);
       });
 
-    const urlToLatestTarball = join(
-      config.release.bucketUrl,
-      buildSubFolder,
-      `${appFileName}.app.tar.zst`
-    );
+    const tarballFileName = getTarballFileName(appFileName, OS);
+    const urlToLatestTarball = `${config.release.bucketUrl}/${platformPrefix}-${tarballFileName}`;
 
 
     // attempt to get the previous version to create a patch file
@@ -2472,7 +2465,7 @@ if (commandArg === "init") {
 
     artifactsToUpload.forEach((filePath) => {
       const filename = basename(filePath);
-      cpSync(filePath, join(artifactFolder, filename), { dereference: true });
+      cpSync(filePath, join(artifactFolder, `${platformPrefix}-${filename}`), { dereference: true });
     });
 
     // todo: now just upload the artifacts to your bucket replacing the ones that exist
