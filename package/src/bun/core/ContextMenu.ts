@@ -76,6 +76,7 @@ const menuConfigWithDefaults = (
         checked: Boolean(menuItem.checked),
         hidden: Boolean(menuItem.hidden),
         tooltip: menuItem.tooltip || undefined,
+        ...(menuItem.accelerator ? { accelerator: menuItem.accelerator } : {}),
         ...(menuItem.submenu
           ? { submenu: menuConfigWithDefaults(menuItem.submenu) }
           : {}),
