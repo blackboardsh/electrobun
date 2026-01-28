@@ -107,7 +107,9 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
   
   // Check platform-specific binaries
   const requiredBinaries = [
-    platformPaths.BUN_BINARY
+    platformPaths.BUN_BINARY,
+    platformPaths.BSDIFF,
+    platformPaths.BSPATCH
   ];
   if (platformOS === 'macos') {
     requiredBinaries.push(
@@ -254,7 +256,11 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     }
     
     // Verify extraction completed successfully - check platform-specific binaries only
-    const requiredBinaries = [platformPaths.BUN_BINARY];
+    const requiredBinaries = [
+      platformPaths.BUN_BINARY,
+      platformPaths.BSDIFF,
+      platformPaths.BSPATCH
+    ];
     if (platformOS === 'macos') {
       requiredBinaries.push(
         platformPaths.LAUNCHER_RELEASE,
@@ -2109,8 +2115,8 @@ if (commandArg === "init") {
         console.log(`✓ Created compressed tar: ${compressedTarPath} (${(compressedData.length / 1024 / 1024).toFixed(2)} MB)`);
       });
 
-      // Remove uncompressed tar
-      unlinkSync(appImageTarPath);
+      // Note: Don't delete uncompressed tar here - bsdiff needs it later for patch generation
+      // It will be cleaned up after bsdiff runs
 
       // Add tar.zst for Updater API (delta updates)
       // Note: raw AppImage is NOT added - only the Setup.AppImage (zipped) is distributed
@@ -2440,7 +2446,6 @@ if (commandArg === "init") {
         // especially for creating multiple diffs in parallel
         const bsdiffpath = targetPaths.BSDIFF;
         const patchFilePath = join(buildFolder, `${prevHash}.patch`);
-        artifactsToUpload.push(patchFilePath);
         const result = Bun.spawnSync(
           [bsdiffpath, prevTarballPath, tarPath, patchFilePath, "--use-zstd"],
           {
@@ -2450,7 +2455,23 @@ if (commandArg === "init") {
           }
         );
         if (!result.success) {
-          throw new Error(`bsdiff failed with exit code ${result.exitCode}`);
+          // Patch generation is non-critical - users will just download full updates instead of delta patches
+          console.error("\n" + "=".repeat(80));
+          console.error("WARNING: Patch generation failed (exit code " + result.exitCode + ")");
+          console.error("Delta updates will not be available for this release.");
+          console.error("Users will download the full update instead.");
+          console.error("=".repeat(80) + "\n");
+        } else {
+          // Only add patch to artifacts if it was successfully created
+          artifactsToUpload.push(patchFilePath);
+        }
+
+        // Clean up uncompressed tars now that bsdiff is done
+        if (existsSync(tarPath)) {
+          unlinkSync(tarPath);
+        }
+        if (existsSync(prevTarballPath)) {
+          unlinkSync(prevTarballPath);
         }
       }
     } else {
