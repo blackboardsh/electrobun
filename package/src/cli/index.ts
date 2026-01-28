@@ -2484,7 +2484,7 @@ if (commandArg === "init") {
     console.log("copying artifacts...");
 
     artifactsToUpload.forEach((filePath) => {
-      const filename = basename(filePath).replace(/ /g, '-');
+      const filename = basename(filePath);
       cpSync(filePath, join(artifactFolder, `${platformPrefix}-${filename}`), { dereference: true });
     });
 
@@ -2834,11 +2834,12 @@ async function createWindowsSelfExtractingExe(
 async function wrapWindowsInstallerInZip(exePath: string, buildFolder: string): Promise<string> {
   const exeName = basename(exePath);
   const exeStem = exeName.replace('.exe', '');
-  
+
   // Derive the paths for metadata and archive files
   const metadataPath = join(buildFolder, `${exeStem}.metadata.json`);
   const archivePath = join(buildFolder, `${exeStem}.tar.zst`);
-  const zipPath = join(buildFolder, `${exeStem}.zip`);
+  // Sanitize the zip filename (no spaces in artifact URLs) while inner files keep their original names
+  const zipPath = join(buildFolder, `${exeStem.replace(/ /g, '')}.zip`);
   
   // Verify all files exist
   if (!existsSync(exePath)) {
@@ -2887,9 +2888,12 @@ async function wrapInArchive(filePath: string, buildFolder: string, archiveType:
   if (archiveType === 'tar.gz') {
     // Output filename: Setup.exe -> Setup.exe.tar.gz, Setup.AppImage -> Setup.tar.gz
     // For AppImage files, strip the .AppImage extension so archive extracts to .AppImage
-    const archivePath = fileName.endsWith('.AppImage')
-      ? filePath.replace(/\.AppImage$/, '.tar.gz')
-      : filePath + '.tar.gz';
+    // Sanitize the archive filename (no spaces in artifact URLs) while inner files keep their original names
+    const sanitizedBase = (fileName.endsWith('.AppImage')
+      ? fileName.replace(/\.AppImage$/, '')
+      : fileName
+    ).replace(/ /g, '');
+    const archivePath = join(fileDir, `${sanitizedBase}.tar.gz`);
 
     // For Linux AppImage files, ensure they have executable permissions before archiving
     if (fileName.endsWith('.AppImage')) {
