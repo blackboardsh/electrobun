@@ -883,10 +883,12 @@ del "%~f0"
 
   appDataFolder: async () => {
     await Updater.getLocallocalInfo();
+    // Use identifier + channel for the app data folder
+    // e.g., ~/Library/Application Support/sh.blackboard.myapp/canary/    
     const appDataFolder = join(
       getAppDataDir(),
       localInfo.identifier,
-      localInfo.name
+      localInfo.channel
     );
 
     return appDataFolder;
