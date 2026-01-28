@@ -1,6 +1,6 @@
 // Interactive Menu Tests - Playgrounds for Application Menu and Context Menu
 
-import { defineTest, expect } from "../../test-framework/types";
+import { defineTest } from "../../test-framework/types";
 import { ApplicationMenu, ContextMenu, BrowserView, BrowserWindow } from "electrobun/bun";
 import Electrobun from "electrobun/bun";
 
@@ -34,7 +34,8 @@ export const menuTests = [
       log("Opening application menu playground window");
 
       await new Promise<void>((resolve) => {
-        let winRef: BrowserWindow | null = null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let winRef: BrowserWindow<any> | null = null;
         let menuHandler: ((e: any) => void) | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
@@ -117,7 +118,8 @@ export const menuTests = [
       log("Opening context menu playground window");
 
       await new Promise<void>((resolve) => {
-        let winRef: BrowserWindow | null = null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let winRef: BrowserWindow<any> | null = null;
         let contextHandler: ((e: any) => void) | null = null;
 
         const rpc = BrowserView.defineRPC<any>({

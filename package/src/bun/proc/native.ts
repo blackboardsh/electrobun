@@ -1,10 +1,7 @@
 import { join } from "path";
-import { type RPCSchema, type RPCTransport, createRPC } from "rpc-anywhere";
-import { execSync } from "child_process";
-import * as fs from "fs";
 import electrobunEventEmitter from "../events/eventEmitter";
+import ElectrobunEvent from "../events/event";
 import { BrowserView } from "../core/BrowserView";
-import { Updater } from "../core/Updater";
 import { Tray } from "../core/Tray";
 
 // Menu data reference system to avoid serialization overhead
@@ -54,9 +51,8 @@ function deserializeMenuAction(encodedAction: string): { action: string; data: a
 
 // todo: set up FFI, this is already in the webworker.
 
-import {  dirname } from "path";
-import { dlopen, suffix, JSCallback, CString, ptr, FFIType, toArrayBuffer } from "bun:ffi";
-import { BrowserWindow, BrowserWindowMap } from "../core/BrowserWindow";
+import { dlopen, suffix, JSCallback, CString, ptr, FFIType, toArrayBuffer, type Pointer } from "bun:ffi";
+import { BrowserWindow } from "../core/BrowserWindow";
 
 
 
@@ -508,7 +504,7 @@ export const native = (() => {
       // },
     });
   } catch (err) {
-    console.log('FATAL Error opening native FFI:', err.message);
+    console.log('FATAL Error opening native FFI:', (err as Error).message);
     console.log('This may be due to:');
     console.log('  - Missing libNativeWrapper.dll/so/dylib');
     console.log('  - Architecture mismatch (ARM64 vs x64)');
@@ -521,7 +517,7 @@ export const native = (() => {
   }
 })();
 
-const callbacks = [];
+// const _callbacks: unknown[] = [];
 
 // NOTE: Bun seems to hit limits on args or arg types. eg: trying to send 12 bools results 
 // in only about 8 going through then params after that. I think it may be similar to 
@@ -557,7 +553,7 @@ export const ffi = {
         titleBarStyle: string,
         transparent: boolean,
       }): FFIType.ptr => {
-        const {id, url, title, frame: {x, y, width, height}, styleMask: {
+        const {id, url: _url, title, frame: {x, y, width, height}, styleMask: {
             Borderless,
             Titled,
             Closable,
@@ -1262,7 +1258,7 @@ export const ffi = {
           canChooseDirectory,
           allowsMultipleSelection,
         } = params;
-        const filePath = native.symbols.openFileDialog(toCString(startingFolder), toCString(allowedFileTypes), canChooseFiles, canChooseDirectory, allowsMultipleSelection);
+        const filePath = native.symbols.openFileDialog(toCString(startingFolder), toCString(allowedFileTypes), canChooseFiles ? 1 : 0, canChooseDirectory ? 1 : 0, allowsMultipleSelection ? 1 : 0);
 
         return filePath.toString();
       },
@@ -1363,7 +1359,7 @@ process.on('uncaughtException', (err) => {
   native.symbols.killApp(); 
 });
 
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason, _promise) => {
   console.error('Unhandled rejection in worker:', reason);
 });
 
@@ -1401,11 +1397,9 @@ const windowCloseCallback = new JSCallback(
         id,
       });
 
-      let result;
       // global event
-      result = electrobunEventEmitter.emitEvent(event);
-
-      result = electrobunEventEmitter.emitEvent(event, id);
+      electrobunEventEmitter.emitEvent(event);
+      electrobunEventEmitter.emitEvent(event, id);
   },
   {
     args: ["u32"],
@@ -1423,11 +1417,9 @@ const windowMoveCallback = new JSCallback(
       y,
     });
 
-    let result;
     // global event
-    result = electrobunEventEmitter.emitEvent(event);
-
-    result = electrobunEventEmitter.emitEvent(event, id);
+    electrobunEventEmitter.emitEvent(event);
+    electrobunEventEmitter.emitEvent(event, id);
   },
   {
     args: ["u32", "f64", "f64"],
@@ -1447,11 +1439,9 @@ const windowResizeCallback = new JSCallback(
       height,
     });
 
-    let result;
     // global event
-    result = electrobunEventEmitter.emitEvent(event);
-
-    result = electrobunEventEmitter.emitEvent(event, id);
+    electrobunEventEmitter.emitEvent(event);
+    electrobunEventEmitter.emitEvent(event, id);
   },
   {
     args: ["u32", "f64", "f64", "f64", "f64"],
@@ -1467,11 +1457,9 @@ const windowFocusCallback = new JSCallback(
       id,
     });
 
-    let result;
     // global event
-    result = electrobunEventEmitter.emitEvent(event);
-
-    result = electrobunEventEmitter.emitEvent(event, id);
+    electrobunEventEmitter.emitEvent(event);
+    electrobunEventEmitter.emitEvent(event, id);
   },
   {
     args: ["u32"],
@@ -1640,7 +1628,7 @@ export const Screen = {
       };
     }
     try {
-      return JSON.parse(jsonStr);
+      return JSON.parse(jsonStr.toString());
     } catch {
       return {
         id: 0,
@@ -1662,7 +1650,7 @@ export const Screen = {
       return [];
     }
     try {
-      return JSON.parse(jsonStr);
+      return JSON.parse(jsonStr.toString());
     } catch {
       return [];
     }
@@ -1678,7 +1666,7 @@ export const Screen = {
       return { x: 0, y: 0 };
     }
     try {
-      return JSON.parse(jsonStr);
+      return JSON.parse(jsonStr.toString());
     } catch {
       return { x: 0, y: 0 };
     }
@@ -1736,7 +1724,7 @@ class SessionCookies {
     );
     if (!result) return [];
     try {
-      return JSON.parse(result);
+      return JSON.parse(result.toString());
     } catch {
       return [];
     }
@@ -1831,7 +1819,7 @@ export const Session = {
 // Navigation rules are now stored in native code and evaluated synchronously
 // without calling back to Bun. Use webview.setNavigationRules() instead.
 // This callback is kept for FFI signature compatibility but is not called.
-const webviewDecideNavigation = new JSCallback((webviewId, url) => {
+const webviewDecideNavigation = new JSCallback((_webviewId, _url) => {
   return true;
 }, {
   args: [FFIType.u32, FFIType.cstring],
@@ -1840,7 +1828,7 @@ const webviewDecideNavigation = new JSCallback((webviewId, url) => {
 });
 
 
-const webviewEventHandler = (id, eventName, detail) => {    
+const webviewEventHandler = (id: number, eventName: string, detail: string) => {
   const webview = BrowserView.getById(id);
   if (!webview) {
     console.error('[webviewEventHandler] No webview found for id:', id);
@@ -1868,7 +1856,7 @@ const webviewEventHandler = (id, eventName, detail) => {
     native.symbols.evaluateJavaScriptWithNoCompletion(hostWebview.ptr, toCString(js))        
   }
     
-  const eventMap = {
+  const eventMap: Record<string, string> = {
       "will-navigate": "willNavigate",
       "did-navigate": "didNavigate",
       "did-navigate-in-page": "didNavigateInPage",
@@ -1881,16 +1869,18 @@ const webviewEventHandler = (id, eventName, detail) => {
       "download-completed": "downloadCompleted",
       "download-failed": "downloadFailed",
       "load-started": "loadStarted",
-      "load-committed": "loadCommitted", 
+      "load-committed": "loadCommitted",
       "load-finished": "loadFinished",
     };
 
   // todo: the events map should use the same hyphenated names instead of camelCase
-  const handler =
-    electrobunEventEmitter.events.webview[eventMap[eventName]];
+  const mappedName = eventMap[eventName];
+  const handler = mappedName
+    ? (electrobunEventEmitter.events.webview as Record<string, unknown>)[mappedName]
+    : undefined;
 
   if (!handler) {
-    console.error('[webviewEventHandler] No handler found for event:', eventName, '(mapped to:', eventMap[eventName], ')');
+    console.error('[webviewEventHandler] No handler found for event:', eventName, '(mapped to:', mappedName, ')');
     return { success: false };
   }
 
@@ -1908,15 +1898,13 @@ const webviewEventHandler = (id, eventName, detail) => {
     }
   }
 
-  const event = handler({
-    id,
+  const event = (handler as (data: { detail: string }) => ElectrobunEvent<unknown, unknown>)({
     detail: parsedDetail,
-  });  
+  });
 
-  let result;
-  // global event  
-  result = electrobunEventEmitter.emitEvent(event);        
-  result = electrobunEventEmitter.emitEvent(event, id);  
+  // global event
+  electrobunEventEmitter.emitEvent(event);
+  electrobunEventEmitter.emitEvent(event, id);
 }
 
 const webviewEventJSCallback = new JSCallback((id, _eventName, _detail) => {
@@ -1945,16 +1933,15 @@ const webviewEventJSCallback = new JSCallback((id, _eventName, _detail) => {
 const bunBridgePostmessageHandler = new JSCallback((id, msg) => {    
   try {
     const msgStr = new CString(msg);
-    
+
     if (!msgStr.length) {
       return;
     }
-    const msgJson = JSON.parse(msgStr);    
-    
+    const msgJson = JSON.parse(msgStr.toString());
+
     const webview = BrowserView.getById(id);
-    
-    webview.rpcHandler?.(msgJson).then(result => {      
-    }).catch(err => console.log('error in rpchandler', err))
+
+    webview.rpcHandler?.(msgJson);
     
   } catch (err) {
     console.error('error sending message to bun: ', err)
@@ -1973,36 +1960,36 @@ const bunBridgePostmessageHandler = new JSCallback((id, msg) => {
 // nativeRPC (internal bun <-> native rpc)
 
 
-const internalBridgeHandler = new JSCallback((id, msg) => {    
-  try {    
-    const batchMessage = new CString(msg); 
-    const jsonBatch = JSON.parse(batchMessage);
+const internalBridgeHandler = new JSCallback((_id: number, msg: number) => {
+  try {
+    const batchMessage = new CString(msg as unknown as Pointer);
+    const jsonBatch = JSON.parse(batchMessage.toString());
 
     if (jsonBatch.id === 'webviewEvent'){
-      // Note: Some WebviewEvents from inside the webview are routed through here      
+      // Note: Some WebviewEvents from inside the webview are routed through here
       // Others call the JSCallback directly from native code.
       const {payload} = jsonBatch;
       webviewEventHandler(payload.id, payload.eventName, payload.detail);
       return;
     }
-    
 
-    jsonBatch.forEach((msgStr) => {      
+
+    jsonBatch.forEach((msgStr: string) => {
       // if (!msgStr.length) {
       //   console.error('WEBVIEW EVENT SENT TO WEBVIEW TAG BRIDGE HANDLER?', )
       //   return;
       // }
-      const msgJson = JSON.parse(msgStr);    
-      
-      if (msgJson.type === 'message') {      
-        const handler = internalRpcHandlers.message[msgJson.id];
+      const msgJson = JSON.parse(msgStr);
+
+      if (msgJson.type === 'message') {
+        const handler = (internalRpcHandlers.message as Record<string, (params: unknown) => void>)[msgJson.id];
         handler(msgJson.payload);
-      } else if(msgJson.type === 'request') {      
+      } else if(msgJson.type === 'request') {
         const hostWebview = BrowserView.getById(msgJson.hostWebviewId);
         // const targetWebview = BrowserView.getById(msgJson.params.params.hostWebviewId);
-        const handler = internalRpcHandlers.request[msgJson.method];
-        
-        
+        const handler = (internalRpcHandlers.request as Record<string, (params: unknown) => unknown>)[msgJson.method];
+
+
         const payload = handler(msgJson.params);
         
 
@@ -2048,10 +2035,9 @@ const trayItemHandler = new JSCallback((id, action) => {
     data, // Always include data property (undefined if no data)
   });
 
-  let result;
   // global event
-  result = electrobunEventEmitter.emitEvent(event);    
-  result = electrobunEventEmitter.emitEvent(event, id);    
+  electrobunEventEmitter.emitEvent(event);
+  electrobunEventEmitter.emitEvent(event, id);
 }, {
   args: [FFIType.u32, FFIType.cstring],
   returns: FFIType.void,
@@ -2059,12 +2045,12 @@ const trayItemHandler = new JSCallback((id, action) => {
 })
 
 
-const applicationMenuHandler = new JSCallback((id, action) => {  
+const applicationMenuHandler = new JSCallback((id, action) => {
   const actionString = new CString(action).toString();
-  
+
   // Use shared deserialization method
   const { action: actualAction, data } = deserializeMenuAction(actionString);
-  
+
   const event = electrobunEventEmitter.events.app.applicationMenuClicked({
     id,
     action: actualAction,
@@ -2079,7 +2065,7 @@ const applicationMenuHandler = new JSCallback((id, action) => {
   threadsafe: true
 })
 
-const contextMenuHandler = new JSCallback((id, action) => {  
+const contextMenuHandler = new JSCallback((_id, action) => {
   const actionString = new CString(action).toString();
   
   // Use shared deserialization method
@@ -2113,12 +2099,22 @@ export function toCString(jsString: string, addNullTerminator: boolean = true): 
 
 
 
+type WebviewTagInitParams = {
+  url: string | null;
+  html: string | null;
+  preload: string | null;
+  renderer: 'native' | 'cef';
+  partition: string | null;
+  frame: { x: number; y: number; width: number; height: number };
+  hostWebviewId: number;
+  windowId: number;
+  navigationRules: string | null;
+};
+
 export const internalRpcHandlers = {
   request: {
   // todo: this shouldn't be getting method, just params.
-    webviewTagInit: (params:
-     BrowserViewOptions & { windowId: number }
-    ) => {      
+    webviewTagInit: (params: WebviewTagInitParams) => {      
       
       const {
         hostWebviewId,
@@ -2148,33 +2144,33 @@ export const internalRpcHandlers = {
 
       return webviewForTag.id;
     },  
-    webviewTagCanGoBack: (params) => {      
+    webviewTagCanGoBack: (params: { id: number }) => {
       const {id} = params;
       const webviewPtr = BrowserView.getById(id)?.ptr;
       if (!webviewPtr) {
         console.error('no webview ptr')
         return false;
       }
-      
-      return native.symbols.webviewCanGoBack(webviewPtr);            
-    },  
-    webviewTagCanGoForward: (params) => {
+
+      return native.symbols.webviewCanGoBack(webviewPtr);
+    },
+    webviewTagCanGoForward: (params: { id: number }) => {
       const {id} = params;
       const webviewPtr = BrowserView.getById(id)?.ptr;
       if (!webviewPtr) {
         console.error('no webview ptr')
         return false;
       }
-      
-      return native.symbols.webviewCanGoForward(webviewPtr);  
-    },  
-    webviewTagCallAsyncJavaScript: (params) => {
+
+      return native.symbols.webviewCanGoForward(webviewPtr);
+    },
+    webviewTagCallAsyncJavaScript: (params: { id: number; script: string }) => {
       console.log('TODO: webviewTagCallAsyncJavaScript NOT YET IMPLEMENTED', params)
       // Not implemented - users can use RPC for JavaScript execution if needed
     }
   },
   message: {
-    webviewTagResize: (params) => {
+    webviewTagResize: (params: { id: number; frame: { x: number; y: number; width: number; height: number }; masks: string }) => {
       const browserView = BrowserView.getById(params.id);
       const webviewPtr = browserView?.ptr;
       
@@ -2186,28 +2182,28 @@ export const internalRpcHandlers = {
       const {x, y, width, height} = params.frame;
       native.symbols.resizeWebview(webviewPtr, x, y, width, height, toCString(params.masks))
     },      
-    webviewTagUpdateSrc: (params) => {
+    webviewTagUpdateSrc: (params: { id: number; url: string }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagUpdateSrc: BrowserView not found or has no ptr for id ${params.id}`);
         return;
       }
-      native.symbols.loadURLInWebView(webview.ptr, toCString(params.url));      
+      native.symbols.loadURLInWebView(webview.ptr, toCString(params.url));
     },
-    webviewTagUpdateHtml: (params) => {      
+    webviewTagUpdateHtml: (params: { id: number; html: string }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagUpdateHtml: BrowserView not found or has no ptr for id ${params.id}`);
         return;
-      }   
-      
+      }
+
       // Store HTML content in native map for scheme handlers
       native.symbols.setWebviewHTMLContent(webview.id, toCString(params.html));
-      
+
       webview.loadHTML(params.html);
       webview.html = params.html;
     },
-    webviewTagUpdatePreload: (params) => {
+    webviewTagUpdatePreload: (params: { id: number; preload: string }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagUpdatePreload: BrowserView not found or has no ptr for id ${params.id}`);
@@ -2215,7 +2211,7 @@ export const internalRpcHandlers = {
       }
       native.symbols.updatePreloadScriptToWebView(webview.ptr, toCString('electrobun_custom_preload_script'), toCString(params.preload), true);
     },
-    webviewTagGoBack: (params) => {
+    webviewTagGoBack: (params: { id: number }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagGoBack: BrowserView not found or has no ptr for id ${params.id}`);
@@ -2223,7 +2219,7 @@ export const internalRpcHandlers = {
       }
       native.symbols.webviewGoBack(webview.ptr);
     },
-    webviewTagGoForward: (params) => {
+    webviewTagGoForward: (params: { id: number }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagGoForward: BrowserView not found or has no ptr for id ${params.id}`);
@@ -2231,7 +2227,7 @@ export const internalRpcHandlers = {
       }
       native.symbols.webviewGoForward(webview.ptr);
     },
-    webviewTagReload: (params) => {
+    webviewTagReload: (params: { id: number }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagReload: BrowserView not found or has no ptr for id ${params.id}`);
@@ -2239,7 +2235,7 @@ export const internalRpcHandlers = {
       }
       native.symbols.webviewReload(webview.ptr);
     },
-    webviewTagRemove: (params) => {
+    webviewTagRemove: (params: { id: number }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagRemove: BrowserView not found or has no ptr for id ${params.id}`);
@@ -2247,14 +2243,14 @@ export const internalRpcHandlers = {
       }
       native.symbols.webviewRemove(webview.ptr);
     },
-    startWindowMove: (params) => {
+    startWindowMove: (params: { id: number }) => {
       const window = BrowserWindow.getById(params.id);
       native.symbols.startWindowMove(window.ptr);
     },
-    stopWindowMove: (params) => {
+    stopWindowMove: (_params: unknown) => {
       native.symbols.stopWindowMove();
     },
-    webviewTagSetTransparent: (params) => {
+    webviewTagSetTransparent: (params: { id: number; transparent: boolean }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagSetTransparent: BrowserView not found or has no ptr for id ${params.id}`);
@@ -2262,7 +2258,7 @@ export const internalRpcHandlers = {
       }
       native.symbols.webviewSetTransparent(webview.ptr, params.transparent);
     },
-    webviewTagSetPassthrough: (params) => {
+    webviewTagSetPassthrough: (params: { id: number; enablePassthrough: boolean }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagSetPassthrough: BrowserView not found or has no ptr for id ${params.id}`);
@@ -2270,7 +2266,7 @@ export const internalRpcHandlers = {
       }
       native.symbols.webviewSetPassthrough(webview.ptr, params.enablePassthrough);
     },
-    webviewTagSetHidden: (params) => {
+    webviewTagSetHidden: (params: { id: number; hidden: boolean }) => {
       const webview = BrowserView.getById(params.id);
       if (!webview || !webview.ptr) {
         console.error(`webviewTagSetHidden: BrowserView not found or has no ptr for id ${params.id}`);
@@ -2303,7 +2299,7 @@ export const internalRpcHandlers = {
       }
       native.symbols.webviewStopFind(webview.ptr);
     },
-    webviewEvent: (params) => {
+    webviewEvent: (params: unknown) => {
       console.log('-----------------+webviewEvent', params)
     },
   },

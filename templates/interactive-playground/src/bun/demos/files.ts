@@ -37,9 +37,9 @@ class FileManager {
       });
     } catch (error) {
       console.error("Move to trash error:", error);
-      this.onSystemEvent?.({ 
-        type: 'file-trashed', 
-        details: { path, success: false, error: error.message } 
+      this.onSystemEvent?.({
+        type: 'file-trashed',
+        details: { path, success: false, error: (error as Error).message }
       });
       throw error;
     }
@@ -54,9 +54,9 @@ class FileManager {
       });
     } catch (error) {
       console.error("Show in finder error:", error);
-      this.onSystemEvent?.({ 
-        type: 'show-in-finder', 
-        details: { path, success: false, error: error.message } 
+      this.onSystemEvent?.({
+        type: 'show-in-finder',
+        details: { path, success: false, error: (error as Error).message }
       });
       throw error;
     }

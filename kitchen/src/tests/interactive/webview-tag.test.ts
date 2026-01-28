@@ -1,6 +1,6 @@
 // Interactive Webview Tag Tests - Playgrounds for various webview features
 
-import { defineTest, expect } from "../../test-framework/types";
+import { defineTest } from "../../test-framework/types";
 import { BrowserView, BrowserWindow } from "electrobun/bun";
 
 export const webviewTagTests = [
@@ -20,7 +20,7 @@ export const webviewTagTests = [
       log("Opening webview tag playground window");
 
       await new Promise<void>((resolve) => {
-        let winRef: BrowserWindow | null = null;
+        let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 600000,
@@ -71,7 +71,7 @@ export const webviewTagTests = [
       log("Opening draggable region playground window");
 
       await new Promise<void>((resolve) => {
-        let winRef: BrowserWindow | null = null;
+        let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 600000,
@@ -91,7 +91,7 @@ export const webviewTagTests = [
           url: "views://playgrounds/draggable/index.html",
           renderer: "cef",
           frame: { width: 500, height: 450, x: 200, y: 100 },
-          frameless: true,
+          titleBarStyle: "hidden",
           rpc,
         });
 
@@ -123,7 +123,7 @@ export const webviewTagTests = [
       log("Opening host message playground window");
 
       await new Promise<void>((resolve) => {
-        let winRef: BrowserWindow | null = null;
+        let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 600000,
@@ -174,7 +174,7 @@ export const webviewTagTests = [
       log("Opening session playground window");
 
       await new Promise<void>((resolve) => {
-        let winRef: BrowserWindow | null = null;
+        let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 600000,

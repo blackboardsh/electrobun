@@ -7,15 +7,20 @@ import {
   type RPCTransport,
   createRPC,
 } from "rpc-anywhere";
-import { ConfigureWebviewTags } from "./webviewtag";
+import { ConfigureWebviewTags, type WebviewTagElement, type WebviewEventTypes } from "./webviewtag";
 // todo: should this just be injected as a preload script?
 import { isAppRegionDrag } from "./stylesAndElements";
 import type { BuiltinBunToWebviewSchema, BuiltinWebviewToBunSchema } from "./builtinrpcSchema";
 import type { InternalWebviewHandlers, WebviewTagHandlers } from "./rpc/webview";
+import "./global.d.ts";
 
 interface ElectrobunWebviewRPCSChema {
   bun: RPCSchema;
   webview: RPCSchema;
+}
+
+interface RPCWithTransport {
+  setTransport: (transport: RPCTransport) => void;
 }
 
 const WEBVIEW_ID = window.__electrobunWebviewId;
@@ -23,11 +28,11 @@ const WINDOW_ID = window.__electrobunWindowId;
 const RPC_SOCKET_PORT = window.__electrobunRpcSocketPort;
 
 
-class Electroview<T> {
+class Electroview<T extends RPCWithTransport> {
   bunSocket?: WebSocket;
   // user's custom rpc browser <-> bun
   rpc?: T;
-  rpcHandler?: (msg: any) => void;
+  rpcHandler?: (msg: unknown) => void;
   // electrobun rpc browser <-> bun
   internalRpc?: any;
   internalRpcHandler?: (msg: any) => void;
@@ -106,7 +111,7 @@ class Electroview<T> {
       console.error("Socket error:", event);
     });
 
-    socket.addEventListener("close", (event) => {
+    socket.addEventListener("close", (_event) => {
       // console.log("Socket closed:", event);
     });
   }
@@ -123,7 +128,7 @@ class Electroview<T> {
   // TODO: implement proper rpc-anywhere style rpc here
   // todo: this is duplicated in webviewtag.ts and should be DRYed up
   isProcessingQueue = false;
-  sendToInternalQueue = [];
+  sendToInternalQueue: string[] = [];
   sendToBunInternal(message: {}) {   
     try {    
       const strMessage = JSON.stringify(message);    
@@ -189,10 +194,10 @@ class Electroview<T> {
     });
   }
 
-  createTransport() {
+  createTransport(): RPCTransport {
     const that = this;
     return {
-      send(message) {
+      send(message: unknown) {
         try {
           const messageString = JSON.stringify(message);
           // console.log("sending message bunbridge", messageString);
@@ -201,7 +206,7 @@ class Electroview<T> {
           console.error("bun: failed to serialize message to webview", error);
         }
       },
-      registerHandler(handler) {
+      registerHandler(handler: (msg: unknown) => void) {
         that.rpcHandler = handler;
       },
     };
@@ -270,7 +275,7 @@ class Electroview<T> {
     }
   }
 
-  receiveMessageFromBun(msg) {
+  receiveMessageFromBun(msg: unknown) {
     // NOTE: in the webview messages are passed by executing ElectrobunView.receiveMessageFromBun(object)
     // so they're already parsed into an object here
     if (this.rpcHandler) {
@@ -380,7 +385,8 @@ class Electroview<T> {
       // while types in here are borked, they resolve correctly/bubble up to the defineRPC call site.
       rpc.addMessageListener(
         "*",
-        (messageName: keyof WebviewSchema["messages"], payload) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (messageName: keyof WebviewSchema["messages"], payload: any) => {
           const globalHandler = messageHandlers["*"];
           if (globalHandler) {
             globalHandler(messageName, payload);
@@ -398,7 +404,7 @@ class Electroview<T> {
   }
 }
 
-export { type RPCSchema, createRPC, Electroview };
+export { type RPCSchema, createRPC, Electroview, type WebviewTagElement, type WebviewEventTypes };
 
 const Electrobun = {
   Electroview,

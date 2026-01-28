@@ -1,6 +1,6 @@
 import { join, dirname, resolve } from "path";
 import { dlopen, suffix, ptr, toArrayBuffer } from "bun:ffi";
-import { existsSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
+import { existsSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 
 // Since main.js now runs from Resources, we need to find libraries in the MacOS directory
@@ -42,7 +42,7 @@ function main() {
         const cefLibs = [join(pathToMacOS, 'libcef.so'), join(pathToMacOS, 'libvk_swiftshader.so')];
         const existingCefLibs = cefLibs.filter(lib => existsSync(lib));
 
-        if (existingCefLibs.length > 0 && !process.env.LD_PRELOAD) {
+        if (existingCefLibs.length > 0 && !process.env['LD_PRELOAD']) {
             console.error(`[LAUNCHER] ERROR: CEF libraries found but LD_PRELOAD not set!`);
             console.error(`[LAUNCHER] Please run through the wrapper script: ./run.sh`);
             console.error(`[LAUNCHER] Or set: LD_PRELOAD="${existingCefLibs.join(':')}" before starting.`);
@@ -54,7 +54,7 @@ function main() {
                 env,
                 stdio: 'inherit'
             });
-            child.on('exit', (code) => process.exit(code));
+            child.on('exit', (code: number | null) => process.exit(code ?? 1));
             return; // Don't continue in this process
         }
     }
@@ -62,15 +62,15 @@ function main() {
     let lib;
     try {
         // Set LD_LIBRARY_PATH if not already set
-        if (!process.env.LD_LIBRARY_PATH?.includes('.')) {
-            process.env.LD_LIBRARY_PATH = `.${process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : ''}`;
+        if (!process.env['LD_LIBRARY_PATH']?.includes('.')) {
+            process.env['LD_LIBRARY_PATH'] = `.${process.env['LD_LIBRARY_PATH'] ? ':' + process.env['LD_LIBRARY_PATH'] : ''}`;
         }
         
         lib = dlopen(libPath, {
             startEventLoop: { args: ["cstring", "cstring", "cstring"], returns: "void" }
         });
     } catch (error) {
-        console.error(`[LAUNCHER] Failed to load library: ${error.message}`);
+        console.error(`[LAUNCHER] Failed to load library: ${(error as Error).message}`);
         
         // Try with absolute path as fallback
         try {
@@ -121,12 +121,12 @@ function main() {
                 asar_close: { args: ["ptr"], returns: "void" }
             });
         } catch (error) {
-            console.error(`[LAUNCHER] Failed to load ASAR library: ${error.message}`);
+            console.error(`[LAUNCHER] Failed to load ASAR library: ${(error as Error).message}`);
             throw error;
         }
 
         // Open ASAR archive
-        const asarArchive = asarLib.symbols.asar_open(ptr(Buffer.from(asarPath + '\0', 'utf8')));
+        const asarArchive = asarLib.symbols.asar_open(ptr(new Uint8Array(Buffer.from(asarPath + '\0', 'utf8'))));
 
         if (!asarArchive || asarArchive === 0n) {
             console.error(`[LAUNCHER] Failed to open ASAR archive at: ${asarPath}`);
@@ -138,7 +138,7 @@ function main() {
         const sizeBuffer = new BigUint64Array(1);
         const fileDataPtr = asarLib.symbols.asar_read_file(
             asarArchive,
-            ptr(Buffer.from(filePath + '\0', 'utf8')),
+            ptr(new Uint8Array(Buffer.from(filePath + '\0', 'utf8'))),
             ptr(sizeBuffer)
         );
 
@@ -201,9 +201,9 @@ ${fileData.toString('utf8')}
     // Pass identifier, name, and channel as C strings using Buffer encoding
     // Bun FFI requires explicit encoding for cstring parameters
     lib.symbols.startEventLoop(
-        ptr(Buffer.from(identifier + '\0', 'utf8')),
-        ptr(Buffer.from(name + '\0', 'utf8')),
-        ptr(Buffer.from(channel + '\0', 'utf8'))
+        ptr(new Uint8Array(Buffer.from(identifier + '\0', 'utf8'))),
+        ptr(new Uint8Array(Buffer.from(name + '\0', 'utf8'))),
+        ptr(new Uint8Array(Buffer.from(channel + '\0', 'utf8')))
     );
 }
 

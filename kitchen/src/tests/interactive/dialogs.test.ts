@@ -1,8 +1,8 @@
 // Interactive Dialog Tests - Require user interaction
 
-import { defineTest, expect } from "../../test-framework/types";
+import { defineTest } from "../../test-framework/types";
 import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
-import { homedir, tmpdir } from "os";
+import { homedir } from "os";
 import { join } from "path";
 
 export const dialogTests = [
@@ -83,7 +83,8 @@ export const dialogTests = [
 
       // Create a promise that resolves when user closes the window
       await new Promise<void>((resolve) => {
-        let winRef: BrowserWindow | null = null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 600000, // 10 minutes - file dialogs can take a while
@@ -96,7 +97,7 @@ export const dialogTests = [
               openFileDialog: async (opts: any) => {
                 // Expand ~ to home directory since macOS NSURL doesn't handle tilde expansion
                 if (opts.startingFolder && opts.startingFolder.startsWith("~")) {
-                  opts.startingFolder = opts.startingFolder.replace("~", Bun.env.HOME || "/Users");
+                  opts.startingFolder = opts.startingFolder.replace("~", Bun.env['HOME'] || "/Users");
                 }
                 log(`Opening dialog with options: ${JSON.stringify(opts)}`);
                 const result = await Utils.openFileDialog(opts);

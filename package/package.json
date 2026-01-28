@@ -52,7 +52,9 @@
   },
   "devDependencies": {
     "@types/archiver": "^6.0.3",
-    "@types/bun": "1.1.9"
+    "@types/bun": "1.1.9",
+    "@types/tar": "^6.1.13",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@oneidentity/zstd-js": "^1.0.3",

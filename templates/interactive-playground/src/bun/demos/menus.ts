@@ -93,7 +93,7 @@ class MenuManager {
       },
     ]);
 
-    tray.on("tray-clicked", (e) => {
+    tray.on("tray-clicked", (e: { data: { action: string } }) => {
       this.onTrayClicked?.(id, e.data.action);
     });
 
@@ -109,7 +109,7 @@ class MenuManager {
     }
   }
 
-  async showContextMenu(params: { x: number; y: number }) {
+  async showContextMenu(_params: { x: number; y: number }) {
     ContextMenu.showContextMenu([
       { role: "undo" },
       { role: "redo" },

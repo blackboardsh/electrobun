@@ -1,16 +1,81 @@
+import "./global.d.ts";
+
 type WebviewEventTypes =
   | "did-navigate"
   | "did-navigate-in-page"
   | "did-commit-navigation"
   | "dom-ready"
-  | "host-message";
+  | "host-message"
+  | "new-window-open";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
+/**
+ * Interface representing an <electrobun-webview> custom element.
+ * Use this to properly type webview elements obtained via querySelector.
+ *
+ * @example
+ * const webview = document.querySelector('electrobun-webview') as WebviewTagElement;
+ * webview.loadURL('https://example.com');
+ * webview.toggleHidden(false);
+ */
+interface WebviewTagElement extends HTMLElement {
+  // Properties
+  webviewId?: number;
+  maskSelectors: Set<string>;
+  transparent: boolean;
+  passthroughEnabled: boolean;
+  hidden: boolean;
+  hiddenMirrorMode: boolean;
+  partition: string | null;
+
+  // Attribute-backed properties (getters/setters)
+  src: string | null;
+  html: string | null;
+  preload: string | null;
+  renderer: 'cef' | 'native';
+
+  // Mask management
+  addMaskSelector(selector: string): void;
+  removeMaskSelector(selector: string): void;
+
+  // Navigation
+  canGoBack(): Promise<boolean>;
+  canGoForward(): Promise<boolean>;
+  goBack(): void;
+  goForward(): void;
+  reload(): void;
+  loadURL(url: string): void;
+  loadHTML(html: string): void;
+
+  // JavaScript execution
+  callAsyncJavaScript(options: { script: string }): Promise<unknown>;
+
+  // Visibility and interaction
+  toggleTransparent(transparent?: boolean, bypassState?: boolean): void;
+  togglePassthrough(enablePassthrough?: boolean, bypassState?: boolean): void;
+  toggleHidden(hidden?: boolean, bypassState?: boolean): void;
+
+  // Events - listener receives a CustomEvent with detail property
+  on(event: WebviewEventTypes, listener: (event: CustomEvent) => void): void;
+  off(event: WebviewEventTypes, listener: (event: CustomEvent) => void): void;
+  emit(event: WebviewEventTypes, detail: unknown): void;
+
+  // Dimension sync
+  syncDimensions(force?: boolean): void;
+
+  // Navigation rules
+  setNavigationRules(rules: string[]): void;
+
+  // Find in page
+  findInPage(searchText: string, options?: { forward?: boolean; matchCase?: boolean }): void;
+  stopFindInPage(): void;
+}
+
 const ConfigureWebviewTags = (
   enableWebviewTags: boolean,
-  internalRpc: (params: any) => any,
-  bunRpc: (params: any) => any
+  internalRpc: unknown,
+  bunRpc: unknown
 ) => {
   if (!enableWebviewTags) {
     return;
@@ -398,12 +463,12 @@ const ConfigureWebviewTags = (
       return ["src", "html", "preload", "class", "style"];
     }
 
-    attributeChangedCallback(name, oldValue, newValue) {
-      if (name === "src" && oldValue !== newValue) {
+    attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null) {
+      if (name === "src" && oldValue !== newValue && newValue !== null) {
         this.updateIFrameSrc(newValue);
-      } else if (name === "html" && oldValue !== newValue) {
+      } else if (name === "html" && oldValue !== newValue && newValue !== null) {
         this.updateIFrameHtml(newValue);
-      } else if (name === "preload" && oldValue !== newValue) {
+      } else if (name === "preload" && oldValue !== newValue && newValue !== null) {
         this.updateIFramePreload(newValue);
       } else {
         this.syncDimensions();
@@ -638,4 +703,4 @@ electrobun-webview {
   }
 };
 
-export { ConfigureWebviewTags };
+export { ConfigureWebviewTags, type WebviewTagElement, type WebviewEventTypes };

@@ -1,9 +1,9 @@
-import Electrobun, { Electroview } from "electrobun/view";
+import Electrobun, { Electroview, type WebviewTagElement } from "electrobun/view";
 
 console.log("🌐 Initializing Multitab Browser UI...");
 
 // Create RPC client
-const rpc = Electroview.defineRPC({
+const rpc = Electroview.defineRPC<any>({
   maxRequestTime: 10000,
   handlers: {
     requests: {},
@@ -25,11 +25,12 @@ const rpc = Electroview.defineRPC({
 });
 
 // Initialize Electrobun with RPC
+// @ts-expect-error - electrobun is used by webview tags for RPC
 const electrobun = new Electrobun.Electroview({ rpc });
 
 class MultitabBrowser {
   private tabs: Map<string, any> = new Map();
-  private webviews: Map<string, HTMLElement> = new Map();
+  private webviews: Map<string, WebviewTagElement> = new Map();
   private activeTabId: string | null = null;
   private bookmarks: Map<string, any> = new Map();
 
@@ -83,7 +84,7 @@ class MultitabBrowser {
               this.handleTabUpdate(tab);
             }
             
-            await rpc.request.navigateTo({ tabId: this.activeTabId, url: processedUrl });
+            await (rpc as any).request.navigateTo({ tabId: this.activeTabId, url: processedUrl });
           } catch (error) {
             console.error("Failed to navigate:", error);
           }
@@ -210,11 +211,11 @@ class MultitabBrowser {
 
   private async createNewTab(url?: string): Promise<void> {
     try {
-      const tab = await rpc.request.createTab({ url });
+      const tab = await (rpc as any).request.createTab({ url });
       this.tabs.set(tab.id, tab);
       
       // Create electrobun-webview element for this tab
-      const webview = document.createElement('electrobun-webview');
+      const webview = document.createElement('electrobun-webview') as WebviewTagElement;
       webview.setAttribute('src', tab.url);
       webview.setAttribute('id', `webview-${tab.id}`);
       webview.setAttribute('masks', '#bookmarks-dropdown');
@@ -290,16 +291,16 @@ class MultitabBrowser {
       // Hide all webviews
       this.webviews.forEach((webview) => {
         // webview.classList.remove('active');
-        webview.toggleHidden(true)
-        webview.togglePassthrough(true)
+        webview.toggleHidden(true);
+        webview.togglePassthrough(true);
       });
-      
+
       // Show the selected webview
       const selectedWebview = this.webviews.get(tabId);
       if (selectedWebview) {
         selectedWebview.classList.add('active');
-        selectedWebview.toggleHidden(false)
-        selectedWebview.togglePassthrough(false)
+        selectedWebview.toggleHidden(false);
+        selectedWebview.togglePassthrough(false);
       }
 
       this.activeTabId = tabId;
@@ -316,7 +317,7 @@ class MultitabBrowser {
       }
 
       // Notify backend about tab switch (optional)
-      await rpc.request.activateTab({ tabId });
+      await (rpc as any).request.activateTab({ tabId });
     } catch (error) {
       console.error("Failed to switch tab:", error);
     }
@@ -326,7 +327,7 @@ class MultitabBrowser {
     try {
       console.log(`Closing tab ${tabId}, active tab: ${this.activeTabId}, total tabs before: ${this.tabs.size}`);
       
-      await rpc.request.closeTab({ id: tabId });
+      await (rpc as any).request.closeTab({ id: tabId });
       this.tabs.delete(tabId);
       
       // Remove the webview element
@@ -583,7 +584,7 @@ class MultitabBrowser {
 
       item.querySelector(".bookmark-delete")?.addEventListener("click", (e) => {
         e.stopPropagation();
-        const url = (e.currentTarget as HTMLElement).dataset.url;
+        const url = (e.currentTarget as HTMLElement).dataset['url'];
         if (url) {
           this.removeBookmark(url);
           this.renderBookmarks();

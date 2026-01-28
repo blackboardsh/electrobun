@@ -35,8 +35,8 @@ const rpc = BrowserView.defineRPC<PlaygroundRPC>({
       showInFinder: fileManager.showInFinder.bind(fileManager),
 
       // WebView Operations (placeholder)
-      createWebView: async (url: string) => ({ id: 1 }),
-      executeJSInWebView: async (params: { id: number; script: string }) => null,
+      createWebView: async (_url: string) => ({ id: 1 }),
+      executeJSInWebView: async (_params: { id: number; script: string }) => null,
 
 
     },

@@ -138,7 +138,7 @@ function showContextMenu(menuId: string) {
   const config = menuConfigs.find((c) => c.id === menuId);
   if (!config) return;
 
-  electrobun.rpc?.request.showContextMenu({ menu: config.menu });
+  (electrobun.rpc as any)?.request.showContextMenu({ menu: config.menu });
   addLogEntry(`Showing: ${config.title}`);
 }
 
@@ -152,7 +152,7 @@ function setActiveButton(menuId: string) {
 document.addEventListener("DOMContentLoaded", () => {
   // Done button
   document.getElementById("doneBtn")?.addEventListener("click", () => {
-    electrobun.rpc?.request.closeWindow({});
+    (electrobun.rpc as any)?.request.closeWindow({});
   });
 
   // Clear log button

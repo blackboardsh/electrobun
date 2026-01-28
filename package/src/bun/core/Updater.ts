@@ -1,85 +1,18 @@
-import { join, dirname, resolve, basename, relative } from "path";
+import { join, dirname, resolve, relative } from "path";
 import { homedir } from "os";
-import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync, cpSync } from "fs";
+import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync } from "fs";
 import { execSync } from "child_process";
 import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
 import { getPlatformPrefix, getTarballFileName } from '../../shared/naming';
-import { native } from '../proc/native';
 import { quit } from './Utils';
-
-// Helper to join URL paths without breaking the protocol (path.join mangles https:// to https:/)
-function urlJoin(...parts: string[]): string {
-  if (parts.length === 0) return '';
-
-  // Start with the first part (base URL)
-  let result = parts[0];
-
-  // Join remaining parts
-  for (let i = 1; i < parts.length; i++) {
-    const part = parts[i];
-    if (!part) continue;
-
-    // Remove trailing slash from result and leading slash from part
-    const cleanResult = result.endsWith('/') ? result.slice(0, -1) : result;
-    const cleanPart = part.startsWith('/') ? part.slice(1) : part;
-
-    result = `${cleanResult}/${cleanPart}`;
-  }
-
-  return result;
-}
 
 // setTimeout(async () => {
 //   console.log('killing')
 //   const { native } = await import('../proc/native');
 //             native.symbols.killApp();
 // }, 1000)
-
-// Create or update run.sh launcher script for Linux
-async function createLinuxLauncherScript(appDir: string): Promise<void> {
-  const parentDir = dirname(appDir);
-  const launcherPath = join(parentDir, "run.sh");
-  
-  const launcherContent = `#!/bin/bash
-# Electrobun App Launcher
-# This script sets up the environment and launches the app
-
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$SCRIPT_DIR/app"
-
-cd "$APP_DIR/bin"
-export LD_LIBRARY_PATH=".:$LD_LIBRARY_PATH"
-
-# Force X11 backend for compatibility
-export GDK_BACKEND=x11
-
-# Check if CEF libraries exist and set LD_PRELOAD
-if [ -f "./libcef.so" ] || [ -f "./libvk_swiftshader.so" ]; then
-    CEF_LIBS=""
-    [ -f "./libcef.so" ] && CEF_LIBS="./libcef.so"
-    if [ -f "./libvk_swiftshader.so" ]; then
-        if [ -n "$CEF_LIBS" ]; then
-            CEF_LIBS="$CEF_LIBS:./libvk_swiftshader.so"
-        else
-            CEF_LIBS="./libvk_swiftshader.so"
-        fi
-    fi
-    export LD_PRELOAD="$CEF_LIBS"
-fi
-
-exec ./launcher "$@"
-`;
-
-  await Bun.write(launcherPath, launcherContent);
-  
-  // Make it executable
-  execSync(`chmod +x "${launcherPath}"`);
-  
-  console.log(`Created/updated Linux launcher script: ${launcherPath}`);
-}
 
 // Create launcher script for AppImage
 async function createLinuxAppImageLauncherScript(appImagePath: string): Promise<void> {
@@ -116,10 +49,10 @@ function getAppDataDir(): string {
       return join(homedir(), "Library", "Application Support");
     case 'win':
       // Use LOCALAPPDATA to match extractor location
-      return process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
+      return process.env['LOCALAPPDATA'] || join(homedir(), "AppData", "Local");
     case 'linux':
       // Use XDG_DATA_HOME or fallback to ~/.local/share to match extractor
-      return process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+      return process.env['XDG_DATA_HOME'] || join(homedir(), ".local", "share");
     default:
       // Fallback to home directory with .config
       return join(homedir(), ".config");
@@ -222,7 +155,7 @@ const Updater = {
 
   downloadUpdate: async () => {
     const appDataFolder = await Updater.appDataFolder();
-    const channelBucketUrl = await Updater.channelBucketUrl();
+    await Updater.channelBucketUrl(); // Ensure localInfo is loaded
     const appFileName = localInfo.name;
 
     let currentHash = (await Updater.getLocallocalInfo()).hash;
@@ -320,7 +253,7 @@ const Updater = {
           // gzip: false,
           file: tmpPatchedTarFilePath,
           cwd: untarDir,
-          filter: (path, stat) => {
+          filter: (path: string) => {
             if (path.endsWith(`${resourcesDir}/version.json`)) {
               versionSubpath = path;
               return true;
@@ -477,7 +410,7 @@ const Updater = {
             // gzip: false,
             file: latestTarPath,
             cwd: extractionDir,
-            onentry: (entry) => {
+            onentry: (entry: tar.ReadEntry) => {
               if (currentOS === 'macos') {
                 // find the first .app bundle in the tarball
                 // Some apps may have nested .app bundles
@@ -722,17 +655,19 @@ del "%~f0"
         // Cross-platform app launch (Windows is handled above with its own update script)
         if (currentOS === 'macos') {
           // Use a detached shell so relaunch survives after killApp terminates the current process
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           await Bun.spawn(
             [
               "sh",
               "-c",
               `open "${runningAppBundlePath}" &`,
             ],
-            { detached: true }
+            { detached: true } as any
           );
         } else if (currentOS === 'linux') {
           // On Linux, launch the AppImage directly
-          Bun.spawn(["sh", "-c", `"${runningAppBundlePath}" &`], { detached: true});
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          Bun.spawn(["sh", "-c", `"${runningAppBundlePath}" &`], { detached: true } as any);
         }
 
         // Use quit() for graceful shutdown

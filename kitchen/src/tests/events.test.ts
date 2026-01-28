@@ -10,11 +10,12 @@ export const eventsTests = [
     description: "Test that global will-navigate event fires",
     async run({ createWindow, log }) {
       let eventFired = false;
-      let eventData: any = null;
+      // @ts-expect-error - reserved for capturing event data
+      let _eventData: any = null;
 
       const handler = (e: any) => {
         eventFired = true;
-        eventData = e.data;
+        _eventData = e.data;
       };
 
       Electrobun.events.on("will-navigate", handler);

@@ -1,5 +1,5 @@
 import type { RPCSchema } from "electrobun";
-import type { TestDefinition, TestResult, TestStatus } from "../test-framework/types";
+import type { TestResult } from "../test-framework/types";
 
 export interface TestInfo {
   id: string;

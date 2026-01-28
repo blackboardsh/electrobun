@@ -1,6 +1,6 @@
 // Interactive Tray Tests - Playground for exploring tray functionality
 
-import { defineTest, expect } from "../../test-framework/types";
+import { defineTest } from "../../test-framework/types";
 import { BrowserView, BrowserWindow, Tray } from "electrobun/bun";
 
 export const trayTests = [
@@ -22,7 +22,7 @@ export const trayTests = [
       await new Promise<void>((resolve) => {
         let currentTray: Tray | null = null;
         let updateInterval: any = null;
-        let winRef: BrowserWindow | null = null;
+        let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 600000, // 10 minutes for interactive exploration

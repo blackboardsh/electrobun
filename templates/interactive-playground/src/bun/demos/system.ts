@@ -1,4 +1,3 @@
-import Electrobun from "electrobun/bun";
 import { platform, arch, release } from "os";
 
 class SystemManager {

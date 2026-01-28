@@ -29,14 +29,16 @@ import {
   getTarballFileName,
   getWindowsSetupFileName,
   getLinuxAppImageBaseName,
-  sanitizeVolumeNameForHdiutil,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  sanitizeVolumeNameForHdiutil as _sanitizeVolumeNameForHdiutil,
   getDmgVolumeName,
   getMacOSBundleDisplayName,
 } from '../shared/naming';
 import { getTemplate, getTemplateNames } from './templates/embedded';
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
 // MacOS named pipes hang at around 4KB
-const MAX_CHUNK_SIZE = 1024 * 2;
+// @ts-expect-error - reserved for future use
+const _MAX_CHUNK_SIZE = 1024 * 2;
 
 
 // const binExt = OS === 'win' ? '.exe' : '';
@@ -95,7 +97,8 @@ function getPlatformPaths(targetOS: 'macos' | 'win' | 'linux', targetArch: 'arm6
 }
 
 // Default PATHS for host platform (backward compatibility)
-const PATHS = getPlatformPaths(OS, ARCH);
+// @ts-expect-error - reserved for future use
+const _PATHS = getPlatformPaths(OS, ARCH);
 
 async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targetArch?: 'arm64' | 'x64') {
   // Use provided target platform or default to host platform
@@ -190,7 +193,7 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     
     // Ensure file is properly closed before proceeding
     await new Promise((resolve, reject) => {
-      fileStream.end((err) => {
+      fileStream.end((err: Error | null | undefined) => {
         if (err) reject(err);
         else resolve(null);
       });
@@ -534,7 +537,8 @@ async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targe
   }
 }
 
-const commandDefaults = {
+// @ts-expect-error - reserved for future use
+const _commandDefaults = {
   init: {
     projectRoot,
     config: "electrobun.config",
@@ -555,13 +559,15 @@ const defaultConfig = {
     name: "MyApp",
     identifier: "com.example.myapp",
     version: "0.1.0",
+    description: "" as string | undefined,
+    urlSchemes: undefined as string[] | undefined,
   },
   build: {
     buildFolder: "build",
     artifactFolder: "artifacts",
-    targets: undefined, // Will default to current platform if not specified
+    targets: undefined as unknown, // Will default to current platform if not specified
     useAsar: false,
-    asarUnpack: undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
+    asarUnpack: undefined as string[] | undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
     mac: {
       codesign: false,
       notarize: false,
@@ -572,19 +578,26 @@ const defaultConfig = {
         // Required for bun runtime to work with dynamic code execution and JIT compilation when signed
         "com.apple.security.cs.allow-unsigned-executable-memory": true,
         "com.apple.security.cs.disable-library-validation": true,
-      },
+      } as Record<string, boolean | string>,
       icons: "icon.iconset",
+      defaultRenderer: undefined as 'native' | 'cef' | undefined,
     },
     win: {
       bundleCEF: false,
+      icon: undefined as string | undefined,
+      defaultRenderer: undefined as 'native' | 'cef' | undefined,
     },
     linux: {
       bundleCEF: false,
+      icon: undefined as string | undefined,
+      defaultRenderer: undefined as 'native' | 'cef' | undefined,
     },
     bun: {
       entrypoint: "src/bun/index.ts",
-      external: [],
+      external: [] as string[],
     },
+    views: undefined as Record<string, { entrypoint: string; external?: string[] }> | undefined,
+    copy: undefined as Record<string, string> | undefined,
   },
   scripts: {
     preBuild: "",
@@ -1058,7 +1071,8 @@ if (commandArg === "init") {
   const macOSBundleDisplayName = getMacOSBundleDisplayName(config.app.name, buildEnvironment);
   const platformPrefix = getPlatformPrefix(buildEnvironment, currentTarget.os, currentTarget.arch);
   const buildFolder = join(projectRoot, config.build.buildFolder, platformPrefix);
-  const bundleFileName = getBundleFileName(config.app.name, buildEnvironment, targetOS);
+  // @ts-expect-error - reserved for future use
+  const _bundleFileName = getBundleFileName(config.app.name, buildEnvironment, targetOS);
   const artifactFolder = join(projectRoot, config.build.artifactFolder);
   
   // Ensure core binaries are available for the target platform before starting build
@@ -1072,7 +1086,7 @@ if (commandArg === "init") {
     const hookScript = config.scripts[hookName];
     if (!hookScript) return;
 
-    console.log(`Running ${hookName} script:`, hookScript);
+    console.log(`Running ${String(hookName)} script:`, hookScript);
     // Use host platform's bun binary for running scripts, not target platform's
     const hostPaths = getPlatformPaths(OS, ARCH);
 
@@ -1094,9 +1108,9 @@ if (commandArg === "init") {
     });
 
     if (result.exitCode !== 0) {
-      console.error(`${hookName} script failed with exit code:`, result.exitCode);
+      console.error(`${String(hookName)} script failed with exit code:`, result.exitCode);
       if (result.stderr) {
-        console.error("stderr:", result.stderr.toString());
+        console.error("stderr:", new TextDecoder().decode(result.stderr as Uint8Array));
       }
       console.error("Tried to run with bun at:", hostPaths.BUN_BINARY);
       console.error("Script path:", hookScript);
@@ -1306,7 +1320,7 @@ if (commandArg === "init") {
           const pngToIco = (await import('png-to-ico')).default;
           const tempIcoPath = join(buildFolder, 'temp-launcher-icon.ico');
           const icoBuffer = await pngToIco(iconSourcePath);
-          writeFileSync(tempIcoPath, icoBuffer);
+          writeFileSync(tempIcoPath, new Uint8Array(icoBuffer));
           iconPath = tempIcoPath;
           console.log(`Converted PNG to ICO format for launcher: ${tempIcoPath}`);
         }
@@ -1359,7 +1373,7 @@ if (commandArg === "init") {
           const pngToIco = (await import('png-to-ico')).default;
           const tempIcoPath = join(buildFolder, 'temp-bun-icon.ico');
           const icoBuffer = await pngToIco(iconSourcePath);
-          writeFileSync(tempIcoPath, icoBuffer);
+          writeFileSync(tempIcoPath, new Uint8Array(icoBuffer));
           iconPath = tempIcoPath;
           console.log(`Converted PNG to ICO format for bun.exe: ${tempIcoPath}`);
         }
@@ -1587,7 +1601,8 @@ if (commandArg === "init") {
         // Copy CEF .so files to main directory as symlinks to cef/ subdirectory
         cefSoFiles.forEach(soFile => {
           const sourcePath = join(cefSourcePath, soFile);
-          const destPath = join(appBundleMacOSPath, soFile);
+          // @ts-expect-error - reserved for future use
+          const _destPath = join(appBundleMacOSPath, soFile);
           if (existsSync(sourcePath)) {
             // We'll create the actual file in cef/ and symlink from main directory
             // This will be done after the cef/ directory is populated
@@ -1844,7 +1859,8 @@ if (commandArg === "init") {
     console.log("Packing resources into ASAR archive...");
 
     const asarPath = join(appBundleFolderResourcesPath, "app.asar");
-    const asarUnpackedPath = join(appBundleFolderResourcesPath, "app.asar.unpacked");
+    // @ts-expect-error - reserved for future use
+    const _asarUnpackedPath = join(appBundleFolderResourcesPath, "app.asar.unpacked");
 
     // Get zig-asar CLI path - on Windows, try x64 first (most common), fall back to arm64
     let zigAsarCli: string;
@@ -1919,7 +1935,7 @@ if (commandArg === "init") {
       if (asarResult.exitCode !== 0) {
         console.error("ASAR packing failed with exit code:", asarResult.exitCode);
         if (asarResult.stderr) {
-          console.error("stderr:", asarResult.stderr.toString());
+          console.error("stderr:", new TextDecoder().decode(asarResult.stderr as Uint8Array));
         }
         console.error("Command:", zigAsarCli, ...asarArgs);
         process.exit(1);
@@ -2179,10 +2195,11 @@ if (commandArg === "init") {
       // todo (yoav): consider using c bindings for zstd for speed instead of wasm
       // we already have it in the bsdiff binary
       console.log("compressing tarball...");
-      await ZstdInit().then(async ({ ZstdSimple, ZstdStream }) => {
+      await ZstdInit().then(async ({ ZstdSimple, ZstdStream: _ZstdStream }) => {
         // Note: Simple is much faster than stream, but stream is better for large files
         // todo (yoav): consider a file size cutoff to switch to stream instead of simple.
-        const useStream = tarball.size > 100 * 1024 * 1024;
+        // @ts-expect-error - reserved for future use (for large file streaming)
+        const _useStream = tarball.size > 100 * 1024 * 1024;
         
         if (tarball.size > 0) {
           // Uint8 array filestream of the tar file
@@ -2315,7 +2332,8 @@ if (commandArg === "init") {
       }
     } else {
       // For Windows and Linux, add the self-extracting bundle directly
-      const platformBundlePath = join(buildFolder, `${appFileName}${platformSuffix}${targetOS === 'win' ? '.exe' : ''}`);
+      // @ts-expect-error - reserved for future use
+      const _platformBundlePath = join(buildFolder, `${appFileName}${platformSuffix}${targetOS === 'win' ? '.exe' : ''}`);
       // Copy the self-extracting bundle to platform-specific filename
       if (targetOS === 'win') {
         // On Windows, create a self-extracting exe
@@ -2538,30 +2556,32 @@ if (commandArg === "init") {
   //   env: {},
   // });
 
-  let mainProc;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let mainProc: any;
   let bundleExecPath: string;
-  let bundleResourcesPath: string;
+  // @ts-expect-error - reserved for future use
+  let _bundleResourcesPath: string;
   let isAppImage = false;
   
   if (OS === 'macos') {
     bundleExecPath = join(buildFolder, bundleFileName, "Contents", 'MacOS');
-    bundleResourcesPath = join(buildFolder, bundleFileName, "Contents", 'Resources');
+    _bundleResourcesPath = join(buildFolder, bundleFileName, "Contents", 'Resources');
   } else if (OS === 'linux') {
     // Check if we have an AppImage or directory bundle
     const appImagePath = join(buildFolder, `${bundleFileName}.AppImage`);
     if (existsSync(appImagePath)) {
       // AppImage mode
       bundleExecPath = appImagePath;
-      bundleResourcesPath = join(buildFolder, bundleFileName, "Resources"); // For compatibility
+      _bundleResourcesPath = join(buildFolder, bundleFileName, "Resources"); // For compatibility
       isAppImage = true;
     } else {
       // Directory bundle mode (fallback)
       bundleExecPath = join(buildFolder, bundleFileName, "bin");
-      bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
+      _bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
     }
   } else if (OS === 'win') {
     bundleExecPath = join(buildFolder, bundleFileName, "bin");
-    bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
+    _bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
   } else {
     throw new Error(`Unsupported OS: ${OS}`);
   }
@@ -2613,7 +2633,7 @@ if (commandArg === "init") {
       mainProc = Bun.spawn(['./bun.exe', '../Resources/main.js'], {
         stdio: ['inherit', 'inherit', 'inherit'],
         cwd: bundleExecPath,
-        onExit: (proc, exitCode, signalCode, error) => {
+        onExit: (_proc, exitCode, signalCode, error) => {
           console.log('Bun process exited:', { exitCode, signalCode, error });
         }
       })
@@ -2646,7 +2666,7 @@ if (commandArg === "init") {
 // Helper functions
 
 async function getConfig() {
-  let loadedConfig = {};
+  let loadedConfig: Partial<typeof defaultConfig> & Record<string, unknown> = {};
   const foundConfigPath = findConfigFile();
   
   if (foundConfigPath) {
@@ -2740,7 +2760,7 @@ function getEntitlementValue(value: boolean | string) {
 async function createWindowsSelfExtractingExe(
   buildFolder: string,
   compressedTarPath: string,
-  appFileName: string,
+  _appFileName: string,
   targetPaths: any,
   buildEnvironment: string,
   hash: string,
@@ -2754,7 +2774,7 @@ async function createWindowsSelfExtractingExe(
 
   // Copy the extractor exe
   const extractorExe = readFileSync(targetPaths.EXTRACTOR);
-  writeFileSync(outputExePath, extractorExe);
+  writeFileSync(outputExePath, new Uint8Array(extractorExe));
 
   // Embed icon into the wrapper EXE if provided
   if (config.build.win?.icon) {
@@ -2772,7 +2792,7 @@ async function createWindowsSelfExtractingExe(
           const pngToIco = (await import('png-to-ico')).default;
           const tempIcoPath = join(buildFolder, 'temp-icon.ico');
           const icoBuffer = await pngToIco(iconSourcePath);
-          writeFileSync(tempIcoPath, icoBuffer);
+          writeFileSync(tempIcoPath, new Uint8Array(icoBuffer));
           iconPath = tempIcoPath;
           console.log(`Converted PNG to ICO format: ${tempIcoPath}`);
         }
@@ -2881,7 +2901,7 @@ async function wrapWindowsInstallerInZip(exePath: string, buildFolder: string): 
   });
 }
 
-async function wrapInArchive(filePath: string, buildFolder: string, archiveType: 'tar.gz' | 'zip'): Promise<string> {
+async function wrapInArchive(filePath: string, _buildFolder: string, archiveType: 'tar.gz' | 'zip'): Promise<string> {
   const fileName = basename(filePath);
   const fileDir = dirname(filePath);
   
@@ -2949,12 +2969,13 @@ async function wrapInArchive(filePath: string, buildFolder: string, archiveType:
       archive.finalize();
     });
   }
+  throw new Error(`Unsupported archive type: ${archiveType}`);
 }
 
 async function createLinuxSelfExtractingAppImage(
   buildFolder: string,
   compressedTarPath: string,
-  appFileName: string,
+  _appFileName: string,
   config: any,
   buildEnvironment: string,
   hash: string
@@ -3001,16 +3022,16 @@ async function createLinuxSelfExtractingAppImage(
   
   // Combine extractor + metadata marker + metadata + archive marker + archive
   const combinedBuffer = Buffer.concat([
-    extractorBinary,
-    metadataMarker,
-    metadataBuffer,
-    archiveMarker,
-    compressedArchive
+    new Uint8Array(extractorBinary),
+    new Uint8Array(metadataMarker),
+    new Uint8Array(metadataBuffer),
+    new Uint8Array(archiveMarker),
+    new Uint8Array(compressedArchive)
   ]);
-  
+
   // Write the self-extracting binary to AppImage/usr/bin/
   const wrapperExtractorPath = join(usrBinPath, wrapperName);
-  writeFileSync(wrapperExtractorPath, combinedBuffer, { mode: 0o755 });
+  writeFileSync(wrapperExtractorPath, new Uint8Array(combinedBuffer), { mode: 0o755 });
   execSync(`chmod +x ${escapePathForTerminal(wrapperExtractorPath)}`);
 
   // Create AppRun script
@@ -3270,7 +3291,7 @@ function codesignAppBundle(
         `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --identifier ${identifier} ${entitlementFlag} ${escapePathForTerminal(execPath)}`
       );
     } catch (err) {
-      console.error(`Failed to sign ${relativePath}:`, err.message);
+      console.error(`Failed to sign ${relativePath}:`, (err as Error).message);
       // Continue signing other files even if one fails
     }
   }
@@ -3287,7 +3308,7 @@ function codesignAppBundle(
         `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`
       );
     } catch (error) {
-      console.error("Failed to sign launcher:", error.message);
+      console.error("Failed to sign launcher:", (error as Error).message);
       console.log("Attempting to sign launcher without runtime hardening...");
       execSync(
         `codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`

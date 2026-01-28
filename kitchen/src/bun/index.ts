@@ -94,7 +94,8 @@ const checkForUpdate = async () => {
 };
 
 // Broadcast update status to all windows
-let testRunnerWindow: BrowserWindow | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let testRunnerWindow: BrowserWindow<any> | null = null;
 const broadcastUpdateStatus = () => {
   testRunnerWindow?.webview.rpc?.send.updateStatus(updateState);
 };
@@ -304,8 +305,8 @@ console.log("Press Cmd+R to run all automated tests, or use the buttons in the U
 
 // Auto-run tests if AUTO_RUN environment variable is set
 // Usage: AUTO_RUN=1 electrobun dev
-console.log(`DEBUG: AUTO_RUN env var = "${process.env.AUTO_RUN}"`);
-const autoRun = !!process.env.AUTO_RUN;
+console.log(`DEBUG: AUTO_RUN env var = "${process.env['AUTO_RUN']}"`);
+const autoRun = !!process.env['AUTO_RUN'];
 console.log(`DEBUG: autoRun = ${autoRun}`);
 if (autoRun) {
   console.log("Auto-running automated tests in 3 seconds...\n");

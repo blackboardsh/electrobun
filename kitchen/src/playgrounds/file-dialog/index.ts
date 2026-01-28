@@ -44,20 +44,20 @@ function init() {
   // Setup event listeners
   openDialogBtn.addEventListener("click", openDialog);
   doneBtn.addEventListener("click", () => {
-    electrobun.rpc?.request.closeWindow({});
+    (electrobun.rpc as any)?.request.closeWindow({});
   });
 
   // Setup preset buttons for folders
   document.querySelectorAll(".preset-btn[data-folder]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      startingFolderInput.value = (btn as HTMLElement).dataset.folder || "~/";
+      startingFolderInput.value = (btn as HTMLElement).dataset['folder'] || "~/";
     });
   });
 
   // Setup preset buttons for file types
   document.querySelectorAll(".preset-btn[data-types]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      allowedFileTypesInput.value = (btn as HTMLElement).dataset.types || "*";
+      allowedFileTypesInput.value = (btn as HTMLElement).dataset['types'] || "*";
     });
   });
 }
@@ -76,7 +76,7 @@ async function openDialog() {
   openDialogBtn.textContent = "Dialog Open...";
 
   try {
-    const result = await electrobun.rpc?.request.openFileDialog(options);
+    const result = await (electrobun.rpc as any)?.request.openFileDialog(options);
 
     // Store in history
     resultHistory.unshift({

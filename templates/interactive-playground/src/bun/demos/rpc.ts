@@ -1,6 +1,5 @@
 class RPCTester {
   async doMath(data: { a: number; b: number; operation: string }): Promise<number> {
-    const startTime = Date.now();
     let result: number;
 
     switch (data.operation) {
@@ -24,23 +23,19 @@ class RPCTester {
         throw new Error(`Unknown operation: ${data.operation}`);
     }
 
-    const duration = Date.now() - startTime;
-    
+    // Duration: Date.now() - startTime
     // Don't send notification here - let the frontend handle timing and display
     // to avoid duplicate entries
-    
+
     return result;
   }
 
   async echoBigData(data: string): Promise<string> {
-    const startTime = Date.now();
-    
     // Simulate some processing time
     await new Promise(resolve => setTimeout(resolve, 100));
     
     const response = `Echo: ${data.slice(0, 100)}... (${data.length} chars)`;
-    const duration = Date.now() - startTime;
-    
+    // Duration: Date.now() - startTime
     // Don't send notification here - let the frontend handle timing and display
     // to avoid duplicate entries
 

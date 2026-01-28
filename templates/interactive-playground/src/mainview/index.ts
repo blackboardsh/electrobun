@@ -1,4 +1,4 @@
-import Electrobun, { Electroview } from "electrobun/view";
+import Electrobun, { Electroview, type WebviewTagElement } from "electrobun/view";
 import { type PlaygroundRPC } from "../bun/types/rpc";
 
 // Import components
@@ -174,9 +174,9 @@ class InteractivePlayground {
 
   private cleanupWebviews() {
     // Find all webview elements and properly remove them
-    const webviews = document.querySelectorAll('electrobun-webview');
-    
-    webviews.forEach((webview: any) => {
+    const webviews = document.querySelectorAll<WebviewTagElement>('electrobun-webview');
+
+    webviews.forEach((webview) => {
       try {
         // Call the native remove method if it exists
         if (typeof webview.remove === 'function') {

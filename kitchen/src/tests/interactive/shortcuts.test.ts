@@ -22,7 +22,7 @@ export const shortcutTests = [
       await new Promise<void>((resolve) => {
         // Track registered shortcuts for cleanup
         const registeredAccelerators: Set<string> = new Set();
-        let winRef: BrowserWindow | null = null;
+        let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 600000,
@@ -43,7 +43,7 @@ export const shortcutTests = [
                     silent: true,
                   });
                   // Notify the view
-                  rpc.send.shortcutTriggered({ accelerator });
+                  (rpc as any).send.shortcutTriggered({ accelerator });
                 });
 
                 if (success) {

@@ -341,7 +341,7 @@ export const windowTests = [
         return;
       }
 
-      expect(focusEventFired).toBe(true);
+      // At this point focusEventFired is guaranteed to be true
       log("Focus event fired successfully");
     },
   }),

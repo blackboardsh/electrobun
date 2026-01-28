@@ -1,8 +1,10 @@
 import ElectrobunEvent from "./event";
 
+type TrayClickedData = { id: number; action: string; data?: unknown };
+
 export default {
-  trayClicked: (data) =>
-    new ElectrobunEvent<{ id: number; action: string }, { allow: boolean }>(
+  trayClicked: (data: TrayClickedData) =>
+    new ElectrobunEvent<TrayClickedData, { allow: boolean }>(
       "tray-clicked",
       data
     ),

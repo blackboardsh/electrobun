@@ -1,6 +1,6 @@
 // Interactive Window Event Tests
 
-import { defineTest, expect } from "../../test-framework/types";
+import { defineTest } from "../../test-framework/types";
 import { BrowserView, BrowserWindow } from "electrobun/bun";
 
 export const windowEventTests = [
@@ -23,18 +23,9 @@ export const windowEventTests = [
       await new Promise<void>((resolve, reject) => {
         let moveDetected = false;
         let resizeDetected = false;
-        let winRef: BrowserWindow | null = null;
+        let winRef: BrowserWindow<any> | null = null;
 
-        const rpc = BrowserView.defineRPC<{
-          requests: {
-            closeWindow: () => { success: boolean };
-          };
-          messages: {
-            updatePosition: { x: number; y: number };
-            updateSize: { width: number; height: number };
-            updateStatus: { moveDetected: boolean; resizeDetected: boolean };
-          };
-        }>({
+        const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 120000,
           handlers: {
             requests: {

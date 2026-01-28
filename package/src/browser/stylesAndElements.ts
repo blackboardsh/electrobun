@@ -1,3 +1,3 @@
 export const isAppRegionDrag = (e: MouseEvent) => {
-  return e.target?.classList.contains("electrobun-webkit-app-region-drag");
+  return (e.target as HTMLElement)?.classList?.contains("electrobun-webkit-app-region-drag");
 };

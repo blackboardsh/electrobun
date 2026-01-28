@@ -37,13 +37,13 @@ function init() {
   unregisterAllBtn.addEventListener("click", unregisterAllShortcuts);
   clearLogBtn.addEventListener("click", clearLog);
   document.getElementById("doneBtn")?.addEventListener("click", () => {
-    electrobun.rpc?.request.closeWindow({});
+    (electrobun.rpc as any)?.request.closeWindow({});
   });
 
   // Setup preset buttons
   document.querySelectorAll(".preset-btn[data-accelerator]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      acceleratorInput.value = (btn as HTMLElement).dataset.accelerator || "";
+      acceleratorInput.value = (btn as HTMLElement).dataset['accelerator'] || "";
     });
   });
 }
@@ -61,7 +61,7 @@ async function registerShortcut() {
   }
 
   try {
-    const result = await electrobun.rpc?.request.registerShortcut({ accelerator });
+    const result = await (electrobun.rpc as any)?.request.registerShortcut({ accelerator });
     if (result.success) {
       registeredShortcuts.set(accelerator, { count: 0 });
       addLog(`Registered: ${accelerator}`, "success");
@@ -84,7 +84,7 @@ async function unregisterCurrent() {
   }
 
   try {
-    await electrobun.rpc?.request.unregisterShortcut({ accelerator });
+    await (electrobun.rpc as any)?.request.unregisterShortcut({ accelerator });
     registeredShortcuts.delete(accelerator);
     addLog(`Unregistered: ${accelerator}`, "info");
     updateActiveShortcuts();
@@ -95,7 +95,7 @@ async function unregisterCurrent() {
 
 async function unregisterByAccelerator(accelerator: string) {
   try {
-    await electrobun.rpc?.request.unregisterShortcut({ accelerator });
+    await (electrobun.rpc as any)?.request.unregisterShortcut({ accelerator });
     registeredShortcuts.delete(accelerator);
     addLog(`Unregistered: ${accelerator}`, "info");
     updateActiveShortcuts();
@@ -111,7 +111,7 @@ async function unregisterAllShortcuts() {
   }
 
   try {
-    await electrobun.rpc?.request.unregisterAllShortcuts({});
+    await (electrobun.rpc as any)?.request.unregisterAllShortcuts({});
     const count = registeredShortcuts.size;
     registeredShortcuts.clear();
     addLog(`Unregistered all ${count} shortcuts`, "success");
@@ -142,7 +142,7 @@ function updateActiveShortcuts() {
   // Add click handlers for remove buttons
   activeShortcutsEl.querySelectorAll(".remove-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const acc = (btn as HTMLElement).dataset.accelerator;
+      const acc = (btn as HTMLElement).dataset['accelerator'];
       if (acc) unregisterByAccelerator(acc);
     });
   });
@@ -184,7 +184,7 @@ function escapeHtml(str: string): string {
 }
 
 // Listen for shortcut triggers from bun
-electrobun.rpc?.addMessageListener("shortcutTriggered", (data: { accelerator: string }) => {
+(electrobun.rpc as any)?.addMessageListener("shortcutTriggered", (data: { accelerator: string }) => {
   const shortcut = registeredShortcuts.get(data.accelerator);
   if (shortcut) {
     shortcut.count++;

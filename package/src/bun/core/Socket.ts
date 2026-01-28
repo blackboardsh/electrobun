@@ -96,7 +96,7 @@ const startRPCServer = () => {
               socketMap[webviewId].socket = ws;
             }
           },
-          close(ws, code, reason) {
+          close(ws, _code, _reason) {
             if (!ws?.data) {
               return;
             }

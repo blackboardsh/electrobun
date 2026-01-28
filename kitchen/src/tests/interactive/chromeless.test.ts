@@ -1,6 +1,6 @@
 // Interactive Chromeless/Transparent Window Tests
 
-import { defineTest, expect } from "../../test-framework/types";
+import { defineTest } from "../../test-framework/types";
 import { BrowserView, BrowserWindow } from "electrobun/bun";
 
 export const chromelessTests = [
@@ -22,18 +22,12 @@ export const chromelessTests = [
 
       log("Opening custom titlebar test window");
 
-      await new Promise<void>((resolve, reject) => {
-        let winRef: BrowserWindow | null = null;
+      await new Promise<void>((resolve, _reject) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let winRef: BrowserWindow<any> | null = null;
         let isMaximized = false;
 
-        const rpc = BrowserView.defineRPC<{
-          requests: {
-            closeWindow: () => { success: boolean };
-            minimizeWindow: () => { success: boolean };
-            maximizeWindow: () => { success: boolean };
-          };
-          messages: {};
-        }>({
+        const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 120000,
           handlers: {
             requests: {
@@ -115,15 +109,11 @@ export const chromelessTests = [
 
       log("Opening transparent window test");
 
-      await new Promise<void>((resolve, reject) => {
-        let winRef: BrowserWindow | null = null;
+      await new Promise<void>((resolve, _reject) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let winRef: BrowserWindow<any> | null = null;
 
-        const rpc = BrowserView.defineRPC<{
-          requests: {
-            closeWindow: () => { success: boolean };
-          };
-          messages: {};
-        }>({
+        const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 120000,
           handlers: {
             requests: {

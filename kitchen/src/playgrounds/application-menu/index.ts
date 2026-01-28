@@ -142,6 +142,7 @@ const rpc = Electroview.defineRPC<any>({
 
 const electrobun = new Electrobun.Electroview({ rpc });
 
+// @ts-expect-error - reserved for tracking active config
 let currentConfig = "config1";
 
 function addLogEntry(action: string) {
@@ -187,7 +188,7 @@ function setActiveButton(configId: string) {
 document.addEventListener("DOMContentLoaded", () => {
   // Done button
   document.getElementById("doneBtn")?.addEventListener("click", () => {
-    electrobun.rpc?.request.closeWindow({});
+    (electrobun.rpc as any)?.request.closeWindow({});
   });
 
   // Clear log button
@@ -205,12 +206,12 @@ document.addEventListener("DOMContentLoaded", () => {
       currentConfig = config.id;
       setActiveButton(config.id);
       updateConfigDetails(config.id);
-      electrobun.rpc?.request.setApplicationMenu({ menu: config.menu });
+      (electrobun.rpc as any)?.request.setApplicationMenu({ menu: config.menu });
       addLogEntry(`Applied config: ${config.title}`);
     });
   });
 
   // Apply initial config
   const initialConfig = menuConfigs[0];
-  electrobun.rpc?.request.setApplicationMenu({ menu: initialConfig.menu });
+  (electrobun.rpc as any)?.request.setApplicationMenu({ menu: initialConfig.menu });
 });

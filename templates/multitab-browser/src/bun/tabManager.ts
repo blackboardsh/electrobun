@@ -3,7 +3,8 @@ import { type Tab, type Bookmark } from "./types/rpc";
 
 export class TabManager {
   private tabs: Map<string, Tab> = new Map();
-  private webviews: Map<string, BrowserView> = new Map();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private webviews: Map<string, BrowserView<any>> = new Map();
   private bookmarks: Map<string, Bookmark> = new Map();
   private nextTabId = 1;
   
@@ -30,15 +31,16 @@ export class TabManager {
     });
 
     // Set up webview event handlers
-    webview.on("page-title-updated", (event) => {
+    // Note: Some of these events may not be supported yet
+    (webview as any).on("page-title-updated", (event: any) => {
       const tab = this.tabs.get(id);
       if (tab) {
-        tab.title = event.data.title || "New Tab";
+        tab.title = event.data?.title || "New Tab";
         this.onTabUpdate?.(tab);
       }
     });
 
-    webview.on("did-start-loading", () => {
+    (webview as any).on("did-start-loading", () => {
       const tab = this.tabs.get(id);
       if (tab) {
         tab.isLoading = true;
@@ -46,7 +48,7 @@ export class TabManager {
       }
     });
 
-    webview.on("did-stop-loading", () => {
+    (webview as any).on("did-stop-loading", () => {
       const tab = this.tabs.get(id);
       if (tab) {
         tab.isLoading = false;
@@ -54,7 +56,7 @@ export class TabManager {
       }
     });
 
-    webview.on("did-navigate", (event) => {
+    webview.on("did-navigate", (event: any) => {
       const tab = this.tabs.get(id);
       if (tab && event.data.url) {
         tab.url = event.data.url;
@@ -82,7 +84,7 @@ export class TabManager {
   async closeTab(id: string): Promise<void> {
     const webview = this.webviews.get(id);
     if (webview) {
-      webview.destroy();
+      (webview as any).destroy();
       this.webviews.delete(id);
     }
     this.tabs.delete(id);
@@ -115,7 +117,7 @@ export class TabManager {
   async goBack(tabId: string): Promise<void> {
     const webview = this.webviews.get(tabId);
     if (webview) {
-      await webview.goBack();
+      await (webview as any).goBack();
       this.updateNavigationState(tabId);
     }
   }
@@ -123,7 +125,7 @@ export class TabManager {
   async goForward(tabId: string): Promise<void> {
     const webview = this.webviews.get(tabId);
     if (webview) {
-      await webview.goForward();
+      await (webview as any).goForward();
       this.updateNavigationState(tabId);
     }
   }
@@ -131,7 +133,7 @@ export class TabManager {
   async reload(tabId: string): Promise<void> {
     const webview = this.webviews.get(tabId);
     if (webview) {
-      await webview.reload();
+      await (webview as any).reload();
       const tab = this.tabs.get(tabId);
       if (tab) {
         tab.isLoading = true;

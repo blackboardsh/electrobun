@@ -1,6 +1,6 @@
 // Interactive Clipboard Tests - Playground
 
-import { defineTest, expect } from "../../test-framework/types";
+import { defineTest } from "../../test-framework/types";
 import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
 
 export const clipboardInteractiveTests = [
@@ -20,7 +20,8 @@ export const clipboardInteractiveTests = [
       log("Opening clipboard playground window");
 
       await new Promise<void>((resolve) => {
-        let winRef: BrowserWindow | null = null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
           maxRequestTime: 600000,

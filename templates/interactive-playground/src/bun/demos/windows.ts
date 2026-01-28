@@ -1,7 +1,7 @@
 import { BrowserWindow } from "electrobun/bun";
 
 class WindowManager {
-  private windows = new Map<number, BrowserWindow>();
+  private windows = new Map<number, BrowserWindow<any>>();
   private nextId = 1;
 
   async createWindow(options: {
@@ -44,11 +44,11 @@ class WindowManager {
       this.onWindowClosed?.(id);
     });
 
-    window.on("resize", (event) => {
+    window.on("resize", (event: { data: unknown }) => {
       this.onWindowEvent?.({ type: 'resize', id, data: event.data });
     });
 
-    window.on("move", (event) => {
+    window.on("move", (event: { data: unknown }) => {
       this.onWindowEvent?.({ type: 'move', id, data: event.data });
     });
 
@@ -76,7 +76,7 @@ class WindowManager {
   async getWindowList() {
     return Array.from(this.windows.entries()).map(([id, window]) => ({
       id,
-      title: window.getTitle() || `Window ${id}`,
+      title: (window as any).getTitle?.() || `Window ${id}`,
     }));
   }
 

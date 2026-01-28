@@ -1,6 +1,4 @@
 export class MenuDemo {
-  private rpc: any;
-
   render() {
     return `
       <div class="demo-section">
@@ -53,7 +51,6 @@ export class MenuDemo {
   }
 
   initialize(rpc: any) {
-    this.rpc = rpc;
     const showContextBtn = document.getElementById('show-context-menu');
 
     showContextBtn?.addEventListener('click', async () => {

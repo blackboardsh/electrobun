@@ -1,28 +1,19 @@
 import Electrobun, { Electroview } from "electrobun/view";
 
-const rpc = Electroview.defineRPC<{
-  requests: {
-    closeWindow: () => { success: boolean };
-  };
-  messages: {
-    updatePosition: { x: number; y: number };
-    updateSize: { width: number; height: number };
-    updateStatus: { moveDetected: boolean; resizeDetected: boolean };
-  };
-}>({
+const rpc = Electroview.defineRPC<any>({
   maxRequestTime: 120000,
   handlers: {
     requests: {},
     messages: {
-      updatePosition: ({ x, y }) => {
+      updatePosition: ({ x, y }: { x: number; y: number }) => {
         const el = document.getElementById("position");
         if (el) el.textContent = `${x}, ${y}`;
       },
-      updateSize: ({ width, height }) => {
+      updateSize: ({ width, height }: { width: number; height: number }) => {
         const el = document.getElementById("size");
         if (el) el.textContent = `${width} x ${height}`;
       },
-      updateStatus: ({ moveDetected, resizeDetected }) => {
+      updateStatus: ({ moveDetected, resizeDetected }: { moveDetected: boolean; resizeDetected: boolean }) => {
         if (moveDetected) {
           document.getElementById("move-indicator")?.classList.add("detected");
           const moveStatus = document.getElementById("move-status");
@@ -51,6 +42,6 @@ const electrobun = new Electrobun.Electroview({ rpc });
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("closeBtn")?.addEventListener("click", () => {
-    electrobun.rpc?.request.closeWindow({});
+    (electrobun.rpc as any)?.request.closeWindow({});
   });
 });

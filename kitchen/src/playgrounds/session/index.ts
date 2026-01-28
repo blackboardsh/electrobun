@@ -12,6 +12,6 @@ const electrobun = new Electrobun.Electroview({ rpc });
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("doneBtn")?.addEventListener("click", () => {
-    electrobun.rpc?.request.closeWindow({});
+    (electrobun.rpc as any)?.request.closeWindow({});
   });
 });

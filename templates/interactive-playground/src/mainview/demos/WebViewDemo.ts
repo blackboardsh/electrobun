@@ -1,6 +1,6 @@
-export class WebViewDemo {
-  private rpc: any;
+import type { WebviewTagElement } from "electrobun/view";
 
+export class WebViewDemo {
   render() {
     return `
       <div class="demo-section">
@@ -177,14 +177,13 @@ export class WebViewDemo {
     `;
   }
 
-  initialize(rpc: any) {
-    this.rpc = rpc;
+  initialize(_rpc: any) {
     this.setupEventListeners();
     this.setupWebViewEvents();
   }
 
   private setupEventListeners() {
-    const webview = document.getElementById('main-webview') as any;
+    const webview = document.getElementById('main-webview') as WebviewTagElement | null;
     const urlBar = document.getElementById('url-bar') as HTMLInputElement;
 
     // Safety check: If webview doesn't exist, don't set up listeners
@@ -298,11 +297,9 @@ export class WebViewDemo {
     });
 
     // Element masking
-    let maskActive = false;
     document.getElementById('add-mask')?.addEventListener('click', () => {
       if (webview && typeof webview.addMaskSelector === 'function') {
         webview.addMaskSelector('.element-to-mask');
-        maskActive = true;
         this.addWebViewEvent('Mask added: .element-to-mask');
       }
     });
@@ -310,7 +307,6 @@ export class WebViewDemo {
     document.getElementById('remove-mask')?.addEventListener('click', () => {
       if (webview && typeof webview.removeMaskSelector === 'function') {
         webview.removeMaskSelector('.element-to-mask');
-        maskActive = false;
         this.addWebViewEvent('Mask removed: .element-to-mask');
       }
     });
@@ -321,8 +317,6 @@ export class WebViewDemo {
     
     if (draggable && dragCoords) {
       draggable.addEventListener('dragstart', (e: DragEvent) => {
-        // Store initial offset
-        const rect = draggable.getBoundingClientRect();
         (e.dataTransfer as any).effectAllowed = 'move';
       });
 
@@ -342,7 +336,7 @@ export class WebViewDemo {
     }
 
     // Add mask selectors to all webviews (with safety checks)
-    document.querySelectorAll('electrobun-webview').forEach((w: any) => {
+    document.querySelectorAll<WebviewTagElement>('electrobun-webview').forEach((w) => {
       if (w && typeof w.addMaskSelector === 'function') {
         w.addMaskSelector("header");
       }
@@ -351,8 +345,8 @@ export class WebViewDemo {
   }
 
   private setupWebViewEvents() {
-    const webview = document.getElementById('main-webview') as any;
-    const cmdClickTestWebview = document.getElementById('cmd-click-test') as any;
+    const webview = document.getElementById('main-webview') as WebviewTagElement | null;
+    const cmdClickTestWebview = document.getElementById('cmd-click-test') as WebviewTagElement | null;
     const urlBar = document.getElementById('url-bar') as HTMLInputElement;
     
     // Setup events for main webview

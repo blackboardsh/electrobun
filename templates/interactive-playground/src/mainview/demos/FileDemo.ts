@@ -140,7 +140,7 @@ export class FileDemo {
       const dt = e.dataTransfer;
       if (!dt) return;
 
-      const files = Array.from(dt.files).map(file => file.path || file.name);
+      const files = Array.from(dt.files).map(file => (file as any).path || file.name);
       this.selectedFiles = files;
       this.updateFileList();
     });

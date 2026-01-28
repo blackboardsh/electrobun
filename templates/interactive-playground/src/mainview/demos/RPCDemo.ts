@@ -98,7 +98,7 @@ export class RPCDemo {
       } catch (error) {
         this.addTestResult({
           operation: `${a} ${operation} ${b}`,
-          result: `Error: ${error.message}`,
+          result: `Error: ${(error as Error).message}`,
           duration: 0
         });
       }
@@ -121,7 +121,7 @@ export class RPCDemo {
       } catch (error) {
         this.addTestResult({
           operation: `Echo ${this.formatBytes(size)}`,
-          result: `Error: ${error.message}`,
+          result: `Error: ${(error as Error).message}`,
           duration: 0
         });
       }
@@ -144,7 +144,7 @@ export class RPCDemo {
       } catch (error) {
         this.addTestResult({
           operation: `Performance: ${count} × ${this.formatBytes(size)}`,
-          result: `Error: ${error.message}`,
+          result: `Error: ${(error as Error).message}`,
           duration: 0
         });
       } finally {

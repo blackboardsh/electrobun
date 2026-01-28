@@ -1,4 +1,4 @@
-import Electrobun, { BrowserWindow, BrowserView, Utils } from "electrobun/bun";
+import { BrowserWindow, BrowserView, Utils } from "electrobun/bun";
 
 console.log("🌐 Multitab Browser starting...");
 
@@ -8,7 +8,7 @@ let nextTabId = 1;
 let mainRPC: any = null; // Will be set after window creation
 
 // Set up RPC using the correct API pattern from interactive-playground
-const rpc = BrowserView.defineRPC({
+const rpc = BrowserView.defineRPC<any>({
   maxRequestTime: 10000,
   handlers: {
     requests: {
@@ -111,10 +111,10 @@ const rpc = BrowserView.defineRPC({
       },
     },
     messages: {
-      "*": (messageName: string, payload: any) => {
-        console.log(`📨 Browser message: ${messageName}`, payload);
+      "*": (messageName: string | number | symbol, payload: unknown) => {
+        console.log(`📨 Browser message: ${String(messageName)}`, payload);
       },
-    },
+    } as any,
   },
 });
 

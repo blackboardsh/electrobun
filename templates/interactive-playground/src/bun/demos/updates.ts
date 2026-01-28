@@ -12,8 +12,8 @@ class UpdateManager {
 
       return {
         updateAvailable: updateInfo.updateAvailable,
-        currentVersion: Electrobun.Updater.getLocalVersion?.() || "0.0.19-beta.118",
-        latestVersion: updateInfo.latestVersion,
+        currentVersion: (Electrobun.Updater as any).getLocalVersion?.() || "0.0.19-beta.118",
+        latestVersion: (updateInfo as any).latestVersion,
       };
     } catch (error) {
       console.error("Update check error:", error);
@@ -26,7 +26,7 @@ class UpdateManager {
       return {
         updateAvailable: false,
         currentVersion: "0.0.19-beta.118",
-        error: error.message
+        error: (error as Error).message
       };
     }
   }
@@ -63,7 +63,7 @@ class UpdateManager {
         progress: 0
       });
 
-      return { success: false, error: error.message };
+      return { success: false, error: (error as Error).message };
     }
   }
 
@@ -90,7 +90,7 @@ class UpdateManager {
         progress: 0
       });
 
-      return { success: false, error: error.message };
+      return { success: false, error: (error as Error).message };
     }
   }
 

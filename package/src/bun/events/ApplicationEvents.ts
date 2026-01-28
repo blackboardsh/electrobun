@@ -1,18 +1,21 @@
 import ElectrobunEvent from "./event";
 
+type MenuClickedData = { id?: number; action: string; data?: unknown };
+type OpenUrlData = { url: string };
+
 export default {
-  applicationMenuClicked: (data) =>
-    new ElectrobunEvent<{ id: number; action: string }, { allow: boolean }>(
+  applicationMenuClicked: (data: MenuClickedData) =>
+    new ElectrobunEvent<MenuClickedData, { allow: boolean }>(
       "application-menu-clicked",
       data
     ),
-  contextMenuClicked: (data) =>
-    new ElectrobunEvent<{ id: number; action: string }, { allow: boolean }>(
+  contextMenuClicked: (data: MenuClickedData) =>
+    new ElectrobunEvent<MenuClickedData, { allow: boolean }>(
       "context-menu-clicked",
       data
     ),
-  openUrl: (data) =>
-    new ElectrobunEvent<{ url: string }, void>(
+  openUrl: (data: OpenUrlData) =>
+    new ElectrobunEvent<OpenUrlData, void>(
       "open-url",
       data
     ),

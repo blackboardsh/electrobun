@@ -33,14 +33,14 @@ function init() {
   readBtn.addEventListener("click", readClipboard);
   writeBtn.addEventListener("click", writeClipboard);
   doneBtn.addEventListener("click", () => {
-    electrobun.rpc?.request.closeWindow({});
+    (electrobun.rpc as any)?.request.closeWindow({});
   });
 }
 
 async function readClipboard() {
   try {
     addLog("Reading clipboard...");
-    const result = await electrobun.rpc?.request.readClipboard({});
+    const result = await (electrobun.rpc as any)?.request.readClipboard({});
 
     if (result.text) {
       readResult.innerHTML = `<span class="clipboard-content">${escapeHtml(result.text)}</span>`;
@@ -71,7 +71,7 @@ async function writeClipboard() {
 
   try {
     addLog(`Writing: "${truncate(text, 50)}"...`);
-    await electrobun.rpc?.request.writeClipboard({ text });
+    await (electrobun.rpc as any)?.request.writeClipboard({ text });
     writeStatus.className = "status-box success";
     writeStatus.textContent = "Text written to clipboard! Try pasting below.";
     addLog("Write successful", "success");

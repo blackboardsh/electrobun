@@ -1,6 +1,5 @@
-import {  native, toCString, ffi } from "../proc/native";
+import { native, toCString, ffi } from "../proc/native";
 import * as fs from "fs";
-import { execSync } from "child_process";
 import electrobunEventEmitter from "../events/eventEmitter";
 import {
   type RPCSchema,
@@ -12,17 +11,14 @@ import {
 } from "rpc-anywhere";
 import { Updater } from "./Updater";
 import { BuildConfig } from "./BuildConfig";
-import type { BuiltinBunToWebviewSchema,BuiltinWebviewToBunSchema } from "../../browser/builtinrpcSchema";
 import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
 import { randomBytes } from "crypto";
-import {FFIType, type Pointer}  from 'bun:ffi';
+import { type Pointer } from 'bun:ffi';
 
 const BrowserViewMap: {
   [id: number]: BrowserView<any>;
 } = {};
 let nextWebviewId = 1;
-
-const CHUNK_SIZE = 1024 * 4; // 4KB
 
 type BrowserViewOptions<T = undefined> = {
   url: string | null;
@@ -50,6 +46,10 @@ interface ElectrobunWebviewRPCSChema {
   webview: RPCSchema;
 }
 
+interface RPCWithTransport {
+  setTransport: (transport: { send: (msg: unknown) => void; registerHandler: (handler: (msg: unknown) => void) => void }) => void;
+}
+
 const hash = await Updater.localInfo.hash();
 const buildConfig = await BuildConfig.get();
 
@@ -69,12 +69,12 @@ const defaultOptions: Partial<BrowserViewOptions> = {
 // but we also want a randomId to separate different instances of the same app
 const randomId = Math.random().toString(36).substring(7);
 
-export class BrowserView<T> {
+export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
   id: number = nextWebviewId++;
-  ptr: Pointer;
+  ptr!: Pointer;
   hostWebviewId?: number;
-  windowId: number;
-  renderer: 'cef' | 'native';
+  windowId!: number;
+  renderer!: 'cef' | 'native';
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
@@ -91,37 +91,40 @@ export class BrowserView<T> {
     width: 800,
     height: 600,
   };
-  pipePrefix: string;
-  inStream: fs.WriteStream;
-  outStream: ReadableStream<Uint8Array>;
-  secretKey: Uint8Array;
-  rpc?: T;  
-  rpcHandler?: (msg: any) => void;
-  navigationRules: string | null;
+  pipePrefix!: string;
+  inStream!: fs.WriteStream;
+  outStream!: ReadableStream<Uint8Array>;
+  secretKey!: Uint8Array;
+  rpc?: T;
+  rpcHandler?: (msg: unknown) => void;
+  navigationRules: string | null = null;
 
   constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
-    // const rpc = options.rpc;        
-    
+    // const rpc = options.rpc;
+
     this.url = options.url || defaultOptions.url || null;
     this.html = options.html || defaultOptions.html || null;
     this.preload = options.preload || defaultOptions.preload || null;
-    this.frame = options.frame
-      ? { ...defaultOptions.frame, ...options.frame }
-      : { ...defaultOptions.frame };
+    this.frame = {
+      x: options.frame?.x ?? defaultOptions.frame!.x,
+      y: options.frame?.y ?? defaultOptions.frame!.y,
+      width: options.frame?.width ?? defaultOptions.frame!.width,
+      height: options.frame?.height ?? defaultOptions.frame!.height,
+    };
     this.rpc = options.rpc;
-    this.secretKey = new Uint8Array(randomBytes(32));    
+    this.secretKey = new Uint8Array(randomBytes(32));
     this.partition = options.partition || null;
     // todo (yoav): since collisions can crash the app add a function that checks if the
     // file exists first
     this.pipePrefix = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_${this.id}`;
     this.hostWebviewId = options.hostWebviewId;
-    this.windowId = options.windowId;
+    this.windowId = options.windowId ?? 0;
     this.autoResize = options.autoResize === false ? false : true;
     this.navigationRules = options.navigationRules || null;
-    this.renderer = options.renderer || defaultOptions.renderer;
+    this.renderer = options.renderer ?? defaultOptions.renderer ?? 'native';
 
     BrowserViewMap[this.id] = this;
-    this.ptr = this.init();
+    this.ptr = this.init() as Pointer;
     
     // If HTML content was provided, load it after webview creation
     if (this.html) {
@@ -168,18 +171,18 @@ export class BrowserView<T> {
     
   }
 
-  createStreams() {    
+  createStreams() {
     if (!this.rpc) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.rpc = BrowserView.defineRPC({
         handlers: { requests: {}, messages: {} },
-      });
+      }) as any;
     }
-    
-    this.rpc.setTransport(this.createTransport());
-    
+
+    this.rpc!.setTransport(this.createTransport());
   }
 
-  sendMessageToWebviewViaExecute(jsonMessage) {
+  sendMessageToWebviewViaExecute(jsonMessage: unknown) {
     const stringifiedMessage =
       typeof jsonMessage === "string"
         ? jsonMessage
@@ -189,7 +192,7 @@ export class BrowserView<T> {
     this.executeJavascript(wrappedMessage);
   }
 
-  sendInternalMessageViaExecute(jsonMessage) {
+  sendInternalMessageViaExecute(jsonMessage: unknown) {
     const stringifiedMessage =
       typeof jsonMessage === "string"
         ? jsonMessage
@@ -258,7 +261,7 @@ export class BrowserView<T> {
       | "download-progress"
       | "download-completed"
       | "download-failed",
-    handler
+    handler: (event: unknown) => void
   ) {
     const specificName = `${name}-${this.id}`;
     electrobunEventEmitter.on(specificName, handler);
@@ -280,8 +283,8 @@ export class BrowserView<T> {
           }
         }
       },
-      registerHandler(handler) {
-        that.rpcHandler = handler;       
+      registerHandler(handler: (msg: unknown) => void) {
+        that.rpcHandler = handler;
       },
     };
   };
@@ -342,7 +345,8 @@ export class BrowserView<T> {
       messages: WebviewSchema["messages"];
     };
 
-    type mixedBunSchema = {      
+    type mixedBunSchema = {
+      requests: WebviewSchema["requests"];
       messages: BunSchema["messages"];
     };
 
@@ -367,7 +371,8 @@ export class BrowserView<T> {
       // while types in here are borked, they resolve correctly/bubble up to the defineRPC call site.
       rpc.addMessageListener(
         "*",
-        (messageName: keyof BunSchema["messages"], payload) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (messageName: keyof BunSchema["messages"], payload: any) => {
           const globalHandler = messageHandlers["*"];
           if (globalHandler) {
             globalHandler(messageName, payload);

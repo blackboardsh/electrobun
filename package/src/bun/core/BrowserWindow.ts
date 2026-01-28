@@ -1,8 +1,7 @@
 import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
-import { type RPC } from "rpc-anywhere";
-import {FFIType} from 'bun:ffi'
+import { type Pointer } from 'bun:ffi';
 import { BuildConfig } from "./BuildConfig";
 
 const buildConfig = await BuildConfig.get();
@@ -50,18 +49,23 @@ const defaultOptions: WindowOptionsType = {
   navigationRules: null,
 };
 
-export const BrowserWindowMap = {};
+export const BrowserWindowMap: { [id: number]: BrowserWindow<RPCWithTransport> } = {};
 
-export class BrowserWindow<T> {
+interface RPCWithTransport {
+  setTransport: (transport: { send: (msg: unknown) => void; registerHandler: (handler: (msg: unknown) => void) => void }) => void;
+}
+
+export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
   id: number = nextWindowId++;
-  ptr: FFIType.ptr;
+  ptr!: Pointer;
   title: string = "Electrobun";
   state: "creating" | "created" = "creating";
   url: string | null = null;
   html: string | null = null;
   preload: string | null = null;
-  renderer:  'native' | 'cef';
+  renderer: 'native' | 'cef' = 'native';
   transparent: boolean = false;
+  navigationRules: string | null = null;
   frame: {
     x: number;
     y: number;
@@ -74,7 +78,7 @@ export class BrowserWindow<T> {
     height: 600,
   };
   // todo (yoav): make this an array of ids or something
-  webviewId: number;
+  webviewId!: number;
 
   constructor(options: Partial<WindowOptionsType<T>> = defaultOptions) {
     this.title = options.title || "New Window";
@@ -139,7 +143,7 @@ export class BrowserWindow<T> {
       },
       titleBarStyle: titleBarStyle || "default",
       transparent: transparent ?? false,
-    });
+    }) as Pointer;
 
     BrowserWindowMap[this.id] = this;
 
@@ -280,7 +284,7 @@ export class BrowserWindow<T> {
 
   // todo (yoav): move this to a class that also has off, append, prepend, etc.
   // name should only allow browserWindow events
-  on(name, handler) {
+  on(name: string, handler: (event: unknown) => void) {
     const specificName = `${name}-${this.id}`;
     electrobunEventEmitter.on(specificName, handler);
   }

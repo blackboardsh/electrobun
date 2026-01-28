@@ -1,4 +1,4 @@
-import Electrobun, { BrowserWindow, BrowserView, createRPC, Utils, type RPCSchema } from "electrobun/bun";
+import { BrowserWindow, BrowserView, Utils, type RPCSchema } from "electrobun/bun";
 
 // Define RPC schema for photo saving
 export type PhotoBoothRPC = {
@@ -38,7 +38,7 @@ const photoBoothRPC = BrowserView.defineRPC<PhotoBoothRPC>({
           
           // Show save dialog using Utils
           const chosenPaths = await Utils.openFileDialog({
-            startingFolder: Bun.env.HOME || "/",
+            startingFolder: Bun.env['HOME'] || "/",
             allowedFileTypes: "png",
             canChooseFiles: false,
             canChooseDirectory: true,
@@ -65,7 +65,7 @@ const photoBoothRPC = BrowserView.defineRPC<PhotoBoothRPC>({
           console.error("Error saving photo:", error);
           return { 
             success: false, 
-            error: error.message 
+            error: (error as Error).message 
           };
         }
       }

@@ -1,13 +1,14 @@
 import ElectrobunEvent from "./event";
 
+type IdData = { id: number };
+type ResizeData = { id: number; x: number; y: number; width: number; height: number };
+type MoveData = { id: number; x: number; y: number };
+
 export default {
-  close: (data) => new ElectrobunEvent<{ id: number }, {}>("close", data),
-  resize: (data) =>
-    new ElectrobunEvent<
-      { id: number; x: number; y: number; width: number; height: number },
-      {}
-    >("resize", data),
-  move: (data) =>
-    new ElectrobunEvent<{ id: number; x: number; y: number }, {}>("move", data),
-  focus: (data) => new ElectrobunEvent<{ id: number }, {}>("focus", data),
+  close: (data: IdData) => new ElectrobunEvent<IdData, {}>("close", data),
+  resize: (data: ResizeData) =>
+    new ElectrobunEvent<ResizeData, {}>("resize", data),
+  move: (data: MoveData) =>
+    new ElectrobunEvent<MoveData, {}>("move", data),
+  focus: (data: IdData) => new ElectrobunEvent<IdData, {}>("focus", data),
 };

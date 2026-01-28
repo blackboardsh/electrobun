@@ -20,7 +20,7 @@ const rpc = Electroview.defineRPC<TestRunnerRPC>({
       testLog: ({ testId, message }) => {
         console.log(`[${testId}] ${message}`);
       },
-      allCompleted: ({ results }) => {
+      allCompleted: ({ results: _results }) => {
         setButtonsEnabled(true);
         updateSummary();
         console.log('All tests completed');
@@ -64,7 +64,7 @@ let btnRunInteractive: HTMLButtonElement;
 let modal: HTMLElement;
 let modalTitle: HTMLElement;
 let modalInstructions: HTMLElement;
-let modalButtons: HTMLElement;
+let _modalButtons: HTMLElement;
 let btnStart: HTMLButtonElement;
 let btnPass: HTMLButtonElement;
 let btnFail: HTMLButtonElement;
@@ -73,7 +73,8 @@ let notesInput: HTMLInputElement;
 
 // Modal mode
 type ModalMode = 'legacy' | 'ready' | 'verify';
-let currentModalMode: ModalMode = 'legacy';
+// @ts-expect-error - reserved for tracking modal state
+let _currentModalMode: ModalMode = 'legacy';
 
 // Initialize
 async function init() {
@@ -88,7 +89,7 @@ async function init() {
   modal = document.getElementById('interactive-modal')!;
   modalTitle = document.getElementById('modal-title')!;
   modalInstructions = document.getElementById('modal-instructions')!;
-  modalButtons = document.getElementById('modal-buttons')!;
+  _modalButtons = document.getElementById('modal-buttons')!;
   btnStart = document.getElementById('btn-start')! as HTMLButtonElement;
   btnPass = document.getElementById('btn-pass')! as HTMLButtonElement;
   btnFail = document.getElementById('btn-fail')! as HTMLButtonElement;
@@ -119,7 +120,7 @@ async function init() {
   testList.addEventListener('click', async (e) => {
     const target = e.target as HTMLElement;
     if (target.classList.contains('run-btn')) {
-      const testId = target.dataset.testId;
+      const testId = target.dataset['testId'];
       if (testId) {
         await runSingleTest(testId);
       }
@@ -320,7 +321,7 @@ async function runInteractiveTests() {
 
 function showInteractiveModal(testId: string, instructions: string[], mode: ModalMode) {
   currentInteractiveTestId = testId;
-  currentModalMode = mode;
+  _currentModalMode =mode;
   const test = tests.find(t => t.id === testId);
 
   modalTitle.textContent = test?.name || 'Interactive Test';
@@ -353,7 +354,7 @@ function showInteractiveModal(testId: string, instructions: string[], mode: Moda
 
 function showVerificationModal(testId: string) {
   currentInteractiveTestId = testId;
-  currentModalMode = 'verify';
+  _currentModalMode ='verify';
   const test = tests.find(t => t.id === testId);
 
   modalTitle.textContent = `Verify: ${test?.name || 'Test'}`;

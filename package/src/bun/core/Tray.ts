@@ -2,10 +2,12 @@ import { ffi, type MenuItemConfig } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { VIEWS_FOLDER } from "./Paths";
 import { join } from "path";
-import {FFIType} from 'bun:ffi';
+import { type Pointer } from 'bun:ffi';
+
+type NonDividerMenuItem = Exclude<MenuItemConfig, { type: "divider" | "separator" }>;
 
 let nextTrayId = 1;
-const TrayMap = {};
+const TrayMap: { [id: number]: Tray } = {};
 
 type ConstructorOptions = {
   title?: string;
@@ -17,7 +19,7 @@ type ConstructorOptions = {
 
 export class Tray {
   id: number = nextTrayId++;
-  ptr: FFIType.ptr;
+  ptr: Pointer | null = null;
 
   constructor({
     title = "",
@@ -34,7 +36,7 @@ export class Tray {
         template,
         width,
         height,
-      });
+      }) as Pointer;
     } catch (error) {
       console.warn('Tray creation failed:', error);
       console.warn('System tray functionality may not be available on this platform');
@@ -75,7 +77,7 @@ export class Tray {
     });
   }
 
-  on(name: "tray-clicked", handler) {
+  on(name: "tray-clicked", handler: (event: unknown) => void) {
     const specificName = `${name}-${this.id}`;
     electrobunEventEmitter.on(specificName, handler);
   }
@@ -110,22 +112,23 @@ const menuConfigWithDefaults = (
 ): Array<MenuItemConfig> => {
   return menu.map((item) => {
     if (item.type === "divider" || item.type === "separator") {
-      return { type: "divider" };
+      return { type: "divider" } as const;
     } else {
+      const menuItem = item as NonDividerMenuItem;
       // Use shared serialization method
-      const actionWithDataId = ffi.internal.serializeMenuAction(item.action || "", item.data);
-      
+      const actionWithDataId = ffi.internal.serializeMenuAction(menuItem.action || "", menuItem.data);
+
       return {
-        label: item.label || "",
-        type: item.type || "normal",
+        label: menuItem.label || "",
+        type: menuItem.type || "normal",
         action: actionWithDataId,
         // default enabled to true unless explicitly set to false
-        enabled: item.enabled === false ? false : true,
-        checked: Boolean(item.checked),
-        hidden: Boolean(item.hidden),
-        tooltip: item.tooltip || undefined,
-        ...(item.submenu
-          ? { submenu: menuConfigWithDefaults(item.submenu) }
+        enabled: menuItem.enabled === false ? false : true,
+        checked: Boolean(menuItem.checked),
+        hidden: Boolean(menuItem.hidden),
+        tooltip: menuItem.tooltip || undefined,
+        ...(menuItem.submenu
+          ? { submenu: menuConfigWithDefaults(menuItem.submenu) }
           : {}),
       };
     }

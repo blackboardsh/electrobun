@@ -1,7 +1,7 @@
 // RPC Tests - Tests for bidirectional RPC communication
 
 import { defineTest, expect } from "../test-framework/types";
-import { BrowserView, type RPCSchema } from "electrobun/bun";
+import { BrowserView } from "electrobun/bun";
 import type { TestHarnessRPC } from "../test-harness/index";
 
 // Create RPC config for test harness
