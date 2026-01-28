@@ -449,6 +449,10 @@ static std::unique_ptr<StatusItemTarget> g_appMenuTarget = nullptr;
 static std::map<UINT, std::string> g_menuItemActions;
 static UINT g_nextMenuId = WM_USER + 1000;  // Start menu IDs from a safe range
 
+// Accelerator table management for menu keyboard shortcuts
+static std::vector<ACCEL> g_menuAccelerators;
+static HACCEL g_hAccelTable = NULL;
+
 // Global state for custom window dragging
 static BOOL g_isMovingWindow = FALSE;
 static HWND g_targetWindow = NULL;
@@ -3596,6 +3600,17 @@ void handleApplicationMenuSelection(UINT menuId) {
                 if (focusedWindow) {
                     SendMessage(focusedWindow, WM_UNDO, 0, 0);
                 }
+            } else if (action == "__redo__") {
+                // Windows doesn't have a standard WM_REDO message
+                // Use Ctrl+Y keypress simulation or application-specific handling
+                HWND focusedWindow = GetFocus();
+                if (focusedWindow) {
+                    // Try sending Ctrl+Y keystroke
+                    keybd_event(VK_CONTROL, 0, 0, 0);
+                    keybd_event('Y', 0, 0, 0);
+                    keybd_event('Y', 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+                }
             } else if (action == "__cut__") {
                 HWND focusedWindow = GetFocus();
                 if (focusedWindow) {
@@ -3611,6 +3626,39 @@ void handleApplicationMenuSelection(UINT menuId) {
                 if (focusedWindow) {
                     SendMessage(focusedWindow, WM_PASTE, 0, 0);
                 }
+            } else if (action == "__pasteAndMatchStyle__") {
+                // Paste as plain text: get clipboard text and paste it without formatting
+                HWND focusedWindow = GetFocus();
+                if (focusedWindow && OpenClipboard(NULL)) {
+                    HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+                    if (hData) {
+                        wchar_t* pszText = static_cast<wchar_t*>(GlobalLock(hData));
+                        if (pszText) {
+                            // Clear clipboard and set as plain text
+                            std::wstring text(pszText);
+                            GlobalUnlock(hData);
+                            EmptyClipboard();
+
+                            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (text.length() + 1) * sizeof(wchar_t));
+                            if (hMem) {
+                                wchar_t* pMem = static_cast<wchar_t*>(GlobalLock(hMem));
+                                if (pMem) {
+                                    wcscpy(pMem, text.c_str());
+                                    GlobalUnlock(hMem);
+                                    SetClipboardData(CF_UNICODETEXT, hMem);
+                                }
+                            }
+                        }
+                    }
+                    CloseClipboard();
+                    // Now paste the plain text
+                    SendMessage(focusedWindow, WM_PASTE, 0, 0);
+                }
+            } else if (action == "__delete__") {
+                HWND focusedWindow = GetFocus();
+                if (focusedWindow) {
+                    SendMessage(focusedWindow, WM_CLEAR, 0, 0);
+                }
             } else if (action == "__selectAll__") {
                 HWND focusedWindow = GetFocus();
                 if (focusedWindow) {
@@ -3620,6 +3668,30 @@ void handleApplicationMenuSelection(UINT menuId) {
                 HWND activeWindow = GetActiveWindow();
                 if (activeWindow) {
                     ShowWindow(activeWindow, SW_MINIMIZE);
+                }
+            } else if (action == "__toggleFullScreen__") {
+                HWND activeWindow = GetActiveWindow();
+                if (activeWindow) {
+                    // Toggle between maximized and normal state
+                    WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+                    GetWindowPlacement(activeWindow, &wp);
+                    if (wp.showCmd == SW_MAXIMIZE) {
+                        ShowWindow(activeWindow, SW_RESTORE);
+                    } else {
+                        ShowWindow(activeWindow, SW_MAXIMIZE);
+                    }
+                }
+            } else if (action == "__zoom__") {
+                HWND activeWindow = GetActiveWindow();
+                if (activeWindow) {
+                    // Zoom toggles between maximized and normal (same as toggleFullScreen on Windows)
+                    WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+                    GetWindowPlacement(activeWindow, &wp);
+                    if (wp.showCmd == SW_MAXIMIZE) {
+                        ShowWindow(activeWindow, SW_RESTORE);
+                    } else {
+                        ShowWindow(activeWindow, SW_MAXIMIZE);
+                    }
                 }
             } else if (action == "__close__") {
                 HWND activeWindow = GetActiveWindow();
@@ -4141,43 +4213,215 @@ void handleMenuItemSelection(UINT menuId, NSStatusItem* statusItem) {
 
 
 
-// Function to set accelerator keys for menu items
-void setMenuItemAccelerator(HMENU menu, UINT menuId, const std::string& accelerator, UINT modifierMask = 0) {
-    if (accelerator.empty()) return;
-    
-    UINT key = 0;
-    UINT modifiers = 0;
-    
-    // Parse simple accelerators like "Ctrl+C", "Ctrl+V", etc.
-    if (accelerator.length() == 1) {
-        key = VkKeyScan(accelerator[0]) & 0xFF;
-        modifiers = FCONTROL;
-    } else if (accelerator.find("Ctrl+") == 0 && accelerator.length() == 6) {
-        char keyChar = accelerator[5];
-        key = VkKeyScan(keyChar) & 0xFF;
-        modifiers = FCONTROL;
-    } else if (accelerator.find("Alt+") == 0 && accelerator.length() == 5) {
-        char keyChar = accelerator[4];
-        key = VkKeyScan(keyChar) & 0xFF;
-        modifiers = FALT;
-    } else if (accelerator.find("Shift+") == 0 && accelerator.length() == 7) {
-        char keyChar = accelerator[6];
-        key = VkKeyScan(keyChar) & 0xFF;
-        modifiers = FSHIFT;
+// Helper to parse virtual key code from key string for menu accelerators
+static UINT getMenuVirtualKeyCode(const std::string& key) {
+    std::string lowerKey = key;
+    std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+
+    // Letters
+    if (lowerKey.length() == 1 && lowerKey[0] >= 'a' && lowerKey[0] <= 'z') {
+        return 'A' + (lowerKey[0] - 'a');
     }
-    
+    // Numbers
+    if (lowerKey.length() == 1 && lowerKey[0] >= '0' && lowerKey[0] <= '9') {
+        return '0' + (lowerKey[0] - '0');
+    }
+    // Function keys
+    if (lowerKey[0] == 'f' && lowerKey.length() >= 2) {
+        try {
+            int fNum = std::stoi(lowerKey.substr(1));
+            if (fNum >= 1 && fNum <= 24) return VK_F1 + (fNum - 1);
+        } catch (...) {}
+    }
+    // Special keys
+    if (lowerKey == "space" || lowerKey == " ") return VK_SPACE;
+    if (lowerKey == "return" || lowerKey == "enter") return VK_RETURN;
+    if (lowerKey == "tab") return VK_TAB;
+    if (lowerKey == "escape" || lowerKey == "esc") return VK_ESCAPE;
+    if (lowerKey == "backspace") return VK_BACK;
+    if (lowerKey == "delete" || lowerKey == "del") return VK_DELETE;
+    if (lowerKey == "insert") return VK_INSERT;
+    if (lowerKey == "up") return VK_UP;
+    if (lowerKey == "down") return VK_DOWN;
+    if (lowerKey == "left") return VK_LEFT;
+    if (lowerKey == "right") return VK_RIGHT;
+    if (lowerKey == "home") return VK_HOME;
+    if (lowerKey == "end") return VK_END;
+    if (lowerKey == "pageup") return VK_PRIOR;
+    if (lowerKey == "pagedown") return VK_NEXT;
+    // Symbols
+    if (lowerKey == "plus") return VK_OEM_PLUS;
+    if (lowerKey == "minus") return VK_OEM_MINUS;
+    if (lowerKey == "-") return VK_OEM_MINUS;
+    if (lowerKey == "=" || lowerKey == "+") return VK_OEM_PLUS;
+    if (lowerKey == "[") return VK_OEM_4;
+    if (lowerKey == "]") return VK_OEM_6;
+    if (lowerKey == "\\") return VK_OEM_5;
+    if (lowerKey == ";") return VK_OEM_1;
+    if (lowerKey == "'") return VK_OEM_7;
+    if (lowerKey == ",") return VK_OEM_COMMA;
+    if (lowerKey == ".") return VK_OEM_PERIOD;
+    if (lowerKey == "/") return VK_OEM_2;
+    if (lowerKey == "`") return VK_OEM_3;
+
+    return 0;
+}
+
+// Helper to parse modifiers from accelerator string for menu accelerators
+// Returns FCONTROL, FALT, FSHIFT flags (not MOD_* flags)
+static BYTE parseMenuModifiers(const std::string& accelerator, std::string& outKey) {
+    BYTE modifiers = FVIRTKEY;  // Always use virtual key codes
+    std::vector<std::string> parts;
+
+    // Split by '+'
+    size_t start = 0, end;
+    while ((end = accelerator.find('+', start)) != std::string::npos) {
+        parts.push_back(accelerator.substr(start, end - start));
+        start = end + 1;
+    }
+    parts.push_back(accelerator.substr(start));
+
+    // Last part is the key
+    outKey = parts.back();
+    parts.pop_back();
+
+    for (const auto& part : parts) {
+        std::string lowerPart = part;
+        std::transform(lowerPart.begin(), lowerPart.end(), lowerPart.begin(), ::tolower);
+
+        if (lowerPart == "command" || lowerPart == "cmd" ||
+            lowerPart == "commandorcontrol" || lowerPart == "cmdorctrl" ||
+            lowerPart == "control" || lowerPart == "ctrl") {
+            modifiers |= FCONTROL;
+        } else if (lowerPart == "alt" || lowerPart == "option") {
+            modifiers |= FALT;
+        } else if (lowerPart == "shift") {
+            modifiers |= FSHIFT;
+        }
+    }
+
+    return modifiers;
+}
+
+// Build display string for accelerator (e.g., "Ctrl+S", "Ctrl+Shift+N")
+static std::string buildAcceleratorDisplayString(const std::string& accelerator) {
+    std::string keyPart;
+    BYTE modifiers = parseMenuModifiers(accelerator, keyPart);
+
+    std::string display;
+    if (modifiers & FCONTROL) {
+        display += "Ctrl+";
+    }
+    if (modifiers & FALT) {
+        display += "Alt+";
+    }
+    if (modifiers & FSHIFT) {
+        display += "Shift+";
+    }
+
+    // Capitalize the key for display
+    std::string upperKey = keyPart;
+    if (!upperKey.empty()) {
+        upperKey[0] = toupper(upperKey[0]);
+    }
+
+    // Handle special key display names
+    std::string lowerKey = keyPart;
+    std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(), ::tolower);
+    if (lowerKey == "return" || lowerKey == "enter") {
+        upperKey = "Enter";
+    } else if (lowerKey == "escape" || lowerKey == "esc") {
+        upperKey = "Esc";
+    } else if (lowerKey == "delete" || lowerKey == "del") {
+        upperKey = "Del";
+    } else if (lowerKey == "backspace") {
+        upperKey = "Backspace";
+    } else if (lowerKey == "space") {
+        upperKey = "Space";
+    } else if (lowerKey == "pageup") {
+        upperKey = "PgUp";
+    } else if (lowerKey == "pagedown") {
+        upperKey = "PgDn";
+    } else if (lowerKey == "plus") {
+        upperKey = "+";
+    } else if (lowerKey == "minus") {
+        upperKey = "-";
+    }
+
+    display += upperKey;
+    return display;
+}
+
+// Rebuild the accelerator table from collected accelerators
+static void rebuildAcceleratorTable() {
+    if (g_hAccelTable) {
+        DestroyAcceleratorTable(g_hAccelTable);
+        g_hAccelTable = NULL;
+    }
+
+    if (!g_menuAccelerators.empty()) {
+        g_hAccelTable = CreateAcceleratorTableA(g_menuAccelerators.data(), (int)g_menuAccelerators.size());
+        if (g_hAccelTable) {
+            // ::log("Created accelerator table with " + std::to_string(g_menuAccelerators.size()) + " entries");
+        }
+    }
+}
+
+// Clear all menu accelerators (call before rebuilding menu)
+static void clearMenuAccelerators() {
+    g_menuAccelerators.clear();
+    if (g_hAccelTable) {
+        DestroyAcceleratorTable(g_hAccelTable);
+        g_hAccelTable = NULL;
+    }
+}
+
+// Function to set accelerator keys for menu items
+// Returns the display string to append to the menu label
+std::string setMenuItemAccelerator(HMENU menu, UINT menuId, const std::string& accelerator, UINT modifierMask = 0) {
+    if (accelerator.empty()) return "";
+
+    std::string keyPart;
+    BYTE modifiers;
+    UINT vkCode;
+
+    // Check if this is a simple single-letter accelerator (for role defaults)
+    if (accelerator.length() == 1 && isalpha(accelerator[0])) {
+        // Single letter with Ctrl modifier (from role defaults)
+        vkCode = toupper(accelerator[0]);
+        modifiers = FVIRTKEY | FCONTROL;
+        keyPart = accelerator;
+    } else {
+        // Parse the full accelerator string
+        modifiers = parseMenuModifiers(accelerator, keyPart);
+        vkCode = getMenuVirtualKeyCode(keyPart);
+    }
+
+    // Apply modifierMask override if specified
     if (modifierMask > 0) {
-        modifiers = 0;
+        modifiers = FVIRTKEY;
         if (modifierMask & 1) modifiers |= FCONTROL;
         if (modifierMask & 2) modifiers |= FSHIFT;
         if (modifierMask & 4) modifiers |= FALT;
     }
-    
-    if (key > 0) {
-        // char logMsg[256];
-        // sprintf_s(logMsg, "Setting accelerator for menu item %u: key=%u, modifiers=%u", menuId, key, modifiers);
-        // ::log(logMsg);
+
+    if (vkCode == 0) {
+        // ::log("Failed to parse accelerator key: " + accelerator);
+        return "";
     }
+
+    // Add to accelerator table
+    ACCEL accel;
+    accel.fVirt = modifiers;
+    accel.key = (WORD)vkCode;
+    accel.cmd = (WORD)menuId;
+    g_menuAccelerators.push_back(accel);
+
+    // Build and return the display string
+    if (accelerator.length() == 1 && isalpha(accelerator[0])) {
+        return "Ctrl+" + std::string(1, (char)toupper(accelerator[0]));
+    }
+    return buildAcceleratorDisplayString(accelerator);
 }
 
 // Enhanced createMenuFromConfig for application menu
@@ -4290,14 +4534,24 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
                             g_menuItemActions[menuId] = "__copy__";
                         } else if (subRole == "paste") {
                             g_menuItemActions[menuId] = "__paste__";
+                        } else if (subRole == "pasteAndMatchStyle") {
+                            g_menuItemActions[menuId] = "__pasteAndMatchStyle__";
+                        } else if (subRole == "delete") {
+                            g_menuItemActions[menuId] = "__delete__";
                         } else if (subRole == "selectAll") {
                             g_menuItemActions[menuId] = "__selectAll__";
                         } else if (subRole == "minimize") {
                             g_menuItemActions[menuId] = "__minimize__";
+                        } else if (subRole == "toggleFullScreen" || subRole == "togglefullscreen") {
+                            g_menuItemActions[menuId] = "__toggleFullScreen__";
+                        } else if (subRole == "zoom") {
+                            g_menuItemActions[menuId] = "__zoom__";
                         } else if (subRole == "close") {
                             g_menuItemActions[menuId] = "__close__";
                         }
-                        
+                        // Note: The following roles are macOS-only and not implemented on Windows:
+                        // hide, hideOthers, showAll, startSpeaking, stopSpeaking, bringAllToFront
+
                         // Set default accelerators for common roles if not specified
                         if (subAccelerator.empty()) {
                             if (subRole == "undo") {
@@ -4308,24 +4562,32 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
                                 subAccelerator = "x";
                             } else if (subRole == "copy") {
                                 subAccelerator = "c";
-                            } else if (subRole == "paste") {
+                            } else if (subRole == "paste" || subRole == "pasteAndMatchStyle") {
                                 subAccelerator = "v";
+                            } else if (subRole == "delete") {
+                                subAccelerator = "Delete";
                             } else if (subRole == "selectAll") {
                                 subAccelerator = "a";
+                            } else if (subRole == "toggleFullScreen" || subRole == "togglefullscreen") {
+                                subAccelerator = "F11";
                             }
                         }
                     }
                     
+                    // Build the label with accelerator display
+                    std::string displayLabel = subLabel;
+                    if (!subAccelerator.empty()) {
+                        std::string accelDisplay = setMenuItemAccelerator(popupMenu, menuId, subAccelerator, 0);
+                        if (!accelDisplay.empty()) {
+                            displayLabel += "\t" + accelDisplay;
+                        }
+                    }
+
                     // Append the menu item
-                    AppendMenuA(popupMenu, flags, menuId, subLabel.c_str());
-                    
+                    AppendMenuA(popupMenu, flags, menuId, displayLabel.c_str());
+
                     if (subChecked) {
                         CheckMenuItem(popupMenu, menuId, MF_BYCOMMAND | MF_CHECKED);
-                    }
-                    
-                    // Set accelerator if specified
-                    if (!subAccelerator.empty()) {
-                        setMenuItemAccelerator(popupMenu, menuId, subAccelerator, 1); // Default to Ctrl
                     }
                     
                     // Handle nested submenus
@@ -5582,6 +5844,10 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
             // Fall back to Windows message loop if CEF init fails
             MSG msg;
             while (GetMessage(&msg, NULL, 0, 0)) {
+                // Check for menu accelerators first
+                if (g_hAccelTable && TranslateAccelerator(msg.hwnd, g_hAccelTable, &msg)) {
+                    continue;
+                }
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
             }
@@ -5590,6 +5856,10 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
         // Use Windows message loop if CEF is not available
         MSG msg;
         while (GetMessage(&msg, NULL, 0, 0)) {
+            // Check for menu accelerators first
+            if (g_hAccelTable && TranslateAccelerator(msg.hwnd, g_hAccelTable, &msg)) {
+                continue;
+            }
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
@@ -7517,14 +7787,18 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
             g_appMenuTarget->zigHandler = zigTrayItemHandler;
             g_appMenuTarget->trayId = 0;
             
-            // Clean up existing application menu
+            // Clean up existing application menu and accelerators
             if (g_applicationMenu) {
                 DestroyMenu(g_applicationMenu);
                 g_applicationMenu = NULL;
             }
-            
+            clearMenuAccelerators();
+
             // Create new application menu from JSON config
             g_applicationMenu = createApplicationMenuFromConfig(menuConfig, g_appMenuTarget.get());
+
+            // Rebuild the accelerator table after menu creation
+            rebuildAcceleratorTable();
             
             if (g_applicationMenu) {
                 
