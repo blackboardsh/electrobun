@@ -1,5 +1,5 @@
 import Electrobun, { Electroview } from "electrobun/view";
-import type { TestRunnerRPC, TestInfo, UpdateInfo } from "./rpc";
+import type { TestRunnerRPC, TestInfo, UpdateInfo, UpdateStatusEntry } from "./rpc";
 import type { TestResult, TestStatus } from "../test-framework/types";
 
 // RPC setup
@@ -42,6 +42,9 @@ const rpc = Electroview.defineRPC<TestRunnerRPC>({
         updateUpdateUI(info);
         console.log(`Update status: ${info.status}, current=${info.currentVersion}, new=${info.newVersion || 'n/a'}`);
       },
+      updateStatusEntry: (entry) => {
+        addStatusEntryToUI(entry);
+      },
     },
   },
 });
@@ -52,6 +55,7 @@ const electrobun = new Electrobun.Electroview({ rpc });
 let tests: TestInfo[] = [];
 let testResults: Map<string, TestResult> = new Map();
 let currentInteractiveTestId: string | null = null;
+let statusHistoryVisible = false;
 
 // DOM elements - will be initialized in init()
 let testList: HTMLElement;
@@ -70,6 +74,10 @@ let btnPass: HTMLButtonElement;
 let btnFail: HTMLButtonElement;
 let btnRetest: HTMLButtonElement;
 let notesInput: HTMLInputElement;
+let historyToggle: HTMLButtonElement;
+let historyPanel: HTMLElement;
+let historyList: HTMLElement;
+let historyClear: HTMLButtonElement;
 
 // Modal mode
 type ModalMode = 'legacy' | 'ready' | 'verify';
@@ -95,6 +103,10 @@ async function init() {
   btnFail = document.getElementById('btn-fail')! as HTMLButtonElement;
   btnRetest = document.getElementById('btn-retest')! as HTMLButtonElement;
   notesInput = document.getElementById('notes-input')! as HTMLInputElement;
+  historyToggle = document.getElementById('update-history-toggle')! as HTMLButtonElement;
+  historyPanel = document.getElementById('update-history-panel')!;
+  historyList = document.getElementById('update-history-list')!;
+  historyClear = document.getElementById('update-history-clear')! as HTMLButtonElement;
 
   if (!testList || !btnRunAll) {
     console.error('DOM elements not found, retrying in 100ms...');
@@ -114,6 +126,14 @@ async function init() {
   const updateBtn = document.getElementById('update-btn');
   if (updateBtn) {
     updateBtn.addEventListener('click', applyUpdate);
+  }
+
+  // History panel handlers
+  if (historyToggle) {
+    historyToggle.addEventListener('click', toggleHistoryPanel);
+  }
+  if (historyClear) {
+    historyClear.addEventListener('click', clearStatusHistory);
   }
 
   // Use event delegation for run buttons (set up once)
@@ -477,7 +497,10 @@ function updateUpdateUI(info: UpdateInfo) {
       break;
 
     case 'no-update':
-      banner.style.display = 'none';
+      banner.style.display = 'flex';
+      banner.classList.add('checking'); // Use neutral gray styling
+      message.textContent = 'No update available';
+      btn.style.display = 'none';
       break;
 
     case 'error':
@@ -495,6 +518,94 @@ async function applyUpdate() {
   } catch (err) {
     console.error('Failed to apply update:', err);
   }
+}
+
+// Status History Panel
+async function toggleHistoryPanel() {
+  statusHistoryVisible = !statusHistoryVisible;
+
+  if (statusHistoryVisible) {
+    historyPanel.style.display = 'flex';
+    historyToggle.textContent = 'Hide History';
+    // Load existing history
+    try {
+      const history = await electrobun.rpc?.request.getUpdateStatusHistory({});
+      if (history) {
+        historyList.innerHTML = '';
+        for (const entry of history) {
+          addStatusEntryToUI(entry);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load status history:', err);
+    }
+  } else {
+    historyPanel.style.display = 'none';
+    historyToggle.textContent = 'Show History';
+  }
+}
+
+async function clearStatusHistory() {
+  try {
+    await electrobun.rpc?.request.clearUpdateStatusHistory({});
+    historyList.innerHTML = '';
+  } catch (err) {
+    console.error('Failed to clear status history:', err);
+  }
+}
+
+function addStatusEntryToUI(entry: UpdateStatusEntry) {
+  if (!historyList) return;
+
+  const entryEl = document.createElement('div');
+  entryEl.className = 'status-entry';
+
+  const time = new Date(entry.timestamp);
+  const timeStr = time.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }) + '.' + String(time.getMilliseconds()).padStart(3, '0');
+
+  // Build details string if present
+  let detailsStr = '';
+  if (entry.details) {
+    const parts: string[] = [];
+    if (entry.details.progress !== undefined) {
+      parts.push(`${entry.details.progress}%`);
+    }
+    if (entry.details.bytesDownloaded !== undefined) {
+      const mb = (entry.details.bytesDownloaded / 1024 / 1024).toFixed(1);
+      parts.push(`${mb}MB`);
+    }
+    if (entry.details.patchNumber !== undefined) {
+      parts.push(`patch #${entry.details.patchNumber}`);
+    }
+    if (entry.details.totalPatchesApplied !== undefined && entry.details.totalPatchesApplied > 0) {
+      parts.push(`${entry.details.totalPatchesApplied} patches`);
+    }
+    if (entry.details.usedPatchPath !== undefined) {
+      parts.push(entry.details.usedPatchPath ? 'patch path' : 'full download');
+    }
+    if (entry.details.currentHash) {
+      parts.push(entry.details.currentHash.slice(0, 8));
+    }
+    if (parts.length > 0) {
+      detailsStr = ` [${parts.join(', ')}]`;
+    }
+  }
+
+  entryEl.innerHTML = `
+    <span class="timestamp">${timeStr}</span>
+    <span class="status-badge ${entry.status}">${entry.status}</span>
+    <span class="message">${escapeHtml(entry.message)}${detailsStr ? `<span class="details">${detailsStr}</span>` : ''}</span>
+  `;
+
+  historyList.appendChild(entryEl);
+
+  // Auto-scroll to bottom
+  historyList.scrollTop = historyList.scrollHeight;
 }
 
 // Helpers

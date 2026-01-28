@@ -42,6 +42,11 @@ let updateState: UpdateInfo = {
 
 console.log(`Current version: ${localInfo.version} (${localInfo.channel})`);
 
+// Register for granular update status changes
+Updater.onStatusChange((entry) => {
+  testRunnerWindow?.webview.rpc?.send.updateStatusEntry(entry);
+});
+
 // Check for updates
 const checkForUpdate = async () => {
   try {
@@ -201,6 +206,14 @@ const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
       applyUpdate: () => {
         console.log("Applying update...");
         Updater.applyUpdate();
+      },
+
+      getUpdateStatusHistory: () => {
+        return Updater.getStatusHistory();
+      },
+
+      clearUpdateStatusHistory: () => {
+        Updater.clearStatusHistory();
       },
     },
     messages: {

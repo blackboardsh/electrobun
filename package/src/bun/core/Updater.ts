@@ -8,6 +8,78 @@ import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
 import { getPlatformPrefix, getTarballFileName } from '../../shared/naming';
 import { quit } from './Utils';
 
+// Update status types for granular progress tracking
+export type UpdateStatusType =
+  | 'idle'
+  | 'checking'
+  | 'check-complete'
+  | 'no-update'
+  | 'update-available'
+  | 'downloading'
+  | 'download-starting'
+  | 'checking-local-tar'
+  | 'local-tar-found'
+  | 'local-tar-missing'
+  | 'fetching-patch'
+  | 'patch-found'
+  | 'patch-not-found'
+  | 'downloading-patch'
+  | 'applying-patch'
+  | 'patch-applied'
+  | 'patch-failed'
+  | 'extracting-version'
+  | 'patch-chain-complete'
+  | 'downloading-full-bundle'
+  | 'download-progress'
+  | 'decompressing'
+  | 'download-complete'
+  | 'applying'
+  | 'extracting'
+  | 'creating-backup'
+  | 'replacing-app'
+  | 'launching-new-version'
+  | 'complete'
+  | 'error';
+
+export interface UpdateStatusDetails {
+  fromHash?: string;
+  toHash?: string;
+  currentHash?: string;
+  latestHash?: string;
+  patchNumber?: number;
+  totalPatchesApplied?: number;
+  progress?: number;
+  bytesDownloaded?: number;
+  totalBytes?: number;
+  usedPatchPath?: boolean;
+  errorMessage?: string;
+  url?: string;
+}
+
+export interface UpdateStatusEntry {
+  status: UpdateStatusType;
+  message: string;
+  timestamp: number;
+  details?: UpdateStatusDetails;
+}
+
+// Status history and callback
+const statusHistory: UpdateStatusEntry[] = [];
+let onStatusChangeCallback: ((entry: UpdateStatusEntry) => void) | null = null;
+
+function emitStatus(status: UpdateStatusType, message: string, details?: UpdateStatusDetails): void {
+  const entry: UpdateStatusEntry = {
+    status,
+    message,
+    timestamp: Date.now(),
+    details,
+  };
+  statusHistory.push(entry);
+  if (onStatusChangeCallback) {
+    onStatusChangeCallback(entry);
+  }
+}
+
 // setTimeout(async () => {
 //   console.log('killing')
 //   const { native } = await import('../proc/native');
@@ -83,11 +155,27 @@ const Updater = {
   updateInfo: () => {
     return updateInfo;
   },
+
+  // Status history and subscription methods
+  getStatusHistory: () => {
+    return [...statusHistory];
+  },
+
+  clearStatusHistory: () => {
+    statusHistory.length = 0;
+  },
+
+  onStatusChange: (callback: ((entry: UpdateStatusEntry) => void) | null) => {
+    onStatusChangeCallback = callback;
+  },
+
   // todo: allow switching channels, by default will check the current channel
   checkForUpdate: async () => {
+    emitStatus('checking', 'Checking for updates...');
     const localInfo = await Updater.getLocallocalInfo();
 
     if (localInfo.channel === "dev") {
+      emitStatus('no-update', 'Dev channel - updates disabled', { currentHash: localInfo.hash });
       return {
         version: localInfo.version,
         hash: localInfo.hash,
@@ -109,6 +197,7 @@ const Updater = {
         try {
           updateInfo = JSON.parse(responseText);
         } catch {
+          emitStatus('error', 'Invalid update.json: failed to parse JSON', { url: updateInfoUrl });
           return {
             version: "",
             hash: "",
@@ -119,6 +208,7 @@ const Updater = {
         }
 
         if (!updateInfo.hash) {
+          emitStatus('error', 'Invalid update.json: missing hash', { url: updateInfoUrl });
           return {
             version: "",
             hash: "",
@@ -130,8 +220,15 @@ const Updater = {
 
         if (updateInfo.hash !== localInfo.hash) {
           updateInfo.updateAvailable = true;
+          emitStatus('update-available', `Update available: ${localInfo.hash.slice(0, 8)} → ${updateInfo.hash.slice(0, 8)}`, {
+            currentHash: localInfo.hash,
+            latestHash: updateInfo.hash,
+          });
+        } else {
+          emitStatus('no-update', 'Already on latest version', { currentHash: localInfo.hash });
         }
       } else {
+        emitStatus('error', `Failed to fetch update info (HTTP ${updateInfoResponse.status})`, { url: updateInfoUrl });
         return {
           version: "",
           hash: "",
@@ -154,6 +251,7 @@ const Updater = {
   },
 
   downloadUpdate: async () => {
+    emitStatus('download-starting', 'Starting update download...');
     const appDataFolder = await Updater.appDataFolder();
     await Updater.channelBucketUrl(); // Ensure localInfo is loaded
     const appFileName = localInfo.name;
@@ -169,11 +267,15 @@ const Updater = {
     let currentTarPath = join(extractionFolder, `${currentHash}.tar`);
     const latestTarPath = join(extractionFolder, `${latestHash}.tar`);
 
-    const seenHashes = [];
+    const seenHashes: string[] = [];
+    let patchesApplied = 0;
+    let usedPatchPath = false;
 
     // todo (yoav): add a check to the while loop that checks for a hash we've seen before
     // so that update loops that are cyclical can be broken
     if (!(await Bun.file(latestTarPath).exists())) {
+      emitStatus('checking-local-tar', `Checking for local tar file: ${currentHash.slice(0, 8)}`, { currentHash });
+
       while (currentHash !== latestHash) {
         seenHashes.push(currentHash);
         const currentTar = Bun.file(currentTarPath);
@@ -182,19 +284,27 @@ const Updater = {
           // tar file of the current version not found
           // so we can't patch it. We need the byte-for-byte tar file
           // so break out and download the full version
+          emitStatus('local-tar-missing', `Local tar not found for ${currentHash.slice(0, 8)}, will download full bundle`, { currentHash });
           break;
         }
+
+        emitStatus('local-tar-found', `Found local tar for ${currentHash.slice(0, 8)}`, { currentHash });
 
         // check if there's a patch file for it
         const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
-        const patchResponse = await fetch(
-          `${localInfo.baseUrl}/${platformPrefix}-${currentHash}.patch`
-        );
+        const patchUrl = `${localInfo.baseUrl}/${platformPrefix}-${currentHash}.patch`;
+        emitStatus('fetching-patch', `Checking for patch: ${currentHash.slice(0, 8)}`, { currentHash, url: patchUrl });
+
+        const patchResponse = await fetch(patchUrl);
 
         if (!patchResponse.ok) {
           // patch not found
+          emitStatus('patch-not-found', `No patch available for ${currentHash.slice(0, 8)}, will download full bundle`, { currentHash });
           break;
         }
+
+        emitStatus('patch-found', `Patch found for ${currentHash.slice(0, 8)}`, { currentHash });
+        emitStatus('downloading-patch', `Downloading patch for ${currentHash.slice(0, 8)}...`, { currentHash });
 
         // The patch file's name is the hash of the "from" version
         const patchFilePath = join(
@@ -213,6 +323,11 @@ const Updater = {
         const bunBinDir = dirname(process.execPath);
         const bspatchPath = join(bunBinDir, "bspatch");
 
+        emitStatus('applying-patch', `Applying patch ${patchesApplied + 1} for ${currentHash.slice(0, 8)}...`, {
+          currentHash,
+          patchNumber: patchesApplied + 1,
+        });
+
         // Note: cwd should be Contents/MacOS/ where the binaries are in the amc app bundle
         try {
           const patchResult = Bun.spawnSync([
@@ -228,6 +343,10 @@ const Updater = {
             if (updateInfo) {
               updateInfo.error = stderr || `bspatch failed with exit code ${patchResult.exitCode}`;
             }
+            emitStatus('patch-failed', `Patch application failed: ${stderr || 'unknown error'}`, {
+              currentHash,
+              errorMessage: stderr || `exit code ${patchResult.exitCode}`,
+            });
             console.error(
               "bspatch failed",
               {
@@ -239,9 +358,21 @@ const Updater = {
             break;
           }
         } catch (error) {
+          emitStatus('patch-failed', `Patch threw exception: ${(error as Error).message}`, {
+            currentHash,
+            errorMessage: (error as Error).message,
+          });
           console.error("bspatch threw", error);
           break;
         }
+
+        patchesApplied++;
+        emitStatus('patch-applied', `Patch ${patchesApplied} applied successfully`, {
+          currentHash,
+          patchNumber: patchesApplied,
+        });
+
+        emitStatus('extracting-version', 'Extracting version info from patched tar...', { currentHash });
 
         let versionSubpath = "";
         const untarDir = join(appDataFolder, "self-extraction", "tmpuntar");
@@ -269,6 +400,7 @@ const Updater = {
         const nextHash = currentVersionJson.hash;
 
         if (seenHashes.includes(nextHash)) {
+          emitStatus('error', 'Cyclical update detected, falling back to full download', { currentHash: nextHash });
           console.log("Warning: cyclical update detected");
           break;
         }
@@ -276,6 +408,7 @@ const Updater = {
         seenHashes.push(nextHash);
 
         if (!nextHash) {
+          emitStatus('error', 'Could not determine next hash from patched tar', { currentHash });
           break;
         }
         // Sync the patched tar file to the new hash
@@ -297,13 +430,35 @@ const Updater = {
           "self-extraction",
           `${currentHash}.tar`
         );
+
+        emitStatus('patch-applied', `Patched to ${nextHash.slice(0, 8)}, checking for more patches...`, {
+          currentHash: nextHash,
+          toHash: latestHash,
+          totalPatchesApplied: patchesApplied,
+        });
         // loop through applying patches until we reach the latest version
         // if we get stuck then exit and just download the full latest version
+      }
+
+      // Check if patch chain completed successfully
+      if (currentHash === latestHash && patchesApplied > 0) {
+        usedPatchPath = true;
+        emitStatus('patch-chain-complete', `Patch chain complete! Applied ${patchesApplied} patches`, {
+          totalPatchesApplied: patchesApplied,
+          currentHash: latestHash,
+          usedPatchPath: true,
+        });
       }
 
       // If we weren't able to apply patches to the current version,
       // then just download it and unpack it
       if (currentHash !== latestHash) {
+        emitStatus('downloading-full-bundle', 'Downloading full update bundle...', {
+          currentHash,
+          latestHash,
+          usedPatchPath: false,
+        });
+
         const cacheBuster = Math.random().toString(36).substring(7);
         const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
         const tarballName = getTarballFileName(appFileName, currentOS);
@@ -313,24 +468,47 @@ const Updater = {
           "self-extraction",
           "latest.tar.zst"
         );
+
+        emitStatus('download-progress', `Fetching ${tarballName}...`, { url: urlToLatestTarball });
         const response = await fetch(urlToLatestTarball + `?${cacheBuster}`);
 
         if (response.ok && response.body) {
-          const reader = response.body.getReader();
+          const contentLength = response.headers.get('content-length');
+          const totalBytes = contentLength ? parseInt(contentLength, 10) : undefined;
+          let bytesDownloaded = 0;
 
+          const reader = response.body.getReader();
           const writer = Bun.file(prevVersionCompressedTarballPath).writer();
 
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             await writer.write(value);
+            bytesDownloaded += value.length;
+
+            // Emit progress every ~500KB or so
+            if (bytesDownloaded % 500000 < value.length) {
+              emitStatus('download-progress', `Downloading: ${(bytesDownloaded / 1024 / 1024).toFixed(1)} MB`, {
+                bytesDownloaded,
+                totalBytes,
+                progress: totalBytes ? Math.round((bytesDownloaded / totalBytes) * 100) : undefined,
+              });
+            }
           }
           await writer.flush();
           writer.end();
+
+          emitStatus('download-progress', `Download complete: ${(bytesDownloaded / 1024 / 1024).toFixed(1)} MB`, {
+            bytesDownloaded,
+            totalBytes,
+            progress: 100,
+          });
         } else {
+          emitStatus('error', `Failed to download: ${urlToLatestTarball}`, { url: urlToLatestTarball });
           console.log("latest version not found at: ", urlToLatestTarball);
         }
 
+        emitStatus('decompressing', 'Decompressing update bundle...');
         await ZstdInit().then(async ({ ZstdSimple }) => {
           const data = new Uint8Array(
             await Bun.file(prevVersionCompressedTarballPath).arrayBuffer()
@@ -339,6 +517,7 @@ const Updater = {
 
           await Bun.write(latestTarPath, uncompressedData);
         });
+        emitStatus('decompressing', 'Decompression complete');
 
         unlinkSync(prevVersionCompressedTarballPath);
         try {
@@ -357,8 +536,14 @@ const Updater = {
       // check for patch from that tar and apply it, until it matches the latest version
       // as a fallback it should just download and unpack the latest version
       updateInfo.updateReady = true;
+      emitStatus('download-complete', `Update ready to install (used ${usedPatchPath ? 'patch' : 'full download'} path)`, {
+        latestHash,
+        usedPatchPath,
+        totalPatchesApplied: patchesApplied,
+      });
     } else {
       updateInfo.error = "Failed to download latest version";
+      emitStatus('error', 'Failed to download latest version', { latestHash });
     }
   },
 
@@ -366,6 +551,7 @@ const Updater = {
   // todo (yoav): rename this to quitAndApplyUpdate or something
   applyUpdate: async () => {
     if (updateInfo?.updateReady) {
+      emitStatus('applying', 'Starting update installation...');
       const appDataFolder = await Updater.appDataFolder();
       const extractionFolder = join(appDataFolder, "self-extraction");
       if (!(await Bun.file(extractionFolder).exists())) {
@@ -378,29 +564,32 @@ const Updater = {
       let appBundleSubpath: string = "";
 
       if (await Bun.file(latestTarPath).exists()) {
+        emitStatus('extracting', `Extracting update to ${latestHash.slice(0, 8)}...`, { latestHash });
+
         // Windows needs a temporary directory to avoid file locking issues
-        const extractionDir = currentOS === 'win' 
+        const extractionDir = currentOS === 'win'
           ? join(extractionFolder, `temp-${latestHash}`)
           : extractionFolder;
-        
+
         if (currentOS === 'win') {
           mkdirSync(extractionDir, { recursive: true });
         }
-        
+
         // Use Windows native tar.exe on Windows due to npm tar library issues (same as CLI)
         if (currentOS === 'win') {
           console.log(`Using Windows native tar.exe to extract ${latestTarPath} to ${extractionDir}...`);
           try {
             const relativeTarPath = relative(extractionDir, latestTarPath);
-            execSync(`tar -xf "${relativeTarPath}"`, { 
+            execSync(`tar -xf "${relativeTarPath}"`, {
               stdio: 'inherit',
               cwd: extractionDir
             });
             console.log('Windows tar.exe extraction completed successfully');
-            
+
             // For Windows/Linux, the app bundle is at root level
             appBundleSubpath = "./";
           } catch (error) {
+            emitStatus('error', `Extraction failed: ${(error as Error).message}`, { errorMessage: (error as Error).message });
             console.error('Windows tar.exe extraction failed:', error);
             throw error;
           }
@@ -526,16 +715,19 @@ const Updater = {
         }
 
         try {
+          emitStatus('creating-backup', 'Creating backup of current version...');
+
           if (currentOS === 'macos') {
             // On macOS, use rename approach
             // Remove existing backup if it exists
             if (statSync(backupPath, { throwIfNoEntry: false })) {
               rmdirSync(backupPath, { recursive: true });
             }
-            
+
             // Move current running app to backup
             renameSync(runningAppBundlePath, backupPath);
 
+            emitStatus('replacing-app', 'Installing new version...');
             // Move new app to running location
             renameSync(newAppBundlePath, runningAppBundlePath);
 
@@ -648,9 +840,14 @@ del "%~f0"
             quit();
           }
         } catch (error) {
+          emitStatus('error', `Failed to replace app: ${(error as Error).message}`, {
+            errorMessage: (error as Error).message,
+          });
           console.error("Failed to replace app with new version", error);
           return;
         }
+
+        emitStatus('launching-new-version', 'Launching updated version...');
 
         // Cross-platform app launch (Windows is handled above with its own update script)
         if (currentOS === 'macos') {
@@ -670,6 +867,7 @@ del "%~f0"
           Bun.spawn(["sh", "-c", `"${runningAppBundlePath}" &`], { detached: true } as any);
         }
 
+        emitStatus('complete', 'Update complete, restarting application...');
         // Use quit() for graceful shutdown
         quit();
       }
@@ -729,4 +927,4 @@ del "%~f0"
   },
 };
 
-export { Updater };
+export { Updater, type UpdateStatusType, type UpdateStatusEntry, type UpdateStatusDetails };

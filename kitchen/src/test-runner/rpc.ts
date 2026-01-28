@@ -1,5 +1,6 @@
 import type { RPCSchema } from "electrobun";
 import type { TestResult } from "../test-framework/types";
+import type { UpdateStatusType, UpdateStatusEntry, UpdateStatusDetails } from "electrobun/bun";
 
 export interface TestInfo {
   id: string;
@@ -16,6 +17,8 @@ export type UpdateStatus =
   | 'update-ready'
   | 'no-update'
   | 'error';
+
+export type { UpdateStatusType, UpdateStatusEntry, UpdateStatusDetails };
 
 export interface UpdateInfo {
   status: UpdateStatus;
@@ -56,6 +59,14 @@ export type TestRunnerRPC = {
         response: void;
       };
       applyUpdate: {
+        params: {};
+        response: void;
+      };
+      getUpdateStatusHistory: {
+        params: {};
+        response: UpdateStatusEntry[];
+      };
+      clearUpdateStatusHistory: {
         params: {};
         response: void;
       };
@@ -100,6 +111,7 @@ export type TestRunnerRPC = {
         availableRenderers: ('native' | 'cef')[];
       };
       updateStatus: UpdateInfo;
+      updateStatusEntry: UpdateStatusEntry;
     };
   }>;
 };

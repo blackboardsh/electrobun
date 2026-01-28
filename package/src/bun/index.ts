@@ -4,7 +4,7 @@ import { BrowserView } from "./core/BrowserView";
 import { Tray } from "./core/Tray";
 import * as ApplicationMenu from "./core/ApplicationMenu";
 import * as ContextMenu from "./core/ContextMenu";
-import { Updater } from "./core/Updater";
+import { Updater, type UpdateStatusType, type UpdateStatusEntry, type UpdateStatusDetails } from "./core/Updater";
 import * as Utils from "./core/Utils";
 import type { MessageBoxOptions, MessageBoxResponse } from "./core/Utils";
 import { type RPCSchema, createRPC } from "rpc-anywhere";
@@ -30,6 +30,9 @@ export {
   type Cookie,
   type CookieFilter,
   type StorageType,
+  type UpdateStatusType,
+  type UpdateStatusEntry,
+  type UpdateStatusDetails,
   createRPC,
   BrowserWindow,
   BrowserView,

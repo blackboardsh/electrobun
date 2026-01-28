@@ -68,6 +68,137 @@ body {
   background: rgba(255, 255, 255, 0.3);
 }
 
+.update-history-toggle {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.update-history-toggle:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Update History Panel */
+.update-history-panel {
+  background: #0f0f1a;
+  border-bottom: 1px solid #333;
+  max-height: 300px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.update-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: #16213e;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #9ca3af;
+}
+
+.update-history-clear {
+  background: transparent;
+  border: 1px solid #4b5563;
+  color: #9ca3af;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.update-history-clear:hover {
+  background: #374151;
+  color: #fff;
+}
+
+.update-history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.status-entry {
+  display: flex;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-bottom: 2px;
+}
+
+.status-entry:hover {
+  background: #1a1a2e;
+}
+
+.status-entry .timestamp {
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.status-entry .status-badge {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  min-width: 80px;
+  text-align: center;
+}
+
+.status-entry .message {
+  color: #d1d5db;
+  flex: 1;
+}
+
+.status-entry .details {
+  color: #6b7280;
+  font-size: 0.7rem;
+}
+
+/* Status badge colors */
+.status-badge.checking { background: #374151; color: #9ca3af; }
+.status-badge.check-complete { background: #374151; color: #9ca3af; }
+.status-badge.no-update { background: #374151; color: #9ca3af; }
+.status-badge.update-available { background: #1e40af; color: #93c5fd; }
+.status-badge.downloading { background: #b45309; color: #fcd34d; }
+.status-badge.download-starting { background: #b45309; color: #fcd34d; }
+.status-badge.download-progress { background: #b45309; color: #fcd34d; }
+.status-badge.decompressing { background: #7c3aed; color: #c4b5fd; }
+.status-badge.download-complete { background: #166534; color: #86efac; }
+.status-badge.checking-local-tar { background: #374151; color: #9ca3af; }
+.status-badge.local-tar-found { background: #166534; color: #86efac; }
+.status-badge.local-tar-missing { background: #b45309; color: #fcd34d; }
+.status-badge.fetching-patch { background: #1e40af; color: #93c5fd; }
+.status-badge.patch-found { background: #166534; color: #86efac; }
+.status-badge.patch-not-found { background: #b45309; color: #fcd34d; }
+.status-badge.downloading-patch { background: #b45309; color: #fcd34d; }
+.status-badge.applying-patch { background: #7c3aed; color: #c4b5fd; }
+.status-badge.patch-applied { background: #166534; color: #86efac; }
+.status-badge.patch-failed { background: #991b1b; color: #fca5a5; }
+.status-badge.extracting-version { background: #7c3aed; color: #c4b5fd; }
+.status-badge.patch-chain-complete { background: #166534; color: #86efac; }
+.status-badge.downloading-full-bundle { background: #b45309; color: #fcd34d; }
+.status-badge.applying { background: #7c3aed; color: #c4b5fd; }
+.status-badge.extracting { background: #7c3aed; color: #c4b5fd; }
+.status-badge.creating-backup { background: #7c3aed; color: #c4b5fd; }
+.status-badge.replacing-app { background: #7c3aed; color: #c4b5fd; }
+.status-badge.launching-new-version { background: #166534; color: #86efac; }
+.status-badge.complete { background: #166534; color: #86efac; }
+.status-badge.error { background: #991b1b; color: #fca5a5; }
+.status-badge.idle { background: #374151; color: #9ca3af; }
+
 header {
   margin-bottom: 20px;
   padding-bottom: 15px;
