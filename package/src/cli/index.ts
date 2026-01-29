@@ -42,26 +42,20 @@ const _MAX_CHUNK_SIZE = 1024 * 2;
 
 // const binExt = OS === 'win' ? '.exe' : '';
 
-// Helper to build a Bun.Archive from a directory entry (file or folder)
-// Note: Bun.file() lazy references produce 0-byte entries in Bun.Archive,
-// so we eagerly read file content with .bytes() before passing to the constructor.
-async function buildArchiveFromDir(baseDir: string, entryName: string, archiveOptions?: any): Promise<InstanceType<typeof Bun.Archive>> {
-  const files: Record<string, Uint8Array> = {};
-  const entryPath = join(baseDir, entryName);
-  const stat = statSync(entryPath);
-  if (stat.isDirectory()) {
-    const glob = new Bun.Glob("**/*");
-    for await (const relPath of glob.scan({ cwd: entryPath, dot: true })) {
-      const fullPath = join(entryPath, relPath);
-      const s = statSync(fullPath);
-      if (s.isFile() || s.isSymbolicLink()) {
-        files[`${entryName}/${relPath}`] = await Bun.file(fullPath).bytes();
-      }
-    }
-  } else {
-    files[entryName] = await Bun.file(entryPath).bytes();
-  }
-  return new Bun.Archive(files, archiveOptions);
+// Create a tar file using system tar command (preserves file permissions unlike Bun.Archive)
+function createTar(tarPath: string, cwd: string, entries: string[]) {
+  execSync(`tar -cf "${tarPath}" ${entries.map(e => `"${e}"`).join(' ')}`, {
+    cwd,
+    stdio: 'pipe',
+  });
+}
+
+// Create a tar.gz file using system tar command
+function createTarGz(tarGzPath: string, cwd: string, entries: string[]) {
+  execSync(`tar -czf "${tarGzPath}" ${entries.map(e => `"${e}"`).join(' ')}`, {
+    cwd,
+    stdio: 'pipe',
+  });
 }
 
 // this when run as an npm script this will be where the folder where package.json is.
@@ -1954,11 +1948,13 @@ if (commandArg === "init") {
   // for hashing the contents
   // tar the signed and notarized app bundle
   // Use sanitized appFileName for tarball paths (URL-safe), but tar content uses actual bundle folder
-  const tmpArchive = await buildArchiveFromDir(buildFolder, basename(appBundleFolderPath));
-  const tmpTarBuffer = await tmpArchive.bytes();
+  const tmpTarPath = join(buildFolder, `${appFileName}${targetOS === 'macos' ? '.app' : ''}-temp.tar`);
+  createTar(tmpTarPath, buildFolder, [basename(appBundleFolderPath)]);
+  const tmpTarBuffer = await Bun.file(tmpTarPath).arrayBuffer();
   // Note: wyhash is the default in Bun.hash but that may change in the future
   // so we're being explicit here.
   const hash = Bun.hash.wyhash(tmpTarBuffer, 43770n).toString(36);
+  unlinkSync(tmpTarPath);
   // const bunVersion = execSync(`${bunBinarySourcePath} --version`).toString().trim();
 
   // version.json inside the app bundle
@@ -2092,8 +2088,7 @@ if (commandArg === "init") {
       console.log(`Creating tar of installer contents: ${appImageTarPath}`);
       
       // Tar the inner directory
-      const appImageArchive = await buildArchiveFromDir(tempDirPath, appFileName);
-      await Bun.write(appImageTarPath, await appImageArchive.bytes());
+      createTar(appImageTarPath, tempDirPath, [appFileName]);
       
       // Clean up temp directory
       rmSync(tempDirPath, { recursive: true });
@@ -2141,8 +2136,7 @@ if (commandArg === "init") {
     // For Linux, we've already created the tar in the AppImage section above
     // For macOS/Windows, tar the signed and notarized app bundle
     if (targetOS !== 'linux') {
-      const finalArchive = await buildArchiveFromDir(buildFolder, basename(appBundleFolderPath));
-      await Bun.write(tarPath, await finalArchive.bytes());
+      createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
     }
 
     let compressedTarPath = `${tarPath}.zst`;
@@ -2913,11 +2907,8 @@ async function wrapInArchive(filePath: string, _buildFolder: string, archiveType
       }
     }
     
-    // Create tar.gz archive using Bun.Archive
-    const releaseFiles: Record<string, Uint8Array> = {};
-    releaseFiles[fileName] = await Bun.file(join(fileDir, fileName)).bytes();
-    const releaseArchive = new Bun.Archive(releaseFiles, { compress: "gzip" });
-    await Bun.write(archivePath, await releaseArchive.bytes());
+    // Create tar.gz archive using system tar (preserves file permissions)
+    createTarGz(archivePath, fileDir, [fileName]);
     
     console.log(`Created archive: ${archivePath} (preserving executable permissions)`);
     return archivePath;
