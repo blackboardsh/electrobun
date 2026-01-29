@@ -321,14 +321,40 @@ const Updater = {
         );
 
         const bunBinDir = dirname(process.execPath);
-        const bspatchPath = join(bunBinDir, "bspatch");
+        const bspatchBinName = currentOS === 'win' ? 'bspatch.exe' : 'bspatch';
+        const bspatchPath = join(bunBinDir, bspatchBinName);
 
         emitStatus('applying-patch', `Applying patch ${patchesApplied + 1} for ${currentHash.slice(0, 8)}...`, {
           currentHash,
           patchNumber: patchesApplied + 1,
         });
 
-        // Note: cwd should be Contents/MacOS/ where the binaries are in the amc app bundle
+        // Verify all files exist before invoking bspatch
+        if (!statSync(bspatchPath, { throwIfNoEntry: false })) {
+          emitStatus('patch-failed', `bspatch binary not found at ${bspatchPath}`, {
+            currentHash,
+            errorMessage: `bspatch not found: ${bspatchPath}`,
+          });
+          console.error("bspatch not found:", bspatchPath);
+          break;
+        }
+        if (!statSync(currentTarPath, { throwIfNoEntry: false })) {
+          emitStatus('patch-failed', `Old tar not found at ${currentTarPath}`, {
+            currentHash,
+            errorMessage: `old tar not found: ${currentTarPath}`,
+          });
+          console.error("old tar not found:", currentTarPath);
+          break;
+        }
+        if (!statSync(patchFilePath, { throwIfNoEntry: false })) {
+          emitStatus('patch-failed', `Patch file not found at ${patchFilePath}`, {
+            currentHash,
+            errorMessage: `patch not found: ${patchFilePath}`,
+          });
+          console.error("patch file not found:", patchFilePath);
+          break;
+        }
+
         try {
           const patchResult = Bun.spawnSync([
             bspatchPath,
@@ -343,7 +369,7 @@ const Updater = {
             if (updateInfo) {
               updateInfo.error = stderr || `bspatch failed with exit code ${patchResult.exitCode}`;
             }
-            emitStatus('patch-failed', `Patch application failed: ${stderr || 'unknown error'}`, {
+            emitStatus('patch-failed', `Patch application failed: ${stderr || `exit code ${patchResult.exitCode}`}`, {
               currentHash,
               errorMessage: stderr || `exit code ${patchResult.exitCode}`,
             });
@@ -353,6 +379,10 @@ const Updater = {
                 exitCode: patchResult.exitCode,
                 stdout,
                 stderr,
+                bspatchPath,
+                oldTar: currentTarPath,
+                newTar: tmpPatchedTarFilePath,
+                patch: patchFilePath,
               },
             );
             break;
@@ -362,7 +392,7 @@ const Updater = {
             currentHash,
             errorMessage: (error as Error).message,
           });
-          console.error("bspatch threw", error);
+          console.error("bspatch threw", error, { bspatchPath });
           break;
         }
 
