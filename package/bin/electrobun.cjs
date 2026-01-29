@@ -88,7 +88,7 @@ async function ensureCliBinary() {
     // Extract CLI binary using Bun.Archive
     const tarBytes = await Bun.file(tarballPath).arrayBuffer();
     const archive = new Bun.Archive(tarBytes);
-    archive.extract(cacheDir);
+    await archive.extract(cacheDir);
 
     // Clean up tarball
     unlinkSync(tarballPath);

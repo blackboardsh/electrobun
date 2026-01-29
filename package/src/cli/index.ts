@@ -43,8 +43,10 @@ const _MAX_CHUNK_SIZE = 1024 * 2;
 // const binExt = OS === 'win' ? '.exe' : '';
 
 // Helper to build a Bun.Archive from a directory entry (file or folder)
-async function buildArchiveFromDir(baseDir: string, entryName: string): Promise<InstanceType<typeof Bun.Archive>> {
-  const files: Record<string, Blob> = {};
+// Note: Bun.file() lazy references produce 0-byte entries in Bun.Archive,
+// so we eagerly read file content with .bytes() before passing to the constructor.
+async function buildArchiveFromDir(baseDir: string, entryName: string, archiveOptions?: any): Promise<InstanceType<typeof Bun.Archive>> {
+  const files: Record<string, Uint8Array> = {};
   const entryPath = join(baseDir, entryName);
   const stat = statSync(entryPath);
   if (stat.isDirectory()) {
@@ -53,13 +55,13 @@ async function buildArchiveFromDir(baseDir: string, entryName: string): Promise<
       const fullPath = join(entryPath, relPath);
       const s = statSync(fullPath);
       if (s.isFile() || s.isSymbolicLink()) {
-        files[`${entryName}/${relPath}`] = Bun.file(fullPath);
+        files[`${entryName}/${relPath}`] = await Bun.file(fullPath).bytes();
       }
     }
   } else {
-    files[entryName] = Bun.file(entryPath);
+    files[entryName] = await Bun.file(entryPath).bytes();
   }
-  return new Bun.Archive(files);
+  return new Bun.Archive(files, archiveOptions);
 }
 
 // this when run as an npm script this will be where the folder where package.json is.
@@ -237,7 +239,7 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     
     const tarBytes = await Bun.file(tempFile).arrayBuffer();
     const archive = new Bun.Archive(tarBytes);
-    archive.extract(platformDistPath);
+    await archive.extract(platformDistPath);
     
     // NOTE: We no longer copy main.js from platform-specific downloads
     // Platform-specific downloads should only contain native binaries
@@ -458,7 +460,7 @@ async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targe
     try {
       const cefTarBytes = await Bun.file(tempFile).arrayBuffer();
       const cefArchive = new Bun.Archive(cefTarBytes);
-      cefArchive.extract(platformDistPath);
+      await cefArchive.extract(platformDistPath);
       
       console.log(`✓ Extraction completed successfully`);
       
@@ -1953,7 +1955,7 @@ if (commandArg === "init") {
   // tar the signed and notarized app bundle
   // Use sanitized appFileName for tarball paths (URL-safe), but tar content uses actual bundle folder
   const tmpArchive = await buildArchiveFromDir(buildFolder, basename(appBundleFolderPath));
-  const tmpTarBuffer = tmpArchive.bytes();
+  const tmpTarBuffer = await tmpArchive.bytes();
   // Note: wyhash is the default in Bun.hash but that may change in the future
   // so we're being explicit here.
   const hash = Bun.hash.wyhash(tmpTarBuffer, 43770n).toString(36);
@@ -2091,7 +2093,7 @@ if (commandArg === "init") {
       
       // Tar the inner directory
       const appImageArchive = await buildArchiveFromDir(tempDirPath, appFileName);
-      await Bun.write(appImageTarPath, appImageArchive.bytes());
+      await Bun.write(appImageTarPath, await appImageArchive.bytes());
       
       // Clean up temp directory
       rmSync(tempDirPath, { recursive: true });
@@ -2140,7 +2142,7 @@ if (commandArg === "init") {
     // For macOS/Windows, tar the signed and notarized app bundle
     if (targetOS !== 'linux') {
       const finalArchive = await buildArchiveFromDir(buildFolder, basename(appBundleFolderPath));
-      await Bun.write(tarPath, finalArchive.bytes());
+      await Bun.write(tarPath, await finalArchive.bytes());
     }
 
     let compressedTarPath = `${tarPath}.zst`;
@@ -2912,10 +2914,10 @@ async function wrapInArchive(filePath: string, _buildFolder: string, archiveType
     }
     
     // Create tar.gz archive using Bun.Archive
-    const releaseFiles: Record<string, Blob> = {};
-    releaseFiles[fileName] = Bun.file(join(fileDir, fileName));
-    const releaseArchive = new Bun.Archive(releaseFiles);
-    await Bun.write(archivePath, releaseArchive.bytes("gzip"));
+    const releaseFiles: Record<string, Uint8Array> = {};
+    releaseFiles[fileName] = await Bun.file(join(fileDir, fileName)).bytes();
+    const releaseArchive = new Bun.Archive(releaseFiles, { compress: "gzip" });
+    await Bun.write(archivePath, await releaseArchive.bytes());
     
     console.log(`Created archive: ${archivePath} (preserving executable permissions)`);
     return archivePath;

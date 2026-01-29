@@ -111,7 +111,9 @@ if (!fs.existsSync(distPath)) {
 }
 
 // Helper to build a Bun.Archive from entries in a base directory
-async function buildArchiveFromEntries(baseDir, entries) {
+// Note: Bun.file() lazy references produce 0-byte entries in Bun.Archive,
+// so we eagerly read file content with .bytes() before passing to the constructor.
+async function buildArchiveFromEntries(baseDir, entries, archiveOptions) {
   const files = {};
   for (const entry of entries) {
     const entryPath = path.join(baseDir, entry);
@@ -122,14 +124,14 @@ async function buildArchiveFromEntries(baseDir, entries) {
         const fullPath = path.join(entryPath, relPath);
         const s = fs.statSync(fullPath);
         if (s.isFile() || s.isSymbolicLink()) {
-          files[`${entry}/${relPath}`] = Bun.file(fullPath);
+          files[`${entry}/${relPath}`] = await Bun.file(fullPath).bytes();
         }
       }
     } else {
-      files[entry] = Bun.file(entryPath);
+      files[entry] = await Bun.file(entryPath).bytes();
     }
   }
-  return new Bun.Archive(files);
+  return new Bun.Archive(files, archiveOptions);
 }
 
 async function createTarballs() {
@@ -165,8 +167,8 @@ async function createTarballs() {
     console.log(`Creating CLI tarball: ${cliOutputFile}`);
     
     // Create CLI tarball directly from bin directory
-    const cliArchive = await buildArchiveFromEntries(binPath, ['electrobun' + (platform === 'win32' ? '.exe' : '')]);
-    await Bun.write(cliOutputFile, cliArchive.bytes("gzip"));
+    const cliArchive = await buildArchiveFromEntries(binPath, ['electrobun' + (platform === 'win32' ? '.exe' : '')], { compress: "gzip" });
+    await Bun.write(cliOutputFile, await cliArchive.bytes());
     
     const cliStats = fs.statSync(cliOutputFile);
     const cliSizeMB = (cliStats.size / 1024 / 1024).toFixed(2);
@@ -181,8 +183,8 @@ async function createTarballs() {
   if (coreFiles.length > 0) {
     console.log(`Creating core binaries tarball: ${coreOutputFile}`);
     
-    const coreArchive = await buildArchiveFromEntries(distPath, coreFiles);
-    await Bun.write(coreOutputFile, coreArchive.bytes("gzip"));
+    const coreArchive = await buildArchiveFromEntries(distPath, coreFiles, { compress: "gzip" });
+    await Bun.write(coreOutputFile, await coreArchive.bytes());
     
     const coreStats = fs.statSync(coreOutputFile);
     const coreSizeMB = (coreStats.size / 1024 / 1024).toFixed(2);
@@ -194,8 +196,8 @@ async function createTarballs() {
   if (fs.existsSync(cefPath)) {
     console.log(`Creating CEF tarball: ${cefOutputFile}`);
     
-    const cefArchive = await buildArchiveFromEntries(distPath, ['cef']);
-    await Bun.write(cefOutputFile, cefArchive.bytes("gzip"));
+    const cefArchive = await buildArchiveFromEntries(distPath, ['cef'], { compress: "gzip" });
+    await Bun.write(cefOutputFile, await cefArchive.bytes());
     
     const cefStats = fs.statSync(cefOutputFile);
     const cefSizeMB = (cefStats.size / 1024 / 1024).toFixed(2);

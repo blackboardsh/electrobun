@@ -411,7 +411,7 @@ const Updater = {
         const resourcesDir = 'Resources';
         const patchedTarBytes = await Bun.file(tmpPatchedTarFilePath).arrayBuffer();
         const patchedArchive = new Bun.Archive(patchedTarBytes);
-        const patchedFiles = patchedArchive.files();
+        const patchedFiles = await patchedArchive.files();
 
         for (const [filePath] of patchedFiles) {
           if (filePath.endsWith(`${resourcesDir}/version.json`) || filePath.endsWith('metadata.json')) {
@@ -607,11 +607,11 @@ const Updater = {
 
         const latestTarBytes = await Bun.file(latestTarPath).arrayBuffer();
         const latestArchive = new Bun.Archive(latestTarBytes);
-        latestArchive.extract(extractionDir);
+        await latestArchive.extract(extractionDir);
 
         if (currentOS === 'macos') {
           // Find the .app bundle by scanning extracted file paths
-          const extractedFiles = latestArchive.files();
+          const extractedFiles = await latestArchive.files();
           for (const [filePath] of extractedFiles) {
             const appMatch = filePath.match(/^([^/]+\.app)\//);
             if (appMatch) {
