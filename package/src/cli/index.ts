@@ -1,4 +1,4 @@
-import { join, dirname, basename, relative } from "path";
+import { join, dirname, basename } from "path";
 import * as path from "path";
 import {
   existsSync,
@@ -18,7 +18,6 @@ import {
 } from "fs";
 import { execSync } from "child_process";
 import * as readline from "readline";
-import tar from "tar";
 import archiver from "archiver";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS, ARCH } from '../shared/platform';
@@ -42,6 +41,26 @@ const _MAX_CHUNK_SIZE = 1024 * 2;
 
 
 // const binExt = OS === 'win' ? '.exe' : '';
+
+// Helper to build a Bun.Archive from a directory entry (file or folder)
+async function buildArchiveFromDir(baseDir: string, entryName: string): Promise<InstanceType<typeof Bun.Archive>> {
+  const files: Record<string, Blob> = {};
+  const entryPath = join(baseDir, entryName);
+  const stat = statSync(entryPath);
+  if (stat.isDirectory()) {
+    const glob = new Bun.Glob("**/*");
+    for await (const relPath of glob.scan({ cwd: entryPath, dot: true })) {
+      const fullPath = join(entryPath, relPath);
+      const s = statSync(fullPath);
+      if (s.isFile() || s.isSymbolicLink()) {
+        files[`${entryName}/${relPath}`] = Bun.file(fullPath);
+      }
+    }
+  } else {
+    files[entryName] = Bun.file(entryPath);
+  }
+  return new Bun.Archive(files);
+}
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -216,22 +235,9 @@ async function ensureCoreDependencies(targetOS?: 'macos' | 'win' | 'linux', targ
     const platformDistPath = join(ELECTROBUN_DEP_PATH, `dist-${platformOS}-${platformArch}`);
     mkdirSync(platformDistPath, { recursive: true });
     
-    // Use Windows native tar.exe on Windows due to npm tar library issues
-    if (OS === 'win') {
-      console.log('Using Windows native tar.exe for reliable extraction...');
-      const relativeTempFile = relative(platformDistPath, tempFile);
-      execSync(`tar -xf "${relativeTempFile}"`, { 
-        stdio: 'inherit',
-        cwd: platformDistPath 
-      });
-    } else {
-      await tar.x({
-        file: tempFile,
-        cwd: platformDistPath,
-        preservePaths: false,
-        strip: 0,
-      });
-    }
+    const tarBytes = await Bun.file(tempFile).arrayBuffer();
+    const archive = new Bun.Archive(tarBytes);
+    archive.extract(platformDistPath);
     
     // NOTE: We no longer copy main.js from platform-specific downloads
     // Platform-specific downloads should only contain native binaries
@@ -450,22 +456,9 @@ async function ensureCEFDependencies(targetOS?: 'macos' | 'win' | 'linux', targe
     await validateTarFile(tempFile);
     
     try {
-      // Use Windows native tar.exe on Windows due to npm tar library issues
-      if (OS === 'win') {
-        console.log('Using Windows native tar.exe for reliable extraction...');
-        const relativeTempFile = relative(platformDistPath, tempFile);
-        execSync(`tar -xf "${relativeTempFile}"`, { 
-          stdio: 'inherit',
-          cwd: platformDistPath 
-        });
-      } else {
-        await tar.x({
-          file: tempFile,
-          cwd: platformDistPath,
-          preservePaths: false,
-          strip: 0,
-        });
-      }
+      const cefTarBytes = await Bun.file(tempFile).arrayBuffer();
+      const cefArchive = new Bun.Archive(cefTarBytes);
+      cefArchive.extract(platformDistPath);
       
       console.log(`✓ Extraction completed successfully`);
       
@@ -1959,22 +1952,11 @@ if (commandArg === "init") {
   // for hashing the contents
   // tar the signed and notarized app bundle
   // Use sanitized appFileName for tarball paths (URL-safe), but tar content uses actual bundle folder
-  const tmpTarPath = join(buildFolder, `${appFileName}${targetOS === 'macos' ? '.app' : ''}-temp.tar`);
-  await tar.c(
-    {
-      gzip: false,
-      file: tmpTarPath,
-      cwd: buildFolder,
-    },
-    [basename(appBundleFolderPath)]
-  );
-  const tmpTarball = Bun.file(tmpTarPath);
-  const tmpTarBuffer = await tmpTarball.arrayBuffer();
+  const tmpArchive = await buildArchiveFromDir(buildFolder, basename(appBundleFolderPath));
+  const tmpTarBuffer = tmpArchive.bytes();
   // Note: wyhash is the default in Bun.hash but that may change in the future
   // so we're being explicit here.
   const hash = Bun.hash.wyhash(tmpTarBuffer, 43770n).toString(36);
-
-  unlinkSync(tmpTarPath);
   // const bunVersion = execSync(`${bunBinarySourcePath} --version`).toString().trim();
 
   // version.json inside the app bundle
@@ -2108,14 +2090,8 @@ if (commandArg === "init") {
       console.log(`Creating tar of installer contents: ${appImageTarPath}`);
       
       // Tar the inner directory
-      await tar.create(
-        {
-          file: appImageTarPath,
-          cwd: tempDirPath,
-          gzip: false, // We'll compress with zstd after
-        },
-        [appFileName]
-      );
+      const appImageArchive = await buildArchiveFromDir(tempDirPath, appFileName);
+      await Bun.write(appImageTarPath, appImageArchive.bytes());
       
       // Clean up temp directory
       rmSync(tempDirPath, { recursive: true });
@@ -2163,14 +2139,8 @@ if (commandArg === "init") {
     // For Linux, we've already created the tar in the AppImage section above
     // For macOS/Windows, tar the signed and notarized app bundle
     if (targetOS !== 'linux') {
-      await tar.c(
-        {
-          gzip: false,
-          file: tarPath,
-          cwd: buildFolder,
-        },
-        [basename(appBundleFolderPath)]
-      );
+      const finalArchive = await buildArchiveFromDir(buildFolder, basename(appBundleFolderPath));
+      await Bun.write(tarPath, finalArchive.bytes());
     }
 
     let compressedTarPath = `${tarPath}.zst`;
@@ -2941,19 +2911,11 @@ async function wrapInArchive(filePath: string, _buildFolder: string, archiveType
       }
     }
     
-    // Create tar.gz archive preserving permissions
-    // Using the tar package for cross-platform compatibility
-    await tar.c(
-      {
-        gzip: true,
-        file: archivePath,
-        cwd: fileDir,
-        portable: true,  // Ensures consistent behavior across platforms
-        preservePaths: false,
-        // The tar package should preserve file modes when creating archives
-      },
-      [fileName]
-    );
+    // Create tar.gz archive using Bun.Archive
+    const releaseFiles: Record<string, Blob> = {};
+    releaseFiles[fileName] = Bun.file(join(fileDir, fileName));
+    const releaseArchive = new Bun.Archive(releaseFiles);
+    await Bun.write(archivePath, releaseArchive.bytes("gzip"));
     
     console.log(`Created archive: ${archivePath} (preserving executable permissions)`);
     return archivePath;

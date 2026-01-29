@@ -1,10 +1,24 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
-const { execSync, spawn } = require('child_process');
-const { existsSync, mkdirSync, createWriteStream, unlinkSync, chmodSync } = require('fs');
+// Electrobun requires Bun 1.3.6+ for Bun.Archive support
+const MIN_BUN_VERSION = '1.3.6';
+if (typeof Bun !== 'undefined') {
+  const current = Bun.version;
+  const [curMaj, curMin, curPatch] = current.split('.').map(Number);
+  const [minMaj, minMin, minPatch] = MIN_BUN_VERSION.split('.').map(Number);
+  if (curMaj < minMaj || (curMaj === minMaj && (curMin < minMin || (curMin === minMin && curPatch < minPatch)))) {
+    console.error(`Electrobun requires Bun >= ${MIN_BUN_VERSION}, but you are running Bun ${current}.`);
+    console.error(`Please upgrade: bun upgrade`);
+    process.exit(1);
+  }
+} else {
+  console.error('Electrobun requires the Bun runtime. Install it: https://bun.sh');
+  process.exit(1);
+}
+
+const { existsSync, mkdirSync, unlinkSync, chmodSync, copyFileSync } = require('fs');
 const { join, dirname } = require('path');
-const https = require('https');
-const tar = require('tar');
+const { spawn } = require('child_process');
 
 // Detect platform and architecture
 function getPlatform() {
@@ -34,47 +48,18 @@ const electrobunDir = join(__dirname, '..');
 const cacheDir = join(electrobunDir, '.cache');
 const cliBinary = join(cacheDir, `electrobun${binExt}`);
 
-async function downloadFile(url, filePath) {
-  return new Promise((resolve, reject) => {
-    mkdirSync(dirname(filePath), { recursive: true });
-    const file = createWriteStream(filePath);
-    
-    https.get(url, (response) => {
-      if (response.statusCode === 302 || response.statusCode === 301) {
-        // Follow redirect
-        return downloadFile(response.headers.location, filePath).then(resolve).catch(reject);
-      }
-      
-      if (response.statusCode !== 200) {
-        reject(new Error(`Download failed: ${response.statusCode}`));
-        return;
-      }
-      
-      response.pipe(file);
-      
-      file.on('finish', () => {
-        file.close();
-        resolve();
-      });
-      
-      file.on('error', reject);
-    }).on('error', reject);
-  });
-}
-
 async function ensureCliBinary() {
   // Check if CLI binary exists in bin location (where npm expects it)
   const binLocation = join(electrobunDir, 'bin', 'electrobun' + binExt);
   if (existsSync(binLocation)) {
     return binLocation;
   }
-  
+
   // Check if core dependencies already exist in cache
   if (existsSync(cliBinary)) {
     // Copy to bin location if it exists in cache but not in bin
     mkdirSync(dirname(binLocation), { recursive: true });
-    const fs = require('fs');
-    fs.copyFileSync(cliBinary, binLocation);
+    copyFileSync(cliBinary, binLocation);
     if (platform !== 'win') {
       chmodSync(binLocation, '755');
     }
@@ -82,55 +67,54 @@ async function ensureCliBinary() {
   }
 
   console.log('Downloading electrobun CLI for your platform...');
-  
+
   // Get the package version to download the matching release
   const packageJson = require(join(electrobunDir, 'package.json'));
   const version = packageJson.version;
   const tag = `v${version}`;
-  
+
   const tarballUrl = `https://github.com/blackboardsh/electrobun/releases/download/${tag}/electrobun-cli-${platform}-${arch}.tar.gz`;
   const tarballPath = join(cacheDir, `electrobun-${platform}-${arch}.tar.gz`);
-  
+
   try {
-    // Download tarball
-    await downloadFile(tarballUrl, tarballPath);
-    
-    // Extract CLI binary  
-    await tar.x({
-      file: tarballPath,
-      cwd: cacheDir
-      // No strip needed - CLI tarball contains just the binary
-    });
-    
+    // Download tarball using fetch (available in Bun)
+    mkdirSync(cacheDir, { recursive: true });
+    const response = await fetch(tarballUrl, { redirect: 'follow' });
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+    }
+    await Bun.write(tarballPath, response);
+
+    // Extract CLI binary using Bun.Archive
+    const tarBytes = await Bun.file(tarballPath).arrayBuffer();
+    const archive = new Bun.Archive(tarBytes);
+    archive.extract(cacheDir);
+
     // Clean up tarball
     unlinkSync(tarballPath);
-    
+
     // Check if CLI binary was extracted
     if (!existsSync(cliBinary)) {
       throw new Error(`CLI binary not found at ${cliBinary} after extraction`);
     }
-    
+
     // Make executable on Unix systems
     if (platform !== 'win') {
       chmodSync(cliBinary, '755');
     }
-    
+
     // Copy CLI to bin location so npm scripts can find it
-    const binLocation = join(electrobunDir, 'bin', 'electrobun' + binExt);
     mkdirSync(dirname(binLocation), { recursive: true });
-    
-    // Copy the downloaded CLI to replace this script
-    const fs = require('fs');
-    fs.copyFileSync(cliBinary, binLocation);
-    
+    copyFileSync(cliBinary, binLocation);
+
     // Make the bin location executable too
     if (platform !== 'win') {
       chmodSync(binLocation, '755');
     }
-    
+
     console.log('electrobun CLI downloaded successfully!');
     return binLocation;
-    
+
   } catch (error) {
     throw new Error(`Failed to download electrobun CLI: ${error.message}`);
   }
@@ -140,22 +124,22 @@ async function main() {
   try {
     const args = process.argv.slice(2);
     const cliPath = await ensureCliBinary();
-    
+
     // Replace this process with the actual CLI
     const child = spawn(cliPath, args, {
       stdio: 'inherit',
       cwd: process.cwd()
     });
-    
+
     child.on('exit', (code) => {
       process.exit(code || 0);
     });
-    
+
     child.on('error', (error) => {
       console.error('Failed to start electrobun CLI:', error.message);
       process.exit(1);
     });
-    
+
   } catch (error) {
     console.error('Error:', error.message);
     process.exit(1);

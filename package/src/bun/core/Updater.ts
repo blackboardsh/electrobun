@@ -1,8 +1,7 @@
-import { join, dirname, resolve, relative } from "path";
+import { join, dirname, resolve } from "path";
 import { homedir } from "os";
 import { renameSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync } from "fs";
 import { execSync } from "child_process";
-import tar from "tar";
 import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from '../../shared/platform';
 import { getPlatformPrefix, getTarballFileName } from '../../shared/naming';
@@ -405,45 +404,20 @@ const Updater = {
         emitStatus('extracting-version', 'Extracting version info from patched tar...', { currentHash });
 
         let hashFilePath = "";
-        const untarDir = join(appDataFolder, "self-extraction", "tmpuntar");
-        mkdirSync(untarDir, { recursive: true });
 
-        // Extract the hash from the patched tar:
+        // Read the hash from the patched tar without full extraction:
         // - macOS/Windows: Resources/version.json (inside the app bundle directory)
         // - Linux: metadata.json (alongside the AppImage, since AppImage is opaque)
         const resourcesDir = 'Resources';
+        const patchedTarBytes = await Bun.file(tmpPatchedTarFilePath).arrayBuffer();
+        const patchedArchive = new Bun.Archive(patchedTarBytes);
+        const patchedFiles = patchedArchive.files();
 
-        if (currentOS === 'win') {
-          // npm tar's filtered extraction has issues on Windows/Bun (creates
-          // directories but doesn't write file content). Use native tar.exe.
-          const listResult = Bun.spawnSync(['tar', '-tf', tmpPatchedTarFilePath]);
-          const entries = new TextDecoder().decode(listResult.stdout).split('\n');
-          const versionEntry = entries.find(e =>
-            e.endsWith(`${resourcesDir}/version.json`) || e.endsWith('metadata.json')
-          );
-          if (versionEntry) {
-            hashFilePath = versionEntry.trim();
-            const extractResult = Bun.spawnSync(
-              ['tar', '-xf', tmpPatchedTarFilePath, hashFilePath],
-              { cwd: untarDir }
-            );
-            if (extractResult.exitCode !== 0) {
-              console.error("tar.exe extraction failed:", new TextDecoder().decode(extractResult.stderr));
-            }
+        for (const [filePath] of patchedFiles) {
+          if (filePath.endsWith(`${resourcesDir}/version.json`) || filePath.endsWith('metadata.json')) {
+            hashFilePath = filePath;
+            break;
           }
-        } else {
-          await tar.x({
-            file: tmpPatchedTarFilePath,
-            cwd: untarDir,
-            filter: (path: string) => {
-              if (path.endsWith(`${resourcesDir}/version.json`) || path.endsWith('metadata.json')) {
-                hashFilePath = path;
-                return true;
-              } else {
-                return false;
-              }
-            },
-          });
         }
 
         if (!hashFilePath) {
@@ -452,9 +426,8 @@ const Updater = {
           break;
         }
 
-        const hashFileJson = await Bun.file(
-          join(untarDir, hashFilePath)
-        ).json();
+        const hashFile = patchedFiles.get(hashFilePath);
+        const hashFileJson = JSON.parse(await hashFile!.text());
         const nextHash = hashFileJson.hash;
 
         if (seenHashes.includes(nextHash)) {
@@ -480,7 +453,6 @@ const Updater = {
         // delete the old tar file
         unlinkSync(currentTarPath);
         unlinkSync(patchFilePath);
-        rmdirSync(untarDir, { recursive: true });
 
         currentHash = nextHash;
         currentTarPath = join(
@@ -633,45 +605,22 @@ const Updater = {
           mkdirSync(extractionDir, { recursive: true });
         }
 
-        // Use Windows native tar.exe on Windows due to npm tar library issues (same as CLI)
-        if (currentOS === 'win') {
-          console.log(`Using Windows native tar.exe to extract ${latestTarPath} to ${extractionDir}...`);
-          try {
-            const relativeTarPath = relative(extractionDir, latestTarPath);
-            execSync(`tar -xf "${relativeTarPath}"`, {
-              stdio: 'inherit',
-              cwd: extractionDir
-            });
-            console.log('Windows tar.exe extraction completed successfully');
+        const latestTarBytes = await Bun.file(latestTarPath).arrayBuffer();
+        const latestArchive = new Bun.Archive(latestTarBytes);
+        latestArchive.extract(extractionDir);
 
-            // For Windows/Linux, the app bundle is at root level
-            appBundleSubpath = "./";
-          } catch (error) {
-            emitStatus('error', `Extraction failed: ${(error as Error).message}`, { errorMessage: (error as Error).message });
-            console.error('Windows tar.exe extraction failed:', error);
-            throw error;
+        if (currentOS === 'macos') {
+          // Find the .app bundle by scanning extracted file paths
+          const extractedFiles = latestArchive.files();
+          for (const [filePath] of extractedFiles) {
+            const appMatch = filePath.match(/^([^/]+\.app)\//);
+            if (appMatch) {
+              appBundleSubpath = appMatch[1] + '/';
+              break;
+            }
           }
         } else {
-          // Use npm tar library on macOS/Linux (keep original behavior)
-          await tar.x({
-            // gzip: false,
-            file: latestTarPath,
-            cwd: extractionDir,
-            onentry: (entry: tar.ReadEntry) => {
-              if (currentOS === 'macos') {
-                // find the first .app bundle in the tarball
-                // Some apps may have nested .app bundles
-                if (!appBundleSubpath && entry.path.endsWith(".app/")) {
-                  appBundleSubpath = entry.path;
-                }
-              } else {
-                // For Linux, look for the main executable
-                if (!appBundleSubpath) {
-                  appBundleSubpath = "./";
-                }
-              }
-            },
-          });
+          appBundleSubpath = "./"
         }
         
         console.log(`Tar extraction completed. Found appBundleSubpath: ${appBundleSubpath}`);
