@@ -404,19 +404,20 @@ const Updater = {
 
         emitStatus('extracting-version', 'Extracting version info from patched tar...', { currentHash });
 
-        let versionSubpath = "";
+        let hashFilePath = "";
         const untarDir = join(appDataFolder, "self-extraction", "tmpuntar");
         mkdirSync(untarDir, { recursive: true });
 
-        // extract just the version.json from the patched tar file so we can see what hash it is now
-        const resourcesDir = 'Resources'; // Always use capitalized Resources
+        // Extract the hash from the patched tar:
+        // - macOS/Windows: Resources/version.json (inside the app bundle directory)
+        // - Linux: metadata.json (alongside the AppImage, since AppImage is opaque)
+        const resourcesDir = 'Resources';
         await tar.x({
-          // gzip: false,
           file: tmpPatchedTarFilePath,
           cwd: untarDir,
           filter: (path: string) => {
-            if (path.endsWith(`${resourcesDir}/version.json`)) {
-              versionSubpath = path;
+            if (path.endsWith(`${resourcesDir}/version.json`) || path.endsWith('metadata.json')) {
+              hashFilePath = path;
               return true;
             } else {
               return false;
@@ -424,10 +425,16 @@ const Updater = {
           },
         });
 
-        const currentVersionJson = await Bun.file(
-          join(untarDir, versionSubpath)
+        if (!hashFilePath) {
+          emitStatus('error', 'Could not find version/metadata file in patched tar', { currentHash });
+          console.error("Neither Resources/version.json nor metadata.json found in patched tar:", tmpPatchedTarFilePath);
+          break;
+        }
+
+        const hashFileJson = await Bun.file(
+          join(untarDir, hashFilePath)
         ).json();
-        const nextHash = currentVersionJson.hash;
+        const nextHash = hashFileJson.hash;
 
         if (seenHashes.includes(nextHash)) {
           emitStatus('error', 'Cyclical update detected, falling back to full download', { currentHash: nextHash });

@@ -2065,7 +2065,7 @@ if (commandArg === "init") {
       // 3. Icon file
       // 4. Metadata
       
-      const tempDirName = `${appFileName}-installer-contents`;
+      const tempDirName = `${appFileName}-tar-staging`;
       const tempDirPath = join(buildFolder, tempDirName);
       
       // Clean up any existing temp directory
@@ -2078,7 +2078,7 @@ if (commandArg === "init") {
       const innerDirPath = join(tempDirPath, appFileName);
       mkdirSync(innerDirPath, { recursive: true });
       
-      // Copy AppImage
+      // Copy AppImage (the inner app bundle on Linux)
       const appImageDestPath = join(innerDirPath, `${appFileName}.AppImage`);
       cpSync(appImagePath, appImageDestPath, { dereference: true });
       
@@ -2099,7 +2099,8 @@ if (commandArg === "init") {
         identifier: config.app.identifier,
         name: config.app.name,
         version: config.app.version,
-        channel: buildEnvironment
+        channel: buildEnvironment,
+        hash: hash,
       };
       writeFileSync(join(innerDirPath, 'metadata.json'), JSON.stringify(metadata, null, 2));
       
