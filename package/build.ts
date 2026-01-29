@@ -7,7 +7,7 @@ import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync, mkdir
 import { parseArgs } from 'util';
 import process from 'process';
 
-console.log("building...", platform(), arch())
+console.log("building...", platform(), arch());
 
 const {values: args} = parseArgs({
     args: Bun.argv,
@@ -23,7 +23,7 @@ const {values: args} = parseArgs({
         }
     },
     allowPositionals: true,
-})
+});
 
 // TODO: set via cl arg
 const CHANNEL: 'debug' | 'release' = args.release ? 'release' : 'debug';
@@ -198,7 +198,7 @@ async function findMsvcTools() {
         }
 
         console.log('✓ Found MSVC tools with vcvarsall.bat');
-    } catch (error) {
+    } catch {
         console.log('Could not locate MSVC tools, using default tool names');
     }
 }
@@ -245,7 +245,7 @@ async function installWindowsDeps() {
 }
 
 async function checkDependencies() {
-    const missingDeps = [];
+    const missingDeps: string[] = [];
 
     if (OS === 'macos') {
         // Try to vendor cmake if not available
@@ -294,7 +294,7 @@ async function checkDependencies() {
             } else {
                 try {
                     await installWindowsDeps();
-                } catch (err) {
+                } catch {
                     console.error('Auto-install failed or was cancelled.');
                 }
 
@@ -618,7 +618,7 @@ function getPlatform() {
         case 'linux':
             return 'linux';
         default:
-            throw 'unsupported platform';
+            throw new Error('unsupported platform');
     }
 }
 
@@ -629,7 +629,7 @@ function getArch() {
         case "x64":
             return 'x64';
         default:
-            throw 'unsupported arch'
+            throw new Error('unsupported arch');
     }
 }
 
@@ -742,15 +742,15 @@ async function vendorBsdiff() {
     console.log('Downloading zig-bsdiff binaries...');
 
     // Map OS names to match GitHub release naming
-    const platformMap: Record<string, string> = {
+    const bsdiffPlatformMap: Record<string, string> = {
         'macos': 'darwin',
         'win': 'win32',
         'linux': 'linux'
     };
-    const platform = platformMap[OS];
-    const arch = ARCH;
+    const bsdiffPlatform = bsdiffPlatformMap[OS];
+    const bsdiffArch = ARCH;
 
-    const tarballUrl = `https://github.com/blackboardsh/zig-bsdiff/releases/download/v${BSDIFF_VERSION}/zig-bsdiff-${platform}-${arch}.tar.gz`;
+    const tarballUrl = `https://github.com/blackboardsh/zig-bsdiff/releases/download/v${BSDIFF_VERSION}/zig-bsdiff-${bsdiffPlatform}-${bsdiffArch}.tar.gz`;
     const tempTarball = join('vendors', `zig-bsdiff-temp.tar.gz`);
 
     try {
@@ -783,8 +783,8 @@ async function vendorBsdiff() {
         }
 
         console.log('✓ zig-bsdiff binaries downloaded successfully');
-    } catch (error: any) {
-        console.error('Failed to download zig-bsdiff binaries:', error.message);
+    } catch (error: unknown) {
+        console.error('Failed to download zig-bsdiff binaries:', error instanceof Error ? error.message : error);
         throw new Error(`Failed to download zig-bsdiff binaries. Please try again in a minute.`);
     }
 }
@@ -794,19 +794,19 @@ async function vendorAsar() {
     const asarBaseDir = join(process.cwd(), 'vendors', 'zig-asar');
 
     // Map OS names to match GitHub release naming
-    const platformMap: Record<string, string> = {
+    const asarPlatformMap: Record<string, string> = {
         'macos': 'darwin',
         'win': 'win32',
         'linux': 'linux'
     };
-    const platform = platformMap[OS];
+    const asarPlatform = asarPlatformMap[OS];
 
     // On Windows, download both x64 and arm64 versions for development flexibility
     // (allows testing on Windows ARM machines while shipping x64 binaries)
     const archsToDownload = OS === 'win' ? ['x64', 'arm64'] : [ARCH];
 
-    for (const arch of archsToDownload) {
-        const asarDir = OS === 'win' ? join(asarBaseDir, arch) : asarBaseDir;
+    for (const targetArch of archsToDownload) {
+        const asarDir = OS === 'win' ? join(asarBaseDir, targetArch) : asarBaseDir;
         const asarCli = join(asarDir, 'zig-asar' + binExt);
         const libExt = OS === 'win' ? '.dll' : OS === 'macos' ? '.dylib' : '.so';
         const asarLib = join(asarDir, 'libasar' + libExt);
@@ -823,10 +823,10 @@ async function vendorAsar() {
         }
 
         await pauseForGitHub();
-        console.log(`Downloading zig-asar binaries for ${platform}-${arch}...`);
+        console.log(`Downloading zig-asar binaries for ${asarPlatform}-${targetArch}...`);
 
-        const tarballUrl = `https://github.com/blackboardsh/zig-asar/releases/download/v${ASAR_VERSION}/zig-asar-${platform}-${arch}.tar.gz`;
-        const tempTarball = join('vendors', `zig-asar-temp-${arch}.tar.gz`);
+        const tarballUrl = `https://github.com/blackboardsh/zig-asar/releases/download/v${ASAR_VERSION}/zig-asar-${asarPlatform}-${targetArch}.tar.gz`;
+        const tempTarball = join('vendors', `zig-asar-temp-${targetArch}.tar.gz`);
 
         try {
             // Download tarball
@@ -859,9 +859,9 @@ async function vendorAsar() {
                 await $`chmod +x ${asarCli}`;
             }
 
-            console.log(`✓ zig-asar binaries for ${arch} downloaded successfully`);
-        } catch (error: any) {
-            console.error(`Failed to download zig-asar binaries for ${arch}:`, error.message);
+            console.log(`✓ zig-asar binaries for ${targetArch} downloaded successfully`);
+        } catch (error: unknown) {
+            console.error(`Failed to download zig-asar binaries for ${targetArch}:`, error instanceof Error ? error.message : error);
             throw new Error(`Failed to download zig-asar binaries. Please try again in a minute.`);
         }
     }
@@ -951,7 +951,7 @@ async function vendorCEF() {
             try {
                 const cefContents = await $`ls vendors/cef/`.text();
                 console.log('CEF directory contents:', cefContents);
-            } catch (e) {
+            } catch {
                 console.log('Could not list CEF directory contents');
             }
             
@@ -1182,14 +1182,14 @@ async function vendorLinuxDeps() {
         const requiredPackages = ['build-essential', 'cmake', 'pkg-config', 'libgtk-3-dev', 'libwebkit2gtk-4.1-dev', 'libayatana-appindicator3-dev', 'librsvg2-dev', 'fuse', 'libfuse2'];
 
         const distroInfo = await $`grep -E '^(ID|ID_LIKE)=' /etc/os-release`.catch(() => null);
-        if (!distroInfo||  !(String(distroInfo.stdout).includes('debian') || String(distroInfo.stdout).includes('ubuntu'))) {
+        if (!distroInfo || !(String(distroInfo.stdout).includes('debian') || String(distroInfo.stdout).includes('ubuntu'))) {
             console.log('Cannot determine Linux distro or not Debian/Ubuntu based - skipping automatic dependency check');
             console.log(`Please ensure required packages are installed: ${requiredPackages.join(', ')}`);
             return;
         }
 
         console.log('Detected Debian/Ubuntu based Linux. Checking dependencies...');
-        const missingPackages = [];
+        const missingPackages: string[] = [];
         for (const pkg of requiredPackages) {
             const result = await $`dpkg -l | grep ${pkg}`.catch(() => null);
             if (!result || String(result.stdout).trim() === '') {
@@ -1375,8 +1375,8 @@ async function buildNative() {
             }
            
             console.log('Native wrapper built successfully');
-        } catch (error: any) {
-            console.log('Build failed, error details:', error.message);
+        } catch (error: unknown) {
+            console.log('Build failed, error details:', error instanceof Error ? error.message : error);
             throw error;
         }
     }
