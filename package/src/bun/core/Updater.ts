@@ -412,18 +412,39 @@ const Updater = {
         // - macOS/Windows: Resources/version.json (inside the app bundle directory)
         // - Linux: metadata.json (alongside the AppImage, since AppImage is opaque)
         const resourcesDir = 'Resources';
-        await tar.x({
-          file: tmpPatchedTarFilePath,
-          cwd: untarDir,
-          filter: (path: string) => {
-            if (path.endsWith(`${resourcesDir}/version.json`) || path.endsWith('metadata.json')) {
-              hashFilePath = path;
-              return true;
-            } else {
-              return false;
+
+        if (currentOS === 'win') {
+          // npm tar's filtered extraction has issues on Windows/Bun (creates
+          // directories but doesn't write file content). Use native tar.exe.
+          const listResult = Bun.spawnSync(['tar', '-tf', tmpPatchedTarFilePath]);
+          const entries = new TextDecoder().decode(listResult.stdout).split('\n');
+          const versionEntry = entries.find(e =>
+            e.endsWith(`${resourcesDir}/version.json`) || e.endsWith('metadata.json')
+          );
+          if (versionEntry) {
+            hashFilePath = versionEntry.trim();
+            const extractResult = Bun.spawnSync(
+              ['tar', '-xf', tmpPatchedTarFilePath, hashFilePath],
+              { cwd: untarDir }
+            );
+            if (extractResult.exitCode !== 0) {
+              console.error("tar.exe extraction failed:", new TextDecoder().decode(extractResult.stderr));
             }
-          },
-        });
+          }
+        } else {
+          await tar.x({
+            file: tmpPatchedTarFilePath,
+            cwd: untarDir,
+            filter: (path: string) => {
+              if (path.endsWith(`${resourcesDir}/version.json`) || path.endsWith('metadata.json')) {
+                hashFilePath = path;
+                return true;
+              } else {
+                return false;
+              }
+            },
+          });
+        }
 
         if (!hashFilePath) {
           emitStatus('error', 'Could not find version/metadata file in patched tar', { currentHash });
