@@ -760,7 +760,14 @@ const Updater = {
             
             // Move new AppImage to app location
             renameSync(newAppBundlePath, runningAppBundlePath);
-            
+
+            // Clean up the extracted inner directory (contains leftover icon, shortcut, metadata.json)
+            const innerDirName = localInfo.name.replace(/ /g, "");
+            const extractedInnerDir = join(extractionDir, innerDirName);
+            if (statSync(extractedInnerDir, { throwIfNoEntry: false })?.isDirectory()) {
+              rmdirSync(extractedInnerDir, { recursive: true });
+            }
+
             // Make AppImage executable
             execSync(`chmod +x "${runningAppBundlePath}"`);
             
