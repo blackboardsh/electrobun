@@ -1127,6 +1127,7 @@ exec "\${EXEC}" "\$@"
 	execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
 
 	// Create .desktop file in AppDir root
+	// Always include Icon field since we always create an icon (either real or placeholder)
 	const desktopContent = `[Desktop Entry]
 Version=1.0
 Type=Application
@@ -1142,7 +1143,7 @@ Categories=Utility;
 	const desktopPath = join(appDirPath, `${appFileName}.desktop`);
 	writeFileSync(desktopPath, desktopContent);
 
-	// Copy icon if available
+	// Copy icon if available, or create a minimal placeholder
 	if (
 		config.build.linux?.icon &&
 		existsSync(join(projectRoot, config.build.linux.icon))
@@ -1158,6 +1159,28 @@ Categories=Utility;
 			`Copied icon for AppImage: ${iconSourcePath} -> ${iconDestPath}`,
 		);
 		console.log(`Created .DirIcon: ${iconSourcePath} -> ${dirIconPath}`);
+	} else {
+		// Create a minimal 1x1 transparent PNG as placeholder to satisfy appimagetool
+		// This prevents "Icon entry not found" errors
+		const placeholderPNG = Buffer.from([
+			0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+			0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+			0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1 dimensions
+			0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, // 8-bit RGBA
+			0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, // IDAT chunk
+			0x54, 0x08, 0x99, 0x01, 0x00, 0x00, 0x05, 0x00,
+			0x01, 0x06, 0x7A, 0x81, 0x7C, 0x00, 0x00, 0x00, // IEND chunk
+			0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
+			0x82
+		]);
+		
+		const iconDestPath = join(appDirPath, `${appFileName}.png`);
+		const dirIconPath = join(appDirPath, ".DirIcon");
+		
+		writeFileSync(iconDestPath, new Uint8Array(placeholderPNG));
+		writeFileSync(dirIconPath, new Uint8Array(placeholderPNG));
+		
+		console.log(`Created placeholder icon for AppImage (no icon specified in config)`);
 	}
 
 	// Generate the AppImage using appimagetool
@@ -1225,10 +1248,26 @@ Categories=Utility;
 		const iconSourcePath = join(projectRoot, config.build.linux.icon);
 		cpSync(iconSourcePath, iconExtractPath, { dereference: true });
 		console.log(`✓ Icon extracted for desktop shortcut: ${iconExtractPath}`);
+	} else {
+		// Create placeholder icon for desktop shortcut
+		const placeholderPNG = Buffer.from([
+			0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+			0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+			0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+			0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+			0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41,
+			0x54, 0x08, 0x99, 0x01, 0x00, 0x00, 0x05, 0x00,
+			0x01, 0x06, 0x7A, 0x81, 0x7C, 0x00, 0x00, 0x00,
+			0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
+			0x82
+		]);
+		writeFileSync(iconExtractPath, new Uint8Array(placeholderPNG));
+		console.log(`✓ Created placeholder icon for desktop shortcut: ${iconExtractPath}`);
 	}
 
 	// Create desktop shortcut alongside the AppImage
 	const desktopShortcutPath = join(buildFolder, `${appFileName}.desktop`);
+	
 	const desktopShortcutContent = `[Desktop Entry]
 Version=1.0
 Type=Application
@@ -3744,14 +3783,17 @@ exec "\${EXEC}" "\$@"
 		writeFileSync(appRunPath, appRunContent);
 		execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
 
+		// Check if icon will be available
+		const hasWrapperIcon = config.build.linux?.icon && 
+			existsSync(join(projectRoot, config.build.linux.icon));
+		
 		// Create desktop file
 		const desktopContent = `[Desktop Entry]
 Version=1.0
 Type=Application
 Name=${config.app.name} Installer
 Comment=Install ${config.app.name}
-Exec=${wrapperName}
-Icon=${wrapperName}
+Exec=${wrapperName}${hasWrapperIcon ? `\nIcon=${wrapperName}` : ""}
 Terminal=false
 Categories=Utility;
 `;
@@ -3760,10 +3802,7 @@ Categories=Utility;
 		writeFileSync(desktopPath, desktopContent);
 
 		// Copy icon if available
-		if (
-			config.build.linux?.icon &&
-			existsSync(join(projectRoot, config.build.linux.icon))
-		) {
+		if (hasWrapperIcon) {
 			const iconSourcePath = join(projectRoot, config.build.linux.icon);
 			const iconDestPath = join(wrapperAppDirPath, `${wrapperName}.png`);
 			const dirIconPath = join(wrapperAppDirPath, ".DirIcon");
