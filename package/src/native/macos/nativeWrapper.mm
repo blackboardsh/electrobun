@@ -6,6 +6,7 @@
 
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonCrypto.h>
@@ -544,6 +545,37 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 @end
 
 /**
+ * Swizzle NSThemeFrame._mouseInGroup: to check repositioned button rect
+ * instead of the original position. This eliminates the ghost hover at the
+ * default traffic light location.
+ */
+static IMP originalMouseInGroupImp = nil;
+static NSRect repositionedButtonGroupRect = NSZeroRect;
+static BOOL buttonsRepositioned = NO;
+
+static void swizzleThemeFrameMouseInGroup(NSView *themeFrame) {
+    static BOOL swizzled = NO;
+    if (swizzled) return;
+    swizzled = YES;
+
+    Class themeFrameClass = [themeFrame class];
+    SEL sel = NSSelectorFromString(@"_mouseInGroup:");
+    Method method = class_getInstanceMethod(themeFrameClass, sel);
+    if (!method) return;
+
+    originalMouseInGroupImp = method_getImplementation(method);
+    IMP newImp = imp_implementationWithBlock(^BOOL(NSView *self, NSButton *button) {
+        if (!buttonsRepositioned) {
+            return ((BOOL (*)(id, SEL, id))originalMouseInGroupImp)(self, sel, button);
+        }
+        NSPoint mouseLocInWindow = [self.window mouseLocationOutsideOfEventStream];
+        NSPoint mouseLocInFrame = [self convertPoint:mouseLocInWindow fromView:nil];
+        return NSPointInRect(mouseLocInFrame, repositionedButtonGroupRect);
+    });
+    method_setImplementation(method, newImp);
+}
+
+/**
  * Transparent overlay view for traffic light button hover tracking.
  * Returns nil from hitTest: so clicks pass through to the actual buttons.
  * Manages its own NSTrackingArea to provide correct hover detection at
@@ -613,10 +645,8 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     NSButton *zoom = [self.parentWindow standardWindowButton:NSWindowZoomButton];
     if (!close || !mini || !zoom) return;
 
-    // NSTitlebarView (direct parent of buttons)
     NSView *titleBarView = close.superview;
     if (!titleBarView) return;
-    // NSTitlebarContainerView (grandparent — this is what Electron resizes)
     NSView *titleBarContainer = titleBarView.superview;
     if (!titleBarContainer) return;
 
@@ -629,18 +659,29 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     CGFloat marginX = self.buttonPositionX >= 0 ? self.buttonPositionX : close.frame.origin.x;
     CGFloat marginY = self.buttonPositionY >= 0 ? self.buttonPositionY : (titleBarView.frame.size.height - close.frame.origin.y - buttonHeight);
 
-    // Resize NSTitlebarContainerView: just tall enough for posY + buttonHeight, pin to top of window
+    // Resize container to accommodate repositioned buttons, pin to top
     NSRect cbounds = titleBarContainer.frame;
     cbounds.size.height = marginY + buttonHeight;
     cbounds.origin.y = NSHeight(self.parentWindow.frame) - NSHeight(cbounds);
     [titleBarContainer setFrame:cbounds];
 
-    // Position buttons at bottom of container (marginY space is above, from window top)
+    // Position buttons at bottom of container (Y=0)
     [close setFrameOrigin:NSMakePoint(marginX, 0)];
     [mini setFrameOrigin:NSMakePoint(marginX + buttonSpacing, 0)];
     [zoom setFrameOrigin:NSMakePoint(marginX + 2 * buttonSpacing, 0)];
 
-    // Update hover view to cover all buttons
+    // Swizzle NSThemeFrame._mouseInGroup: to use repositioned button rect
+    NSView *themeFrame = titleBarContainer.superview;
+    if (themeFrame) {
+        swizzleThemeFrameMouseInGroup(themeFrame);
+        // Compute button group rect in NSThemeFrame coordinates
+        CGFloat boundsWidth = 3 * buttonWidth + 2 * buttonPadding;
+        NSRect groupInContainer = NSMakeRect(marginX, 0, boundsWidth, buttonHeight);
+        repositionedButtonGroupRect = [themeFrame convertRect:groupInContainer fromView:titleBarContainer];
+        buttonsRepositioned = YES;
+    }
+
+    // Update hover overlay
     CGFloat boundsWidth = 3 * buttonWidth + 2 * buttonPadding;
     self.frame = NSMakeRect(NSMinX(close.frame), NSMinY(close.frame), boundsWidth, buttonHeight);
 }
@@ -5006,13 +5047,11 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
         }
 
-        // Apply window button position (macOS only, hiddenInset only)
-        if (strcmp(titleBarStyle, "hiddenInset") == 0) {
-            WindowDelegate *del = objc_getAssociatedObject(window, "WindowDelegate");
-            if (del) {
-                del.windowButtonPositionX = windowButtonPositionX;
-                del.windowButtonPositionY = windowButtonPositionY;
-            }
+        // Apply window button position (macOS only)
+        WindowDelegate *del = objc_getAssociatedObject(window, "WindowDelegate");
+        if (del) {
+            del.windowButtonPositionX = windowButtonPositionX;
+            del.windowButtonPositionY = windowButtonPositionY;
         }
     });
 
