@@ -440,18 +440,8 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     defer allocator.free(extracted_app_path);
     std.debug.print("DEBUG: extracted_app_path = '{s}'\n", .{extracted_app_path});
     
-    // Check if app directory exists and move it to backup
-    const backup_dir = try std.fs.path.join(allocator, &.{ self_extraction_dir, "backup" });
-    defer allocator.free(backup_dir);
-    
-    // Clean up old backup if it exists
-    std.fs.cwd().deleteTree(backup_dir) catch {};
-    
-    // Move existing app to backup (if it exists)
-    std.fs.cwd().rename(app_dir, backup_dir) catch |err| switch (err) {
-        error.FileNotFound => {},  // No existing app, that's fine
-        else => return err,
-    };
+    // Remove existing app directory before installing the new one
+    std.fs.cwd().deleteTree(app_dir) catch {};
     
     // Move the extracted app to the app directory
     std.debug.print("\nDEBUG: Preparing to move app...\n", .{});
@@ -524,8 +514,6 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     } else {
         // On Unix systems, rename works across directories
         std.fs.cwd().rename(extracted_app_path, app_dir) catch |err| {
-            // If move fails, try to restore backup
-            std.fs.cwd().rename(backup_dir, app_dir) catch {};
             return err;
         };
     }
@@ -1391,11 +1379,7 @@ pub fn main() !void {
     // todo: get the basename of the newBundlePath and join a new path with it
     // in case the name changed.
 
-    // Note: move the current bundle to application support as a backup in case the update fails
-    // We only need to keep it around until the next update since we assume if you didn't need it
-    // before then you won't need it in the future. ie: only keep one backup around.
-    const backupBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, "backup.app" });
-    try std.fs.renameAbsolute(APPBUNDLE_PATH, backupBundlePath);
+    std.fs.deleteTreeAbsolute(APPBUNDLE_PATH) catch {};
     try std.fs.renameAbsolute(newBundlePath, APPBUNDLE_PATH);
 
     // Platform-specific app launching

@@ -34,7 +34,6 @@ export type UpdateStatusType =
   | 'download-complete'
   | 'applying'
   | 'extracting'
-  | 'creating-backup'
   | 'replacing-app'
   | 'launching-new-version'
   | 'complete'
@@ -147,6 +146,29 @@ let updateInfo: {
   updateReady: boolean;
   error: string;
 };
+
+function cleanupExtractionFolder(extractionFolder: string, keepTarHash: string) {
+  const keepFile = `${keepTarHash}.tar`;
+  try {
+    const entries = readdirSync(extractionFolder);
+    for (const entry of entries) {
+      if (entry === keepFile) continue;
+      const fullPath = join(extractionFolder, entry);
+      try {
+        const s = statSync(fullPath);
+        if (s.isDirectory()) {
+          rmdirSync(fullPath, { recursive: true });
+        } else {
+          unlinkSync(fullPath);
+        }
+      } catch (e) {
+        // Best effort — file may be in use on Windows
+      }
+    }
+  } catch (e) {
+    // Ignore errors in cleanup
+  }
+}
 
 const Updater = {
   // workaround for some weird state stuff in this old version of bun
@@ -550,12 +572,6 @@ const Updater = {
         emitStatus('decompressing', 'Decompression complete');
 
         unlinkSync(prevVersionCompressedTarballPath);
-        try {
-          unlinkSync(currentTarPath);
-        } catch (error) {
-          // Note: ignore the error. it may have already been deleted by the patching process
-          // if the patching process only got halfway
-        }
       }
     }
 
@@ -575,6 +591,9 @@ const Updater = {
       updateInfo.error = "Failed to download latest version";
       emitStatus('error', 'Failed to download latest version', { latestHash });
     }
+
+    // Clean up stale files in the extraction folder (old tars, patches, backups, etc.)
+    cleanupExtractionFolder(extractionFolder, latestHash);
   },
 
   // todo (yoav): this should emit an event so app can cleanup or block the restart
@@ -711,28 +730,14 @@ const Updater = {
             runningAppBundlePath = join(appDataFolder, 'app');
           }
         }
-        // Platform-specific backup handling
-        let backupPath: string;
-        if (currentOS === 'macos') {
-          // On macOS, backup in extraction folder with .app extension
-          backupPath = join(extractionFolder, "backup.app");
-        } else {
-          // On Linux/Windows, create a tar backup of the current app
-          backupPath = join(extractionFolder, "backup.tar");
-        }
-
         try {
-          emitStatus('creating-backup', 'Creating backup of current version...');
+          emitStatus('replacing-app', 'Removing old version...');
 
           if (currentOS === 'macos') {
-            // On macOS, use rename approach
-            // Remove existing backup if it exists
-            if (statSync(backupPath, { throwIfNoEntry: false })) {
-              rmdirSync(backupPath, { recursive: true });
+            // Remove existing app before installing the new one
+            if (statSync(runningAppBundlePath, { throwIfNoEntry: false })) {
+              rmdirSync(runningAppBundlePath, { recursive: true });
             }
-
-            // Move current running app to backup
-            renameSync(runningAppBundlePath, backupPath);
 
             emitStatus('replacing-app', 'Installing new version...');
             // Move new app to running location
@@ -747,17 +752,11 @@ const Updater = {
               // Ignore errors - attribute may not exist
             }
           } else if (currentOS === 'linux') {
-            // On Linux, backup and replace AppImage file
-            // Remove existing backup if it exists
-            if (statSync(backupPath, { throwIfNoEntry: false })) {
-              unlinkSync(backupPath);
-            }
-            
-            // Create backup of current AppImage (if it exists)
+            // On Linux, remove existing AppImage and replace with new one
             if (statSync(runningAppBundlePath, { throwIfNoEntry: false })) {
-              renameSync(runningAppBundlePath, backupPath);
+              unlinkSync(runningAppBundlePath);
             }
-            
+
             // Move new AppImage to app location
             renameSync(newAppBundlePath, runningAppBundlePath);
 
@@ -773,16 +772,21 @@ const Updater = {
             
             // Create/update launcher script that points to the AppImage
             await createLinuxAppImageLauncherScript(runningAppBundlePath);
-          } else {
+          }
+
+          // Clean up stale files in extraction folder
+          if (currentOS !== 'win') {
+            cleanupExtractionFolder(extractionFolder, latestHash);
+          }
+
+          if (currentOS === 'win') {
             // On Windows, files are locked while in use, so we need a helper script
             // that runs after the app exits to do the replacement
             const parentDir = dirname(runningAppBundlePath);
             const updateScriptPath = join(parentDir, 'update.bat');
-            const backupDir = join(parentDir, 'app-backup');
             const launcherPath = join(runningAppBundlePath, 'bin', 'launcher.exe');
 
             // Convert paths to Windows format
-            const backupDirWin = backupDir.replace(/\//g, '\\');
             const runningAppWin = runningAppBundlePath.replace(/\//g, '\\');
             const newAppWin = newAppBundlePath.replace(/\//g, '\\');
             const extractionDirWin = extractionDir.replace(/\//g, '\\');
@@ -790,11 +794,10 @@ const Updater = {
 
             // Create a batch script that will:
             // 1. Wait for the current app to exit
-            // 2. Remove old backup
-            // 3. Move current app to backup
-            // 4. Move new app to current location
-            // 5. Launch the new app
-            // 6. Clean up
+            // 2. Remove current app folder
+            // 3. Move new app to current location
+            // 4. Launch the new app
+            // 5. Clean up
             const updateScript = `@echo off
 setlocal
 
@@ -809,14 +812,9 @@ if "%ERRORLEVEL%"=="0" (
 :: Small extra delay to ensure all file handles are released
 timeout /t 2 /nobreak >nul
 
-:: Remove old backup if exists
-if exist "${backupDirWin}" (
-    rmdir /s /q "${backupDirWin}"
-)
-
-:: Backup current app folder
+:: Remove current app folder
 if exist "${runningAppWin}" (
-    move "${runningAppWin}" "${backupDirWin}"
+    rmdir /s /q "${runningAppWin}"
 )
 
 :: Move new app to current location

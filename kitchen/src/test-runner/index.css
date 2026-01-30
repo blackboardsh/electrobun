@@ -192,7 +192,6 @@ body {
 .status-badge.downloading-full-bundle { background: #b45309; color: #fcd34d; }
 .status-badge.applying { background: #7c3aed; color: #c4b5fd; }
 .status-badge.extracting { background: #7c3aed; color: #c4b5fd; }
-.status-badge.creating-backup { background: #7c3aed; color: #c4b5fd; }
 .status-badge.replacing-app { background: #7c3aed; color: #c4b5fd; }
 .status-badge.launching-new-version { background: #166534; color: #86efac; }
 .status-badge.complete { background: #166534; color: #86efac; }
