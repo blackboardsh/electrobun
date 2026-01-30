@@ -3093,8 +3093,9 @@ public:
                         EventFlags event_flags) override {
         if (command_id == MENU_ID_DEV_TOOLS) {
             CefWindowInfo windowInfo;
+            windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
             CefBrowserSettings settings;
-            
+
             // Create rect for devtools window
             CefRect devtools_rect(100, 100, 800, 600);
             // Set as child of the parent window
@@ -3124,6 +3125,7 @@ public:
 
     bool OnBeforePopup(CefRefPtr<CefBrowser> browser,
                       CefRefPtr<CefFrame> frame,
+                      int popup_id,
                       const CefString& target_url,
                       const CefString& target_frame_name,
                       CefLifeSpanHandler::WindowOpenDisposition target_disposition,
@@ -3177,9 +3179,10 @@ public:
                 (event.modifiers & EVENTFLAG_COMMAND_DOWN) &&
                 (event.modifiers & EVENTFLAG_ALT_DOWN)) {
                 CefWindowInfo windowInfo;
+                windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
                 CefBrowserSettings settings;
-                
-                
+
+
                 // Create rect for devtools window
                 CefRect devtools_rect(100, 100, 800, 600);
                 // Set as child of the parent window
@@ -3855,7 +3858,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
   CefRequestContextSettings settings;
   if (!partitionIdentifier || !partitionIdentifier[0]) {
     settings.persist_session_cookies = false;
-    settings.persist_user_preferences = false;
   } else {
     std::string identifier(partitionIdentifier);
     bool isPersistent = identifier.substr(0, 8) == "persist:";
@@ -3878,11 +3880,9 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         [fileManager createDirectoryAtPath:cachePath withIntermediateDirectories:YES attributes:nil error:nil];
       }
       settings.persist_session_cookies = true;
-      settings.persist_user_preferences = true;
       CefString(&settings.cache_path).FromString([cachePath UTF8String]);
     } else {
       settings.persist_session_cookies = false;
-      settings.persist_user_preferences = false;
     }
   }
 
@@ -3938,6 +3938,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 }
 
                 CefWindowInfo window_info;
+                window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
 
                 NSView *contentView = window.contentView;
 

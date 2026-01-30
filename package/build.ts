@@ -870,19 +870,19 @@ async function vendorAsar() {
 async function vendorCEF() {
     // Use stable CEF version for macOS, current for Windows and Linux
     // full urls for reference:
-    // macos x64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_macosx64_minimal.tar.bz2
-    // macos arm64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_macosarm64_minimal.tar.bz2
-    // windows x64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_windows64_minimal.tar.bz2
-    // windows arm64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_windowsarm64_minimal.tar.bz2
-    // linux x64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_linux64_minimal.tar.bz2
-    // linux arm64: https://cef-builds.spotifycdn.com/cef_binary_125.0.22%2Bgc410c95%2Bchromium-125.0.6422.142_linuxarm64_minimal.tar.bz2
+    // macos x64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_macosx64_minimal.tar.bz2
+    // macos arm64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_macosarm64_minimal.tar.bz2
+    // windows x64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_windows64_minimal.tar.bz2
+    // windows arm64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_windowsarm64_minimal.tar.bz2
+    // linux x64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_linux64_minimal.tar.bz2
+    // linux arm64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_linuxarm64_minimal.tar.bz2
 
-    const CEF_VERSION_MAC = `125.0.22+gc410c95`;
-    const CHROMIUM_VERSION_MAC = `125.0.6422.142`;
-    const CEF_VERSION_WIN = `125.0.22+gc410c95`;
-    const CHROMIUM_VERSION_WIN = `125.0.6422.142`;
-    const CEF_VERSION_LINUX = `125.0.22+gc410c95`;
-    const CHROMIUM_VERSION_LINUX = `125.0.6422.142`;
+    const CEF_VERSION_MAC = `144.0.11+ge135be2`;
+    const CHROMIUM_VERSION_MAC = `144.0.7559.97`;
+    const CEF_VERSION_WIN = `144.0.11+ge135be2`;
+    const CHROMIUM_VERSION_WIN = `144.0.7559.97`;
+    const CEF_VERSION_LINUX = `144.0.11+ge135be2`;
+    const CHROMIUM_VERSION_LINUX = `144.0.7559.97`;
     
     if (OS === 'macos') {
         if (!existsSync(join(process.cwd(), 'vendors', 'cef'))) {                

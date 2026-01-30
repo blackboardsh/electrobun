@@ -867,6 +867,7 @@ public:
         if (command_id == 26501) {
             // Show devtools
             CefWindowInfo windowInfo;
+            windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
             CefBrowserSettings settings;
             CefPoint point(params->GetXCoord(), params->GetYCoord());
             
@@ -5600,7 +5601,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     if (!partitionIdentifier || !partitionIdentifier[0]) {
         // No partition - use in-memory session
         settings.persist_session_cookies = false;
-        settings.persist_user_preferences = false;
     } else {
         std::string identifier(partitionIdentifier);
         bool isPersistent = identifier.substr(0, 8) == "persist:";
@@ -5614,7 +5614,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             if (!localAppData) {
                 printf("ERROR CEF: LOCALAPPDATA not found, falling back to in-memory session\n");
                 settings.persist_session_cookies = false;
-                settings.persist_user_preferences = false;
             } else {
                 // Build path with identifier/channel structure (consistent with CLI and updater)
                 // Structure: %LOCALAPPDATA%\{identifier}\{channel}\CEF\Partitions\{partitionName}
@@ -5625,7 +5624,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 SHCreateDirectoryExW(NULL, wideCachePath.c_str(), NULL);
 
                 settings.persist_session_cookies = true;
-                settings.persist_user_preferences = true;
                 CefString(&settings.cache_path).FromString(cachePath);
 
                 printf("DEBUG CEF: Persistent partition '%s' using cache path: %s\n",
@@ -5634,7 +5632,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         } else {
             // Non-persistent partition - in-memory session
             settings.persist_session_cookies = false;
-            settings.persist_user_preferences = false;
             printf("DEBUG CEF: In-memory partition '%s'\n", identifier.c_str());
         }
     }
@@ -5692,6 +5689,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         
         // Create CEF browser info
         CefWindowInfo windowInfo;
+        windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
         CefRect cefBounds((int)x, (int)y, (int)width, (int)height);
 
         CefBrowserSettings browserSettings;

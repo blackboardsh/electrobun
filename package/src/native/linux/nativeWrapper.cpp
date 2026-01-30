@@ -1080,7 +1080,11 @@ public:
             case 26501: // Inspect Element
             case 26502: // Open DevTools
                 printf("CEF: Opening DevTools...\n");
-                browser->GetHost()->ShowDevTools(CefWindowInfo(), this, CefBrowserSettings(), CefPoint());
+                {
+                    CefWindowInfo devToolsInfo;
+                    devToolsInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+                    browser->GetHost()->ShowDevTools(devToolsInfo, this, CefBrowserSettings(), CefPoint());
+                }
                 return true;
                 
             case 26503: // Reload
@@ -1105,7 +1109,11 @@ public:
                        bool* is_keyboard_shortcut) override {
         if (event.type == KEYEVENT_KEYDOWN && event.windows_key_code == 123) { // F12 key
             printf("CEF: F12 pressed - opening DevTools\n");
-            browser->GetHost()->ShowDevTools(CefWindowInfo(), this, CefBrowserSettings(), CefPoint());
+            {
+                CefWindowInfo devToolsInfo;
+                devToolsInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+                browser->GetHost()->ShowDevTools(devToolsInfo, this, CefBrowserSettings(), CefPoint());
+            }
             return true; // Consume the event
         }
         return false;
@@ -2885,7 +2893,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     if (!partitionIdentifier || !partitionIdentifier[0]) {
         // No partition: use ephemeral settings
         settings.persist_session_cookies = false;
-        settings.persist_user_preferences = false;
     } else {
         std::string identifier(partitionIdentifier);
         bool isPersistent = identifier.substr(0, 8) == "persist:";
@@ -2902,12 +2909,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             g_mkdir_with_parents(cachePath.c_str(), 0755);
 
             settings.persist_session_cookies = true;
-            settings.persist_user_preferences = true;
             CefString(&settings.cache_path).FromString(cachePath);
         } else {
             // Ephemeral partition
             settings.persist_session_cookies = false;
-            settings.persist_user_preferences = false;
         }
     }
 
@@ -3038,6 +3043,7 @@ public:
         
         // Create CEF browser immediately as child of X11 window
         CefWindowInfo window_info;
+        window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
         CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
         
         // Use SetAsChild with the X11 window
