@@ -760,39 +760,219 @@ function escapePathForTerminal(path: string): string {
 	return `"${path.replace(/"/g, '\\"')}"`;
 }
 
+// Download libfuse2 for cross-distribution compatibility
+async function downloadLibfuse2(vendorDir: string): Promise<void> {
+	const arch = ARCH === "arm64" ? "arm64" : "amd64";
+	
+	const tempDir = join(vendorDir, "temp");
+	mkdirSync(tempDir, { recursive: true });
+
+	try {
+		// Strategy 1: Try to extract from the system if libfuse2 is installed but not in standard paths
+		try {
+			console.log("Checking for system libfuse2 in non-standard locations...");
+			const findResult = execSync(
+				`find /usr -name "libfuse.so.2*" -type f 2>/dev/null | head -1`,
+				{ encoding: "utf8" }
+			).trim();
+			
+			if (findResult) {
+				console.log(`Found system libfuse2 at: ${findResult}`);
+				execSync(`cp "${findResult}" "${join(vendorDir, "libfuse.so.2")}"`, {
+					stdio: "inherit",
+				});
+				console.log("✓ Copied system libfuse2 to vendor directory");
+				return;
+			}
+		} catch (e) {
+			// System search failed, continue with download
+		}
+
+		// Strategy 2: Download pre-compiled binary from a reliable source
+		console.log(`Downloading pre-compiled libfuse2 for ${arch}...`);
+		
+		// We'll download from Ubuntu as it's a reliable source with good compatibility
+		const packageUrls: Record<string, string> = {
+			amd64: "http://archive.ubuntu.com/ubuntu/pool/universe/f/fuse/libfuse2_2.9.9-3_amd64.deb",
+			arm64: "http://ports.ubuntu.com/ubuntu-ports/pool/universe/f/fuse/libfuse2_2.9.9-3_arm64.deb",
+		};
+
+		const packageUrl = packageUrls[arch];
+		if (!packageUrl) {
+			throw new Error(`Unsupported architecture for libfuse2 download: ${arch}`);
+		}
+
+		const packageFile = join(tempDir, "libfuse2.deb");
+		
+		// Download the package
+		execSync(`wget -q "${packageUrl}" -O "${packageFile}"`, {
+			stdio: "inherit",
+		});
+
+		// Extract based on available tools
+		console.log("Extracting libfuse2...");
+		
+		// Check if we have 'ar' command (Debian-based)
+		let extractionMethod = "ar";
+		try {
+			execSync("which ar", { stdio: "ignore" });
+		} catch {
+			// Check if we have 'bsdtar' (available on many distros)
+			try {
+				execSync("which bsdtar", { stdio: "ignore" });
+				extractionMethod = "bsdtar";
+			} catch {
+				// Check if we have '7z' (available on many distros)
+				try {
+					execSync("which 7z", { stdio: "ignore" });
+					extractionMethod = "7z";
+				} catch {
+					// Fallback: try to install ar via busybox if available
+					try {
+						execSync("which busybox", { stdio: "ignore" });
+						extractionMethod = "busybox";
+					} catch {
+						throw new Error("No suitable extraction tool found (ar, bsdtar, 7z, or busybox)");
+					}
+				}
+			}
+		}
+
+		// Extract the .deb package
+		switch (extractionMethod) {
+			case "ar":
+				execSync(`cd "${tempDir}" && ar x libfuse2.deb`, { stdio: "inherit" });
+				break;
+			case "bsdtar":
+				execSync(`cd "${tempDir}" && bsdtar -xf libfuse2.deb`, { stdio: "inherit" });
+				break;
+			case "7z":
+				execSync(`cd "${tempDir}" && 7z x libfuse2.deb`, { stdio: "inherit" });
+				break;
+			case "busybox":
+				execSync(`cd "${tempDir}" && busybox ar x libfuse2.deb`, { stdio: "inherit" });
+				break;
+		}
+
+		// Extract the data archive (could be .tar.xz, .tar.gz, or .tar.zst)
+		const dataFiles = execSync(`cd "${tempDir}" && ls data.tar.* 2>/dev/null || true`, {
+			encoding: "utf8"
+		}).trim();
+
+		if (dataFiles) {
+			execSync(`cd "${tempDir}" && tar -xf ${dataFiles}`, { stdio: "inherit" });
+		} else {
+			throw new Error("Could not find data archive in .deb package");
+		}
+
+		// Find and copy the library
+		const libFiles = execSync(
+			`cd "${tempDir}" && find . -name "libfuse.so.2*" -type f | head -1`,
+			{ encoding: "utf8" }
+		).trim();
+
+		if (!libFiles) {
+			throw new Error("Could not find libfuse.so.2 in extracted package");
+		}
+
+		const sourcePath = join(tempDir, libFiles);
+		const destPath = join(vendorDir, "libfuse.so.2");
+		
+		execSync(`cp "${sourcePath}" "${destPath}"`, { stdio: "inherit" });
+		console.log("✓ libfuse2 vendored successfully");
+		
+		// Also copy libfuse.so.2.9.9 as some systems might need the versioned file
+		const versionedDestPath = join(vendorDir, "libfuse.so.2.9.9");
+		execSync(`cp "${sourcePath}" "${versionedDestPath}"`, { stdio: "inherit" });
+
+	} catch (error) {
+		// If download fails, provide helpful instructions for manual installation
+		console.error("Failed to download libfuse2 automatically");
+		console.log("\nManual installation instructions for common distributions:");
+		console.log("  Ubuntu/Debian:  sudo apt install libfuse2");
+		console.log("  Fedora/RHEL:   sudo dnf install fuse-libs");
+		console.log("  openSUSE:       sudo zypper install libfuse2");
+		console.log("  Arch Linux:     sudo pacman -S fuse2");
+		console.log("  Alpine:         sudo apk add fuse");
+		throw error;
+	} finally {
+		// Clean up temp directory
+		rmSync(tempDir, { recursive: true, force: true });
+	}
+}
+
+// Get the vendor directory path
+function getVendorDir(): string {
+	return join(ELECTROBUN_DEP_PATH, "vendor");
+}
+
+// Get appimagetool command with proper environment if using vendored libfuse2
+function getAppImageToolCommand(): string {
+	const vendorDir = getVendorDir();
+	const vendoredLibfusePath = join(vendorDir, "libfuse.so.2");
+	
+	if (existsSync(vendoredLibfusePath)) {
+		// Use vendored libfuse2 by setting LD_LIBRARY_PATH
+		// Also set LD_PRELOAD to ensure our libfuse2 is used over system libs
+		return `LD_LIBRARY_PATH="${vendorDir}:$LD_LIBRARY_PATH" LD_PRELOAD="${vendoredLibfusePath}" appimagetool`;
+	}
+	
+	// Use system appimagetool without modifications
+	return "appimagetool";
+}
+
 // AppImage tooling functions
 async function ensureAppImageTooling(): Promise<void> {
-	// First check if FUSE2 is available
-	try {
-		execSync("ls /usr/lib/*/libfuse.so.2 || ls /lib/*/libfuse.so.2", {
-			stdio: "ignore",
-		});
-	} catch (error) {
-		console.log("");
-		console.log(
-			"═══════════════════════════════════════════════════════════════",
-		);
-		console.log("🚨 FUSE2 DEPENDENCY MISSING");
-		console.log(
-			"═══════════════════════════════════════════════════════════════",
-		);
-		console.log(
-			"AppImage creation requires libfuse2, but it was not found on your system.",
-		);
-		console.log("");
-		console.log("Please install it using:");
-		console.log("   sudo apt update && sudo apt install -y libfuse2");
-		console.log("");
-		console.log(
-			"Without libfuse2, AppImage creation will fail with FUSE errors.",
-		);
-		console.log(
-			"═══════════════════════════════════════════════════════════════",
-		);
-		console.log("");
-		throw new Error(
-			"libfuse2 is required for AppImage creation but not found. Please install it first.",
-		);
+	// Create vendor directory for dependencies
+	const vendorDir = getVendorDir();
+	mkdirSync(vendorDir, { recursive: true });
+
+	// First check if we have vendored libfuse2
+	const vendoredLibfusePath = join(vendorDir, "libfuse.so.2");
+
+	if (existsSync(vendoredLibfusePath)) {
+		console.log("✓ Using vendored libfuse2");
+	} else {
+		// Check if FUSE2 is available system-wide
+		try {
+			execSync("ls /usr/lib/*/libfuse.so.2 || ls /lib/*/libfuse.so.2", {
+				stdio: "ignore",
+			});
+			console.log("✓ System libfuse2 found");
+		} catch (error) {
+			// libfuse2 not found, attempt to download it
+			console.log("📥 libfuse2 not found, downloading vendored copy...");
+			
+			try {
+				await downloadLibfuse2(vendorDir);
+			} catch (downloadError) {
+				console.log("");
+				console.log(
+					"═══════════════════════════════════════════════════════════════",
+				);
+				console.log("🚨 FUSE2 DEPENDENCY MISSING");
+				console.log(
+					"═══════════════════════════════════════════════════════════════",
+				);
+				console.log(
+					"Failed to download libfuse2 automatically.",
+				);
+				console.log("");
+				console.log("You can manually install it using:");
+				console.log("   sudo apt update && sudo apt install -y libfuse2");
+				console.log("");
+				console.log(
+					"Without libfuse2, AppImage creation will fail with FUSE errors.",
+				);
+				console.log(
+					"═══════════════════════════════════════════════════════════════",
+				);
+				console.log("");
+				throw new Error(
+					"libfuse2 is required for AppImage creation but not found. Please install it manually.",
+				);
+			}
+		}
 	}
 
 	try {
@@ -833,8 +1013,15 @@ async function ensureAppImageTooling(): Promise<void> {
 				execSync("mkdir -p ~/.local/bin", { stdio: "inherit" });
 
 				// Extract the AppImage to get the binary
+				// Use vendored libfuse2 if available for extraction
+				const vendorDir = getVendorDir();
+				const vendoredLibfusePath = join(vendorDir, "libfuse.so.2");
+				const extractCmd = existsSync(vendoredLibfusePath)
+					? `LD_LIBRARY_PATH="${vendorDir}:$LD_LIBRARY_PATH" ./appimagetool.AppImage --appimage-extract`
+					: "./appimagetool.AppImage --appimage-extract";
+				
 				execSync(
-					"cd /tmp && ./appimagetool.AppImage --appimage-extract >/dev/null 2>&1",
+					`cd /tmp && ${extractCmd} >/dev/null 2>&1`,
 					{ stdio: "inherit" },
 				);
 				execSync(
@@ -985,7 +1172,7 @@ Categories=Utility;
 	const appImageArch = ARCH === "arm64" ? "aarch64" : "x86_64";
 
 	// Use full path to appimagetool if not in PATH
-	let appimagetoolCmd = "appimagetool";
+	let appimagetoolBase = "appimagetool";
 	try {
 		execSync("which appimagetool", { stdio: "ignore" });
 	} catch {
@@ -997,9 +1184,12 @@ Categories=Utility;
 			"appimagetool",
 		);
 		if (existsSync(localBinPath)) {
-			appimagetoolCmd = localBinPath;
+			appimagetoolBase = localBinPath;
 		}
 	}
+	
+	// Get the command with proper environment for vendored libfuse2
+	const appimagetoolCmd = getAppImageToolCommand().replace("appimagetool", appimagetoolBase);
 
 	try {
 		// First try with --no-appstream flag to avoid some FUSE-related issues
@@ -3598,7 +3788,7 @@ Categories=Utility;
 		const appImageArch = ARCH === "arm64" ? "aarch64" : "x86_64";
 
 		// Use appimagetool to create the wrapper AppImage
-		let appimagetoolCmd = "appimagetool";
+		let appimagetoolBase = "appimagetool";
 		try {
 			execSync("which appimagetool", { stdio: "ignore" });
 		} catch {
@@ -3609,9 +3799,12 @@ Categories=Utility;
 				"appimagetool",
 			);
 			if (existsSync(localBinPath)) {
-				appimagetoolCmd = localBinPath;
+				appimagetoolBase = localBinPath;
 			}
 		}
+		
+		// Get the command with proper environment for vendored libfuse2
+		const appimagetoolCmd = getAppImageToolCommand().replace("appimagetool", appimagetoolBase);
 
 		try {
 			execSync(
