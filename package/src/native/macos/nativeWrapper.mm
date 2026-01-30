@@ -87,6 +87,56 @@ class CefLifeSpanHandler;
 class CefBrowser;
 class ElectrobunSchemeHandler;
 class ElectrobunSchemeHandlerFactory;
+class ElectrobunClient;
+
+typedef void (*RemoteDevToolsClosedCallback)(void* ctx, int target_id);
+void RemoteDevToolsClosed(void* ctx, int target_id);
+
+class RemoteDevToolsClient : public CefClient, public CefLifeSpanHandler {
+public:
+    RemoteDevToolsClient(RemoteDevToolsClosedCallback callback, void* ctx, int target_id)
+        : callback_(callback), ctx_(ctx), target_id_(target_id) {}
+
+    CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
+        return this;
+    }
+
+    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        if (callback_) {
+            RemoteDevToolsClosedCallback cb = callback_;
+            void* ctx = ctx_;
+            int target_id = target_id_;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                cb(ctx, target_id);
+            });
+        }
+    }
+
+private:
+    RemoteDevToolsClosedCallback callback_ = nullptr;
+    void* ctx_ = nullptr;
+    int target_id_ = 0;
+
+    IMPLEMENT_REFCOUNTING(RemoteDevToolsClient);
+};
+
+@interface RemoteDevToolsWindowDelegate : NSObject <NSWindowDelegate> {
+@public
+    RemoteDevToolsClosedCallback callback;
+    void* ctx;
+    int target_id;
+}
+@end
+
+@implementation RemoteDevToolsWindowDelegate
+- (BOOL)windowShouldClose:(id)sender {
+    if (callback) {
+        callback(ctx, target_id);
+    }
+    // Prevent NSWindow from actually closing to avoid CEF teardown crashes.
+    return NO;
+}
+@end
 
 // Type definitions
 // Core callback types are defined in shared/callbacks.h
@@ -2445,6 +2495,10 @@ public:
         command_line->AppendSwitch("enable-features=PictureInPicture");
         command_line->AppendSwitch("enable-fullscreen");
 
+        // Allow DevTools frontend (served over https) to connect to local ws://127.0.0.1:9222
+        command_line->AppendSwitchWithValue("remote-allow-origins", "*");
+        command_line->AppendSwitch("allow-insecure-localhost");
+
         // Note: CEF transparency is handled via OSR (off-screen rendering) mode
         // which is enabled when transparent:true is set in the window options
 
@@ -2663,6 +2717,17 @@ private:
     // Track download paths by download ID
     std::map<uint32_t, std::string> download_paths_; 
 
+    struct DevToolsHost {
+        NSWindow* window = nil;
+        CefRefPtr<CefBrowser> browser;
+        CefRefPtr<RemoteDevToolsClient> client;
+        RemoteDevToolsWindowDelegate* delegate = nil;
+        bool is_open = false;
+    };
+
+    std::map<int, DevToolsHost> devtools_hosts_;
+    std::string last_title_;
+
      // Helper function to escape JavaScript code for embedding in a string
     std::string EscapeJavaScriptString(const std::string& input) {
         std::string result;
@@ -2695,7 +2760,184 @@ private:
 
     std::vector<std::shared_ptr<const char>> messageStrings_;
 
+    void ShowDevToolsWindow(CefRefPtr<CefBrowser> browser, const CefPoint& inspect_at) {
+        if (!browser || !browser->GetHost()) {
+            return;
+        }
+
+        CefWindowInfo windowInfo;
+        CefBrowserSettings settings;
+        windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+
+        CefWindowHandle parent = browser->GetHost()->GetWindowHandle();
+        if (parent) {
+            NSView* parentView = (__bridge NSView*)parent;
+            NSRect bounds = [parentView bounds];
+            CefRect devtools_rect(0, 0, (int)bounds.size.width, (int)bounds.size.height);
+            windowInfo.SetAsChild(parent, devtools_rect);
+        } else {
+            CefRect devtools_rect(0, 0, 900, 700);
+            windowInfo.SetAsChild(nullptr, devtools_rect);
+        }
+
+        browser->GetHost()->ShowDevTools(windowInfo, nullptr, settings, inspect_at);
+    }
+
+    void CreateRemoteDevToolsWindow(int target_id, const std::string& url) {
+        DevToolsHost& host = devtools_hosts_[target_id];
+
+        if (!host.window) {
+            NSRect frame = NSMakeRect(120, 120, 1100, 800);
+            NSWindowStyleMask style = NSWindowStyleMaskTitled |
+                                      NSWindowStyleMaskClosable |
+                                      NSWindowStyleMaskResizable |
+                                      NSWindowStyleMaskMiniaturizable;
+            host.window = [[NSWindow alloc] initWithContentRect:frame
+                                                      styleMask:style
+                                                        backing:NSBackingStoreBuffered
+                                                          defer:NO];
+            [host.window setTitle:@"DevTools"];
+
+            host.delegate = [[RemoteDevToolsWindowDelegate alloc] init];
+            host.delegate->callback = RemoteDevToolsClosed;
+            host.delegate->ctx = this;
+            host.delegate->target_id = target_id;
+            [host.window setDelegate:host.delegate];
+        }
+
+        [host.window makeKeyAndOrderFront:nil];
+        host.is_open = true;
+
+        if (!host.client) {
+            host.client = new RemoteDevToolsClient(RemoteDevToolsClosed, this, target_id);
+        }
+
+        if (host.browser) {
+            host.browser->GetMainFrame()->LoadURL(CefString(url));
+            return;
+        }
+
+        NSView* contentView = [host.window contentView];
+        NSRect bounds = [contentView bounds];
+        CefRect devtools_rect(0, 0, (int)bounds.size.width, (int)bounds.size.height);
+
+        CefWindowInfo windowInfo;
+        windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+        windowInfo.SetAsChild((__bridge void*)contentView, devtools_rect);
+
+        CefBrowserSettings settings;
+        host.browser = CefBrowserHost::CreateBrowserSync(
+            windowInfo,
+            host.client,
+            CefString(url),
+            settings,
+            nullptr,
+            nullptr);
+        host.is_open = true;
+    }
+
+    void OpenRemoteDevToolsFrontend(CefRefPtr<CefBrowser> browser) {
+        int target_id = static_cast<int>(webview_id_);
+        std::string targetUrl;
+        if (browser && browser->GetMainFrame()) {
+            targetUrl = browser->GetMainFrame()->GetURL().ToString();
+        }
+
+        NSString* targetUrlNs = targetUrl.empty() ? nil : [NSString stringWithUTF8String:targetUrl.c_str()];
+
+        NSURL* url = [NSURL URLWithString:@"http://127.0.0.1:9222/json"];
+        NSURLSessionDataTask* task = [[NSURLSession sharedSession]
+            dataTaskWithURL:url
+          completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
+            if (error || !data) {
+                NSLog(@"[CEF] Remote DevTools: failed to fetch JSON: %@", error);
+                return;
+            }
+
+            NSError* jsonError = nil;
+            id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+            if (jsonError || ![json isKindOfClass:[NSArray class]]) {
+                NSLog(@"[CEF] Remote DevTools: invalid JSON");
+                return;
+            }
+
+            NSArray* items = (NSArray*)json;
+            if ([items count] == 0) {
+                NSLog(@"[CEF] Remote DevTools: no targets");
+                return;
+            }
+
+            NSDictionary* selected = nil;
+            NSString* targetTitleNs = nil;
+            if (!last_title_.empty()) {
+                targetTitleNs = [NSString stringWithUTF8String:last_title_.c_str()];
+            }
+
+            if (targetUrlNs || targetTitleNs) {
+                for (NSDictionary* item in items) {
+                    NSString* itemUrl = item[@"url"];
+                    NSString* itemTitle = item[@"title"];
+
+                    bool urlMatch = false;
+                    bool titleMatch = false;
+                    if (targetUrlNs && [itemUrl isKindOfClass:[NSString class]] &&
+                        [itemUrl isEqualToString:targetUrlNs]) {
+                        urlMatch = true;
+                    }
+                    if (targetTitleNs && [itemTitle isKindOfClass:[NSString class]] &&
+                        [itemTitle isEqualToString:targetTitleNs]) {
+                        titleMatch = true;
+                    }
+
+                    if ((targetUrlNs && targetTitleNs && urlMatch && titleMatch) ||
+                        (targetUrlNs && urlMatch) ||
+                        (targetTitleNs && titleMatch)) {
+                        selected = item;
+                        break;
+                    }
+                }
+            }
+            if (!selected) {
+                selected = [items objectAtIndex:0];
+            }
+
+            NSString* wsUrl = selected[@"webSocketDebuggerUrl"];
+            if (![wsUrl isKindOfClass:[NSString class]]) {
+                NSLog(@"[CEF] Remote DevTools: missing webSocketDebuggerUrl");
+                return;
+            }
+
+            // Build a local DevTools frontend URL to avoid cross-origin rejection.
+            // Example: http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/<id>
+            NSString* wsParam = [wsUrl stringByReplacingOccurrencesOfString:@"ws://" withString:@""];
+            NSString* finalUrl = [NSString stringWithFormat:@"http://127.0.0.1:9222/devtools/inspector.html?ws=%@&dockSide=undocked", wsParam];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                this->CreateRemoteDevToolsWindow(target_id, [finalUrl UTF8String]);
+            });
+        }];
+
+        [task resume];
+    }
+
 public:
+    void OnRemoteDevToolsClosed(int target_id) {
+        auto it = devtools_hosts_.find(target_id);
+        if (it == devtools_hosts_.end()) {
+            return;
+        }
+        it->second.is_open = false;
+        if (it->second.window) {
+            [it->second.window orderOut:nil];
+        }
+    }
+
+    void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) override {
+        if (browser && browser->GetMainFrame()) {
+            last_title_ = title.ToString();
+        }
+    }
+
     ElectrobunClient(uint32_t webviewId,
                      HandlePostMessage bunBridgeHandler,
                      HandlePostMessage internalBridgeHandler,
@@ -3092,22 +3334,15 @@ public:
                         int command_id,
                         EventFlags event_flags) override {
         if (command_id == MENU_ID_DEV_TOOLS) {
-            CefWindowInfo windowInfo;
-            windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-            CefBrowserSettings settings;
+            OpenRemoteDevToolsFrontend(browser);
 
-            // Create rect for devtools window
-            CefRect devtools_rect(100, 100, 800, 600);
-            // Set as child of the parent window
-            windowInfo.SetAsChild(nullptr, devtools_rect);
-            
-            // Create point for inspect element
-            CefPoint inspect_at(0, 0);
-            
-            browser->GetHost()->ShowDevTools(windowInfo, 
-                                        browser->GetHost()->GetClient(), 
-                                        settings, 
-                                        inspect_at);
+            CefPoint inspect_at(params->GetXCoord(), params->GetYCoord());
+            CefRefPtr<ElectrobunClient> self(this);
+            CefRefPtr<CefBrowser> browser_ref(browser);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // Disabled for now due to crash in CEF 144 on macOS.
+                // self->ShowDevToolsWindow(browser_ref, inspect_at);
+            });
             return true;
         }
         return false;
@@ -3178,22 +3413,12 @@ public:
             if (event.native_key_code == 34 &&
                 (event.modifiers & EVENTFLAG_COMMAND_DOWN) &&
                 (event.modifiers & EVENTFLAG_ALT_DOWN)) {
-                CefWindowInfo windowInfo;
-                windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-                CefBrowserSettings settings;
-
-
-                // Create rect for devtools window
-                CefRect devtools_rect(100, 100, 800, 600);
-                // Set as child of the parent window
-                windowInfo.SetAsChild(nullptr, devtools_rect);
-                
                 CefPoint inspect_at(0, 0);
-                
-                browser->GetHost()->ShowDevTools(windowInfo, 
-                                            browser->GetHost()->GetClient(), 
-                                            settings, 
-                                            inspect_at);
+                CefRefPtr<ElectrobunClient> self(this);
+                CefRefPtr<CefBrowser> browser_ref(browser);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self->ShowDevToolsWindow(browser_ref, inspect_at);
+                });
                 return true;
             }
             
@@ -3550,6 +3775,13 @@ public:
 // Initialize static debounce timestamp for cmd+click handling
 NSTimeInterval ElectrobunClient::lastCmdClickTime = 0;
 
+void RemoteDevToolsClosed(void* ctx, int target_id) {
+    if (!ctx) {
+        return;
+    }
+    static_cast<ElectrobunClient*>(ctx)->OnRemoteDevToolsClosed(target_id);
+}
+
 @interface CEFWebViewImpl : AbstractView
     // @property (nonatomic, strong) WKWebView *webView;
 
@@ -3599,15 +3831,30 @@ bool initializeCEF() {
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single threaded message loop on macOS
     settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
+    settings.remote_debugging_port = 9222;
     // settings.log_severity = LOGSEVERITY_VERBOSE;
 
-    // // Set explicit path to this app's own CEF helper process
-    // // This prevents multiple apps from sharing the same helper
-    // NSString* helperPath = [[NSBundle mainBundle] pathForAuxiliaryExecutable:@"bun Helper.app/Contents/MacOS/bun Helper"];
-    // if (helperPath) {
-    //     CefString(&settings.browser_subprocess_path) = [helperPath UTF8String];
-    //     NSLog(@"[CEF] Using helper at: %@", helperPath);
-    // }
+    // Set explicit paths to avoid bundle lookup issues in newer CEF builds.
+    NSString* bundlePath = [[NSBundle mainBundle] bundlePath];
+    if (bundlePath) {
+        CefString(&settings.main_bundle_path) = [bundlePath UTF8String];
+    }
+
+    NSString* frameworkPath = [[NSBundle mainBundle]
+        pathForResource:@"Chromium Embedded Framework"
+                 ofType:@"framework"
+            inDirectory:@"Contents/Frameworks"];
+    if (frameworkPath) {
+        CefString(&settings.framework_dir_path) = [frameworkPath UTF8String];
+    }
+
+    // This prevents multiple apps from sharing the same helper.
+    NSString* helperPath =
+        [[NSBundle mainBundle] pathForAuxiliaryExecutable:@"bun Helper.app/Contents/MacOS/bun Helper"];
+    if (helperPath) {
+        CefString(&settings.browser_subprocess_path) = [helperPath UTF8String];
+        NSLog(@"[CEF] Using helper at: %@", helperPath);
+    }
     
     // Add cache path to prevent warnings and potential issues
      // Use app-specific cache directory to allow multiple Electrobun apps to run simultaneously
@@ -6401,5 +6648,3 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
 extern "C" void setWindowIcon(void* window, const char* iconPath) {
     // Not supported on macOS - macOS windows use the app bundle icon
 }
-
-
