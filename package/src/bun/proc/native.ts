@@ -9,867 +9,901 @@ const menuDataRegistry = new Map<string, any>();
 let menuDataCounter = 0;
 
 function storeMenuData(data: any): string {
-  const id = `menuData_${++menuDataCounter}`;
-  menuDataRegistry.set(id, data);
-  return id;
+	const id = `menuData_${++menuDataCounter}`;
+	menuDataRegistry.set(id, data);
+	return id;
 }
 
 function getMenuData(id: string): any {
-  return menuDataRegistry.get(id);
+	return menuDataRegistry.get(id);
 }
 
 function clearMenuData(id: string): void {
-  menuDataRegistry.delete(id);
+	menuDataRegistry.delete(id);
 }
 
 // Shared methods for EB delimiter serialization/deserialization
-const ELECTROBUN_DELIMITER = '|EB|';
+const ELECTROBUN_DELIMITER = "|EB|";
 
 function serializeMenuAction(action: string, data: any): string {
-  const dataId = storeMenuData(data);
-  return `${ELECTROBUN_DELIMITER}${dataId}|${action}`;
+	const dataId = storeMenuData(data);
+	return `${ELECTROBUN_DELIMITER}${dataId}|${action}`;
 }
 
-function deserializeMenuAction(encodedAction: string): { action: string; data: any } {
-  let actualAction = encodedAction;
-  let data = undefined;
-  
-  if (encodedAction.startsWith(ELECTROBUN_DELIMITER)) {
-    const parts = encodedAction.split('|');
-    if (parts.length >= 4) { // ['', 'EB', 'dataId', 'actualAction', ...]
-      const dataId = parts[2];
-      actualAction = parts.slice(3).join('|'); // Rejoin in case action contains |
-      data = getMenuData(dataId);
-      
-      // Clean up data from registry after use
-      clearMenuData(dataId);
-    }
-  }
-  
-  return { action: actualAction, data };
+function deserializeMenuAction(encodedAction: string): {
+	action: string;
+	data: any;
+} {
+	let actualAction = encodedAction;
+	let data = undefined;
+
+	if (encodedAction.startsWith(ELECTROBUN_DELIMITER)) {
+		const parts = encodedAction.split("|");
+		if (parts.length >= 4) {
+			// ['', 'EB', 'dataId', 'actualAction', ...]
+			const dataId = parts[2];
+			actualAction = parts.slice(3).join("|"); // Rejoin in case action contains |
+			data = getMenuData(dataId);
+
+			// Clean up data from registry after use
+			clearMenuData(dataId);
+		}
+	}
+
+	return { action: actualAction, data };
 }
 
 // todo: set up FFI, this is already in the webworker.
 
-import { dlopen, suffix, JSCallback, CString, ptr, FFIType, toArrayBuffer, type Pointer } from "bun:ffi";
+import {
+	dlopen,
+	suffix,
+	JSCallback,
+	CString,
+	ptr,
+	FFIType,
+	toArrayBuffer,
+	type Pointer,
+} from "bun:ffi";
 import { BrowserWindow } from "../core/BrowserWindow";
 
-
-
 export const native = (() => {
-  try {
-    // Use absolute path to native wrapper DLL to avoid working directory issues
-    // On Windows shortcuts, the working directory may not be set correctly
-    const nativeWrapperPath = join(process.cwd(), `libNativeWrapper.${suffix}`);
-    return dlopen(nativeWrapperPath, {  
-      // window
-      createWindowWithFrameAndStyleFromWorker: {
-        // Pass each parameter individually
-        args: [
-          FFIType.u32,                 // windowId
-          FFIType.f64, FFIType.f64,    // x, y
-          FFIType.f64, FFIType.f64,    // width, height
-          FFIType.u32,           // styleMask
-          FFIType.cstring,       // titleBarStyle
-          FFIType.bool,          // transparent
-          FFIType.function,      // closeHandler
-          FFIType.function,      // moveHandler
-          FFIType.function,      // resizeHandler
-          FFIType.function       // focusHandler
-        ],
-        returns: FFIType.ptr
-      },
-      setWindowTitle: {
-        args: [
-          FFIType.ptr, // window ptr
-          FFIType.cstring, // title
-        ],
-        returns: FFIType.void,
-      },
-      showWindow: {
-        args: [
-          FFIType.ptr, // window ptr
-        ],
-        returns: FFIType.void,
-      },
-      closeWindow: {
-        args: [
-          FFIType.ptr, // window ptr
-        ],
-        returns: FFIType.void,
-      },
-      minimizeWindow: {
-        args: [FFIType.ptr],
-        returns: FFIType.void,
-      },
-      restoreWindow: {
-        args: [FFIType.ptr],
-        returns: FFIType.void,
-      },
-      isWindowMinimized: {
-        args: [FFIType.ptr],
-        returns: FFIType.bool,
-      },
-      maximizeWindow: {
-        args: [FFIType.ptr],
-        returns: FFIType.void,
-      },
-      unmaximizeWindow: {
-        args: [FFIType.ptr],
-        returns: FFIType.void,
-      },
-      isWindowMaximized: {
-        args: [FFIType.ptr],
-        returns: FFIType.bool,
-      },
-      setWindowFullScreen: {
-        args: [FFIType.ptr, FFIType.bool],
-        returns: FFIType.void,
-      },
-      isWindowFullScreen: {
-        args: [FFIType.ptr],
-        returns: FFIType.bool,
-      },
-      setWindowAlwaysOnTop: {
-        args: [FFIType.ptr, FFIType.bool],
-        returns: FFIType.void,
-      },
-      isWindowAlwaysOnTop: {
-        args: [FFIType.ptr],
-        returns: FFIType.bool,
-      },
-      setWindowPosition: {
-        args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-        returns: FFIType.void,
-      },
-      setWindowSize: {
-        args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-        returns: FFIType.void,
-      },
-      setWindowFrame: {
-        args: [FFIType.ptr, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64],
-        returns: FFIType.void,
-      },
-      getWindowFrame: {
-        args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
-        returns: FFIType.void,
-      },
-      // webview
-      initWebview: {
-        args: [
-          FFIType.u32, // webviewId
-          FFIType.ptr, // windowPtr
-          FFIType.cstring, // renderer
-          FFIType.cstring, // url
-          FFIType.f64, FFIType.f64,    // x, y
-          FFIType.f64, FFIType.f64,    // width, height
-          FFIType.bool, // autoResize
-          FFIType.cstring, // partition
-          FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
-          FFIType.function, // webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
-          FFIType.function, //  bunBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
-          FFIType.function, //  internalBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
-          FFIType.cstring, // electrobunPreloadScript
-          FFIType.cstring, // customPreloadScript
-          FFIType.bool, // transparent
-        ],
-        returns: FFIType.ptr
-      },
+	try {
+		// Use absolute path to native wrapper DLL to avoid working directory issues
+		// On Windows shortcuts, the working directory may not be set correctly
+		const nativeWrapperPath = join(process.cwd(), `libNativeWrapper.${suffix}`);
+		return dlopen(nativeWrapperPath, {
+			// window
+			createWindowWithFrameAndStyleFromWorker: {
+				// Pass each parameter individually
+				args: [
+					FFIType.u32, // windowId
+					FFIType.f64,
+					FFIType.f64, // x, y
+					FFIType.f64,
+					FFIType.f64, // width, height
+					FFIType.u32, // styleMask
+					FFIType.cstring, // titleBarStyle
+					FFIType.bool, // transparent
+					FFIType.function, // closeHandler
+					FFIType.function, // moveHandler
+					FFIType.function, // resizeHandler
+					FFIType.function, // focusHandler
+				],
+				returns: FFIType.ptr,
+			},
+			setWindowTitle: {
+				args: [
+					FFIType.ptr, // window ptr
+					FFIType.cstring, // title
+				],
+				returns: FFIType.void,
+			},
+			showWindow: {
+				args: [
+					FFIType.ptr, // window ptr
+				],
+				returns: FFIType.void,
+			},
+			closeWindow: {
+				args: [
+					FFIType.ptr, // window ptr
+				],
+				returns: FFIType.void,
+			},
+			minimizeWindow: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			restoreWindow: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			isWindowMinimized: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			maximizeWindow: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			unmaximizeWindow: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			isWindowMaximized: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			setWindowFullScreen: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			isWindowFullScreen: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			setWindowAlwaysOnTop: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			isWindowAlwaysOnTop: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			setWindowPosition: {
+				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			setWindowSize: {
+				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			setWindowFrame: {
+				args: [FFIType.ptr, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			getWindowFrame: {
+				args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
+			// webview
+			initWebview: {
+				args: [
+					FFIType.u32, // webviewId
+					FFIType.ptr, // windowPtr
+					FFIType.cstring, // renderer
+					FFIType.cstring, // url
+					FFIType.f64,
+					FFIType.f64, // x, y
+					FFIType.f64,
+					FFIType.f64, // width, height
+					FFIType.bool, // autoResize
+					FFIType.cstring, // partition
+					FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
+					FFIType.function, // webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
+					FFIType.function, //  bunBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+					FFIType.function, //  internalBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+					FFIType.cstring, // electrobunPreloadScript
+					FFIType.cstring, // customPreloadScript
+					FFIType.bool, // transparent
+				],
+				returns: FFIType.ptr,
+			},
 
-      // webviewtag
-      webviewCanGoBack: {
-        args: [FFIType.ptr],
-        returns: FFIType.bool
-      },
+			// webviewtag
+			webviewCanGoBack: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
 
-      webviewCanGoForward: {
-        args: [FFIType.ptr],
-        returns: FFIType.bool
-      },
-      // TODO: Curently CEF doesn't support this directly
-      // revisit after refactor
-      // callAsyncJavaScript: {
-      //   args: [
-      //     FFIType.
-      //   ],
-      //   returns: FFIType.void
-      // },
-      resizeWebview: {
-        args: [
-          FFIType.ptr, // webview handle
-          FFIType.f64, // x
-          FFIType.f64, // y
-          FFIType.f64, // width
-          FFIType.f64, // height
-          FFIType.cstring // maskJson
-        ],
-        returns: FFIType.void
-      },
+			webviewCanGoForward: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			// TODO: Curently CEF doesn't support this directly
+			// revisit after refactor
+			// callAsyncJavaScript: {
+			//   args: [
+			//     FFIType.
+			//   ],
+			//   returns: FFIType.void
+			// },
+			resizeWebview: {
+				args: [
+					FFIType.ptr, // webview handle
+					FFIType.f64, // x
+					FFIType.f64, // y
+					FFIType.f64, // width
+					FFIType.f64, // height
+					FFIType.cstring, // maskJson
+				],
+				returns: FFIType.void,
+			},
 
-      loadURLInWebView: {
-        args: [FFIType.ptr, FFIType.cstring],
-        returns: FFIType.void
-      },
-      loadHTMLInWebView: {
-        args: [FFIType.ptr, FFIType.cstring],
-        returns: FFIType.void
-      },
-     
-      updatePreloadScriptToWebView: {
-        args: [
-          FFIType.ptr, // webview handle
-          FFIType.cstring,  // script identifier
-          FFIType.cstring,  // script
-          FFIType.bool  // allframes
-        ],
-        returns: FFIType.void
-      },
-      webviewGoBack: {
-        args: [FFIType.ptr],
-        returns: FFIType.void
-      },
-      webviewGoForward: {
-        args: [FFIType.ptr],
-        returns: FFIType.void
-      },
-      webviewReload: {
-        args: [FFIType.ptr],
-        returns: FFIType.void
-      },
-      webviewRemove: {
-        args: [FFIType.ptr],
-        returns: FFIType.void
-      },
-      setWebviewHTMLContent: {
-        args: [FFIType.u32, FFIType.cstring],
-        returns: FFIType.void
-      },
-      startWindowMove: {
-        args: [FFIType.ptr],
-        returns: FFIType.void
-      },
-      stopWindowMove: {
-        args: [],
-        returns: FFIType.void
-      },
-      webviewSetTransparent: {
-        // TODO XX: bools or ints?
-        args: [FFIType.ptr, FFIType.bool],
-        returns: FFIType.void
-      },
-      webviewSetPassthrough: {
-        args: [FFIType.ptr, FFIType.bool],
-        returns: FFIType.void
-      },
-      webviewSetHidden: {
-        args: [FFIType.ptr, FFIType.bool],
-        returns: FFIType.void
-      },
-      setWebviewNavigationRules: {
-        args: [FFIType.ptr, FFIType.cstring],
-        returns: FFIType.void
-      },
-      webviewFindInPage: {
-        args: [FFIType.ptr, FFIType.cstring, FFIType.bool, FFIType.bool],
-        returns: FFIType.void
-      },
-      webviewStopFind: {
-        args: [FFIType.ptr],
-        returns: FFIType.void
-      },
-      evaluateJavaScriptWithNoCompletion: {
-        args: [FFIType.ptr, FFIType.cstring],
-        returns: FFIType.void
-      },
-      // Tray
-      createTray: {
-        args: [
-          FFIType.u32, // id
-          FFIType.cstring, // title
-          FFIType.cstring, // pathToImage
-          FFIType.bool, // isTemplate
-          FFIType.u32, // width
-          FFIType.u32, //height
-          FFIType.function, // trayItemHandler
-         ],
-        returns: FFIType.ptr
-      },
-      setTrayTitle: {
-        args: [FFIType.ptr, FFIType.cstring],
-        returns: FFIType.void
-      },
-      setTrayImage: {
-        args: [FFIType.ptr, FFIType.cstring],
-        returns: FFIType.void
-      },
-      setTrayMenu: {
-        args: [FFIType.ptr, FFIType.cstring],
-        returns: FFIType.void
-      },
-      removeTray: {
-        args: [FFIType.ptr],
-        returns: FFIType.void
-      },
-      setApplicationMenu: {
-        args: [FFIType.cstring, FFIType.function],
-        returns: FFIType.void
-      },
-      showContextMenu: {
-        args: [FFIType.cstring, FFIType.function],
-        returns: FFIType.void
-      },   
-      moveToTrash: {
-        args: [FFIType.cstring],
-        returns: FFIType.bool
-      },  
-      showItemInFolder: {
-        args: [FFIType.cstring],
-        returns: FFIType.void
-      },
-      openExternal: {
-        args: [FFIType.cstring],
-        returns: FFIType.bool
-      },
-      openPath: {
-        args: [FFIType.cstring],
-        returns: FFIType.bool
-      },
-      showNotification: {
-        args: [
-          FFIType.cstring, // title
-          FFIType.cstring, // body
-          FFIType.cstring, // subtitle
-          FFIType.bool,    // silent
-        ],
-        returns: FFIType.void
-      },
+			loadURLInWebView: {
+				args: [FFIType.ptr, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			loadHTMLInWebView: {
+				args: [FFIType.ptr, FFIType.cstring],
+				returns: FFIType.void,
+			},
 
-      // Global keyboard shortcuts
-      setGlobalShortcutCallback: {
-        args: [FFIType.function],
-        returns: FFIType.void
-      },
-      registerGlobalShortcut: {
-        args: [FFIType.cstring],
-        returns: FFIType.bool
-      },
-      unregisterGlobalShortcut: {
-        args: [FFIType.cstring],
-        returns: FFIType.bool
-      },
-      unregisterAllGlobalShortcuts: {
-        args: [],
-        returns: FFIType.void
-      },
-      isGlobalShortcutRegistered: {
-        args: [FFIType.cstring],
-        returns: FFIType.bool
-      },
+			updatePreloadScriptToWebView: {
+				args: [
+					FFIType.ptr, // webview handle
+					FFIType.cstring, // script identifier
+					FFIType.cstring, // script
+					FFIType.bool, // allframes
+				],
+				returns: FFIType.void,
+			},
+			webviewGoBack: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			webviewGoForward: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			webviewReload: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			webviewRemove: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			setWebviewHTMLContent: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			startWindowMove: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			stopWindowMove: {
+				args: [],
+				returns: FFIType.void,
+			},
+			webviewSetTransparent: {
+				// TODO XX: bools or ints?
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			webviewSetPassthrough: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			webviewSetHidden: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			setWebviewNavigationRules: {
+				args: [FFIType.ptr, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			webviewFindInPage: {
+				args: [FFIType.ptr, FFIType.cstring, FFIType.bool, FFIType.bool],
+				returns: FFIType.void,
+			},
+			webviewStopFind: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			evaluateJavaScriptWithNoCompletion: {
+				args: [FFIType.ptr, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			// Tray
+			createTray: {
+				args: [
+					FFIType.u32, // id
+					FFIType.cstring, // title
+					FFIType.cstring, // pathToImage
+					FFIType.bool, // isTemplate
+					FFIType.u32, // width
+					FFIType.u32, //height
+					FFIType.function, // trayItemHandler
+				],
+				returns: FFIType.ptr,
+			},
+			setTrayTitle: {
+				args: [FFIType.ptr, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			setTrayImage: {
+				args: [FFIType.ptr, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			setTrayMenu: {
+				args: [FFIType.ptr, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			removeTray: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			setApplicationMenu: {
+				args: [FFIType.cstring, FFIType.function],
+				returns: FFIType.void,
+			},
+			showContextMenu: {
+				args: [FFIType.cstring, FFIType.function],
+				returns: FFIType.void,
+			},
+			moveToTrash: {
+				args: [FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			showItemInFolder: {
+				args: [FFIType.cstring],
+				returns: FFIType.void,
+			},
+			openExternal: {
+				args: [FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			openPath: {
+				args: [FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			showNotification: {
+				args: [
+					FFIType.cstring, // title
+					FFIType.cstring, // body
+					FFIType.cstring, // subtitle
+					FFIType.bool, // silent
+				],
+				returns: FFIType.void,
+			},
 
-      // Screen API
-      getAllDisplays: {
-        args: [],
-        returns: FFIType.cstring
-      },
-      getPrimaryDisplay: {
-        args: [],
-        returns: FFIType.cstring
-      },
-      getCursorScreenPoint: {
-        args: [],
-        returns: FFIType.cstring
-      },
+			// Global keyboard shortcuts
+			setGlobalShortcutCallback: {
+				args: [FFIType.function],
+				returns: FFIType.void,
+			},
+			registerGlobalShortcut: {
+				args: [FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			unregisterGlobalShortcut: {
+				args: [FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			unregisterAllGlobalShortcuts: {
+				args: [],
+				returns: FFIType.void,
+			},
+			isGlobalShortcutRegistered: {
+				args: [FFIType.cstring],
+				returns: FFIType.bool,
+			},
 
-      openFileDialog: {
-        args: [
-          FFIType.cstring,
-          FFIType.cstring,
-          FFIType.int,
-          FFIType.int,
-          FFIType.int,
-        ],
-        returns: FFIType.cstring
-      },
-      showMessageBox: {
-        args: [
-          FFIType.cstring, // type
-          FFIType.cstring, // title
-          FFIType.cstring, // message
-          FFIType.cstring, // detail
-          FFIType.cstring, // buttons (comma-separated)
-          FFIType.int,     // defaultId
-          FFIType.int,     // cancelId
-        ],
-        returns: FFIType.int
-      },
+			// Screen API
+			getAllDisplays: {
+				args: [],
+				returns: FFIType.cstring,
+			},
+			getPrimaryDisplay: {
+				args: [],
+				returns: FFIType.cstring,
+			},
+			getCursorScreenPoint: {
+				args: [],
+				returns: FFIType.cstring,
+			},
 
-      // Clipboard API
-      clipboardReadText: {
-        args: [],
-        returns: FFIType.cstring
-      },
-      clipboardWriteText: {
-        args: [FFIType.cstring],
-        returns: FFIType.void
-      },
-      clipboardReadImage: {
-        args: [FFIType.ptr], // pointer to size_t for output size
-        returns: FFIType.ptr  // pointer to PNG data
-      },
-      clipboardWriteImage: {
-        args: [FFIType.ptr, FFIType.u64], // PNG data pointer, size
-        returns: FFIType.void
-      },
-      clipboardClear: {
-        args: [],
-        returns: FFIType.void
-      },
-      clipboardAvailableFormats: {
-        args: [],
-        returns: FFIType.cstring
-      },
+			openFileDialog: {
+				args: [
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.int,
+					FFIType.int,
+					FFIType.int,
+				],
+				returns: FFIType.cstring,
+			},
+			showMessageBox: {
+				args: [
+					FFIType.cstring, // type
+					FFIType.cstring, // title
+					FFIType.cstring, // message
+					FFIType.cstring, // detail
+					FFIType.cstring, // buttons (comma-separated)
+					FFIType.int, // defaultId
+					FFIType.int, // cancelId
+				],
+				returns: FFIType.int,
+			},
 
-      // Session/Cookie API
-      sessionGetCookies: {
-        args: [FFIType.cstring, FFIType.cstring],
-        returns: FFIType.cstring
-      },
-      sessionSetCookie: {
-        args: [FFIType.cstring, FFIType.cstring],
-        returns: FFIType.bool
-      },
-      sessionRemoveCookie: {
-        args: [FFIType.cstring, FFIType.cstring, FFIType.cstring],
-        returns: FFIType.bool
-      },
-      sessionClearCookies: {
-        args: [FFIType.cstring],
-        returns: FFIType.void
-      },
-      sessionClearStorageData: {
-        args: [FFIType.cstring, FFIType.cstring],
-        returns: FFIType.void
-      },
+			// Clipboard API
+			clipboardReadText: {
+				args: [],
+				returns: FFIType.cstring,
+			},
+			clipboardWriteText: {
+				args: [FFIType.cstring],
+				returns: FFIType.void,
+			},
+			clipboardReadImage: {
+				args: [FFIType.ptr], // pointer to size_t for output size
+				returns: FFIType.ptr, // pointer to PNG data
+			},
+			clipboardWriteImage: {
+				args: [FFIType.ptr, FFIType.u64], // PNG data pointer, size
+				returns: FFIType.void,
+			},
+			clipboardClear: {
+				args: [],
+				returns: FFIType.void,
+			},
+			clipboardAvailableFormats: {
+				args: [],
+				returns: FFIType.cstring,
+			},
 
-      // URL scheme handler (macOS only)
-      setURLOpenHandler: {
-        args: [FFIType.function], // handler callback
-        returns: FFIType.void
-      },
+			// Session/Cookie API
+			sessionGetCookies: {
+				args: [FFIType.cstring, FFIType.cstring],
+				returns: FFIType.cstring,
+			},
+			sessionSetCookie: {
+				args: [FFIType.cstring, FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			sessionRemoveCookie: {
+				args: [FFIType.cstring, FFIType.cstring, FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			sessionClearCookies: {
+				args: [FFIType.cstring],
+				returns: FFIType.void,
+			},
+			sessionClearStorageData: {
+				args: [FFIType.cstring, FFIType.cstring],
+				returns: FFIType.void,
+			},
 
-      // Window style utilities
-      getWindowStyle: {
-        args: [
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-          FFIType.bool,
-        ],
-        returns: FFIType.u32
-      }, 
-      // JSCallback utils for native code to use
-      setJSUtils: {
-        args: [
-          FFIType.function, // get Mimetype from url/filename
-          FFIType.function, // get html property from webview
-        ],
-        returns: FFIType.void
-      },   
-      setWindowIcon: {
-        args: [
-          FFIType.ptr, // window pointer
-          FFIType.cstring, // icon path
-        ],
-        returns: FFIType.void
-      },
-      killApp: {
-        args: [],
-        returns: FFIType.void
-      },
-      testFFI2: {
-        args: [FFIType.function],
-        returns: FFIType.void
-      },
-      // FFIFn: {
-      //   args: [],
-      //   returns: FFIType.void
-      // },
-    });
-  } catch (err) {
-    console.log('FATAL Error opening native FFI:', (err as Error).message);
-    console.log('This may be due to:');
-    console.log('  - Missing libNativeWrapper.dll/so/dylib');
-    console.log('  - Architecture mismatch (ARM64 vs x64)');
-    console.log('  - Missing WebView2 or CEF dependencies');
-    if (suffix === 'so') {
-      console.log('  - Missing system libraries (try: ldd ./libNativeWrapper.so)');
-    }
-    console.log('Check that the build process completed successfully for your architecture.');
-    process.exit();
-  }
+			// URL scheme handler (macOS only)
+			setURLOpenHandler: {
+				args: [FFIType.function], // handler callback
+				returns: FFIType.void,
+			},
+
+			// Window style utilities
+			getWindowStyle: {
+				args: [
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+				],
+				returns: FFIType.u32,
+			},
+			// JSCallback utils for native code to use
+			setJSUtils: {
+				args: [
+					FFIType.function, // get Mimetype from url/filename
+					FFIType.function, // get html property from webview
+				],
+				returns: FFIType.void,
+			},
+			setWindowIcon: {
+				args: [
+					FFIType.ptr, // window pointer
+					FFIType.cstring, // icon path
+				],
+				returns: FFIType.void,
+			},
+			killApp: {
+				args: [],
+				returns: FFIType.void,
+			},
+			testFFI2: {
+				args: [FFIType.function],
+				returns: FFIType.void,
+			},
+			// FFIFn: {
+			//   args: [],
+			//   returns: FFIType.void
+			// },
+		});
+	} catch (err) {
+		console.log("FATAL Error opening native FFI:", (err as Error).message);
+		console.log("This may be due to:");
+		console.log("  - Missing libNativeWrapper.dll/so/dylib");
+		console.log("  - Architecture mismatch (ARM64 vs x64)");
+		console.log("  - Missing WebView2 or CEF dependencies");
+		if (suffix === "so") {
+			console.log(
+				"  - Missing system libraries (try: ldd ./libNativeWrapper.so)",
+			);
+		}
+		console.log(
+			"Check that the build process completed successfully for your architecture.",
+		);
+		process.exit();
+	}
 })();
 
 // const _callbacks: unknown[] = [];
 
-// NOTE: Bun seems to hit limits on args or arg types. eg: trying to send 12 bools results 
-// in only about 8 going through then params after that. I think it may be similar to 
+// NOTE: Bun seems to hit limits on args or arg types. eg: trying to send 12 bools results
+// in only about 8 going through then params after that. I think it may be similar to
 // a zig bug I ran into last year. So check number of args in a signature when alignment issues occur.
 
 // TODO XX: maybe this should actually be inside BrowserWindow and BrowserView as static methods
 export const ffi = {
-  request: {
-    createWindow: (params: {
-        id: number,
-        url: string | null,
-        title: string,
-        frame: {
-          width: number,
-          height: number,
-          x: number,
-          y: number,
-        },
-        styleMask: {
-          Borderless: boolean,
-          Titled: boolean,
-          Closable: boolean,
-          Miniaturizable: boolean,
-          Resizable: boolean,
-          UnifiedTitleAndToolbar: boolean,
-          FullScreen: boolean,
-          FullSizeContentView: boolean,
-          UtilityWindow: boolean,
-          DocModalWindow: boolean,
-          NonactivatingPanel: boolean,
-          HUDWindow: boolean,
-        },
-        titleBarStyle: string,
-        transparent: boolean,
-      }): FFIType.ptr => {
-        const {id, url: _url, title, frame: {x, y, width, height}, styleMask: {
-            Borderless,
-            Titled,
-            Closable,
-            Miniaturizable,
-            Resizable,
-            UnifiedTitleAndToolbar,
-            FullScreen,
-            FullSizeContentView,
-            UtilityWindow,
-            DocModalWindow,
-            NonactivatingPanel,
-            HUDWindow
-          },
-          titleBarStyle,
-          transparent} = params
+	request: {
+		createWindow: (params: {
+			id: number;
+			url: string | null;
+			title: string;
+			frame: {
+				width: number;
+				height: number;
+				x: number;
+				y: number;
+			};
+			styleMask: {
+				Borderless: boolean;
+				Titled: boolean;
+				Closable: boolean;
+				Miniaturizable: boolean;
+				Resizable: boolean;
+				UnifiedTitleAndToolbar: boolean;
+				FullScreen: boolean;
+				FullSizeContentView: boolean;
+				UtilityWindow: boolean;
+				DocModalWindow: boolean;
+				NonactivatingPanel: boolean;
+				HUDWindow: boolean;
+			};
+			titleBarStyle: string;
+			transparent: boolean;
+		}): FFIType.ptr => {
+			const {
+				id,
+				url: _url,
+				title,
+				frame: { x, y, width, height },
+				styleMask: {
+					Borderless,
+					Titled,
+					Closable,
+					Miniaturizable,
+					Resizable,
+					UnifiedTitleAndToolbar,
+					FullScreen,
+					FullSizeContentView,
+					UtilityWindow,
+					DocModalWindow,
+					NonactivatingPanel,
+					HUDWindow,
+				},
+				titleBarStyle,
+				transparent,
+			} = params;
 
-          const styleMask = native.symbols.getWindowStyle(
-            Borderless,
-            Titled,
-            Closable,
-            Miniaturizable,
-            Resizable,
-            UnifiedTitleAndToolbar,
-            FullScreen,
-            FullSizeContentView,
-            UtilityWindow,
-            DocModalWindow,
-            NonactivatingPanel,
-            HUDWindow
-          )
+			const styleMask = native.symbols.getWindowStyle(
+				Borderless,
+				Titled,
+				Closable,
+				Miniaturizable,
+				Resizable,
+				UnifiedTitleAndToolbar,
+				FullScreen,
+				FullSizeContentView,
+				UtilityWindow,
+				DocModalWindow,
+				NonactivatingPanel,
+				HUDWindow,
+			);
 
-        const windowPtr = native.symbols.createWindowWithFrameAndStyleFromWorker(
-          id,
-          // frame
-          x, y, width, height,
-          styleMask,
-          // style
-          toCString(titleBarStyle),
-          transparent,
-          // callbacks
-          windowCloseCallback,
-          windowMoveCallback,
-          windowResizeCallback,
-          windowFocusCallback,
-        );
-        
-        
-        if (!windowPtr) {
-          throw "Failed to create window"
-        }
-        
-        native.symbols.setWindowTitle(windowPtr, toCString(title));
-        native.symbols.showWindow(windowPtr);
+			const windowPtr = native.symbols.createWindowWithFrameAndStyleFromWorker(
+				id,
+				// frame
+				x,
+				y,
+				width,
+				height,
+				styleMask,
+				// style
+				toCString(titleBarStyle),
+				transparent,
+				// callbacks
+				windowCloseCallback,
+				windowMoveCallback,
+				windowResizeCallback,
+				windowFocusCallback,
+			);
 
-        return windowPtr;
-      },
-      setTitle: (params: {winId: number, title: string}) => {
-        const {winId, title} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
-          
+			if (!windowPtr) {
+				throw "Failed to create window";
+			}
 
-        if (!windowPtr) {          
-          throw `Can't add webview to window. window no longer exists`;
-        }
-        
-        native.symbols.setWindowTitle(windowPtr, toCString(title));        
-      },
-      
-      closeWindow: (params: {winId: number}) => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
-        
-        if (!windowPtr) {
-          throw `Can't close window. Window no longer exists`;
-        }
-        
-        native.symbols.closeWindow(windowPtr);
-        // Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
-      },
+			native.symbols.setWindowTitle(windowPtr, toCString(title));
+			native.symbols.showWindow(windowPtr);
 
-      focusWindow: (params: {winId: number}) => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			return windowPtr;
+		},
+		setTitle: (params: { winId: number; title: string }) => {
+			const { winId, title } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't focus window. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				throw `Can't add webview to window. window no longer exists`;
+			}
 
-        native.symbols.showWindow(windowPtr);
-      },
+			native.symbols.setWindowTitle(windowPtr, toCString(title));
+		},
 
-      minimizeWindow: (params: {winId: number}) => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		closeWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't minimize window. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				throw `Can't close window. Window no longer exists`;
+			}
 
-        native.symbols.minimizeWindow(windowPtr);
-      },
+			native.symbols.closeWindow(windowPtr);
+			// Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
+		},
 
-      restoreWindow: (params: {winId: number}) => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		focusWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't restore window. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				throw `Can't focus window. Window no longer exists`;
+			}
 
-        native.symbols.restoreWindow(windowPtr);
-      },
+			native.symbols.showWindow(windowPtr);
+		},
 
-      isWindowMinimized: (params: {winId: number}): boolean => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		minimizeWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          return false;
-        }
+			if (!windowPtr) {
+				throw `Can't minimize window. Window no longer exists`;
+			}
 
-        return native.symbols.isWindowMinimized(windowPtr);
-      },
+			native.symbols.minimizeWindow(windowPtr);
+		},
 
-      maximizeWindow: (params: {winId: number}) => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		restoreWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't maximize window. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				throw `Can't restore window. Window no longer exists`;
+			}
 
-        native.symbols.maximizeWindow(windowPtr);
-      },
+			native.symbols.restoreWindow(windowPtr);
+		},
 
-      unmaximizeWindow: (params: {winId: number}) => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		isWindowMinimized: (params: { winId: number }): boolean => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't unmaximize window. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				return false;
+			}
 
-        native.symbols.unmaximizeWindow(windowPtr);
-      },
+			return native.symbols.isWindowMinimized(windowPtr);
+		},
 
-      isWindowMaximized: (params: {winId: number}): boolean => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		maximizeWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          return false;
-        }
+			if (!windowPtr) {
+				throw `Can't maximize window. Window no longer exists`;
+			}
 
-        return native.symbols.isWindowMaximized(windowPtr);
-      },
+			native.symbols.maximizeWindow(windowPtr);
+		},
 
-      setWindowFullScreen: (params: {winId: number; fullScreen: boolean}) => {
-        const {winId, fullScreen} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		unmaximizeWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't set fullscreen. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				throw `Can't unmaximize window. Window no longer exists`;
+			}
 
-        native.symbols.setWindowFullScreen(windowPtr, fullScreen);
-      },
+			native.symbols.unmaximizeWindow(windowPtr);
+		},
 
-      isWindowFullScreen: (params: {winId: number}): boolean => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		isWindowMaximized: (params: { winId: number }): boolean => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          return false;
-        }
+			if (!windowPtr) {
+				return false;
+			}
 
-        return native.symbols.isWindowFullScreen(windowPtr);
-      },
+			return native.symbols.isWindowMaximized(windowPtr);
+		},
 
-      setWindowAlwaysOnTop: (params: {winId: number; alwaysOnTop: boolean}) => {
-        const {winId, alwaysOnTop} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		setWindowFullScreen: (params: { winId: number; fullScreen: boolean }) => {
+			const { winId, fullScreen } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't set always on top. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				throw `Can't set fullscreen. Window no longer exists`;
+			}
 
-        native.symbols.setWindowAlwaysOnTop(windowPtr, alwaysOnTop);
-      },
+			native.symbols.setWindowFullScreen(windowPtr, fullScreen);
+		},
 
-      isWindowAlwaysOnTop: (params: {winId: number}): boolean => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		isWindowFullScreen: (params: { winId: number }): boolean => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          return false;
-        }
+			if (!windowPtr) {
+				return false;
+			}
 
-        return native.symbols.isWindowAlwaysOnTop(windowPtr);
-      },
+			return native.symbols.isWindowFullScreen(windowPtr);
+		},
 
-      setWindowPosition: (params: {winId: number; x: number; y: number}) => {
-        const {winId, x, y} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		setWindowAlwaysOnTop: (params: { winId: number; alwaysOnTop: boolean }) => {
+			const { winId, alwaysOnTop } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't set window position. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				throw `Can't set always on top. Window no longer exists`;
+			}
 
-        native.symbols.setWindowPosition(windowPtr, x, y);
-      },
+			native.symbols.setWindowAlwaysOnTop(windowPtr, alwaysOnTop);
+		},
 
-      setWindowSize: (params: {winId: number; width: number; height: number}) => {
-        const {winId, width, height} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		isWindowAlwaysOnTop: (params: { winId: number }): boolean => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't set window size. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				return false;
+			}
 
-        native.symbols.setWindowSize(windowPtr, width, height);
-      },
+			return native.symbols.isWindowAlwaysOnTop(windowPtr);
+		},
 
-      setWindowFrame: (params: {winId: number; x: number; y: number; width: number; height: number}) => {
-        const {winId, x, y, width, height} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		setWindowPosition: (params: { winId: number; x: number; y: number }) => {
+			const { winId, x, y } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          throw `Can't set window frame. Window no longer exists`;
-        }
+			if (!windowPtr) {
+				throw `Can't set window position. Window no longer exists`;
+			}
 
-        native.symbols.setWindowFrame(windowPtr, x, y, width, height);
-      },
+			native.symbols.setWindowPosition(windowPtr, x, y);
+		},
 
-      getWindowFrame: (params: {winId: number}): {x: number; y: number; width: number; height: number} => {
-        const {winId} = params;
-        const windowPtr = BrowserWindow.getById(winId)?.ptr;
+		setWindowSize: (params: {
+			winId: number;
+			width: number;
+			height: number;
+		}) => {
+			const { winId, width, height } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        if (!windowPtr) {
-          return {x: 0, y: 0, width: 0, height: 0};
-        }
+			if (!windowPtr) {
+				throw `Can't set window size. Window no longer exists`;
+			}
 
-        // Create buffers to receive the output values
-        const xBuf = new Float64Array(1);
-        const yBuf = new Float64Array(1);
-        const widthBuf = new Float64Array(1);
-        const heightBuf = new Float64Array(1);
+			native.symbols.setWindowSize(windowPtr, width, height);
+		},
 
-        native.symbols.getWindowFrame(
-          windowPtr,
-          ptr(xBuf),
-          ptr(yBuf),
-          ptr(widthBuf),
-          ptr(heightBuf)
-        );
+		setWindowFrame: (params: {
+			winId: number;
+			x: number;
+			y: number;
+			width: number;
+			height: number;
+		}) => {
+			const { winId, x, y, width, height } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-        return {
-          x: xBuf[0],
-          y: yBuf[0],
-          width: widthBuf[0],
-          height: heightBuf[0],
-        };
-      },
+			if (!windowPtr) {
+				throw `Can't set window frame. Window no longer exists`;
+			}
 
-      createWebview: (params: {
-        id: number;
-        windowId: number;
-        renderer: "cef" | "native";
-        rpcPort: number;
-        secretKey: string;
-        hostWebviewId: number | null;
-        pipePrefix: string;
-        url: string | null;
-        html: string | null;
-        partition: string | null;
-        preload: string | null;
-        frame: {
-          x: number;
-          y: number;
-          width: number;
-          height: number;
-        };
-        autoResize: boolean;
-        navigationRules: string | null;
-      }): FFIType.ptr => {
+			native.symbols.setWindowFrame(windowPtr, x, y, width, height);
+		},
 
-        const { id,
-          windowId,
-          renderer,
-          rpcPort,
-          secretKey,
-          // hostWebviewId: number | null;
-          // pipePrefix: string;
-          url,
-          // html: string | null;
-          partition,
-          preload,
-          frame: {
-            x,
-            y,
-            width,
-            height,
-          },
-          autoResize} = params
+		getWindowFrame: (params: {
+			winId: number;
+		}): { x: number; y: number; width: number; height: number } => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
 
-          const parentWindow = BrowserWindow.getById(windowId);
-          const windowPtr = parentWindow?.ptr;
-          // Get transparent flag from parent window
-          const transparent = parentWindow?.transparent ?? false;
-          
+			if (!windowPtr) {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
 
-        if (!windowPtr) {          
-          throw `Can't add webview to window. window no longer exists`;
-        }        
+			// Create buffers to receive the output values
+			const xBuf = new Float64Array(1);
+			const yBuf = new Float64Array(1);
+			const widthBuf = new Float64Array(1);
+			const heightBuf = new Float64Array(1);
 
-        const electrobunPreload = `
+			native.symbols.getWindowFrame(
+				windowPtr,
+				ptr(xBuf),
+				ptr(yBuf),
+				ptr(widthBuf),
+				ptr(heightBuf),
+			);
+
+			return {
+				x: xBuf[0],
+				y: yBuf[0],
+				width: widthBuf[0],
+				height: heightBuf[0],
+			};
+		},
+
+		createWebview: (params: {
+			id: number;
+			windowId: number;
+			renderer: "cef" | "native";
+			rpcPort: number;
+			secretKey: string;
+			hostWebviewId: number | null;
+			pipePrefix: string;
+			url: string | null;
+			html: string | null;
+			partition: string | null;
+			preload: string | null;
+			frame: {
+				x: number;
+				y: number;
+				width: number;
+				height: number;
+			};
+			autoResize: boolean;
+			navigationRules: string | null;
+		}): FFIType.ptr => {
+			const {
+				id,
+				windowId,
+				renderer,
+				rpcPort,
+				secretKey,
+				// hostWebviewId: number | null;
+				// pipePrefix: string;
+				url,
+				// html: string | null;
+				partition,
+				preload,
+				frame: { x, y, width, height },
+				autoResize,
+			} = params;
+
+			const parentWindow = BrowserWindow.getById(windowId);
+			const windowPtr = parentWindow?.ptr;
+			// Get transparent flag from parent window
+			const transparent = parentWindow?.transparent ?? false;
+
+			if (!windowPtr) {
+				throw `Can't add webview to window. window no longer exists`;
+			}
+
+			const electrobunPreload =
+				`
          window.__electrobunWebviewId = ${id};
          window.__electrobunWindowId = ${windowId};
          window.__electrobunRpcSocketPort = ${rpcPort};
@@ -944,7 +978,8 @@ export const ffi = {
          window.__electrobun_encrypt = encryptString;
          window.__electrobun_decrypt = decryptString;
         })();
-        ` + `
+        ` +
+				`
          function emitWebviewEvent (eventName, detail) {
            // Note: There appears to be some race bug with Bun FFI where sites can
            // init (like views://myview/index.html) so fast while the Bun FFI to load a url is still executing
@@ -1066,315 +1101,306 @@ export const ffi = {
           document.head.appendChild(style);
          });
                 
-        `
-        const customPreload = preload;               
+        `;
+			const customPreload = preload;
 
-        const webviewPtr = native.symbols.initWebview(
-          id,
-          windowPtr,
-          toCString(renderer),
-          toCString(url || ''),
-          x, y,
-          width, height,
-          autoResize,
-          toCString(partition || 'persist:default'),
-          webviewDecideNavigation,
-          webviewEventJSCallback,
-          bunBridgePostmessageHandler,
-          internalBridgeHandler,
-          toCString(electrobunPreload),
-          toCString(customPreload || ''),
-          transparent,
-        )        
+			const webviewPtr = native.symbols.initWebview(
+				id,
+				windowPtr,
+				toCString(renderer),
+				toCString(url || ""),
+				x,
+				y,
+				width,
+				height,
+				autoResize,
+				toCString(partition || "persist:default"),
+				webviewDecideNavigation,
+				webviewEventJSCallback,
+				bunBridgePostmessageHandler,
+				internalBridgeHandler,
+				toCString(electrobunPreload),
+				toCString(customPreload || ""),
+				transparent,
+			);
 
-        if (!webviewPtr) {
-           throw "Failed to create webview"
-        }
+			if (!webviewPtr) {
+				throw "Failed to create webview";
+			}
 
-        return webviewPtr;
-      },
+			return webviewPtr;
+		},
 
-      evaluateJavascriptWithNoCompletion: (params: {id: number; js: string}) => {
-        const {id, js} = params;
-        const webview = BrowserView.getById(id);
-        
-        if (!webview?.ptr) {
-          return;
-        }
-        
-        native.symbols.evaluateJavaScriptWithNoCompletion(webview.ptr, toCString(js))        
-      },
+		evaluateJavascriptWithNoCompletion: (params: {
+			id: number;
+			js: string;
+		}) => {
+			const { id, js } = params;
+			const webview = BrowserView.getById(id);
 
-      createTray: (params: {
-        id: number;
-        title: string;
-        image: string;
-        template: boolean;
-        width: number;
-        height: number;
-      }): FFIType.ptr => {
-        const {
-          id,
-          title,
-          image,
-          template,
-          width,
-          height
-        } = params;
+			if (!webview?.ptr) {
+				return;
+			}
 
-        const trayPtr =  native.symbols.createTray(
-          id,
-          toCString(title),
-          toCString(image),
-          template,
-          width,
-          height,
-          trayItemHandler,
-        );
+			native.symbols.evaluateJavaScriptWithNoCompletion(
+				webview.ptr,
+				toCString(js),
+			);
+		},
 
-        if (!trayPtr) {
-          throw 'Failed to create tray';
-        }
+		createTray: (params: {
+			id: number;
+			title: string;
+			image: string;
+			template: boolean;
+			width: number;
+			height: number;
+		}): FFIType.ptr => {
+			const { id, title, image, template, width, height } = params;
 
-        return trayPtr;
-      },
-      setTrayTitle: (params: {
-        id: number,
-        title: string,
-      }): void => {
-        const {
-          id,
-          title
-        } = params;
+			const trayPtr = native.symbols.createTray(
+				id,
+				toCString(title),
+				toCString(image),
+				template,
+				width,
+				height,
+				trayItemHandler,
+			);
 
-        const tray = Tray.getById(id);
+			if (!trayPtr) {
+				throw "Failed to create tray";
+			}
 
-        native.symbols.setTrayTitle(
-          tray.ptr,
-          toCString(title)
-        );
-      },
-      setTrayImage: (params: {
-        id: number,
-        image: string,
-      }): void => {
-        const {
-          id,
-          image
-        } = params;
+			return trayPtr;
+		},
+		setTrayTitle: (params: { id: number; title: string }): void => {
+			const { id, title } = params;
 
-        const tray = Tray.getById(id);
+			const tray = Tray.getById(id);
 
-        native.symbols.setTrayImage(
-          tray.ptr,
-          toCString(image)
-        );
-      },
-      setTrayMenu: (params: {        
-          id: number,
-          // json string of config
-          menuConfig: string,
-        }): void => {
-        const {
-          id,
-          menuConfig
-        } = params;
+			native.symbols.setTrayTitle(tray.ptr, toCString(title));
+		},
+		setTrayImage: (params: { id: number; image: string }): void => {
+			const { id, image } = params;
 
-        const tray = Tray.getById(id);
-        
-        native.symbols.setTrayMenu(
-          tray.ptr,
-          toCString(menuConfig)
-        );
-      },
+			const tray = Tray.getById(id);
 
-      removeTray: (params: { id: number }): void => {
-        const { id } = params;        
-        const tray = Tray.getById(id);        
-        
-        if (!tray) {
-          throw `Can't remove tray. Tray no longer exists`;
-        }
-                
-        native.symbols.removeTray(tray.ptr);        
-        // The Tray class will handle removing from TrayMap
-      },
-      setApplicationMenu: (params: {menuConfig: string}): void => {
-        const {
-          menuConfig
-        } = params;
+			native.symbols.setTrayImage(tray.ptr, toCString(image));
+		},
+		setTrayMenu: (params: {
+			id: number;
+			// json string of config
+			menuConfig: string;
+		}): void => {
+			const { id, menuConfig } = params;
 
-        native.symbols.setApplicationMenu(
-          toCString(menuConfig),
-          applicationMenuHandler
-        );
-      },
-      showContextMenu: (params: {menuConfig: string}): void => {
-        const {
-          menuConfig
-        } = params;
+			const tray = Tray.getById(id);
 
-        native.symbols.showContextMenu(
-          toCString(menuConfig),
-          contextMenuHandler
-        );
-      },
-      moveToTrash: (params: {path: string}): boolean => {
-        const {
-          path
-        } = params;
+			native.symbols.setTrayMenu(tray.ptr, toCString(menuConfig));
+		},
 
-        return native.symbols.moveToTrash(toCString(path));        
-      },
-      showItemInFolder: (params: {path: string}): void => {
-        const {
-          path
-        } = params;
+		removeTray: (params: { id: number }): void => {
+			const { id } = params;
+			const tray = Tray.getById(id);
 
-        native.symbols.showItemInFolder(toCString(path));
-      },
-      openExternal: (params: {url: string}): boolean => {
-        const { url } = params;
-        return native.symbols.openExternal(toCString(url));
-      },
-      openPath: (params: {path: string}): boolean => {
-        const { path } = params;
-        return native.symbols.openPath(toCString(path));
-      },
-      showNotification: (params: {title: string, body?: string, subtitle?: string, silent?: boolean}): void => {
-        const { title, body = '', subtitle = '', silent = false } = params;
-        native.symbols.showNotification(
-          toCString(title),
-          toCString(body),
-          toCString(subtitle),
-          silent
-        );
-      },
-      openFileDialog: (params: {startingFolder: string, allowedFileTypes: string, canChooseFiles: boolean, canChooseDirectory: boolean, allowsMultipleSelection: boolean}): string => {
-        const {
-          startingFolder,
-          allowedFileTypes,
-          canChooseFiles,
-          canChooseDirectory,
-          allowsMultipleSelection,
-        } = params;
-        const filePath = native.symbols.openFileDialog(toCString(startingFolder), toCString(allowedFileTypes), canChooseFiles ? 1 : 0, canChooseDirectory ? 1 : 0, allowsMultipleSelection ? 1 : 0);
+			if (!tray) {
+				throw `Can't remove tray. Tray no longer exists`;
+			}
 
-        return filePath.toString();
-      },
-      showMessageBox: (params: {type?: string, title?: string, message?: string, detail?: string, buttons?: string[], defaultId?: number, cancelId?: number}): number => {
-        const {
-          type = 'info',
-          title = '',
-          message = '',
-          detail = '',
-          buttons = ['OK'],
-          defaultId = 0,
-          cancelId = -1,
-        } = params;
-        // Convert buttons array to comma-separated string
-        const buttonsStr = buttons.join(',');
-        return native.symbols.showMessageBox(
-          toCString(type),
-          toCString(title),
-          toCString(message),
-          toCString(detail),
-          toCString(buttonsStr),
-          defaultId,
-          cancelId
-        );
-      },
+			native.symbols.removeTray(tray.ptr);
+			// The Tray class will handle removing from TrayMap
+		},
+		setApplicationMenu: (params: { menuConfig: string }): void => {
+			const { menuConfig } = params;
 
-      // Clipboard API
-      clipboardReadText: (): string | null => {
-        const result = native.symbols.clipboardReadText();
-        if (!result) return null;
-        return result.toString();
-      },
-      clipboardWriteText: (params: {text: string}): void => {
-        native.symbols.clipboardWriteText(toCString(params.text));
-      },
-      clipboardReadImage: (): Uint8Array | null => {
-        // Allocate a buffer for the size output
-        const sizeBuffer = new BigUint64Array(1);
-        const dataPtr = native.symbols.clipboardReadImage(ptr(sizeBuffer));
+			native.symbols.setApplicationMenu(
+				toCString(menuConfig),
+				applicationMenuHandler,
+			);
+		},
+		showContextMenu: (params: { menuConfig: string }): void => {
+			const { menuConfig } = params;
 
-        if (!dataPtr) return null;
+			native.symbols.showContextMenu(toCString(menuConfig), contextMenuHandler);
+		},
+		moveToTrash: (params: { path: string }): boolean => {
+			const { path } = params;
 
-        const size = Number(sizeBuffer[0]);
-        if (size === 0) return null;
+			return native.symbols.moveToTrash(toCString(path));
+		},
+		showItemInFolder: (params: { path: string }): void => {
+			const { path } = params;
 
-        // Copy the data to a Uint8Array
-        const result = new Uint8Array(size);
-        const sourceView = new Uint8Array(toArrayBuffer(dataPtr, 0, size));
-        result.set(sourceView);
+			native.symbols.showItemInFolder(toCString(path));
+		},
+		openExternal: (params: { url: string }): boolean => {
+			const { url } = params;
+			return native.symbols.openExternal(toCString(url));
+		},
+		openPath: (params: { path: string }): boolean => {
+			const { path } = params;
+			return native.symbols.openPath(toCString(path));
+		},
+		showNotification: (params: {
+			title: string;
+			body?: string;
+			subtitle?: string;
+			silent?: boolean;
+		}): void => {
+			const { title, body = "", subtitle = "", silent = false } = params;
+			native.symbols.showNotification(
+				toCString(title),
+				toCString(body),
+				toCString(subtitle),
+				silent,
+			);
+		},
+		openFileDialog: (params: {
+			startingFolder: string;
+			allowedFileTypes: string;
+			canChooseFiles: boolean;
+			canChooseDirectory: boolean;
+			allowsMultipleSelection: boolean;
+		}): string => {
+			const {
+				startingFolder,
+				allowedFileTypes,
+				canChooseFiles,
+				canChooseDirectory,
+				allowsMultipleSelection,
+			} = params;
+			const filePath = native.symbols.openFileDialog(
+				toCString(startingFolder),
+				toCString(allowedFileTypes),
+				canChooseFiles ? 1 : 0,
+				canChooseDirectory ? 1 : 0,
+				allowsMultipleSelection ? 1 : 0,
+			);
 
-        // Note: The native code allocated this memory with malloc
-        // We should free it, but Bun's FFI doesn't expose free directly
-        // The memory will be reclaimed when the process exits
+			return filePath.toString();
+		},
+		showMessageBox: (params: {
+			type?: string;
+			title?: string;
+			message?: string;
+			detail?: string;
+			buttons?: string[];
+			defaultId?: number;
+			cancelId?: number;
+		}): number => {
+			const {
+				type = "info",
+				title = "",
+				message = "",
+				detail = "",
+				buttons = ["OK"],
+				defaultId = 0,
+				cancelId = -1,
+			} = params;
+			// Convert buttons array to comma-separated string
+			const buttonsStr = buttons.join(",");
+			return native.symbols.showMessageBox(
+				toCString(type),
+				toCString(title),
+				toCString(message),
+				toCString(detail),
+				toCString(buttonsStr),
+				defaultId,
+				cancelId,
+			);
+		},
 
-        return result;
-      },
-      clipboardWriteImage: (params: {pngData: Uint8Array}): void => {
-        const { pngData } = params;
-        native.symbols.clipboardWriteImage(ptr(pngData), BigInt(pngData.length));
-      },
-      clipboardClear: (): void => {
-        native.symbols.clipboardClear();
-      },
-      clipboardAvailableFormats: (): string[] => {
-        const result = native.symbols.clipboardAvailableFormats();
-        if (!result) return [];
-        const formatsStr = result.toString();
-        if (!formatsStr) return [];
-        return formatsStr.split(',').filter(f => f.length > 0);
-      },
+		// Clipboard API
+		clipboardReadText: (): string | null => {
+			const result = native.symbols.clipboardReadText();
+			if (!result) return null;
+			return result.toString();
+		},
+		clipboardWriteText: (params: { text: string }): void => {
+			native.symbols.clipboardWriteText(toCString(params.text));
+		},
+		clipboardReadImage: (): Uint8Array | null => {
+			// Allocate a buffer for the size output
+			const sizeBuffer = new BigUint64Array(1);
+			const dataPtr = native.symbols.clipboardReadImage(ptr(sizeBuffer));
 
-      // ffifunc: (params: {}): void => {
-      //   const {
-          
-      //   } = params;
+			if (!dataPtr) return null;
 
-      //   native.symbols.ffifunc(
+			const size = Number(sizeBuffer[0]);
+			if (size === 0) return null;
 
-      //   );
-      // },
-    
-  },
-   // Internal functions for menu data management
-  internal: {
-    storeMenuData,
-    getMenuData,
-    clearMenuData,
-    serializeMenuAction,
-    deserializeMenuAction,
-  }
-}
+			// Copy the data to a Uint8Array
+			const result = new Uint8Array(size);
+			const sourceView = new Uint8Array(toArrayBuffer(dataPtr, 0, size));
+			result.set(sourceView);
+
+			// Note: The native code allocated this memory with malloc
+			// We should free it, but Bun's FFI doesn't expose free directly
+			// The memory will be reclaimed when the process exits
+
+			return result;
+		},
+		clipboardWriteImage: (params: { pngData: Uint8Array }): void => {
+			const { pngData } = params;
+			native.symbols.clipboardWriteImage(ptr(pngData), BigInt(pngData.length));
+		},
+		clipboardClear: (): void => {
+			native.symbols.clipboardClear();
+		},
+		clipboardAvailableFormats: (): string[] => {
+			const result = native.symbols.clipboardAvailableFormats();
+			if (!result) return [];
+			const formatsStr = result.toString();
+			if (!formatsStr) return [];
+			return formatsStr.split(",").filter((f) => f.length > 0);
+		},
+
+		// ffifunc: (params: {}): void => {
+		//   const {
+
+		//   } = params;
+
+		//   native.symbols.ffifunc(
+
+		//   );
+		// },
+	},
+	// Internal functions for menu data management
+	internal: {
+		storeMenuData,
+		getMenuData,
+		clearMenuData,
+		serializeMenuAction,
+		deserializeMenuAction,
+	},
+};
 
 // Worker management. Move to a different file
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught exception in worker:', err); 
-  // Since the main js event loop is blocked by the native event loop
-  // we use FFI to dispatch a kill command to main
-  native.symbols.killApp(); 
+process.on("uncaughtException", (err) => {
+	console.error("Uncaught exception in worker:", err);
+	// Since the main js event loop is blocked by the native event loop
+	// we use FFI to dispatch a kill command to main
+	native.symbols.killApp();
 });
 
-process.on('unhandledRejection', (reason, _promise) => {
-  console.error('Unhandled rejection in worker:', reason);
+process.on("unhandledRejection", (reason, _promise) => {
+	console.error("Unhandled rejection in worker:", reason);
 });
 
-process.on('SIGINT', () => {
-  console.log('[electrobun] Received SIGINT, calling killApp() for graceful shutdown...');
-  native.symbols.killApp();
+process.on("SIGINT", () => {
+	console.log(
+		"[electrobun] Received SIGINT, calling killApp() for graceful shutdown...",
+	);
+	native.symbols.killApp();
 });
 
-process.on('SIGTERM', () => {
-  console.log('[electrobun] Received SIGTERM, calling killApp() for graceful shutdown...');
-  native.symbols.killApp();
+process.on("SIGTERM", () => {
+	console.log(
+		"[electrobun] Received SIGTERM, calling killApp() for graceful shutdown...",
+	);
+	native.symbols.killApp();
 });
-
-
-
 
 // const testCallback = new JSCallback(
 //   (windowId, x, y) => {
@@ -1385,154 +1411,158 @@ process.on('SIGTERM', () => {
 //     args: [],
 //     returns: "void",
 //     threadsafe: true,
-    
+
 //   }
 // );
 
-
 const windowCloseCallback = new JSCallback(
-  (id) => {
-    const handler = electrobunEventEmitter.events.window.close;
-      const event = handler({
-        id,
-      });
+	(id) => {
+		const handler = electrobunEventEmitter.events.window.close;
+		const event = handler({
+			id,
+		});
 
-      // global event
-      electrobunEventEmitter.emitEvent(event);
-      electrobunEventEmitter.emitEvent(event, id);
-  },
-  {
-    args: ["u32"],
-    returns: "void",
-    threadsafe: true,
-  }
+		// global event
+		electrobunEventEmitter.emitEvent(event);
+		electrobunEventEmitter.emitEvent(event, id);
+	},
+	{
+		args: ["u32"],
+		returns: "void",
+		threadsafe: true,
+	},
 );
 
 const windowMoveCallback = new JSCallback(
-  (id, x, y) => {
-    const handler = electrobunEventEmitter.events.window.move;
-    const event = handler({
-      id,
-      x,
-      y,
-    });
+	(id, x, y) => {
+		const handler = electrobunEventEmitter.events.window.move;
+		const event = handler({
+			id,
+			x,
+			y,
+		});
 
-    // global event
-    electrobunEventEmitter.emitEvent(event);
-    electrobunEventEmitter.emitEvent(event, id);
-  },
-  {
-    args: ["u32", "f64", "f64"],
-    returns: "void",
-    threadsafe: true,
-  }
+		// global event
+		electrobunEventEmitter.emitEvent(event);
+		electrobunEventEmitter.emitEvent(event, id);
+	},
+	{
+		args: ["u32", "f64", "f64"],
+		returns: "void",
+		threadsafe: true,
+	},
 );
 
 const windowResizeCallback = new JSCallback(
-  (id, x, y, width, height) => {
-    const handler = electrobunEventEmitter.events.window.resize;
-    const event = handler({
-      id,
-      x,
-      y,
-      width,
-      height,
-    });
+	(id, x, y, width, height) => {
+		const handler = electrobunEventEmitter.events.window.resize;
+		const event = handler({
+			id,
+			x,
+			y,
+			width,
+			height,
+		});
 
-    // global event
-    electrobunEventEmitter.emitEvent(event);
-    electrobunEventEmitter.emitEvent(event, id);
-  },
-  {
-    args: ["u32", "f64", "f64", "f64", "f64"],
-    returns: "void",
-    threadsafe: true,
-  }
+		// global event
+		electrobunEventEmitter.emitEvent(event);
+		electrobunEventEmitter.emitEvent(event, id);
+	},
+	{
+		args: ["u32", "f64", "f64", "f64", "f64"],
+		returns: "void",
+		threadsafe: true,
+	},
 );
 
 const windowFocusCallback = new JSCallback(
-  (id) => {
-    const handler = electrobunEventEmitter.events.window.focus;
-    const event = handler({
-      id,
-    });
+	(id) => {
+		const handler = electrobunEventEmitter.events.window.focus;
+		const event = handler({
+			id,
+		});
 
-    // global event
-    electrobunEventEmitter.emitEvent(event);
-    electrobunEventEmitter.emitEvent(event, id);
-  },
-  {
-    args: ["u32"],
-    returns: "void",
-    threadsafe: true,
-  }
+		// global event
+		electrobunEventEmitter.emitEvent(event);
+		electrobunEventEmitter.emitEvent(event, id);
+	},
+	{
+		args: ["u32"],
+		returns: "void",
+		threadsafe: true,
+	},
 );
 
-const getMimeType = new JSCallback((filePath) => {
-  const _filePath = new CString(filePath).toString();
-  const mimeType = Bun.file(_filePath).type;// || "application/octet-stream";
+const getMimeType = new JSCallback(
+	(filePath) => {
+		const _filePath = new CString(filePath).toString();
+		const mimeType = Bun.file(_filePath).type; // || "application/octet-stream";
 
-  // For this usecase we generally don't want the charset included in the mimetype 
-  // otherwise it can break. eg: for html with text/javascript;charset=utf-8 browsers
-  // will tend to render the code/text instead of interpreting the html.
-  
-  return toCString(mimeType.split(';')[0]);
-}, {
-  args: [FFIType.cstring],  
-  returns: FFIType.cstring,
-  // threadsafe: true
-});
+		// For this usecase we generally don't want the charset included in the mimetype
+		// otherwise it can break. eg: for html with text/javascript;charset=utf-8 browsers
+		// will tend to render the code/text instead of interpreting the html.
 
-const getHTMLForWebviewSync = new JSCallback((webviewId) => {
-  const webview = BrowserView.getById(webviewId);
-  
-  return toCString(webview?.html || '');
-}, {
-  args: [FFIType.u32],  
-  returns: FFIType.cstring,
-  // threadsafe: true
-});
+		return toCString(mimeType.split(";")[0]);
+	},
+	{
+		args: [FFIType.cstring],
+		returns: FFIType.cstring,
+		// threadsafe: true
+	},
+);
 
+const getHTMLForWebviewSync = new JSCallback(
+	(webviewId) => {
+		const webview = BrowserView.getById(webviewId);
+
+		return toCString(webview?.html || "");
+	},
+	{
+		args: [FFIType.u32],
+		returns: FFIType.cstring,
+		// threadsafe: true
+	},
+);
 
 native.symbols.setJSUtils(getMimeType, getHTMLForWebviewSync);
 
 // URL scheme open handler (macOS only)
 // Receives URLs when the app is opened via custom URL schemes (e.g., myapp://path)
 const urlOpenCallback = new JSCallback(
-  (urlPtr) => {
-    const url = new CString(urlPtr).toString();
-    const handler = electrobunEventEmitter.events.app.openUrl;
-    const event = handler({ url });
-    electrobunEventEmitter.emitEvent(event);
-  },
-  {
-    args: [FFIType.cstring],
-    returns: "void",
-    threadsafe: true,
-  }
+	(urlPtr) => {
+		const url = new CString(urlPtr).toString();
+		const handler = electrobunEventEmitter.events.app.openUrl;
+		const event = handler({ url });
+		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: [FFIType.cstring],
+		returns: "void",
+		threadsafe: true,
+	},
 );
 
 // Register the URL open handler with native code (macOS only)
-if (process.platform === 'darwin') {
-  native.symbols.setURLOpenHandler(urlOpenCallback);
+if (process.platform === "darwin") {
+	native.symbols.setURLOpenHandler(urlOpenCallback);
 }
 
 // Global shortcut storage and callback
 const globalShortcutHandlers = new Map<string, () => void>();
 
 const globalShortcutCallback = new JSCallback(
-  (acceleratorPtr) => {
-    const accelerator = new CString(acceleratorPtr).toString();
-    const handler = globalShortcutHandlers.get(accelerator);
-    if (handler) {
-      handler();
-    }
-  },
-  {
-    args: [FFIType.cstring],
-    returns: "void",
-    threadsafe: true,
-  }
+	(acceleratorPtr) => {
+		const accelerator = new CString(acceleratorPtr).toString();
+		const handler = globalShortcutHandlers.get(accelerator);
+		if (handler) {
+			handler();
+		}
+	},
+	{
+		args: [FFIType.cstring],
+		returns: "void",
+		threadsafe: true,
+	},
 );
 
 // Set up the global shortcut callback
@@ -1540,252 +1570,256 @@ native.symbols.setGlobalShortcutCallback(globalShortcutCallback);
 
 // GlobalShortcut module for external use
 export const GlobalShortcut = {
-  /**
-   * Register a global keyboard shortcut
-   * @param accelerator - The shortcut string (e.g., "CommandOrControl+Shift+Space")
-   * @param callback - Function to call when the shortcut is triggered
-   * @returns true if registered successfully, false otherwise
-   */
-  register: (accelerator: string, callback: () => void): boolean => {
-    if (globalShortcutHandlers.has(accelerator)) {
-      return false; // Already registered
-    }
+	/**
+	 * Register a global keyboard shortcut
+	 * @param accelerator - The shortcut string (e.g., "CommandOrControl+Shift+Space")
+	 * @param callback - Function to call when the shortcut is triggered
+	 * @returns true if registered successfully, false otherwise
+	 */
+	register: (accelerator: string, callback: () => void): boolean => {
+		if (globalShortcutHandlers.has(accelerator)) {
+			return false; // Already registered
+		}
 
-    const result = native.symbols.registerGlobalShortcut(toCString(accelerator));
-    if (result) {
-      globalShortcutHandlers.set(accelerator, callback);
-    }
-    return result;
-  },
+		const result = native.symbols.registerGlobalShortcut(
+			toCString(accelerator),
+		);
+		if (result) {
+			globalShortcutHandlers.set(accelerator, callback);
+		}
+		return result;
+	},
 
-  /**
-   * Unregister a global keyboard shortcut
-   * @param accelerator - The shortcut string to unregister
-   * @returns true if unregistered successfully, false otherwise
-   */
-  unregister: (accelerator: string): boolean => {
-    const result = native.symbols.unregisterGlobalShortcut(toCString(accelerator));
-    if (result) {
-      globalShortcutHandlers.delete(accelerator);
-    }
-    return result;
-  },
+	/**
+	 * Unregister a global keyboard shortcut
+	 * @param accelerator - The shortcut string to unregister
+	 * @returns true if unregistered successfully, false otherwise
+	 */
+	unregister: (accelerator: string): boolean => {
+		const result = native.symbols.unregisterGlobalShortcut(
+			toCString(accelerator),
+		);
+		if (result) {
+			globalShortcutHandlers.delete(accelerator);
+		}
+		return result;
+	},
 
-  /**
-   * Unregister all global keyboard shortcuts
-   */
-  unregisterAll: (): void => {
-    native.symbols.unregisterAllGlobalShortcuts();
-    globalShortcutHandlers.clear();
-  },
+	/**
+	 * Unregister all global keyboard shortcuts
+	 */
+	unregisterAll: (): void => {
+		native.symbols.unregisterAllGlobalShortcuts();
+		globalShortcutHandlers.clear();
+	},
 
-  /**
-   * Check if a shortcut is registered
-   * @param accelerator - The shortcut string to check
-   * @returns true if registered, false otherwise
-   */
-  isRegistered: (accelerator: string): boolean => {
-    return native.symbols.isGlobalShortcutRegistered(toCString(accelerator));
-  },
+	/**
+	 * Check if a shortcut is registered
+	 * @param accelerator - The shortcut string to check
+	 * @returns true if registered, false otherwise
+	 */
+	isRegistered: (accelerator: string): boolean => {
+		return native.symbols.isGlobalShortcutRegistered(toCString(accelerator));
+	},
 };
 
 // Types for Screen API
 export interface Rectangle {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
 }
 
 export interface Display {
-  id: number;
-  bounds: Rectangle;
-  workArea: Rectangle;
-  scaleFactor: number;
-  isPrimary: boolean;
+	id: number;
+	bounds: Rectangle;
+	workArea: Rectangle;
+	scaleFactor: number;
+	isPrimary: boolean;
 }
 
 export interface Point {
-  x: number;
-  y: number;
+	x: number;
+	y: number;
 }
 
 // Screen module for display and cursor information
 export const Screen = {
-  /**
-   * Get the primary display
-   * @returns Display object for the primary monitor
-   */
-  getPrimaryDisplay: (): Display => {
-    const jsonStr = native.symbols.getPrimaryDisplay();
-    if (!jsonStr) {
-      return {
-        id: 0,
-        bounds: { x: 0, y: 0, width: 0, height: 0 },
-        workArea: { x: 0, y: 0, width: 0, height: 0 },
-        scaleFactor: 1,
-        isPrimary: true,
-      };
-    }
-    try {
-      return JSON.parse(jsonStr.toString());
-    } catch {
-      return {
-        id: 0,
-        bounds: { x: 0, y: 0, width: 0, height: 0 },
-        workArea: { x: 0, y: 0, width: 0, height: 0 },
-        scaleFactor: 1,
-        isPrimary: true,
-      };
-    }
-  },
+	/**
+	 * Get the primary display
+	 * @returns Display object for the primary monitor
+	 */
+	getPrimaryDisplay: (): Display => {
+		const jsonStr = native.symbols.getPrimaryDisplay();
+		if (!jsonStr) {
+			return {
+				id: 0,
+				bounds: { x: 0, y: 0, width: 0, height: 0 },
+				workArea: { x: 0, y: 0, width: 0, height: 0 },
+				scaleFactor: 1,
+				isPrimary: true,
+			};
+		}
+		try {
+			return JSON.parse(jsonStr.toString());
+		} catch {
+			return {
+				id: 0,
+				bounds: { x: 0, y: 0, width: 0, height: 0 },
+				workArea: { x: 0, y: 0, width: 0, height: 0 },
+				scaleFactor: 1,
+				isPrimary: true,
+			};
+		}
+	},
 
-  /**
-   * Get all connected displays
-   * @returns Array of Display objects
-   */
-  getAllDisplays: (): Display[] => {
-    const jsonStr = native.symbols.getAllDisplays();
-    if (!jsonStr) {
-      return [];
-    }
-    try {
-      return JSON.parse(jsonStr.toString());
-    } catch {
-      return [];
-    }
-  },
+	/**
+	 * Get all connected displays
+	 * @returns Array of Display objects
+	 */
+	getAllDisplays: (): Display[] => {
+		const jsonStr = native.symbols.getAllDisplays();
+		if (!jsonStr) {
+			return [];
+		}
+		try {
+			return JSON.parse(jsonStr.toString());
+		} catch {
+			return [];
+		}
+	},
 
-  /**
-   * Get the current cursor position in screen coordinates
-   * @returns Point with x and y coordinates
-   */
-  getCursorScreenPoint: (): Point => {
-    const jsonStr = native.symbols.getCursorScreenPoint();
-    if (!jsonStr) {
-      return { x: 0, y: 0 };
-    }
-    try {
-      return JSON.parse(jsonStr.toString());
-    } catch {
-      return { x: 0, y: 0 };
-    }
-  },
+	/**
+	 * Get the current cursor position in screen coordinates
+	 * @returns Point with x and y coordinates
+	 */
+	getCursorScreenPoint: (): Point => {
+		const jsonStr = native.symbols.getCursorScreenPoint();
+		if (!jsonStr) {
+			return { x: 0, y: 0 };
+		}
+		try {
+			return JSON.parse(jsonStr.toString());
+		} catch {
+			return { x: 0, y: 0 };
+		}
+	},
 };
 
 // Types for Session/Cookie API
 export interface Cookie {
-  name: string;
-  value: string;
-  domain?: string;
-  path?: string;
-  secure?: boolean;
-  httpOnly?: boolean;
-  sameSite?: 'no_restriction' | 'lax' | 'strict';
-  expirationDate?: number; // Unix timestamp in seconds
+	name: string;
+	value: string;
+	domain?: string;
+	path?: string;
+	secure?: boolean;
+	httpOnly?: boolean;
+	sameSite?: "no_restriction" | "lax" | "strict";
+	expirationDate?: number; // Unix timestamp in seconds
 }
 
 export interface CookieFilter {
-  url?: string;
-  name?: string;
-  domain?: string;
-  path?: string;
-  secure?: boolean;
-  session?: boolean;
+	url?: string;
+	name?: string;
+	domain?: string;
+	path?: string;
+	secure?: boolean;
+	session?: boolean;
 }
 
 export type StorageType =
-  | 'cookies'
-  | 'localStorage'
-  | 'sessionStorage'
-  | 'indexedDB'
-  | 'webSQL'
-  | 'cache'
-  | 'all';
+	| "cookies"
+	| "localStorage"
+	| "sessionStorage"
+	| "indexedDB"
+	| "webSQL"
+	| "cache"
+	| "all";
 
 // Cookies API for a session
 class SessionCookies {
-  private partitionId: string;
+	private partitionId: string;
 
-  constructor(partitionId: string) {
-    this.partitionId = partitionId;
-  }
+	constructor(partitionId: string) {
+		this.partitionId = partitionId;
+	}
 
-  /**
-   * Get cookies matching the filter criteria
-   * @param filter - Optional filter to match cookies
-   * @returns Array of matching cookies
-   */
-  get(filter?: CookieFilter): Cookie[] {
-    const filterJson = JSON.stringify(filter || {});
-    const result = native.symbols.sessionGetCookies(
-      toCString(this.partitionId),
-      toCString(filterJson)
-    );
-    if (!result) return [];
-    try {
-      return JSON.parse(result.toString());
-    } catch {
-      return [];
-    }
-  }
+	/**
+	 * Get cookies matching the filter criteria
+	 * @param filter - Optional filter to match cookies
+	 * @returns Array of matching cookies
+	 */
+	get(filter?: CookieFilter): Cookie[] {
+		const filterJson = JSON.stringify(filter || {});
+		const result = native.symbols.sessionGetCookies(
+			toCString(this.partitionId),
+			toCString(filterJson),
+		);
+		if (!result) return [];
+		try {
+			return JSON.parse(result.toString());
+		} catch {
+			return [];
+		}
+	}
 
-  /**
-   * Set a cookie
-   * @param cookie - The cookie to set
-   * @returns true if the cookie was set successfully
-   */
-  set(cookie: Cookie): boolean {
-    const cookieJson = JSON.stringify(cookie);
-    return native.symbols.sessionSetCookie(
-      toCString(this.partitionId),
-      toCString(cookieJson)
-    );
-  }
+	/**
+	 * Set a cookie
+	 * @param cookie - The cookie to set
+	 * @returns true if the cookie was set successfully
+	 */
+	set(cookie: Cookie): boolean {
+		const cookieJson = JSON.stringify(cookie);
+		return native.symbols.sessionSetCookie(
+			toCString(this.partitionId),
+			toCString(cookieJson),
+		);
+	}
 
-  /**
-   * Remove a specific cookie
-   * @param url - The URL associated with the cookie
-   * @param name - The name of the cookie
-   * @returns true if the cookie was removed successfully
-   */
-  remove(url: string, name: string): boolean {
-    return native.symbols.sessionRemoveCookie(
-      toCString(this.partitionId),
-      toCString(url),
-      toCString(name)
-    );
-  }
+	/**
+	 * Remove a specific cookie
+	 * @param url - The URL associated with the cookie
+	 * @param name - The name of the cookie
+	 * @returns true if the cookie was removed successfully
+	 */
+	remove(url: string, name: string): boolean {
+		return native.symbols.sessionRemoveCookie(
+			toCString(this.partitionId),
+			toCString(url),
+			toCString(name),
+		);
+	}
 
-  /**
-   * Clear all cookies for this session
-   */
-  clear(): void {
-    native.symbols.sessionClearCookies(toCString(this.partitionId));
-  }
+	/**
+	 * Clear all cookies for this session
+	 */
+	clear(): void {
+		native.symbols.sessionClearCookies(toCString(this.partitionId));
+	}
 }
 
 // Session class representing a storage partition
 class SessionInstance {
-  readonly partition: string;
-  readonly cookies: SessionCookies;
+	readonly partition: string;
+	readonly cookies: SessionCookies;
 
-  constructor(partition: string) {
-    this.partition = partition;
-    this.cookies = new SessionCookies(partition);
-  }
+	constructor(partition: string) {
+		this.partition = partition;
+		this.cookies = new SessionCookies(partition);
+	}
 
-  /**
-   * Clear storage data for this session
-   * @param types - Array of storage types to clear, or 'all' to clear everything
-   */
-  clearStorageData(types: StorageType[] | 'all' = 'all'): void {
-    const typesArray = types === 'all' ? ['all'] : types;
-    native.symbols.sessionClearStorageData(
-      toCString(this.partition),
-      toCString(JSON.stringify(typesArray))
-    );
-  }
+	/**
+	 * Clear storage data for this session
+	 * @param types - Array of storage types to clear, or 'all' to clear everything
+	 */
+	clearStorageData(types: StorageType[] | "all" = "all"): void {
+		const typesArray = types === "all" ? ["all"] : types;
+		native.symbols.sessionClearStorageData(
+			toCString(this.partition),
+			toCString(JSON.stringify(typesArray)),
+		);
+	}
 }
 
 // Cache of session instances
@@ -1793,558 +1827,666 @@ const sessionCache = new Map<string, SessionInstance>();
 
 // Session module for storage/cookie management
 export const Session = {
-  /**
-   * Get or create a session for a given partition
-   * @param partition - The partition identifier (e.g., "persist:myapp" or "ephemeral")
-   * @returns Session instance for the partition
-   */
-  fromPartition: (partition: string): SessionInstance => {
-    let session = sessionCache.get(partition);
-    if (!session) {
-      session = new SessionInstance(partition);
-      sessionCache.set(partition, session);
-    }
-    return session;
-  },
+	/**
+	 * Get or create a session for a given partition
+	 * @param partition - The partition identifier (e.g., "persist:myapp" or "ephemeral")
+	 * @returns Session instance for the partition
+	 */
+	fromPartition: (partition: string): SessionInstance => {
+		let session = sessionCache.get(partition);
+		if (!session) {
+			session = new SessionInstance(partition);
+			sessionCache.set(partition, session);
+		}
+		return session;
+	},
 
-  /**
-   * Get the default session (persist:default partition)
-   */
-  get defaultSession(): SessionInstance {
-    return Session.fromPartition('persist:default');
-  },
+	/**
+	 * Get the default session (persist:default partition)
+	 */
+	get defaultSession(): SessionInstance {
+		return Session.fromPartition("persist:default");
+	},
 };
 
 // DEPRECATED: This callback is no longer used for navigation decisions.
 // Navigation rules are now stored in native code and evaluated synchronously
 // without calling back to Bun. Use webview.setNavigationRules() instead.
 // This callback is kept for FFI signature compatibility but is not called.
-const webviewDecideNavigation = new JSCallback((_webviewId, _url) => {
-  return true;
-}, {
-  args: [FFIType.u32, FFIType.cstring],
-  returns: FFIType.u32,
-  threadsafe: true
-});
-
+const webviewDecideNavigation = new JSCallback(
+	(_webviewId, _url) => {
+		return true;
+	},
+	{
+		args: [FFIType.u32, FFIType.cstring],
+		returns: FFIType.u32,
+		threadsafe: true,
+	},
+);
 
 const webviewEventHandler = (id: number, eventName: string, detail: string) => {
-  const webview = BrowserView.getById(id);
-  if (!webview) {
-    console.error('[webviewEventHandler] No webview found for id:', id);
-    return;
-  }
-  
-  if (webview.hostWebviewId) {
-    const hostWebview = BrowserView.getById(webview.hostWebviewId);
+	const webview = BrowserView.getById(id);
+	if (!webview) {
+		console.error("[webviewEventHandler] No webview found for id:", id);
+		return;
+	}
 
-    if (!hostWebview) {
-      console.error('[webviewEventHandler] No webview found for id:', id);
-      return;
-    }
+	if (webview.hostWebviewId) {
+		const hostWebview = BrowserView.getById(webview.hostWebviewId);
 
-    // This is a webviewtag so we should send the event into the parent as well
-    // TODO XX: escape event name and detail to remove `
-    // NOTE: for new-window-open and host-message the detail is a json string that needs to be parsed
-    let js;
-    if (eventName === 'new-window-open' || eventName === 'host-message') {
-      js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, ${detail});`
-    } else {
-      js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, \`${detail}\`);`
-    }
-    
-    native.symbols.evaluateJavaScriptWithNoCompletion(hostWebview.ptr, toCString(js))        
-  }
-    
-  const eventMap: Record<string, string> = {
-      "will-navigate": "willNavigate",
-      "did-navigate": "didNavigate",
-      "did-navigate-in-page": "didNavigateInPage",
-      "did-commit-navigation": "didCommitNavigation",
-      "dom-ready": "domReady",
-      "new-window-open": "newWindowOpen",
-      "host-message": "hostMessage",
-      "download-started": "downloadStarted",
-      "download-progress": "downloadProgress",
-      "download-completed": "downloadCompleted",
-      "download-failed": "downloadFailed",
-      "load-started": "loadStarted",
-      "load-committed": "loadCommitted",
-      "load-finished": "loadFinished",
-    };
+		if (!hostWebview) {
+			console.error("[webviewEventHandler] No webview found for id:", id);
+			return;
+		}
 
-  // todo: the events map should use the same hyphenated names instead of camelCase
-  const mappedName = eventMap[eventName];
-  const handler = mappedName
-    ? (electrobunEventEmitter.events.webview as Record<string, unknown>)[mappedName]
-    : undefined;
+		// This is a webviewtag so we should send the event into the parent as well
+		// TODO XX: escape event name and detail to remove `
+		// NOTE: for new-window-open and host-message the detail is a json string that needs to be parsed
+		let js;
+		if (eventName === "new-window-open" || eventName === "host-message") {
+			js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, ${detail});`;
+		} else {
+			js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, \`${detail}\`);`;
+		}
 
-  if (!handler) {
-    console.error('[webviewEventHandler] No handler found for event:', eventName, '(mapped to:', mappedName, ')');
-    return { success: false };
-  }
+		native.symbols.evaluateJavaScriptWithNoCompletion(
+			hostWebview.ptr,
+			toCString(js),
+		);
+	}
 
-  // Parse JSON data for events that send JSON
-  let parsedDetail = detail;
-  if (eventName === "new-window-open" || eventName === "host-message" ||
-      eventName === "download-started" || eventName === "download-progress" ||
-      eventName === "download-completed" || eventName === "download-failed") {
-    try {
-      parsedDetail = JSON.parse(detail);
-    } catch (e) {
-      console.error('[webviewEventHandler] Failed to parse JSON:', e);
-      // Fallback to string if parsing fails (backward compatibility)
-      parsedDetail = detail;
-    }
-  }
+	const eventMap: Record<string, string> = {
+		"will-navigate": "willNavigate",
+		"did-navigate": "didNavigate",
+		"did-navigate-in-page": "didNavigateInPage",
+		"did-commit-navigation": "didCommitNavigation",
+		"dom-ready": "domReady",
+		"new-window-open": "newWindowOpen",
+		"host-message": "hostMessage",
+		"download-started": "downloadStarted",
+		"download-progress": "downloadProgress",
+		"download-completed": "downloadCompleted",
+		"download-failed": "downloadFailed",
+		"load-started": "loadStarted",
+		"load-committed": "loadCommitted",
+		"load-finished": "loadFinished",
+	};
 
-  const event = (handler as (data: { detail: string }) => ElectrobunEvent<unknown, unknown>)({
-    detail: parsedDetail,
-  });
+	// todo: the events map should use the same hyphenated names instead of camelCase
+	const mappedName = eventMap[eventName];
+	const handler = mappedName
+		? (electrobunEventEmitter.events.webview as Record<string, unknown>)[
+				mappedName
+			]
+		: undefined;
 
-  // global event
-  electrobunEventEmitter.emitEvent(event);
-  electrobunEventEmitter.emitEvent(event, id);
-}
+	if (!handler) {
+		console.error(
+			"[webviewEventHandler] No handler found for event:",
+			eventName,
+			"(mapped to:",
+			mappedName,
+			")",
+		);
+		return { success: false };
+	}
 
-const webviewEventJSCallback = new JSCallback((id, _eventName, _detail) => {
-  let eventName = "";
-  let detail = "";
+	// Parse JSON data for events that send JSON
+	let parsedDetail = detail;
+	if (
+		eventName === "new-window-open" ||
+		eventName === "host-message" ||
+		eventName === "download-started" ||
+		eventName === "download-progress" ||
+		eventName === "download-completed" ||
+		eventName === "download-failed"
+	) {
+		try {
+			parsedDetail = JSON.parse(detail);
+		} catch (e) {
+			console.error("[webviewEventHandler] Failed to parse JSON:", e);
+			// Fallback to string if parsing fails (backward compatibility)
+			parsedDetail = detail;
+		}
+	}
 
-  try {
-    // Convert cstring pointers to actual strings
-    eventName = new CString(_eventName).toString();
-    detail = new CString(_detail).toString();
-  } catch (err) {
-    console.error('[webviewEventJSCallback] Error converting strings:', err);
-    console.error('[webviewEventJSCallback] Raw values:', { _eventName, _detail });
-    return;
-  }
+	const event = (
+		handler as (data: { detail: string }) => ElectrobunEvent<unknown, unknown>
+	)({
+		detail: parsedDetail,
+	});
 
-  webviewEventHandler(id, eventName, detail);    
-}, {
-  args: [FFIType.u32, FFIType.cstring, FFIType.cstring],
-  returns: FFIType.void,
-  threadsafe: true
-});
+	// global event
+	electrobunEventEmitter.emitEvent(event);
+	electrobunEventEmitter.emitEvent(event, id);
+};
 
+const webviewEventJSCallback = new JSCallback(
+	(id, _eventName, _detail) => {
+		let eventName = "";
+		let detail = "";
 
+		try {
+			// Convert cstring pointers to actual strings
+			eventName = new CString(_eventName).toString();
+			detail = new CString(_detail).toString();
+		} catch (err) {
+			console.error("[webviewEventJSCallback] Error converting strings:", err);
+			console.error("[webviewEventJSCallback] Raw values:", {
+				_eventName,
+				_detail,
+			});
+			return;
+		}
 
-const bunBridgePostmessageHandler = new JSCallback((id, msg) => {    
-  try {
-    const msgStr = new CString(msg);
+		webviewEventHandler(id, eventName, detail);
+	},
+	{
+		args: [FFIType.u32, FFIType.cstring, FFIType.cstring],
+		returns: FFIType.void,
+		threadsafe: true,
+	},
+);
 
-    if (!msgStr.length) {
-      return;
-    }
-    const msgJson = JSON.parse(msgStr.toString());
+const bunBridgePostmessageHandler = new JSCallback(
+	(id, msg) => {
+		try {
+			const msgStr = new CString(msg);
 
-    const webview = BrowserView.getById(id);
+			if (!msgStr.length) {
+				return;
+			}
+			const msgJson = JSON.parse(msgStr.toString());
 
-    webview.rpcHandler?.(msgJson);
-    
-  } catch (err) {
-    console.error('error sending message to bun: ', err)
-    console.error('msgString: ', new CString(msg));
-  }
-    
-  
-}, {
-  args: [FFIType.u32, FFIType.cstring],
-  returns: FFIType.void,
-  threadsafe: true
-});
+			const webview = BrowserView.getById(id);
+
+			webview.rpcHandler?.(msgJson);
+		} catch (err) {
+			console.error("error sending message to bun: ", err);
+			console.error("msgString: ", new CString(msg));
+		}
+	},
+	{
+		args: [FFIType.u32, FFIType.cstring],
+		returns: FFIType.void,
+		threadsafe: true,
+	},
+);
 
 // internalRPC (bun <-> browser internal stuff)
 // BrowserView.rpc (user defined bun <-> browser rpc unique to each webview)
 // nativeRPC (internal bun <-> native rpc)
 
+const internalBridgeHandler = new JSCallback(
+	(_id: number, msg: number) => {
+		try {
+			const batchMessage = new CString(msg as unknown as Pointer);
+			const jsonBatch = JSON.parse(batchMessage.toString());
 
-const internalBridgeHandler = new JSCallback((_id: number, msg: number) => {
-  try {
-    const batchMessage = new CString(msg as unknown as Pointer);
-    const jsonBatch = JSON.parse(batchMessage.toString());
+			if (jsonBatch.id === "webviewEvent") {
+				// Note: Some WebviewEvents from inside the webview are routed through here
+				// Others call the JSCallback directly from native code.
+				const { payload } = jsonBatch;
+				webviewEventHandler(payload.id, payload.eventName, payload.detail);
+				return;
+			}
 
-    if (jsonBatch.id === 'webviewEvent'){
-      // Note: Some WebviewEvents from inside the webview are routed through here
-      // Others call the JSCallback directly from native code.
-      const {payload} = jsonBatch;
-      webviewEventHandler(payload.id, payload.eventName, payload.detail);
-      return;
-    }
+			jsonBatch.forEach((msgStr: string) => {
+				// if (!msgStr.length) {
+				//   console.error('WEBVIEW EVENT SENT TO WEBVIEW TAG BRIDGE HANDLER?', )
+				//   return;
+				// }
+				const msgJson = JSON.parse(msgStr);
 
+				if (msgJson.type === "message") {
+					const handler = (
+						internalRpcHandlers.message as Record<
+							string,
+							(params: unknown) => void
+						>
+					)[msgJson.id];
+					handler(msgJson.payload);
+				} else if (msgJson.type === "request") {
+					const hostWebview = BrowserView.getById(msgJson.hostWebviewId);
+					// const targetWebview = BrowserView.getById(msgJson.params.params.hostWebviewId);
+					const handler = (
+						internalRpcHandlers.request as Record<
+							string,
+							(params: unknown) => unknown
+						>
+					)[msgJson.method];
 
-    jsonBatch.forEach((msgStr: string) => {
-      // if (!msgStr.length) {
-      //   console.error('WEBVIEW EVENT SENT TO WEBVIEW TAG BRIDGE HANDLER?', )
-      //   return;
-      // }
-      const msgJson = JSON.parse(msgStr);
+					const payload = handler(msgJson.params);
 
-      if (msgJson.type === 'message') {
-        const handler = (internalRpcHandlers.message as Record<string, (params: unknown) => void>)[msgJson.id];
-        handler(msgJson.payload);
-      } else if(msgJson.type === 'request') {
-        const hostWebview = BrowserView.getById(msgJson.hostWebviewId);
-        // const targetWebview = BrowserView.getById(msgJson.params.params.hostWebviewId);
-        const handler = (internalRpcHandlers.request as Record<string, (params: unknown) => unknown>)[msgJson.method];
+					const resultObj = {
+						type: "response",
+						id: msgJson.id,
+						success: true,
+						payload,
+					};
 
+					if (!hostWebview) {
+						console.log(
+							"--->>> internal request in bun: NO HOST WEBVIEW FOUND",
+						);
+						return;
+					}
 
-        const payload = handler(msgJson.params);
-        
+					hostWebview.sendInternalMessageViaExecute(resultObj);
+				}
+			});
+		} catch (err) {
+			console.error("error in internalBridgeHandler: ", err);
+			// console.log('msgStr: ', id, new CString(msg));
+		}
+	},
+	{
+		args: [FFIType.u32, FFIType.cstring],
+		returns: FFIType.void,
+		threadsafe: true,
+	},
+);
 
-        const resultObj = {
-          type: 'response',
-          id: msgJson.id,
-          success: true,
-          payload,
-        }
-        
-        if (!hostWebview) {        
-          console.log('--->>> internal request in bun: NO HOST WEBVIEW FOUND');
-          return 
-        }
-              
-        hostWebview.sendInternalMessageViaExecute(resultObj);          
-      }
-    });
-          
-    } catch (err) {
-      console.error('error in internalBridgeHandler: ', err)
-      // console.log('msgStr: ', id, new CString(msg));
-    }        
+const trayItemHandler = new JSCallback(
+	(id, action) => {
+		// Note: Some invisible character that doesn't appear in .length
+		// is causing issues
+		const actionString = (new CString(action).toString() || "").trim();
 
-    
-}, {
-  args: [FFIType.u32, FFIType.cstring],
-  returns: FFIType.void,
-  threadsafe: true
-});
+		// Use shared deserialization method
+		const { action: actualAction, data } = deserializeMenuAction(actionString);
 
-const trayItemHandler = new JSCallback((id, action) => {
-  // Note: Some invisible character that doesn't appear in .length
-  // is causing issues      
-  const actionString = (new CString(action).toString() || "").trim();
-  
-  // Use shared deserialization method
-  const { action: actualAction, data } = deserializeMenuAction(actionString);
-  
-  const event = electrobunEventEmitter.events.tray.trayClicked({
-    id,
-    action: actualAction,
-    data, // Always include data property (undefined if no data)
-  });
+		const event = electrobunEventEmitter.events.tray.trayClicked({
+			id,
+			action: actualAction,
+			data, // Always include data property (undefined if no data)
+		});
 
-  // global event
-  electrobunEventEmitter.emitEvent(event);
-  electrobunEventEmitter.emitEvent(event, id);
-}, {
-  args: [FFIType.u32, FFIType.cstring],
-  returns: FFIType.void,
-  threadsafe: true,
-})
+		// global event
+		electrobunEventEmitter.emitEvent(event);
+		electrobunEventEmitter.emitEvent(event, id);
+	},
+	{
+		args: [FFIType.u32, FFIType.cstring],
+		returns: FFIType.void,
+		threadsafe: true,
+	},
+);
 
+const applicationMenuHandler = new JSCallback(
+	(id, action) => {
+		const actionString = new CString(action).toString();
 
-const applicationMenuHandler = new JSCallback((id, action) => {
-  const actionString = new CString(action).toString();
+		// Use shared deserialization method
+		const { action: actualAction, data } = deserializeMenuAction(actionString);
 
-  // Use shared deserialization method
-  const { action: actualAction, data } = deserializeMenuAction(actionString);
+		const event = electrobunEventEmitter.events.app.applicationMenuClicked({
+			id,
+			action: actualAction,
+			data, // Always include data property (undefined if no data)
+		});
 
-  const event = electrobunEventEmitter.events.app.applicationMenuClicked({
-    id,
-    action: actualAction,
-    data, // Always include data property (undefined if no data)
-  });
-  
-  // global event
-  electrobunEventEmitter.emitEvent(event);
-}, {
-  args: [FFIType.u32, FFIType.cstring],
-  returns: FFIType.void,
-  threadsafe: true
-})
+		// global event
+		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: [FFIType.u32, FFIType.cstring],
+		returns: FFIType.void,
+		threadsafe: true,
+	},
+);
 
-const contextMenuHandler = new JSCallback((_id, action) => {
-  const actionString = new CString(action).toString();
-  
-  // Use shared deserialization method
-  const { action: actualAction, data } = deserializeMenuAction(actionString);
-  
-  const event = electrobunEventEmitter.events.app.contextMenuClicked({
-    action: actualAction,
-    data, // Always include data property (undefined if no data)
-  });
+const contextMenuHandler = new JSCallback(
+	(_id, action) => {
+		const actionString = new CString(action).toString();
 
-  electrobunEventEmitter.emitEvent(event);
-}, {
-  args: [FFIType.u32, FFIType.cstring],
-  returns: FFIType.void,
-  threadsafe: true
-})
+		// Use shared deserialization method
+		const { action: actualAction, data } = deserializeMenuAction(actionString);
+
+		const event = electrobunEventEmitter.events.app.contextMenuClicked({
+			action: actualAction,
+			data, // Always include data property (undefined if no data)
+		});
+
+		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: [FFIType.u32, FFIType.cstring],
+		returns: FFIType.void,
+		threadsafe: true,
+	},
+);
 
 // Note: When passed over FFI JS will GC the buffer/pointer. Make sure to use strdup() or something
 // on the c side to duplicate the string so objc/c++ gc can own it
-export function toCString(jsString: string, addNullTerminator: boolean = true): CString {      
-  let appendWith = '';
-  
-  if (addNullTerminator && !jsString.endsWith('\0')) {
-    appendWith = '\0';
-  }
-    const buff = Buffer.from(jsString + appendWith, 'utf8');    
-    
-  // @ts-ignore - This is valid in Bun
-  return ptr(buff);
+export function toCString(
+	jsString: string,
+	addNullTerminator: boolean = true,
+): CString {
+	let appendWith = "";
+
+	if (addNullTerminator && !jsString.endsWith("\0")) {
+		appendWith = "\0";
+	}
+	const buff = Buffer.from(jsString + appendWith, "utf8");
+
+	// @ts-ignore - This is valid in Bun
+	return ptr(buff);
 }
 
-
-
 type WebviewTagInitParams = {
-  url: string | null;
-  html: string | null;
-  preload: string | null;
-  renderer: 'native' | 'cef';
-  partition: string | null;
-  frame: { x: number; y: number; width: number; height: number };
-  hostWebviewId: number;
-  windowId: number;
-  navigationRules: string | null;
+	url: string | null;
+	html: string | null;
+	preload: string | null;
+	renderer: "native" | "cef";
+	partition: string | null;
+	frame: { x: number; y: number; width: number; height: number };
+	hostWebviewId: number;
+	windowId: number;
+	navigationRules: string | null;
 };
 
 export const internalRpcHandlers = {
-  request: {
-  // todo: this shouldn't be getting method, just params.
-    webviewTagInit: (params: WebviewTagInitParams) => {      
-      
-      const {
-        hostWebviewId,
-        windowId,
-        renderer,
-        html,
-        preload,
-        partition,
-        frame,
-        navigationRules,
-      } = params;
+	request: {
+		// todo: this shouldn't be getting method, just params.
+		webviewTagInit: (params: WebviewTagInitParams) => {
+			const {
+				hostWebviewId,
+				windowId,
+				renderer,
+				html,
+				preload,
+				partition,
+				frame,
+				navigationRules,
+			} = params;
 
-      const url = !params.url && !html ? "https://electrobun.dev" : params.url;    
+			const url = !params.url && !html ? "https://electrobun.dev" : params.url;
 
-      const webviewForTag = new BrowserView({
-        url,
-        html,
-        preload,
-        partition,
-        frame,
-        hostWebviewId,
-        autoResize: false,
-        windowId,
-        renderer,//: "cef",
-        navigationRules,
-      });      
+			const webviewForTag = new BrowserView({
+				url,
+				html,
+				preload,
+				partition,
+				frame,
+				hostWebviewId,
+				autoResize: false,
+				windowId,
+				renderer, //: "cef",
+				navigationRules,
+			});
 
-      return webviewForTag.id;
-    },  
-    webviewTagCanGoBack: (params: { id: number }) => {
-      const {id} = params;
-      const webviewPtr = BrowserView.getById(id)?.ptr;
-      if (!webviewPtr) {
-        console.error('no webview ptr')
-        return false;
-      }
+			return webviewForTag.id;
+		},
+		webviewTagCanGoBack: (params: { id: number }) => {
+			const { id } = params;
+			const webviewPtr = BrowserView.getById(id)?.ptr;
+			if (!webviewPtr) {
+				console.error("no webview ptr");
+				return false;
+			}
 
-      return native.symbols.webviewCanGoBack(webviewPtr);
-    },
-    webviewTagCanGoForward: (params: { id: number }) => {
-      const {id} = params;
-      const webviewPtr = BrowserView.getById(id)?.ptr;
-      if (!webviewPtr) {
-        console.error('no webview ptr')
-        return false;
-      }
+			return native.symbols.webviewCanGoBack(webviewPtr);
+		},
+		webviewTagCanGoForward: (params: { id: number }) => {
+			const { id } = params;
+			const webviewPtr = BrowserView.getById(id)?.ptr;
+			if (!webviewPtr) {
+				console.error("no webview ptr");
+				return false;
+			}
 
-      return native.symbols.webviewCanGoForward(webviewPtr);
-    },
-    webviewTagCallAsyncJavaScript: (params: { id: number; script: string }) => {
-      console.log('TODO: webviewTagCallAsyncJavaScript NOT YET IMPLEMENTED', params)
-      // Not implemented - users can use RPC for JavaScript execution if needed
-    }
-  },
-  message: {
-    webviewTagResize: (params: { id: number; frame: { x: number; y: number; width: number; height: number }; masks: string }) => {
-      const browserView = BrowserView.getById(params.id);
-      const webviewPtr = browserView?.ptr;
-      
-      if (!webviewPtr) {
-        console.log('[Bun] ERROR: webviewTagResize - no webview ptr found for id:', params.id);
-        return;
-      }
-      
-      const {x, y, width, height} = params.frame;
-      native.symbols.resizeWebview(webviewPtr, x, y, width, height, toCString(params.masks))
-    },      
-    webviewTagUpdateSrc: (params: { id: number; url: string }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagUpdateSrc: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.loadURLInWebView(webview.ptr, toCString(params.url));
-    },
-    webviewTagUpdateHtml: (params: { id: number; html: string }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagUpdateHtml: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
+			return native.symbols.webviewCanGoForward(webviewPtr);
+		},
+		webviewTagCallAsyncJavaScript: (params: { id: number; script: string }) => {
+			console.log(
+				"TODO: webviewTagCallAsyncJavaScript NOT YET IMPLEMENTED",
+				params,
+			);
+			// Not implemented - users can use RPC for JavaScript execution if needed
+		},
+	},
+	message: {
+		webviewTagResize: (params: {
+			id: number;
+			frame: { x: number; y: number; width: number; height: number };
+			masks: string;
+		}) => {
+			const browserView = BrowserView.getById(params.id);
+			const webviewPtr = browserView?.ptr;
 
-      // Store HTML content in native map for scheme handlers
-      native.symbols.setWebviewHTMLContent(webview.id, toCString(params.html));
+			if (!webviewPtr) {
+				console.log(
+					"[Bun] ERROR: webviewTagResize - no webview ptr found for id:",
+					params.id,
+				);
+				return;
+			}
 
-      webview.loadHTML(params.html);
-      webview.html = params.html;
-    },
-    webviewTagUpdatePreload: (params: { id: number; preload: string }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagUpdatePreload: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.updatePreloadScriptToWebView(webview.ptr, toCString('electrobun_custom_preload_script'), toCString(params.preload), true);
-    },
-    webviewTagGoBack: (params: { id: number }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagGoBack: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.webviewGoBack(webview.ptr);
-    },
-    webviewTagGoForward: (params: { id: number }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagGoForward: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.webviewGoForward(webview.ptr);
-    },
-    webviewTagReload: (params: { id: number }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagReload: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.webviewReload(webview.ptr);
-    },
-    webviewTagRemove: (params: { id: number }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagRemove: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.webviewRemove(webview.ptr);
-    },
-    startWindowMove: (params: { id: number }) => {
-      const window = BrowserWindow.getById(params.id);
-      native.symbols.startWindowMove(window.ptr);
-    },
-    stopWindowMove: (_params: unknown) => {
-      native.symbols.stopWindowMove();
-    },
-    webviewTagSetTransparent: (params: { id: number; transparent: boolean }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagSetTransparent: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.webviewSetTransparent(webview.ptr, params.transparent);
-    },
-    webviewTagSetPassthrough: (params: { id: number; enablePassthrough: boolean }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagSetPassthrough: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.webviewSetPassthrough(webview.ptr, params.enablePassthrough);
-    },
-    webviewTagSetHidden: (params: { id: number; hidden: boolean }) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagSetHidden: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.webviewSetHidden(webview.ptr, params.hidden);
-    },
-    webviewTagSetNavigationRules: (params: {id: number; rules: string[]}) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagSetNavigationRules: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      const rulesJson = JSON.stringify(params.rules);
-      native.symbols.setWebviewNavigationRules(webview.ptr, toCString(rulesJson));
-    },
-    webviewTagFindInPage: (params: {id: number; searchText: string; forward: boolean; matchCase: boolean}) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagFindInPage: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.webviewFindInPage(webview.ptr, toCString(params.searchText), params.forward, params.matchCase);
-    },
-    webviewTagStopFind: (params: {id: number}) => {
-      const webview = BrowserView.getById(params.id);
-      if (!webview || !webview.ptr) {
-        console.error(`webviewTagStopFind: BrowserView not found or has no ptr for id ${params.id}`);
-        return;
-      }
-      native.symbols.webviewStopFind(webview.ptr);
-    },
-    webviewEvent: (params: unknown) => {
-      console.log('-----------------+webviewEvent', params)
-    },
-  },
-  
- 
+			const { x, y, width, height } = params.frame;
+			native.symbols.resizeWebview(
+				webviewPtr,
+				x,
+				y,
+				width,
+				height,
+				toCString(params.masks),
+			);
+		},
+		webviewTagUpdateSrc: (params: { id: number; url: string }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagUpdateSrc: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.loadURLInWebView(webview.ptr, toCString(params.url));
+		},
+		webviewTagUpdateHtml: (params: { id: number; html: string }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagUpdateHtml: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			// Store HTML content in native map for scheme handlers
+			native.symbols.setWebviewHTMLContent(webview.id, toCString(params.html));
+
+			webview.loadHTML(params.html);
+			webview.html = params.html;
+		},
+		webviewTagUpdatePreload: (params: { id: number; preload: string }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagUpdatePreload: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.updatePreloadScriptToWebView(
+				webview.ptr,
+				toCString("electrobun_custom_preload_script"),
+				toCString(params.preload),
+				true,
+			);
+		},
+		webviewTagGoBack: (params: { id: number }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagGoBack: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewGoBack(webview.ptr);
+		},
+		webviewTagGoForward: (params: { id: number }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagGoForward: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewGoForward(webview.ptr);
+		},
+		webviewTagReload: (params: { id: number }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagReload: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewReload(webview.ptr);
+		},
+		webviewTagRemove: (params: { id: number }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagRemove: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewRemove(webview.ptr);
+		},
+		startWindowMove: (params: { id: number }) => {
+			const window = BrowserWindow.getById(params.id);
+			native.symbols.startWindowMove(window.ptr);
+		},
+		stopWindowMove: (_params: unknown) => {
+			native.symbols.stopWindowMove();
+		},
+		webviewTagSetTransparent: (params: {
+			id: number;
+			transparent: boolean;
+		}) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagSetTransparent: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewSetTransparent(webview.ptr, params.transparent);
+		},
+		webviewTagSetPassthrough: (params: {
+			id: number;
+			enablePassthrough: boolean;
+		}) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagSetPassthrough: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewSetPassthrough(
+				webview.ptr,
+				params.enablePassthrough,
+			);
+		},
+		webviewTagSetHidden: (params: { id: number; hidden: boolean }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagSetHidden: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewSetHidden(webview.ptr, params.hidden);
+		},
+		webviewTagSetNavigationRules: (params: { id: number; rules: string[] }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagSetNavigationRules: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			const rulesJson = JSON.stringify(params.rules);
+			native.symbols.setWebviewNavigationRules(
+				webview.ptr,
+				toCString(rulesJson),
+			);
+		},
+		webviewTagFindInPage: (params: {
+			id: number;
+			searchText: string;
+			forward: boolean;
+			matchCase: boolean;
+		}) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagFindInPage: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewFindInPage(
+				webview.ptr,
+				toCString(params.searchText),
+				params.forward,
+				params.matchCase,
+			);
+		},
+		webviewTagStopFind: (params: { id: number }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagStopFind: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewStopFind(webview.ptr);
+		},
+		webviewEvent: (params: unknown) => {
+			console.log("-----------------+webviewEvent", params);
+		},
+	},
 };
 
 // todo: consider renaming to TrayMenuItemConfig
 export type MenuItemConfig =
-  | { type: "divider" | "separator" }
-  | {
-      type: "normal";
-      label: string;
-      tooltip?: string;
-      action?: string;
-      data?: any;
-      submenu?: Array<MenuItemConfig>;
-      enabled?: boolean;
-      checked?: boolean;
-      hidden?: boolean;
-    };
+	| { type: "divider" | "separator" }
+	| {
+			type: "normal";
+			label: string;
+			tooltip?: string;
+			action?: string;
+			data?: any;
+			submenu?: Array<MenuItemConfig>;
+			enabled?: boolean;
+			checked?: boolean;
+			hidden?: boolean;
+	  };
 
 export type ApplicationMenuItemConfig =
-  | { type: "divider" | "separator" }
-  | {
-      type?: "normal";
-      label: string;
-      tooltip?: string;
-      action?: string;
-      data?: any;
-      submenu?: Array<ApplicationMenuItemConfig>;
-      enabled?: boolean;
-      checked?: boolean;
-      hidden?: boolean;
-      accelerator?: string;
-    }
-  | {
-      type?: "normal";
-      label?: string;
-      tooltip?: string;
-      role?: string;
-      data?: any;
-      submenu?: Array<ApplicationMenuItemConfig>;
-      enabled?: boolean;
-      checked?: boolean;
-      hidden?: boolean;
-      accelerator?: string;
-    };
+	| { type: "divider" | "separator" }
+	| {
+			type?: "normal";
+			label: string;
+			tooltip?: string;
+			action?: string;
+			data?: any;
+			submenu?: Array<ApplicationMenuItemConfig>;
+			enabled?: boolean;
+			checked?: boolean;
+			hidden?: boolean;
+			accelerator?: string;
+	  }
+	| {
+			type?: "normal";
+			label?: string;
+			tooltip?: string;
+			role?: string;
+			data?: any;
+			submenu?: Array<ApplicationMenuItemConfig>;
+			enabled?: boolean;
+			checked?: boolean;
+			hidden?: boolean;
+			accelerator?: string;
+	  };

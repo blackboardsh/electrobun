@@ -1,465 +1,467 @@
 * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    background: #1a1a1a;
-    color: #ffffff;
-    overflow: hidden;
+	font-family:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+		sans-serif;
+	background: #1a1a1a;
+	color: #ffffff;
+	overflow: hidden;
 }
 
 .container {
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
+	height: 100vh;
+	display: flex;
+	flex-direction: column;
 }
 
 header {
-    background: #2a2a2a;
-    padding: 1rem 2rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid #3a3a3a;
-    gap: 2rem;
+	background: #2a2a2a;
+	padding: 1rem 2rem;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	border-bottom: 1px solid #3a3a3a;
+	gap: 2rem;
 }
 
 .mode-selector {
-    display: flex;
-    gap: 0.5rem;
-    background: #1a1a1a;
-    padding: 0.25rem;
-    border-radius: 8px;
-    border: 1px solid #3a3a3a;
+	display: flex;
+	gap: 0.5rem;
+	background: #1a1a1a;
+	padding: 0.25rem;
+	border-radius: 8px;
+	border: 1px solid #3a3a3a;
 }
 
 .mode-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    background: transparent;
-    color: #999;
-    border: none;
-    border-radius: 6px;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.75rem 1rem;
+	background: transparent;
+	color: #999;
+	border: none;
+	border-radius: 6px;
+	font-size: 0.875rem;
+	font-weight: 500;
+	cursor: pointer;
+	transition: all 0.2s;
 }
 
 .mode-btn:hover {
-    background: #333;
-    color: #fff;
+	background: #333;
+	color: #fff;
 }
 
 .mode-btn.active {
-    background: #007aff;
-    color: white;
+	background: #007aff;
+	color: white;
 }
 
 .mode-btn.active:hover {
-    background: #0056b3;
+	background: #0056b3;
 }
 
 h1 {
-    font-size: 1.5rem;
-    font-weight: 600;
+	font-size: 1.5rem;
+	font-weight: 600;
 }
 
 .status {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    color: #999;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-size: 0.875rem;
+	color: #999;
 }
 
 .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #666;
-    transition: background 0.3s;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: #666;
+	transition: background 0.3s;
 }
 
 .status.active .status-dot {
-    background: #4CAF50;
-    box-shadow: 0 0 8px #4CAF50;
+	background: #4caf50;
+	box-shadow: 0 0 8px #4caf50;
 }
 
 .status.error .status-dot {
-    background: #f44336;
+	background: #f44336;
 }
 
 main {
-    flex: 1;
-    display: flex;
-    overflow: hidden;
+	flex: 1;
+	display: flex;
+	overflow: hidden;
 }
 
 .camera-section {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 2rem;
-    gap: 1.5rem;
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	padding: 2rem;
+	gap: 1.5rem;
 }
 
 .video-container {
-    flex: 1;
-    position: relative;
-    background: #000;
-    border-radius: 12px;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+	flex: 1;
+	position: relative;
+	background: #000;
+	border-radius: 12px;
+	overflow: hidden;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
 .native-capture-placeholder {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #1a1a1a;
-    color: #999;
-    z-index: 1;
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: #1a1a1a;
+	color: #999;
+	z-index: 1;
 }
 
 .placeholder-content {
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1rem;
+	text-align: center;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 1rem;
 }
 
 .placeholder-content svg {
-    opacity: 0.6;
+	opacity: 0.6;
 }
 
 .placeholder-content p {
-    margin: 0;
-    font-size: 0.875rem;
+	margin: 0;
+	font-size: 0.875rem;
 }
 
 .placeholder-content p:first-of-type {
-    font-size: 1rem;
-    font-weight: 500;
-    color: #ccc;
+	font-size: 1rem;
+	font-weight: 500;
+	color: #ccc;
 }
 
 #video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
 }
 
 .countdown {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 8rem;
-    font-weight: bold;
-    color: white;
-    text-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
-    opacity: 0;
-    transition: opacity 0.3s;
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	font-size: 8rem;
+	font-weight: bold;
+	color: white;
+	text-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+	opacity: 0;
+	transition: opacity 0.3s;
 }
 
 .countdown.active {
-    opacity: 1;
+	opacity: 1;
 }
 
 .controls {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    align-items: center;
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+	align-items: center;
 }
 
 .capture-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem 2rem;
-    font-size: 1rem;
-    font-weight: 500;
-    background: #007AFF;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.3s;
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.75rem 2rem;
+	font-size: 1rem;
+	font-weight: 500;
+	background: #007aff;
+	color: white;
+	border: none;
+	border-radius: 8px;
+	cursor: pointer;
+	transition: all 0.3s;
 }
 
 .capture-btn:hover:not(:disabled) {
-    background: #0056b3;
-    transform: scale(1.05);
+	background: #0056b3;
+	transform: scale(1.05);
 }
 
 .capture-btn:active:not(:disabled) {
-    transform: scale(0.95);
+	transform: scale(0.95);
 }
 
 .capture-btn:disabled {
-    background: #444;
-    cursor: not-allowed;
-    opacity: 0.6;
+	background: #444;
+	cursor: not-allowed;
+	opacity: 0.6;
 }
 
 .settings {
-    display: flex;
-    gap: 2rem;
-    align-items: center;
+	display: flex;
+	gap: 2rem;
+	align-items: center;
 }
 
 .settings label {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    cursor: pointer;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	cursor: pointer;
 }
 
 .settings input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
-    cursor: pointer;
+	width: 18px;
+	height: 18px;
+	cursor: pointer;
 }
 
 .camera-select {
-    padding: 0.5rem;
-    background: #2a2a2a;
-    color: white;
-    border: 1px solid #3a3a3a;
-    border-radius: 4px;
-    cursor: pointer;
+	padding: 0.5rem;
+	background: #2a2a2a;
+	color: white;
+	border: 1px solid #3a3a3a;
+	border-radius: 4px;
+	cursor: pointer;
 }
 
 .camera-only-control {
-    display: flex;
+	display: flex;
 }
 
 .screen-only-control {
-    display: none;
+	display: none;
 }
 
 .mode-screen .camera-only-control {
-    display: none;
+	display: none;
 }
 
 .mode-screen .screen-only-control {
-    display: flex;
+	display: flex;
 }
 
 .start-camera-btn,
 .select-screen-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    background: #007aff;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: background 0.2s;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.5rem 1rem;
+	background: #007aff;
+	color: white;
+	border: none;
+	border-radius: 6px;
+	font-size: 0.875rem;
+	cursor: pointer;
+	transition: background 0.2s;
 }
 
 .start-camera-btn:hover,
 .select-screen-btn:hover {
-    background: #0056b3;
+	background: #0056b3;
 }
 
 .change-source-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    background: #444;
-    color: white;
-    border: 1px solid #555;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    transition: background 0.2s;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.5rem 1rem;
+	background: #444;
+	color: white;
+	border: 1px solid #555;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 0.875rem;
+	transition: background 0.2s;
 }
 
 .change-source-btn:hover {
-    background: #555;
+	background: #555;
 }
 
 .gallery-section {
-    width: 300px;
-    background: #2a2a2a;
-    padding: 1.5rem;
-    overflow-y: auto;
-    border-left: 1px solid #3a3a3a;
+	width: 300px;
+	background: #2a2a2a;
+	padding: 1.5rem;
+	overflow-y: auto;
+	border-left: 1px solid #3a3a3a;
 }
 
 .gallery-section h2 {
-    font-size: 1.125rem;
-    margin-bottom: 1rem;
+	font-size: 1.125rem;
+	margin-bottom: 1rem;
 }
 
 .gallery {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.75rem;
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 0.75rem;
 }
 
 .empty-state {
-    grid-column: 1 / -1;
-    text-align: center;
-    color: #666;
-    padding: 2rem 0;
-    font-size: 0.875rem;
+	grid-column: 1 / -1;
+	text-align: center;
+	color: #666;
+	padding: 2rem 0;
+	font-size: 0.875rem;
 }
 
 .photo-item {
-    position: relative;
-    aspect-ratio: 1;
-    border-radius: 8px;
-    overflow: hidden;
-    cursor: pointer;
-    transition: transform 0.2s;
+	position: relative;
+	aspect-ratio: 1;
+	border-radius: 8px;
+	overflow: hidden;
+	cursor: pointer;
+	transition: transform 0.2s;
 }
 
 .photo-item:hover {
-    transform: scale(1.05);
+	transform: scale(1.05);
 }
 
 .photo-item img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
 }
 
 .photo-item .photo-time {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
-    color: white;
-    font-size: 0.75rem;
-    padding: 0.5rem;
-    text-align: center;
+	position: absolute;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
+	color: white;
+	font-size: 0.75rem;
+	padding: 0.5rem;
+	text-align: center;
 }
 
 .photo-modal {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.9);
-    z-index: 1000;
-    padding: 2rem;
+	display: none;
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: rgba(0, 0, 0, 0.9);
+	z-index: 1000;
+	padding: 2rem;
 }
 
 .photo-modal.active {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
 .modal-content {
-    position: relative;
-    max-width: 90vw;
-    max-height: 90vh;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
+	position: relative;
+	max-width: 90vw;
+	max-height: 90vh;
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
 }
 
 .modal-close {
-    position: absolute;
-    top: -40px;
-    right: 0;
-    background: none;
-    border: none;
-    color: white;
-    font-size: 2rem;
-    cursor: pointer;
-    width: 40px;
-    height: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    transition: background 0.2s;
+	position: absolute;
+	top: -40px;
+	right: 0;
+	background: none;
+	border: none;
+	color: white;
+	font-size: 2rem;
+	cursor: pointer;
+	width: 40px;
+	height: 40px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 4px;
+	transition: background 0.2s;
 }
 
 .modal-close:hover {
-    background: rgba(255, 255, 255, 0.1);
+	background: rgba(255, 255, 255, 0.1);
 }
 
 #modalImage {
-    max-width: 100%;
-    max-height: calc(90vh - 60px);
-    object-fit: contain;
-    border-radius: 8px;
+	max-width: 100%;
+	max-height: calc(90vh - 60px);
+	object-fit: contain;
+	border-radius: 8px;
 }
 
 .modal-actions {
-    display: flex;
-    gap: 1rem;
-    justify-content: center;
+	display: flex;
+	gap: 1rem;
+	justify-content: center;
 }
 
 .action-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1.5rem;
-    background: #007AFF;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    font-weight: 500;
-    transition: background 0.2s;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.75rem 1.5rem;
+	background: #007aff;
+	color: white;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 0.875rem;
+	font-weight: 500;
+	transition: background 0.2s;
 }
 
 .action-btn:hover {
-    background: #0056b3;
+	background: #0056b3;
 }
 
 .action-btn.danger {
-    background: #dc3545;
+	background: #dc3545;
 }
 
 .action-btn.danger:hover {
-    background: #c82333;
+	background: #c82333;
 }
 
 @media (max-width: 768px) {
-    main {
-        flex-direction: column;
-    }
-    
-    .gallery-section {
-        width: 100%;
-        border-left: none;
-        border-top: 1px solid #3a3a3a;
-        height: 200px;
-        flex-shrink: 0;
-    }
-    
-    .gallery {
-        grid-template-columns: repeat(3, 1fr);
-    }
+	main {
+		flex-direction: column;
+	}
+
+	.gallery-section {
+		width: 100%;
+		border-left: none;
+		border-top: 1px solid #3a3a3a;
+		height: 200px;
+		flex-shrink: 0;
+	}
+
+	.gallery {
+		grid-template-columns: repeat(3, 1fr);
+	}
 }

@@ -2,11 +2,11 @@ import { ffi, native } from "../proc/native";
 
 // TODO: move this to a more appropriate namespace
 export const moveToTrash = (path: string) => {
-  return ffi.request.moveToTrash({ path });
+	return ffi.request.moveToTrash({ path });
 };
 
 export const showItemInFolder = (path: string) => {
-  return ffi.request.showItemInFolder({ path });
+	return ffi.request.showItemInFolder({ path });
 };
 
 /**
@@ -27,7 +27,7 @@ export const showItemInFolder = (path: string) => {
  * openExternal("slack://open");
  */
 export const openExternal = (url: string): boolean => {
-  return ffi.request.openExternal({ url });
+	return ffi.request.openExternal({ url });
 };
 
 /**
@@ -46,26 +46,26 @@ export const openExternal = (url: string): boolean => {
  * openPath("/Users/me/Downloads");
  */
 export const openPath = (path: string): boolean => {
-  return ffi.request.openPath({ path });
+	return ffi.request.openPath({ path });
 };
 
 export type NotificationOptions = {
-  /**
-   * The title of the notification (required)
-   */
-  title: string;
-  /**
-   * The main body text of the notification
-   */
-  body?: string;
-  /**
-   * A subtitle displayed below the title (macOS only, shown as additional line on other platforms)
-   */
-  subtitle?: string;
-  /**
-   * If true, the notification will not play a sound
-   */
-  silent?: boolean;
+	/**
+	 * The title of the notification (required)
+	 */
+	title: string;
+	/**
+	 * The main body text of the notification
+	 */
+	body?: string;
+	/**
+	 * A subtitle displayed below the title (macOS only, shown as additional line on other platforms)
+	 */
+	subtitle?: string;
+	/**
+	 * If true, the notification will not play a sound
+	 */
+	silent?: boolean;
 };
 
 /**
@@ -103,65 +103,65 @@ export type NotificationOptions = {
  * });
  */
 export const showNotification = (options: NotificationOptions): void => {
-  const { title, body, subtitle, silent } = options;
-  ffi.request.showNotification({ title, body, subtitle, silent });
+	const { title, body, subtitle, silent } = options;
+	ffi.request.showNotification({ title, body, subtitle, silent });
 };
 
 export const quit = () => {
-  // Use native killApp for graceful shutdown
-  native.symbols.killApp();
+	// Use native killApp for graceful shutdown
+	native.symbols.killApp();
 };
 
 export const openFileDialog = async (
-  opts: {
-    startingFolder?: string;
-    allowedFileTypes?: string;
-    canChooseFiles?: boolean;
-    canChooseDirectory?: boolean;
-    allowsMultipleSelection?: boolean;
-  } = {}
+	opts: {
+		startingFolder?: string;
+		allowedFileTypes?: string;
+		canChooseFiles?: boolean;
+		canChooseDirectory?: boolean;
+		allowsMultipleSelection?: boolean;
+	} = {},
 ): Promise<string[]> => {
-  const optsWithDefault = {
-    ...{
-      startingFolder: "~/",
-      allowedFileTypes: "*",
-      canChooseFiles: true,
-      canChooseDirectory: true,
-      allowsMultipleSelection: true,
-    },
-    ...opts,
-  };
+	const optsWithDefault = {
+		...{
+			startingFolder: "~/",
+			allowedFileTypes: "*",
+			canChooseFiles: true,
+			canChooseDirectory: true,
+			allowsMultipleSelection: true,
+		},
+		...opts,
+	};
 
-  // todo: extend the timeout for this one (this version of rpc-anywhere doesn't seem to be able to set custom timeouts per request)
-  // we really want it to be infinity since the open file dialog blocks everything anyway.
-  // todo: there's the timeout between bun and zig, and the timeout between browser and bun since user likely requests
-  // from a browser context
-  const result = await ffi.request.openFileDialog({
-    startingFolder: optsWithDefault.startingFolder,
-    allowedFileTypes: optsWithDefault.allowedFileTypes,
-    canChooseFiles: optsWithDefault.canChooseFiles,
-    canChooseDirectory: optsWithDefault.canChooseDirectory,
-    allowsMultipleSelection: optsWithDefault.allowsMultipleSelection,
-  });
+	// todo: extend the timeout for this one (this version of rpc-anywhere doesn't seem to be able to set custom timeouts per request)
+	// we really want it to be infinity since the open file dialog blocks everything anyway.
+	// todo: there's the timeout between bun and zig, and the timeout between browser and bun since user likely requests
+	// from a browser context
+	const result = await ffi.request.openFileDialog({
+		startingFolder: optsWithDefault.startingFolder,
+		allowedFileTypes: optsWithDefault.allowedFileTypes,
+		canChooseFiles: optsWithDefault.canChooseFiles,
+		canChooseDirectory: optsWithDefault.canChooseDirectory,
+		allowsMultipleSelection: optsWithDefault.allowsMultipleSelection,
+	});
 
-  const filePaths = result.split(",");
+	const filePaths = result.split(",");
 
-  // todo: it's nested like this due to zig union types. needs a zig refactor and revisit
-  return filePaths;
+	// todo: it's nested like this due to zig union types. needs a zig refactor and revisit
+	return filePaths;
 };
 
 export type MessageBoxOptions = {
-  type?: "info" | "warning" | "error" | "question";
-  title?: string;
-  message?: string;
-  detail?: string;
-  buttons?: string[];
-  defaultId?: number;
-  cancelId?: number;
+	type?: "info" | "warning" | "error" | "question";
+	title?: string;
+	message?: string;
+	detail?: string;
+	buttons?: string[];
+	defaultId?: number;
+	cancelId?: number;
 };
 
 export type MessageBoxResponse = {
-  response: number; // Index of the clicked button
+	response: number; // Index of the clicked button
 };
 
 /**
@@ -192,29 +192,29 @@ export type MessageBoxResponse = {
  * }
  */
 export const showMessageBox = async (
-  opts: MessageBoxOptions = {}
+	opts: MessageBoxOptions = {},
 ): Promise<MessageBoxResponse> => {
-  const {
-    type = "info",
-    title = "",
-    message = "",
-    detail = "",
-    buttons = ["OK"],
-    defaultId = 0,
-    cancelId = -1,
-  } = opts;
+	const {
+		type = "info",
+		title = "",
+		message = "",
+		detail = "",
+		buttons = ["OK"],
+		defaultId = 0,
+		cancelId = -1,
+	} = opts;
 
-  const response = ffi.request.showMessageBox({
-    type,
-    title,
-    message,
-    detail,
-    buttons,
-    defaultId,
-    cancelId,
-  });
+	const response = ffi.request.showMessageBox({
+		type,
+		title,
+		message,
+		detail,
+		buttons,
+		defaultId,
+		cancelId,
+	});
 
-  return { response };
+	return { response };
 };
 
 // ============================================================================
@@ -226,7 +226,7 @@ export const showMessageBox = async (
  * @returns The clipboard text, or null if no text is available
  */
 export const clipboardReadText = (): string | null => {
-  return ffi.request.clipboardReadText();
+	return ffi.request.clipboardReadText();
 };
 
 /**
@@ -234,7 +234,7 @@ export const clipboardReadText = (): string | null => {
  * @param text - The text to write to the clipboard
  */
 export const clipboardWriteText = (text: string): void => {
-  ffi.request.clipboardWriteText({ text });
+	ffi.request.clipboardWriteText({ text });
 };
 
 /**
@@ -242,7 +242,7 @@ export const clipboardWriteText = (text: string): void => {
  * @returns PNG image data as Uint8Array, or null if no image is available
  */
 export const clipboardReadImage = (): Uint8Array | null => {
-  return ffi.request.clipboardReadImage();
+	return ffi.request.clipboardReadImage();
 };
 
 /**
@@ -250,14 +250,14 @@ export const clipboardReadImage = (): Uint8Array | null => {
  * @param pngData - PNG image data as Uint8Array
  */
 export const clipboardWriteImage = (pngData: Uint8Array): void => {
-  ffi.request.clipboardWriteImage({ pngData });
+	ffi.request.clipboardWriteImage({ pngData });
 };
 
 /**
  * Clear the system clipboard.
  */
 export const clipboardClear = (): void => {
-  ffi.request.clipboardClear();
+	ffi.request.clipboardClear();
 };
 
 /**
@@ -265,5 +265,5 @@ export const clipboardClear = (): void => {
  * @returns Array of format names (e.g., ["text", "image", "files", "html"])
  */
 export const clipboardAvailableFormats = (): string[] => {
-  return ffi.request.clipboardAvailableFormats();
+	return ffi.request.clipboardAvailableFormats();
 };

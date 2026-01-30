@@ -19,8 +19,10 @@ import { join } from "path";
 const type = process.argv[2];
 
 if (!type || !["beta", "patch", "minor", "major", "stable"].includes(type)) {
-  console.error("Usage: bun scripts/push-version.js <beta|patch|minor|major|stable>");
-  process.exit(1);
+	console.error(
+		"Usage: bun scripts/push-version.js <beta|patch|minor|major|stable>",
+	);
+	process.exit(1);
 }
 
 const packageDir = import.meta.dir.replace("/scripts", "");
@@ -33,11 +35,11 @@ const currentVersion = packageJson.version;
 
 // Determine npm version command
 const versionCmd = {
-  beta: "prerelease --preid=beta",
-  patch: "prepatch --preid=beta",
-  minor: "preminor --preid=beta",
-  major: "premajor --preid=beta",
-  stable: "patch",
+	beta: "prerelease --preid=beta",
+	patch: "prepatch --preid=beta",
+	minor: "preminor --preid=beta",
+	major: "premajor --preid=beta",
+	stable: "patch",
 }[type];
 
 console.log(`Current version: ${currentVersion}`);
@@ -45,8 +47,8 @@ console.log(`Running: npm version ${versionCmd}`);
 
 // Bump version (without git operations)
 execSync(`npm version ${versionCmd} --no-git-tag-version`, {
-  cwd: packageDir,
-  stdio: "inherit",
+	cwd: packageDir,
+	stdio: "inherit",
 });
 
 // Read new version
@@ -60,8 +62,8 @@ console.log(`New version: ${newVersion}`);
 const kitchenConfigPath = join(repoRoot, "kitchen", "electrobun.config.ts");
 let kitchenConfig = readFileSync(kitchenConfigPath, "utf-8");
 kitchenConfig = kitchenConfig.replace(
-  /version:\s*["'].*["']/,
-  `version: "${newVersion}"`
+	/version:\s*["'].*["']/,
+	`version: "${newVersion}"`,
 );
 writeFileSync(kitchenConfigPath, kitchenConfig);
 console.log(`Updated kitchen/electrobun.config.ts version to ${newVersion}`);
@@ -69,7 +71,10 @@ console.log(`Updated kitchen/electrobun.config.ts version to ${newVersion}`);
 // Git operations from repo root
 console.log(`Creating commit and tag: ${tagName}`);
 
-execSync(`git add package/package.json kitchen/electrobun.config.ts`, { cwd: repoRoot, stdio: "inherit" });
+execSync(`git add package/package.json kitchen/electrobun.config.ts`, {
+	cwd: repoRoot,
+	stdio: "inherit",
+});
 execSync(`git commit -m "${tagName}"`, { cwd: repoRoot, stdio: "inherit" });
 execSync(`git tag ${tagName}`, { cwd: repoRoot, stdio: "inherit" });
 

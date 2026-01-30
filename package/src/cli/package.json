@@ -1,14 +1,11 @@
 {
-  "name": "electrobun-cli",
-  "module": "index.ts",
-  "type": "module",
-  "devDependencies": {
-    
-  },
-  "peerDependencies": {
-    "typescript": "^5.0.0"
-  },
-  "dependencies": {    
-  },
-  "trustedDependencies": []
+	"name": "electrobun-cli",
+	"module": "index.ts",
+	"type": "module",
+	"devDependencies": {},
+	"peerDependencies": {
+		"typescript": "^5.0.0"
+	},
+	"dependencies": {},
+	"trustedDependencies": []
 }

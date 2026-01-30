@@ -10,159 +10,192 @@ const absoluteLibPath = resolve(libPath);
 
 // Wrap main logic in a function to avoid top-level return
 function main() {
-    // Read version.json early to get identifier, name, and channel for CEF initialization
-    let channel = "";
-    let identifier = "";
-    let name = "";
-    try {
-        const pathToLauncherBin = process.argv0;
-        const pathToBinDir = dirname(pathToLauncherBin);
-        const versionJsonPath = join(pathToBinDir, "..", "Resources", "version.json");
+	// Read version.json early to get identifier, name, and channel for CEF initialization
+	let channel = "";
+	let identifier = "";
+	let name = "";
+	try {
+		const pathToLauncherBin = process.argv0;
+		const pathToBinDir = dirname(pathToLauncherBin);
+		const versionJsonPath = join(
+			pathToBinDir,
+			"..",
+			"Resources",
+			"version.json",
+		);
 
-        if (existsSync(versionJsonPath)) {
-            const versionInfo = require(versionJsonPath);
-            if (versionInfo.identifier) {
-                identifier = versionInfo.identifier;
-            }
-            if (versionInfo.name) {
-                name = versionInfo.name;
-            }
-            if (versionInfo.channel) {
-                channel = versionInfo.channel;
-            }
-            console.log(`[LAUNCHER] Loaded identifier: ${identifier}, name: ${name}, channel: ${channel}`);
-        }
-    } catch (error) {
-        console.error(`[LAUNCHER] Warning: Could not read version.json:`, error);
-        // Continue anyway - this is not critical for dev builds
-    }
+		if (existsSync(versionJsonPath)) {
+			const versionInfo = require(versionJsonPath);
+			if (versionInfo.identifier) {
+				identifier = versionInfo.identifier;
+			}
+			if (versionInfo.name) {
+				name = versionInfo.name;
+			}
+			if (versionInfo.channel) {
+				channel = versionInfo.channel;
+			}
+			console.log(
+				`[LAUNCHER] Loaded identifier: ${identifier}, name: ${name}, channel: ${channel}`,
+			);
+		}
+	} catch (error) {
+		console.error(`[LAUNCHER] Warning: Could not read version.json:`, error);
+		// Continue anyway - this is not critical for dev builds
+	}
 
-    // Check for CEF libraries and warn if LD_PRELOAD not set (Linux only)
-    if (process.platform === 'linux') {
-        const cefLibs = [join(pathToMacOS, 'libcef.so'), join(pathToMacOS, 'libvk_swiftshader.so')];
-        const existingCefLibs = cefLibs.filter(lib => existsSync(lib));
+	// Check for CEF libraries and warn if LD_PRELOAD not set (Linux only)
+	if (process.platform === "linux") {
+		const cefLibs = [
+			join(pathToMacOS, "libcef.so"),
+			join(pathToMacOS, "libvk_swiftshader.so"),
+		];
+		const existingCefLibs = cefLibs.filter((lib) => existsSync(lib));
 
-        if (existingCefLibs.length > 0 && !process.env['LD_PRELOAD']) {
-            console.error(`[LAUNCHER] ERROR: CEF libraries found but LD_PRELOAD not set!`);
-            console.error(`[LAUNCHER] Please run through the wrapper script: ./run.sh`);
-            console.error(`[LAUNCHER] Or set: LD_PRELOAD="${existingCefLibs.join(':')}" before starting.`);
+		if (existingCefLibs.length > 0 && !process.env["LD_PRELOAD"]) {
+			console.error(
+				`[LAUNCHER] ERROR: CEF libraries found but LD_PRELOAD not set!`,
+			);
+			console.error(
+				`[LAUNCHER] Please run through the wrapper script: ./run.sh`,
+			);
+			console.error(
+				`[LAUNCHER] Or set: LD_PRELOAD="${existingCefLibs.join(":")}" before starting.`,
+			);
 
-            // Try to re-exec ourselves with LD_PRELOAD set
-            const { spawn } = require('child_process');
-            const env = { ...process.env, LD_PRELOAD: existingCefLibs.join(':') };
-            const child = spawn(process.argv[0], process.argv.slice(1), {
-                env,
-                stdio: 'inherit'
-            });
-            child.on('exit', (code: number | null) => process.exit(code ?? 1));
-            return; // Don't continue in this process
-        }
-    }
+			// Try to re-exec ourselves with LD_PRELOAD set
+			const { spawn } = require("child_process");
+			const env = { ...process.env, LD_PRELOAD: existingCefLibs.join(":") };
+			const child = spawn(process.argv[0], process.argv.slice(1), {
+				env,
+				stdio: "inherit",
+			});
+			child.on("exit", (code: number | null) => process.exit(code ?? 1));
+			return; // Don't continue in this process
+		}
+	}
 
-    let lib;
-    try {
-        // Set LD_LIBRARY_PATH if not already set
-        if (!process.env['LD_LIBRARY_PATH']?.includes('.')) {
-            process.env['LD_LIBRARY_PATH'] = `.${process.env['LD_LIBRARY_PATH'] ? ':' + process.env['LD_LIBRARY_PATH'] : ''}`;
-        }
-        
-        lib = dlopen(libPath, {
-            startEventLoop: { args: ["cstring", "cstring", "cstring"], returns: "void" }
-        });
-    } catch (error) {
-        console.error(`[LAUNCHER] Failed to load library: ${(error as Error).message}`);
-        
-        // Try with absolute path as fallback
-        try {
-            lib = dlopen(absoluteLibPath, {
-                startEventLoop: { args: ["cstring", "cstring", "cstring"], returns: "void" }
-            });
-        } catch (absError) {
-            console.error(`[LAUNCHER] Library loading failed. Try running: ldd ${libPath}`);
-            throw error;
-        }
-    }
+	let lib;
+	try {
+		// Set LD_LIBRARY_PATH if not already set
+		if (!process.env["LD_LIBRARY_PATH"]?.includes(".")) {
+			process.env["LD_LIBRARY_PATH"] =
+				`.${process.env["LD_LIBRARY_PATH"] ? ":" + process.env["LD_LIBRARY_PATH"] : ""}`;
+		}
 
-    // todo (yoav): as the debug launcher, get the relative path a different way, so dev builds can be shared and executed
-    // from different locations
-    const pathToLauncherBin = process.argv0;
-    const pathToBinDir = dirname(pathToLauncherBin);
+		lib = dlopen(libPath, {
+			startEventLoop: {
+				args: ["cstring", "cstring", "cstring"],
+				returns: "void",
+			},
+		});
+	} catch (error) {
+		console.error(
+			`[LAUNCHER] Failed to load library: ${(error as Error).message}`,
+		);
 
-    const resourcesDir = join(pathToBinDir, "..", "Resources");
-    const asarPath = join(resourcesDir, "app.asar");
-    const appFolderPath = join(resourcesDir, "app");
+		// Try with absolute path as fallback
+		try {
+			lib = dlopen(absoluteLibPath, {
+				startEventLoop: {
+					args: ["cstring", "cstring", "cstring"],
+					returns: "void",
+				},
+			});
+		} catch (absError) {
+			console.error(
+				`[LAUNCHER] Library loading failed. Try running: ldd ${libPath}`,
+			);
+			throw error;
+		}
+	}
 
-    let appEntrypointPath: string;
+	// todo (yoav): as the debug launcher, get the relative path a different way, so dev builds can be shared and executed
+	// from different locations
+	const pathToLauncherBin = process.argv0;
+	const pathToBinDir = dirname(pathToLauncherBin);
 
-    // Check if ASAR archive exists
-    if (existsSync(asarPath)) {
-        console.log(`[LAUNCHER] Loading app code from ASAR: ${asarPath}`);
+	const resourcesDir = join(pathToBinDir, "..", "Resources");
+	const asarPath = join(resourcesDir, "app.asar");
+	const appFolderPath = join(resourcesDir, "app");
 
-        // Load ASAR functions via FFI
-        // On Windows, use libNativeWrapper.dll which has built-in C++ ASAR reader
-        // On macOS/Linux, use standalone libasar library
-        let asarLibPath: string;
-        let asarLib: any;
+	let appEntrypointPath: string;
 
-        if (process.platform === 'win32') {
-            // Windows: Use native wrapper's built-in ASAR reader (no external DLL needed)
-            asarLibPath = libPath;
-            console.log(`[LAUNCHER] Using native wrapper's ASAR reader: ${asarLibPath}`);
-        } else {
-            // macOS/Linux: Use standalone libasar library
-            asarLibPath = join(pathToMacOS, `libasar.${suffix}`);
-        }
+	// Check if ASAR archive exists
+	if (existsSync(asarPath)) {
+		console.log(`[LAUNCHER] Loading app code from ASAR: ${asarPath}`);
 
-        try {
-            asarLib = dlopen(asarLibPath, {
-                asar_open: { args: ["cstring"], returns: "ptr" },
-                asar_read_file: { args: ["ptr", "cstring", "ptr"], returns: "ptr" },
-                asar_free_buffer: { args: ["ptr", "u64"], returns: "void" },
-                asar_close: { args: ["ptr"], returns: "void" }
-            });
-        } catch (error) {
-            console.error(`[LAUNCHER] Failed to load ASAR library: ${(error as Error).message}`);
-            throw error;
-        }
+		// Load ASAR functions via FFI
+		// On Windows, use libNativeWrapper.dll which has built-in C++ ASAR reader
+		// On macOS/Linux, use standalone libasar library
+		let asarLibPath: string;
+		let asarLib: any;
 
-        // Open ASAR archive
-        const asarArchive = asarLib.symbols.asar_open(ptr(new Uint8Array(Buffer.from(asarPath + '\0', 'utf8'))));
+		if (process.platform === "win32") {
+			// Windows: Use native wrapper's built-in ASAR reader (no external DLL needed)
+			asarLibPath = libPath;
+			console.log(
+				`[LAUNCHER] Using native wrapper's ASAR reader: ${asarLibPath}`,
+			);
+		} else {
+			// macOS/Linux: Use standalone libasar library
+			asarLibPath = join(pathToMacOS, `libasar.${suffix}`);
+		}
 
-        if (!asarArchive || asarArchive === 0n) {
-            console.error(`[LAUNCHER] Failed to open ASAR archive at: ${asarPath}`);
-            throw new Error("Failed to open ASAR archive");
-        }
+		try {
+			asarLib = dlopen(asarLibPath, {
+				asar_open: { args: ["cstring"], returns: "ptr" },
+				asar_read_file: { args: ["ptr", "cstring", "ptr"], returns: "ptr" },
+				asar_free_buffer: { args: ["ptr", "u64"], returns: "void" },
+				asar_close: { args: ["ptr"], returns: "void" },
+			});
+		} catch (error) {
+			console.error(
+				`[LAUNCHER] Failed to load ASAR library: ${(error as Error).message}`,
+			);
+			throw error;
+		}
 
-        // Read bun/index.js from ASAR
-        const filePath = "bun/index.js";
-        const sizeBuffer = new BigUint64Array(1);
-        const fileDataPtr = asarLib.symbols.asar_read_file(
-            asarArchive,
-            ptr(new Uint8Array(Buffer.from(filePath + '\0', 'utf8'))),
-            ptr(sizeBuffer)
-        );
+		// Open ASAR archive
+		const asarArchive = asarLib.symbols.asar_open(
+			ptr(new Uint8Array(Buffer.from(asarPath + "\0", "utf8"))),
+		);
 
-        if (!fileDataPtr || fileDataPtr === 0n) {
-            console.error(`[LAUNCHER] Failed to read ${filePath} from ASAR`);
-            asarLib.symbols.asar_close(asarArchive);
-            throw new Error(`Failed to read ${filePath} from ASAR`);
-        }
+		if (!asarArchive || asarArchive === 0n) {
+			console.error(`[LAUNCHER] Failed to open ASAR archive at: ${asarPath}`);
+			throw new Error("Failed to open ASAR archive");
+		}
 
-        const fileSize = Number(sizeBuffer[0]);
-        console.log(`[LAUNCHER] Read ${fileSize} bytes from ASAR for ${filePath}`);
+		// Read bun/index.js from ASAR
+		const filePath = "bun/index.js";
+		const sizeBuffer = new BigUint64Array(1);
+		const fileDataPtr = asarLib.symbols.asar_read_file(
+			asarArchive,
+			ptr(new Uint8Array(Buffer.from(filePath + "\0", "utf8"))),
+			ptr(sizeBuffer),
+		);
 
-        // Copy data from the FFI pointer to a Buffer using toArrayBuffer
-        const arrayBuffer = toArrayBuffer(fileDataPtr, 0, fileSize);
-        const fileData = Buffer.from(arrayBuffer);
+		if (!fileDataPtr || fileDataPtr === 0n) {
+			console.error(`[LAUNCHER] Failed to read ${filePath} from ASAR`);
+			asarLib.symbols.asar_close(asarArchive);
+			throw new Error(`Failed to read ${filePath} from ASAR`);
+		}
 
-        // Write to system temp directory with randomized filename for security
-        const systemTmpDir = tmpdir();
-        const randomFileName = `electrobun-${Date.now()}-${Math.random().toString(36).substring(7)}.js`;
-        appEntrypointPath = join(systemTmpDir, randomFileName);
+		const fileSize = Number(sizeBuffer[0]);
+		console.log(`[LAUNCHER] Read ${fileSize} bytes from ASAR for ${filePath}`);
 
-        // Prepend code to delete the temp file after a short delay
-        // This runs in the Worker thread, not the main thread (which gets blocked by startEventLoop)
-        const wrappedFileData = `
+		// Copy data from the FFI pointer to a Buffer using toArrayBuffer
+		const arrayBuffer = toArrayBuffer(fileDataPtr, 0, fileSize);
+		const fileData = Buffer.from(arrayBuffer);
+
+		// Write to system temp directory with randomized filename for security
+		const systemTmpDir = tmpdir();
+		const randomFileName = `electrobun-${Date.now()}-${Math.random().toString(36).substring(7)}.js`;
+		appEntrypointPath = join(systemTmpDir, randomFileName);
+
+		// Prepend code to delete the temp file after a short delay
+		// This runs in the Worker thread, not the main thread (which gets blocked by startEventLoop)
+		const wrappedFileData = `
 // Auto-delete temp file after Worker loads it
 const __tempFilePath = "${appEntrypointPath}";
 setTimeout(() => {
@@ -174,37 +207,37 @@ setTimeout(() => {
     }
 }, 100);
 
-${fileData.toString('utf8')}
+${fileData.toString("utf8")}
 `;
 
-        writeFileSync(appEntrypointPath, wrappedFileData);
-        console.log(`[LAUNCHER] Wrote app entrypoint to: ${appEntrypointPath}`);
+		writeFileSync(appEntrypointPath, wrappedFileData);
+		console.log(`[LAUNCHER] Wrote app entrypoint to: ${appEntrypointPath}`);
 
-        // Free the buffer
-        asarLib.symbols.asar_free_buffer(fileDataPtr, BigInt(fileSize));
+		// Free the buffer
+		asarLib.symbols.asar_free_buffer(fileDataPtr, BigInt(fileSize));
 
-        // Close the archive
-        asarLib.symbols.asar_close(asarArchive);
-    } else {
-        // Fallback to flat file system (for non-ASAR builds)
-        console.log(`[LAUNCHER] Loading app code from flat files`);
-        appEntrypointPath = join(appFolderPath, "bun", "index.js");
-    }
+		// Close the archive
+		asarLib.symbols.asar_close(asarArchive);
+	} else {
+		// Fallback to flat file system (for non-ASAR builds)
+		console.log(`[LAUNCHER] Loading app code from flat files`);
+		appEntrypointPath = join(appFolderPath, "bun", "index.js");
+	}
 
-    // NOTE: No point adding any event listeners here because this is the main
-    // ui thread which is about to be blocked by the native event loop below.
-    new Worker(appEntrypointPath, {
-        // consider adding a preload with error handling
-        // preload: [''];
-    });
+	// NOTE: No point adding any event listeners here because this is the main
+	// ui thread which is about to be blocked by the native event loop below.
+	new Worker(appEntrypointPath, {
+		// consider adding a preload with error handling
+		// preload: [''];
+	});
 
-    // Pass identifier, name, and channel as C strings using Buffer encoding
-    // Bun FFI requires explicit encoding for cstring parameters
-    lib.symbols.startEventLoop(
-        ptr(new Uint8Array(Buffer.from(identifier + '\0', 'utf8'))),
-        ptr(new Uint8Array(Buffer.from(name + '\0', 'utf8'))),
-        ptr(new Uint8Array(Buffer.from(channel + '\0', 'utf8')))
-    );
+	// Pass identifier, name, and channel as C strings using Buffer encoding
+	// Bun FFI requires explicit encoding for cstring parameters
+	lib.symbols.startEventLoop(
+		ptr(new Uint8Array(Buffer.from(identifier + "\0", "utf8"))),
+		ptr(new Uint8Array(Buffer.from(name + "\0", "utf8"))),
+		ptr(new Uint8Array(Buffer.from(channel + "\0", "utf8"))),
+	);
 }
 
 // Call the main function
