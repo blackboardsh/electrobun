@@ -383,6 +383,25 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "Window with inset titlebar style and custom inset position",
+    category: "BrowserWindow",
+    description: "Test creating a window with inset titlebar and custom inset position",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Inset Titlebar with custom inset position",
+        titleBarStyle: "hiddenInset",
+        windowButtonPosition: { x: 3, y: 3 },
+        renderer: 'cef',
+      });
+
+      expect(win.id).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      log("Window with inset titlebar style and custom inset position created successfully");
+    },
+  }),
+
+  defineTest({
     name: "Window setPosition",
     category: "BrowserWindow",
     description: "Test programmatically moving a window",

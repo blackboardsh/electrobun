@@ -6263,6 +6263,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     double width, double height,
     uint32_t styleMask,
     const char* titleBarStyle,
+    double /* windowButtonPositionX */,
+    double /* windowButtonPositionY */,
     bool transparent,
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,

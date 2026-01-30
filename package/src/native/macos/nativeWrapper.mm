@@ -543,6 +543,18 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 @interface AppDelegate : NSObject <NSApplicationDelegate>
 @end
 
+/**
+ * Transparent overlay view for traffic light button hover tracking.
+ * Returns nil from hitTest: so clicks pass through to the actual buttons.
+ * Manages its own NSTrackingArea to provide correct hover detection at
+ * the repositioned button locations.
+ */
+@interface ButtonsAreaHoverView : NSView
+    @property (nonatomic, weak) NSWindow *parentWindow;
+    @property (nonatomic, assign) double buttonPositionX;
+    @property (nonatomic, assign) double buttonPositionY;
+@end
+
 @interface WindowDelegate : NSObject <NSWindowDelegate>
     @property (nonatomic, assign) WindowCloseHandler closeHandler;
     @property (nonatomic, assign) WindowMoveHandler moveHandler;
@@ -550,6 +562,89 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) WindowFocusHandler focusHandler;
     @property (nonatomic, assign) uint32_t windowId;
     @property (nonatomic, strong) NSWindow *window;
+    @property (nonatomic, assign) double windowButtonPositionX;
+    @property (nonatomic, assign) double windowButtonPositionY;
+    @property (nonatomic, strong) ButtonsAreaHoverView *buttonsHoverView;
+@end
+
+@implementation ButtonsAreaHoverView
+
+- (NSView *)hitTest:(NSPoint)point {
+    return nil;
+}
+
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    for (NSTrackingArea *area in self.trackingAreas) {
+        [self removeTrackingArea:area];
+    }
+    NSTrackingArea *trackingArea = [[NSTrackingArea alloc]
+        initWithRect:NSZeroRect
+        options:(NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect)
+        owner:self
+        userInfo:nil];
+    [self addTrackingArea:trackingArea];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    if (!self.parentWindow) return;
+    NSButton *close = [self.parentWindow standardWindowButton:NSWindowCloseButton];
+    NSButton *mini = [self.parentWindow standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoom = [self.parentWindow standardWindowButton:NSWindowZoomButton];
+    [close setNeedsDisplay:YES];
+    [mini setNeedsDisplay:YES];
+    [zoom setNeedsDisplay:YES];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    if (!self.parentWindow) return;
+    NSButton *close = [self.parentWindow standardWindowButton:NSWindowCloseButton];
+    NSButton *mini = [self.parentWindow standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoom = [self.parentWindow standardWindowButton:NSWindowZoomButton];
+    [close setNeedsDisplay:YES];
+    [mini setNeedsDisplay:YES];
+    [zoom setNeedsDisplay:YES];
+}
+
+- (void)redraw {
+    if (!self.parentWindow) return;
+    NSButton *close = [self.parentWindow standardWindowButton:NSWindowCloseButton];
+    NSButton *mini = [self.parentWindow standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoom = [self.parentWindow standardWindowButton:NSWindowZoomButton];
+    if (!close || !mini || !zoom) return;
+
+    // NSTitlebarView (direct parent of buttons)
+    NSView *titleBarView = close.superview;
+    if (!titleBarView) return;
+    // NSTitlebarContainerView (grandparent — this is what Electron resizes)
+    NSView *titleBarContainer = titleBarView.superview;
+    if (!titleBarContainer) return;
+
+    CGFloat buttonWidth = close.frame.size.width;
+    CGFloat buttonHeight = close.frame.size.height;
+    CGFloat buttonPadding = NSMinX(mini.frame) - NSMaxX(close.frame);
+    if (buttonPadding < 0) buttonPadding = 6;
+    CGFloat buttonSpacing = buttonWidth + buttonPadding;
+
+    CGFloat marginX = self.buttonPositionX >= 0 ? self.buttonPositionX : close.frame.origin.x;
+    CGFloat marginY = self.buttonPositionY >= 0 ? self.buttonPositionY : (titleBarView.frame.size.height - close.frame.origin.y - buttonHeight);
+
+    // Resize NSTitlebarContainerView: just tall enough for posY + buttonHeight, pin to top of window
+    NSRect cbounds = titleBarContainer.frame;
+    cbounds.size.height = marginY + buttonHeight;
+    cbounds.origin.y = NSHeight(self.parentWindow.frame) - NSHeight(cbounds);
+    [titleBarContainer setFrame:cbounds];
+
+    // Position buttons at bottom of container (marginY space is above, from window top)
+    [close setFrameOrigin:NSMakePoint(marginX, 0)];
+    [mini setFrameOrigin:NSMakePoint(marginX + buttonSpacing, 0)];
+    [zoom setFrameOrigin:NSMakePoint(marginX + 2 * buttonSpacing, 0)];
+
+    // Update hover view to cover all buttons
+    CGFloat boundsWidth = 3 * buttonWidth + 2 * buttonPadding;
+    self.frame = NSMakeRect(NSMinX(close.frame), NSMinY(close.frame), boundsWidth, buttonHeight);
+}
+
 @end
 
 @interface StatusItemTarget : NSObject
@@ -4311,7 +4406,30 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             self.closeHandler(self.windowId);
         }
     }
+    - (void)applyWindowButtonPosition {
+        if (self.windowButtonPositionX < 0 && self.windowButtonPositionY < 0) return;
+        NSWindow *window = self.window;
+        NSButton *close = [window standardWindowButton:NSWindowCloseButton];
+        if (!close) return;
+        NSView *titleBarView = close.superview;
+        if (!titleBarView) return;
+        NSView *titleBarContainer = titleBarView.superview;
+        if (!titleBarContainer) return;
+
+        // Create hover view on first call — add to NSTitlebarContainerView (grandparent)
+        if (!self.buttonsHoverView) {
+            self.buttonsHoverView = [[ButtonsAreaHoverView alloc] initWithFrame:NSZeroRect];
+            self.buttonsHoverView.parentWindow = window;
+            [titleBarContainer addSubview:self.buttonsHoverView];
+        }
+
+        self.buttonsHoverView.buttonPositionX = self.windowButtonPositionX;
+        self.buttonsHoverView.buttonPositionY = self.windowButtonPositionY;
+        [self.buttonsHoverView redraw];
+    }
+
     - (void)windowDidResize:(NSNotification *)notification {
+        [self applyWindowButtonPosition];
         NSWindow *window = [notification object];
         NSRect windowFrame = [window frame];
         ContainerView *containerView = [window contentView];
@@ -4832,6 +4950,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   double width, double height,
   uint32_t styleMask,
   const char* titleBarStyle,
+  double windowButtonPositionX,
+  double windowButtonPositionY,
   bool transparent,
   WindowCloseHandler zigCloseHandler,
   WindowMoveHandler zigMoveHandler,
@@ -4885,6 +5005,15 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
             [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
         }
+
+        // Apply window button position (macOS only, hiddenInset only)
+        if (strcmp(titleBarStyle, "hiddenInset") == 0) {
+            WindowDelegate *del = objc_getAssociatedObject(window, "WindowDelegate");
+            if (del) {
+                del.windowButtonPositionX = windowButtonPositionX;
+                del.windowButtonPositionY = windowButtonPositionY;
+            }
+        }
     });
 
     return window;
@@ -4899,7 +5028,13 @@ extern "C" void showWindow(NSWindow *window) {
         [window makeKeyAndOrderFront:nil];
         
         // Activate the application to ensure it can receive focus
-        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];    
+        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
+
+        // Reapply window button position after show (layout resets positions)
+        WindowDelegate *del = objc_getAssociatedObject(window, "WindowDelegate");
+        if (del) {
+            [del applyWindowButtonPosition];
+        }
     });
 }
 

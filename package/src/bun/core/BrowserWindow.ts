@@ -27,6 +27,8 @@ type WindowOptionsType<T = undefined> = {
 	// - 'hidden': no titlebar, no native window controls (for fully custom chrome)
 	// - 'hiddenInset': transparent titlebar with inset native controls
 	titleBarStyle: "hidden" | "hiddenInset" | "default";
+	// windowButtonPosition: absolute position {x, y} for traffic light buttons (macOS only)
+	windowButtonPosition?: { x: number; y: number };
 	// transparent: when true, window background is transparent (see-through)
 	transparent: boolean;
 	navigationRules: string | null;
@@ -104,6 +106,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		rpc,
 		styleMask,
 		titleBarStyle,
+		windowButtonPosition,
 		transparent,
 	}: Partial<WindowOptionsType<T>>) {
 		this.ptr = ffi.request.createWindow({
@@ -146,6 +149,8 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 					: {}),
 			},
 			titleBarStyle: titleBarStyle || "default",
+			windowButtonPositionX: titleBarStyle === 'hiddenInset' ? (windowButtonPosition?.x ?? -1) : -1,
+			windowButtonPositionY: titleBarStyle === 'hiddenInset' ? (windowButtonPosition?.y ?? -1) : -1,
 			transparent: transparent ?? false,
 		}) as Pointer;
 

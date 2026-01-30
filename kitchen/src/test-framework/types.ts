@@ -54,7 +54,8 @@ export interface WindowOptions {
   x?: number;
   y?: number;
   title?: string;
-  titleBarStyle?: 'default' | 'hiddenInset';
+  titleBarStyle?: 'default' | 'hiddenInset' | 'hidden';
+  windowButtonPosition?: { x: number; y: number };
   renderer?: 'cef' | 'native';
 }
 

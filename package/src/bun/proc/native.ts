@@ -84,6 +84,8 @@ export const native = (() => {
 					FFIType.f64, // width, height
 					FFIType.u32, // styleMask
 					FFIType.cstring, // titleBarStyle
+					FFIType.f64, // windowButtonPositionX
+					FFIType.f64, // windowButtonPositionY
 					FFIType.bool, // transparent
 					FFIType.function, // closeHandler
 					FFIType.function, // moveHandler
@@ -570,6 +572,8 @@ export const ffi = {
 				HUDWindow: boolean;
 			};
 			titleBarStyle: string;
+			windowButtonPositionX: number,
+			windowButtonPositionY: number,
 			transparent: boolean;
 		}): FFIType.ptr => {
 			const {
@@ -592,6 +596,8 @@ export const ffi = {
 					HUDWindow,
 				},
 				titleBarStyle,
+				windowButtonPositionX,
+				windowButtonPositionY,
 				transparent,
 			} = params;
 
@@ -620,6 +626,8 @@ export const ffi = {
 				styleMask,
 				// style
 				toCString(titleBarStyle),
+				windowButtonPositionX,
+				windowButtonPositionY,
 				transparent,
 				// callbacks
 				windowCloseCallback,
