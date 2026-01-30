@@ -43,7 +43,10 @@ const _MAX_CHUNK_SIZE = 1024 * 2;
 
 // Create a tar file using system tar command (preserves file permissions unlike Bun.Archive)
 function createTar(tarPath: string, cwd: string, entries: string[]) {
-	execSync(`tar -cf "${tarPath}" ${entries.map((e) => `"${e}"`).join(" ")}`, {
+	// Use a relative path for the tar output on Windows to avoid bsdtar
+	// interpreting the "C:" drive letter as a remote host specifier.
+	const resolvedTarPath = process.platform === "win32" ? path.relative(cwd, tarPath) : tarPath;
+	execSync(`tar -cf "${resolvedTarPath}" ${entries.map((e) => `"${e}"`).join(" ")}`, {
 		cwd,
 		stdio: "pipe",
 	});
@@ -2032,6 +2035,8 @@ ${schemesXml}
 					"libcef.dll",
 					"chrome_elf.dll",
 					"d3dcompiler_47.dll",
+					"dxcompiler.dll",
+					"dxil.dll",
 					"libEGL.dll",
 					"libGLESv2.dll",
 					"vk_swiftshader.dll",
