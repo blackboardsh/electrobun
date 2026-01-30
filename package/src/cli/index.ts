@@ -2388,7 +2388,7 @@ if (commandArg === "init") {
       console.log("No baseUrl configured, skipping patch generation");
       console.log("To enable patch generation, configure baseUrl in your electrobun.config");
     } else {
-      const urlToPrevUpdateJson = `${config.release.baseUrl}/${platformPrefix}-update.json`;
+      const urlToPrevUpdateJson = `${config.release.baseUrl.replace(/\/+$/, '')}/${platformPrefix}-update.json`;
       const cacheBuster = Math.random().toString(36).substring(7);
       const updateJsonResponse = await fetch(
         urlToPrevUpdateJson + `?${cacheBuster}`
@@ -2397,7 +2397,7 @@ if (commandArg === "init") {
       });
 
     const tarballFileName = getTarballFileName(appFileName, OS);
-    const urlToLatestTarball = `${config.release.baseUrl}/${platformPrefix}-${tarballFileName}`;
+    const urlToLatestTarball = `${config.release.baseUrl.replace(/\/+$/, '')}/${platformPrefix}-${tarballFileName}`;
 
 
     // attempt to get the previous version to create a patch file

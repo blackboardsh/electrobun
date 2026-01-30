@@ -208,7 +208,7 @@ const Updater = {
 
     const cacheBuster = Math.random().toString(36).substring(7);
     const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
-    const updateInfoUrl = `${localInfo.baseUrl}/${platformPrefix}-update.json?${cacheBuster}`;
+    const updateInfoUrl = `${localInfo.baseUrl.replace(/\/+$/, '')}/${platformPrefix}-update.json?${cacheBuster}`;
 
     try {
       const updateInfoResponse = await fetch(updateInfoUrl);
@@ -313,7 +313,7 @@ const Updater = {
 
         // check if there's a patch file for it
         const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
-        const patchUrl = `${localInfo.baseUrl}/${platformPrefix}-${currentHash}.patch`;
+        const patchUrl = `${localInfo.baseUrl.replace(/\/+$/, '')}/${platformPrefix}-${currentHash}.patch`;
         emitStatus('fetching-patch', `Checking for patch: ${currentHash.slice(0, 8)}`, { currentHash, url: patchUrl });
 
         const patchResponse = await fetch(patchUrl);
@@ -514,7 +514,7 @@ const Updater = {
         const cacheBuster = Math.random().toString(36).substring(7);
         const platformPrefix = getPlatformPrefix(localInfo.channel, currentOS, currentArch);
         const tarballName = getTarballFileName(appFileName, currentOS);
-        const urlToLatestTarball = `${localInfo.baseUrl}/${platformPrefix}-${tarballName}`;
+        const urlToLatestTarball = `${localInfo.baseUrl.replace(/\/+$/, '')}/${platformPrefix}-${tarballName}`;
         const prevVersionCompressedTarballPath = join(
           appDataFolder,
           "self-extraction",

@@ -120,7 +120,7 @@ export function getDmgVolumeName(appName: string, buildEnvironment: BuildEnviron
  * Uses flat prefix-based naming for compatibility with GitHub Releases and other hosts.
  */
 export function getUpdateInfoUrl(baseUrl: string, platformPrefix: string): string {
-  return `${baseUrl}/${platformPrefix}-update.json`;
+  return `${baseUrl.replace(/\/+$/, '')}/${platformPrefix}-update.json`;
 }
 
 /**
@@ -128,7 +128,7 @@ export function getUpdateInfoUrl(baseUrl: string, platformPrefix: string): strin
  * Uses flat prefix-based naming for compatibility with GitHub Releases and other hosts.
  */
 export function getPatchFileUrl(baseUrl: string, platformPrefix: string, hash: string): string {
-  return `${baseUrl}/${platformPrefix}-${hash}.patch`;
+  return `${baseUrl.replace(/\/+$/, '')}/${platformPrefix}-${hash}.patch`;
 }
 
 /**
@@ -136,5 +136,5 @@ export function getPatchFileUrl(baseUrl: string, platformPrefix: string, hash: s
  * Uses flat prefix-based naming for compatibility with GitHub Releases and other hosts.
  */
 export function getTarballUrl(baseUrl: string, platformPrefix: string, tarballFileName: string): string {
-  return `${baseUrl}/${platformPrefix}-${tarballFileName}`;
+  return `${baseUrl.replace(/\/+$/, '')}/${platformPrefix}-${tarballFileName}`;
 }
