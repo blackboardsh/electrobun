@@ -1100,30 +1100,31 @@ async function createAppImage(
 	}
 	mkdirSync(appDirPath, { recursive: true });
 
-	// Copy the entire app bundle to AppDir/usr/bin/
-	const usrBinPath = join(appDirPath, "usr", "bin");
-	mkdirSync(usrBinPath, { recursive: true });
+	try {
+		// Copy the entire app bundle to AppDir/usr/bin/
+		const usrBinPath = join(appDirPath, "usr", "bin");
+		mkdirSync(usrBinPath, { recursive: true });
 
-	// console.log(`DEBUG: Attempting to copy from: ${resolvedAppBundlePath}`);
-	// console.log(`DEBUG: Does source exist? ${existsSync(resolvedAppBundlePath)}`);
-	// console.log(`DEBUG: To destination: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
+		// console.log(`DEBUG: Attempting to copy from: ${resolvedAppBundlePath}`);
+		// console.log(`DEBUG: Does source exist? ${existsSync(resolvedAppBundlePath)}`);
+		// console.log(`DEBUG: To destination: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
 
-	if (!existsSync(resolvedAppBundlePath)) {
-		throw new Error(`Source bundle does not exist: ${resolvedAppBundlePath}`);
-	}
+		if (!existsSync(resolvedAppBundlePath)) {
+			throw new Error(`Source bundle does not exist: ${resolvedAppBundlePath}`);
+		}
 
-	// console.log(`DEBUG: About to copy with cpSync:`);
-	// console.log(`  from: ${resolvedAppBundlePath} (exists: ${existsSync(resolvedAppBundlePath)})`);
-	// console.log(`  to: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
+		// console.log(`DEBUG: About to copy with cpSync:`);
+		// console.log(`  from: ${resolvedAppBundlePath} (exists: ${existsSync(resolvedAppBundlePath)})`);
+		// console.log(`  to: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
 
-	cpSync(
-		resolvedAppBundlePath,
-		join(usrBinPath, basename(resolvedAppBundlePath)),
-		{
-			recursive: true,
-			dereference: true,
-		},
-	);
+		cpSync(
+			resolvedAppBundlePath,
+			join(usrBinPath, basename(resolvedAppBundlePath)),
+			{
+				recursive: true,
+				dereference: true,
+			},
+		);
 
 	// Create AppRun script (the entry point)
 	const appBundleBasename = basename(resolvedAppBundlePath);
@@ -1139,9 +1140,9 @@ export LD_LIBRARY_PATH="\${HERE}/usr/bin/${appBundleBasename}/bin:\${HERE}/usr/b
 exec "\${EXEC}" "\$@"
 `;
 
-	const appRunPath = join(appDirPath, "AppRun");
-	writeFileSync(appRunPath, appRunContent);
-	execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
+		const appRunPath = join(appDirPath, "AppRun");
+		writeFileSync(appRunPath, appRunContent);
+		execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
 
 	// Create .desktop file in AppDir root
 	// Always include Icon field since we always create an icon (either real or placeholder)
@@ -1157,29 +1158,29 @@ StartupWMClass=${appFileName}
 Categories=Utility;
 `;
 
-	const desktopPath = join(appDirPath, `${appFileName}.desktop`);
-	writeFileSync(desktopPath, desktopContent);
+		const desktopPath = join(appDirPath, `${appFileName}.desktop`);
+		writeFileSync(desktopPath, desktopContent);
 
 	// Copy icon if available, or create a minimal placeholder
-	if (
-		config.build.linux?.icon &&
-		existsSync(join(projectRoot, config.build.linux.icon))
-	) {
-		const iconSourcePath = join(projectRoot, config.build.linux.icon);
-		const iconDestPath = join(appDirPath, `${appFileName}.png`);
-		const dirIconPath = join(appDirPath, ".DirIcon");
+		if (
+			config.build.linux?.icon &&
+			existsSync(join(projectRoot, config.build.linux.icon))
+		) {
+			const iconSourcePath = join(projectRoot, config.build.linux.icon);
+			const iconDestPath = join(appDirPath, `${appFileName}.png`);
+			const dirIconPath = join(appDirPath, ".DirIcon");
 
-		cpSync(iconSourcePath, iconDestPath, { dereference: true });
-		cpSync(iconSourcePath, dirIconPath, { dereference: true });
+			cpSync(iconSourcePath, iconDestPath, { dereference: true });
+			cpSync(iconSourcePath, dirIconPath, { dereference: true });
 
-		console.log(
-			`Copied icon for AppImage: ${iconSourcePath} -> ${iconDestPath}`,
-		);
-		console.log(`Created .DirIcon: ${iconSourcePath} -> ${dirIconPath}`);
-	} else {
-		// Create a minimal 1x1 transparent PNG as placeholder to satisfy appimagetool
-		// This prevents "Icon entry not found" errors
-		const placeholderPNG = Buffer.from([
+			console.log(
+				`Copied icon for AppImage: ${iconSourcePath} -> ${iconDestPath}`,
+			);
+			console.log(`Created .DirIcon: ${iconSourcePath} -> ${dirIconPath}`);
+		} else {
+			// Create a minimal 1x1 transparent PNG as placeholder to satisfy appimagetool
+			// This prevents "Icon entry not found" errors
+			const placeholderPNG = Buffer.from([
 			0x89,
 			0x50,
 			0x4e,
@@ -1247,88 +1248,88 @@ Categories=Utility;
 			0x82,
 		]);
 
-		const iconDestPath = join(appDirPath, `${appFileName}.png`);
-		const dirIconPath = join(appDirPath, ".DirIcon");
+			const iconDestPath = join(appDirPath, `${appFileName}.png`);
+			const dirIconPath = join(appDirPath, ".DirIcon");
 
-		writeFileSync(iconDestPath, new Uint8Array(placeholderPNG));
-		writeFileSync(dirIconPath, new Uint8Array(placeholderPNG));
+			writeFileSync(iconDestPath, new Uint8Array(placeholderPNG));
+			writeFileSync(dirIconPath, new Uint8Array(placeholderPNG));
 
-		console.log(
-			`Created placeholder icon for AppImage (no icon specified in config)`,
-		);
-	}
+			console.log(
+				`Created placeholder icon for AppImage (no icon specified in config)`,
+			);
+		}
 
 	// Generate the AppImage using appimagetool
-	const appImagePath = join(buildFolder, `${appFileName}.AppImage`);
-	if (existsSync(appImagePath)) {
-		unlinkSync(appImagePath);
-	}
+		const appImagePath = join(buildFolder, `${appFileName}.AppImage`);
+		if (existsSync(appImagePath)) {
+			unlinkSync(appImagePath);
+		}
 
 	// console.log(`DEBUG: AppDir path: ${appDirPath}`);
 	// console.log(`DEBUG: Does AppDir exist? ${existsSync(appDirPath)}`);
-	console.log(`Generating AppImage: ${appImagePath}`);
-	const appImageArch = ARCH === "arm64" ? "aarch64" : "x86_64";
+		console.log(`Generating AppImage: ${appImagePath}`);
+		const appImageArch = ARCH === "arm64" ? "aarch64" : "x86_64";
 
 	// Use full path to appimagetool if not in PATH
-	let appimagetoolBase = "appimagetool";
-	try {
-		execSync("which appimagetool", { stdio: "ignore" });
-	} catch {
-		// Try ~/.local/bin/appimagetool
-		const localBinPath = join(
-			process.env["HOME"] || "",
-			".local",
-			"bin",
-			"appimagetool",
-		);
-		if (existsSync(localBinPath)) {
-			appimagetoolBase = localBinPath;
+		let appimagetoolBase = "appimagetool";
+		try {
+			execSync("which appimagetool", { stdio: "ignore" });
+		} catch {
+			// Try ~/.local/bin/appimagetool
+			const localBinPath = join(
+				process.env["HOME"] || "",
+				".local",
+				"bin",
+				"appimagetool",
+			);
+			if (existsSync(localBinPath)) {
+				appimagetoolBase = localBinPath;
+			}
 		}
-	}
 
 	// Get the command with proper environment for vendored libfuse2
-	const appimagetoolCmd = getAppImageToolCommand().replace(
-		"appimagetool",
-		appimagetoolBase,
-	);
+		const appimagetoolCmd = getAppImageToolCommand().replace(
+			"appimagetool",
+			appimagetoolBase,
+		);
 
-	try {
-		// First try with --no-appstream flag to avoid some FUSE-related issues
-		execSync(
-			`ARCH=${appImageArch} ${appimagetoolCmd} --no-appstream ${escapePathForTerminal(appDirPath)} ${escapePathForTerminal(appImagePath)}`,
-			{
-				stdio: "inherit",
-				env: { ...process.env, ARCH: appImageArch },
-			},
-		);
-	} catch (error) {
-		console.error("Failed to create AppImage:", error);
-		console.log(
-			"Note: If you see FUSE errors, you may need to install libfuse2:",
-		);
-		console.log("  sudo apt update && sudo apt install -y libfuse2");
-		throw error;
-	}
+		try {
+			// First try with --no-appstream flag to avoid some FUSE-related issues
+			execSync(
+				`ARCH=${appImageArch} ${appimagetoolCmd} --no-appstream ${escapePathForTerminal(appDirPath)} ${escapePathForTerminal(appImagePath)}`,
+				{
+					stdio: "inherit",
+					env: { ...process.env, ARCH: appImageArch },
+				},
+			);
+		} catch (error) {
+			console.error("Failed to create AppImage:", error);
+			console.log(
+				"Note: If you see FUSE errors, you may need to install libfuse2:",
+			);
+			console.log("  sudo apt update && sudo apt install -y libfuse2");
+			throw error;
+		}
 
 	// Verify the AppImage was created
-	if (!existsSync(appImagePath)) {
-		throw new Error(
-			`AppImage was not created at expected path: ${appImagePath}`,
-		);
-	}
+		if (!existsSync(appImagePath)) {
+			throw new Error(
+				`AppImage was not created at expected path: ${appImagePath}`,
+			);
+		}
 
 	// Extract and copy icon for desktop shortcut
-	const iconExtractPath = join(buildFolder, `${appFileName}.png`);
-	if (
-		config.build.linux?.icon &&
-		existsSync(join(projectRoot, config.build.linux.icon))
-	) {
-		const iconSourcePath = join(projectRoot, config.build.linux.icon);
-		cpSync(iconSourcePath, iconExtractPath, { dereference: true });
-		console.log(`✓ Icon extracted for desktop shortcut: ${iconExtractPath}`);
-	} else {
-		// Create placeholder icon for desktop shortcut
-		const placeholderPNG = Buffer.from([
+		const iconExtractPath = join(buildFolder, `${appFileName}.png`);
+		if (
+			config.build.linux?.icon &&
+			existsSync(join(projectRoot, config.build.linux.icon))
+		) {
+			const iconSourcePath = join(projectRoot, config.build.linux.icon);
+			cpSync(iconSourcePath, iconExtractPath, { dereference: true });
+			console.log(`✓ Icon extracted for desktop shortcut: ${iconExtractPath}`);
+		} else {
+			// Create placeholder icon for desktop shortcut
+			const placeholderPNG = Buffer.from([
 			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
 			0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
 			0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
@@ -1336,14 +1337,14 @@ Categories=Utility;
 			0x01, 0x06, 0x7a, 0x81, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
 			0x44, 0xae, 0x42, 0x60, 0x82,
 		]);
-		writeFileSync(iconExtractPath, new Uint8Array(placeholderPNG));
-		console.log(
-			`✓ Created placeholder icon for desktop shortcut: ${iconExtractPath}`,
-		);
-	}
+			writeFileSync(iconExtractPath, new Uint8Array(placeholderPNG));
+			console.log(
+				`✓ Created placeholder icon for desktop shortcut: ${iconExtractPath}`,
+			);
+		}
 
 	// Create desktop shortcut alongside the AppImage
-	const desktopShortcutPath = join(buildFolder, `${appFileName}.desktop`);
+		const desktopShortcutPath = join(buildFolder, `${appFileName}.desktop`);
 
 	const desktopShortcutContent = `[Desktop Entry]
 Version=1.0
@@ -1357,15 +1358,17 @@ StartupWMClass=${appFileName}
 Categories=Utility;
 `;
 
-	writeFileSync(desktopShortcutPath, desktopShortcutContent);
-	execSync(`chmod +x ${escapePathForTerminal(desktopShortcutPath)}`);
-	console.log(`✓ Desktop shortcut created: ${desktopShortcutPath}`);
+		writeFileSync(desktopShortcutPath, desktopShortcutContent);
+		execSync(`chmod +x ${escapePathForTerminal(desktopShortcutPath)}`);
+		console.log(`✓ Desktop shortcut created: ${desktopShortcutPath}`);
 
-	// Clean up AppDir
-	rmSync(appDirPath, { recursive: true, force: true });
-
-	console.log(`✓ AppImage created: ${appImagePath}`);
-	return appImagePath;
+		console.log(`✓ AppImage created: ${appImagePath}`);
+		return appImagePath;
+	} finally {
+		if (existsSync(appDirPath)) {
+			rmSync(appDirPath, { recursive: true, force: true });
+		}
+	}
 }
 
 // Helper function to generate usage description entries for Info.plist
@@ -2768,69 +2771,59 @@ ${schemesXml}
 					rmSync(tempDirPath, { recursive: true });
 				}
 
-				// Create temp directory structure
-				mkdirSync(tempDirPath, { recursive: true });
-				const innerDirPath = join(tempDirPath, appFileName);
-				mkdirSync(innerDirPath, { recursive: true });
+				try {
+					// Create temp directory structure
+					mkdirSync(tempDirPath, { recursive: true });
+					const innerDirPath = join(tempDirPath, appFileName);
+					mkdirSync(innerDirPath, { recursive: true });
 
-				// Copy AppImage (the inner app bundle on Linux)
-				const appImageDestPath = join(innerDirPath, `${appFileName}.AppImage`);
-				cpSync(appImagePath, appImageDestPath, { dereference: true });
-
-				// Copy desktop shortcut and icon (they were created alongside the AppImage)
-				const desktopPath = join(buildFolder, `${appFileName}.desktop`);
-				const iconPath = join(buildFolder, `${appFileName}.png`);
-
-				if (existsSync(desktopPath)) {
-					cpSync(desktopPath, join(innerDirPath, `${appFileName}.desktop`));
-				}
-
-				if (existsSync(iconPath)) {
-					cpSync(iconPath, join(innerDirPath, `${appFileName}.png`));
-				}
-
-				// Create metadata file
-				const metadata = {
-					identifier: config.app.identifier,
-					name: config.app.name,
-					version: config.app.version,
-					channel: buildEnvironment,
-					hash: hash,
-				};
-				writeFileSync(
-					join(innerDirPath, "metadata.json"),
-					JSON.stringify(metadata, null, 2),
-				);
-
-				const appImageTarPath = join(buildFolder, `${appFileName}.tar`);
-				console.log(`Creating tar of installer contents: ${appImageTarPath}`);
-
-				// Tar the inner directory
-				createTar(appImageTarPath, tempDirPath, [appFileName]);
-
-				// Clean up temp directory
-				rmSync(tempDirPath, { recursive: true });
-
-				// Compress with Zstandard
-				console.log(`Compressing tar with zstd...`);
-				const uncompressedTarData = readFileSync(appImageTarPath);
-				const compressedTarPath = `${appImageTarPath}.zst`;
-				await ZstdInit().then(async ({ ZstdSimple }) => {
-					const data = new Uint8Array(uncompressedTarData);
-					const compressionLevel = 22;
-					const compressedData = ZstdSimple.compress(data, compressionLevel);
-					writeFileSync(compressedTarPath, compressedData);
-					console.log(
-						`✓ Created compressed tar: ${compressedTarPath} (${(compressedData.length / 1024 / 1024).toFixed(2)} MB)`,
+					// Copy AppImage (the inner app bundle on Linux)
+					const appImageDestPath = join(
+						innerDirPath,
+						`${appFileName}.AppImage`,
 					);
-				});
+					cpSync(appImagePath, appImageDestPath, { dereference: true });
 
-				// Note: Don't delete uncompressed tar here - bsdiff needs it later for patch generation
-				// It will be cleaned up after bsdiff runs
+					// Copy desktop shortcut and icon (they were created alongside the AppImage)
+					const desktopPath = join(buildFolder, `${appFileName}.desktop`);
+					const iconPath = join(buildFolder, `${appFileName}.png`);
 
-				// Add tar.zst for Updater API (delta updates)
-				// Note: raw AppImage is NOT added - only the Setup.AppImage (zipped) is distributed
-				artifactsToUpload.push(compressedTarPath);
+					if (existsSync(desktopPath)) {
+						cpSync(desktopPath, join(innerDirPath, `${appFileName}.desktop`));
+					}
+
+					if (existsSync(iconPath)) {
+						cpSync(iconPath, join(innerDirPath, `${appFileName}.png`));
+					}
+
+					// Create metadata file
+					const metadata = {
+						identifier: config.app.identifier,
+						name: config.app.name,
+						version: config.app.version,
+						channel: buildEnvironment,
+						hash: hash,
+					};
+					writeFileSync(
+						join(innerDirPath, "metadata.json"),
+						JSON.stringify(metadata, null, 2),
+					);
+
+					const appImageTarPath = join(buildFolder, `${appFileName}.tar`);
+					console.log(
+						`Creating tar of installer contents: ${appImageTarPath}`,
+					);
+
+					// Tar the inner directory
+					createTar(appImageTarPath, tempDirPath, [appFileName]);
+				} finally {
+					if (existsSync(tempDirPath)) {
+						rmSync(tempDirPath, { recursive: true });
+					}
+				}
+
+				// Leave the tar uncompressed for diff generation; compression happens later.
+				// Note: Don't delete uncompressed tar here - bsdiff needs it later for patch generation.
 			}
 		}
 
@@ -2860,17 +2853,161 @@ ${schemesXml}
 			// For macOS/Windows, tar the signed and notarized app bundle
 			if (targetOS !== "linux") {
 				createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
+				rmdirSync(appBundleFolderPath, { recursive: true });
 			}
+
+			// generate bsdiff
+			// https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst
+			console.log("baseUrl: ", config.release.baseUrl);
+
+			console.log("generating a patch from the previous version...");
+
+			// Skip patch generation if disabled
+			if (config.release.generatePatch === false) {
+				console.log(
+					"Patch generation disabled (release.generatePatch = false)",
+				);
+			} else if (
+				!config.release.baseUrl ||
+				config.release.baseUrl.trim() === ""
+			) {
+				console.log("No baseUrl configured, skipping patch generation");
+				console.log(
+					"To enable patch generation, configure baseUrl in your electrobun.config",
+				);
+			} else {
+				const urlToPrevUpdateJson = `${config.release.baseUrl.replace(/\/+$/, "")}/${platformPrefix}-update.json`;
+				const cacheBuster = Math.random().toString(36).substring(7);
+				const updateJsonResponse = await fetch(
+					urlToPrevUpdateJson + `?${cacheBuster}`,
+				).catch((err) => {
+					console.log("baseUrl not found: ", err);
+				});
+
+				const tarballFileName = getTarballFileName(appFileName, OS);
+				const urlToLatestTarball = `${config.release.baseUrl.replace(/\/+$/, "")}/${platformPrefix}-${tarballFileName}`;
+
+				// attempt to get the previous version to create a patch file
+				if (updateJsonResponse && updateJsonResponse.ok) {
+					const prevUpdateJson = await updateJsonResponse!.json();
+
+					const prevHash = prevUpdateJson.hash;
+					console.log("PREVIOUS HASH", prevHash);
+
+					// todo (yoav): should be able to stream and decompress in the same step
+
+					const response = await fetch(urlToLatestTarball + `?${cacheBuster}`);
+					const prevVersionCompressedTarballPath = join(
+						buildFolder,
+						"prev.tar.zst",
+					);
+
+					if (response && response.ok && response.body) {
+						const reader = response.body.getReader();
+						const totalBytesHeader = response.headers.get("content-length");
+						const totalBytes = totalBytesHeader
+							? Number(totalBytesHeader)
+							: undefined;
+						let downloadedBytes = 0;
+						let lastLogTime = Date.now();
+						const logIntervalMs = 5_000;
+
+						const writer = Bun.file(prevVersionCompressedTarballPath).writer();
+
+						while (true) {
+							const { done, value } = await reader.read();
+							if (done) break;
+							downloadedBytes += value.length;
+							const now = Date.now();
+							if (now - lastLogTime >= logIntervalMs) {
+								if (totalBytes && Number.isFinite(totalBytes)) {
+									const percent = (
+										(downloadedBytes / totalBytes) *
+										100
+									).toFixed(1);
+									console.log(
+										`Downloading previous version... ${percent}% (${downloadedBytes}/${totalBytes} bytes)`,
+									);
+								} else {
+									console.log(
+										`Downloading previous version... ${downloadedBytes} bytes`,
+									);
+								}
+								lastLogTime = now;
+							}
+							await writer.write(value);
+						}
+						await writer.flush();
+						writer.end();
+
+						console.log("decompress prev funn bundle...");
+						const prevTarballPath = join(buildFolder, "prev.tar");
+						await ZstdInit().then(async ({ ZstdSimple }) => {
+							const data = new Uint8Array(
+								await Bun.file(prevVersionCompressedTarballPath).arrayBuffer(),
+							);
+							const uncompressedData = ZstdSimple.decompress(data);
+							await Bun.write(prevTarballPath, uncompressedData);
+						});
+						if (existsSync(prevVersionCompressedTarballPath)) {
+							unlinkSync(prevVersionCompressedTarballPath);
+						}
+
+						console.log("diff previous and new tarballs...");
+						// Run it as a separate process to leverage multi-threadedness
+						// especially for creating multiple diffs in parallel
+						const bsdiffpath = targetPaths.BSDIFF;
+						const patchFilePath = join(buildFolder, `${prevHash}.patch`);
+						const result = Bun.spawnSync(
+							[
+								bsdiffpath,
+								prevTarballPath,
+								tarPath,
+								patchFilePath,
+								"--use-zstd",
+							],
+							{
+								cwd: buildFolder,
+								stdout: "inherit",
+								stderr: "inherit",
+							},
+						);
+						if (!result.success) {
+							// Patch generation is non-critical - users will just download full updates instead of delta patches
+							console.error("\n" + "=".repeat(80));
+							console.error(
+								"WARNING: Patch generation failed (exit code " +
+									result.exitCode +
+									")",
+							);
+							console.error(
+								"Delta updates will not be available for this release.",
+							);
+							console.error("Users will download the full update instead.");
+							console.error("=".repeat(80) + "\n");
+						} else {
+							// Only add patch to artifacts if it was successfully created
+							artifactsToUpload.push(patchFilePath);
+						}
+
+						// Clean up previous tarball now that bsdiff is done
+						if (existsSync(prevTarballPath)) {
+							unlinkSync(prevTarballPath);
+						}
+					} else {
+						console.log(
+							"Failed to fetch previous tarball, skipping patch generation",
+						);
+					}
+				} else {
+					console.log("prevoius version not found at: ", urlToLatestTarball);
+					console.log("skipping diff generation");
+				}
+			} // End of baseUrl validation block
 
 			let compressedTarPath = `${tarPath}.zst`;
 
-			// For Linux, skip compression as we already have the compressed tar
-			if (targetOS === "linux") {
-				console.log(
-					"Linux tar.zst already created, skipping general compression step",
-				);
-				// compressedTarPath already points to the right file
-			} else {
+			{
 				const tarball = Bun.file(tarPath);
 				const tarBuffer = await tarball.arrayBuffer();
 
@@ -2919,10 +3056,9 @@ ${schemesXml}
 				);
 			}
 
-			// For macOS/Windows, delete the original app bundle since we've tarred it
-			// For Linux, the app bundle was already converted to AppImage, so the directory might not exist
-			if (targetOS !== "linux") {
-				rmdirSync(appBundleFolderPath, { recursive: true });
+			// Remove the uncompressed tar now that compression and diffing are done.
+			if (existsSync(tarPath)) {
+				unlinkSync(tarPath);
 			}
 
 			const selfExtractingBundle = createAppBundle(
@@ -3019,45 +3155,48 @@ ${schemesXml}
 					rmSync(dmgStagingDir, { recursive: true });
 				}
 				mkdirSync(dmgStagingDir, { recursive: true });
-
-				// Copy the app bundle to the staging directory
-				const stagedAppPath = join(
-					dmgStagingDir,
-					basename(selfExtractingBundle.appBundleFolderPath),
-				);
-				execSync(
-					`cp -R ${escapePathForTerminal(selfExtractingBundle.appBundleFolderPath)} ${escapePathForTerminal(stagedAppPath)}`,
-				);
-
-				// Create a symlink to /Applications for easy drag-and-drop installation
-				const applicationsLink = join(dmgStagingDir, "Applications");
-				symlinkSync("/Applications", applicationsLink);
-
-				// hdiutil create -volname "YourAppName" -srcfolder /path/to/staging -ov -format UDZO YourAppName.dmg
-				// Note: use ULFO (lzfse) for better compatibility with large CEF frameworks and modern macOS
-				execSync(
-					`hdiutil create -volname "${dmgVolumeName}" -srcfolder ${escapePathForTerminal(
+				try {
+					// Copy the app bundle to the staging directory
+					const stagedAppPath = join(
 						dmgStagingDir,
-					)} -ov -format ULFO ${escapePathForTerminal(dmgCreationPath)}`,
-				);
+						basename(selfExtractingBundle.appBundleFolderPath),
+					);
+					execSync(
+						`cp -R ${escapePathForTerminal(selfExtractingBundle.appBundleFolderPath)} ${escapePathForTerminal(stagedAppPath)}`,
+					);
 
-				// Clean up staging directory
-				rmSync(dmgStagingDir, { recursive: true });
-				if (buildEnvironment === "stable" && dmgCreationPath !== finalDmgPath) {
-					renameSync(dmgCreationPath, finalDmgPath);
-				}
-				artifactsToUpload.push(finalDmgPath);
+					// Create a symlink to /Applications for easy drag-and-drop installation
+					const applicationsLink = join(dmgStagingDir, "Applications");
+					symlinkSync("/Applications", applicationsLink);
 
-				if (shouldCodesign) {
-					codesignAppBundle(finalDmgPath, undefined, config);
-				} else {
-					console.log("skipping codesign");
-				}
+					// hdiutil create -volname "YourAppName" -srcfolder /path/to/staging -ov -format UDZO YourAppName.dmg
+					// Note: use ULFO (lzfse) for better compatibility with large CEF frameworks and modern macOS
+					execSync(
+						`hdiutil create -volname "${dmgVolumeName}" -srcfolder ${escapePathForTerminal(
+							dmgStagingDir,
+						)} -ov -format ULFO ${escapePathForTerminal(dmgCreationPath)}`,
+					);
 
-				if (shouldNotarize) {
-					notarizeAndStaple(finalDmgPath, config);
-				} else {
-					console.log("skipping notarization");
+					if (buildEnvironment === "stable" && dmgCreationPath !== finalDmgPath) {
+						renameSync(dmgCreationPath, finalDmgPath);
+					}
+					artifactsToUpload.push(finalDmgPath);
+
+					if (shouldCodesign) {
+						codesignAppBundle(finalDmgPath, undefined, config);
+					} else {
+						console.log("skipping codesign");
+					}
+
+					if (shouldNotarize) {
+						notarizeAndStaple(finalDmgPath, config);
+					} else {
+						console.log("skipping notarization");
+					}
+				} finally {
+					if (existsSync(dmgStagingDir)) {
+						rmSync(dmgStagingDir, { recursive: true });
+					}
 				}
 			} else {
 				// For Windows and Linux, add the self-extracting bundle directly
@@ -3144,165 +3283,20 @@ ${schemesXml}
 				updateJsonContent,
 			);
 
-			// generate bsdiff
-			// https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst
-			console.log("baseUrl: ", config.release.baseUrl);
-
-			console.log("generating a patch from the previous version...");
-
-			// Skip patch generation if disabled
-			if (config.release.generatePatch === false) {
-				console.log(
-					"Patch generation disabled (release.generatePatch = false)",
-				);
-			} else if (
-				!config.release.baseUrl ||
-				config.release.baseUrl.trim() === ""
-			) {
-				console.log("No baseUrl configured, skipping patch generation");
-				console.log(
-					"To enable patch generation, configure baseUrl in your electrobun.config",
-				);
-			} else {
-				const urlToPrevUpdateJson = `${config.release.baseUrl.replace(/\/+$/, "")}/${platformPrefix}-update.json`;
-				const cacheBuster = Math.random().toString(36).substring(7);
-				const updateJsonResponse = await fetch(
-					urlToPrevUpdateJson + `?${cacheBuster}`,
-				).catch((err) => {
-					console.log("baseUrl not found: ", err);
-				});
-
-				const tarballFileName = getTarballFileName(appFileName, OS);
-				const urlToLatestTarball = `${config.release.baseUrl.replace(/\/+$/, "")}/${platformPrefix}-${tarballFileName}`;
-
-				// attempt to get the previous version to create a patch file
-				if (updateJsonResponse && updateJsonResponse.ok) {
-					const prevUpdateJson = await updateJsonResponse!.json();
-
-					const prevHash = prevUpdateJson.hash;
-					console.log("PREVIOUS HASH", prevHash);
-
-					// todo (yoav): should be able to stream and decompress in the same step
-
-					const response = await fetch(urlToLatestTarball + `?${cacheBuster}`);
-					const prevVersionCompressedTarballPath = join(
-						buildFolder,
-						"prev.tar.zst",
-					);
-
-					if (response && response.ok && response.body) {
-						const reader = response.body.getReader();
-						const totalBytesHeader = response.headers.get("content-length");
-						const totalBytes = totalBytesHeader
-							? Number(totalBytesHeader)
-							: undefined;
-						let downloadedBytes = 0;
-						let lastLogTime = Date.now();
-						const logIntervalMs = 5_000;
-
-						const writer = Bun.file(prevVersionCompressedTarballPath).writer();
-
-						while (true) {
-							const { done, value } = await reader.read();
-							if (done) break;
-							downloadedBytes += value.length;
-							const now = Date.now();
-							if (now - lastLogTime >= logIntervalMs) {
-								if (totalBytes && Number.isFinite(totalBytes)) {
-									const percent = (
-										(downloadedBytes / totalBytes) *
-										100
-									).toFixed(1);
-									console.log(
-										`Downloading previous version... ${percent}% (${downloadedBytes}/${totalBytes} bytes)`,
-									);
-								} else {
-									console.log(
-										`Downloading previous version... ${downloadedBytes} bytes`,
-									);
-								}
-								lastLogTime = now;
-							}
-							await writer.write(value);
-						}
-						await writer.flush();
-						writer.end();
-
-						console.log("decompress prev funn bundle...");
-						const prevTarballPath = join(buildFolder, "prev.tar");
-						await ZstdInit().then(async ({ ZstdSimple }) => {
-							const data = new Uint8Array(
-								await Bun.file(prevVersionCompressedTarballPath).arrayBuffer(),
-							);
-							const uncompressedData = ZstdSimple.decompress(data);
-							await Bun.write(prevTarballPath, uncompressedData);
-						});
-
-						console.log("diff previous and new tarballs...");
-						// Run it as a separate process to leverage multi-threadedness
-						// especially for creating multiple diffs in parallel
-						const bsdiffpath = targetPaths.BSDIFF;
-						const patchFilePath = join(buildFolder, `${prevHash}.patch`);
-						const result = Bun.spawnSync(
-							[
-								bsdiffpath,
-								prevTarballPath,
-								tarPath,
-								patchFilePath,
-								"--use-zstd",
-							],
-							{
-								cwd: buildFolder,
-								stdout: "inherit",
-								stderr: "inherit",
-							},
-						);
-						if (!result.success) {
-							// Patch generation is non-critical - users will just download full updates instead of delta patches
-							console.error("\n" + "=".repeat(80));
-							console.error(
-								"WARNING: Patch generation failed (exit code " +
-									result.exitCode +
-									")",
-							);
-							console.error(
-								"Delta updates will not be available for this release.",
-							);
-							console.error("Users will download the full update instead.");
-							console.error("=".repeat(80) + "\n");
-						} else {
-							// Only add patch to artifacts if it was successfully created
-							artifactsToUpload.push(patchFilePath);
-						}
-
-						// Clean up uncompressed tars now that bsdiff is done
-						if (existsSync(tarPath)) {
-							unlinkSync(tarPath);
-						}
-						if (existsSync(prevTarballPath)) {
-							unlinkSync(prevTarballPath);
-						}
-					} else {
-						console.log(
-							"Failed to fetch previous tarball, skipping patch generation",
-						);
-					}
-				} else {
-					console.log("prevoius version not found at: ", urlToLatestTarball);
-					console.log("skipping diff generation");
-				}
-			} // End of baseUrl validation block
-
 			// compress all the upload files
-			console.log("copying artifacts...");
+			console.log("moving artifacts...");
 
 			artifactsToUpload.forEach((filePath) => {
 				const filename = basename(filePath);
-				cpSync(
-					filePath,
-					join(artifactFolder, `${platformPrefix}-${filename}`),
-					{ dereference: true },
-				);
+				const destination = join(artifactFolder, `${platformPrefix}-${filename}`);
+				try {
+					renameSync(filePath, destination);
+				} catch {
+					cpSync(filePath, destination, { dereference: true });
+					if (existsSync(filePath)) {
+						unlinkSync(filePath);
+					}
+				}
 			});
 
 			// todo: now just upload the artifacts to your bucket replacing the ones that exist
@@ -3836,11 +3830,12 @@ ${schemesXml}
 		const wrapperAppDirPath = join(buildFolder, `${wrapperName}.AppDir`);
 
 		// Clean up any existing AppDir
-		if (existsSync(wrapperAppDirPath)) {
-			rmSync(wrapperAppDirPath, { recursive: true, force: true });
-		}
-		mkdirSync(wrapperAppDirPath, { recursive: true });
+	if (existsSync(wrapperAppDirPath)) {
+		rmSync(wrapperAppDirPath, { recursive: true, force: true });
+	}
+	mkdirSync(wrapperAppDirPath, { recursive: true });
 
+	try {
 		// Create usr/bin directory structure
 		const usrBinPath = join(wrapperAppDirPath, "usr", "bin");
 		mkdirSync(usrBinPath, { recursive: true });
@@ -3977,9 +3972,6 @@ Categories=Utility;
 			throw error;
 		}
 
-		// Clean up AppDir
-		rmSync(wrapperAppDirPath, { recursive: true, force: true });
-
 		// Verify the wrapper AppImage was created
 		if (!existsSync(wrapperAppImagePath)) {
 			throw new Error(
@@ -3993,7 +3985,12 @@ Categories=Utility;
 		);
 
 		return wrapperAppImagePath;
+	} finally {
+		if (existsSync(wrapperAppDirPath)) {
+			rmSync(wrapperAppDirPath, { recursive: true, force: true });
+		}
 	}
+}
 
 	function codesignAppBundle(
 		appBundleOrDmgPath: string,

@@ -47,9 +47,21 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Log disk space (job start)
+        shell: bash
+        run: |
+          echo "Runner OS: $RUNNER_OS"
+          df -h /
+
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.3.8
+
+      - name: Log disk space (job start - Windows)
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize
 
       - name: Install dependencies
         run: bun install
@@ -71,6 +83,24 @@ jobs:
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
+          echo "Disk space after cleanup:"
+          df -h /
+
+      - name: Free disk space (macOS)
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          # Remove Xcode caches and simulators to free space.
+          rm -rf "$HOME/Library/Developer/Xcode/DerivedData" || true
+          rm -rf "$HOME/Library/Developer/Xcode/Archives" || true
+          rm -rf "$HOME/Library/Developer/Xcode/iOS DeviceSupport" || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Caches || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
+          # Clear common caches.
+          rm -rf "$HOME/Library/Caches" || true
+          rm -rf "$HOME/Library/Logs" || true
           echo "Disk space after cleanup:"
           df -h /
 
