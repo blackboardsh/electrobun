@@ -3,7 +3,7 @@
 import { defineTest, expect } from "../test-framework/types";
 import { Utils } from "electrobun/bun";
 import { mkdtemp, writeFile, access } from "fs/promises";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 
 export const utilsTests = [
@@ -163,6 +163,110 @@ export const utilsTests = [
     async run({ log }) {
       expect(typeof Utils.quit).toBe("function");
       log("quit function exists (not calling it!)");
+    },
+  }),
+
+  // ---- Paths API tests ----
+
+  defineTest({
+    name: "paths object exists",
+    category: "Utils",
+    description: "Test that Utils.paths is available",
+    async run({ log }) {
+      expect(typeof Utils.paths).toBe("object");
+      expect(Utils.paths !== null).toBe(true);
+      log("Utils.paths is an object");
+    },
+  }),
+
+  defineTest({
+    name: "paths.home matches os.homedir()",
+    category: "Utils",
+    description: "Test that paths.home returns the correct home directory",
+    async run({ log }) {
+      const result = Utils.paths.home;
+      expect(typeof result).toBe("string");
+      expect(result).toBe(homedir());
+      log(`paths.home = "${result}"`);
+    },
+  }),
+
+  defineTest({
+    name: "paths.temp matches os.tmpdir()",
+    category: "Utils",
+    description: "Test that paths.temp returns the correct temp directory",
+    async run({ log }) {
+      const result = Utils.paths.temp;
+      expect(typeof result).toBe("string");
+      expect(result).toBe(tmpdir());
+      log(`paths.temp = "${result}"`);
+    },
+  }),
+
+  defineTest({
+    name: "paths OS directories return non-empty strings",
+    category: "Utils",
+    description: "Test that all OS-level path getters return non-empty strings",
+    async run({ log }) {
+      const osKeys = [
+        "appData",
+        "config",
+        "cache",
+        "logs",
+        "documents",
+        "downloads",
+        "desktop",
+        "pictures",
+        "music",
+        "videos",
+      ] as const;
+
+      for (const key of osKeys) {
+        const value = Utils.paths[key];
+        expect(typeof value).toBe("string");
+        expect(value.length > 0).toBe(true);
+        log(`paths.${key} = "${value}"`);
+      }
+    },
+  }),
+
+  defineTest({
+    name: "paths app-scoped directories return non-empty strings",
+    category: "Utils",
+    description:
+      "Test that userData, userCache, userLogs return paths based on version.json",
+    async run({ log }) {
+      const appKeys = ["userData", "userCache", "userLogs"] as const;
+
+      for (const key of appKeys) {
+        const value = Utils.paths[key];
+        expect(typeof value).toBe("string");
+        expect(value.length > 0).toBe(true);
+        log(`paths.${key} = "${value}"`);
+      }
+
+      // App-scoped paths should contain an identifier-like segment
+      // (e.g. "some.app.identifier") and not just be the base OS dir
+      expect(Utils.paths.userData.length > Utils.paths.appData.length).toBe(
+        true,
+      );
+      expect(Utils.paths.userCache.length > Utils.paths.cache.length).toBe(
+        true,
+      );
+      expect(Utils.paths.userLogs.length > Utils.paths.logs.length).toBe(true);
+      log("App-scoped paths are longer than their base OS dirs");
+    },
+  }),
+
+  defineTest({
+    name: "paths getters are stable across calls",
+    category: "Utils",
+    description: "Test that repeated access returns the same value",
+    async run({ log }) {
+      expect(Utils.paths.home).toBe(Utils.paths.home);
+      expect(Utils.paths.downloads).toBe(Utils.paths.downloads);
+      expect(Utils.paths.userData).toBe(Utils.paths.userData);
+      log("All tested paths return stable values");
     },
   }),
 ];

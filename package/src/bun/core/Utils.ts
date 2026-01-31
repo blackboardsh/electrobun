@@ -1,4 +1,8 @@
 import { ffi, native } from "../proc/native";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { OS } from "../../shared/platform";
 
 // TODO: move this to a more appropriate namespace
 export const moveToTrash = (path: string) => {
@@ -266,4 +270,164 @@ export const clipboardClear = (): void => {
  */
 export const clipboardAvailableFormats = (): string[] => {
 	return ffi.request.clipboardAvailableFormats();
+};
+
+// ============================================================================
+// Paths API — cross-platform OS directories and app-scoped directories
+// ============================================================================
+
+const home = homedir();
+
+function getLinuxXdgUserDirs(): Record<string, string> {
+	try {
+		const content = readFileSync(join(home, ".config", "user-dirs.dirs"), "utf-8");
+		const dirs: Record<string, string> = {};
+		for (const line of content.split("\n")) {
+			const trimmed = line.trim();
+			if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+			const eqIdx = trimmed.indexOf("=");
+			const key = trimmed.slice(0, eqIdx);
+			let value = trimmed.slice(eqIdx + 1);
+			// Strip surrounding quotes
+			if (value.startsWith('"') && value.endsWith('"')) {
+				value = value.slice(1, -1);
+			}
+			// Substitute $HOME
+			value = value.replace(/\$HOME/g, home);
+			dirs[key] = value;
+		}
+		return dirs;
+	} catch {
+		return {};
+	}
+}
+
+let _xdgUserDirs: Record<string, string> | undefined;
+function xdgUserDir(key: string, fallbackName: string): string {
+	if (OS !== "linux") return "";
+	if (!_xdgUserDirs) _xdgUserDirs = getLinuxXdgUserDirs();
+	return _xdgUserDirs[key] || join(home, fallbackName);
+}
+
+let _versionInfo: { identifier: string; channel: string } | undefined;
+function getVersionInfo(): { identifier: string; channel: string } {
+	if (_versionInfo) return _versionInfo;
+	try {
+		const resourcesDir = "Resources";
+		const raw = readFileSync(join("..", resourcesDir, "version.json"), "utf-8");
+		const parsed = JSON.parse(raw);
+		_versionInfo = { identifier: parsed.identifier, channel: parsed.channel };
+		return _versionInfo;
+	} catch (error) {
+		console.error("Failed to read version.json", error);
+		throw error;
+	}
+}
+
+function getAppDataDir(): string {
+	switch (OS) {
+		case "macos":
+			return join(home, "Library", "Application Support");
+		case "win":
+			return process.env["LOCALAPPDATA"] || join(home, "AppData", "Local");
+		case "linux":
+			return process.env["XDG_DATA_HOME"] || join(home, ".local", "share");
+	}
+}
+
+function getCacheDir(): string {
+	switch (OS) {
+		case "macos":
+			return join(home, "Library", "Caches");
+		case "win":
+			return process.env["LOCALAPPDATA"] || join(home, "AppData", "Local");
+		case "linux":
+			return process.env["XDG_CACHE_HOME"] || join(home, ".cache");
+	}
+}
+
+function getLogsDir(): string {
+	switch (OS) {
+		case "macos":
+			return join(home, "Library", "Logs");
+		case "win":
+			return process.env["LOCALAPPDATA"] || join(home, "AppData", "Local");
+		case "linux":
+			return process.env["XDG_STATE_HOME"] || join(home, ".local", "state");
+	}
+}
+
+function getConfigDir(): string {
+	switch (OS) {
+		case "macos":
+			return join(home, "Library", "Application Support");
+		case "win":
+			return process.env["APPDATA"] || join(home, "AppData", "Roaming");
+		case "linux":
+			return process.env["XDG_CONFIG_HOME"] || join(home, ".config");
+	}
+}
+
+function getUserDir(macName: string, winName: string, xdgKey: string, fallbackName: string): string {
+	switch (OS) {
+		case "macos":
+			return join(home, macName);
+		case "win": {
+			const userProfile = process.env["USERPROFILE"] || home;
+			return join(userProfile, winName);
+		}
+		case "linux":
+			return xdgUserDir(xdgKey, fallbackName);
+	}
+}
+
+export const paths = {
+	get home(): string {
+		return home;
+	},
+	get appData(): string {
+		return getAppDataDir();
+	},
+	get config(): string {
+		return getConfigDir();
+	},
+	get cache(): string {
+		return getCacheDir();
+	},
+	get temp(): string {
+		return tmpdir();
+	},
+	get logs(): string {
+		return getLogsDir();
+	},
+	get documents(): string {
+		return getUserDir("Documents", "Documents", "XDG_DOCUMENTS_DIR", "Documents");
+	},
+	get downloads(): string {
+		return getUserDir("Downloads", "Downloads", "XDG_DOWNLOAD_DIR", "Downloads");
+	},
+	get desktop(): string {
+		return getUserDir("Desktop", "Desktop", "XDG_DESKTOP_DIR", "Desktop");
+	},
+	get pictures(): string {
+		return getUserDir("Pictures", "Pictures", "XDG_PICTURES_DIR", "Pictures");
+	},
+	get music(): string {
+		return getUserDir("Music", "Music", "XDG_MUSIC_DIR", "Music");
+	},
+	get videos(): string {
+		return getUserDir("Movies", "Videos", "XDG_VIDEOS_DIR", "Videos");
+	},
+	get userData(): string {
+		const { identifier, channel } = getVersionInfo();
+		return join(getAppDataDir(), identifier, channel);
+	},
+	get userCache(): string {
+		const { identifier, channel } = getVersionInfo();
+		return join(getCacheDir(), identifier, channel);
+	},
+	get userLogs(): string {
+		const { identifier, channel } = getVersionInfo();
+		return join(getLogsDir(), identifier, channel);
+	},
 };
