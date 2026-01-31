@@ -65,6 +65,7 @@ const MIN_DOWNLOAD_SIZES: Record<string, number> = {
 	bun: 10 * 1024 * 1024, // Bun zip should be > 10MB
 	"zig-asar": 100 * 1024, // zig-asar tarball should be > 100KB
 	"zig-bsdiff": 100 * 1024, // zig-bsdiff tarball should be > 100KB
+	"zig-zstd": 100 * 1024, // zig-zstd tarball should be > 100KB
 	cef: 50 * 1024 * 1024, // CEF tarball should be > 50MB
 };
 
@@ -454,6 +455,7 @@ async function setup() {
 	// GitHub downloads have built-in pauses to avoid rate limiting
 	await vendorBun(); // GitHub
 	await vendorBsdiff(); // GitHub
+	await vendorZstd(); // GitHub
 	await vendorAsar(); // GitHub
 	await vendorZig(); // ziglang.org (not GitHub)
 	await vendorCEF(); // Spotify CDN (not GitHub)
@@ -519,6 +521,8 @@ async function copyToDist() {
 	// Copy bsdiff/bspatch from vendored zig-bsdiff
 	await $`cp vendors/zig-bsdiff/bsdiff${binExt} dist/bsdiff${binExt}`;
 	await $`cp vendors/zig-bsdiff/bspatch${binExt} dist/bspatch${binExt}`;
+	// Copy zig-zstd from vendored zig-zstd
+	await $`cp vendors/zig-zstd/zig-zstd${binExt} dist/zig-zstd${binExt}`;
 
 	// Copy zig-asar CLI and library from vendored zig-asar
 	const libExt = OS === "win" ? ".dll" : OS === "macos" ? ".dylib" : ".so";
@@ -890,6 +894,68 @@ async function vendorBsdiff() {
 		);
 		throw new Error(
 			`Failed to download zig-bsdiff binaries. Please try again in a minute.`,
+		);
+	}
+}
+
+async function vendorZstd() {
+	const ZSTD_VERSION = "0.1.2";
+	const zstdDir = join(process.cwd(), "vendors", "zig-zstd");
+	const zstdBin = join(zstdDir, "zig-zstd" + binExt);
+
+	if (existsSync(zstdBin)) {
+		return;
+	}
+
+	await pauseForGitHub();
+	console.log("Downloading zig-zstd binaries...");
+
+	const zstdPlatformMap: Record<string, string> = {
+		macos: "darwin",
+		win: "win32",
+		linux: "linux",
+	};
+	const zstdPlatform = zstdPlatformMap[OS];
+	const zstdArch = ARCH;
+
+	const tempTarball = join("vendors", `zig-zstd-temp.tar.gz`);
+
+	try {
+		await $`mkdir -p vendors/zig-zstd`;
+		const tarballUrl = `https://github.com/blackboardsh/zig-zstd/releases/download/v${ZSTD_VERSION}/zig-zstd-${zstdPlatform}-${zstdArch}.tar.gz`;
+		console.log(`Downloading zig-zstd from: ${tarballUrl}`);
+		await $`rm -f "${tempTarball}"`;
+		const githubToken =
+			process.env["GITHUB_TOKEN"] ??
+			process.env["GH_TOKEN"] ??
+			process.env["GITHUB_ACCESS_TOKEN"];
+		if (githubToken) {
+			await $`curl -fL -H "Authorization: Bearer ${githubToken}" -H "Accept: application/octet-stream" "${tarballUrl}" -o "${tempTarball}"`;
+		} else {
+			await $`curl -fL -H "Accept: application/octet-stream" "${tarballUrl}" -o "${tempTarball}"`;
+		}
+		validateDownload(tempTarball, "zig-zstd");
+
+		await $`tar -xzf "${tempTarball}" -C vendors/zig-zstd`;
+
+		await $`rm "${tempTarball}"`;
+
+		if (!existsSync(zstdBin)) {
+			throw new Error(`Binary not found after extraction: ${zstdDir}`);
+		}
+
+		if (OS !== "win") {
+			await $`chmod +x ${zstdBin}`;
+		}
+
+		console.log("✓ zig-zstd binaries downloaded successfully");
+	} catch (error: unknown) {
+		console.error(
+			"Failed to download zig-zstd binaries:",
+			error instanceof Error ? error.message : error,
+		);
+		throw new Error(
+			`Failed to download zig-zstd binaries. Please try again in a minute.`,
 		);
 	}
 }

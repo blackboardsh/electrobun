@@ -19,7 +19,6 @@ import {
 import { execSync } from "child_process";
 import * as readline from "readline";
 import archiver from "archiver";
-import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS, ARCH } from "../shared/platform";
 import {
 	getAppFileName,
@@ -113,6 +112,7 @@ function getPlatformPaths(
 		BSPATCH: join(platformDistDir, "bspatch") + binExt,
 		EXTRACTOR: join(platformDistDir, "extractor") + binExt,
 		BSDIFF: join(platformDistDir, "bsdiff") + binExt,
+		ZSTD: join(platformDistDir, "zig-zstd") + binExt,
 		CEF_FRAMEWORK_MACOS: join(
 			platformDistDir,
 			"cef",
@@ -305,6 +305,7 @@ async function ensureCoreDependencies(
 			platformPaths.BUN_BINARY,
 			platformPaths.BSDIFF,
 			platformPaths.BSPATCH,
+			platformPaths.ZSTD,
 		];
 		if (platformOS === "macos") {
 			requiredBinaries.push(
@@ -2338,6 +2339,14 @@ ${schemesXml}
 			dereference: true,
 		});
 
+		// Copy zig-zstd for updater tarball decompression
+		const zstdSource = targetPaths.ZSTD;
+		const zstdDestination = join(appBundleMacOSPath, "zig-zstd") + targetBinExt;
+		cpSync(zstdSource, zstdDestination, {
+			recursive: true,
+			dereference: true,
+		});
+
 		// Copy libasar dynamic library for ASAR support
 		const libExt =
 			targetOS === "win" ? ".dll" : targetOS === "macos" ? ".dylib" : ".so";
@@ -2828,7 +2837,7 @@ ${schemesXml}
 		}
 
 		if (buildEnvironment !== "dev") {
-			// zstd wasm https://github.com/OneIdentity/zstd-js
+			// zig-zstd CLI (native zstd)
 			// tar https://github.com/isaacs/node-tar
 
 			// steps:
@@ -2942,57 +2951,85 @@ ${schemesXml}
 
 						console.log("decompress prev funn bundle...");
 						const prevTarballPath = join(buildFolder, "prev.tar");
-						await ZstdInit().then(async ({ ZstdSimple }) => {
-							const data = new Uint8Array(
-								await Bun.file(prevVersionCompressedTarballPath).arrayBuffer(),
+						let canGeneratePatch = true;
+						const zstdPath = targetPaths.ZSTD;
+						if (!existsSync(zstdPath)) {
+							console.log(
+								`zig-zstd not found at ${zstdPath}, skipping patch generation`,
 							);
-							const uncompressedData = ZstdSimple.decompress(data);
-							await Bun.write(prevTarballPath, uncompressedData);
-						});
-						if (existsSync(prevVersionCompressedTarballPath)) {
-							unlinkSync(prevVersionCompressedTarballPath);
+							canGeneratePatch = false;
 						}
 
-						console.log("diff previous and new tarballs...");
-						// Run it as a separate process to leverage multi-threadedness
-						// especially for creating multiple diffs in parallel
-						const bsdiffpath = targetPaths.BSDIFF;
-						const patchFilePath = join(buildFolder, `${prevHash}.patch`);
-						const result = Bun.spawnSync(
-							[
-								bsdiffpath,
+						if (canGeneratePatch) {
+							const decompressResult = Bun.spawnSync(
+								[
+									zstdPath,
+								"decompress",
+								"-i",
+								prevVersionCompressedTarballPath,
+								"-o",
 								prevTarballPath,
-								tarPath,
-								patchFilePath,
-								"--use-zstd",
 							],
 							{
 								cwd: buildFolder,
 								stdout: "inherit",
-								stderr: "inherit",
-							},
-						);
-						if (!result.success) {
-							// Patch generation is non-critical - users will just download full updates instead of delta patches
-							console.error("\n" + "=".repeat(80));
-							console.error(
-								"WARNING: Patch generation failed (exit code " +
-									result.exitCode +
-									")",
+									stderr: "inherit",
+								},
 							);
-							console.error(
-								"Delta updates will not be available for this release.",
-							);
-							console.error("Users will download the full update instead.");
-							console.error("=".repeat(80) + "\n");
-						} else {
-							// Only add patch to artifacts if it was successfully created
-							artifactsToUpload.push(patchFilePath);
+							if (!decompressResult.success) {
+								console.log(
+									`Failed to decompress previous tarball (exit code ${decompressResult.exitCode}), skipping patch generation`,
+								);
+								canGeneratePatch = false;
+							}
 						}
 
-						// Clean up previous tarball now that bsdiff is done
-						if (existsSync(prevTarballPath)) {
-							unlinkSync(prevTarballPath);
+						if (existsSync(prevVersionCompressedTarballPath)) {
+							unlinkSync(prevVersionCompressedTarballPath);
+						}
+
+						if (canGeneratePatch) {
+							console.log("diff previous and new tarballs...");
+							// Run it as a separate process to leverage multi-threadedness
+							// especially for creating multiple diffs in parallel
+							const bsdiffpath = targetPaths.BSDIFF;
+							const patchFilePath = join(buildFolder, `${prevHash}.patch`);
+							const result = Bun.spawnSync(
+								[
+									bsdiffpath,
+									prevTarballPath,
+									tarPath,
+									patchFilePath,
+									"--use-zstd",
+								],
+								{
+									cwd: buildFolder,
+									stdout: "inherit",
+									stderr: "inherit",
+								},
+							);
+							if (!result.success) {
+								// Patch generation is non-critical - users will just download full updates instead of delta patches
+								console.error("\n" + "=".repeat(80));
+								console.error(
+									"WARNING: Patch generation failed (exit code " +
+										result.exitCode +
+										")",
+								);
+								console.error(
+									"Delta updates will not be available for this release.",
+								);
+								console.error("Users will download the full update instead.");
+								console.error("=".repeat(80) + "\n");
+							} else {
+								// Only add patch to artifacts if it was successfully created
+								artifactsToUpload.push(patchFilePath);
+							}
+
+							// Clean up previous tarball now that bsdiff is done
+							if (existsSync(prevTarballPath)) {
+								unlinkSync(prevTarballPath);
+							}
 						}
 					} else {
 						console.log(
@@ -3009,7 +3046,6 @@ ${schemesXml}
 
 			{
 				const tarball = Bun.file(tarPath);
-				const tarBuffer = await tarball.arrayBuffer();
 
 				// Note: The playground app bundle is around 48MB.
 				// compression on m1 max with 64GB ram:
@@ -3020,45 +3056,35 @@ ${schemesXml}
 
 				artifactsToUpload.push(compressedTarPath);
 
-				// zstd compress tarball
-				// todo (yoav): consider using c bindings for zstd for speed instead of wasm
-				// we already have it in the bsdiff binary
 				console.log("compressing tarball...");
-				await ZstdInit().then(
-					async ({ ZstdSimple, ZstdStream }) => {
-						// Note: Simple is much faster than stream, but stream uses less memory for large files.
-						const useStream = tarball.size > 100 * 1024 * 1024;
-
-						if (tarball.size > 0) {
-							// Uint8 array filestream of the tar file
-							const data = new Uint8Array(tarBuffer);
-
-							let compressedData: Uint8Array;
-							if (useStream) {
-								console.log("compressing tarball with zstd stream...");
-								compressedData = ZstdStream.compress(data);
-							} else {
-								console.log("compressing tarball with zstd simple...");
-								const compressionLevel = 22; // Maximum compression - now safe with stripped CEF libraries
-								compressedData = ZstdSimple.compress(
-									data,
-									compressionLevel,
-								);
-							}
-
-							console.log(
-								"compressed",
-								data.length,
-								"bytes",
-								"from",
-								tarBuffer.byteLength,
-								"bytes",
-							);
-
-							await Bun.write(compressedTarPath, compressedData);
-						}
-					},
-				);
+				if (tarball.size > 0) {
+					const zstdPath = targetPaths.ZSTD;
+					if (!existsSync(zstdPath)) {
+						throw new Error(`zig-zstd not found at ${zstdPath}`);
+					}
+					const compressResult = Bun.spawnSync(
+						[
+							zstdPath,
+							"compress",
+							"-i",
+							tarPath,
+							"-o",
+							compressedTarPath,
+							"--threads",
+							"max",
+						],
+						{
+							cwd: buildFolder,
+							stdout: "inherit",
+							stderr: "inherit",
+						},
+					);
+					if (!compressResult.success) {
+						throw new Error(
+							`zig-zstd compress failed with exit code ${compressResult.exitCode}`,
+						);
+					}
+				}
 			}
 
 			// Remove the uncompressed tar now that compression and diffing are done.

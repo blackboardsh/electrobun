@@ -624,6 +624,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !
         "bin/bun",
         "bin/bspatch",
         "bin/bsdiff",
+        "bin/zig-zstd",
     };
 
     // Also check for scripts (handled in the iterator below)

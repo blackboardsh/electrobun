@@ -56,7 +56,6 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@oneidentity/zstd-js": "^1.0.3",
     "archiver": "^7.0.1",
     "png-to-ico": "^2.1.8",
     "rcedit": "^4.0.1",

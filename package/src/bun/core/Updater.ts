@@ -9,7 +9,6 @@ import {
 	readdirSync,
 } from "fs";
 import { execSync } from "child_process";
-import { ZstdInit } from "@oneidentity/zstd-js/wasm";
 import { OS as currentOS, ARCH as currentArch } from "../../shared/platform";
 import { getPlatformPrefix, getTarballFileName } from "../../shared/naming";
 import { quit } from "./Utils";
@@ -714,15 +713,45 @@ const Updater = {
 				}
 
 				emitStatus("decompressing", "Decompressing update bundle...");
-				await ZstdInit().then(async ({ ZstdSimple }) => {
-					const data = new Uint8Array(
-						await Bun.file(prevVersionCompressedTarballPath).arrayBuffer(),
-					);
-					const uncompressedData = ZstdSimple.decompress(data);
+				const bunBinDir = dirname(process.execPath);
+				const zstdBinName = currentOS === "win" ? "zig-zstd.exe" : "zig-zstd";
+				const zstdPath = join(bunBinDir, zstdBinName);
 
-					await Bun.write(latestTarPath, uncompressedData);
-				});
-				emitStatus("decompressing", "Decompression complete");
+				if (!statSync(zstdPath, { throwIfNoEntry: false })) {
+					updateInfo.error = `zig-zstd not found: ${zstdPath}`;
+					emitStatus("error", updateInfo.error, { zstdPath });
+					console.error("zig-zstd not found:", zstdPath);
+				} else {
+					const decompressResult = Bun.spawnSync(
+						[
+							zstdPath,
+							"decompress",
+							"-i",
+							prevVersionCompressedTarballPath,
+							"-o",
+							latestTarPath,
+							"--no-timing",
+						],
+						{
+							cwd: extractionFolder,
+							stdout: "inherit",
+							stderr: "inherit",
+						},
+					);
+					if (!decompressResult.success) {
+						updateInfo.error = `zig-zstd failed with exit code ${decompressResult.exitCode}`;
+						emitStatus("error", updateInfo.error, {
+							zstdPath,
+							exitCode: decompressResult.exitCode,
+						});
+						console.error("zig-zstd failed", {
+							exitCode: decompressResult.exitCode,
+							zstdPath,
+						});
+					} else {
+						emitStatus("decompressing", "Decompression complete");
+					}
+				}
 
 				unlinkSync(prevVersionCompressedTarballPath);
 			}
