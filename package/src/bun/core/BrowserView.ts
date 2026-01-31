@@ -264,6 +264,18 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		native.symbols.webviewStopFind(this.ptr);
 	}
 
+	openDevTools() {
+		native.symbols.webviewOpenDevTools(this.ptr);
+	}
+
+	closeDevTools() {
+		native.symbols.webviewCloseDevTools(this.ptr);
+	}
+
+	toggleDevTools() {
+		native.symbols.webviewToggleDevTools(this.ptr);
+	}
+
 	// todo (yoav): move this to a class that also has off, append, prepend, etc.
 	// name should only allow browserView events
 	// Note: normalize event names to willNavigate instead of ['will-navigate'] to save

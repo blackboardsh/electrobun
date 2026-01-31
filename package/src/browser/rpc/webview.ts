@@ -84,5 +84,14 @@ export type WebviewTagHandlers = RPCSchema<{
 		webviewTagStopFind: {
 			id: number;
 		};
+		webviewTagOpenDevTools: {
+			id: number;
+		};
+		webviewTagCloseDevTools: {
+			id: number;
+		};
+		webviewTagToggleDevTools: {
+			id: number;
+		};
 	};
 }>;

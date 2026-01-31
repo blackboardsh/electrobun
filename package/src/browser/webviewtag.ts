@@ -73,6 +73,11 @@ interface WebviewTagElement extends HTMLElement {
 		options?: { forward?: boolean; matchCase?: boolean },
 	): void;
 	stopFindInPage(): void;
+
+	// Developer tools
+	openDevTools(): void;
+	closeDevTools(): void;
+	toggleDevTools(): void;
 }
 
 const ConfigureWebviewTags = (
@@ -683,6 +688,39 @@ const ConfigureWebviewTags = (
 			}
 
 			this.internalRpc.send.webviewTagStopFind({
+				id: this.webviewId,
+			});
+		}
+
+		openDevTools() {
+			if (!this.webviewId) {
+				console.warn("openDevTools called on removed webview");
+				return;
+			}
+
+			this.internalRpc.send.webviewTagOpenDevTools({
+				id: this.webviewId,
+			});
+		}
+
+		closeDevTools() {
+			if (!this.webviewId) {
+				console.warn("closeDevTools called on removed webview");
+				return;
+			}
+
+			this.internalRpc.send.webviewTagCloseDevTools({
+				id: this.webviewId,
+			});
+		}
+
+		toggleDevTools() {
+			if (!this.webviewId) {
+				console.warn("toggleDevTools called on removed webview");
+				return;
+			}
+
+			this.internalRpc.send.webviewTagToggleDevTools({
 				id: this.webviewId,
 			});
 		}

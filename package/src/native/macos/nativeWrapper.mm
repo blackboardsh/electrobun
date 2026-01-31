@@ -535,6 +535,11 @@ void releaseObjCObject(id objcObject) {
 
     - (void)findInPage:(const char*)searchText forward:(BOOL)forward matchCase:(BOOL)matchCase;
     - (void)stopFindInPage;
+
+    // Developer tools methods
+    - (void)openDevTools;
+    - (void)closeDevTools;
+    - (void)toggleDevTools;
 @end
 
 // Global map to track all AbstractView instances by their webviewId
@@ -2408,6 +2413,48 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         dispatch_async(dispatch_get_main_queue(), ^{
             // Clear selection to remove find highlighting
             [self.webView evaluateJavaScript:@"window.getSelection().removeAllRanges();" completionHandler:nil];
+        });
+    }
+
+    - (void)openDevTools {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // WKWebView doesn't have public DevTools API, but we can use private API if available
+            if ([self.webView respondsToSelector:@selector(_inspector)]) {
+                id inspector = [self.webView performSelector:@selector(_inspector)];
+                if ([inspector respondsToSelector:@selector(show)]) {
+                    [inspector performSelector:@selector(show)];
+                }
+            }
+        });
+    }
+
+    - (void)closeDevTools {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.webView respondsToSelector:@selector(_inspector)]) {
+                id inspector = [self.webView performSelector:@selector(_inspector)];
+                if ([inspector respondsToSelector:@selector(close)]) {
+                    [inspector performSelector:@selector(close)];
+                }
+            }
+        });
+    }
+
+    - (void)toggleDevTools {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.webView respondsToSelector:@selector(_inspector)]) {
+                id inspector = [self.webView performSelector:@selector(_inspector)];
+                if ([inspector respondsToSelector:@selector(isVisible)]) {
+                    BOOL isVisible = [[inspector performSelector:@selector(isVisible)] boolValue];
+                    if (isVisible) {
+                        [self closeDevTools];
+                    } else {
+                        [self openDevTools];
+                    }
+                } else {
+                    // Fallback: just try to open
+                    [self openDevTools];
+                }
+            }
         });
     }
 
@@ -4570,6 +4617,29 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         }
     }
 
+    - (void)openDevTools {
+        // Use existing remote debugger approach for CEF
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.browser) {
+                openRemoteDevTools(self.webviewId);
+            }
+        });
+    }
+
+    - (void)closeDevTools {
+        // Close remote debugger window
+        dispatch_async(dispatch_get_main_queue(), ^{
+            closeRemoteDevTools(self.webviewId);
+        });
+    }
+
+    - (void)toggleDevTools {
+        // Toggle remote debugger window
+        dispatch_async(dispatch_get_main_queue(), ^{
+            toggleRemoteDevTools(self.webviewId);
+        });
+    }
+
 @end
 
 
@@ -5058,9 +5128,61 @@ extern "C" void webviewFindInPage(AbstractView *abstractView, const char *search
     });
 }
 
+// Remote DevTools helper functions for CEF
+void openRemoteDevTools(uint32_t webviewId) {
+    // Get the CEF webview and trigger remote debugger
+    AbstractView* view = globalAbstractViews[@(webviewId)];
+    if (view && [view isKindOfClass:[CEFWebViewImpl class]]) {
+        CEFWebViewImpl* cefView = (CEFWebViewImpl*)view;
+        if (cefView.browser) {
+            // Use the existing DevTools host creation system
+            static ElectrobunBrowserProcessHandler* handler = nullptr;
+            if (!handler) {
+                handler = new ElectrobunBrowserProcessHandler();
+            }
+            
+            // Create remote devtools window for this webview
+            std::string url = "http://localhost:" + std::to_string(g_remoteDebugPort) + "/json/list";
+            handler->CreateRemoteDevToolsWindow(webviewId, url);
+        }
+    }
+}
+
+void closeRemoteDevTools(uint32_t webviewId) {
+    // Close remote debugger window
+    static ElectrobunBrowserProcessHandler* handler = nullptr;
+    if (!handler) {
+        handler = new ElectrobunBrowserProcessHandler();
+    }
+    handler->OnRemoteDevToolsClosed(webviewId);
+}
+
+void toggleRemoteDevTools(uint32_t webviewId) {
+    // Toggle would need state tracking - for now just open
+    openRemoteDevTools(webviewId);
+}
+
 extern "C" void webviewStopFind(AbstractView *abstractView) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [abstractView stopFindInPage];
+    });
+}
+
+extern "C" void webviewOpenDevTools(AbstractView *abstractView) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView openDevTools];
+    });
+}
+
+extern "C" void webviewCloseDevTools(AbstractView *abstractView) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView closeDevTools];
+    });
+}
+
+extern "C" void webviewToggleDevTools(AbstractView *abstractView) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView toggleDevTools];
     });
 }
 

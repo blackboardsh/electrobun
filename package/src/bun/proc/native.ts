@@ -296,6 +296,18 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.cstring],
 				returns: FFIType.void,
 			},
+			webviewOpenDevTools: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			webviewCloseDevTools: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			webviewToggleDevTools: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
 			// Tray
 			createTray: {
 				args: [
@@ -2442,6 +2454,36 @@ export const internalRpcHandlers = {
 				return;
 			}
 			native.symbols.webviewStopFind(webview.ptr);
+		},
+		webviewTagOpenDevTools: (params: { id: number }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagOpenDevTools: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewOpenDevTools(webview.ptr);
+		},
+		webviewTagCloseDevTools: (params: { id: number }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagCloseDevTools: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewCloseDevTools(webview.ptr);
+		},
+		webviewTagToggleDevTools: (params: { id: number }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagToggleDevTools: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.webviewToggleDevTools(webview.ptr);
 		},
 		webviewEvent: (params: unknown) => {
 			console.log("-----------------+webviewEvent", params);

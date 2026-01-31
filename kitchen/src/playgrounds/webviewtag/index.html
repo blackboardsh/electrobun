@@ -83,6 +83,14 @@
         <button onclick="stopFind()">Stop Find</button>
     </div>
 
+    <h2>Developer Tools</h2>
+    <div class="controls">
+        <button onclick="openDevTools()">Open DevTools</button>
+        <button onclick="closeDevTools()">Close DevTools</button>
+        <button onclick="toggleDevTools()">Toggle DevTools</button>
+        <span id="devToolsStatus" style="margin-left: 10px; font-size: 12px; color: #666;"></span>
+    </div>
+
     <h2>Mask & Passthrough Controls</h2>
     <div class="controls">
         <button onclick="document.querySelector('electrobun-webview').toggleTransparent()">Toggle Transparent</button>
@@ -164,6 +172,43 @@
             const wv = document.querySelector('electrobun-webview');
             if (!wv) return;
             wv.stopFindInPage();
+        }
+
+        // DevTools functions
+        function openDevTools() {
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            try {
+                wv.openDevTools();
+                document.getElementById('devToolsStatus').textContent = 'DevTools opened';
+                setTimeout(() => document.getElementById('devToolsStatus').textContent = '', 2000);
+            } catch (e) {
+                document.getElementById('devToolsStatus').textContent = 'Error: ' + e.message;
+            }
+        }
+
+        function closeDevTools() {
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            try {
+                wv.closeDevTools();
+                document.getElementById('devToolsStatus').textContent = 'DevTools closed';
+                setTimeout(() => document.getElementById('devToolsStatus').textContent = '', 2000);
+            } catch (e) {
+                document.getElementById('devToolsStatus').textContent = 'Error: ' + e.message;
+            }
+        }
+
+        function toggleDevTools() {
+            const wv = document.querySelector('electrobun-webview');
+            if (!wv) return;
+            try {
+                wv.toggleDevTools();
+                document.getElementById('devToolsStatus').textContent = 'DevTools toggled';
+                setTimeout(() => document.getElementById('devToolsStatus').textContent = '', 2000);
+            } catch (e) {
+                document.getElementById('devToolsStatus').textContent = 'Error: ' + e.message;
+            }
         }
 
         // Webview event listeners

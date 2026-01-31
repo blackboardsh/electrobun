@@ -2803,6 +2803,11 @@ public:
     // Find in page methods
     virtual void findInPage(const char* searchText, bool forward, bool matchCase) = 0;
     virtual void stopFindInPage() = 0;
+
+    // Developer tools methods
+    virtual void openDevTools() = 0;
+    virtual void closeDevTools() = 0;
+    virtual void toggleDevTools() = 0;
 };
 
 // Helper function to check navigation rules
@@ -3173,6 +3178,23 @@ public:
 
         // Clear selection to remove find highlighting
         webview->ExecuteScript(L"window.getSelection().removeAllRanges();", nullptr);
+    }
+
+    void openDevTools() override {
+        if (!webview) return;
+        webview->OpenDevToolsWindow();
+    }
+
+    void closeDevTools() override {
+        if (!webview) return;
+        webview->CloseDevToolsWindow();
+    }
+
+    void toggleDevTools() override {
+        if (!webview) return;
+        // WebView2 doesn't have a direct toggle method, try to check if open first
+        // For now, just open DevTools (WebView2 usually manages the toggle behavior)
+        webview->OpenDevToolsWindow();
     }
 };
 
@@ -3586,6 +3608,25 @@ public:
         if (host) {
             host->StopFinding(true); // true = clear selection
         }
+    }
+
+    void openDevTools() override {
+        if (!browser) return;
+        
+        // Use remote debugger approach for CEF on Windows
+        openRemoteDevTools(webview_id);
+    }
+
+    void closeDevTools() override {
+        if (!browser) return;
+        
+        closeRemoteDevTools(webview_id);
+    }
+
+    void toggleDevTools() override {
+        if (!browser) return;
+        
+        toggleRemoteDevTools(webview_id);
     }
 };
 
@@ -6670,10 +6711,52 @@ ELECTROBUN_EXPORT void webviewFindInPage(AbstractView *abstractView, const char 
     }
 }
 
+// Remote DevTools helper functions for CEF on Windows
+void openRemoteDevTools(uint32_t webviewId) {
+    // TODO: Implement remote debugger approach for Windows CEF
+    // This should trigger the remote debugger system when it's ported from macOS
+    // For now, this is a placeholder that can be implemented once the 
+    // remote debugger approach is fully ported to Windows
+}
+
+void closeRemoteDevTools(uint32_t webviewId) {
+    // TODO: Close remote debugger window for Windows CEF
+}
+
+void toggleRemoteDevTools(uint32_t webviewId) {
+    // TODO: Toggle remote debugger window for Windows CEF  
+    // For now, just try to open
+    openRemoteDevTools(webviewId);
+}
+
 ELECTROBUN_EXPORT void webviewStopFind(AbstractView *abstractView) {
     if (abstractView) {
         MainThreadDispatcher::dispatch_sync([abstractView]() {
             abstractView->stopFindInPage();
+        });
+    }
+}
+
+ELECTROBUN_EXPORT void webviewOpenDevTools(AbstractView *abstractView) {
+    if (abstractView) {
+        MainThreadDispatcher::dispatch_sync([abstractView]() {
+            abstractView->openDevTools();
+        });
+    }
+}
+
+ELECTROBUN_EXPORT void webviewCloseDevTools(AbstractView *abstractView) {
+    if (abstractView) {
+        MainThreadDispatcher::dispatch_sync([abstractView]() {
+            abstractView->closeDevTools();
+        });
+    }
+}
+
+ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
+    if (abstractView) {
+        MainThreadDispatcher::dispatch_sync([abstractView]() {
+            abstractView->toggleDevTools();
         });
     }
 }

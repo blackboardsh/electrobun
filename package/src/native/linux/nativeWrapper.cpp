@@ -1094,7 +1094,7 @@ public:
                 printf("CEF: Opening DevTools...\n");
                 {
                     CefWindowInfo devToolsInfo;
-                    devToolsInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+                    devToolsInfo.runtime_style = CEF_RUNTIME_STYLE_CHROME;
                     browser->GetHost()->ShowDevTools(devToolsInfo, this, CefBrowserSettings(), CefPoint());
                 }
                 return true;
@@ -1123,7 +1123,7 @@ public:
             printf("CEF: F12 pressed - opening DevTools\n");
             {
                 CefWindowInfo devToolsInfo;
-                devToolsInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+                devToolsInfo.runtime_style = CEF_RUNTIME_STYLE_CHROME;
                 browser->GetHost()->ShowDevTools(devToolsInfo, this, CefBrowserSettings(), CefPoint());
             }
             return true; // Consume the event
@@ -2082,6 +2082,11 @@ public:
     // Find in page methods
     virtual void findInPage(const char* searchText, bool forward, bool matchCase) = 0;
     virtual void stopFindInPage() = 0;
+
+    // Developer tools methods
+    virtual void openDevTools() = 0;
+    virtual void closeDevTools() = 0;
+    virtual void toggleDevTools() = 0;
 };
 
 // Helper function implementation - calls AbstractView's navigation rules method
@@ -2979,6 +2984,37 @@ public:
         }
     }
 
+    void openDevTools() override {
+        if (!WEBKIT_IS_WEB_VIEW(webview)) return;
+        
+        WebKitWebInspector* inspector = webkit_web_view_get_inspector(WEBKIT_WEB_VIEW(webview));
+        if (inspector) {
+            webkit_web_inspector_show(inspector);
+        }
+    }
+
+    void closeDevTools() override {
+        if (!WEBKIT_IS_WEB_VIEW(webview)) return;
+        
+        WebKitWebInspector* inspector = webkit_web_view_get_inspector(WEBKIT_WEB_VIEW(webview));
+        if (inspector) {
+            webkit_web_inspector_close(inspector);
+        }
+    }
+
+    void toggleDevTools() override {
+        if (!WEBKIT_IS_WEB_VIEW(webview)) return;
+        
+        WebKitWebInspector* inspector = webkit_web_view_get_inspector(WEBKIT_WEB_VIEW(webview));
+        if (inspector) {
+            if (webkit_web_inspector_is_attached(inspector)) {
+                webkit_web_inspector_close(inspector);
+            } else {
+                webkit_web_inspector_show(inspector);
+            }
+        }
+    }
+
 };
 
 // Initialize static debounce timestamp for ctrl+click handling
@@ -3142,7 +3178,7 @@ public:
         // Create CEF browser immediately as child of X11 window
         CefWindowInfo window_info;
         // Use Alloy runtime style for embedded windows (like macOS)
-        window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+        window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
         
         // For child windows, position should be relative to parent (0,0 for fullscreen)
         CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
@@ -3714,6 +3750,41 @@ public:
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
         if (host) {
             host->StopFinding(true); // true = clear selection
+        }
+    }
+
+    void openDevTools() override {
+        if (!browser) return;
+
+        CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        if (host) {
+            CefWindowInfo devToolsInfo;
+            devToolsInfo.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+            host->ShowDevTools(devToolsInfo, nullptr, CefBrowserSettings(), CefPoint());
+        }
+    }
+
+    void closeDevTools() override {
+        if (!browser) return;
+
+        CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        if (host) {
+            host->CloseDevTools();
+        }
+    }
+
+    void toggleDevTools() override {
+        if (!browser) return;
+
+        CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        if (host) {
+            if (host->HasDevTools()) {
+                host->CloseDevTools();
+            } else {
+                CefWindowInfo devToolsInfo;
+                devToolsInfo.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+                host->ShowDevTools(devToolsInfo, nullptr, CefBrowserSettings(), CefPoint());
+            }
         }
     }
 };
@@ -5781,6 +5852,30 @@ ELECTROBUN_EXPORT void webviewStopFind(AbstractView* abstractView) {
     if (abstractView) {
         dispatch_sync_main_void([abstractView]() {
             abstractView->stopFindInPage();
+        });
+    }
+}
+
+ELECTROBUN_EXPORT void webviewOpenDevTools(AbstractView* abstractView) {
+    if (abstractView) {
+        dispatch_sync_main_void([abstractView]() {
+            abstractView->openDevTools();
+        });
+    }
+}
+
+ELECTROBUN_EXPORT void webviewCloseDevTools(AbstractView* abstractView) {
+    if (abstractView) {
+        dispatch_sync_main_void([abstractView]() {
+            abstractView->closeDevTools();
+        });
+    }
+}
+
+ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView* abstractView) {
+    if (abstractView) {
+        dispatch_sync_main_void([abstractView]() {
+            abstractView->toggleDevTools();
         });
     }
 }
