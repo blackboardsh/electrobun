@@ -2658,12 +2658,12 @@ ${schemesXml}
 
 		const artifactsToUpload = [];
 
-		// Linux AppImage creation (for all build environments including dev)
-		if (targetOS === "linux") {
+		// Linux AppImage creation (skip for dev environment)
+		if (targetOS === "linux" && buildEnvironment !== "dev") {
 			// Ensure AppImage tooling is available
 			await ensureAppImageTooling();
 
-			// Create AppImage from the app bundle (for both dev and production builds)
+			// Create AppImage from the app bundle (for canary and stable builds)
 			console.log(
 				`🔍 CALLING createAppImage with appBundleFolderPath: ${appBundleFolderPath}`,
 			);
@@ -2758,7 +2758,7 @@ ${schemesXml}
 				// Note: raw AppImage is NOT added - only the Setup.AppImage (zipped) is distributed
 				artifactsToUpload.push(compressedTarPath);
 			}
-		}
+		} 
 
 		if (buildEnvironment !== "dev") {
 			// zstd wasm https://github.com/OneIdentity/zstd-js
