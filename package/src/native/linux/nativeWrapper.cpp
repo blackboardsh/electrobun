@@ -930,20 +930,20 @@ public:
                        bool is_redirect) override {
         std::string url = request->GetURL().ToString();
 
-        // Check for Ctrl key using GDK
+        // Check for Ctrl key using GDK (must use pointer device, not keyboard, for gdk_device_get_state)
         GdkDisplay* display = gdk_display_get_default();
         GdkSeat* seat = display ? gdk_display_get_default_seat(display) : nullptr;
-        GdkDevice* keyboard = seat ? gdk_seat_get_keyboard(seat) : nullptr;
+        GdkDevice* pointer = seat ? gdk_seat_get_pointer(seat) : nullptr;
         GdkModifierType modifiers = (GdkModifierType)0;
         bool isCtrlHeld = false;
 
-        if (keyboard) {
-            gdk_device_get_state(keyboard, gdk_get_default_root_window(), NULL, &modifiers);
+        if (pointer) {
+            gdk_device_get_state(pointer, gdk_get_default_root_window(), NULL, &modifiers);
             isCtrlHeld = (modifiers & GDK_CONTROL_MASK) != 0;
         }
 
-        printf("[CEF OnBeforeBrowse] url=%s user_gesture=%d is_redirect=%d display=%p seat=%p keyboard=%p modifiers=0x%X isCtrlHeld=%d hasHandler=%d webviewId=%u\n",
-               url.c_str(), user_gesture, is_redirect, display, seat, keyboard, modifiers, isCtrlHeld, webview_event_handler_ != nullptr, webview_id_);
+        printf("[CEF OnBeforeBrowse] url=%s user_gesture=%d is_redirect=%d display=%p seat=%p pointer=%p modifiers=0x%X isCtrlHeld=%d hasHandler=%d webviewId=%u\n",
+               url.c_str(), user_gesture, is_redirect, display, seat, pointer, modifiers, isCtrlHeld, webview_event_handler_ != nullptr, webview_id_);
 
         if (isCtrlHeld && !is_redirect && webview_event_handler_) {
             // Debounce: ignore ctrl+click navigations within 500ms
@@ -2530,20 +2530,20 @@ public:
             WebKitURIRequest* request = webkit_navigation_action_get_request(action);
             const char* uri = webkit_uri_request_get_uri(request);
 
-            // Check for Ctrl key using GDK
+            // Check for Ctrl key using GDK (must use pointer device, not keyboard, for gdk_device_get_state)
             GdkDisplay* display = gdk_display_get_default();
             GdkSeat* seat = display ? gdk_display_get_default_seat(display) : nullptr;
-            GdkDevice* keyboard = seat ? gdk_seat_get_keyboard(seat) : nullptr;
+            GdkDevice* pointer = seat ? gdk_seat_get_pointer(seat) : nullptr;
             GdkModifierType modifiers = (GdkModifierType)0;
             bool isCtrlHeld = false;
 
-            if (keyboard) {
-                gdk_device_get_state(keyboard, gdk_get_default_root_window(), NULL, &modifiers);
+            if (pointer) {
+                gdk_device_get_state(pointer, gdk_get_default_root_window(), NULL, &modifiers);
                 isCtrlHeld = (modifiers & GDK_CONTROL_MASK) != 0;
             }
 
-            printf("[GTKWebKit onDecidePolicy] url=%s display=%p seat=%p keyboard=%p modifiers=0x%X isCtrlHeld=%d hasHandler=%d\n",
-                   uri ? uri : "(null)", display, seat, keyboard, modifiers, isCtrlHeld, impl->eventHandler != nullptr);
+            printf("[GTKWebKit onDecidePolicy] url=%s display=%p seat=%p pointer=%p modifiers=0x%X isCtrlHeld=%d hasHandler=%d\n",
+                   uri ? uri : "(null)", display, seat, pointer, modifiers, isCtrlHeld, impl->eventHandler != nullptr);
 
             if (isCtrlHeld && impl->eventHandler) {
                 // Debounce: ignore ctrl+click navigations within 500ms
