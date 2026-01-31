@@ -2,7 +2,7 @@ export default {
 	app: {
 		name: "Electrobun Kitchen Sink",
 		identifier: "sh.blackboard.electrobun-kitchen",
-		version: "1.4.0-beta.4",
+		version: "1.5.0-beta.0",
 		urlSchemes: ["electrobun-playground"],
 	},
 	build: {
@@ -123,8 +123,8 @@ export default {
 				"views/playgrounds/transparent-window/index.html",
 		},
 		mac: {
-			codesign: true,
-			notarize: true,
+			codesign: false,
+			notarize: false,
 			bundleCEF: true,
 			entitlements: {},
 		},
