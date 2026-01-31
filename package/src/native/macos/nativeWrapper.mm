@@ -1001,6 +1001,18 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     - (void)stopFindInPage {
         [self doesNotRecognizeSelector:_cmd];
     }
+
+    - (void)openDevTools {
+        [self doesNotRecognizeSelector:_cmd];
+    }
+
+    - (void)closeDevTools {
+        [self doesNotRecognizeSelector:_cmd];
+    }
+
+    - (void)toggleDevTools {
+        [self doesNotRecognizeSelector:_cmd];
+    }
 @end
 
 
@@ -3004,6 +3016,28 @@ private:
     }
 
 public:
+    bool IsRemoteDevToolsOpen(int target_id) const {
+        auto it = devtools_hosts_.find(target_id);
+        return it != devtools_hosts_.end() && it->second.is_open;
+    }
+
+    void OpenRemoteDevTools(CefRefPtr<CefBrowser> browser) {
+        OpenRemoteDevToolsFrontend(browser);
+    }
+
+    void CloseRemoteDevTools() {
+        OnRemoteDevToolsClosed(static_cast<int>(webview_id_));
+    }
+
+    void ToggleRemoteDevTools(CefRefPtr<CefBrowser> browser) {
+        int target_id = static_cast<int>(webview_id_);
+        if (IsRemoteDevToolsOpen(target_id)) {
+            OnRemoteDevToolsClosed(target_id);
+        } else {
+            OpenRemoteDevToolsFrontend(browser);
+        }
+    }
+
     void OnRemoteDevToolsClosed(int target_id) {
         auto it = devtools_hosts_.find(target_id);
         if (it == devtools_hosts_.end()) {
@@ -4621,7 +4655,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         // Use existing remote debugger approach for CEF
         dispatch_async(dispatch_get_main_queue(), ^{
             if (self.browser) {
-                openRemoteDevTools(self.webviewId);
+                self.client->OpenRemoteDevTools(self.browser);
             }
         });
     }
@@ -4629,14 +4663,16 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     - (void)closeDevTools {
         // Close remote debugger window
         dispatch_async(dispatch_get_main_queue(), ^{
-            closeRemoteDevTools(self.webviewId);
+            self.client->CloseRemoteDevTools();
         });
     }
 
     - (void)toggleDevTools {
         // Toggle remote debugger window
         dispatch_async(dispatch_get_main_queue(), ^{
-            toggleRemoteDevTools(self.webviewId);
+            if (self.browser) {
+                self.client->ToggleRemoteDevTools(self.browser);
+            }
         });
     }
 
@@ -5126,40 +5162,6 @@ extern "C" void webviewFindInPage(AbstractView *abstractView, const char *search
     dispatch_async(dispatch_get_main_queue(), ^{
         [abstractView findInPage:searchText forward:forward matchCase:matchCase];
     });
-}
-
-// Remote DevTools helper functions for CEF
-void openRemoteDevTools(uint32_t webviewId) {
-    // Get the CEF webview and trigger remote debugger
-    AbstractView* view = globalAbstractViews[@(webviewId)];
-    if (view && [view isKindOfClass:[CEFWebViewImpl class]]) {
-        CEFWebViewImpl* cefView = (CEFWebViewImpl*)view;
-        if (cefView.browser) {
-            // Use the existing DevTools host creation system
-            static ElectrobunBrowserProcessHandler* handler = nullptr;
-            if (!handler) {
-                handler = new ElectrobunBrowserProcessHandler();
-            }
-            
-            // Create remote devtools window for this webview
-            std::string url = "http://localhost:" + std::to_string(g_remoteDebugPort) + "/json/list";
-            handler->CreateRemoteDevToolsWindow(webviewId, url);
-        }
-    }
-}
-
-void closeRemoteDevTools(uint32_t webviewId) {
-    // Close remote debugger window
-    static ElectrobunBrowserProcessHandler* handler = nullptr;
-    if (!handler) {
-        handler = new ElectrobunBrowserProcessHandler();
-    }
-    handler->OnRemoteDevToolsClosed(webviewId);
-}
-
-void toggleRemoteDevTools(uint32_t webviewId) {
-    // Toggle would need state tracking - for now just open
-    openRemoteDevTools(webviewId);
 }
 
 extern "C" void webviewStopFind(AbstractView *abstractView) {
