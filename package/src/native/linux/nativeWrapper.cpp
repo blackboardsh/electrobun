@@ -694,6 +694,9 @@ public:
         command_line->AppendSwitch("disable-plugins");
         command_line->AppendSwitch("disable-web-security");
         command_line->AppendSwitch("no-sandbox");
+        // Force X11 backend for window embedding compatibility
+        command_line->AppendSwitchWithValue("ozone-platform", "x11");
+        command_line->AppendSwitch("use-x11");
     }
     
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
@@ -788,6 +791,9 @@ private:
     Display* display_;
     bool osr_enabled_;
     int osr_width_, osr_height_;
+    
+    // Parent window handle for proper CEF window parenting
+    Window parent_window_handle_;
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -806,7 +812,8 @@ public:
         , display_(nullptr)
         , osr_enabled_(false)
         , osr_width_(0)
-        , osr_height_(0) {}
+        , osr_height_(0)
+        , parent_window_handle_(0) {}
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
         electrobun_script_ = script;
@@ -826,6 +833,10 @@ public:
     
     void SetBrowser(CefRefPtr<CefBrowser> browser) {
         browser_ = browser;
+    }
+    
+    void SetParentWindowHandle(Window parent_window) {
+        parent_window_handle_ = parent_window;
     }
     
     CefRefPtr<CefBrowser> GetBrowser() {
@@ -1033,6 +1044,7 @@ public:
             std::string url = frame->GetURL().ToString();
             webview_event_handler_(webview_id_, strdup("did-navigate"), strdup(url.c_str()));
         }
+        
     }
 
     // Context menu handler with DevTools option
@@ -1130,20 +1142,96 @@ public:
             browser_created_callback_(browser);
         }
         
+        // Schedule rapid interval to trigger OOPIF positioning
+        // Runs every 5ms for up to 1 second to ensure OOPIFs are positioned correctly
+        struct LayoutIntervalData {
+            CefRefPtr<CefBrowser> browser;
+            gint64 start_time;
+            int trigger_count;
+        };
+        
+        auto* interval_data = new LayoutIntervalData{
+            browser, 
+            g_get_monotonic_time(), // microseconds since arbitrary point
+            0
+        };
+        
+        g_timeout_add(5, [](gpointer data) -> gboolean {
+            auto* lid = static_cast<LayoutIntervalData*>(data);
+            
+            // Check if 1 second has elapsed
+            gint64 elapsed = g_get_monotonic_time() - lid->start_time;
+            if (elapsed > 1000000) { // 1 second in microseconds
+                delete lid;
+                return G_SOURCE_REMOVE;
+            }
+            
+            if (!g_shuttingDown && lid->browser) {
+                CefWindowHandle cefWindow = lid->browser->GetHost()->GetWindowHandle();
+                
+                if (cefWindow && cefWindow != 0x1) {
+                    
+                    
+                    // Get window dimensions for mouse event coordinates
+                    Display* display = gdk_x11_get_default_xdisplay();
+                    XWindowAttributes attrs;
+                    if (XGetWindowAttributes(display, (Window)cefWindow, &attrs) != 0) {
+                        // Send mouse move event to trigger layout recalculation
+                        CefMouseEvent moveEvent;
+                        moveEvent.x = attrs.width / 2;
+                        moveEvent.y = attrs.height / 2;
+                        lid->browser->GetHost()->SendMouseMoveEvent(moveEvent, false);
+                        
+                        // Send minimal scroll event
+                        CefMouseEvent scrollEvent;
+                        scrollEvent.x = attrs.width / 2;
+                        scrollEvent.y = attrs.height / 2;
+                        lid->browser->GetHost()->SendMouseWheelEvent(scrollEvent, 0, 1);
+                        lid->browser->GetHost()->SendMouseWheelEvent(scrollEvent, 0, -1);
+                    }
+                    
+                    lid->trigger_count++;
+                }
+            }
+            
+            return G_SOURCE_CONTINUE; // Continue interval
+        }, interval_data);
+        
         // The CEF browser window is now fully created
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
         
-        // Validate the CEF window handle and try to understand what's happening
+        // printf("CEF: [BROWSER_CREATED] Browser created, window handle: 0x%lx\n", (unsigned long)cefWindow);
+        
+        // Validate the CEF window handle and ensure proper parenting
         if (cefWindow) {
             Display* display = gdk_x11_get_default_xdisplay();
             
-            // For transparent windows, ensure the CEF window has no background
-            // This will be properly handled when transparency info is available
-            
+            // Try to get window attributes to validate the handle
             XWindowAttributes attrs;
+            int result = XGetWindowAttributes(display, (Window)cefWindow, &attrs);
             
-            
-            if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
+            // Ensure the CEF window is properly parented to the main window
+            if (parent_window_handle_) {
+                if (cefWindow != 0x1 && result != 0) {
+                    XReparentWindow(display, cefWindow, parent_window_handle_, 0, 0);
+                    XMapRaised(display, cefWindow);
+                    XFlush(display);
+                } else {
+                    // printf("CEF: [BROWSER_CREATED] Skipping reparenting due to invalid window handle\n");
+                }
+            } else {
+                printf("CEF: [BROWSER_CREATED] No parent window handle set\n");
+            }
+                
+                // Get window geometry to verify positioning
+                XWindowAttributes parent_attrs, cef_attrs;
+                if (XGetWindowAttributes(display, parent_window_handle_, &parent_attrs) &&
+                    XGetWindowAttributes(display, cefWindow, &cef_attrs)) {
+                    
+                }
+                            
+            XWindowAttributes tree_attrs;
+            if (XGetWindowAttributes(display, cefWindow, &tree_attrs) == 0) {
                 Window root, parent;
                 Window* children;
                 unsigned int nchildren;
@@ -1193,19 +1281,27 @@ public:
                             bool canGoBack,
                             bool canGoForward) override {
         if (!isLoading) {
+            // Notify browser of resize when loading completes to ensure OOPIFs are positioned
+            browser->GetHost()->WasResized();
             
             // Check if CEF window handle is valid now
             CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
+            
             if (cefWindow) {
+   
+                
                 Display* display = gdk_x11_get_default_xdisplay();
                 XWindowAttributes attrs;
-                if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
+                int result = XGetWindowAttributes(display, cefWindow, &attrs);
+                
+                if (result == 0) {
+                    printf("CEF: [LOADING_STATE] ERROR - Cannot get window attributes\n");
                 } else {
                     
                     // Check window class hint
                     XClassHint class_hint;
                     if (XGetClassHint(display, cefWindow, &class_hint) != 0) {
-                        
+                       
                         // Analyze toolkit based on class names
                         // if (class_hint.res_class) {
                         //     if (strstr(class_hint.res_class, "Gtk") || strstr(class_hint.res_class, "gtk")) {
@@ -1489,6 +1585,8 @@ public:
                             const CefString& title,
                             const CefString& default_file_path,
                             const std::vector<CefString>& accept_filters,
+                            const std::vector<CefString>& accept_extensions,
+                            const std::vector<CefString>& accept_descriptions,
                             CefRefPtr<CefFileDialogCallback> callback) override {
         
         printf("CEF Linux: File dialog requested - mode: %d\n", static_cast<int>(mode));
@@ -1820,8 +1918,9 @@ bool initializeCEF() {
     CefSettings settings;
     settings.no_sandbox = true;
     settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows
-    settings.log_severity = LOGSEVERITY_ERROR;  // Suppress non-critical warnings like X11 window errors
+    settings.log_severity = LOGSEVERITY_ERROR;  // Change to WARNING to see more CEF logs
     // settings.remote_debugging_port = 9222;
+    
     // printf("CEF: Remote debugging enabled on port 9222\n");
     
     // Use centralized GTK initialization to ensure proper setlocale handling
@@ -1860,10 +1959,9 @@ bool initializeCEF() {
     }
     
     if (!result) {
-        printf("CEF initialization failed\n");
+        printf("CEF: [INIT] ERROR - CefInitialize failed\n");
         return false;
-    } else {
-    }
+    } 
     
     g_cefInitialized = true;
     // printf("CEF initialized successfully\n");
@@ -3043,17 +3141,25 @@ public:
         
         // Create CEF browser immediately as child of X11 window
         CefWindowInfo window_info;
+        // Use Alloy runtime style for embedded windows (like macOS)
         window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+        
+        // For child windows, position should be relative to parent (0,0 for fullscreen)
         CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
         
         // Use SetAsChild with the X11 window
         window_info.SetAsChild(x11win->window, cef_rect);
         
+        // Validate parent window before creating browser
+        Display* display = gdk_x11_get_default_xdisplay();
+        XWindowAttributes parent_attrs;
+        bool parent_valid = XGetWindowAttributes(display, x11win->window, &parent_attrs) != 0;
+        
         // For transparent windows, use windowless/OSR mode like macOS and Windows
         if (x11win->transparent) {
             // Use windowless (off-screen) rendering for transparency
             window_info.SetAsWindowless(x11win->window);
-            printf("CEF: Using windowless (OSR) mode for transparency\n");
+            // printf("CEF: Using windowless (OSR) mode for transparency\n");
         }
         
         
@@ -3064,7 +3170,7 @@ public:
             // For OSR transparent windows, use fully transparent background
             browser_settings.background_color = CefColorSetARGB(0, 0, 0, 0); // Fully transparent
             this->parentTransparent = true;
-            printf("CEF: Using transparent background for OSR mode\n");
+            // printf("CEF: Using transparent background for OSR mode\n");
         }
         
         // Create client
@@ -3077,6 +3183,9 @@ public:
             nullptr  // No GTK window needed
         );
         
+        // Set parent window handle for proper CEF window parenting
+        client->SetParentWindowHandle(x11win->window);
+        
         // Enable OSR for transparent windows
         if (x11win->transparent) {
             client->EnableOSR(x11win->window, x11win->display, (int)width, (int)height);
@@ -3085,6 +3194,8 @@ public:
         // Set up browser creation callback to notify CEFWebViewImpl when browser is ready
         client->SetBrowserCreatedCallback([this, x11win](CefRefPtr<CefBrowser> browser) {
             this->browser = browser;
+            
+            CefWindowHandle handle = browser->GetHost()->GetWindowHandle();
             
             // Handle pending frame positioning now that browser is available
             if (hasPendingFrame) {
@@ -3186,15 +3297,20 @@ public:
         // Ensure the window is mapped and raised
         XMapRaised(display, (Window)cefWindow);
         XFlush(display);
-        
-        // Also notify CEF about the resize
-        browserRef->GetHost()->WasResized();
-        
+                
         // Check if the resize actually took effect
         XWindowAttributes newAttrs;
         if (XGetWindowAttributes(display, (Window)cefWindow, &newAttrs) != 0) {
-            // printf("CEF: After resize - CEF window 0x%lx now at (%d,%d) size %dx%d\n", 
-            //        (unsigned long)cefWindow, newAttrs.x, newAttrs.y, newAttrs.width, newAttrs.height);
+            // Check parent window
+            Window root, parent;
+            Window* children;
+            unsigned int nchildren;
+            if (XQueryTree(display, (Window)cefWindow, &root, &parent, &children, &nchildren) != 0) {
+                
+                if (children) XFree(children);
+            }
+        } else {
+            printf("CEF: [POSITION] ERROR - Could not get window attributes after resize\n");
         }
         
     }
@@ -3230,22 +3346,25 @@ public:
         
         // Move the CEF browser window to match the widget position
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
-        if (cefWindow) {
+        
+        if (cefWindow) {        
             Display* display = gdk_x11_get_default_xdisplay();
             
             // Validate CEF window handle before using it
             XWindowAttributes attrs;
-            if (XGetWindowAttributes(display, cefWindow, &attrs) == 0) {
-                printf("CEF: ERROR - Invalid CEF window handle 0x%lx in syncCEFPositionWithWidget, deferring until window is ready\n", 
-                       (unsigned long)cefWindow);
+            int result = XGetWindowAttributes(display, cefWindow, &attrs);
+            
+            if (result == 0) {
                 // Skip positioning for now - this is likely during initial creation
                 return;
             }
             
             XMoveResizeWindow(display, cefWindow, finalX, finalY, finalWidth, finalHeight);
             XFlush(display);
+            
+
         } else {
-            printf("CEF: No CEF window handle available\n");
+            printf("CEF: [SYNC_WIDGET] No CEF window handle available\n");
         }
     }
     
