@@ -714,6 +714,7 @@ const defaultConfig = {
 	},
 	release: {
 		baseUrl: "",
+		generatePatch: true,
 	},
 };
 
@@ -3076,8 +3077,13 @@ ${schemesXml}
 
 			console.log("generating a patch from the previous version...");
 
-			// Skip patch generation if baseUrl is not configured
-			if (!config.release.baseUrl || config.release.baseUrl.trim() === "") {
+			// Skip patch generation if disabled
+			if (config.release.generatePatch === false) {
+				console.log("Patch generation disabled (release.generatePatch = false)");
+			} else if (
+				!config.release.baseUrl ||
+				config.release.baseUrl.trim() === ""
+			) {
 				console.log("No baseUrl configured, skipping patch generation");
 				console.log(
 					"To enable patch generation, configure baseUrl in your electrobun.config",

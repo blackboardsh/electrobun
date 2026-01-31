@@ -232,5 +232,11 @@ export interface ElectrobunConfig {
 		 * Used for auto-updates and patch generation
 		 */
 		baseUrl?: string;
+		/**
+		 * Generate delta patch files by diffing against the previous release.
+		 * Disable to skip patch generation for local canary/stable testing.
+		 * @default true
+		 */
+		generatePatch?: boolean;
 	};
 }
