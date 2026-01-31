@@ -3025,21 +3025,26 @@ ${schemesXml}
 				// we already have it in the bsdiff binary
 				console.log("compressing tarball...");
 				await ZstdInit().then(
-					async ({ ZstdSimple, ZstdStream: _ZstdStream }) => {
-						// Note: Simple is much faster than stream, but stream is better for large files
-						// todo (yoav): consider a file size cutoff to switch to stream instead of simple.
-						// @ts-expect-error - reserved for future use (for large file streaming)
-						const _useStream = tarball.size > 100 * 1024 * 1024;
+					async ({ ZstdSimple, ZstdStream }) => {
+						// Note: Simple is much faster than stream, but stream uses less memory for large files.
+						const useStream = tarball.size > 100 * 1024 * 1024;
 
 						if (tarball.size > 0) {
 							// Uint8 array filestream of the tar file
 							const data = new Uint8Array(tarBuffer);
 
-							const compressionLevel = 22; // Maximum compression - now safe with stripped CEF libraries
-							const compressedData = ZstdSimple.compress(
-								data,
-								compressionLevel,
-							);
+							let compressedData: Uint8Array;
+							if (useStream) {
+								console.log("compressing tarball with zstd stream...");
+								compressedData = ZstdStream.compress(data);
+							} else {
+								console.log("compressing tarball with zstd simple...");
+								const compressionLevel = 22; // Maximum compression - now safe with stripped CEF libraries
+								compressedData = ZstdSimple.compress(
+									data,
+									compressionLevel,
+								);
+							}
 
 							console.log(
 								"compressed",
