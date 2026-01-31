@@ -1921,13 +1921,13 @@ const webviewEventHandler = (id: number, eventName: string, detail: string) => {
 		: undefined;
 
 	if (!handler) {
-		console.error(
-			"[webviewEventHandler] No handler found for event:",
-			eventName,
-			"(mapped to:",
-			mappedName,
-			")",
-		);
+		// console.error(
+		// 	"[webviewEventHandler] No handler found for event:",
+		// 	eventName,
+		// 	"(mapped to:",
+		// 	mappedName,
+		// 	")",
+		// );
 		return { success: false };
 	}
 
