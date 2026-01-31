@@ -2066,6 +2066,11 @@ public:
         }
     }
 
+    bool IsDevToolsOpen(int target_id) {
+        auto it = devtools_hosts_.find(target_id);
+        return it != devtools_hosts_.end() && it->second.is_open;
+    }
+
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -3187,13 +3192,13 @@ public:
 
     void closeDevTools() override {
         if (!webview) return;
-        webview->CloseDevToolsWindow();
+        // WebView2 doesn't expose a CloseDevToolsWindow API.
+        // The DevTools window is user-managed; opening it again is a no-op if already open.
     }
 
     void toggleDevTools() override {
         if (!webview) return;
-        // WebView2 doesn't have a direct toggle method, try to check if open first
-        // For now, just open DevTools (WebView2 usually manages the toggle behavior)
+        // WebView2 handles toggle behavior internally - opening when already open is a no-op
         webview->OpenDevToolsWindow();
     }
 };
@@ -3611,22 +3616,24 @@ public:
     }
 
     void openDevTools() override {
-        if (!browser) return;
-        
-        // Use remote debugger approach for CEF on Windows
-        openRemoteDevTools(webview_id);
+        if (!browser || !client) return;
+        client->OpenRemoteDevToolsFrontend(browser);
     }
 
     void closeDevTools() override {
-        if (!browser) return;
-        
-        closeRemoteDevTools(webview_id);
+        if (!browser || !client) return;
+        int target_id = browser->GetIdentifier();
+        client->OnRemoteDevToolsClosed(target_id);
     }
 
     void toggleDevTools() override {
-        if (!browser) return;
-        
-        toggleRemoteDevTools(webview_id);
+        if (!browser || !client) return;
+        int target_id = browser->GetIdentifier();
+        if (client->IsDevToolsOpen(target_id)) {
+            client->OnRemoteDevToolsClosed(target_id);
+        } else {
+            client->OpenRemoteDevToolsFrontend(browser);
+        }
     }
 };
 
