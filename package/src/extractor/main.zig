@@ -1263,7 +1263,9 @@ pub fn main() !void {
 
     const metadataParsed = try std.json.parseFromSlice(struct {
         identifier: []const u8,
+        name: []const u8,
         channel: []const u8,
+        hash: []const u8,
     }, allocator, metadataJsonContents, .{ .ignore_unknown_fields = true });
     defer metadataParsed.deinit();
 
@@ -1273,6 +1275,12 @@ pub fn main() !void {
     const channelName = try allocator.dupe(u8, metadataParsed.value.channel);
     defer allocator.free(channelName);
 
+    const appDisplayName = try allocator.dupe(u8, metadataParsed.value.name);
+    defer allocator.free(appDisplayName);
+
+    const hashName = try allocator.dupe(u8, metadataParsed.value.hash);
+    defer allocator.free(hashName);
+
     const appDataPathSegment = try std.fs.path.join(allocator, &.{ identifierName, channelName });
 
     const APPDATA_PATH = try std.fs.getAppDataDir(allocator, appDataPathSegment);
@@ -1280,7 +1288,8 @@ pub fn main() !void {
 
     const appBundleResourcesPath = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, BUNLE_RESOURCES_REL_PATH });
 
-    const compressedBundleFileName = try getFilenameFromExtension(allocator, appBundleResourcesPath, ".zst");
+    const compressedBundleFileName = try std.fmt.allocPrint(allocator, "{s}.tar.zst", .{hashName});
+    defer allocator.free(compressedBundleFileName);
 
     std.debug.print("compressedBundleFileName: {s}\n", .{compressedBundleFileName});
 
@@ -1353,7 +1362,15 @@ pub fn main() !void {
 
     std.debug.print("Time taken to untar: {} ns\n", .{std.time.nanoTimestamp() - startTime});
 
-    const bundleFileName = try getFilenameFromExtension(allocator, SELF_EXTRACTION_PATH, ".app");
+    const bundleBaseName = if (std.mem.eql(u8, channelName, "stable"))
+        appDisplayName
+    else
+        try std.fmt.allocPrint(allocator, "{s}-{s}", .{ appDisplayName, channelName });
+    defer if (!std.mem.eql(u8, channelName, "stable")) allocator.free(bundleBaseName);
+
+    const bundleFileName = try std.fmt.allocPrint(allocator, "{s}.app", .{bundleBaseName});
+    defer allocator.free(bundleFileName);
+
     std.debug.print("bundleFileName: {s}\n", .{bundleFileName});
     // Note: the name of the application or bundle may change between builds. By switching distribution channels
     // and/or by the app developer deciding to rename it.
@@ -1408,21 +1425,6 @@ pub fn main() !void {
     // }
 }
 
-pub fn getFilenameFromExtension(allocator: std.mem.Allocator, folderPath: []const u8, extension: []const u8) ![]const u8 {
-    const dir = try std.fs.openDirAbsolute(folderPath, .{});
-    var iterator = dir.iterate();
-
-    while (try iterator.next()) |entry| {
-        const entryName = entry.name;
-        if (std.mem.eql(u8, std.fs.path.extension(entryName), extension)) {
-            const fileName = try allocator.alloc(u8, entryName.len);
-            @memcpy(fileName, entryName);
-            return fileName;
-        }
-    }
-
-    return error.FileNotFound;
-}
 
 // Note: zig stdlib's untar function doesn't support file modes. They don't plan on adding it later,
 // or at least not for windows in the near future which we expect to support in the future. In the meantime this is a patched
