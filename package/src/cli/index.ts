@@ -45,11 +45,15 @@ const _MAX_CHUNK_SIZE = 1024 * 2;
 function createTar(tarPath: string, cwd: string, entries: string[]) {
 	// Use a relative path for the tar output on Windows to avoid bsdtar
 	// interpreting the "C:" drive letter as a remote host specifier.
-	const resolvedTarPath = process.platform === "win32" ? path.relative(cwd, tarPath) : tarPath;
-	execSync(`tar -cf "${resolvedTarPath}" ${entries.map((e) => `"${e}"`).join(" ")}`, {
-		cwd,
-		stdio: "pipe",
-	});
+	const resolvedTarPath =
+		process.platform === "win32" ? path.relative(cwd, tarPath) : tarPath;
+	execSync(
+		`tar -cf "${resolvedTarPath}" ${entries.map((e) => `"${e}"`).join(" ")}`,
+		{
+			cwd,
+			stdio: "pipe",
+		},
+	);
 }
 
 // Create a tar.gz file using system tar command
@@ -767,7 +771,7 @@ function escapePathForTerminal(path: string): string {
 // Download libfuse2 for cross-distribution compatibility
 async function downloadLibfuse2(vendorDir: string): Promise<void> {
 	const arch = ARCH === "arm64" ? "arm64" : "amd64";
-	
+
 	const tempDir = join(vendorDir, "temp");
 	mkdirSync(tempDir, { recursive: true });
 
@@ -777,9 +781,9 @@ async function downloadLibfuse2(vendorDir: string): Promise<void> {
 			console.log("Checking for system libfuse2 in non-standard locations...");
 			const findResult = execSync(
 				`find /usr -name "libfuse.so.2*" -type f 2>/dev/null | head -1`,
-				{ encoding: "utf8" }
+				{ encoding: "utf8" },
 			).trim();
-			
+
 			if (findResult) {
 				console.log(`Found system libfuse2 at: ${findResult}`);
 				execSync(`cp "${findResult}" "${join(vendorDir, "libfuse.so.2")}"`, {
@@ -794,20 +798,24 @@ async function downloadLibfuse2(vendorDir: string): Promise<void> {
 
 		// Strategy 2: Download pre-compiled binary from a reliable source
 		console.log(`Downloading pre-compiled libfuse2 for ${arch}...`);
-		
+
 		// We'll download from Ubuntu as it's a reliable source with good compatibility
 		const packageUrls: Record<string, string> = {
-			amd64: "http://archive.ubuntu.com/ubuntu/pool/universe/f/fuse/libfuse2_2.9.9-3_amd64.deb",
-			arm64: "http://ports.ubuntu.com/ubuntu-ports/pool/universe/f/fuse/libfuse2_2.9.9-3_arm64.deb",
+			amd64:
+				"http://archive.ubuntu.com/ubuntu/pool/universe/f/fuse/libfuse2_2.9.9-3_amd64.deb",
+			arm64:
+				"http://ports.ubuntu.com/ubuntu-ports/pool/universe/f/fuse/libfuse2_2.9.9-3_arm64.deb",
 		};
 
 		const packageUrl = packageUrls[arch];
 		if (!packageUrl) {
-			throw new Error(`Unsupported architecture for libfuse2 download: ${arch}`);
+			throw new Error(
+				`Unsupported architecture for libfuse2 download: ${arch}`,
+			);
 		}
 
 		const packageFile = join(tempDir, "libfuse2.deb");
-		
+
 		// Download the package
 		execSync(`wget -q "${packageUrl}" -O "${packageFile}"`, {
 			stdio: "inherit",
@@ -815,7 +823,7 @@ async function downloadLibfuse2(vendorDir: string): Promise<void> {
 
 		// Extract based on available tools
 		console.log("Extracting libfuse2...");
-		
+
 		// Check if we have 'ar' command (Debian-based)
 		let extractionMethod = "ar";
 		try {
@@ -836,7 +844,9 @@ async function downloadLibfuse2(vendorDir: string): Promise<void> {
 						execSync("which busybox", { stdio: "ignore" });
 						extractionMethod = "busybox";
 					} catch {
-						throw new Error("No suitable extraction tool found (ar, bsdtar, 7z, or busybox)");
+						throw new Error(
+							"No suitable extraction tool found (ar, bsdtar, 7z, or busybox)",
+						);
 					}
 				}
 			}
@@ -848,20 +858,27 @@ async function downloadLibfuse2(vendorDir: string): Promise<void> {
 				execSync(`cd "${tempDir}" && ar x libfuse2.deb`, { stdio: "inherit" });
 				break;
 			case "bsdtar":
-				execSync(`cd "${tempDir}" && bsdtar -xf libfuse2.deb`, { stdio: "inherit" });
+				execSync(`cd "${tempDir}" && bsdtar -xf libfuse2.deb`, {
+					stdio: "inherit",
+				});
 				break;
 			case "7z":
 				execSync(`cd "${tempDir}" && 7z x libfuse2.deb`, { stdio: "inherit" });
 				break;
 			case "busybox":
-				execSync(`cd "${tempDir}" && busybox ar x libfuse2.deb`, { stdio: "inherit" });
+				execSync(`cd "${tempDir}" && busybox ar x libfuse2.deb`, {
+					stdio: "inherit",
+				});
 				break;
 		}
 
 		// Extract the data archive (could be .tar.xz, .tar.gz, or .tar.zst)
-		const dataFiles = execSync(`cd "${tempDir}" && ls data.tar.* 2>/dev/null || true`, {
-			encoding: "utf8"
-		}).trim();
+		const dataFiles = execSync(
+			`cd "${tempDir}" && ls data.tar.* 2>/dev/null || true`,
+			{
+				encoding: "utf8",
+			},
+		).trim();
 
 		if (dataFiles) {
 			execSync(`cd "${tempDir}" && tar -xf ${dataFiles}`, { stdio: "inherit" });
@@ -872,7 +889,7 @@ async function downloadLibfuse2(vendorDir: string): Promise<void> {
 		// Find and copy the library
 		const libFiles = execSync(
 			`cd "${tempDir}" && find . -name "libfuse.so.2*" -type f | head -1`,
-			{ encoding: "utf8" }
+			{ encoding: "utf8" },
 		).trim();
 
 		if (!libFiles) {
@@ -881,14 +898,13 @@ async function downloadLibfuse2(vendorDir: string): Promise<void> {
 
 		const sourcePath = join(tempDir, libFiles);
 		const destPath = join(vendorDir, "libfuse.so.2");
-		
+
 		execSync(`cp "${sourcePath}" "${destPath}"`, { stdio: "inherit" });
 		console.log("✓ libfuse2 vendored successfully");
-		
+
 		// Also copy libfuse.so.2.9.9 as some systems might need the versioned file
 		const versionedDestPath = join(vendorDir, "libfuse.so.2.9.9");
 		execSync(`cp "${sourcePath}" "${versionedDestPath}"`, { stdio: "inherit" });
-
 	} catch (error) {
 		// If download fails, provide helpful instructions for manual installation
 		console.error("Failed to download libfuse2 automatically");
@@ -914,13 +930,13 @@ function getVendorDir(): string {
 function getAppImageToolCommand(): string {
 	const vendorDir = getVendorDir();
 	const vendoredLibfusePath = join(vendorDir, "libfuse.so.2");
-	
+
 	if (existsSync(vendoredLibfusePath)) {
 		// Use vendored libfuse2 by setting LD_LIBRARY_PATH
 		// Also set LD_PRELOAD to ensure our libfuse2 is used over system libs
 		return `LD_LIBRARY_PATH="${vendorDir}:$LD_LIBRARY_PATH" LD_PRELOAD="${vendoredLibfusePath}" appimagetool`;
 	}
-	
+
 	// Use system appimagetool without modifications
 	return "appimagetool";
 }
@@ -946,7 +962,7 @@ async function ensureAppImageTooling(): Promise<void> {
 		} catch (error) {
 			// libfuse2 not found, attempt to download it
 			console.log("📥 libfuse2 not found, downloading vendored copy...");
-			
+
 			try {
 				await downloadLibfuse2(vendorDir);
 			} catch (downloadError) {
@@ -958,9 +974,7 @@ async function ensureAppImageTooling(): Promise<void> {
 				console.log(
 					"═══════════════════════════════════════════════════════════════",
 				);
-				console.log(
-					"Failed to download libfuse2 automatically.",
-				);
+				console.log("Failed to download libfuse2 automatically.");
 				console.log("");
 				console.log("You can manually install it using:");
 				console.log("   sudo apt update && sudo apt install -y libfuse2");
@@ -1023,11 +1037,10 @@ async function ensureAppImageTooling(): Promise<void> {
 				const extractCmd = existsSync(vendoredLibfusePath)
 					? `LD_LIBRARY_PATH="${vendorDir}:$LD_LIBRARY_PATH" ./appimagetool.AppImage --appimage-extract`
 					: "./appimagetool.AppImage --appimage-extract";
-				
-				execSync(
-					`cd /tmp && ${extractCmd} >/dev/null 2>&1`,
-					{ stdio: "inherit" },
-				);
+
+				execSync(`cd /tmp && ${extractCmd} >/dev/null 2>&1`, {
+					stdio: "inherit",
+				});
 				execSync(
 					"cp /tmp/squashfs-root/usr/bin/appimagetool ~/.local/bin/appimagetool",
 					{ stdio: "inherit" },
@@ -1167,24 +1180,82 @@ Categories=Utility;
 		// Create a minimal 1x1 transparent PNG as placeholder to satisfy appimagetool
 		// This prevents "Icon entry not found" errors
 		const placeholderPNG = Buffer.from([
-			0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-			0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
-			0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1 dimensions
-			0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, // 8-bit RGBA
-			0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, // IDAT chunk
-			0x54, 0x08, 0x99, 0x01, 0x00, 0x00, 0x05, 0x00,
-			0x01, 0x06, 0x7A, 0x81, 0x7C, 0x00, 0x00, 0x00, // IEND chunk
-			0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
-			0x82
+			0x89,
+			0x50,
+			0x4e,
+			0x47,
+			0x0d,
+			0x0a,
+			0x1a,
+			0x0a, // PNG signature
+			0x00,
+			0x00,
+			0x00,
+			0x0d,
+			0x49,
+			0x48,
+			0x44,
+			0x52, // IHDR chunk
+			0x00,
+			0x00,
+			0x00,
+			0x01,
+			0x00,
+			0x00,
+			0x00,
+			0x01, // 1x1 dimensions
+			0x08,
+			0x06,
+			0x00,
+			0x00,
+			0x00,
+			0x1f,
+			0x15,
+			0xc4, // 8-bit RGBA
+			0x89,
+			0x00,
+			0x00,
+			0x00,
+			0x0b,
+			0x49,
+			0x44,
+			0x41, // IDAT chunk
+			0x54,
+			0x08,
+			0x99,
+			0x01,
+			0x00,
+			0x00,
+			0x05,
+			0x00,
+			0x01,
+			0x06,
+			0x7a,
+			0x81,
+			0x7c,
+			0x00,
+			0x00,
+			0x00, // IEND chunk
+			0x00,
+			0x49,
+			0x45,
+			0x4e,
+			0x44,
+			0xae,
+			0x42,
+			0x60,
+			0x82,
 		]);
-		
+
 		const iconDestPath = join(appDirPath, `${appFileName}.png`);
 		const dirIconPath = join(appDirPath, ".DirIcon");
-		
+
 		writeFileSync(iconDestPath, new Uint8Array(placeholderPNG));
 		writeFileSync(dirIconPath, new Uint8Array(placeholderPNG));
-		
-		console.log(`Created placeholder icon for AppImage (no icon specified in config)`);
+
+		console.log(
+			`Created placeholder icon for AppImage (no icon specified in config)`,
+		);
 	}
 
 	// Generate the AppImage using appimagetool
@@ -1214,9 +1285,12 @@ Categories=Utility;
 			appimagetoolBase = localBinPath;
 		}
 	}
-	
+
 	// Get the command with proper environment for vendored libfuse2
-	const appimagetoolCmd = getAppImageToolCommand().replace("appimagetool", appimagetoolBase);
+	const appimagetoolCmd = getAppImageToolCommand().replace(
+		"appimagetool",
+		appimagetoolBase,
+	);
 
 	try {
 		// First try with --no-appstream flag to avoid some FUSE-related issues
@@ -1255,23 +1329,22 @@ Categories=Utility;
 	} else {
 		// Create placeholder icon for desktop shortcut
 		const placeholderPNG = Buffer.from([
-			0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-			0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-			0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-			0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-			0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41,
-			0x54, 0x08, 0x99, 0x01, 0x00, 0x00, 0x05, 0x00,
-			0x01, 0x06, 0x7A, 0x81, 0x7C, 0x00, 0x00, 0x00,
-			0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
-			0x82
+			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+			0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+			0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+			0x0b, 0x49, 0x44, 0x41, 0x54, 0x08, 0x99, 0x01, 0x00, 0x00, 0x05, 0x00,
+			0x01, 0x06, 0x7a, 0x81, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+			0x44, 0xae, 0x42, 0x60, 0x82,
 		]);
 		writeFileSync(iconExtractPath, new Uint8Array(placeholderPNG));
-		console.log(`✓ Created placeholder icon for desktop shortcut: ${iconExtractPath}`);
+		console.log(
+			`✓ Created placeholder icon for desktop shortcut: ${iconExtractPath}`,
+		);
 	}
 
 	// Create desktop shortcut alongside the AppImage
 	const desktopShortcutPath = join(buildFolder, `${appFileName}.desktop`);
-	
+
 	const desktopShortcutContent = `[Desktop Entry]
 Version=1.0
 Type=Application
@@ -2759,7 +2832,7 @@ ${schemesXml}
 				// Note: raw AppImage is NOT added - only the Setup.AppImage (zipped) is distributed
 				artifactsToUpload.push(compressedTarPath);
 			}
-		} 
+		}
 
 		if (buildEnvironment !== "dev") {
 			// zstd wasm https://github.com/OneIdentity/zstd-js
@@ -3079,7 +3152,9 @@ ${schemesXml}
 
 			// Skip patch generation if disabled
 			if (config.release.generatePatch === false) {
-				console.log("Patch generation disabled (release.generatePatch = false)");
+				console.log(
+					"Patch generation disabled (release.generatePatch = false)",
+				);
 			} else if (
 				!config.release.baseUrl ||
 				config.release.baseUrl.trim() === ""
@@ -3115,14 +3190,39 @@ ${schemesXml}
 						"prev.tar.zst",
 					);
 
-					if (response.ok && response.body) {
+					if (response && response.ok && response.body) {
 						const reader = response.body.getReader();
+						const totalBytesHeader = response.headers.get("content-length");
+						const totalBytes = totalBytesHeader
+							? Number(totalBytesHeader)
+							: undefined;
+						let downloadedBytes = 0;
+						let lastLogTime = Date.now();
+						const logIntervalMs = 5_000;
 
 						const writer = Bun.file(prevVersionCompressedTarballPath).writer();
 
 						while (true) {
 							const { done, value } = await reader.read();
 							if (done) break;
+							downloadedBytes += value.length;
+							const now = Date.now();
+							if (now - lastLogTime >= logIntervalMs) {
+								if (totalBytes && Number.isFinite(totalBytes)) {
+									const percent = (
+										(downloadedBytes / totalBytes) *
+										100
+									).toFixed(1);
+									console.log(
+										`Downloading previous version... ${percent}% (${downloadedBytes}/${totalBytes} bytes)`,
+									);
+								} else {
+									console.log(
+										`Downloading previous version... ${downloadedBytes} bytes`,
+									);
+								}
+								lastLogTime = now;
+							}
 							await writer.write(value);
 						}
 						await writer.flush();
@@ -3182,6 +3282,10 @@ ${schemesXml}
 						if (existsSync(prevTarballPath)) {
 							unlinkSync(prevTarballPath);
 						}
+					} else {
+						console.log(
+							"Failed to fetch previous tarball, skipping patch generation",
+						);
 					}
 				} else {
 					console.log("prevoius version not found at: ", urlToLatestTarball);
@@ -3795,9 +3899,10 @@ exec "\${EXEC}" "\$@"
 		execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
 
 		// Check if icon will be available
-		const hasWrapperIcon = config.build.linux?.icon && 
+		const hasWrapperIcon =
+			config.build.linux?.icon &&
 			existsSync(join(projectRoot, config.build.linux.icon));
-		
+
 		// Create desktop file
 		const desktopContent = `[Desktop Entry]
 Version=1.0
@@ -3852,9 +3957,12 @@ Categories=Utility;
 				appimagetoolBase = localBinPath;
 			}
 		}
-		
+
 		// Get the command with proper environment for vendored libfuse2
-		const appimagetoolCmd = getAppImageToolCommand().replace("appimagetool", appimagetoolBase);
+		const appimagetoolCmd = getAppImageToolCommand().replace(
+			"appimagetool",
+			appimagetoolBase,
+		);
 
 		try {
 			execSync(
