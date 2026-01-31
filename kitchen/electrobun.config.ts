@@ -123,8 +123,8 @@ export default {
 				"views/playgrounds/transparent-window/index.html",
 		},
 		mac: {
-			codesign: false,
-			notarize: false,
+			codesign: true,
+			notarize: true,
 			bundleCEF: true,
 			entitlements: {},
 		},
