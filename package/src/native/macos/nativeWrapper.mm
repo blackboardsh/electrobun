@@ -11,6 +11,9 @@
 #import <CommonCrypto/CommonCrypto.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UserNotifications/UserNotifications.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
 
 // CEF includes
 #include "include/base/cef_ref_counted.h"
@@ -78,6 +81,37 @@ static CGFloat offsetX = 0.0;
 static CGFloat offsetY = 0.0;
 static id mouseDraggedMonitor = nil;
 static id mouseUpMonitor = nil;
+
+static int g_remoteDebugPort = 9222;
+
+static bool IsPortAvailable(int port) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        return false;
+    }
+
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons((uint16_t)port);
+
+    int result = bind(sock, (struct sockaddr*)&addr, sizeof(addr));
+    close(sock);
+    return result == 0;
+}
+
+static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
+    for (int port = startPort; port <= endPort; ++port) {
+        if (IsPortAvailable(port)) {
+            return port;
+        }
+    }
+    return 0;
+}
 
 
 // Forward declare the CEF classes
@@ -2845,7 +2879,8 @@ private:
 
         NSString* targetUrlNs = targetUrl.empty() ? nil : [NSString stringWithUTF8String:targetUrl.c_str()];
 
-        NSURL* url = [NSURL URLWithString:@"http://127.0.0.1:9222/json"];
+        NSString* baseUrl = [NSString stringWithFormat:@"http://127.0.0.1:%d", g_remoteDebugPort];
+        NSURL* url = [NSURL URLWithString:[baseUrl stringByAppendingString:@"/json"]];
         NSURLSessionDataTask* task = [[NSURLSession sharedSession]
             dataTaskWithURL:url
           completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
@@ -2910,7 +2945,8 @@ private:
             // Build a local DevTools frontend URL to avoid cross-origin rejection.
             // Example: http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/<id>
             NSString* wsParam = [wsUrl stringByReplacingOccurrencesOfString:@"ws://" withString:@""];
-            NSString* finalUrl = [NSString stringWithFormat:@"http://127.0.0.1:9222/devtools/inspector.html?ws=%@&dockSide=undocked", wsParam];
+            NSString* finalUrl = [NSString stringWithFormat:@"%@/devtools/inspector.html?ws=%@&dockSide=undocked",
+                                  baseUrl, wsParam];
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 this->CreateRemoteDevToolsWindow(target_id, [finalUrl UTF8String]);
@@ -3831,7 +3867,14 @@ bool initializeCEF() {
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single threaded message loop on macOS
     settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
-    settings.remote_debugging_port = 9222;
+    // Remote DevTools port with simple scan for availability.
+    int selectedPort = FindAvailableRemoteDebugPort(9222, 9232);
+    if (selectedPort == 0) {
+        selectedPort = 9222;
+        NSLog(@"[CEF] Remote DevTools: no free port in 9222-9232, falling back to 9222");
+    }
+    g_remoteDebugPort = selectedPort;
+    settings.remote_debugging_port = selectedPort;
     // settings.log_severity = LOGSEVERITY_VERBOSE;
 
     // Set explicit paths to avoid bundle lookup issues in newer CEF builds.
