@@ -1,3 +1,6 @@
+#include <winsock2.h>   // Must come before Windows.h
+#include <ws2tcpip.h>
+#include <winhttp.h>
 #include <Windows.h>
 #include <windowsx.h>  // For GET_X_LPARAM and GET_Y_LPARAM
 #include <string>
@@ -338,6 +341,7 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
 #include "include/cef_download_handler.h"
+#include "include/cef_task.h"
 #include "include/wrapper/cef_helpers.h"
 
 // Restore macro definitions
@@ -353,6 +357,8 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dcomp.lib")
 #pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "ws2_32.lib")
 
 
 using namespace Microsoft::WRL;
@@ -362,6 +368,7 @@ using namespace Microsoft::WRL;
 #define ELECTROBUN_EXPORT __declspec(dllexport)
 #define WM_EXECUTE_SYNC_BLOCK (WM_USER + 1)
 #define WM_EXECUTE_ASYNC_BLOCK (WM_USER + 2)
+#define WM_DEVTOOLS_CREATE (WM_USER + 3)
 
 // Forward declarations
 class AbstractView;
@@ -463,6 +470,42 @@ static POINT g_initialWindowPos = {};
 // WebView positioning constants
 static const int OFFSCREEN_OFFSET = -20000;
 
+// Remote DevTools port
+static int g_remoteDebugPort = 9222;
+
+static bool IsPortAvailable(int port) {
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return false;
+    }
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) {
+        WSACleanup();
+        return false;
+    }
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons((u_short)port);
+
+    int result = bind(sock, (struct sockaddr*)&addr, sizeof(addr));
+    closesocket(sock);
+    WSACleanup();
+    return result == 0;
+}
+
+static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
+    for (int port = startPort; port <= endPort; ++port) {
+        if (IsPortAvailable(port)) {
+            return port;
+        }
+    }
+    return 0;
+}
+
 // CEF global variables
 static bool g_cef_initialized = false;
 static CefRefPtr<CefApp> g_cef_app;
@@ -479,6 +522,10 @@ public:
         // Disable features for minimal implementation
         command_line->AppendSwitch("disable-web-security");
         command_line->AppendSwitch("disable-features=VizDisplayCompositor");
+
+        // Allow DevTools frontend (served over http) to connect to local ws://127.0.0.1
+        command_line->AppendSwitchWithValue("remote-allow-origins", "*");
+        command_line->AppendSwitch("allow-insecure-localhost");
     }
 
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
@@ -557,6 +604,98 @@ public:
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunLifeSpanHandler);
 };
+
+// Forward declaration for DevTools callback
+class ElectrobunCefClient;
+typedef void (*RemoteDevToolsClosedCallback)(void* ctx, int target_id);
+void RemoteDevToolsClosed(void* ctx, int target_id);
+
+// Lightweight CefClient for the DevTools browser window
+class RemoteDevToolsClient : public CefClient, public CefLifeSpanHandler {
+public:
+    RemoteDevToolsClient(RemoteDevToolsClosedCallback callback, void* ctx, int target_id)
+        : callback_(callback), ctx_(ctx), target_id_(target_id) {}
+
+    CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
+        return this;
+    }
+
+    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        if (callback_) {
+            callback_(ctx_, target_id_);
+        }
+    }
+
+private:
+    RemoteDevToolsClosedCallback callback_ = nullptr;
+    void* ctx_ = nullptr;
+    int target_id_ = 0;
+    IMPLEMENT_REFCOUNTING(RemoteDevToolsClient);
+};
+
+// DevTools window class and WndProc
+struct DevToolsWindowContext {
+    RemoteDevToolsClosedCallback close_callback = nullptr;
+    void* ctx = nullptr;
+    int target_id = 0;
+    CefRefPtr<CefBrowser> browser;
+};
+
+static std::once_flag g_devtoolsClassRegistered;
+static const char* DEVTOOLS_WINDOW_CLASS = "ElectrobunDevToolsClass";
+
+static LRESULT CALLBACK DevToolsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    DevToolsWindowContext* dtCtx = nullptr;
+
+    if (msg == WM_NCCREATE) {
+        CREATESTRUCTA* cs = (CREATESTRUCTA*)lParam;
+        dtCtx = (DevToolsWindowContext*)cs->lpCreateParams;
+        SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR)dtCtx);
+    } else {
+        dtCtx = (DevToolsWindowContext*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+    }
+
+    switch (msg) {
+        case WM_CLOSE:
+            // Hide the window instead of destroying it to avoid CEF teardown issues
+            ShowWindow(hwnd, SW_HIDE);
+            if (dtCtx && dtCtx->close_callback) {
+                dtCtx->close_callback(dtCtx->ctx, dtCtx->target_id);
+            }
+            return 0;
+
+        case WM_SIZE:
+            if (dtCtx && dtCtx->browser) {
+                HWND browserHwnd = dtCtx->browser->GetHost()->GetWindowHandle();
+                if (browserHwnd) {
+                    RECT rect;
+                    GetClientRect(hwnd, &rect);
+                    SetWindowPos(browserHwnd, nullptr, 0, 0,
+                                 rect.right - rect.left, rect.bottom - rect.top,
+                                 SWP_NOZORDER);
+                }
+            }
+            break;
+
+        case WM_DESTROY:
+            return 0;
+    }
+
+    return DefWindowProcA(hwnd, msg, wParam, lParam);
+}
+
+static void EnsureDevToolsWindowClassRegistered() {
+    std::call_once(g_devtoolsClassRegistered, []() {
+        WNDCLASSA wc = {};
+        wc.lpfnWndProc = DevToolsWndProc;
+        wc.hInstance = GetModuleHandle(NULL);
+        wc.lpszClassName = DEVTOOLS_WINDOW_CLASS;
+        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        RegisterClassA(&wc);
+    });
+}
 
 // Forward declarations for functions defined later in the file
 std::string loadViewsFile(const std::string& path);
@@ -859,24 +998,13 @@ public:
         model->AddItem(26501, "Inspect Element");
     }
     
+    // Defined out-of-line after ElectrobunCefClient (needs full class definition)
     bool OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
                             CefRefPtr<CefFrame> frame,
                             CefRefPtr<CefContextMenuParams> params,
                             int command_id,
-                            EventFlags event_flags) override {
-        if (command_id == 26501) {
-            // Show devtools
-            CefWindowInfo windowInfo;
-            windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-            CefBrowserSettings settings;
-            CefPoint point(params->GetXCoord(), params->GetYCoord());
-            
-            browser->GetHost()->ShowDevTools(windowInfo, nullptr, settings, point);
-            return true;
-        }
-        return false;
-    }
-    
+                            EventFlags event_flags) override;
+
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunContextMenuHandler);
 };
@@ -1530,46 +1658,18 @@ void handleApplicationMenuSelection(UINT menuId);
 // CEF Keyboard Handler for menu accelerators
 class ElectrobunKeyboardHandler : public CefKeyboardHandler {
 public:
+    // Defined out-of-line after ElectrobunCefClient (needs full class definition)
     bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
                       const CefKeyEvent& event,
                       CefEventHandle os_event,
-                      bool* is_keyboard_shortcut) override {
-        // Only handle key down events
-        if (event.type != KEYEVENT_RAWKEYDOWN) {
-            return false;
-        }
-
-        // Check if we have accelerator entries
-        if (g_menuAccelerators.empty()) {
-            return false;
-        }
-
-        // Build the current modifier state from CEF event
-        BYTE modifiers = FVIRTKEY;
-        if (event.modifiers & EVENTFLAG_CONTROL_DOWN) modifiers |= FCONTROL;
-        if (event.modifiers & EVENTFLAG_ALT_DOWN) modifiers |= FALT;
-        if (event.modifiers & EVENTFLAG_SHIFT_DOWN) modifiers |= FSHIFT;
-
-        // Check if this key combination matches any accelerator
-        WORD vkCode = (WORD)event.windows_key_code;
-
-        for (const auto& accel : g_menuAccelerators) {
-            if (accel.key == vkCode && accel.fVirt == modifiers) {
-                // Found a match! Trigger the menu command directly
-                handleApplicationMenuSelection(accel.cmd);
-                return true;  // Prevent CEF from processing this key
-            }
-        }
-
-        return false;
-    }
+                      bool* is_keyboard_shortcut) override;
 
 private:
     IMPLEMENT_REFCOUNTING(ElectrobunKeyboardHandler);
 };
 
 // CEF Client class with load and life span handlers
-class ElectrobunCefClient : public CefClient {
+class ElectrobunCefClient : public CefClient, public CefDisplayHandler {
 public:
     WebviewEventHandler webview_event_handler_ = nullptr;
 
@@ -1671,6 +1771,10 @@ public:
         return m_keyboardHandler;
     }
 
+    CefRefPtr<CefDisplayHandler> GetDisplayHandler() override {
+        return this;
+    }
+
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                  CefRefPtr<CefFrame> frame,
                                  CefProcessId source_process,
@@ -1718,6 +1822,250 @@ public:
         }
     }
 
+    // Track page title for DevTools target matching
+    void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) override {
+        if (browser && browser->GetMainFrame()) {
+            last_title_ = title.ToString();
+        }
+    }
+
+    // Open remote DevTools frontend for a specific browser (including OOPIFs)
+    void OpenRemoteDevToolsFrontend(CefRefPtr<CefBrowser> browser) {
+        if (!browser || !browser->GetHost()) return;
+
+        int target_id = browser->GetIdentifier();
+
+        // If already open, bring to front
+        auto it = devtools_hosts_.find(target_id);
+        if (it != devtools_hosts_.end() && it->second.is_open && it->second.window) {
+            ShowWindow(it->second.window, SW_SHOW);
+            SetForegroundWindow(it->second.window);
+            return;
+        }
+
+        // Get the browser's URL and title for matching against /json targets
+        std::string targetUrl;
+        if (browser->GetMainFrame()) {
+            targetUrl = browser->GetMainFrame()->GetURL().ToString();
+        }
+        std::string targetTitle = last_title_;
+        int port = g_remoteDebugPort;
+
+        // Keep ref to self for the background thread
+        CefRefPtr<ElectrobunCefClient> self(this);
+
+        // Fetch /json on a background thread
+        std::thread([self, target_id, targetUrl, targetTitle, port]() {
+            // WinHTTP synchronous GET to http://127.0.0.1:{port}/json
+            HINTERNET hSession = WinHttpOpen(L"Electrobun/DevTools",
+                                              WINHTTP_ACCESS_TYPE_NO_PROXY,
+                                              WINHTTP_NO_PROXY_NAME,
+                                              WINHTTP_NO_PROXY_BYPASS, 0);
+            if (!hSession) return;
+
+            wchar_t hostStr[64];
+            swprintf_s(hostStr, L"127.0.0.1");
+            HINTERNET hConnect = WinHttpConnect(hSession, hostStr, (INTERNET_PORT)port, 0);
+            if (!hConnect) { WinHttpCloseHandle(hSession); return; }
+
+            HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", L"/json",
+                                                     nullptr, WINHTTP_NO_REFERER,
+                                                     WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+            if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
+
+            BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+            if (!bResults) { WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
+
+            bResults = WinHttpReceiveResponse(hRequest, nullptr);
+            if (!bResults) { WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
+
+            // Read full response body
+            std::string jsonBody;
+            DWORD dwSize = 0;
+            DWORD dwDownloaded = 0;
+            do {
+                dwSize = 0;
+                WinHttpQueryDataAvailable(hRequest, &dwSize);
+                if (dwSize == 0) break;
+
+                std::vector<char> buf(dwSize + 1, 0);
+                WinHttpReadData(hRequest, buf.data(), dwSize, &dwDownloaded);
+                jsonBody.append(buf.data(), dwDownloaded);
+            } while (dwSize > 0);
+
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+
+            if (jsonBody.empty()) return;
+
+            // Simple JSON parsing for the /json array response.
+            // Each target object has "url", "title", "webSocketDebuggerUrl" fields.
+            // Find the target matching our browser's URL or title.
+
+            // Parse JSON array - find objects and extract fields
+            struct JsonTarget {
+                std::string url;
+                std::string title;
+                std::string wsUrl;
+            };
+            std::vector<JsonTarget> targets;
+
+            // Simple parser: split by objects in the array
+            size_t pos = 0;
+            while ((pos = jsonBody.find('{', pos)) != std::string::npos) {
+                size_t end = jsonBody.find('}', pos);
+                if (end == std::string::npos) break;
+
+                std::string obj = jsonBody.substr(pos, end - pos + 1);
+                JsonTarget t;
+
+                // Extract "url" field
+                auto extractField = [&obj](const std::string& fieldName) -> std::string {
+                    std::string key = "\"" + fieldName + "\"";
+                    size_t kp = obj.find(key);
+                    if (kp == std::string::npos) return "";
+                    size_t colon = obj.find(':', kp + key.length());
+                    if (colon == std::string::npos) return "";
+                    size_t qStart = obj.find('"', colon + 1);
+                    if (qStart == std::string::npos) return "";
+                    size_t qEnd = obj.find('"', qStart + 1);
+                    if (qEnd == std::string::npos) return "";
+                    return obj.substr(qStart + 1, qEnd - qStart - 1);
+                };
+
+                t.url = extractField("url");
+                t.title = extractField("title");
+                t.wsUrl = extractField("webSocketDebuggerUrl");
+                targets.push_back(t);
+
+                pos = end + 1;
+            }
+
+            if (targets.empty()) return;
+
+            // Match target by URL and/or title
+            const JsonTarget* selected = nullptr;
+            for (const auto& t : targets) {
+                bool urlMatch = !targetUrl.empty() && t.url == targetUrl;
+                bool titleMatch = !targetTitle.empty() && t.title == targetTitle;
+
+                if ((!targetUrl.empty() && !targetTitle.empty() && urlMatch && titleMatch) ||
+                    (!targetUrl.empty() && urlMatch) ||
+                    (!targetTitle.empty() && titleMatch)) {
+                    selected = &t;
+                    break;
+                }
+            }
+            if (!selected) {
+                selected = &targets[0];
+            }
+
+            if (selected->wsUrl.empty()) return;
+
+            // Build the DevTools frontend URL
+            // Strip ws:// prefix from the WebSocket URL
+            std::string wsParam = selected->wsUrl;
+            if (wsParam.substr(0, 5) == "ws://") {
+                wsParam = wsParam.substr(5);
+            }
+
+            std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+            std::string finalUrl = baseUrl + "/devtools/inspector.html?ws=" + wsParam + "&dockSide=undocked";
+
+            // Post back to the UI thread via CefPostTask
+            class CreateDevToolsTask : public CefTask {
+            public:
+                CreateDevToolsTask(CefRefPtr<ElectrobunCefClient> client, int tid, const std::string& url)
+                    : client_(client), target_id_(tid), url_(url) {}
+                void Execute() override {
+                    client_->CreateRemoteDevToolsWindow(target_id_, url_);
+                }
+            private:
+                CefRefPtr<ElectrobunCefClient> client_;
+                int target_id_;
+                std::string url_;
+                IMPLEMENT_REFCOUNTING(CreateDevToolsTask);
+            };
+            CefPostTask(TID_UI, new CreateDevToolsTask(self, target_id, finalUrl));
+
+        }).detach();
+    }
+
+    // Create or reuse a DevTools window for a specific target
+    void CreateRemoteDevToolsWindow(int target_id, const std::string& url) {
+        EnsureDevToolsWindowClassRegistered();
+
+        DevToolsHost& host = devtools_hosts_[target_id];
+
+        if (!host.window) {
+            host.dt_ctx = new DevToolsWindowContext();
+            host.dt_ctx->close_callback = RemoteDevToolsClosed;
+            host.dt_ctx->ctx = this;
+            host.dt_ctx->target_id = target_id;
+
+            host.window = CreateWindowExA(
+                0,
+                DEVTOOLS_WINDOW_CLASS,
+                "DevTools",
+                WS_OVERLAPPEDWINDOW,
+                CW_USEDEFAULT, CW_USEDEFAULT, 1100, 800,
+                nullptr,  // No parent - standalone window
+                nullptr,
+                GetModuleHandle(NULL),
+                host.dt_ctx);
+        }
+
+        ShowWindow(host.window, SW_SHOW);
+        SetForegroundWindow(host.window);
+        host.is_open = true;
+
+        if (!host.client) {
+            host.client = new RemoteDevToolsClient(RemoteDevToolsClosed, this, target_id);
+        }
+
+        if (host.browser) {
+            // Reuse existing DevTools browser, just navigate to the new URL
+            host.browser->GetMainFrame()->LoadURL(CefString(url));
+            return;
+        }
+
+        // Create a new CEF browser inside the DevTools window
+        RECT rect;
+        GetClientRect(host.window, &rect);
+        CefRect cefRect(0, 0, rect.right - rect.left, rect.bottom - rect.top);
+
+        CefWindowInfo windowInfo;
+        windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+        windowInfo.SetAsChild((CefWindowHandle)host.window, cefRect);
+
+        CefBrowserSettings settings;
+        host.browser = CefBrowserHost::CreateBrowserSync(
+            windowInfo,
+            host.client,
+            CefString(url),
+            settings,
+            nullptr,
+            nullptr);
+
+        // Store the browser on the window context for WM_SIZE handling
+        if (host.dt_ctx) {
+            host.dt_ctx->browser = host.browser;
+        }
+
+        host.is_open = true;
+    }
+
+    void OnRemoteDevToolsClosed(int target_id) {
+        auto it = devtools_hosts_.find(target_id);
+        if (it == devtools_hosts_.end()) return;
+        it->second.is_open = false;
+        if (it->second.window) {
+            ShowWindow(it->second.window, SW_HIDE);
+        }
+    }
+
 private:
     uint32_t webview_id_;
     HandlePostMessage bun_bridge_handler_;
@@ -1735,8 +2083,95 @@ private:
     CefRefPtr<ElectrobunKeyboardHandler> m_keyboardHandler;
     CefRefPtr<ElectrobunRenderHandler> m_renderHandler;
     bool osr_enabled_;
+
+    // Remote DevTools state - tracked per CefBrowser (by identifier)
+    struct DevToolsHost {
+        HWND window = nullptr;
+        CefRefPtr<CefBrowser> browser;
+        CefRefPtr<RemoteDevToolsClient> client;
+        DevToolsWindowContext* dt_ctx = nullptr;
+        bool is_open = false;
+    };
+    std::map<int, DevToolsHost> devtools_hosts_;
+    std::string last_title_;
+
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
+
+// Free function callback for RemoteDevToolsClient -> ElectrobunCefClient
+void RemoteDevToolsClosed(void* ctx, int target_id) {
+    if (!ctx) return;
+    static_cast<ElectrobunCefClient*>(ctx)->OnRemoteDevToolsClosed(target_id);
+}
+
+// Out-of-line definitions for handlers that need ElectrobunCefClient to be fully defined
+
+bool ElectrobunContextMenuHandler::OnContextMenuCommand(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    CefRefPtr<CefContextMenuParams> params,
+    int command_id,
+    EventFlags event_flags) {
+    if (command_id == 26501) {
+        // Open remote DevTools via the owning ElectrobunCefClient
+        CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
+        ElectrobunCefClient* ebClient = static_cast<ElectrobunCefClient*>(client.get());
+        if (ebClient) {
+            ebClient->OpenRemoteDevToolsFrontend(browser);
+        }
+        return true;
+    }
+    return false;
+}
+
+bool ElectrobunKeyboardHandler::OnPreKeyEvent(
+    CefRefPtr<CefBrowser> browser,
+    const CefKeyEvent& event,
+    CefEventHandle os_event,
+    bool* is_keyboard_shortcut) {
+    // Only handle key down events
+    if (event.type != KEYEVENT_RAWKEYDOWN) {
+        return false;
+    }
+
+    // F12 or Ctrl+Shift+I -> open DevTools
+    bool isF12 = (event.windows_key_code == 123);
+    bool isCtrlShiftI = (event.windows_key_code == 'I' &&
+                         (event.modifiers & EVENTFLAG_CONTROL_DOWN) &&
+                         (event.modifiers & EVENTFLAG_SHIFT_DOWN));
+    if (isF12 || isCtrlShiftI) {
+        CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
+        ElectrobunCefClient* ebClient = static_cast<ElectrobunCefClient*>(client.get());
+        if (ebClient) {
+            ebClient->OpenRemoteDevToolsFrontend(browser);
+        }
+        return true;
+    }
+
+    // Check if we have accelerator entries
+    if (g_menuAccelerators.empty()) {
+        return false;
+    }
+
+    // Build the current modifier state from CEF event
+    BYTE modifiers = FVIRTKEY;
+    if (event.modifiers & EVENTFLAG_CONTROL_DOWN) modifiers |= FCONTROL;
+    if (event.modifiers & EVENTFLAG_ALT_DOWN) modifiers |= FALT;
+    if (event.modifiers & EVENTFLAG_SHIFT_DOWN) modifiers |= FSHIFT;
+
+    // Check if this key combination matches any accelerator
+    WORD vkCode = (WORD)event.windows_key_code;
+
+    for (const auto& accel : g_menuAccelerators) {
+        if (accel.key == vkCode && accel.fVirt == modifiers) {
+            // Found a match! Trigger the menu command directly
+            handleApplicationMenuSelection(accel.cmd);
+            return true;  // Prevent CEF from processing this key
+        }
+    }
+
+    return false;
+}
 
 // ElectrobunRenderHandler::OnPaint implementation
 void ElectrobunRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser,
@@ -4813,6 +5248,15 @@ ELECTROBUN_EXPORT bool initCEF() {
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single-threaded message loop
     settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
+
+    // Remote DevTools port with scan for availability
+    int selectedPort = FindAvailableRemoteDebugPort(9222, 9232);
+    if (selectedPort == 0) {
+        selectedPort = 9222;
+        std::cout << "[CEF] Remote DevTools: no free port in 9222-9232, falling back to 9222" << std::endl;
+    }
+    g_remoteDebugPort = selectedPort;
+    settings.remote_debugging_port = selectedPort;
 
     // Set the subprocess path to the helper executable
     CefString(&settings.browser_subprocess_path) = std::string(exePath) + "\\bun Helper.exe";
