@@ -126,6 +126,74 @@ const menuConfigs: MenuConfig[] = [
       },
     ],
   },
+  {
+    id: "config5",
+    title: "Accelerator Matrix",
+    description: [
+      "Explicit accelerators across menus",
+      "Cmd/Ctrl+1, Cmd/Ctrl+Shift+P, Cmd/Ctrl+Alt+I",
+      "Cmd/Ctrl+Shift+[ and Cmd/Ctrl+Shift+]",
+      "Cmd/Ctrl+/, Cmd/Ctrl+;, Cmd/Ctrl+K",
+    ],
+    menu: [
+      {
+        submenu: [
+          { label: "About", role: "about" },
+          { type: "separator" },
+          { label: "Preferences...", action: "prefs", accelerator: "CommandOrControl+," },
+          { type: "separator" },
+          { label: "Quit", role: "quit", accelerator: "CommandOrControl+Q" },
+        ],
+      },
+      {
+        label: "File",
+        submenu: [
+          { label: "New", action: "file-new", accelerator: "CommandOrControl+N" },
+          { label: "Open", action: "file-open", accelerator: "CommandOrControl+O" },
+          { label: "Save", action: "file-save", accelerator: "CommandOrControl+S" },
+          { label: "Save As...", action: "file-save-as", accelerator: "CommandOrControl+Shift+S" },
+          { type: "separator" },
+          { label: "Close Window", action: "file-close", accelerator: "CommandOrControl+W" },
+        ],
+      },
+      {
+        label: "View",
+        submenu: [
+          { label: "Reload", action: "view-reload", accelerator: "CommandOrControl+R" },
+          {
+            label: "Force Reload",
+            action: "view-force-reload",
+            accelerator: "CommandOrControl+Shift+R",
+          },
+          { type: "separator" },
+          { label: "Toggle DevTools", action: "view-devtools", accelerator: "Alt+CommandOrControl+I" },
+          { label: "Toggle Sidebar", action: "view-sidebar", accelerator: "CommandOrControl+Shift+P" },
+        ],
+      },
+      {
+        label: "Navigate",
+        submenu: [
+          { label: "Go Left", action: "nav-left", accelerator: "CommandOrControl+Shift+[" },
+          { label: "Go Right", action: "nav-right", accelerator: "CommandOrControl+Shift+]" },
+          { type: "separator" },
+          { label: "Search", action: "nav-search", accelerator: "CommandOrControl+/" },
+          { label: "Quick Actions", action: "nav-quick", accelerator: "CommandOrControl+K" },
+          { label: "Open Console", action: "nav-console", accelerator: "CommandOrControl+;" },
+        ],
+      },
+      {
+        label: "Tabs",
+        submenu: [
+          { label: "Tab 1", action: "tab-1", accelerator: "CommandOrControl+1" },
+          { label: "Tab 2", action: "tab-2", accelerator: "CommandOrControl+2" },
+          { label: "Tab 3", action: "tab-3", accelerator: "CommandOrControl+3" },
+          { type: "separator" },
+          { label: "Next Tab", action: "tab-next", accelerator: "CommandOrControl+Shift+]" },
+          { label: "Previous Tab", action: "tab-prev", accelerator: "CommandOrControl+Shift+[" },
+        ],
+      },
+    ],
+  },
 ];
 
 const rpc = Electroview.defineRPC<any>({
