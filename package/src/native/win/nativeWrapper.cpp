@@ -53,6 +53,7 @@
 #include "../shared/json_menu_parser.h"
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
+#include "../shared/accelerator_parser.h"
 
 using namespace electrobun;
 
@@ -4691,39 +4692,16 @@ static UINT getMenuVirtualKeyCode(const std::string& key) {
     return 0;
 }
 
-// Helper to parse modifiers from accelerator string for menu accelerators
-// Returns FCONTROL, FALT, FSHIFT flags (not MOD_* flags)
+// Parse modifiers from accelerator string for menu accelerators using the
+// shared cross-platform parser. Returns FCONTROL, FALT, FSHIFT flags.
 static BYTE parseMenuModifiers(const std::string& accelerator, std::string& outKey) {
-    BYTE modifiers = FVIRTKEY;  // Always use virtual key codes
-    std::vector<std::string> parts;
+    auto parts = electrobun::parseAccelerator(accelerator);
+    outKey = parts.key;
 
-    // Split by '+'
-    size_t start = 0, end;
-    while ((end = accelerator.find('+', start)) != std::string::npos) {
-        parts.push_back(accelerator.substr(start, end - start));
-        start = end + 1;
-    }
-    parts.push_back(accelerator.substr(start));
-
-    // Last part is the key
-    outKey = parts.back();
-    parts.pop_back();
-
-    for (const auto& part : parts) {
-        std::string lowerPart = part;
-        std::transform(lowerPart.begin(), lowerPart.end(), lowerPart.begin(), ::tolower);
-
-        if (lowerPart == "command" || lowerPart == "cmd" ||
-            lowerPart == "commandorcontrol" || lowerPart == "cmdorctrl" ||
-            lowerPart == "control" || lowerPart == "ctrl") {
-            modifiers |= FCONTROL;
-        } else if (lowerPart == "alt" || lowerPart == "option") {
-            modifiers |= FALT;
-        } else if (lowerPart == "shift") {
-            modifiers |= FSHIFT;
-        }
-    }
-
+    BYTE modifiers = FVIRTKEY;
+    if (parts.commandOrControl || parts.command || parts.control) modifiers |= FCONTROL;
+    if (parts.alt)                                                modifiers |= FALT;
+    if (parts.shift)                                              modifiers |= FSHIFT;
     return modifiers;
 }
 
@@ -8974,40 +8952,17 @@ static UINT getVirtualKeyCode(const std::string& key) {
     return 0;
 }
 
-// Helper to parse modifiers from accelerator string
+// Parse modifiers from accelerator string for global shortcuts using the
+// shared cross-platform parser. Returns MOD_CONTROL, MOD_ALT, MOD_SHIFT flags.
 static UINT parseModifiers(const std::string& accelerator, std::string& outKey) {
+    auto parts = electrobun::parseAccelerator(accelerator);
+    outKey = parts.key;
+
     UINT modifiers = 0;
-    std::vector<std::string> parts;
-
-    // Split by '+'
-    size_t start = 0, end;
-    while ((end = accelerator.find('+', start)) != std::string::npos) {
-        parts.push_back(accelerator.substr(start, end - start));
-        start = end + 1;
-    }
-    parts.push_back(accelerator.substr(start));
-
-    // Last part is the key
-    outKey = parts.back();
-    parts.pop_back();
-
-    for (const auto& part : parts) {
-        std::string lowerPart = part;
-        std::transform(lowerPart.begin(), lowerPart.end(), lowerPart.begin(), ::tolower);
-
-        if (lowerPart == "command" || lowerPart == "cmd" ||
-            lowerPart == "commandorcontrol" || lowerPart == "cmdorctrl" ||
-            lowerPart == "control" || lowerPart == "ctrl") {
-            modifiers |= MOD_CONTROL;
-        } else if (lowerPart == "alt" || lowerPart == "option") {
-            modifiers |= MOD_ALT;
-        } else if (lowerPart == "shift") {
-            modifiers |= MOD_SHIFT;
-        } else if (lowerPart == "win" || lowerPart == "super" || lowerPart == "meta") {
-            modifiers |= MOD_WIN;
-        }
-    }
-
+    if (parts.commandOrControl || parts.command || parts.control) modifiers |= MOD_CONTROL;
+    if (parts.alt)                                                modifiers |= MOD_ALT;
+    if (parts.shift)                                              modifiers |= MOD_SHIFT;
+    if (parts.super)                                              modifiers |= MOD_WIN;
     return modifiers;
 }
 

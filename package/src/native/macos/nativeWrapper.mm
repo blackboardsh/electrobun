@@ -56,6 +56,7 @@
 #include "../shared/ffi_helpers.h"
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
+#include "../shared/accelerator_parser.h"
 
 using namespace electrobun;
 
@@ -649,6 +650,92 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     - (void)menuItemClicked:(id)sender;
 @end
 
+// Convert a key name string to an NSMenuItem key equivalent string.
+// For single characters this is just the character itself. For special keys
+// (arrows, function keys, etc.) it returns the appropriate Unicode character
+// that NSMenuItem expects.
+static NSString *keyEquivalentFromString(NSString *key) {
+    if ([key length] == 1) {
+        return key;
+    }
+
+    static NSDictionary *specialKeys = nil;
+    if (!specialKeys) {
+        specialKeys = @{
+            @"return":   @"\r",
+            @"enter":    @"\r",
+            @"tab":      @"\t",
+            @"escape":   [NSString stringWithFormat:@"%C", (unichar)0x1B],
+            @"esc":      [NSString stringWithFormat:@"%C", (unichar)0x1B],
+            @"space":    @" ",
+            @"backspace": [NSString stringWithFormat:@"%C", (unichar)NSBackspaceCharacter],
+            @"delete":   [NSString stringWithFormat:@"%C", (unichar)NSDeleteCharacter],
+            @"up":       [NSString stringWithFormat:@"%C", (unichar)NSUpArrowFunctionKey],
+            @"down":     [NSString stringWithFormat:@"%C", (unichar)NSDownArrowFunctionKey],
+            @"left":     [NSString stringWithFormat:@"%C", (unichar)NSLeftArrowFunctionKey],
+            @"right":    [NSString stringWithFormat:@"%C", (unichar)NSRightArrowFunctionKey],
+            @"home":     [NSString stringWithFormat:@"%C", (unichar)NSHomeFunctionKey],
+            @"end":      [NSString stringWithFormat:@"%C", (unichar)NSEndFunctionKey],
+            @"pageup":   [NSString stringWithFormat:@"%C", (unichar)NSPageUpFunctionKey],
+            @"pagedown": [NSString stringWithFormat:@"%C", (unichar)NSPageDownFunctionKey],
+            @"f1":  [NSString stringWithFormat:@"%C", (unichar)NSF1FunctionKey],
+            @"f2":  [NSString stringWithFormat:@"%C", (unichar)NSF2FunctionKey],
+            @"f3":  [NSString stringWithFormat:@"%C", (unichar)NSF3FunctionKey],
+            @"f4":  [NSString stringWithFormat:@"%C", (unichar)NSF4FunctionKey],
+            @"f5":  [NSString stringWithFormat:@"%C", (unichar)NSF5FunctionKey],
+            @"f6":  [NSString stringWithFormat:@"%C", (unichar)NSF6FunctionKey],
+            @"f7":  [NSString stringWithFormat:@"%C", (unichar)NSF7FunctionKey],
+            @"f8":  [NSString stringWithFormat:@"%C", (unichar)NSF8FunctionKey],
+            @"f9":  [NSString stringWithFormat:@"%C", (unichar)NSF9FunctionKey],
+            @"f10": [NSString stringWithFormat:@"%C", (unichar)NSF10FunctionKey],
+            @"f11": [NSString stringWithFormat:@"%C", (unichar)NSF11FunctionKey],
+            @"f12": [NSString stringWithFormat:@"%C", (unichar)NSF12FunctionKey],
+            @"f13": [NSString stringWithFormat:@"%C", (unichar)NSF13FunctionKey],
+            @"f14": [NSString stringWithFormat:@"%C", (unichar)NSF14FunctionKey],
+            @"f15": [NSString stringWithFormat:@"%C", (unichar)NSF15FunctionKey],
+            @"f16": [NSString stringWithFormat:@"%C", (unichar)NSF16FunctionKey],
+            @"f17": [NSString stringWithFormat:@"%C", (unichar)NSF17FunctionKey],
+            @"f18": [NSString stringWithFormat:@"%C", (unichar)NSF18FunctionKey],
+            @"f19": [NSString stringWithFormat:@"%C", (unichar)NSF19FunctionKey],
+            @"f20": [NSString stringWithFormat:@"%C", (unichar)NSF20FunctionKey],
+            @"plus": @"+",
+            @"minus": @"-",
+        };
+    }
+
+    NSString *equivalent = specialKeys[key];
+    return equivalent ?: key;
+}
+
+// Convert shared AcceleratorParts to macOS NSEventModifierFlags.
+// On macOS, CommandOrControl and Command both map to the Command key.
+static NSEventModifierFlags modifierFlagsFromAccelerator(const electrobun::AcceleratorParts& parts) {
+    NSEventModifierFlags flags = 0;
+    if (parts.commandOrControl || parts.command) flags |= NSEventModifierFlagCommand;
+    if (parts.control)                           flags |= NSEventModifierFlagControl;
+    if (parts.alt)                               flags |= NSEventModifierFlagOption;
+    if (parts.shift)                             flags |= NSEventModifierFlagShift;
+    return flags;
+}
+
+// Parse an Electron-style accelerator string into an NSMenuItem key equivalent
+// and modifier mask. When the accelerator is a bare key with no modifiers
+// (e.g. "s"), Command is used as the default modifier to match macOS conventions.
+static void parseMenuAccelerator(NSString *accelerator,
+                                 NSString **outKeyEquivalent,
+                                 NSEventModifierFlags *outModifiers) {
+    auto parts = electrobun::parseAccelerator([accelerator UTF8String]);
+
+    *outModifiers = modifierFlagsFromAccelerator(parts);
+
+    // Bare key like "s" with no modifier prefix — default to Command
+    if (parts.isBareKey) {
+        *outModifiers = NSEventModifierFlagCommand;
+    }
+
+    *outKeyEquivalent = keyEquivalentFromString(
+        [NSString stringWithUTF8String:parts.key.c_str()]);
+}
 
 NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
     NSMenu *menu = [[NSMenu alloc] init];
@@ -755,11 +842,17 @@ NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
                 menuItem.target = target;
             }
             if (accelerator) {
-                menuItem.keyEquivalent = accelerator;
                 if (modifierMask) {
+                    // Explicit modifierMask from JSON takes precedence
+                    menuItem.keyEquivalent = [accelerator lowercaseString];
                     menuItem.keyEquivalentModifierMask = [modifierMask unsignedIntegerValue];
                 } else {
-                    menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    // Parse Electron-style accelerator (e.g. "CommandOrControl+T")
+                    NSString *keyEq = nil;
+                    NSEventModifierFlags modFlags = 0;
+                    parseMenuAccelerator(accelerator, &keyEq, &modFlags);
+                    menuItem.keyEquivalent = keyEq;
+                    menuItem.keyEquivalentModifierMask = modFlags;
                 }
             }
             menuItem.enabled = enabled;
@@ -6153,34 +6246,12 @@ static GlobalShortcutCallback g_globalShortcutCallback = nullptr;
 static NSMutableDictionary<NSString*, id> *g_globalShortcuts = nil;
 static NSLock *g_globalShortcutsLock = nil;
 
-// Helper to parse modifier flags from accelerator string
+// Helper to parse modifier flags from accelerator string using the shared
+// cross-platform parser from accelerator_parser.h.
 static NSEventModifierFlags parseModifiers(NSString *accelerator, NSString **outKey) {
-    NSEventModifierFlags modifiers = 0;
-    NSMutableArray *parts = [[accelerator componentsSeparatedByString:@"+"] mutableCopy];
-
-    // The last part is the key
-    *outKey = [[parts lastObject] lowercaseString];
-    [parts removeLastObject];
-
-    for (NSString *part in parts) {
-        NSString *lowerPart = [part lowercaseString];
-        if ([lowerPart isEqualToString:@"command"] ||
-            [lowerPart isEqualToString:@"cmd"] ||
-            [lowerPart isEqualToString:@"commandorcontrol"] ||
-            [lowerPart isEqualToString:@"cmdorctrl"]) {
-            modifiers |= NSEventModifierFlagCommand;
-        } else if ([lowerPart isEqualToString:@"control"] ||
-                   [lowerPart isEqualToString:@"ctrl"]) {
-            modifiers |= NSEventModifierFlagControl;
-        } else if ([lowerPart isEqualToString:@"alt"] ||
-                   [lowerPart isEqualToString:@"option"]) {
-            modifiers |= NSEventModifierFlagOption;
-        } else if ([lowerPart isEqualToString:@"shift"]) {
-            modifiers |= NSEventModifierFlagShift;
-        }
-    }
-
-    return modifiers;
+    auto parts = electrobun::parseAccelerator([accelerator UTF8String]);
+    *outKey = [NSString stringWithUTF8String:parts.key.c_str()];
+    return modifierFlagsFromAccelerator(parts);
 }
 
 // Helper to get key code from key string

@@ -51,6 +51,7 @@
 #include "../shared/json_menu_parser.h"
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
+#include "../shared/accelerator_parser.h"
 
 using namespace electrobun;
 
@@ -7815,40 +7816,17 @@ static KeySym getKeySym(const std::string& key) {
     return NoSymbol;
 }
 
-// Helper to parse modifiers from accelerator string
+// Parse modifiers from accelerator string for X11 shortcuts using the
+// shared cross-platform parser. Returns X11 modifier mask.
 static unsigned int parseX11Modifiers(const std::string& accelerator, std::string& outKey) {
+    auto parts = electrobun::parseAccelerator(accelerator);
+    outKey = parts.key;
+
     unsigned int modifiers = 0;
-    std::vector<std::string> parts;
-
-    // Split by '+'
-    size_t start = 0, end;
-    while ((end = accelerator.find('+', start)) != std::string::npos) {
-        parts.push_back(accelerator.substr(start, end - start));
-        start = end + 1;
-    }
-    parts.push_back(accelerator.substr(start));
-
-    // Last part is the key
-    outKey = parts.back();
-    parts.pop_back();
-
-    for (const auto& part : parts) {
-        std::string lowerPart = part;
-        std::transform(lowerPart.begin(), lowerPart.end(), lowerPart.begin(), ::tolower);
-
-        if (lowerPart == "command" || lowerPart == "cmd" ||
-            lowerPart == "commandorcontrol" || lowerPart == "cmdorctrl" ||
-            lowerPart == "control" || lowerPart == "ctrl") {
-            modifiers |= ControlMask;
-        } else if (lowerPart == "alt" || lowerPart == "option") {
-            modifiers |= Mod1Mask;
-        } else if (lowerPart == "shift") {
-            modifiers |= ShiftMask;
-        } else if (lowerPart == "super" || lowerPart == "meta" || lowerPart == "win") {
-            modifiers |= Mod4Mask;
-        }
-    }
-
+    if (parts.commandOrControl || parts.command || parts.control) modifiers |= ControlMask;
+    if (parts.alt)                                                modifiers |= Mod1Mask;
+    if (parts.shift)                                              modifiers |= ShiftMask;
+    if (parts.super)                                              modifiers |= Mod4Mask;
     return modifiers;
 }
 
