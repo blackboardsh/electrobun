@@ -2721,10 +2721,20 @@ ${schemesXml}
 
 		const bundlesCEF = platformConfig?.bundleCEF ?? false;
 
-		const buildJsonContent = JSON.stringify({
+		const buildJsonObj: Record<string, unknown> = {
 			defaultRenderer: platformConfig?.defaultRenderer ?? "native",
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
-		});
+		};
+
+		// Include chromiumFlags only if the developer defined them
+		if (
+			platformConfig?.chromiumFlags &&
+			Object.keys(platformConfig.chromiumFlags).length > 0
+		) {
+			buildJsonObj.chromiumFlags = platformConfig.chromiumFlags;
+		}
+
+		const buildJsonContent = JSON.stringify(buildJsonObj);
 
 		await Bun.write(
 			join(appBundleFolderResourcesPath, "build.json"),

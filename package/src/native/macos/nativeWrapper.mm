@@ -57,6 +57,7 @@
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
+#include "../shared/chromium_flags.h"
 
 using namespace electrobun;
 
@@ -2663,6 +2664,8 @@ private:
 
 ElectrobunHandler* ElectrobunHandler::g_instance = nullptr;
 
+std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
+
 class ElectrobunApp : public CefApp,
                      public CefBrowserProcessHandler,
                      public CefRenderProcessHandler {
@@ -2688,6 +2691,8 @@ public:
         // Note: CEF transparency is handled via OSR (off-screen rendering) mode
         // which is enabled when transparent:true is set in the window options
 
+        // Apply user-defined chromium flags from build.json
+        electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);
     }
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {        
         registrar->AddCustomScheme("views", 
@@ -4036,6 +4041,13 @@ bool initializeCEF() {
     
     CefMainArgs main_args(argc, argv);
     g_app = new ElectrobunApp();
+
+    // Read user-defined chromium flags from build.json
+    NSString* buildJsonPath = [[NSBundle mainBundle] pathForResource:@"build" ofType:@"json"];
+    if (buildJsonPath) {
+        std::string buildJsonContent = electrobun::readFileToString([buildJsonPath UTF8String]);
+        g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
+    }
 
     CefSettings settings;
     settings.no_sandbox = true;

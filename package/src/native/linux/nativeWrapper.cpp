@@ -52,6 +52,7 @@
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
+#include "../shared/chromium_flags.h"
 
 using namespace electrobun;
 
@@ -318,6 +319,7 @@ static std::mutex g_webviewMapMutex;
 static std::map<int, std::string> g_preloadScripts;
 
 CefRefPtr<class ElectrobunApp> g_app;
+std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
 
 
 // Get the directory of the current executable
@@ -698,6 +700,9 @@ public:
         // Force X11 backend for window embedding compatibility
         command_line->AppendSwitchWithValue("ozone-platform", "x11");
         command_line->AppendSwitch("use-x11");
+
+        // Apply user-defined chromium flags from build.json
+        electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);
     }
     
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
@@ -1915,7 +1920,13 @@ bool initializeCEF() {
     CefMainArgs main_args(argc, argv);
     g_app = new ElectrobunApp();
 
-   
+    // Read user-defined chromium flags from build.json
+    std::string buildJsonPath = getExecutableDir() + "/../Resources/build.json";
+    std::string buildJsonContent = electrobun::readFileToString(buildJsonPath);
+    if (!buildJsonContent.empty()) {
+        g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
+    }
+
     CefSettings settings;
     settings.no_sandbox = true;
     settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows

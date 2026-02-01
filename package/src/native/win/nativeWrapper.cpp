@@ -54,6 +54,7 @@
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
+#include "../shared/chromium_flags.h"
 
 using namespace electrobun;
 
@@ -510,6 +511,7 @@ static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
 // CEF global variables
 static bool g_cef_initialized = false;
 static CefRefPtr<CefApp> g_cef_app;
+static std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
 static HANDLE g_job_object = nullptr;  // Job object to track all child processes
 
 // Simple CEF App class for minimal implementation
@@ -527,6 +529,9 @@ public:
         // Allow DevTools frontend (served over http) to connect to local ws://127.0.0.1
         command_line->AppendSwitchWithValue("remote-allow-origins", "*");
         command_line->AppendSwitch("allow-insecure-localhost");
+
+        // Apply user-defined chromium flags from build.json
+        electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);
     }
 
     void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
@@ -5268,6 +5273,13 @@ ELECTROBUN_EXPORT bool initCEF() {
     
     // Create the app
     g_cef_app = new ElectrobunCefApp();
+
+    // Read user-defined chromium flags from build.json
+    std::string buildJsonPath = std::string(exePath) + "\\..\\Resources\\build.json";
+    std::string buildJsonContent = electrobun::readFileToString(buildJsonPath);
+    if (!buildJsonContent.empty()) {
+        g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
+    }
 
     // CEF settings
     CefSettings settings;

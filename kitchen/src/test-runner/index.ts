@@ -448,6 +448,11 @@ function updateBuildConfigUI(config: { defaultRenderer: string; availableRendere
   if (availableRenderersEl) {
     availableRenderersEl.textContent = config.availableRenderers.join(', ');
   }
+
+  const userAgentEl = document.getElementById('user-agent-value');
+  if (userAgentEl) {
+    userAgentEl.textContent = navigator.userAgent;
+  }
 }
 
 // Update UI

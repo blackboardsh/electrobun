@@ -152,6 +152,21 @@ export interface ElectrobunConfig {
 			defaultRenderer?: "native" | "cef";
 
 			/**
+			 * Custom Chromium command-line flags to pass to CEF during initialization.
+			 * Keys are flag names without the "--" prefix.
+			 * Use `true` for switch-only flags, or a string for flags that take a value.
+			 *
+			 * @example
+			 * ```typescript
+			 * chromiumFlags: {
+			 *   "disable-gpu": true,                // --disable-gpu
+			 *   "remote-debugging-port": "9333",    // --remote-debugging-port=9333
+			 * }
+			 * ```
+			 */
+			chromiumFlags?: Record<string, string | true>;
+
+			/**
 			 * macOS entitlements for code signing
 			 */
 			entitlements?: Record<string, boolean | string>;
@@ -180,6 +195,21 @@ export interface ElectrobunConfig {
 			defaultRenderer?: "native" | "cef";
 
 			/**
+			 * Custom Chromium command-line flags to pass to CEF during initialization.
+			 * Keys are flag names without the "--" prefix.
+			 * Use `true` for switch-only flags, or a string for flags that take a value.
+			 *
+			 * @example
+			 * ```typescript
+			 * chromiumFlags: {
+			 *   "disable-gpu": true,                // --disable-gpu
+			 *   "remote-debugging-port": "9333",    // --remote-debugging-port=9333
+			 * }
+			 * ```
+			 */
+			chromiumFlags?: Record<string, string | true>;
+
+			/**
 			 * Path to application icon (.ico format)
 			 * Used for the installer/extractor wrapper, desktop shortcuts, and taskbar
 			 * Should include multiple sizes (16x16, 32x32, 48x48, 256x256) for best results
@@ -204,6 +234,21 @@ export interface ElectrobunConfig {
 			 * @default 'native'
 			 */
 			defaultRenderer?: "native" | "cef";
+
+			/**
+			 * Custom Chromium command-line flags to pass to CEF during initialization.
+			 * Keys are flag names without the "--" prefix.
+			 * Use `true` for switch-only flags, or a string for flags that take a value.
+			 *
+			 * @example
+			 * ```typescript
+			 * chromiumFlags: {
+			 *   "disable-gpu": true,                // --disable-gpu
+			 *   "remote-debugging-port": "9333",    // --remote-debugging-port=9333
+			 * }
+			 * ```
+			 */
+			chromiumFlags?: Record<string, string | true>;
 
 			/**
 			 * Path to application icon (PNG format recommended)

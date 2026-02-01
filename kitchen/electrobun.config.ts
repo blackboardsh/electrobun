@@ -114,14 +114,29 @@ export default {
 			notarize: true,
 			bundleCEF: true,
 			entitlements: {},
+			chromiumFlags: {
+				// "show-paint-rects": true,
+				// "show-composited-layer-borders": true,
+				"user-agent": "BarkusAurelius/1.0 (Macintosh; powered by bunnies)",
+			},
 		},
 		linux: {
 			bundleCEF: true,
 			icon: "icon.iconset/icon_256x256.png",
+			chromiumFlags: {
+				// "show-paint-rects": true,
+				// "show-composited-layer-borders": true,
+				"user-agent": "BarkusAurelius/1.0 (Macintosh; powered by bunnies)",
+			},
 		},
 		win: {
 			bundleCEF: true,
 			icon: "icon.iconset/icon_256x256.png",
+			chromiumFlags: {
+				// "show-paint-rects": true,
+				// "show-composited-layer-borders": true,
+				"user-agent": "BarkusAurelius/1.0 (Macintosh; powered by bunnies)",
+			},
 		},
 	},
 	scripts: {
