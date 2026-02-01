@@ -2661,20 +2661,24 @@ ${schemesXml}
 			}
 		}
 
-		// All the unique files are in the bundle now. Create an initial temporary tar file
-		// for hashing the contents
-		// tar the signed and notarized app bundle
-		// Use sanitized appFileName for tarball paths (URL-safe), but tar content uses actual bundle folder
-		const tmpTarPath = join(
-			buildFolder,
-			`${appFileName}${targetOS === "macos" ? ".app" : ""}-temp.tar`,
-		);
-		createTar(tmpTarPath, buildFolder, [basename(appBundleFolderPath)]);
-		const tmpTarBuffer = await Bun.file(tmpTarPath).arrayBuffer();
-		// Note: wyhash is the default in Bun.hash but that may change in the future
-		// so we're being explicit here.
-		const hash = Bun.hash.wyhash(tmpTarBuffer, 43770n).toString(36);
-		unlinkSync(tmpTarPath);
+		// Create a content hash for version.json. In non-dev builds this is used
+		// by the updater to detect changes. For dev builds we skip the tar and
+		// use a placeholder since the updater isn't relevant.
+		let hash: string;
+		if (buildEnvironment === "dev") {
+			hash = "dev";
+		} else {
+			const tmpTarPath = join(
+				buildFolder,
+				`${appFileName}${targetOS === "macos" ? ".app" : ""}-temp.tar`,
+			);
+			createTar(tmpTarPath, buildFolder, [basename(appBundleFolderPath)]);
+			const tmpTarBuffer = await Bun.file(tmpTarPath).arrayBuffer();
+			// Note: wyhash is the default in Bun.hash but that may change in the future
+			// so we're being explicit here.
+			hash = Bun.hash.wyhash(tmpTarBuffer, 43770n).toString(36);
+			unlinkSync(tmpTarPath);
+		}
 		// const bunVersion = execSync(`${bunBinarySourcePath} --version`).toString().trim();
 
 		// version.json inside the app bundle
