@@ -704,10 +704,9 @@ const defaultConfig = {
 		},
 		bun: {
 			entrypoint: "src/bun/index.ts",
-			external: [] as string[],
 		},
 		views: undefined as
-			| Record<string, { entrypoint: string; external?: string[] }>
+			| Record<string, { entrypoint: string; [key: string]: unknown }>
 			| undefined,
 		copy: undefined as Record<string, string> | undefined,
 	},
@@ -2420,10 +2419,11 @@ ${schemesXml}
 		// transpile developer's bun code
 		const bunDestFolder = join(appBundleAppCodePath, "bun");
 		// Build bun-javascript ts files
+		const { entrypoint: _bunEntrypoint, ...bunBuildOptions } = bunConfig;
 		const buildResult = await Bun.build({
+			...bunBuildOptions,
 			entrypoints: [bunSource],
 			outdir: bunDestFolder,
-			external: bunConfig.external || [],
 			// minify: true, // todo (yoav): add minify in canary and prod builds
 			target: "bun",
 		});
@@ -2462,10 +2462,11 @@ ${schemesXml}
 
 			// console.info(`bundling ${viewSource} to ${viewDestFolder} with config: `, viewConfig);
 
+			const { entrypoint: _viewEntrypoint, ...viewBuildOptions } = viewConfig;
 			const buildResult = await Bun.build({
+				...viewBuildOptions,
 				entrypoints: [viewSource],
 				outdir: viewDestFolder,
-				external: viewConfig.external || [],
 				target: "browser",
 			});
 

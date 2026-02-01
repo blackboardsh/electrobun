@@ -1,3 +1,5 @@
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
 	app: {
 		name: "Electrobun Kitchen Sink",
@@ -9,68 +11,53 @@ export default {
 		useAsar: true,
 		bun: {
 			entrypoint: "src/bun/index.ts",
-			external: [],
 		},
 		views: {
 			"test-runner": {
 				entrypoint: "src/test-runner/index.ts",
-				external: [],
+				minify: true,
 			},
 			"test-harness": {
 				entrypoint: "src/test-harness/index.ts",
-				external: [],
 			},
 			"playgrounds/file-dialog": {
 				entrypoint: "src/playgrounds/file-dialog/index.ts",
-				external: [],
 			},
 			"playgrounds/tray": {
 				entrypoint: "src/playgrounds/tray/index.ts",
-				external: [],
 			},
 			"playgrounds/shortcuts": {
 				entrypoint: "src/playgrounds/shortcuts/index.ts",
-				external: [],
 			},
 			"playgrounds/clipboard": {
 				entrypoint: "src/playgrounds/clipboard/index.ts",
-				external: [],
 			},
 			"playgrounds/host-message": {
 				entrypoint: "src/playgrounds/host-message/index.ts",
-				external: [],
 			},
 			"playgrounds/session": {
 				entrypoint: "src/playgrounds/session/index.ts",
-				external: [],
 			},
 			"playgrounds/draggable": {
 				entrypoint: "src/playgrounds/draggable/index.ts",
-				external: [],
 			},
 			"playgrounds/application-menu": {
 				entrypoint: "src/playgrounds/application-menu/index.ts",
-				external: [],
 			},
 			"playgrounds/context-menu": {
 				entrypoint: "src/playgrounds/context-menu/index.ts",
-				external: [],
 			},
 			"playgrounds/webviewtag": {
 				entrypoint: "src/playgrounds/webviewtag/index.ts",
-				external: [],
 			},
 			"playgrounds/window-events": {
 				entrypoint: "src/playgrounds/window-events/index.ts",
-				external: [],
 			},
 			"playgrounds/custom-titlebar": {
 				entrypoint: "src/playgrounds/custom-titlebar/index.ts",
-				external: [],
 			},
 			"playgrounds/transparent-window": {
 				entrypoint: "src/playgrounds/transparent-window/index.ts",
-				external: [],
 			},
 		},
 		copy: {
@@ -144,4 +131,4 @@ export default {
 		baseUrl: "https://electrobun-kitchen.blackboard.sh/",
 		generatePatch: true,
 	},
-};
+} satisfies ElectrobunConfig;

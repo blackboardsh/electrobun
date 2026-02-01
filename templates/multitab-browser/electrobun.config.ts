@@ -1,3 +1,5 @@
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
 	app: {
 		name: "multitab-browser",
@@ -7,12 +9,10 @@ export default {
 	build: {
 		bun: {
 			entrypoint: "src/bun/index.ts",
-			external: [],
 		},
 		views: {
 			mainview: {
 				entrypoint: "src/mainview/index.ts",
-				external: [],
 			},
 		},
 		copy: {
@@ -29,4 +29,4 @@ export default {
 			bundleCEF: true,
 		},
 	},
-};
+} satisfies ElectrobunConfig;

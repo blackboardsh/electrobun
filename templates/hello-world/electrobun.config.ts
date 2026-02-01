@@ -1,3 +1,5 @@
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
 	app: {
 		name: "hello-world",
@@ -8,7 +10,6 @@ export default {
 		views: {
 			mainview: {
 				entrypoint: "src/mainview/index.ts",
-				external: [],
 			},
 		},
 		copy: {
@@ -25,4 +26,4 @@ export default {
 			bundleCEF: false,
 		},
 	},
-};
+} satisfies ElectrobunConfig;

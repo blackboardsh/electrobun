@@ -1,3 +1,5 @@
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
 	app: {
 		name: "svelte-app",
@@ -20,4 +22,4 @@ export default {
 			bundleCEF: false,
 		},
 	},
-};
+} satisfies ElectrobunConfig;

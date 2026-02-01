@@ -3,6 +3,16 @@
  * Used in electrobun.config.ts files
  */
 
+/**
+ * Bun.build() options that can be passed through to the bundler.
+ * Excludes options that are controlled by Electrobun (entrypoints, outdir, target).
+ * See https://bun.sh/docs/bundler for full documentation.
+ */
+type BunBuildOptions = Omit<
+	Parameters<typeof Bun.build>[0],
+	"entrypoints" | "outdir" | "target"
+>;
+
 export interface ElectrobunConfig {
 	/**
 	 * Application metadata configuration
@@ -48,7 +58,9 @@ export interface ElectrobunConfig {
 	 */
 	build?: {
 		/**
-		 * Bun process build configuration
+		 * Bun process build configuration.
+		 * Accepts all Bun.build() options (plugins, sourcemap, minify, define, etc.)
+		 * in addition to the entrypoint. See https://bun.sh/docs/bundler
 		 */
 		bun?: {
 			/**
@@ -56,16 +68,12 @@ export interface ElectrobunConfig {
 			 * @default "src/bun/index.ts"
 			 */
 			entrypoint?: string;
-
-			/**
-			 * External modules to exclude from bundling
-			 * @default []
-			 */
-			external?: string[];
-		};
+		} & BunBuildOptions;
 
 		/**
-		 * Browser view build configurations
+		 * Browser view build configurations.
+		 * Each view accepts all Bun.build() options (plugins, sourcemap, minify, define, etc.)
+		 * in addition to the entrypoint. See https://bun.sh/docs/bundler
 		 */
 		views?: {
 			[viewName: string]: {
@@ -73,12 +81,7 @@ export interface ElectrobunConfig {
 				 * Entry point for this view's TypeScript code
 				 */
 				entrypoint: string;
-
-				/**
-				 * External modules to exclude from bundling for this view
-				 */
-				external?: string[];
-			};
+			} & BunBuildOptions;
 		};
 
 		/**
