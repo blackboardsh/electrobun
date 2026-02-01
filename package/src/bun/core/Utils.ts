@@ -111,10 +111,23 @@ export const showNotification = (options: NotificationOptions): void => {
 	ffi.request.showNotification({ title, body, subtitle, silent });
 };
 
+let isQuitting = false;
+
 export const quit = () => {
-	// Use native killApp for graceful shutdown
+	if (isQuitting) return;
+	isQuitting = true;
 	native.symbols.killApp();
 };
+
+// Override process.exit so that calling it triggers proper native cleanup
+const originalProcessExit = process.exit;
+process.exit = ((code?: number) => {
+	if (isQuitting) {
+		originalProcessExit(code);
+		return;
+	}
+	quit();
+}) as typeof process.exit;
 
 export const openFileDialog = async (
 	opts: {
@@ -280,7 +293,10 @@ const home = homedir();
 
 function getLinuxXdgUserDirs(): Record<string, string> {
 	try {
-		const content = readFileSync(join(home, ".config", "user-dirs.dirs"), "utf-8");
+		const content = readFileSync(
+			join(home, ".config", "user-dirs.dirs"),
+			"utf-8",
+		);
 		const dirs: Record<string, string> = {};
 		for (const line of content.split("\n")) {
 			const trimmed = line.trim();
@@ -368,7 +384,12 @@ function getConfigDir(): string {
 	}
 }
 
-function getUserDir(macName: string, winName: string, xdgKey: string, fallbackName: string): string {
+function getUserDir(
+	macName: string,
+	winName: string,
+	xdgKey: string,
+	fallbackName: string,
+): string {
 	switch (OS) {
 		case "macos":
 			return join(home, macName);
@@ -401,10 +422,20 @@ export const paths = {
 		return getLogsDir();
 	},
 	get documents(): string {
-		return getUserDir("Documents", "Documents", "XDG_DOCUMENTS_DIR", "Documents");
+		return getUserDir(
+			"Documents",
+			"Documents",
+			"XDG_DOCUMENTS_DIR",
+			"Documents",
+		);
 	},
 	get downloads(): string {
-		return getUserDir("Downloads", "Downloads", "XDG_DOWNLOAD_DIR", "Downloads");
+		return getUserDir(
+			"Downloads",
+			"Downloads",
+			"XDG_DOWNLOAD_DIR",
+			"Downloads",
+		);
 	},
 	get desktop(): string {
 		return getUserDir("Desktop", "Desktop", "XDG_DESKTOP_DIR", "Desktop");
