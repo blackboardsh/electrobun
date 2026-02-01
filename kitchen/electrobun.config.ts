@@ -4,7 +4,7 @@ export default {
 	app: {
 		name: "Electrobun Kitchen Sink",
 		identifier: "sh.blackboard.electrobun-kitchen",
-		version: "1.9.0-beta.0",
+		version: "1.9.0-beta.1",
 		urlSchemes: ["electrobun-playground"],
 	},
 	build: {
@@ -117,7 +117,7 @@ export default {
 			chromiumFlags: {
 				// "show-paint-rects": true,
 				// "show-composited-layer-borders": true,
-				// "user-agent": "BarkusAurelius/1.0 (Macintosh; powered by bunnies)",
+				"user-agent": "BarkusAurelius/1.0 (Macintosh; powered by bunnies)",
 			},
 		},
 		linux: {
