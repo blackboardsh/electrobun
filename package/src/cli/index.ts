@@ -1126,9 +1126,9 @@ async function createAppImage(
 			},
 		);
 
-	// Create AppRun script (the entry point)
-	const appBundleBasename = basename(resolvedAppBundlePath);
-	const appRunContent = `#!/bin/bash
+		// Create AppRun script (the entry point)
+		const appBundleBasename = basename(resolvedAppBundlePath);
+		const appRunContent = `#!/bin/bash
 # AppRun script for ${appFileName}
 HERE="$(dirname "$(readlink -f "\${0}")")"
 EXEC="\${HERE}/usr/bin/${appBundleBasename}/bin/launcher"
@@ -1144,9 +1144,9 @@ exec "\${EXEC}" "\$@"
 		writeFileSync(appRunPath, appRunContent);
 		execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
 
-	// Create .desktop file in AppDir root
-	// Always include Icon field since we always create an icon (either real or placeholder)
-	const desktopContent = `[Desktop Entry]
+		// Create .desktop file in AppDir root
+		// Always include Icon field since we always create an icon (either real or placeholder)
+		const desktopContent = `[Desktop Entry]
 Version=1.0
 Type=Application
 Name=${config.app.name}
@@ -1161,7 +1161,7 @@ Categories=Utility;
 		const desktopPath = join(appDirPath, `${appFileName}.desktop`);
 		writeFileSync(desktopPath, desktopContent);
 
-	// Copy icon if available, or create a minimal placeholder
+		// Copy icon if available, or create a minimal placeholder
 		if (
 			config.build.linux?.icon &&
 			existsSync(join(projectRoot, config.build.linux.icon))
@@ -1181,72 +1181,72 @@ Categories=Utility;
 			// Create a minimal 1x1 transparent PNG as placeholder to satisfy appimagetool
 			// This prevents "Icon entry not found" errors
 			const placeholderPNG = Buffer.from([
-			0x89,
-			0x50,
-			0x4e,
-			0x47,
-			0x0d,
-			0x0a,
-			0x1a,
-			0x0a, // PNG signature
-			0x00,
-			0x00,
-			0x00,
-			0x0d,
-			0x49,
-			0x48,
-			0x44,
-			0x52, // IHDR chunk
-			0x00,
-			0x00,
-			0x00,
-			0x01,
-			0x00,
-			0x00,
-			0x00,
-			0x01, // 1x1 dimensions
-			0x08,
-			0x06,
-			0x00,
-			0x00,
-			0x00,
-			0x1f,
-			0x15,
-			0xc4, // 8-bit RGBA
-			0x89,
-			0x00,
-			0x00,
-			0x00,
-			0x0b,
-			0x49,
-			0x44,
-			0x41, // IDAT chunk
-			0x54,
-			0x08,
-			0x99,
-			0x01,
-			0x00,
-			0x00,
-			0x05,
-			0x00,
-			0x01,
-			0x06,
-			0x7a,
-			0x81,
-			0x7c,
-			0x00,
-			0x00,
-			0x00, // IEND chunk
-			0x00,
-			0x49,
-			0x45,
-			0x4e,
-			0x44,
-			0xae,
-			0x42,
-			0x60,
-			0x82,
-		]);
+				0x89,
+				0x50,
+				0x4e,
+				0x47,
+				0x0d,
+				0x0a,
+				0x1a,
+				0x0a, // PNG signature
+				0x00,
+				0x00,
+				0x00,
+				0x0d,
+				0x49,
+				0x48,
+				0x44,
+				0x52, // IHDR chunk
+				0x00,
+				0x00,
+				0x00,
+				0x01,
+				0x00,
+				0x00,
+				0x00,
+				0x01, // 1x1 dimensions
+				0x08,
+				0x06,
+				0x00,
+				0x00,
+				0x00,
+				0x1f,
+				0x15,
+				0xc4, // 8-bit RGBA
+				0x89,
+				0x00,
+				0x00,
+				0x00,
+				0x0b,
+				0x49,
+				0x44,
+				0x41, // IDAT chunk
+				0x54,
+				0x08,
+				0x99,
+				0x01,
+				0x00,
+				0x00,
+				0x05,
+				0x00,
+				0x01,
+				0x06,
+				0x7a,
+				0x81,
+				0x7c,
+				0x00,
+				0x00,
+				0x00, // IEND chunk
+				0x00,
+				0x49,
+				0x45,
+				0x4e,
+				0x44,
+				0xae,
+				0x42,
+				0x60,
+				0x82,
+			]);
 
 			const iconDestPath = join(appDirPath, `${appFileName}.png`);
 			const dirIconPath = join(appDirPath, ".DirIcon");
@@ -1259,18 +1259,18 @@ Categories=Utility;
 			);
 		}
 
-	// Generate the AppImage using appimagetool
+		// Generate the AppImage using appimagetool
 		const appImagePath = join(buildFolder, `${appFileName}.AppImage`);
 		if (existsSync(appImagePath)) {
 			unlinkSync(appImagePath);
 		}
 
-	// console.log(`DEBUG: AppDir path: ${appDirPath}`);
-	// console.log(`DEBUG: Does AppDir exist? ${existsSync(appDirPath)}`);
+		// console.log(`DEBUG: AppDir path: ${appDirPath}`);
+		// console.log(`DEBUG: Does AppDir exist? ${existsSync(appDirPath)}`);
 		console.log(`Generating AppImage: ${appImagePath}`);
 		const appImageArch = ARCH === "arm64" ? "aarch64" : "x86_64";
 
-	// Use full path to appimagetool if not in PATH
+		// Use full path to appimagetool if not in PATH
 		let appimagetoolBase = "appimagetool";
 		try {
 			execSync("which appimagetool", { stdio: "ignore" });
@@ -1287,7 +1287,7 @@ Categories=Utility;
 			}
 		}
 
-	// Get the command with proper environment for vendored libfuse2
+		// Get the command with proper environment for vendored libfuse2
 		const appimagetoolCmd = getAppImageToolCommand().replace(
 			"appimagetool",
 			appimagetoolBase,
@@ -1311,14 +1311,14 @@ Categories=Utility;
 			throw error;
 		}
 
-	// Verify the AppImage was created
+		// Verify the AppImage was created
 		if (!existsSync(appImagePath)) {
 			throw new Error(
 				`AppImage was not created at expected path: ${appImagePath}`,
 			);
 		}
 
-	// Extract and copy icon for desktop shortcut
+		// Extract and copy icon for desktop shortcut
 		const iconExtractPath = join(buildFolder, `${appFileName}.png`);
 		if (
 			config.build.linux?.icon &&
@@ -1330,23 +1330,23 @@ Categories=Utility;
 		} else {
 			// Create placeholder icon for desktop shortcut
 			const placeholderPNG = Buffer.from([
-			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
-			0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-			0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
-			0x0b, 0x49, 0x44, 0x41, 0x54, 0x08, 0x99, 0x01, 0x00, 0x00, 0x05, 0x00,
-			0x01, 0x06, 0x7a, 0x81, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-			0x44, 0xae, 0x42, 0x60, 0x82,
-		]);
+				0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+				0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+				0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+				0x0b, 0x49, 0x44, 0x41, 0x54, 0x08, 0x99, 0x01, 0x00, 0x00, 0x05, 0x00,
+				0x01, 0x06, 0x7a, 0x81, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+				0x44, 0xae, 0x42, 0x60, 0x82,
+			]);
 			writeFileSync(iconExtractPath, new Uint8Array(placeholderPNG));
 			console.log(
 				`✓ Created placeholder icon for desktop shortcut: ${iconExtractPath}`,
 			);
 		}
 
-	// Create desktop shortcut alongside the AppImage
+		// Create desktop shortcut alongside the AppImage
 		const desktopShortcutPath = join(buildFolder, `${appFileName}.desktop`);
 
-	const desktopShortcutContent = `[Desktop Entry]
+		const desktopShortcutContent = `[Desktop Entry]
 Version=1.0
 Type=Application
 Name=${config.app.name}
@@ -2662,23 +2662,35 @@ ${schemesXml}
 		}
 
 		// Create a content hash for version.json. In non-dev builds this is used
-		// by the updater to detect changes. For dev builds we skip the tar and
-		// use a placeholder since the updater isn't relevant.
+		// by the updater to detect changes. For dev builds we skip it since
+		// the updater isn't relevant.
 		let hash: string;
 		if (buildEnvironment === "dev") {
 			hash = "dev";
 		} else {
-			const tmpTarPath = join(
-				buildFolder,
-				`${appFileName}${targetOS === "macos" ? ".app" : ""}-temp.tar`,
-			);
-			createTar(tmpTarPath, buildFolder, [basename(appBundleFolderPath)]);
-			const tmpTarBuffer = await Bun.file(tmpTarPath).arrayBuffer();
+			// Walk the app bundle and create an in-memory tar for hashing
+			// (no temp file on disk). This runs after ASAR packing so the
+			// hash reflects the final shipped bundle contents.
+			console.time("Generate Bundle hash");
+			const bundleFiles: Record<string, Blob> = {};
+			const bundleBase = basename(appBundleFolderPath);
+			const entries = readdirSync(appBundleFolderPath, {
+				recursive: true,
+			});
+			for (const entry of entries) {
+				const entryPath = entry.toString();
+				const fullPath = join(appBundleFolderPath, entryPath);
+				if (statSync(fullPath).isFile()) {
+					bundleFiles[join(bundleBase, entryPath)] = Bun.file(fullPath);
+				}
+			}
+			const archiveBytes = await new Bun.Archive(bundleFiles).bytes();
 			// Note: wyhash is the default in Bun.hash but that may change in the future
 			// so we're being explicit here.
-			hash = Bun.hash.wyhash(tmpTarBuffer, 43770n).toString(36);
-			unlinkSync(tmpTarPath);
+			hash = Bun.hash.wyhash(archiveBytes, 43770n).toString(36);
+			console.timeEnd("Generate Bundle hash");
 		}
+
 		// const bunVersion = execSync(`${bunBinarySourcePath} --version`).toString().trim();
 
 		// version.json inside the app bundle
@@ -2824,9 +2836,7 @@ ${schemesXml}
 					);
 
 					const appImageTarPath = join(buildFolder, `${appFileName}.tar`);
-					console.log(
-						`Creating tar of installer contents: ${appImageTarPath}`,
-					);
+					console.log(`Creating tar of installer contents: ${appImageTarPath}`);
 
 					// Tar the inner directory
 					createTar(appImageTarPath, tempDirPath, [appFileName]);
@@ -2969,15 +2979,15 @@ ${schemesXml}
 							const decompressResult = Bun.spawnSync(
 								[
 									zstdPath,
-								"decompress",
-								"-i",
-								prevVersionCompressedTarballPath,
-								"-o",
-								prevTarballPath,
-							],
-							{
-								cwd: buildFolder,
-								stdout: "inherit",
+									"decompress",
+									"-i",
+									prevVersionCompressedTarballPath,
+									"-o",
+									prevTarballPath,
+								],
+								{
+									cwd: buildFolder,
+									stdout: "inherit",
 									stderr: "inherit",
 								},
 							);
@@ -3213,7 +3223,10 @@ ${schemesXml}
 						)} -ov -format ULFO ${escapePathForTerminal(dmgCreationPath)}`,
 					);
 
-					if (buildEnvironment === "stable" && dmgCreationPath !== finalDmgPath) {
+					if (
+						buildEnvironment === "stable" &&
+						dmgCreationPath !== finalDmgPath
+					) {
 						renameSync(dmgCreationPath, finalDmgPath);
 					}
 					artifactsToUpload.push(finalDmgPath);
@@ -3324,7 +3337,10 @@ ${schemesXml}
 
 			artifactsToUpload.forEach((filePath) => {
 				const filename = basename(filePath);
-				const destination = join(artifactFolder, `${platformPrefix}-${filename}`);
+				const destination = join(
+					artifactFolder,
+					`${platformPrefix}-${filename}`,
+				);
 				try {
 					renameSync(filePath, destination);
 				} catch {
@@ -3866,57 +3882,57 @@ ${schemesXml}
 		const wrapperAppDirPath = join(buildFolder, `${wrapperName}.AppDir`);
 
 		// Clean up any existing AppDir
-	if (existsSync(wrapperAppDirPath)) {
-		rmSync(wrapperAppDirPath, { recursive: true, force: true });
-	}
-	mkdirSync(wrapperAppDirPath, { recursive: true });
+		if (existsSync(wrapperAppDirPath)) {
+			rmSync(wrapperAppDirPath, { recursive: true, force: true });
+		}
+		mkdirSync(wrapperAppDirPath, { recursive: true });
 
-	try {
-		// Create usr/bin directory structure
-		const usrBinPath = join(wrapperAppDirPath, "usr", "bin");
-		mkdirSync(usrBinPath, { recursive: true });
+		try {
+			// Create usr/bin directory structure
+			const usrBinPath = join(wrapperAppDirPath, "usr", "bin");
+			mkdirSync(usrBinPath, { recursive: true });
 
-		// Create self-extracting binary with embedded archive (following magic markers pattern)
-		const targetPaths = getPlatformPaths("linux", ARCH);
+			// Create self-extracting binary with embedded archive (following magic markers pattern)
+			const targetPaths = getPlatformPaths("linux", ARCH);
 
-		// Read the extractor binary
-		const extractorBinary = readFileSync(targetPaths.EXTRACTOR);
+			// Read the extractor binary
+			const extractorBinary = readFileSync(targetPaths.EXTRACTOR);
 
-		// Read the compressed archive
-		const compressedArchive = readFileSync(compressedTarPath);
+			// Read the compressed archive
+			const compressedArchive = readFileSync(compressedTarPath);
 
-		// Create metadata JSON
-		const metadata = {
-			identifier: config.app.identifier,
-			name: config.app.name,
-			channel: buildEnvironment,
-			hash: hash,
-		};
-		const metadataJson = JSON.stringify(metadata);
-		const metadataBuffer = Buffer.from(metadataJson, "utf8");
+			// Create metadata JSON
+			const metadata = {
+				identifier: config.app.identifier,
+				name: config.app.name,
+				channel: buildEnvironment,
+				hash: hash,
+			};
+			const metadataJson = JSON.stringify(metadata);
+			const metadataBuffer = Buffer.from(metadataJson, "utf8");
 
-		// Create marker buffers
-		const metadataMarker = Buffer.from("ELECTROBUN_METADATA_V1", "utf8");
-		const archiveMarker = Buffer.from("ELECTROBUN_ARCHIVE_V1", "utf8");
+			// Create marker buffers
+			const metadataMarker = Buffer.from("ELECTROBUN_METADATA_V1", "utf8");
+			const archiveMarker = Buffer.from("ELECTROBUN_ARCHIVE_V1", "utf8");
 
-		// Combine extractor + metadata marker + metadata + archive marker + archive
-		const combinedBuffer = Buffer.concat([
-			new Uint8Array(extractorBinary),
-			new Uint8Array(metadataMarker),
-			new Uint8Array(metadataBuffer),
-			new Uint8Array(archiveMarker),
-			new Uint8Array(compressedArchive),
-		]);
+			// Combine extractor + metadata marker + metadata + archive marker + archive
+			const combinedBuffer = Buffer.concat([
+				new Uint8Array(extractorBinary),
+				new Uint8Array(metadataMarker),
+				new Uint8Array(metadataBuffer),
+				new Uint8Array(archiveMarker),
+				new Uint8Array(compressedArchive),
+			]);
 
-		// Write the self-extracting binary to AppImage/usr/bin/
-		const wrapperExtractorPath = join(usrBinPath, wrapperName);
-		writeFileSync(wrapperExtractorPath, new Uint8Array(combinedBuffer), {
-			mode: 0o755,
-		});
-		execSync(`chmod +x ${escapePathForTerminal(wrapperExtractorPath)}`);
+			// Write the self-extracting binary to AppImage/usr/bin/
+			const wrapperExtractorPath = join(usrBinPath, wrapperName);
+			writeFileSync(wrapperExtractorPath, new Uint8Array(combinedBuffer), {
+				mode: 0o755,
+			});
+			execSync(`chmod +x ${escapePathForTerminal(wrapperExtractorPath)}`);
 
-		// Create AppRun script
-		const appRunContent = `#!/bin/bash
+			// Create AppRun script
+			const appRunContent = `#!/bin/bash
 # AppRun script for ${wrapperName}
 HERE="$(dirname "$(readlink -f "\${0}")")"
 EXEC="\${HERE}/usr/bin/${wrapperName}"
@@ -3925,17 +3941,17 @@ EXEC="\${HERE}/usr/bin/${wrapperName}"
 exec "\${EXEC}" "\$@"
 `;
 
-		const appRunPath = join(wrapperAppDirPath, "AppRun");
-		writeFileSync(appRunPath, appRunContent);
-		execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
+			const appRunPath = join(wrapperAppDirPath, "AppRun");
+			writeFileSync(appRunPath, appRunContent);
+			execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
 
-		// Check if icon will be available
-		const hasWrapperIcon =
-			config.build.linux?.icon &&
-			existsSync(join(projectRoot, config.build.linux.icon));
+			// Check if icon will be available
+			const hasWrapperIcon =
+				config.build.linux?.icon &&
+				existsSync(join(projectRoot, config.build.linux.icon));
 
-		// Create desktop file
-		const desktopContent = `[Desktop Entry]
+			// Create desktop file
+			const desktopContent = `[Desktop Entry]
 Version=1.0
 Type=Application
 Name=${config.app.name} Installer
@@ -3945,88 +3961,88 @@ Terminal=false
 Categories=Utility;
 `;
 
-		const desktopPath = join(wrapperAppDirPath, `${wrapperName}.desktop`);
-		writeFileSync(desktopPath, desktopContent);
+			const desktopPath = join(wrapperAppDirPath, `${wrapperName}.desktop`);
+			writeFileSync(desktopPath, desktopContent);
 
-		// Copy icon if available
-		if (hasWrapperIcon) {
-			const iconSourcePath = join(projectRoot, config.build.linux.icon);
-			const iconDestPath = join(wrapperAppDirPath, `${wrapperName}.png`);
-			const dirIconPath = join(wrapperAppDirPath, ".DirIcon");
+			// Copy icon if available
+			if (hasWrapperIcon) {
+				const iconSourcePath = join(projectRoot, config.build.linux.icon);
+				const iconDestPath = join(wrapperAppDirPath, `${wrapperName}.png`);
+				const dirIconPath = join(wrapperAppDirPath, ".DirIcon");
 
-			cpSync(iconSourcePath, iconDestPath, { dereference: true });
-			cpSync(iconSourcePath, dirIconPath, { dereference: true });
+				cpSync(iconSourcePath, iconDestPath, { dereference: true });
+				cpSync(iconSourcePath, dirIconPath, { dereference: true });
 
-			console.log(
-				`Copied icon for wrapper AppImage: ${iconSourcePath} -> ${iconDestPath}`,
-			);
-		}
+				console.log(
+					`Copied icon for wrapper AppImage: ${iconSourcePath} -> ${iconDestPath}`,
+				);
+			}
 
-		// Ensure appimagetool is available
-		await ensureAppImageTooling();
+			// Ensure appimagetool is available
+			await ensureAppImageTooling();
 
-		// Generate the wrapper AppImage
-		if (existsSync(wrapperAppImagePath)) {
-			unlinkSync(wrapperAppImagePath);
-		}
+			// Generate the wrapper AppImage
+			if (existsSync(wrapperAppImagePath)) {
+				unlinkSync(wrapperAppImagePath);
+			}
 
-		console.log(`Creating wrapper AppImage: ${wrapperAppImagePath}`);
-		const appImageArch = ARCH === "arm64" ? "aarch64" : "x86_64";
+			console.log(`Creating wrapper AppImage: ${wrapperAppImagePath}`);
+			const appImageArch = ARCH === "arm64" ? "aarch64" : "x86_64";
 
-		// Use appimagetool to create the wrapper AppImage
-		let appimagetoolBase = "appimagetool";
-		try {
-			execSync("which appimagetool", { stdio: "ignore" });
-		} catch {
-			const localBinPath = join(
-				process.env["HOME"] || "",
-				".local",
-				"bin",
+			// Use appimagetool to create the wrapper AppImage
+			let appimagetoolBase = "appimagetool";
+			try {
+				execSync("which appimagetool", { stdio: "ignore" });
+			} catch {
+				const localBinPath = join(
+					process.env["HOME"] || "",
+					".local",
+					"bin",
+					"appimagetool",
+				);
+				if (existsSync(localBinPath)) {
+					appimagetoolBase = localBinPath;
+				}
+			}
+
+			// Get the command with proper environment for vendored libfuse2
+			const appimagetoolCmd = getAppImageToolCommand().replace(
 				"appimagetool",
+				appimagetoolBase,
 			);
-			if (existsSync(localBinPath)) {
-				appimagetoolBase = localBinPath;
+
+			try {
+				execSync(
+					`ARCH=${appImageArch} ${appimagetoolCmd} --no-appstream ${escapePathForTerminal(wrapperAppDirPath)} ${escapePathForTerminal(wrapperAppImagePath)}`,
+					{
+						stdio: "inherit",
+						env: { ...process.env, ARCH: appImageArch },
+					},
+				);
+			} catch (error) {
+				console.error("Failed to create wrapper AppImage:", error);
+				throw error;
+			}
+
+			// Verify the wrapper AppImage was created
+			if (!existsSync(wrapperAppImagePath)) {
+				throw new Error(
+					`Wrapper AppImage was not created at expected path: ${wrapperAppImagePath}`,
+				);
+			}
+
+			const stats = statSync(wrapperAppImagePath);
+			console.log(
+				`✓ Linux wrapper AppImage created: ${wrapperAppImagePath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`,
+			);
+
+			return wrapperAppImagePath;
+		} finally {
+			if (existsSync(wrapperAppDirPath)) {
+				rmSync(wrapperAppDirPath, { recursive: true, force: true });
 			}
 		}
-
-		// Get the command with proper environment for vendored libfuse2
-		const appimagetoolCmd = getAppImageToolCommand().replace(
-			"appimagetool",
-			appimagetoolBase,
-		);
-
-		try {
-			execSync(
-				`ARCH=${appImageArch} ${appimagetoolCmd} --no-appstream ${escapePathForTerminal(wrapperAppDirPath)} ${escapePathForTerminal(wrapperAppImagePath)}`,
-				{
-					stdio: "inherit",
-					env: { ...process.env, ARCH: appImageArch },
-				},
-			);
-		} catch (error) {
-			console.error("Failed to create wrapper AppImage:", error);
-			throw error;
-		}
-
-		// Verify the wrapper AppImage was created
-		if (!existsSync(wrapperAppImagePath)) {
-			throw new Error(
-				`Wrapper AppImage was not created at expected path: ${wrapperAppImagePath}`,
-			);
-		}
-
-		const stats = statSync(wrapperAppImagePath);
-		console.log(
-			`✓ Linux wrapper AppImage created: ${wrapperAppImagePath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`,
-		);
-
-		return wrapperAppImagePath;
-	} finally {
-		if (existsSync(wrapperAppDirPath)) {
-			rmSync(wrapperAppDirPath, { recursive: true, force: true });
-		}
 	}
-}
 
 	function codesignAppBundle(
 		appBundleOrDmgPath: string,
