@@ -261,6 +261,21 @@ export interface ElectrobunConfig {
 	};
 
 	/**
+	 * Runtime behaviour configuration.
+	 * These values are copied into build.json and available to the Bun process at runtime.
+	 * You can add arbitrary keys here and access them via BuildConfig.
+	 */
+	runtime?: {
+		/**
+		 * Quit the application when the last BrowserWindow is closed.
+		 * @default true
+		 */
+		exitOnLastWindowClosed?: boolean;
+
+		[key: string]: unknown;
+	};
+
+	/**
 	 * Build scripts configuration
 	 */
 	scripts?: {

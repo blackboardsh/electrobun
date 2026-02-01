@@ -2,12 +2,12 @@
 // Run with: cd /electrobun/package && bun dev
 
 import Electrobun, {
-  BrowserWindow,
-  BrowserView,
-  ApplicationMenu,
-  Utils,
-  BuildConfig,
-  Updater,
+	BrowserWindow,
+	BrowserView,
+	ApplicationMenu,
+	Utils,
+	BuildConfig,
+	Updater,
 } from "electrobun/bun";
 import { executor } from "../test-framework/executor";
 import { allTests } from "../tests";
@@ -30,79 +30,81 @@ console.log("\n");
 const buildConfig = await BuildConfig.get();
 console.log("Build Configuration:");
 console.log(`   Default Renderer: ${buildConfig.defaultRenderer}`);
-console.log(`   Available Renderers: ${buildConfig.availableRenderers.join(', ')}`);
+console.log(
+	`   Available Renderers: ${buildConfig.availableRenderers.join(", ")}`,
+);
 console.log("");
 
 // Update state
 const localInfo = await Updater.getLocallocalInfo();
 let updateState: UpdateInfo = {
-  status: 'checking',
-  currentVersion: localInfo.version,
+	status: "checking",
+	currentVersion: localInfo.version,
 };
 
 console.log(`Current version: ${localInfo.version} (${localInfo.channel})`);
 
 // Register for granular update status changes
 Updater.onStatusChange((entry) => {
-  testRunnerWindow?.webview.rpc?.send.updateStatusEntry(entry);
+	testRunnerWindow?.webview.rpc?.send.updateStatusEntry(entry);
 });
 
 // Check for updates
 const checkForUpdate = async () => {
-  try {
-    updateState.status = 'checking';
-    broadcastUpdateStatus();
+	try {
+		updateState.status = "checking";
+		broadcastUpdateStatus();
 
-    const updateInfo = await Updater.checkForUpdate();
+		const updateInfo = await Updater.checkForUpdate();
 
-    if (updateInfo.error) {
-      console.log(`Update check error: ${updateInfo.error}`);
-      updateState.status = 'error';
-      updateState.error = updateInfo.error;
-      broadcastUpdateStatus();
-      return;
-    }
+		if (updateInfo.error) {
+			console.log(`Update check error: ${updateInfo.error}`);
+			updateState.status = "error";
+			updateState.error = updateInfo.error;
+			broadcastUpdateStatus();
+			return;
+		}
 
-    if (updateInfo.updateAvailable) {
-      console.log(`Update available: ${updateInfo.version}`);
-      updateState.status = 'update-available';
-      updateState.newVersion = updateInfo.version;
-      broadcastUpdateStatus();
+		if (updateInfo.updateAvailable) {
+			console.log(`Update available: ${updateInfo.version}`);
+			updateState.status = "update-available";
+			updateState.newVersion = updateInfo.version;
+			broadcastUpdateStatus();
 
-      // Start downloading
-      updateState.status = 'downloading';
-      broadcastUpdateStatus();
+			// Start downloading
+			updateState.status = "downloading";
+			broadcastUpdateStatus();
 
-      await Updater.downloadUpdate();
+			await Updater.downloadUpdate();
 
-      if (Updater.updateInfo().updateReady) {
-        console.log("Update downloaded and ready to install");
-        updateState.status = 'update-ready';
-        broadcastUpdateStatus();
-      } else {
-        console.log("Update download failed");
-        updateState.status = 'error';
-        updateState.error = 'Download failed';
-        broadcastUpdateStatus();
-      }
-    } else {
-      console.log("No update available");
-      updateState.status = 'no-update';
-      broadcastUpdateStatus();
-    }
-  } catch (err: any) {
-    console.log(`Update check failed: ${err.message}`);
-    updateState.status = 'error';
-    updateState.error = err.message;
-    broadcastUpdateStatus();
-  }
+			if (Updater.updateInfo().updateReady) {
+				console.log("Update downloaded and ready to install");
+				updateState.status = "update-ready";
+				broadcastUpdateStatus();
+			} else {
+				console.log("Update download failed");
+				updateState.status = "error";
+				updateState.error = "Download failed";
+				broadcastUpdateStatus();
+			}
+		} else {
+			console.log("No update available");
+			updateState.status = "no-update";
+			broadcastUpdateStatus();
+		}
+	} catch (err: any) {
+		console.log(`Update check failed: ${err.message}`);
+		updateState.status = "error";
+		updateState.error = err.message;
+		broadcastUpdateStatus();
+	}
 };
 
 // Broadcast update status to all windows
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let testRunnerWindow: BrowserWindow<any> | null = null;
 const broadcastUpdateStatus = () => {
-  testRunnerWindow?.webview.rpc?.send.updateStatus(updateState);
+	testRunnerWindow?.webview.rpc?.send.updateStatus(updateState);
 };
 
 // Register all tests
@@ -118,124 +120,122 @@ console.log("");
 
 // Set up the application menu
 ApplicationMenu.setApplicationMenu([
-  {
-    submenu: [
-      { label: "Quit", role: "quit", accelerator: "q" },
-    ],
-  },
-  {
-    label: "Edit",
-    submenu: [
-      { role: "undo" },
-      { role: "redo" },
-      { type: "separator" },
-      { role: "cut" },
-      { role: "copy" },
-      { role: "paste" },
-      { role: "selectAll" },
-    ],
-  },
-  {
-    label: "Tests",
-    submenu: [
-      {
-        label: "Run All Automated",
-        action: "run-all-automated",
-        accelerator: "CommandOrControl+R",
-      },
-      {
-        label: "Run Interactive Tests",
-        action: "run-interactive",
-        accelerator: "CommandOrControl+Shift+R",
-      },
-    ],
-  },
+	{
+		submenu: [{ label: "Quit", role: "quit", accelerator: "q" }],
+	},
+	{
+		label: "Edit",
+		submenu: [
+			{ role: "undo" },
+			{ role: "redo" },
+			{ type: "separator" },
+			{ role: "cut" },
+			{ role: "copy" },
+			{ role: "paste" },
+			{ role: "selectAll" },
+		],
+	},
+	{
+		label: "Tests",
+		submenu: [
+			{
+				label: "Run All Automated",
+				action: "run-all-automated",
+				accelerator: "CommandOrControl+R",
+			},
+			{
+				label: "Run Interactive Tests",
+				action: "run-interactive",
+				accelerator: "CommandOrControl+Shift+R",
+			},
+		],
+	},
 ]);
 
 Electrobun.events.on("application-menu-clicked", async (e) => {
-  if (e.data.action === "run-all-automated") {
-    await executor.runAllAutomated();
-  } else if (e.data.action === "run-interactive") {
-    await executor.runInteractiveTests();
-  }
+	if (e.data.action === "run-all-automated") {
+		await executor.runAllAutomated();
+	} else if (e.data.action === "run-interactive") {
+		await executor.runInteractiveTests();
+	}
 });
 
 // Create the RPC for the test runner window
 const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
-  maxRequestTime: 300000, // 5 minutes for long test runs
-  handlers: {
-    requests: {
-      getTests: () => {
-        return executor.getTests().map((t) => ({
-          id: t.id,
-          name: t.name,
-          category: t.category,
-          description: t.description,
-          interactive: t.interactive,
-        }));
-      },
+	maxRequestTime: 300000, // 5 minutes for long test runs
+	handlers: {
+		requests: {
+			getTests: () => {
+				return executor.getTests().map((t) => ({
+					id: t.id,
+					name: t.name,
+					category: t.category,
+					description: t.description,
+					interactive: t.interactive,
+				}));
+			},
 
-      runTest: async ({ testId }) => {
-        const test = executor.getTests().find((t) => t.id === testId);
-        if (!test) {
-          throw new Error(`Test not found: ${testId}`);
-        }
-        return await executor.runTest(test);
-      },
+			runTest: async ({ testId }) => {
+				const test = executor.getTests().find((t) => t.id === testId);
+				if (!test) {
+					throw new Error(`Test not found: ${testId}`);
+				}
+				return await executor.runTest(test);
+			},
 
-      runAllAutomated: async () => {
-        return await executor.runAllAutomated();
-      },
+			runAllAutomated: async () => {
+				return await executor.runAllAutomated();
+			},
 
-      runInteractiveTests: async () => {
-        return await executor.runInteractiveTests();
-      },
+			runInteractiveTests: async () => {
+				return await executor.runInteractiveTests();
+			},
 
-      submitInteractiveResult: ({ testId, passed, notes }) => {
-        executor.submitInteractiveResult(testId, passed, notes);
-      },
+			submitInteractiveResult: ({ testId, passed, notes }) => {
+				executor.submitInteractiveResult(testId, passed, notes);
+			},
 
-      submitReady: ({ testId }) => {
-        executor.submitReady(testId);
-      },
+			submitReady: ({ testId }) => {
+				executor.submitReady(testId);
+			},
 
-      submitVerification: ({ testId, action, notes }) => {
-        executor.submitVerification(testId, action, notes);
-      },
+			submitVerification: ({ testId, action, notes }) => {
+				executor.submitVerification(testId, action, notes);
+			},
 
-      applyUpdate: () => {
-        console.log("Applying update...");
-        Updater.applyUpdate();
-      },
+			applyUpdate: () => {
+				console.log("Applying update...");
+				Updater.applyUpdate();
+			},
 
-      getUpdateStatusHistory: () => {
-        return Updater.getStatusHistory();
-      },
+			getUpdateStatusHistory: () => {
+				return Updater.getStatusHistory();
+			},
 
-      clearUpdateStatusHistory: () => {
-        Updater.clearStatusHistory();
-      },
-    },
-    messages: {
-      logToBun: ({ msg }) => {
-        console.log("[UI]", msg);
-      },
-    },
-  },
+			clearUpdateStatusHistory: () => {
+				Updater.clearStatusHistory();
+			},
+		},
+		messages: {
+			logToBun: ({ msg }) => {
+				console.log("[UI]", msg);
+			},
+		},
+	},
 });
 
 // Create the test runner window
 testRunnerWindow = new BrowserWindow({
-  title: "Electrobun Integration Tests",
-  url: "views://test-runner/index.html",
-  renderer: "cef",
-  frame: {
-    width: 1000,
-    height: 800,
-    x: 100,
-    y: 100,
-  },
-  rpc: testRunnerRPC,
+	title: "Electrobun Integration Tests",
+	url: "views://test-runner/index.html",
+	renderer: "cef",
+	frame: {
+		width: 1000,
+		height: 800,
+		x: 100,
+		y: 100,
+	},
+	rpc: testRunnerRPC,
 });
 
 // Keep test runner on top so results are visible while tests run
@@ -243,12 +243,12 @@ testRunnerWindow.setAlwaysOnTop(true);
 
 // Send build config and update status to the UI when ready
 testRunnerWindow.webview.on("dom-ready", () => {
-  testRunnerWindow!.webview.rpc?.send.buildConfig({
-    defaultRenderer: buildConfig.defaultRenderer,
-    availableRenderers: buildConfig.availableRenderers,
-  });
-  // Send current update status
-  testRunnerWindow!.webview.rpc?.send.updateStatus(updateState);
+	testRunnerWindow!.webview.rpc?.send.buildConfig({
+		defaultRenderer: buildConfig.defaultRenderer,
+		availableRenderers: buildConfig.availableRenderers,
+	});
+	// Send current update status
+	testRunnerWindow!.webview.rpc?.send.updateStatus(updateState);
 });
 
 // Check for updates on startup
@@ -256,85 +256,87 @@ checkForUpdate();
 
 // Forward test events to the UI
 executor.onEvent((event) => {
-  switch (event.type) {
-    case "test-started":
-      testRunnerWindow.webview.rpc?.send.testStarted({
-        testId: event.testId!,
-        name: event.name!,
-      });
-      break;
+	switch (event.type) {
+		case "test-started":
+			testRunnerWindow.webview.rpc?.send.testStarted({
+				testId: event.testId!,
+				name: event.name!,
+			});
+			break;
 
-    case "test-completed":
-      testRunnerWindow.webview.rpc?.send.testCompleted({
-        testId: event.testId!,
-        result: event.result!,
-      });
-      break;
+		case "test-completed":
+			testRunnerWindow.webview.rpc?.send.testCompleted({
+				testId: event.testId!,
+				result: event.result!,
+			});
+			break;
 
-    case "test-log":
-      testRunnerWindow.webview.rpc?.send.testLog({
-        testId: event.testId!,
-        message: event.message!,
-      });
-      break;
+		case "test-log":
+			testRunnerWindow.webview.rpc?.send.testLog({
+				testId: event.testId!,
+				message: event.message!,
+			});
+			break;
 
-    case "all-completed":
-      testRunnerWindow.webview.rpc?.send.allCompleted({
-        results: event.results!,
-      });
-      break;
+		case "all-completed":
+			testRunnerWindow.webview.rpc?.send.allCompleted({
+				results: event.results!,
+			});
+			break;
 
-    case "interactive-waiting":
-      testRunnerWindow.webview.rpc?.send.interactiveWaiting({
-        testId: event.testId!,
-        instructions: event.instructions!,
-      });
-      break;
+		case "interactive-waiting":
+			testRunnerWindow.webview.rpc?.send.interactiveWaiting({
+				testId: event.testId!,
+				instructions: event.instructions!,
+			});
+			break;
 
-    case "interactive-ready":
-      testRunnerWindow.webview.rpc?.send.interactiveReady({
-        testId: event.testId!,
-        instructions: event.instructions!,
-      });
-      break;
+		case "interactive-ready":
+			testRunnerWindow.webview.rpc?.send.interactiveReady({
+				testId: event.testId!,
+				instructions: event.instructions!,
+			});
+			break;
 
-    case "interactive-verify":
-      testRunnerWindow.webview.rpc?.send.interactiveVerify({
-        testId: event.testId!,
-      });
-      break;
-  }
+		case "interactive-verify":
+			testRunnerWindow.webview.rpc?.send.interactiveVerify({
+				testId: event.testId!,
+			});
+			break;
+	}
 });
 
 // Handle window close
-testRunnerWindow.on("close", () => {
-  console.log("\nTest runner closed. Exiting...\n");
-  Utils.quit();
-});
+// testRunnerWindow.on("close", () => {
+//   console.log("\nTest runner closed. Exiting...\n");
+//   Utils.quit();
+// });
 
 // Print instructions
 console.log("Test Runner window opened.");
-console.log("Press Cmd+R to run all automated tests, or use the buttons in the UI.\n");
+console.log(
+	"Press Cmd+R to run all automated tests, or use the buttons in the UI.\n",
+);
 
 // Auto-run tests if AUTO_RUN environment variable is set
 // Usage: AUTO_RUN=1 electrobun dev
-console.log(`DEBUG: AUTO_RUN env var = "${process.env['AUTO_RUN']}"`);
-const autoRun = !!process.env['AUTO_RUN'];
+console.log(`DEBUG: AUTO_RUN env var = "${process.env["AUTO_RUN"]}"`);
+const autoRun = !!process.env["AUTO_RUN"];
 console.log(`DEBUG: autoRun = ${autoRun}`);
 if (autoRun) {
-  console.log("Auto-running automated tests in 3 seconds...\n");
-  setTimeout(async () => {
-    const results = await executor.runAllAutomated();
-    
-    // Exit with appropriate code when auto-run is complete
-    const failedCount = results.filter(r => r.status === 'failed').length;
-    const exitCode = failedCount > 0 ? 1 : 0;
-    console.log(`\nAuto-run complete. Exiting with code ${exitCode}...`);
-    
-    // Give a moment for final logs to flush
-    setTimeout(() => {
-      // Use Utils.quit() for graceful shutdown with proper CEF cleanup
-      Utils.quit();
-    }, 500);
-  }, 3000);
+	console.log("Auto-running automated tests in 3 seconds...\n");
+	setTimeout(async () => {
+		const results = await executor.runAllAutomated();
+
+		// Exit with appropriate code when auto-run is complete
+		const failedCount = results.filter((r) => r.status === "failed").length;
+		const exitCode = failedCount > 0 ? 1 : 0;
+		console.log(`\nAuto-run complete. Exiting with code ${exitCode}...`);
+
+		// Give a moment for final logs to flush
+		setTimeout(() => {
+			// Use Utils.quit() for graceful shutdown with proper CEF cleanup
+			Utils.quit();
+		}, 500);
+	}, 3000);
 }

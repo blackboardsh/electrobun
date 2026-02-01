@@ -7,6 +7,9 @@ export default {
 		version: "1.9.0-beta.2",
 		urlSchemes: ["electrobun-playground"],
 	},
+	runtime: {
+		// exitOnLastWindowClosed: false,
+	},
 	build: {
 		useAsar: true,
 		bun: {

@@ -3,6 +3,7 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type Pointer } from "bun:ffi";
 import { BuildConfig } from "./BuildConfig";
+import { quit } from "./Utils";
 
 const buildConfig = await BuildConfig.get();
 
@@ -52,6 +53,18 @@ const defaultOptions: WindowOptionsType = {
 export const BrowserWindowMap: {
 	[id: number]: BrowserWindow<RPCWithTransport>;
 } = {};
+
+// Clean up the window map when a window closes and optionally quit the app
+electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
+	delete BrowserWindowMap[event.data.id];
+
+	const exitOnLastWindowClosed =
+		buildConfig.runtime?.exitOnLastWindowClosed ?? true;
+
+	if (exitOnLastWindowClosed && Object.keys(BrowserWindowMap).length === 0) {
+		quit();
+	}
+});
 
 interface RPCWithTransport {
 	setTransport: (transport: {

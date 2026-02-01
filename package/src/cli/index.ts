@@ -2724,6 +2724,7 @@ ${schemesXml}
 		const buildJsonObj: Record<string, unknown> = {
 			defaultRenderer: platformConfig?.defaultRenderer ?? "native",
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
+			runtime: config.runtime ?? {},
 		};
 
 		// Include chromiumFlags only if the developer defined them
