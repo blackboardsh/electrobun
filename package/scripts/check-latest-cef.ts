@@ -17,7 +17,7 @@ import { appendFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
 
 const CEF_INDEX_URL =
-	"https://cef-builds.spotifycdn.com/linux64_builds_index.json";
+	"https://cef-builds.spotifycdn.com/index.json";
 
 interface StableVersion {
 	cef_version: string;
