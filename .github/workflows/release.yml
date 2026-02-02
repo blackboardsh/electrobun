@@ -121,7 +121,7 @@ jobs:
         id: cef-version
         shell: bash
         run: |
-          CEF_VER=$(grep "const CEF_VERSION " package/build.ts | head -1 | sed "s/.*\`\(.*\)\`.*/\1/" | tr '+' '-')
+          CEF_VER=$(grep "const CEF_VERSION " package/src/shared/cef-version.ts | head -1 | sed "s/.*\`\(.*\)\`.*/\1/" | tr '+' '-')
           echo "version=$CEF_VER" >> $GITHUB_OUTPUT
 
       - name: Cache CEF vendor directory
