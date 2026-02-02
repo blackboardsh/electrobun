@@ -1350,6 +1350,7 @@ async function vendorCEF() {
 	} else if (OS === "linux") {
 		if (!existsSync(join(process.cwd(), "vendors", "cef"))) {
 			const cefArch = ARCH === "arm64" ? "linuxarm64" : "linux64";
+			console.log(`Downloading CEF for Linux ${ARCH}...`);
 			await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_LINUX}%2Bchromium-${CHROMIUM_VERSION_LINUX}_${cefArch}_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;
 			// Write version stamp so future builds can detect staleness
 			writeFileSync(
