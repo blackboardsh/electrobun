@@ -52,8 +52,12 @@ async function getLatestStableCEFVersion(): Promise<StableVersion> {
 		throw new Error("No stable CEF version found in builds index");
 	}
 
+	// The CDN's cef_version includes "+chromium-..." suffix, but cef-version.ts
+	// stores just the CEF part (e.g. "144.0.11+ge135be2").
+	const cefOnly = stable.cef_version.replace(/\+chromium-.*$/, "");
+
 	return {
-		cef_version: stable.cef_version,
+		cef_version: cefOnly,
 		chromium_version: stable.chromium_version,
 	};
 }

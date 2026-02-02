@@ -1,64 +1,65 @@
 {
-  "name": "electrobun",
-  "version": "1.9.0-beta.3",
-  "description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
-  "license": "MIT",
-  "author": "Blackboard Technologies Inc.",
-  "keywords": [
-    "bun",
-    "desktop",
-    "app",
-    "cross-platform",
-    "typescript"
-  ],
-  "exports": {
-    ".": "./dist/api/bun/index.ts",
-    "./bun": "./dist/api/bun/index.ts",
-    "./view": "./dist/api/browser/index.ts"
-  },
-  "type": "module",
-  "bin": {
-    "electrobun": "./bin/electrobun.cjs"
-  },
-  "homepage": "https://electrobun.dev",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/blackboardsh/electrobun.git"
-  },
-  "scripts": {
-    "build:cli": "mkdir -p bin && vendors/bun/bun build src/cli/index.ts --compile --outfile bin/electrobun",
-    "start": "bun src/bun/index.ts",
-    "check-zig-version": "vendors/zig/zig version",
-    "build:dev": "bun build.ts",
-    "build:release": "bun build.ts --release",
-    "dev": "bun install && bun build:dev && bun build:cli && cd ../kitchen && bun install && bun build:dev && bun start",
-    "dev:clean": "cd ../kitchen && rm -rf node_modules && rm -rf vendors/cef && cd ../package && bun dev",
-    "dev:rerun": "cd ../kitchen && bun start",
-    "dev:canary": "bun install && bun build:release && bun build:cli && cd ../kitchen && bun install && bun build:canary",
-    "dev:stable": "bun install && bun build:release && bun build:cli && cd ../kitchen && bun install && bun build:stable",
-    "run:template": "bun install && bun build:dev && bun build:cli && cd ../templates/interactive-playground && bun install && bun build:dev && bun start",
-    "dev:docs": "cd ../documentation && bun start",
-    "build:docs:release": "cd ../documentation && bun run build",
-    "npm:publish": "bun build:release && npm publish",
-    "npm:publish:beta": "bun build:release && npm publish --tag beta",
-    "push:beta": "bun scripts/push-version.js beta",
-    "push:patch": "bun scripts/push-version.js patch",
-    "push:minor": "bun scripts/push-version.js minor",
-    "push:major": "bun scripts/push-version.js major",
-    "push:stable": "bun scripts/push-version.js stable",
-    "build:push:artifacts": "bun scripts/build-and-upload-artifacts.js",
-    "test": "bun install && bun build:dev && bun build:cli && cd ../tests && bun install && bun build:dev && bun start",
-    "test:unit": "bun test src/shared"
-  },
-  "devDependencies": {
-    "@types/archiver": "^6.0.3",
-    "@types/bun": "1.1.9",
-    "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "archiver": "^7.0.1",
-    "png-to-ico": "^2.1.8",
-    "rcedit": "^4.0.1",
-    "rpc-anywhere": "1.5.0"
-  }
+	"name": "electrobun",
+	"version": "1.9.0-beta.3",
+	"description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
+	"license": "MIT",
+	"author": "Blackboard Technologies Inc.",
+	"keywords": [
+		"bun",
+		"desktop",
+		"app",
+		"cross-platform",
+		"typescript"
+	],
+	"exports": {
+		".": "./dist/api/bun/index.ts",
+		"./bun": "./dist/api/bun/index.ts",
+		"./view": "./dist/api/browser/index.ts"
+	},
+	"type": "module",
+	"bin": {
+		"electrobun": "./bin/electrobun.cjs"
+	},
+	"homepage": "https://electrobun.dev",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/blackboardsh/electrobun.git"
+	},
+	"scripts": {
+		"build:cli": "mkdir -p bin && vendors/bun/bun build src/cli/index.ts --compile --outfile bin/electrobun",
+		"start": "bun src/bun/index.ts",
+		"check-zig-version": "vendors/zig/zig version",
+		"build:dev": "bun build.ts",
+		"build:release": "bun build.ts --release",
+		"dev": "bun install && bun build:dev && bun build:cli && cd ../kitchen && bun install && bun build:dev && bun start",
+		"dev:clean": "cd ../kitchen && rm -rf node_modules && rm -rf vendors/cef && cd ../package && bun dev",
+		"dev:rerun": "cd ../kitchen && bun start",
+		"dev:canary": "bun install && bun build:release && bun build:cli && cd ../kitchen && bun install && bun build:canary",
+		"dev:stable": "bun install && bun build:release && bun build:cli && cd ../kitchen && bun install && bun build:stable",
+		"run:template": "bun install && bun build:dev && bun build:cli && cd ../templates/interactive-playground && bun install && bun build:dev && bun start",
+		"dev:docs": "cd ../documentation && bun start",
+		"build:docs:release": "cd ../documentation && bun run build",
+		"npm:publish": "bun build:release && npm publish",
+		"npm:publish:beta": "bun build:release && npm publish --tag beta",
+		"push:beta": "bun scripts/push-version.js beta",
+		"push:patch": "bun scripts/push-version.js patch",
+		"push:minor": "bun scripts/push-version.js minor",
+		"push:major": "bun scripts/push-version.js major",
+		"push:stable": "bun scripts/push-version.js stable",
+		"build:push:artifacts": "bun scripts/build-and-upload-artifacts.js",
+		"test": "bun install && bun build:dev && bun build:cli && cd ../tests && bun install && bun build:dev && bun start",
+		"test:unit": "bun test src/shared",
+		"bump-cef": "bun scripts/check-latest-cef.ts"
+	},
+	"devDependencies": {
+		"@types/archiver": "^6.0.3",
+		"@types/bun": "1.1.9",
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"archiver": "^7.0.1",
+		"png-to-ico": "^2.1.8",
+		"rcedit": "^4.0.1",
+		"rpc-anywhere": "1.5.0"
+	}
 }
