@@ -1,4 +1,4 @@
-import type { ServerWebSocket } from "bun";
+import type { Server, ServerWebSocket } from "bun";
 import { BrowserView } from "./BrowserView";
 import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
 
@@ -58,7 +58,7 @@ const startRPCServer = () => {
 		try {
 			server = Bun.serve<{ webviewId: number }>({
 				port,
-				fetch(req, server) {
+				fetch(req: Request, server: Server<{ webviewId: number }>) {
 					const url = new URL(req.url);
 					//   const token = new URL(req.url).searchParams.get("token");
 					//   if (token !== AUTH_TOKEN)
@@ -84,7 +84,7 @@ const startRPCServer = () => {
 					maxPayloadLength: payloadLimit,
 					// Anything beyond the backpressure limit will be dropped
 					backpressureLimit: payloadLimit * 2,
-					open(ws) {
+					open(ws: ServerWebSocket<{ webviewId: number }>) {
 						if (!ws?.data) {
 							return;
 						}
@@ -96,7 +96,7 @@ const startRPCServer = () => {
 							socketMap[webviewId].socket = ws;
 						}
 					},
-					close(ws, _code, _reason) {
+					close(ws: ServerWebSocket<{ webviewId: number }>, _code: number, _reason: string) {
 						if (!ws?.data) {
 							return;
 						}
@@ -107,7 +107,7 @@ const startRPCServer = () => {
 						}
 					},
 
-					message(ws, message) {
+					message(ws: ServerWebSocket<{ webviewId: number }>, message: string | Buffer) {
 						if (!ws?.data) {
 							return;
 						}

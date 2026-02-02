@@ -10,5 +10,8 @@
 	},
 	"dependencies": {
 		"electrobun": "latest"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
 	}
 }

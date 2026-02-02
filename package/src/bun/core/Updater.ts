@@ -58,6 +58,8 @@ export interface UpdateStatusDetails {
 	usedPatchPath?: boolean;
 	errorMessage?: string;
 	url?: string;
+	zstdPath?: string;
+	exitCode?: number | null;
 }
 
 export interface UpdateStatusEntry {
@@ -1145,9 +1147,4 @@ del "%~f0"
 	},
 };
 
-export {
-	Updater,
-	type UpdateStatusType,
-	type UpdateStatusEntry,
-	type UpdateStatusDetails,
-};
+export { Updater };

@@ -68,7 +68,6 @@ let btnRunInteractive: HTMLButtonElement;
 let modal: HTMLElement;
 let modalTitle: HTMLElement;
 let modalInstructions: HTMLElement;
-let _modalButtons: HTMLElement;
 let btnStart: HTMLButtonElement;
 let btnPass: HTMLButtonElement;
 let btnFail: HTMLButtonElement;
@@ -97,7 +96,6 @@ async function init() {
   modal = document.getElementById('interactive-modal')!;
   modalTitle = document.getElementById('modal-title')!;
   modalInstructions = document.getElementById('modal-instructions')!;
-  _modalButtons = document.getElementById('modal-buttons')!;
   btnStart = document.getElementById('btn-start')! as HTMLButtonElement;
   btnPass = document.getElementById('btn-pass')! as HTMLButtonElement;
   btnFail = document.getElementById('btn-fail')! as HTMLButtonElement;

@@ -929,16 +929,19 @@ const defaultConfig = {
 			} as Record<string, boolean | string>,
 			icons: "icon.iconset",
 			defaultRenderer: undefined as "native" | "cef" | undefined,
+			chromiumFlags: undefined as Record<string, string | true> | undefined,
 		},
 		win: {
 			bundleCEF: false,
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
+			chromiumFlags: undefined as Record<string, string | true> | undefined,
 		},
 		linux: {
 			bundleCEF: false,
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
+			chromiumFlags: undefined as Record<string, string | true> | undefined,
 		},
 		bun: {
 			entrypoint: "src/bun/index.ts",
@@ -948,6 +951,7 @@ const defaultConfig = {
 			| undefined,
 		copy: undefined as Record<string, string> | undefined,
 	},
+	runtime: {} as Record<string, unknown>,
 	scripts: {
 		preBuild: "",
 		postBuild: "",
@@ -2914,7 +2918,7 @@ ${schemesXml}
 			const bundleBase = basename(appBundleFolderPath);
 			const entries = readdirSync(appBundleFolderPath, {
 				recursive: true,
-			});
+			} as any) as string[];
 			for (const entry of entries) {
 				const entryPath = entry.toString();
 				const fullPath = join(appBundleFolderPath, entryPath);
@@ -2971,7 +2975,7 @@ ${schemesXml}
 			platformConfig?.chromiumFlags &&
 			Object.keys(platformConfig.chromiumFlags).length > 0
 		) {
-			buildJsonObj.chromiumFlags = platformConfig.chromiumFlags;
+			buildJsonObj["chromiumFlags"] = platformConfig.chromiumFlags;
 		}
 
 		const buildJsonContent = JSON.stringify(buildJsonObj);
@@ -3840,6 +3844,10 @@ ${schemesXml}
 					...defaultConfig.build.bun,
 					...(loadedConfig?.build?.bun || {}),
 				},
+			},
+			runtime: {
+				...defaultConfig.runtime,
+				...((loadedConfig as Record<string, any>)?.["runtime"] || {}),
 			},
 			scripts: {
 				...defaultConfig.scripts,
