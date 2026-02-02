@@ -49,7 +49,7 @@
 		"build:push:artifacts": "bun scripts/build-and-upload-artifacts.js",
 		"test": "bun install && bun build:dev && bun build:cli && cd ../tests && bun install && bun build:dev && bun start",
 		"test:unit": "bun test src/shared",
-		"bump-cef": "bun scripts/check-latest-cef.ts"
+		"bump-cef": "bun scripts/update-cef-version.ts"
 	},
 	"devDependencies": {
 		"@types/archiver": "^6.0.3",

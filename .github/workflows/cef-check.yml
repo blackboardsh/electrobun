@@ -35,7 +35,7 @@ jobs:
       - name: Check latest stable CEF version
         id: check
         working-directory: package
-        run: bun scripts/check-latest-cef.ts
+        run: bun scripts/update-cef-version.ts
 
       - name: Build with latest CEF
         if: steps.check.outputs.has_update == 'true'
