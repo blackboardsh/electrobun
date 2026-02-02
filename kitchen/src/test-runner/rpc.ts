@@ -109,6 +109,7 @@ export type TestRunnerRPC = {
       buildConfig: {
         defaultRenderer: 'native' | 'cef';
         availableRenderers: ('native' | 'cef')[];
+        cefVersion?: string;
       };
       updateStatus: UpdateInfo;
       updateStatusEntry: UpdateStatusEntry;

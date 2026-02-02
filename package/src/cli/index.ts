@@ -20,6 +20,7 @@ import { execSync } from "child_process";
 import * as readline from "readline";
 import archiver from "archiver";
 import { OS, ARCH } from "../shared/platform";
+import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
 import {
 	getAppFileName,
 	getBundleFileName,
@@ -118,9 +119,9 @@ function getPlatformPaths(
 			"cef",
 			"Chromium Embedded Framework.framework",
 		),
-		CEF_HELPER_MACOS: join(platformDistDir, "cef", "process_helper"),
-		CEF_HELPER_WIN: join(platformDistDir, "cef", "process_helper.exe"),
-		CEF_HELPER_LINUX: join(platformDistDir, "cef", "process_helper"),
+		CEF_HELPER_MACOS: join(platformDistDir, "process_helper"),
+		CEF_HELPER_WIN: join(platformDistDir, "process_helper.exe"),
+		CEF_HELPER_LINUX: join(platformDistDir, "process_helper"),
 		CEF_DIR: join(platformDistDir, "cef"),
 
 		// Shared platform-independent files (from dist/)
@@ -361,10 +362,28 @@ async function ensureCoreDependencies(
 	}
 }
 
+/**
+ * Returns the effective CEF directory path. When a custom cefVersion is set,
+ * CEF files are stored in node_modules/.electrobun-cache/ which survives
+ * both dist rebuilds and bun install (which replaces node_modules/electrobun).
+ * When using the default version, returns the standard dist-{platform}/cef/ path.
+ */
+function getEffectiveCEFDir(
+	platformOS: "macos" | "win" | "linux",
+	platformArch: "arm64" | "x64",
+	cefVersion?: string,
+): string {
+	if (cefVersion) {
+		return join(projectRoot, "node_modules", ".electrobun-cache", "cef-override", `${platformOS}-${platformArch}`);
+	}
+	return getPlatformPaths(platformOS, platformArch).CEF_DIR;
+}
+
 async function ensureCEFDependencies(
 	targetOS?: "macos" | "win" | "linux",
 	targetArch?: "arm64" | "x64",
-) {
+	cefVersion?: string,
+): Promise<string> {
 	// Use provided target platform or default to host platform
 	const platformOS = targetOS || OS;
 	const platformArch = targetArch || ARCH;
@@ -372,12 +391,40 @@ async function ensureCEFDependencies(
 	// Get platform-specific paths
 	const platformPaths = getPlatformPaths(platformOS, platformArch);
 
+	// If custom CEF version specified, download from Spotify CDN
+	// Custom CEF is stored in vendors/cef-override/ to survive dist rebuilds
+	if (cefVersion) {
+		const overrideDir = getEffectiveCEFDir(platformOS, platformArch, cefVersion);
+		// Check if already downloaded with matching version
+		const cefVersionFile = join(overrideDir, ".cef-version");
+		if (existsSync(overrideDir) && existsSync(cefVersionFile)) {
+			const cachedVersion = readFileSync(cefVersionFile, "utf8").trim();
+			if (cachedVersion === cefVersion) {
+				console.log(
+					`Custom CEF ${cefVersion} already cached for ${platformOS}-${platformArch} at ${overrideDir}`,
+				);
+				return overrideDir;
+			}
+			// Version mismatch - remove stale cache
+			console.log(
+				`Cached CEF version "${cachedVersion}" does not match requested "${cefVersion}", re-downloading...`,
+			);
+			rmSync(overrideDir, { recursive: true, force: true });
+		} else if (existsSync(overrideDir)) {
+			// Override dir exists but no version stamp - remove it
+			rmSync(overrideDir, { recursive: true, force: true });
+		}
+
+		await downloadAndExtractCustomCEF(cefVersion, platformOS, platformArch);
+		return overrideDir;
+	}
+
 	// Check if CEF dependencies already exist
 	if (existsSync(platformPaths.CEF_DIR)) {
 		console.log(
 			`CEF dependencies found for ${platformOS}-${platformArch}, using cached version`,
 		);
-		return;
+		return platformPaths.CEF_DIR;
 	}
 
 	console.log(
@@ -603,6 +650,7 @@ async function ensureCEFDependencies(
 		console.log(
 			`✓ CEF dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`,
 		);
+		return platformPaths.CEF_DIR;
 	} catch (error: any) {
 		console.error(
 			`Failed to download CEF dependencies for ${platformOS}-${platformArch}:`,
@@ -647,6 +695,195 @@ async function ensureCEFDependencies(
 	}
 }
 
+/**
+ * Downloads CEF runtime files from Spotify CDN for a custom version override.
+ * Extracts the minimal distribution and restructures runtime files to the
+ * layout the CLI expects. No compilation is needed — process_helper ships in
+ * the core tarball and uses CEF's stable C API at runtime.
+ *
+ * The C API is designed for ABI stability within the same major version line.
+ * Across major versions, breaking changes are possible.
+ */
+async function downloadAndExtractCustomCEF(
+	cefVersion: string,
+	platformOS: "macos" | "win" | "linux",
+	platformArch: "arm64" | "x64",
+) {
+	// Parse "CEF_VERSION+chromium-CHROMIUM_VERSION"
+	const match = cefVersion.match(/^(.+)\+chromium-(.+)$/);
+	if (!match) {
+		throw new Error(
+			`Invalid cefVersion format: "${cefVersion}". ` +
+				`Expected: "CEF_VERSION+chromium-CHROMIUM_VERSION" ` +
+				`(e.g. "144.0.11+ge135be2+chromium-144.0.7559.97")`,
+		);
+	}
+	const [, cefVer, chromiumVer] = match;
+
+	// Map platform names to Spotify CDN naming
+	const cefPlatformMap: Record<string, string> = {
+		"macos-arm64": "macosarm64",
+		"macos-x64": "macosx64",
+		"win-x64": "windows64",
+		"win-arm64": "windowsarm64",
+		"linux-x64": "linux64",
+		"linux-arm64": "linuxarm64",
+	};
+	const cefPlatform = cefPlatformMap[`${platformOS}-${platformArch}`];
+	if (!cefPlatform) {
+		throw new Error(
+			`Unsupported platform/arch for custom CEF: ${platformOS}-${platformArch}`,
+		);
+	}
+
+	// URL-encode the + as %2B
+	const encodedCefVer = cefVer.replace(/\+/g, "%2B");
+	const cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${encodedCefVer}%2Bchromium-${chromiumVer}_${cefPlatform}_minimal.tar.bz2`;
+
+	console.log(`Using custom CEF version: ${cefVersion}`);
+	console.log(`Downloading from: ${cefUrl}`);
+
+	// Store custom CEF in .electrobun-cache so it survives dist rebuilds and bun install
+	const cefDir = getEffectiveCEFDir(platformOS, platformArch, cefVersion);
+	console.log(`Caching custom CEF to ${cefDir}`);
+	mkdirSync(cefDir, { recursive: true });
+
+	// Download to temp file
+	const tempFile = join(
+		ELECTROBUN_DEP_PATH,
+		`cef-custom-${platformOS}-${platformArch}-${Date.now()}.tar.bz2`,
+	);
+
+	try {
+		console.log(`Downloading custom CEF...`);
+		const response = await fetch(cefUrl);
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		}
+
+		const contentLength = response.headers.get("content-length");
+		const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
+		const fileStream = createWriteStream(tempFile);
+		let downloadedSize = 0;
+		let lastReportedPercent = -1;
+
+		if (response.body) {
+			const reader = response.body.getReader();
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+
+				const chunk = Buffer.from(value);
+				fileStream.write(chunk);
+				downloadedSize += chunk.length;
+
+				if (totalSize > 0) {
+					const percent = Math.round((downloadedSize / totalSize) * 100);
+					const percentTier = Math.floor(percent / 10) * 10;
+					if (percentTier > lastReportedPercent && percentTier <= 100) {
+						console.log(
+							`  Progress: ${percentTier}% (${Math.round(downloadedSize / 1024 / 1024)}MB/${Math.round(totalSize / 1024 / 1024)}MB)`,
+						);
+						lastReportedPercent = percentTier;
+					}
+				}
+			}
+		}
+
+		await new Promise((resolve, reject) => {
+			fileStream.end((error: any) => {
+				if (error) reject(error);
+				else resolve(void 0);
+			});
+		});
+
+		console.log(
+			`Download completed (${Math.round(downloadedSize / 1024 / 1024)}MB), extracting...`,
+		);
+
+		// Extract tar.bz2 using system tar (bz2 requires it)
+		execSync(
+			`tar -xjf "${tempFile}" --strip-components=1 -C "${cefDir}"`,
+			{ stdio: "inherit" },
+		);
+
+		// The Spotify distribution layout has runtime files in Release/ and Resources/
+		// subdirectories, but the CLI expects them at the cef/ root. Copy them up.
+		console.log("Copying CEF runtime files to expected locations...");
+		const releaseDir = join(cefDir, "Release");
+		const resourcesDir = join(cefDir, "Resources");
+
+		if (platformOS === "macos") {
+			// macOS: copy the framework from Release/ to cef/ root
+			const fwSrc = join(releaseDir, "Chromium Embedded Framework.framework");
+			const fwDst = join(cefDir, "Chromium Embedded Framework.framework");
+			if (existsSync(fwSrc) && !existsSync(fwDst)) {
+				cpSync(fwSrc, fwDst, { recursive: true, dereference: true });
+			}
+		} else {
+			// Windows and Linux: copy all files from Release/ and Resources/ to cef/ root
+			if (existsSync(releaseDir)) {
+				for (const entry of readdirSync(releaseDir)) {
+					const src = join(releaseDir, entry);
+					const dst = join(cefDir, entry);
+					if (!existsSync(dst)) {
+						cpSync(src, dst, { recursive: true, dereference: true });
+					}
+				}
+			}
+			if (existsSync(resourcesDir)) {
+				for (const entry of readdirSync(resourcesDir)) {
+					const src = join(resourcesDir, entry);
+					const dst = join(cefDir, entry);
+					if (!existsSync(dst)) {
+						cpSync(src, dst, { recursive: true, dereference: true });
+					}
+				}
+			}
+		}
+
+		// Write version stamp
+		writeFileSync(join(cefDir, ".cef-version"), cefVersion);
+
+		console.log(
+			`Custom CEF ${cefVersion} for ${platformOS}-${platformArch} set up successfully`,
+		);
+		console.log(
+			`Note: process_helper ships in the core tarball and uses CEF's stable C API.`,
+		);
+		console.log(
+			`C API compatibility is expected within the same major version line.`,
+		);
+	} catch (error: any) {
+		// Clean up on failure
+		if (existsSync(cefDir)) {
+			try {
+				rmSync(cefDir, { recursive: true, force: true });
+			} catch {}
+		}
+
+		console.error(
+			`Failed to set up custom CEF ${cefVersion} for ${platformOS}-${platformArch}:`,
+			error.message,
+		);
+		console.error(
+			`\nVerify the CEF version string and that it exists at: https://cef-builds.spotifycdn.com/`,
+		);
+		console.error(
+			`Note: CEF's C API is ABI-stable within the same major version. ` +
+				`Across major versions, breaking changes are possible.`,
+		);
+		process.exit(1);
+	} finally {
+		// Clean up temp file
+		if (existsSync(tempFile)) {
+			try {
+				unlinkSync(tempFile);
+			} catch {}
+		}
+	}
+}
+
 // @ts-expect-error - reserved for future use
 const _commandDefaults = {
 	init: {
@@ -678,6 +915,7 @@ const defaultConfig = {
 		targets: undefined as unknown, // Will default to current platform if not specified
 		useAsar: false,
 		asarUnpack: undefined as string[] | undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
+		cefVersion: undefined as string | undefined, // Override CEF version: "CEF_VERSION+chromium-CHROMIUM_VERSION"
 		mac: {
 			codesign: false,
 			notarize: false,
@@ -2063,9 +2301,9 @@ ${schemesXml}
 			(targetOS === "win" && config.build.win?.bundleCEF) ||
 			(targetOS === "linux" && config.build.linux?.bundleCEF)
 		) {
-			await ensureCEFDependencies(currentTarget.os, currentTarget.arch);
+			const effectiveCEFDir = await ensureCEFDependencies(currentTarget.os, currentTarget.arch, config.build.cefVersion);
 			if (targetOS === "macos") {
-				const cefFrameworkSource = targetPaths.CEF_FRAMEWORK_MACOS;
+				const cefFrameworkSource = join(effectiveCEFDir, "Chromium Embedded Framework.framework");
 				const cefFrameworkDestination = join(
 					appBundleFolderFrameworksPath,
 					"Chromium Embedded Framework.framework",
@@ -2106,8 +2344,8 @@ ${schemesXml}
 					});
 				});
 			} else if (targetOS === "win") {
-				// Copy CEF DLLs from platform-specific dist/cef/ to the main executable directory
-				const cefSourcePath = targetPaths.CEF_DIR;
+				// Copy CEF DLLs from CEF directory to the main executable directory
+				const cefSourcePath = effectiveCEFDir;
 				const cefDllFiles = [
 					"libcef.dll",
 					"chrome_elf.dll",
@@ -2153,7 +2391,7 @@ ${schemesXml}
 				});
 
 				// Copy CEF resources to MacOS/cef/ subdirectory for other resources like locales
-				const cefResourcesSource = targetPaths.CEF_DIR;
+				const cefResourcesSource = effectiveCEFDir;
 				const cefResourcesDestination = join(appBundleMacOSPath, "cef");
 
 				if (existsSync(cefResourcesSource)) {
@@ -2186,7 +2424,7 @@ ${schemesXml}
 				}
 			} else if (targetOS === "linux") {
 				// Copy CEF shared libraries from platform-specific dist/cef/ to the main executable directory
-				const cefSourcePath = targetPaths.CEF_DIR;
+				const cefSourcePath = effectiveCEFDir;
 
 				if (existsSync(cefSourcePath)) {
 					const cefSoFiles = [
@@ -2725,6 +2963,7 @@ ${schemesXml}
 			defaultRenderer: platformConfig?.defaultRenderer ?? "native",
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
 			runtime: config.runtime ?? {},
+			...(bundlesCEF ? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING } : {}),
 		};
 
 		// Include chromiumFlags only if the developer defined them

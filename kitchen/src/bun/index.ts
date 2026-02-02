@@ -230,7 +230,7 @@ testRunnerWindow = new BrowserWindow({
 	url: "views://test-runner/index.html",
 	renderer: "cef",
 	frame: {
-		width: 1000,
+		width: 1200,
 		height: 800,
 		x: 100,
 		y: 100,
@@ -246,6 +246,7 @@ testRunnerWindow.webview.on("dom-ready", () => {
 	testRunnerWindow!.webview.rpc?.send.buildConfig({
 		defaultRenderer: buildConfig.defaultRenderer,
 		availableRenderers: buildConfig.availableRenderers,
+		cefVersion: buildConfig.cefVersion,
 	});
 	// Send current update status
 	testRunnerWindow!.webview.rpc?.send.updateStatus(updateState);

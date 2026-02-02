@@ -124,6 +124,17 @@ export interface ElectrobunConfig {
 		asarUnpack?: string[];
 
 		/**
+		 * Override the CEF (Chromium Embedded Framework) version.
+		 * Format: "CEF_VERSION+chromium-CHROMIUM_VERSION"
+		 * Example: "144.0.11+ge135be2+chromium-144.0.7559.97"
+		 *
+		 * Check the electrobun-cef-compat compatibility matrix for tested combinations
+		 * before overriding. Using an untested version may cause runtime issues.
+		 * @default Uses the version bundled with this Electrobun release
+		 */
+		cefVersion?: string;
+
+		/**
 		 * macOS-specific build configuration
 		 */
 		mac?: {

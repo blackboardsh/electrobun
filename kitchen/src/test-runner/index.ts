@@ -438,7 +438,7 @@ async function submitVerification(action: 'pass' | 'fail' | 'retest') {
 }
 
 // Build Config UI
-function updateBuildConfigUI(config: { defaultRenderer: string; availableRenderers: string[] }) {
+function updateBuildConfigUI(config: { defaultRenderer: string; availableRenderers: string[]; cefVersion?: string }) {
   const defaultRendererEl = document.getElementById('default-renderer');
   const availableRenderersEl = document.getElementById('available-renderers');
 
@@ -447,6 +447,18 @@ function updateBuildConfigUI(config: { defaultRenderer: string; availableRendere
   }
   if (availableRenderersEl) {
     availableRenderersEl.textContent = config.availableRenderers.join(', ');
+  }
+
+  const chromiumVersionEl = document.getElementById('chromium-version');
+  if (chromiumVersionEl) {
+    if (config.cefVersion) {
+      // Extract chromium version from CEF version string like "144.0.12+g1a1008c+chromium-144.0.7559.110"
+      const chromiumMatch = config.cefVersion.match(/chromium-([\d.]+)/);
+      chromiumVersionEl.textContent = chromiumMatch ? chromiumMatch[1] : config.cefVersion;
+    } else {
+      const chromeMatch = navigator.userAgent.match(/Chrome\/(\S+)/);
+      chromiumVersionEl.textContent = chromeMatch ? chromeMatch[1] : 'N/A';
+    }
   }
 
   const userAgentEl = document.getElementById('user-agent-value');

@@ -117,6 +117,27 @@ jobs:
             pkg-config \
             libfuse2
 
+      - name: Get CEF version for cache key
+        id: cef-version
+        shell: bash
+        run: |
+          CEF_VER=$(grep "const CEF_VERSION " package/build.ts | head -1 | sed "s/.*\`\(.*\)\`.*/\1/" | tr '+' '-')
+          echo "version=$CEF_VER" >> $GITHUB_OUTPUT
+
+      - name: Cache CEF vendor directory
+        uses: actions/cache@v4
+        with:
+          path: package/vendors/cef
+          key: cef-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ steps.cef-version.outputs.version }}
+
+      - name: Cache process_helper binary
+        uses: actions/cache@v4
+        with:
+          path: |
+            package/src/native/build/process_helper
+            package/src/native/build/process_helper.exe
+          key: process-helper-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ steps.cef-version.outputs.version }}-${{ hashFiles('package/src/native/**/cef_process_helper_*') }}
+
       - name: Build for ${{ matrix.platform_name }}-${{ matrix.arch }}
         run: bun scripts/package-release.js
         working-directory: package

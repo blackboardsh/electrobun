@@ -15,6 +15,7 @@ import {
 } from "fs";
 import { parseArgs } from "util";
 import process from "process";
+import { CEF_VERSION, CHROMIUM_VERSION, DEFAULT_CEF_VERSION_STRING } from "./src/shared/cef-version";
 
 console.log("building...", platform(), arch());
 
@@ -572,7 +573,7 @@ async function copyToDist() {
 		await $`mkdir -p dist/cef`;
 		await $`cp -R vendors/cef/Release/Chromium\ Embedded\ Framework.framework dist/cef/Chromium\ Embedded\ Framework.framework`;
 		// CEF's helper process binary
-		await $`cp -R src/native/build/process_helper dist/cef/process_helper`;
+		await $`cp -R src/native/build/process_helper dist/process_helper`;
 	} else if (OS === "win") {
 		await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
 		// native system webview library - always use x64 for Windows
@@ -606,7 +607,7 @@ async function copyToDist() {
 		);
 
 		// Copy CEF helper process
-		await $`cp src/native/build/process_helper.exe dist/cef/process_helper.exe`;
+		await $`cp src/native/build/process_helper.exe dist/process_helper.exe`;
 	} else if (OS === "linux") {
 		// Copy both GTK-only and CEF native wrappers for flexible deployment
 		if (
@@ -677,7 +678,7 @@ async function copyToDist() {
 				join(process.cwd(), "src", "native", "build", "process_helper"),
 			)
 		) {
-			await $`cp src/native/build/process_helper dist/cef/process_helper`;
+			await $`cp src/native/build/process_helper dist/process_helper`;
 		}
 		console.log("[done]Copying CEF files for Linux...");
 	}
@@ -1048,21 +1049,47 @@ async function vendorAsar() {
 }
 
 async function vendorCEF() {
-	// Use stable CEF version for macOS, current for Windows and Linux
-	// full urls for reference:
-	// macos x64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_macosx64.tar.bz2
-	// macos arm64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_macosarm64.tar.bz2
-	// windows x64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_windows64_minimal.tar.bz2
-	// windows arm64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_windowsarm64_minimal.tar.bz2
-	// linux x64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_linux64_minimal.tar.bz2
-	// linux arm64: https://cef-builds.spotifycdn.com/cef_binary_144.0.11%2Bge135be2%2Bchromium-144.0.7559.97_linuxarm64_minimal.tar.bz2
+	// CEF_VERSION, CHROMIUM_VERSION, and DEFAULT_CEF_VERSION_STRING are imported from src/shared/cef-version.ts
+	const expectedVersionString = DEFAULT_CEF_VERSION_STRING;
 
-	const CEF_VERSION_MAC = `144.0.11+ge135be2`;
-	const CHROMIUM_VERSION_MAC = `144.0.7559.97`;
-	const CEF_VERSION_WIN = `144.0.11+ge135be2`;
-	const CHROMIUM_VERSION_WIN = `144.0.7559.97`;
-	const CEF_VERSION_LINUX = `144.0.11+ge135be2`;
-	const CHROMIUM_VERSION_LINUX = `144.0.7559.97`;
+	// Keep per-platform aliases for backward compatibility in URL construction below.
+	const CEF_VERSION_MAC = CEF_VERSION;
+	const CHROMIUM_VERSION_MAC = CHROMIUM_VERSION;
+	const CEF_VERSION_WIN = CEF_VERSION;
+	const CHROMIUM_VERSION_WIN = CHROMIUM_VERSION;
+	const CEF_VERSION_LINUX = CEF_VERSION;
+	const CHROMIUM_VERSION_LINUX = CHROMIUM_VERSION;
+
+	// Check if vendored CEF version matches expected version.
+	// When the hardcoded version is bumped (e.g. after a git pull),
+	// this detects the mismatch and forces a clean re-vendor + rebuild.
+	const cefDir = join(process.cwd(), "vendors", "cef");
+	const versionFile = join(cefDir, ".cef-version");
+
+	if (existsSync(cefDir) && existsSync(versionFile)) {
+		const vendoredVersion = readFileSync(versionFile, "utf-8").trim();
+		if (vendoredVersion !== expectedVersionString) {
+			console.log(`CEF version mismatch: vendored "${vendoredVersion}" vs expected "${expectedVersionString}"`);
+			console.log("Cleaning stale CEF artifacts and re-vendoring...");
+			// Remove stale CEF vendor directory
+			await $`rm -rf vendors/cef`;
+			// Remove stale build artifacts compiled against old CEF
+			await $`rm -f src/native/build/process_helper src/native/build/process_helper.exe`;
+			await $`rm -f src/native/build/process_helper_mac.o src/native/build/process_helper_win.obj src/native/linux/build/process_helper_linux.o`;
+			await $`rm -f src/native/build/libNativeWrapper.dylib src/native/build/libNativeWrapper.so src/native/build/libNativeWrapper_cef.so`;
+			await $`rm -f src/native/win/build/libNativeWrapper.dll src/native/win/build/nativeWrapper.obj`;
+			await $`rm -f src/native/macos/build/nativeWrapper.o src/native/linux/build/nativeWrapper.o`;
+		}
+	} else if (existsSync(cefDir) && !existsSync(versionFile)) {
+		// CEF dir exists but no version file (legacy state) — force re-vendor
+		console.log("CEF vendor directory found without version stamp, cleaning...");
+		await $`rm -rf vendors/cef`;
+		await $`rm -f src/native/build/process_helper src/native/build/process_helper.exe`;
+		await $`rm -f src/native/build/process_helper_mac.o src/native/build/process_helper_win.obj src/native/linux/build/process_helper_linux.o`;
+		await $`rm -f src/native/build/libNativeWrapper.dylib src/native/build/libNativeWrapper.so src/native/build/libNativeWrapper_cef.so`;
+		await $`rm -f src/native/win/build/libNativeWrapper.dll src/native/win/build/nativeWrapper.obj`;
+		await $`rm -f src/native/macos/build/nativeWrapper.o src/native/linux/build/nativeWrapper.o`;
+	}
 
 	if (OS === "macos") {
 		if (!existsSync(join(process.cwd(), "vendors", "cef"))) {
@@ -1147,6 +1174,11 @@ async function vendorCEF() {
 					"CEF download/extraction failed - CMakeLists.txt not found",
 				);
 			}
+			// Write version stamp so future builds can detect staleness
+			writeFileSync(
+				join(process.cwd(), "vendors", "cef", ".cef-version"),
+				expectedVersionString,
+			);
 			console.log("CEF downloaded and extracted successfully");
 		}
 
@@ -1259,6 +1291,11 @@ async function vendorCEF() {
 			if (!existsSync(cefCMakeFile)) {
 				throw new Error("CEF extraction failed - CMakeLists.txt not found");
 			}
+			// Write version stamp so future builds can detect staleness
+			writeFileSync(
+				join(process.cwd(), "vendors", "cef", ".cef-version"),
+				expectedVersionString,
+			);
 			console.log("CEF extracted successfully");
 		}
 
@@ -1314,6 +1351,11 @@ async function vendorCEF() {
 		if (!existsSync(join(process.cwd(), "vendors", "cef"))) {
 			const cefArch = ARCH === "arm64" ? "linuxarm64" : "linux64";
 			await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_LINUX}%2Bchromium-${CHROMIUM_VERSION_LINUX}_${cefArch}_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;
+			// Write version stamp so future builds can detect staleness
+			writeFileSync(
+				join(process.cwd(), "vendors", "cef", ".cef-version"),
+				expectedVersionString,
+			);
 		}
 
 		// Build CEF wrapper library for Linux
