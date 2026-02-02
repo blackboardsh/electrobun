@@ -89,6 +89,9 @@ using electrobun::OperationGuard;
 #include "include/cef_download_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
+// CEF dynamic loader for weak linking
+#include "cef_loader.h"
+
 // Ensure the exported functions have appropriate visibility
 #define ELECTROBUN_EXPORT __attribute__((visibility("default")))
 

@@ -1672,7 +1672,7 @@ async function buildNative() {
 			// Link with WebKitGTK, AppIndicator, and optionally CEF libraries using weak linking
 			await $`mkdir -p src/native/build`;
 
-			// Build both GTK-only and CEF versions for Linux to allow small bundles
+			// Build both GTK-only and CEF versions for Linux
 			const asarLib = join(process.cwd(), "vendors", "zig-asar", "libasar.so");
 
 			console.log("Building GTK-only version (libNativeWrapper.so)");
@@ -1690,20 +1690,22 @@ async function buildNative() {
 			await $`${linkCmd}`;
 
 			if (cefLibsExist) {
-				console.log("Building CEF version (libNativeWrapper_cef.so)");
+				console.log("Compiling CEF loader...");
+				await $`g++ -c -std=c++17 -fPIC -I${cefInclude} -o src/native/linux/build/cef_loader.o src/native/linux/cef_loader.cpp`;
+
+				console.log("Building CEF version (libNativeWrapper_cef.so) with weak linking");
 				const linkCefCmd = [
 					"g++",
 					"-shared",
 					"-o",
 					"src/native/build/libNativeWrapper_cef.so",
 					"src/native/linux/build/nativeWrapper.o",
+					"src/native/linux/build/cef_loader.o",
 					asarLib,
 					...pkgConfigLibs.split(/\s+/).filter((f) => f),
 					"-Wl,--whole-archive",
 					cefWrapperLib,
 					"-Wl,--no-whole-archive",
-					"-Wl,--as-needed",
-					cefLib,
 					"-ldl",
 					"-lpthread",
 					"-Wl,-rpath,$ORIGIN:$ORIGIN/cef",

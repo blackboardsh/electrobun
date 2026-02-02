@@ -2013,7 +2013,7 @@ ${schemesXml}
 				cpSync(nativeWrapperLinuxSource, nativeWrapperLinuxDestination, {
 					dereference: true,
 				});
-				console.log(`Using ${useCEF ? "CEF" : "GTK"} native wrapper for Linux`);
+				console.log(`Using ${useCEF ? "CEF (with weak linking)" : "GTK-only"} native wrapper for Linux`);
 			} else {
 				throw new Error(
 					`Native wrapper not found: ${nativeWrapperLinuxSource}`,
@@ -3472,7 +3472,7 @@ ${schemesXml}
 					try {
 						cpSync(correctLibSource, currentLibPath, { dereference: true });
 						console.log(
-							`Updated libNativeWrapper.so for ${config.build.linux?.bundleCEF ? "CEF" : "GTK-only"} mode`,
+							`Updated libNativeWrapper.so for ${config.build.linux?.bundleCEF ? "CEF (with weak linking)" : "GTK-only"} mode`,
 						);
 					} catch (error) {
 						console.warn("Failed to update libNativeWrapper.so:", error);
