@@ -1863,6 +1863,11 @@ async function generateTemplateEmbeddings() {
 	const TEMPLATES_DIR = join(process.cwd(), "..", "templates");
 	const OUTPUT_FILE = join(process.cwd(), "src/cli/templates/embedded.ts");
 
+	const electrobunPackageJson = JSON.parse(
+		readFileSync(join(process.cwd(), "package.json"), "utf-8")
+	);
+	const electrobunVersion = electrobunPackageJson.version;
+
 	if (!existsSync(TEMPLATES_DIR)) {
 		console.log("No templates directory found, skipping template generation");
 		return;
@@ -1925,6 +1930,15 @@ async function generateTemplateEmbeddings() {
 		}
 
 		readDirectory(templateDir);
+
+		// Pin the electrobun dependency version in template package.json
+		if (files["package.json"]) {
+			const pkgJson = JSON.parse(files["package.json"]);
+			if (pkgJson.dependencies?.electrobun === "latest") {
+				pkgJson.dependencies.electrobun = electrobunVersion;
+			}
+			files["package.json"] = JSON.stringify(pkgJson, null, "\t") + "\n";
+		}
 
 		templates[templateName] = {
 			name: templateName,
