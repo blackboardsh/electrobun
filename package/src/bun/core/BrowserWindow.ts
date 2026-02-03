@@ -10,7 +10,7 @@ const buildConfig = await BuildConfig.get();
 
 let nextWindowId = 1;
 
-type WindowOptionsType<T = undefined> = {
+export type WindowOptionsType<T = undefined> = {
 	title: string;
 	frame: {
 		x: number;

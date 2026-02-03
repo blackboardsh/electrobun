@@ -18,7 +18,7 @@ const BrowserViewMap: {
 } = {};
 let nextWebviewId = 1;
 
-type BrowserViewOptions<T = undefined> = {
+export type BrowserViewOptions<T = undefined> = {
 	url: string | null;
 	html: string | null;
 	preload: string | null;

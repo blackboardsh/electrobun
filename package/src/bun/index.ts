@@ -1,7 +1,7 @@
 import electobunEventEmmitter from "./events/eventEmitter";
-import { BrowserWindow } from "./core/BrowserWindow";
-import { BrowserView } from "./core/BrowserView";
-import { Tray } from "./core/Tray";
+import { BrowserWindow, type WindowOptionsType } from "./core/BrowserWindow";
+import { BrowserView, type BrowserViewOptions } from "./core/BrowserView";
+import { Tray, type TrayOptions } from "./core/Tray";
 import * as ApplicationMenu from "./core/ApplicationMenu";
 import * as ContextMenu from "./core/ContextMenu";
 import {
@@ -11,7 +11,11 @@ import {
 	type UpdateStatusDetails,
 } from "./core/Updater";
 import * as Utils from "./core/Utils";
-import type { MessageBoxOptions, MessageBoxResponse } from "./core/Utils";
+import type {
+	MessageBoxOptions,
+	MessageBoxResponse,
+	NotificationOptions,
+} from "./core/Utils";
 import {
 	type RPCSchema,
 	type ElectrobunRPCSchema,
@@ -30,6 +34,8 @@ import type {
 	Cookie,
 	CookieFilter,
 	StorageType,
+	MenuItemConfig,
+	ApplicationMenuItemConfig,
 } from "./proc/native";
 import { BuildConfig, type BuildConfigType } from "./core/BuildConfig";
 
@@ -40,8 +46,14 @@ export {
 	type ElectrobunEvent,
 	type ElectrobunConfig,
 	type BuildConfigType,
+	type WindowOptionsType,
+	type BrowserViewOptions,
+	type TrayOptions,
 	type MessageBoxOptions,
 	type MessageBoxResponse,
+	type NotificationOptions,
+	type MenuItemConfig,
+	type ApplicationMenuItemConfig,
 	type Display,
 	type Rectangle,
 	type Point,

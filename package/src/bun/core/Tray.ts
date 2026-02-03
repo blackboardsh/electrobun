@@ -12,7 +12,7 @@ type NonDividerMenuItem = Exclude<
 let nextTrayId = 1;
 const TrayMap: { [id: number]: Tray } = {};
 
-type ConstructorOptions = {
+export type TrayOptions = {
 	title?: string;
 	image?: string;
 	template?: boolean;
@@ -30,7 +30,7 @@ export class Tray {
 		template = true,
 		width = 16,
 		height = 16,
-	}: ConstructorOptions = {}) {
+	}: TrayOptions = {}) {
 		try {
 			this.ptr = ffi.request.createTray({
 				id: this.id,
