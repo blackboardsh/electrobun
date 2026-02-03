@@ -21,6 +21,7 @@ import * as readline from "readline";
 import archiver from "archiver";
 import { OS, ARCH } from "../shared/platform";
 import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
+import { BUN_VERSION } from "../shared/bun-version";
 import {
 	getAppFileName,
 	getBundleFileName,
@@ -377,6 +378,206 @@ function getEffectiveCEFDir(
 		return join(projectRoot, "node_modules", ".electrobun-cache", "cef-override", `${platformOS}-${platformArch}`);
 	}
 	return getPlatformPaths(platformOS, platformArch).CEF_DIR;
+}
+
+/**
+ * Returns the effective Bun binary path. When a custom bunVersion is set,
+ * the Bun binary is stored in node_modules/.electrobun-cache/ which survives
+ * both dist rebuilds and bun install (which replaces node_modules/electrobun).
+ * When using the default version, returns the standard dist-{platform}/bun path.
+ */
+function getEffectiveBunBinary(
+	platformOS: "macos" | "win" | "linux",
+	platformArch: "arm64" | "x64",
+	bunVersion?: string,
+): string {
+	const binExt = platformOS === "win" ? ".exe" : "";
+	if (bunVersion) {
+		return join(projectRoot, "node_modules", ".electrobun-cache", "bun-override", `${platformOS}-${platformArch}`, `bun${binExt}`);
+	}
+	return getPlatformPaths(platformOS, platformArch).BUN_BINARY;
+}
+
+/**
+ * Ensures the correct Bun binary is available for bundling. When a custom
+ * bunVersion is specified in the config, downloads that version from GitHub
+ * releases and caches it. Otherwise returns the default binary path.
+ */
+async function ensureBunBinary(
+	targetOS: "macos" | "win" | "linux",
+	targetArch: "arm64" | "x64",
+	bunVersion?: string,
+): Promise<string> {
+	if (!bunVersion) {
+		return getPlatformPaths(targetOS, targetArch).BUN_BINARY;
+	}
+
+	const binExt = targetOS === "win" ? ".exe" : "";
+	const overrideDir = join(projectRoot, "node_modules", ".electrobun-cache", "bun-override", `${targetOS}-${targetArch}`);
+	const overrideBinary = join(overrideDir, `bun${binExt}`);
+	const versionFile = join(overrideDir, ".bun-version");
+
+	// Check if already downloaded with matching version
+	if (existsSync(overrideBinary) && existsSync(versionFile)) {
+		const cachedVersion = readFileSync(versionFile, "utf8").trim();
+		if (cachedVersion === bunVersion) {
+			console.log(
+				`Custom Bun ${bunVersion} already cached for ${targetOS}-${targetArch}`,
+			);
+			return overrideBinary;
+		}
+		// Version mismatch - remove stale cache
+		console.log(
+			`Cached Bun version "${cachedVersion}" does not match requested "${bunVersion}", re-downloading...`,
+		);
+		rmSync(overrideDir, { recursive: true, force: true });
+	} else if (existsSync(overrideDir)) {
+		rmSync(overrideDir, { recursive: true, force: true });
+	}
+
+	await downloadCustomBun(bunVersion, targetOS, targetArch);
+	return overrideBinary;
+}
+
+/**
+ * Downloads a specific Bun version from GitHub releases for a custom version
+ * override. The binary is cached in node_modules/.electrobun-cache/bun-override/
+ * so it survives dist rebuilds and bun install.
+ */
+async function downloadCustomBun(
+	bunVersion: string,
+	platformOS: "macos" | "win" | "linux",
+	platformArch: "arm64" | "x64",
+) {
+	// Map to GitHub release asset names
+	let bunUrlSegment: string;
+	let bunDirName: string;
+
+	if (platformOS === "win") {
+		bunUrlSegment = "bun-windows-x64-baseline.zip";
+		bunDirName = "bun-windows-x64-baseline";
+	} else if (platformOS === "macos") {
+		bunUrlSegment = platformArch === "arm64" ? "bun-darwin-aarch64.zip" : "bun-darwin-x64.zip";
+		bunDirName = platformArch === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
+	} else if (platformOS === "linux") {
+		bunUrlSegment = platformArch === "arm64" ? "bun-linux-aarch64.zip" : "bun-linux-x64.zip";
+		bunDirName = platformArch === "arm64" ? "bun-linux-aarch64" : "bun-linux-x64";
+	} else {
+		throw new Error(`Unsupported platform for custom Bun: ${platformOS}`);
+	}
+
+	const binExt = platformOS === "win" ? ".exe" : "";
+	const overrideDir = join(projectRoot, "node_modules", ".electrobun-cache", "bun-override", `${platformOS}-${platformArch}`);
+	const overrideBinary = join(overrideDir, `bun${binExt}`);
+	const bunUrl = `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/${bunUrlSegment}`;
+
+	console.log(`Using custom Bun version: ${bunVersion}`);
+	console.log(`Downloading from: ${bunUrl}`);
+
+	mkdirSync(overrideDir, { recursive: true });
+
+	const tempZipPath = join(overrideDir, "temp.zip");
+
+	try {
+		console.log(`Downloading custom Bun...`);
+		const response = await fetch(bunUrl);
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		}
+
+		const contentLength = response.headers.get("content-length");
+		const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
+		const fileStream = createWriteStream(tempZipPath);
+		let downloadedSize = 0;
+		let lastReportedPercent = -1;
+
+		if (response.body) {
+			const reader = response.body.getReader();
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+
+				const chunk = Buffer.from(value);
+				fileStream.write(chunk);
+				downloadedSize += chunk.length;
+
+				if (totalSize > 0) {
+					const percent = Math.round((downloadedSize / totalSize) * 100);
+					const percentTier = Math.floor(percent / 10) * 10;
+					if (percentTier > lastReportedPercent && percentTier <= 100) {
+						console.log(
+							`  Progress: ${percentTier}% (${Math.round(downloadedSize / 1024 / 1024)}MB/${Math.round(totalSize / 1024 / 1024)}MB)`,
+						);
+						lastReportedPercent = percentTier;
+					}
+				}
+			}
+		}
+
+		await new Promise((resolve, reject) => {
+			fileStream.end((error: any) => {
+				if (error) reject(error);
+				else resolve(void 0);
+			});
+		});
+
+		console.log(
+			`Download completed (${Math.round(downloadedSize / 1024 / 1024)}MB), extracting...`,
+		);
+
+		// Extract zip file
+		if (platformOS === "win") {
+			execSync(
+				`powershell -command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${overrideDir}' -Force"`,
+				{ stdio: "inherit" },
+			);
+		} else {
+			execSync(`unzip -o "${tempZipPath}" -d "${overrideDir}"`, {
+				stdio: "inherit",
+			});
+		}
+
+		// Move binary from extracted subdirectory to override dir root
+		const extractedBinary = join(overrideDir, bunDirName, `bun${binExt}`);
+		if (existsSync(extractedBinary)) {
+			renameSync(extractedBinary, overrideBinary);
+		} else {
+			throw new Error(`Bun binary not found after extraction at ${extractedBinary}`);
+		}
+
+		// Set execute permissions on non-Windows
+		if (platformOS !== "win") {
+			execSync(`chmod +x "${overrideBinary}"`);
+		}
+
+		// Write version stamp
+		writeFileSync(join(overrideDir, ".bun-version"), bunVersion);
+
+		// Clean up
+		if (existsSync(tempZipPath)) unlinkSync(tempZipPath);
+		const extractedDir = join(overrideDir, bunDirName);
+		if (existsSync(extractedDir)) rmSync(extractedDir, { recursive: true, force: true });
+
+		console.log(
+			`Custom Bun ${bunVersion} for ${platformOS}-${platformArch} set up successfully`,
+		);
+	} catch (error: any) {
+		// Clean up on failure
+		if (existsSync(overrideDir)) {
+			try {
+				rmSync(overrideDir, { recursive: true, force: true });
+			} catch {}
+		}
+
+		console.error(
+			`Failed to set up custom Bun ${bunVersion} for ${platformOS}-${platformArch}:`,
+			error.message,
+		);
+		console.error(
+			`\nVerify the Bun version string and that it exists at: https://github.com/oven-sh/bun/releases`,
+		);
+		process.exit(1);
+	}
 }
 
 async function ensureCEFDependencies(
@@ -917,6 +1118,7 @@ const defaultConfig = {
 		useAsar: false,
 		asarUnpack: undefined as string[] | undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
 		cefVersion: undefined as string | undefined, // Override CEF version: "CEF_VERSION+chromium-CHROMIUM_VERSION"
+		bunVersion: undefined as string | undefined, // Override Bun runtime version: "1.4.2"
 		mac: {
 			codesign: false,
 			notarize: false,
@@ -2158,7 +2360,7 @@ ${schemesXml}
 
 		// Bun runtime binary
 		// todo (yoav): this only works for the current architecture
-		const bunBinarySourcePath = targetPaths.BUN_BINARY;
+		const bunBinarySourcePath = await ensureBunBinary(currentTarget.os, currentTarget.arch, config.build.bunVersion);
 		// Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
 		// in node_modules, so we have to dereference here to get the actual binary in the bundle.
 		const bunBinaryDestInBundlePath =
@@ -2969,6 +3171,7 @@ ${schemesXml}
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
 			runtime: config.runtime ?? {},
 			...(bundlesCEF ? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING } : {}),
+			bunVersion: config.build?.bunVersion ?? BUN_VERSION,
 		};
 
 		// Include chromiumFlags only if the developer defined them

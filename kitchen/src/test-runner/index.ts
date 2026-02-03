@@ -436,7 +436,7 @@ async function submitVerification(action: 'pass' | 'fail' | 'retest') {
 }
 
 // Build Config UI
-function updateBuildConfigUI(config: { defaultRenderer: string; availableRenderers: string[]; cefVersion?: string }) {
+function updateBuildConfigUI(config: { defaultRenderer: string; availableRenderers: string[]; cefVersion?: string; bunVersion?: string }) {
   const defaultRendererEl = document.getElementById('default-renderer');
   const availableRenderersEl = document.getElementById('available-renderers');
 
@@ -457,6 +457,11 @@ function updateBuildConfigUI(config: { defaultRenderer: string; availableRendere
       const chromeMatch = navigator.userAgent.match(/Chrome\/(\S+)/);
       chromiumVersionEl.textContent = chromeMatch ? chromeMatch[1]! : 'N/A';
     }
+  }
+
+  const bunVersionEl = document.getElementById('bun-version');
+  if (bunVersionEl) {
+    bunVersionEl.textContent = config.bunVersion || 'N/A';
   }
 
   const userAgentEl = document.getElementById('user-agent-value');

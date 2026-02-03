@@ -16,6 +16,7 @@ import {
 import { parseArgs } from "util";
 import process from "process";
 import { CEF_VERSION, CHROMIUM_VERSION, DEFAULT_CEF_VERSION_STRING } from "./src/shared/cef-version";
+import { BUN_VERSION } from "./src/shared/bun-version";
 
 console.log("building...", platform(), arch());
 
@@ -752,8 +753,28 @@ async function BunInstall() {
 }
 
 async function vendorBun() {
+	// Check if vendored Bun version matches expected version.
+	// When the hardcoded version is bumped (e.g. after a git pull),
+	// this detects the mismatch and forces a clean re-vendor.
+	const bunDir = join(process.cwd(), "vendors", "bun");
+	const bunVersionFile = join(bunDir, ".bun-version");
+
 	if (existsSync(PATH.bun.RUNTIME)) {
-		return;
+		if (existsSync(bunVersionFile)) {
+			const vendoredVersion = readFileSync(bunVersionFile, "utf-8").trim();
+			if (vendoredVersion !== BUN_VERSION) {
+				console.log(`Bun version mismatch: vendored "${vendoredVersion}" vs expected "${BUN_VERSION}"`);
+				console.log("Cleaning stale Bun binary and re-vendoring...");
+				unlinkSync(PATH.bun.RUNTIME);
+			} else {
+				return;
+			}
+		} else {
+			// Binary exists but no version stamp (legacy state) — write one and keep going
+			mkdirSync(bunDir, { recursive: true });
+			writeFileSync(bunVersionFile, BUN_VERSION);
+			return;
+		}
 	}
 
 	await pauseForGitHub();
@@ -781,7 +802,7 @@ async function vendorBun() {
 	const extractDir = join("vendors", "bun");
 
 	// Download zip file
-	await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v1.3.8/${bunUrlSegment}`;
+	await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${bunUrlSegment}`;
 
 	// Validate download
 	validateDownload(tempZipPath, "bun");
@@ -811,6 +832,9 @@ async function vendorBun() {
 	// Clean up
 	await $`rm ${tempZipPath}`;
 	await $`rm -rf ${join("vendors", "bun", bunDirName)}`;
+
+	// Write version stamp so future builds can detect staleness
+	writeFileSync(join("vendors", "bun", ".bun-version"), BUN_VERSION);
 }
 
 async function vendorZig() {

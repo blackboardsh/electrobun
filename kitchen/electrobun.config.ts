@@ -13,6 +13,7 @@ export default {
 	build: {
 		useAsar: true,
 		// cefVersion: "144.0.12+g1a1008c+chromium-144.0.7559.110",
+		// bunVersion: "1.3.7",
 		bun: {
 			entrypoint: "src/bun/index.ts",
 		},

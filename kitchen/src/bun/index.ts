@@ -247,6 +247,7 @@ testRunnerWindow.webview.on("dom-ready", () => {
 		defaultRenderer: buildConfig.defaultRenderer,
 		availableRenderers: buildConfig.availableRenderers,
 		cefVersion: buildConfig.cefVersion,
+		bunVersion: buildConfig.bunVersion,
 	});
 	// Send current update status
 	testRunnerWindow!.webview.rpc?.send.updateStatus(updateState);

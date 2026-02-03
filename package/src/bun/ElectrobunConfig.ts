@@ -135,6 +135,16 @@ export interface ElectrobunConfig {
 		cefVersion?: string;
 
 		/**
+		 * Override the Bun runtime version.
+		 * Format: semver string (e.g., "1.4.2")
+		 *
+		 * This downloads the specified Bun version from GitHub releases and uses it
+		 * instead of the version bundled with this Electrobun release.
+		 * @default Uses the version bundled with this Electrobun release
+		 */
+		bunVersion?: string;
+
+		/**
 		 * macOS-specific build configuration
 		 */
 		mac?: {

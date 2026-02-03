@@ -2,6 +2,7 @@ export type BuildConfigType = {
 	defaultRenderer: "native" | "cef";
 	availableRenderers: ("native" | "cef")[];
 	cefVersion?: string;
+	bunVersion?: string;
 	runtime?: {
 		exitOnLastWindowClosed?: boolean;
 		[key: string]: unknown;

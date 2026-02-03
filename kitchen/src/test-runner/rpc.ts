@@ -110,6 +110,7 @@ export type TestRunnerRPC = {
         defaultRenderer: 'native' | 'cef';
         availableRenderers: ('native' | 'cef')[];
         cefVersion?: string;
+        bunVersion?: string;
       };
       updateStatus: UpdateInfo;
       updateStatusEntry: UpdateStatusEntry;
