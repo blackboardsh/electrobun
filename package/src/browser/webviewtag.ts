@@ -217,6 +217,7 @@ const ConfigureWebviewTags = (
 		setCallAsyncJavaScriptResponse(messageId: string, response: any) {
 			const resolvers = this.asyncResolvers[messageId];
 			delete this.asyncResolvers[messageId];
+			if (!resolvers) return;
 			try {
 				response = JSON.parse(response);
 

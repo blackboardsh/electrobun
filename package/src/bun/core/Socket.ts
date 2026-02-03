@@ -169,6 +169,8 @@ export const sendMessageToWebviewViaSocket = (
 	const rpc = socketMap[webviewId];
 	const browserView = BrowserView.getById(webviewId);
 
+	if (!browserView) return false;
+
 	if (rpc?.socket?.readyState === WebSocket.OPEN) {
 		try {
 			const unencryptedString = JSON.stringify(message);

@@ -138,7 +138,7 @@ export class TestExecutor {
 
       log: (message: string) => {
         logs.push(message);
-        const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+        const timestamp = new Date().toISOString().split('T')[1]!.split('.')[0]!;
         console.log(`  [${timestamp}] ${message}`);
         this.emit({ type: 'test-log', testId, message });
       },

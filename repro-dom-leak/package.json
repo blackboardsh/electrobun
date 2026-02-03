@@ -3,5 +3,8 @@
 	"private": true,
 	"dependencies": {
 		"electrobun": "file:../package"
+	},
+	"devDependencies": {
+		"typescript": "^5.9.3"
 	}
 }

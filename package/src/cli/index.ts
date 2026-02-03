@@ -718,7 +718,8 @@ async function downloadAndExtractCustomCEF(
 				`(e.g. "144.0.11+ge135be2+chromium-144.0.7559.97")`,
 		);
 	}
-	const [, cefVer, chromiumVer] = match;
+	const cefVer = match[1]!;
+	const chromiumVer = match[2]!;
 
 	// Map platform names to Spotify CDN naming
 	const cefPlatformMap: Record<string, string> = {
@@ -1682,7 +1683,7 @@ ${schemesXml}
 			if (templateFlag) {
 				// Traditional usage: electrobun init my-project --template=photo-booth
 				projectName = secondArg || "my-electrobun-app";
-				templateName = templateFlag.split("=")[1];
+				templateName = templateFlag.split("=")[1]!;
 			} else if (secondArg && availableTemplates.includes(secondArg)) {
 				// New intuitive usage: electrobun init photo-booth
 				projectName = secondArg; // Use template name as project name
@@ -1718,7 +1719,7 @@ ${schemesXml}
 					process.exit(1);
 				}
 
-				templateName = availableTemplates[templateIndex];
+				templateName = availableTemplates[templateIndex]!;
 
 				// Ask for project name
 				const rl2 = readline.createInterface({
@@ -2679,7 +2680,7 @@ ${schemesXml}
 		// Build webview-javascript ts files
 		// bundle all the bundles
 		for (const viewName in config.build.views) {
-			const viewConfig = config.build.views[viewName];
+			const viewConfig = config.build.views[viewName]!;
 
 			const viewSource = join(projectRoot, viewConfig.entrypoint);
 			if (!existsSync(viewSource)) {
@@ -2728,7 +2729,7 @@ ${schemesXml}
 
 			const destination = join(
 				appBundleAppCodePath,
-				config.build.copy[relSource],
+				config.build.copy[relSource]!,
 			);
 			const destFolder = dirname(destination);
 
@@ -3869,7 +3870,7 @@ ${schemesXml}
 <dict>
     ${Object.keys(entitlements)
 			.map((key) => {
-				return `<key>${key}</key>\n${getEntitlementValue(entitlements[key])}`;
+				return `<key>${key}</key>\n${getEntitlementValue(entitlements[key]!)}`;
 			})
 			.join("\n")}
 </dict>

@@ -468,12 +468,12 @@ const Updater = {
 					]);
 
 					if (patchResult.exitCode !== 0 || patchResult.success === false) {
-						const stderr = new TextDecoder().decode(
-							patchResult.stderr || new Uint8Array(),
-						);
-						const stdout = new TextDecoder().decode(
-							patchResult.stdout || new Uint8Array(),
-						);
+						const stderr = patchResult.stderr
+							? patchResult.stderr.toString()
+							: "";
+						const stdout = patchResult.stdout
+							? patchResult.stdout.toString()
+							: "";
 						if (updateInfo) {
 							updateInfo.error =
 								stderr ||

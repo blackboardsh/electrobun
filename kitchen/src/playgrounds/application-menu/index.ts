@@ -280,6 +280,6 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Apply initial config
-  const initialConfig = menuConfigs[0];
+  const initialConfig = menuConfigs[0]!;
   (electrobun.rpc as any)?.request.setApplicationMenu({ menu: initialConfig.menu });
 });

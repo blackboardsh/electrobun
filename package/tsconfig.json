@@ -22,7 +22,8 @@
       // Some stricter flags
       "noUnusedLocals": true,
       "noUnusedParameters": true,
-      "noPropertyAccessFromIndexSignature": true
+      "noPropertyAccessFromIndexSignature": true,
+      "noUncheckedIndexedAccess": true
     },
     "include": ["src/**/*"],
     "exclude": ["node_modules", "dist", "vendors", "build"]

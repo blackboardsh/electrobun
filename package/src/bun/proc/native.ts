@@ -41,7 +41,7 @@ function deserializeMenuAction(encodedAction: string): {
 		const parts = encodedAction.split("|");
 		if (parts.length >= 4) {
 			// ['', 'EB', 'dataId', 'actualAction', ...]
-			const dataId = parts[2];
+			const dataId = parts[2]!;
 			actualAction = parts.slice(3).join("|"); // Rejoin in case action contains |
 			data = getMenuData(dataId);
 
@@ -861,10 +861,10 @@ export const ffi = {
 			);
 
 			return {
-				x: xBuf[0],
-				y: yBuf[0],
-				width: widthBuf[0],
-				height: heightBuf[0],
+				x: xBuf[0]!,
+				y: yBuf[0]!,
+				width: widthBuf[0]!,
+				height: heightBuf[0]!,
 			};
 		},
 
@@ -1190,6 +1190,7 @@ export const ffi = {
 			const { id, title } = params;
 
 			const tray = Tray.getById(id);
+			if (!tray) return;
 
 			native.symbols.setTrayTitle(tray.ptr, toCString(title));
 		},
@@ -1197,6 +1198,7 @@ export const ffi = {
 			const { id, image } = params;
 
 			const tray = Tray.getById(id);
+			if (!tray) return;
 
 			native.symbols.setTrayImage(tray.ptr, toCString(image));
 		},
@@ -1208,6 +1210,7 @@ export const ffi = {
 			const { id, menuConfig } = params;
 
 			const tray = Tray.getById(id);
+			if (!tray) return;
 
 			native.symbols.setTrayMenu(tray.ptr, toCString(menuConfig));
 		},
@@ -1514,7 +1517,7 @@ const getMimeType = new JSCallback(
 		// otherwise it can break. eg: for html with text/javascript;charset=utf-8 browsers
 		// will tend to render the code/text instead of interpreting the html.
 
-		return toCString(mimeType.split(";")[0]);
+		return toCString(mimeType.split(";")[0]!);
 	},
 	{
 		args: [FFIType.cstring],
@@ -2011,6 +2014,7 @@ const bunBridgePostmessageHandler = new JSCallback(
 			const msgJson = JSON.parse(msgStr.toString());
 
 			const webview = BrowserView.getById(id);
+			if (!webview) return;
 
 			webview.rpcHandler?.(msgJson);
 		} catch (err) {
@@ -2057,7 +2061,7 @@ const internalBridgeHandler = new JSCallback(
 							(params: unknown) => void
 						>
 					)[msgJson.id];
-					handler(msgJson.payload);
+					handler?.(msgJson.payload);
 				} else if (msgJson.type === "request") {
 					const hostWebview = BrowserView.getById(msgJson.hostWebviewId);
 					// const targetWebview = BrowserView.getById(msgJson.params.params.hostWebviewId);
@@ -2068,7 +2072,7 @@ const internalBridgeHandler = new JSCallback(
 						>
 					)[msgJson.method];
 
-					const payload = handler(msgJson.params);
+					const payload = handler?.(msgJson.params);
 
 					const resultObj = {
 						type: "response",
@@ -2367,6 +2371,7 @@ export const internalRpcHandlers = {
 		},
 		startWindowMove: (params: { id: number }) => {
 			const window = BrowserWindow.getById(params.id);
+			if (!window) return;
 			native.symbols.startWindowMove(window.ptr);
 		},
 		stopWindowMove: (_params: unknown) => {

@@ -452,10 +452,10 @@ function updateBuildConfigUI(config: { defaultRenderer: string; availableRendere
     if (config.cefVersion) {
       // Extract chromium version from CEF version string like "144.0.12+g1a1008c+chromium-144.0.7559.110"
       const chromiumMatch = config.cefVersion.match(/chromium-([\d.]+)/);
-      chromiumVersionEl.textContent = chromiumMatch ? chromiumMatch[1] : config.cefVersion;
+      chromiumVersionEl.textContent = chromiumMatch ? chromiumMatch[1]! : config.cefVersion;
     } else {
       const chromeMatch = navigator.userAgent.match(/Chrome\/(\S+)/);
-      chromiumVersionEl.textContent = chromeMatch ? chromeMatch[1] : 'N/A';
+      chromiumVersionEl.textContent = chromeMatch ? chromeMatch[1]! : 'N/A';
     }
   }
 
