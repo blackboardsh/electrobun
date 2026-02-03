@@ -381,24 +381,6 @@ function getEffectiveCEFDir(
 }
 
 /**
- * Returns the effective Bun binary path. When a custom bunVersion is set,
- * the Bun binary is stored in node_modules/.electrobun-cache/ which survives
- * both dist rebuilds and bun install (which replaces node_modules/electrobun).
- * When using the default version, returns the standard dist-{platform}/bun path.
- */
-function getEffectiveBunBinary(
-	platformOS: "macos" | "win" | "linux",
-	platformArch: "arm64" | "x64",
-	bunVersion?: string,
-): string {
-	const binExt = platformOS === "win" ? ".exe" : "";
-	if (bunVersion) {
-		return join(projectRoot, "node_modules", ".electrobun-cache", "bun-override", `${platformOS}-${platformArch}`, `bun${binExt}`);
-	}
-	return getPlatformPaths(platformOS, platformArch).BUN_BINARY;
-}
-
-/**
  * Ensures the correct Bun binary is available for bundling. When a custom
  * bunVersion is specified in the config, downloads that version from GitHub
  * releases and caches it. Otherwise returns the default binary path.
