@@ -1,6 +1,6 @@
 {
 	"name": "electrobun",
-	"version": "1.10.1-beta.0",
+	"version": "1.10.2-beta.0",
 	"description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
 	"license": "MIT",
 	"author": "Blackboard Technologies Inc.",
