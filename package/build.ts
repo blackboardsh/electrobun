@@ -505,13 +505,11 @@ async function copyApiFiles() {
 		await $`cp -R src/bun/ dist/api`;
 		await $`cp -R src/browser/ dist/api`;
 		await $`cp -R src/shared/ dist/api`;
-		await $`cp -R src/vendor/ dist/api`;
 	} else {
 		// on unix cp is more like a rename
 		await $`cp -R src/bun dist/api/`;
 		await $`cp -R src/browser dist/api/`;
 		await $`cp -R src/shared dist/api/`;
-		await $`cp -R src/vendor dist/api/`;
 	}
 }
 

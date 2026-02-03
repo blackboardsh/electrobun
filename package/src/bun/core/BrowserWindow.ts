@@ -4,6 +4,7 @@ import { BrowserView } from "./BrowserView";
 import { type Pointer } from "bun:ffi";
 import { BuildConfig } from "./BuildConfig";
 import { quit } from "./Utils";
+import { type RPCWithTransport } from "../../shared/rpc.js";
 
 const buildConfig = await BuildConfig.get();
 
@@ -65,13 +66,6 @@ electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
 		quit();
 	}
 });
-
-interface RPCWithTransport {
-	setTransport: (transport: {
-		send: (msg: unknown) => void;
-		registerHandler: (handler: (msg: unknown) => void) => void;
-	}) => void;
-}
 
 export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	id: number = nextWindowId++;

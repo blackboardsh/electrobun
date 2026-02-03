@@ -1,12 +1,12 @@
-import type {
-	RPCSchema,
-	RPCRequestHandler,
-	RPCOptions,
-	RPCMessageHandlerFn,
-	WildcardRPCMessageHandlerFn,
-	RPCTransport,
-} from "../vendor/rpc-anywhere/types.js";
-import { createRPC } from "../vendor/rpc-anywhere/create-rpc.js";
+import {
+	type RPCSchema,
+	type RPCTransport,
+	type ElectrobunRPCSchema,
+	type ElectrobunRPCConfig,
+	type RPCWithTransport,
+	createRPC,
+	defineElectrobunRPC,
+} from "../shared/rpc.js";
 import {
 	ConfigureWebviewTags,
 	type WebviewTagElement,
@@ -15,23 +15,10 @@ import {
 // todo: should this just be injected as a preload script?
 import { isAppRegionDrag } from "./stylesAndElements";
 import type {
-	BuiltinBunToWebviewSchema,
-	BuiltinWebviewToBunSchema,
-} from "./builtinrpcSchema";
-import type {
 	InternalWebviewHandlers,
 	WebviewTagHandlers,
 } from "./rpc/webview";
 import "./global.d.ts";
-
-interface ElectrobunWebviewRPCSChema {
-	bun: RPCSchema;
-	webview: RPCSchema;
-}
-
-interface RPCWithTransport {
-	setTransport: (transport: RPCTransport) => void;
-}
 
 const WEBVIEW_ID = window.__electrobunWebviewId;
 const WINDOW_ID = window.__electrobunWindowId;
@@ -289,51 +276,13 @@ class Electroview<T extends RPCWithTransport> {
 			this.rpcHandler(msg);
 		}
 	}
-	// todo (yoav): This is mostly just the reverse of the one in BrowserView.ts on the bun side. Should DRY this up.
-	static defineRPC<
-		Schema extends ElectrobunWebviewRPCSChema,
-		BunSchema extends RPCSchema = Schema["bun"],
-		WebviewSchema extends RPCSchema = Schema["webview"],
-	>(config: {
-		maxRequestTime?: number;
-		handlers: {
-			requests?: RPCRequestHandler<WebviewSchema["requests"]>;
-			messages?: {
-				[key in keyof WebviewSchema["messages"]]: RPCMessageHandlerFn<
-					WebviewSchema["messages"],
-					key
-				>;
-			} & {
-				"*"?: WildcardRPCMessageHandlerFn<WebviewSchema["messages"]>;
-			};
-		};
-	}) {
-		// Note: RPC Anywhere requires defining the requests that a schema handles and the messages that a schema sends.
-		// eg: BunSchema {
-		//   requests: // ... requests bun handles, sent by webview
-		//   messages: // ... messages bun sends, handled by webview
-		// }
-		// In some generlized contexts that makes sense,
-		// In the Electrobun context it can feel a bit counter-intuitive so we swap this around a bit. In Electrobun, the
-		// webview and bun are known endpoints so we simplify schema definitions by combining them.
-		// Schema {
-		//   bun: BunSchema {
-		//      requests: // ... requests bun sends, handled by webview,
-		//      messages: // ... messages bun sends, handled by webview
-		//    },
-		//   webview: WebviewSchema {
-		//      requests: // ... requests webview sends, handled by bun,
-		//      messages: // ... messages webview sends, handled by bun
-		//    },
-		// }
-		// electrobun also treats messages as "requests that we don't wait for to complete", and normalizes specifying the
-		// handlers for them alongside request handlers.
-
-		const builtinHandlers: {
-			requests: RPCRequestHandler<BuiltinBunToWebviewSchema["requests"]>;
-		} = {
-			requests: {
-				evaluateJavascriptWithResponse: ({ script }) => {
+	static defineRPC<Schema extends ElectrobunRPCSchema>(
+		config: ElectrobunRPCConfig<Schema, "webview">,
+	) {
+		return defineElectrobunRPC("webview", {
+			...config,
+			extraRequestHandlers: {
+				evaluateJavascriptWithResponse: ({ script }: { script: string }) => {
 					return new Promise((resolve) => {
 						try {
 							const resultFunction = new Function(script);
@@ -358,56 +307,7 @@ class Electroview<T extends RPCWithTransport> {
 					});
 				},
 			},
-		};
-
-		type mixedWebviewSchema = {
-			requests: BunSchema["requests"] & BuiltinWebviewToBunSchema["requests"];
-			messages: WebviewSchema["messages"];
-		};
-
-		type mixedBunSchema = {
-			requests: WebviewSchema["requests"] &
-				BuiltinBunToWebviewSchema["requests"];
-			messages: BunSchema["messages"];
-		};
-
-		const rpcOptions = {
-			maxRequestTime: config.maxRequestTime,
-			requestHandler: {
-				...config.handlers.requests,
-				...builtinHandlers.requests,
-			},
-			transport: {
-				// Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey
-				registerHandler: () => {},
-			},
-		} as RPCOptions<mixedBunSchema, mixedWebviewSchema>;
-
-		const rpc = createRPC<mixedBunSchema, mixedWebviewSchema>(rpcOptions);
-
-		const messageHandlers = config.handlers.messages;
-		if (messageHandlers) {
-			// note: this can only be done once there is a transport
-			// @ts-ignore - this is due to all the schema mixing we're doing, fine to ignore
-			// while types in here are borked, they resolve correctly/bubble up to the defineRPC call site.
-			rpc.addMessageListener(
-				"*",
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				(messageName: keyof WebviewSchema["messages"], payload: any) => {
-					const globalHandler = messageHandlers["*"];
-					if (globalHandler) {
-						globalHandler(messageName, payload);
-					}
-
-					const messageHandler = messageHandlers[messageName];
-					if (messageHandler) {
-						messageHandler(payload);
-					}
-				},
-			);
-		}
-
-		return rpc;
+		});
 	}
 }
 

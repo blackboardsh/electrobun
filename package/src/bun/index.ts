@@ -12,8 +12,12 @@ import {
 } from "./core/Updater";
 import * as Utils from "./core/Utils";
 import type { MessageBoxOptions, MessageBoxResponse } from "./core/Utils";
-import type { RPCSchema } from "../vendor/rpc-anywhere/types.js";
-import { createRPC } from "../vendor/rpc-anywhere/create-rpc.js";
+import {
+	type RPCSchema,
+	type ElectrobunRPCSchema,
+	createRPC,
+	defineElectrobunRPC,
+} from "../shared/rpc.js";
 import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
 import * as Socket from "./core/Socket";
@@ -32,6 +36,7 @@ import { BuildConfig, type BuildConfigType } from "./core/BuildConfig";
 // Named Exports
 export {
 	type RPCSchema,
+	type ElectrobunRPCSchema,
 	type ElectrobunEvent,
 	type ElectrobunConfig,
 	type BuildConfigType,
@@ -47,6 +52,7 @@ export {
 	type UpdateStatusEntry,
 	type UpdateStatusDetails,
 	createRPC,
+	defineElectrobunRPC,
 	BrowserWindow,
 	BrowserView,
 	Tray,

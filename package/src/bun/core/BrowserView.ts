@@ -1,14 +1,12 @@
 import { native, toCString, ffi } from "../proc/native";
 import * as fs from "fs";
 import electrobunEventEmitter from "../events/eventEmitter";
-import type {
-	RPCSchema,
-	RPCRequestHandler,
-	RPCMessageHandlerFn,
-	WildcardRPCMessageHandlerFn,
-	RPCOptions,
-} from "../../vendor/rpc-anywhere/types.js";
-import { createRPC } from "../../vendor/rpc-anywhere/create-rpc.js";
+import {
+	type ElectrobunRPCSchema,
+	type ElectrobunRPCConfig,
+	type RPCWithTransport,
+	defineElectrobunRPC,
+} from "../../shared/rpc.js";
 import { Updater } from "./Updater";
 import { BuildConfig } from "./BuildConfig";
 import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
@@ -40,18 +38,6 @@ type BrowserViewOptions<T = undefined> = {
 	navigationRules: string | null;
 	// renderer:
 };
-
-interface ElectrobunWebviewRPCSChema {
-	bun: RPCSchema;
-	webview: RPCSchema;
-}
-
-interface RPCWithTransport {
-	setTransport: (transport: {
-		send: (msg: unknown) => void;
-		registerHandler: (handler: (msg: unknown) => void) => void;
-	}) => void;
-}
 
 const hash = await Updater.localInfo.hash();
 const buildConfig = await BuildConfig.get();
@@ -327,95 +313,9 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		return Object.values(BrowserViewMap);
 	}
 
-	static defineRPC<
-		Schema extends ElectrobunWebviewRPCSChema,
-		BunSchema extends RPCSchema = Schema["bun"],
-		WebviewSchema extends RPCSchema = Schema["webview"],
-	>(config: {
-		maxRequestTime?: number;
-		handlers: {
-			requests?: RPCRequestHandler<BunSchema["requests"]>;
-			messages?: {
-				[key in keyof BunSchema["messages"]]: RPCMessageHandlerFn<
-					BunSchema["messages"],
-					key
-				>;
-			} & {
-				"*"?: WildcardRPCMessageHandlerFn<BunSchema["messages"]>;
-			};
-		};
-	}) {
-		// Note: RPC Anywhere requires defining the requests that a schema handles and the messages that a schema sends.
-		// eg: BunSchema {
-		//   requests: // ... requests bun handles, sent by webview
-		//   messages: // ... messages bun sends, handled by webview
-		// }
-		// In some generlized contexts that makes sense,
-		// In the Electrobun context it can feel a bit counter-intuitive so we swap this around a bit. In Electrobun, the
-		// webview and bun are known endpoints so we simplify schema definitions by combining them.
-		// Schema {
-		//   bun: BunSchema {
-		//      requests: // ... requests bun handles, sent by webview,
-		//      messages: // ... messages bun handles, sent by webview
-		//    },
-		//   webview: WebviewSchema {
-		//      requests: // ... requests webview handles, sent by bun,
-		//      messages: // ... messages webview handles, sent by bun
-		//    },
-		// }
-		// This way from bun, webview.rpc.request.getTitle() and webview.rpc.send.someMessage maps to the schema
-		// MySchema.webview.requests.getTitle and MySchema.webview.messages.someMessage
-		// and in the webview, Electroview.rpc.request.getFileContents maps to
-		// MySchema.bun.requests.getFileContents.
-		// electrobun also treats messages as "requests that we don't wait for to complete", and normalizes specifying the
-		// handlers for them alongside request handlers.
-
-		type mixedWebviewSchema = {
-			requests: BunSchema["requests"]; // & BuiltinWebviewToBunSchema["requests"];
-			messages: WebviewSchema["messages"];
-		};
-
-		type mixedBunSchema = {
-			requests: WebviewSchema["requests"];
-			messages: BunSchema["messages"];
-		};
-
-		const rpcOptions = {
-			maxRequestTime: config.maxRequestTime,
-			requestHandler: {
-				...config.handlers.requests,
-				// ...internalRpcHandlers,
-			},
-			transport: {
-				// Note: RPC Anywhere will throw if you try add a message listener if transport.registerHandler is falsey
-				registerHandler: () => {},
-			},
-		} as RPCOptions<mixedWebviewSchema, mixedBunSchema>;
-
-		const rpc = createRPC<mixedWebviewSchema, mixedBunSchema>(rpcOptions);
-
-		const messageHandlers = config.handlers.messages;
-		if (messageHandlers) {
-			// note: this can only be done once there is a transport
-			// @ts-ignore - this is due to all the schema mixing we're doing, fine to ignore
-			// while types in here are borked, they resolve correctly/bubble up to the defineRPC call site.
-			rpc.addMessageListener(
-				"*",
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				(messageName: keyof BunSchema["messages"], payload: any) => {
-					const globalHandler = messageHandlers["*"];
-					if (globalHandler) {
-						globalHandler(messageName, payload);
-					}
-
-					const messageHandler = messageHandlers[messageName];
-					if (messageHandler) {
-						messageHandler(payload);
-					}
-				},
-			);
-		}
-
-		return rpc;
+	static defineRPC<Schema extends ElectrobunRPCSchema>(
+		config: ElectrobunRPCConfig<Schema, "bun">,
+	) {
+		return defineElectrobunRPC("bun", config);
 	}
 }

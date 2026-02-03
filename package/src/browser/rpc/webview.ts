@@ -1,4 +1,4 @@
-import type { RPCSchema } from "../../vendor/rpc-anywhere/types.js";
+import type { RPCSchema } from "../../shared/rpc.js";
 
 // todo (yoav): move this stuff to browser/rpc/webview.ts
 export type InternalWebviewHandlers = RPCSchema<{
