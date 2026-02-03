@@ -1,14 +1,14 @@
 import { native, toCString, ffi } from "../proc/native";
 import * as fs from "fs";
 import electrobunEventEmitter from "../events/eventEmitter";
-import {
-	type RPCSchema,
-	type RPCRequestHandler,
-	type RPCMessageHandlerFn,
-	type WildcardRPCMessageHandlerFn,
-	type RPCOptions,
-	createRPC,
-} from "rpc-anywhere";
+import type {
+	RPCSchema,
+	RPCRequestHandler,
+	RPCMessageHandlerFn,
+	WildcardRPCMessageHandlerFn,
+	RPCOptions,
+} from "../../vendor/rpc-anywhere/types.js";
+import { createRPC } from "../../vendor/rpc-anywhere/create-rpc.js";
 import { Updater } from "./Updater";
 import { BuildConfig } from "./BuildConfig";
 import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";

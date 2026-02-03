@@ -1,12 +1,12 @@
-import {
-	type RPCSchema,
-	type RPCRequestHandler,
-	type RPCOptions,
-	type RPCMessageHandlerFn,
-	type WildcardRPCMessageHandlerFn,
-	type RPCTransport,
-	createRPC,
-} from "rpc-anywhere";
+import type {
+	RPCSchema,
+	RPCRequestHandler,
+	RPCOptions,
+	RPCMessageHandlerFn,
+	WildcardRPCMessageHandlerFn,
+	RPCTransport,
+} from "../vendor/rpc-anywhere/types.js";
+import { createRPC } from "../vendor/rpc-anywhere/create-rpc.js";
 import {
 	ConfigureWebviewTags,
 	type WebviewTagElement,

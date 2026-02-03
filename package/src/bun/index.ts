@@ -12,7 +12,8 @@ import {
 } from "./core/Updater";
 import * as Utils from "./core/Utils";
 import type { MessageBoxOptions, MessageBoxResponse } from "./core/Utils";
-import { type RPCSchema, createRPC } from "rpc-anywhere";
+import type { RPCSchema } from "../vendor/rpc-anywhere/types.js";
+import { createRPC } from "../vendor/rpc-anywhere/create-rpc.js";
 import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
 import * as Socket from "./core/Socket";

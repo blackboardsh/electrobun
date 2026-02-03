@@ -1,0 +1,7 @@
+{
+	"name": "repro-dom-leak",
+	"private": true,
+	"dependencies": {
+		"electrobun": "file:../package"
+	}
+}
