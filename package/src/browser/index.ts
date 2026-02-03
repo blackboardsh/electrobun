@@ -313,6 +313,8 @@ class Electroview<T extends RPCWithTransport> {
 
 export {
 	type RPCSchema,
+	type ElectrobunRPCSchema,
+	type ElectrobunRPCConfig,
 	createRPC,
 	Electroview,
 	type WebviewTagElement,
