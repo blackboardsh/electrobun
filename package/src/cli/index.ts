@@ -3926,14 +3926,22 @@ ${schemesXml}
 		} else if (OS === "win") {
 			// Windows: Use launcher if available, otherwise fallback to direct execution
 			const launcherPath = join(bundleExecPath, "launcher.exe");
-			if (existsSync(launcherPath)) {
+			const launcherExists = existsSync(launcherPath);
+
+			if (launcherExists) {
 				mainProc = Bun.spawn([launcherPath], {
 					stdio: ["inherit", "inherit", "inherit"],
 					cwd: bundleExecPath,
 				});
-			} else {
-				// Fallback for older builds
-				mainProc = Bun.spawn(["./bun.exe", "../Resources/main.js"], {
+			}
+
+			// Fallback for older builds without launcher
+			// Note: Using explicit !launcherExists check instead of else block
+			// to work around Bun compiler bug that strips else blocks on Windows
+			if (!launcherExists) {
+				const bunExePath = join(bundleExecPath, "bun.exe");
+				const mainJsPath = join(_bundleResourcesPath, "main.js");
+				mainProc = Bun.spawn([bunExePath, mainJsPath], {
 					stdio: ["inherit", "inherit", "inherit"],
 					cwd: bundleExecPath,
 					onExit: (_proc, exitCode, signalCode, error) => {
