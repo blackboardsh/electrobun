@@ -98,3 +98,12 @@ All commands are run from the `/package` directory:
 ### Debugging
 
 **macOS:** Use `lldb <path-to-bundle>/Contents/MacOS/launcher` and then `run` to debug release builds
+
+## Platform Support
+
+| OS | Status |
+|---|---|
+| macOS 14+ | Official |
+| Windows 11+ | Official |
+| Ubuntu 22.04+ | Official |
+| Other Linux distros (gtk3, webkit2gtk-4.1) | Community |
