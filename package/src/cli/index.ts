@@ -3924,23 +3924,10 @@ ${schemesXml}
 				});
 			}
 		} else if (OS === "win") {
-			// Windows: Use launcher if available, otherwise fallback to direct execution
-			const launcherPath = join(bundleExecPath, "launcher.exe");
-			if (existsSync(launcherPath)) {
-				mainProc = Bun.spawn([launcherPath], {
-					stdio: ["inherit", "inherit", "inherit"],
-					cwd: bundleExecPath,
-				});
-			} else {
-				// Fallback for older builds
-				mainProc = Bun.spawn(["./bun.exe", "../Resources/main.js"], {
-					stdio: ["inherit", "inherit", "inherit"],
-					cwd: bundleExecPath,
-					onExit: (_proc, exitCode, signalCode, error) => {
-						console.log("Bun process exited:", { exitCode, signalCode, error });
-					},
-				});
-			}
+			mainProc = Bun.spawn([join(bundleExecPath, "launcher.exe")], {
+				stdio: ["inherit", "inherit", "inherit"],
+				cwd: bundleExecPath,
+			});
 		}
 
 		process.on("SIGINT", () => {
