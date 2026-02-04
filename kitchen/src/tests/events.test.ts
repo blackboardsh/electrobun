@@ -1,7 +1,7 @@
 // Event System Tests
 
 import { defineTest, expect } from "../test-framework/types";
-import Electrobun from "electrobun/bun";
+import Electrobun, { Utils } from "electrobun/bun";
 
 export const eventsTests = [
   defineTest({
@@ -213,6 +213,71 @@ export const eventsTests = [
       expect(win2Events).toBeGreaterThanOrEqual(1);
 
       win2.close();
+    },
+  }),
+
+  defineTest({
+    name: "before-quit event can cancel quit",
+    category: "Events",
+    description: "Test that before-quit event fires and can cancel application quit",
+    async run({ log }) {
+      let beforeQuitFired = false;
+
+      const handler = (e: any) => {
+        beforeQuitFired = true;
+        e.response = { allow: false };
+      };
+
+      Electrobun.events.on("before-quit", handler);
+
+      log("Calling Utils.quit() with before-quit handler that cancels");
+      Utils.quit();
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      Electrobun.events.off("before-quit", handler);
+
+      expect(beforeQuitFired).toBe(true);
+      log("before-quit event fired and quit was cancelled");
+    },
+  }),
+
+  defineTest({
+    name: "Window close fires per-window handler before global",
+    category: "Events",
+    description: "Test that per-window close handlers fire before global close handlers",
+    async run({ createWindow, log }) {
+      const order: string[] = [];
+
+      const globalHandler = () => {
+        order.push("global");
+      };
+
+      Electrobun.events.on("close", globalHandler);
+
+      const win = await createWindow({
+        html: "<html><body>Test</body></html>",
+        title: "Close Order Test",
+        renderer: 'cef',
+      });
+
+      win.window.on("close", () => {
+        order.push("specific");
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      log("Closing window");
+      win.window.close();
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      Electrobun.events.off("close", globalHandler);
+
+      log(`Event order: ${order.join(", ")}`);
+      expect(order[0]).toBe("specific");
+      expect(order[1]).toBe("global");
+      log("Per-window close handler fired before global handler");
     },
   }),
 ];
