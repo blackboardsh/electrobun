@@ -117,6 +117,7 @@ export const quit = () => {
 	if (isQuitting) return;
 	isQuitting = true;
 	native.symbols.killApp();
+	process.exit();
 };
 
 // Override process.exit so that calling it triggers proper native cleanup
