@@ -1825,22 +1825,6 @@ async function buildLauncher() {
 	}
 }
 
-async function buildAsar() {
-	console.log("Building asar library...");
-	let zigArgs: string[] = [];
-	if (ARCH === "arm64") {
-		zigArgs = ["-Dtarget=aarch64-macos"];
-	} else {
-		zigArgs = ["-Dtarget=x86_64-macos"];
-	}
-
-	if (CHANNEL === "debug") {
-		await $`cd ../zig-asar && ../electrobun/vendors/zig/zig build ${zigArgs}`;
-	} else if (CHANNEL === "release") {
-		await $`cd ../zig-asar && ../electrobun/vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
-	}
-}
-
 async function buildMainJs() {
 	const bunModule = await import("bun");
 	const result = await bunModule.build({
@@ -1865,7 +1849,12 @@ async function buildMainJs() {
 
 async function buildSelfExtractor() {
 	const zigArgs =
-		OS === "win" ? ["-Dtarget=x86_64-windows", "-Dcpu=baseline"] : [];
+		OS === "win"
+			? ["-Dtarget=x86_64-windows", "-Dcpu=baseline"]
+			: ARCH === "x64"
+				? ["-Dcpu=baseline"]
+				: [];
+
 	if (CHANNEL === "debug") {
 		await $`cd src/extractor && ../../vendors/zig/zig build ${zigArgs}`;
 	} else if (CHANNEL === "release") {
