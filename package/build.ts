@@ -15,7 +15,11 @@ import {
 } from "fs";
 import { parseArgs } from "util";
 import process from "process";
-import { CEF_VERSION, CHROMIUM_VERSION, DEFAULT_CEF_VERSION_STRING } from "./src/shared/cef-version";
+import {
+	CEF_VERSION,
+	CHROMIUM_VERSION,
+	DEFAULT_CEF_VERSION_STRING,
+} from "./src/shared/cef-version";
 import { BUN_VERSION } from "./src/shared/bun-version";
 
 console.log("building...", platform(), arch());
@@ -763,7 +767,9 @@ async function vendorBun() {
 		if (existsSync(bunVersionFile)) {
 			const vendoredVersion = readFileSync(bunVersionFile, "utf-8").trim();
 			if (vendoredVersion !== BUN_VERSION) {
-				console.log(`Bun version mismatch: vendored "${vendoredVersion}" vs expected "${BUN_VERSION}"`);
+				console.log(
+					`Bun version mismatch: vendored "${vendoredVersion}" vs expected "${BUN_VERSION}"`,
+				);
 				console.log("Cleaning stale Bun binary and re-vendoring...");
 				unlinkSync(PATH.bun.RUNTIME);
 			} else {
@@ -857,7 +863,7 @@ async function vendorZig() {
 }
 
 async function vendorBsdiff() {
-	const BSDIFF_VERSION = "0.1.18";
+	const BSDIFF_VERSION = "0.1.19";
 	const bsdiffDir = join(process.cwd(), "vendors", "zig-bsdiff");
 	const bsdiffBin = join(bsdiffDir, "bsdiff" + binExt);
 	const bspatchBin = join(bsdiffDir, "bspatch" + binExt);
@@ -924,7 +930,7 @@ async function vendorBsdiff() {
 }
 
 async function vendorZstd() {
-	const ZSTD_VERSION = "0.1.2";
+	const ZSTD_VERSION = "0.1.3";
 	const zstdDir = join(process.cwd(), "vendors", "zig-zstd");
 	const zstdBin = join(zstdDir, "zig-zstd" + binExt);
 
@@ -986,7 +992,7 @@ async function vendorZstd() {
 }
 
 async function vendorAsar() {
-	const ASAR_VERSION = "0.2.1";
+	const ASAR_VERSION = "0.2.2";
 	const asarBaseDir = join(process.cwd(), "vendors", "zig-asar");
 
 	// Map OS names to match GitHub release naming
@@ -1093,7 +1099,9 @@ async function vendorCEF() {
 	if (existsSync(cefDir) && existsSync(versionFile)) {
 		const vendoredVersion = readFileSync(versionFile, "utf-8").trim();
 		if (vendoredVersion !== expectedVersionString) {
-			console.log(`CEF version mismatch: vendored "${vendoredVersion}" vs expected "${expectedVersionString}"`);
+			console.log(
+				`CEF version mismatch: vendored "${vendoredVersion}" vs expected "${expectedVersionString}"`,
+			);
 			console.log("Cleaning stale CEF artifacts and re-vendoring...");
 			// Remove stale CEF vendor directory
 			await $`rm -rf vendors/cef`;
@@ -1106,7 +1114,9 @@ async function vendorCEF() {
 		}
 	} else if (existsSync(cefDir) && !existsSync(versionFile)) {
 		// CEF dir exists but no version file (legacy state) — force re-vendor
-		console.log("CEF vendor directory found without version stamp, cleaning...");
+		console.log(
+			"CEF vendor directory found without version stamp, cleaning...",
+		);
 		await $`rm -rf vendors/cef`;
 		await $`rm -f src/native/build/process_helper src/native/build/process_helper.exe`;
 		await $`rm -f src/native/build/process_helper_mac.o src/native/build/process_helper_win.obj src/native/linux/build/process_helper_linux.o`;
@@ -1760,7 +1770,9 @@ async function buildNative() {
 				console.log("Compiling CEF loader...");
 				await $`g++ -c -std=c++17 -fPIC -I${cefInclude} -o src/native/linux/build/cef_loader.o src/native/linux/cef_loader.cpp`;
 
-				console.log("Building CEF version (libNativeWrapper_cef.so) with weak linking");
+				console.log(
+					"Building CEF version (libNativeWrapper_cef.so) with weak linking",
+				);
 				const linkCefCmd = [
 					"g++",
 					"-shared",
@@ -1877,7 +1889,7 @@ async function generateTemplateEmbeddings() {
 	const OUTPUT_FILE = join(process.cwd(), "src/cli/templates/embedded.ts");
 
 	const electrobunPackageJson = JSON.parse(
-		readFileSync(join(process.cwd(), "package.json"), "utf-8")
+		readFileSync(join(process.cwd(), "package.json"), "utf-8"),
 	);
 	const electrobunVersion = electrobunPackageJson.version;
 
