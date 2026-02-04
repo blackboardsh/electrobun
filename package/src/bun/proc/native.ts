@@ -1437,9 +1437,10 @@ const windowCloseCallback = new JSCallback(
 			id,
 		});
 
-		// global event
-		electrobunEventEmitter.emitEvent(event);
+		// emit specific event first so user per-window handlers run
+		// before the global handler (e.g. exitOnLastWindowClosed)
 		electrobunEventEmitter.emitEvent(event, id);
+		electrobunEventEmitter.emitEvent(event);
 	},
 	{
 		args: ["u32"],
