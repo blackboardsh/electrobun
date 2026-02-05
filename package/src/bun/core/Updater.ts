@@ -786,9 +786,12 @@ const Updater = {
 					mkdirSync(extractionDir, { recursive: true });
 				}
 
-				const latestTarBytes = await Bun.file(latestTarPath).arrayBuffer();
-				const latestArchive = new Bun.Archive(latestTarBytes);
-				await latestArchive.extract(extractionDir);
+				// Extract tar file using node tar (more compatible than Bun.Archive)
+				const tar = await import("tar");
+				await tar.extract({
+					file: latestTarPath,
+					cwd: extractionDir,
+				});
 
 				if (currentOS === "macos") {
 					// Find the .app bundle by scanning extracted file paths
@@ -819,10 +822,20 @@ const Updater = {
 				// Platform-specific path handling
 				let newAppBundlePath: string;
 				if (currentOS === "linux") {
-					// On Linux, the tarball contains a directory bundle, not an AppImage
-					// Structure: extractionDir/{appBundleName}
-					const appBundleName = `${localInfo.name.replace(/ /g, "").replace(/\./g, "")}-${localInfo.channel}`;
-					newAppBundlePath = join(extractionDir, appBundleName);
+					// On Linux, the tarball contains a directory bundle
+					// Find the actual extracted app directory name instead of guessing
+					const extractedFiles = readdirSync(extractionDir);
+					const appBundleDir = extractedFiles.find(file => {
+						const filePath = join(extractionDir, file);
+						return statSync(filePath).isDirectory() && !file.endsWith('.tar');
+					});
+					
+					if (!appBundleDir) {
+						console.error("Could not find app bundle directory in extraction");
+						return;
+					}
+					
+					newAppBundlePath = join(extractionDir, appBundleDir);
 
 					// Verify the app bundle directory exists
 					const bundleStats = statSync(newAppBundlePath, { throwIfNoEntry: false });
