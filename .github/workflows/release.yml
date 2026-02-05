@@ -114,8 +114,7 @@ jobs:
             libayatana-appindicator3-dev \
             build-essential \
             cmake \
-            pkg-config \
-            libfuse2
+            pkg-config
 
       - name: Get CEF version for cache key
         id: cef-version
