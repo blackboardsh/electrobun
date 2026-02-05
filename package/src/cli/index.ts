@@ -1206,9 +1206,8 @@ async function createLinuxInstallerArchive(
     console.log("Creating Linux installer archive...");
 
     // Create installer name using sanitized app file name (no spaces, URL-safe)
-    const installerName = buildEnvironment === "stable"
-        ? `${appFileName}-Setup`
-        : `${appFileName}-Setup-${buildEnvironment}`;
+    // Note: appFileName already includes the channel suffix for non-stable builds
+    const installerName = `${appFileName}-Setup`;
     
     // Create temp directory for staging
     const stagingDir = join(buildFolder, `${installerName}-staging`);
