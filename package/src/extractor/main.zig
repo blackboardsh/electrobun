@@ -936,16 +936,13 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
         return;
     };
 
-    // On Linux, look for an AppImage in the app directory
-    const app_name_with_channel = try std.fmt.allocPrint(allocator, "{s}-{s}.AppImage", .{ try std.mem.replaceOwned(u8, allocator, metadata.name, " ", ""), metadata.channel });
-    defer allocator.free(app_name_with_channel);
+    // On Linux, look for the launcher binary in the app directory
+    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
+    defer allocator.free(launcher_path);
 
-    const appimage_path = try std.fs.path.join(allocator, &.{ app_dir, app_name_with_channel });
-    defer allocator.free(appimage_path);
-
-    // Check if AppImage exists
-    std.fs.cwd().access(appimage_path, .{}) catch |err| {
-        std.debug.print("Warning: AppImage not found at {s}: {}\n", .{ appimage_path, err });
+    // Check if launcher exists
+    std.fs.cwd().access(launcher_path, .{}) catch |err| {
+        std.debug.print("Warning: launcher binary not found at {s}: {}\n", .{ launcher_path, err });
         return;
     };
 
@@ -955,36 +952,6 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
 
     const desktop_file_path = try std.fs.path.join(allocator, &.{ desktop_dir, desktop_filename });
     defer allocator.free(desktop_file_path);
-
-    // Create a wrapper script for better library path handling
-    // Place it as a sibling to the app directory so it persists across updates
-    const parent_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidPath;
-    const wrapper_script_path = try std.fs.path.join(allocator, &.{ parent_dir, "run.sh" });
-    defer allocator.free(wrapper_script_path);
-
-    const wrapper_content = try std.fmt.allocPrint(allocator,
-        \\#!/bin/bash
-        \\# Electrobun App Launcher for AppImage
-        \\# This script launches the AppImage
-        \\
-        \\# Get the directory where this script is located
-        \\SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}})" && pwd)"
-        \\APP_DIR="$SCRIPT_DIR/app"
-        \\
-        \\# Execute the AppImage
-        \\exec "$APP_DIR/{s}" "$@"
-        \\
-    , .{app_name_with_channel});
-    defer allocator.free(wrapper_content);
-
-    const wrapper_file = try std.fs.cwd().createFile(wrapper_script_path, .{});
-    defer wrapper_file.close();
-    try wrapper_file.writeAll(wrapper_content);
-
-    // Make wrapper script executable
-    const wrapper_script_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{wrapper_script_path});
-    defer allocator.free(wrapper_script_path_z);
-    _ = std.c.chmod(wrapper_script_path_z.ptr, 0o755);
 
     // Look for the desktop file in the extracted app directory and copy it
     var app_dir_handle = try std.fs.cwd().openDir(app_dir, .{ .iterate = true });
@@ -1002,16 +969,41 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
             const desktop_content = try std.fs.cwd().readFileAlloc(allocator, source_desktop, 4096);
             defer allocator.free(desktop_content);
 
-            // Find icon file in app directory
+            // Find icon file in app directory (first try root, then Resources subdirectory)
             var icon_path: []const u8 = undefined;
             var icon_path_allocated = false;
 
+            // First, try to find icon in the app root directory
             var icon_iterator = app_dir_handle.iterate();
             while (try icon_iterator.next()) |icon_entry| {
                 if (icon_entry.kind == .file and std.mem.endsWith(u8, icon_entry.name, ".png")) {
                     icon_path = try std.fs.path.join(allocator, &.{ app_dir, icon_entry.name });
                     icon_path_allocated = true;
                     break;
+                }
+            }
+
+            // If no icon found in root, try Resources subdirectory
+            if (!icon_path_allocated) {
+                const resources_path = try std.fs.path.join(allocator, &.{ app_dir, "Resources" });
+                defer allocator.free(resources_path);
+                
+                var resources_dir_handle = std.fs.cwd().openDir(resources_path, .{ .iterate = true }) catch |err| blk: {
+                    // Resources directory doesn't exist, that's okay
+                    if (err == error.FileNotFound) break :blk null;
+                    return err;
+                };
+                
+                if (resources_dir_handle) |*res_handle| {
+                    defer res_handle.close();
+                    var res_icon_iterator = res_handle.iterate();
+                    while (try res_icon_iterator.next()) |icon_entry| {
+                        if (icon_entry.kind == .file and std.mem.endsWith(u8, icon_entry.name, ".png")) {
+                            icon_path = try std.fs.path.join(allocator, &.{ resources_path, icon_entry.name });
+                            icon_path_allocated = true;
+                            break;
+                        }
+                    }
                 }
             }
             defer if (icon_path_allocated) allocator.free(icon_path);
@@ -1023,9 +1015,9 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
 
             while (lines.next()) |line| {
                 if (std.mem.startsWith(u8, line, "Exec=")) {
-                    // Replace with new Exec line - point directly to AppImage
+                    // Replace with new Exec line - point to launcher binary
                     try result.appendSlice("Exec=\"");
-                    try result.appendSlice(appimage_path);
+                    try result.appendSlice(launcher_path);
                     try result.appendSlice("\"\n");
                 } else if (std.mem.startsWith(u8, line, "Icon=") and icon_path_allocated) {
                     // Replace with new Icon line

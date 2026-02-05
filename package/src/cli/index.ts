@@ -58,15 +58,6 @@ function createTar(tarPath: string, cwd: string, entries: string[]) {
 }
 
 // Create a tar.gz file using system tar command
-function createTarGz(tarGzPath: string, cwd: string, entries: string[]) {
-	execSync(
-		`tar -czf "${tarGzPath}" ${entries.map((e) => `"${e}"`).join(" ")}`,
-		{
-			cwd,
-			stdio: "pipe",
-		},
-	);
-}
 
 // this when run as an npm script this will be where the folder where package.json is.
 const projectRoot = process.cwd();
@@ -1195,608 +1186,129 @@ function escapePathForTerminal(path: string): string {
 	return `"${path.replace(/"/g, '\\"')}"`;
 }
 
-// Download libfuse2 for cross-distribution compatibility
-async function downloadLibfuse2(vendorDir: string): Promise<void> {
-	const arch = ARCH === "arm64" ? "arm64" : "amd64";
-
-	const tempDir = join(vendorDir, "temp");
-	mkdirSync(tempDir, { recursive: true });
-
-	try {
-		// Strategy 1: Try to extract from the system if libfuse2 is installed but not in standard paths
-		try {
-			console.log("Checking for system libfuse2 in non-standard locations...");
-			const findResult = execSync(
-				`find /usr -name "libfuse.so.2*" -type f 2>/dev/null | head -1`,
-				{ encoding: "utf8" },
-			).trim();
-
-			if (findResult) {
-				console.log(`Found system libfuse2 at: ${findResult}`);
-				execSync(`cp "${findResult}" "${join(vendorDir, "libfuse.so.2")}"`, {
-					stdio: "inherit",
-				});
-				console.log("✓ Copied system libfuse2 to vendor directory");
-				return;
-			}
-		} catch (e) {
-			// System search failed, continue with download
-		}
-
-		// Strategy 2: Download pre-compiled binary from a reliable source
-		console.log(`Downloading pre-compiled libfuse2 for ${arch}...`);
-
-		// We'll download from Ubuntu as it's a reliable source with good compatibility
-		const packageUrls: Record<string, string> = {
-			amd64:
-				"http://archive.ubuntu.com/ubuntu/pool/universe/f/fuse/libfuse2_2.9.9-3_amd64.deb",
-			arm64:
-				"http://ports.ubuntu.com/ubuntu-ports/pool/universe/f/fuse/libfuse2_2.9.9-3_arm64.deb",
-		};
-
-		const packageUrl = packageUrls[arch];
-		if (!packageUrl) {
-			throw new Error(
-				`Unsupported architecture for libfuse2 download: ${arch}`,
-			);
-		}
-
-		const packageFile = join(tempDir, "libfuse2.deb");
-
-		// Download the package
-		execSync(`wget -q "${packageUrl}" -O "${packageFile}"`, {
-			stdio: "inherit",
-		});
-
-		// Extract based on available tools
-		console.log("Extracting libfuse2...");
-
-		// Check if we have 'ar' command (Debian-based)
-		let extractionMethod = "ar";
-		try {
-			execSync("which ar", { stdio: "ignore" });
-		} catch {
-			// Check if we have 'bsdtar' (available on many distros)
-			try {
-				execSync("which bsdtar", { stdio: "ignore" });
-				extractionMethod = "bsdtar";
-			} catch {
-				// Check if we have '7z' (available on many distros)
-				try {
-					execSync("which 7z", { stdio: "ignore" });
-					extractionMethod = "7z";
-				} catch {
-					// Fallback: try to install ar via busybox if available
-					try {
-						execSync("which busybox", { stdio: "ignore" });
-						extractionMethod = "busybox";
-					} catch {
-						throw new Error(
-							"No suitable extraction tool found (ar, bsdtar, 7z, or busybox)",
-						);
-					}
-				}
-			}
-		}
-
-		// Extract the .deb package
-		switch (extractionMethod) {
-			case "ar":
-				execSync(`cd "${tempDir}" && ar x libfuse2.deb`, { stdio: "inherit" });
-				break;
-			case "bsdtar":
-				execSync(`cd "${tempDir}" && bsdtar -xf libfuse2.deb`, {
-					stdio: "inherit",
-				});
-				break;
-			case "7z":
-				execSync(`cd "${tempDir}" && 7z x libfuse2.deb`, { stdio: "inherit" });
-				break;
-			case "busybox":
-				execSync(`cd "${tempDir}" && busybox ar x libfuse2.deb`, {
-					stdio: "inherit",
-				});
-				break;
-		}
-
-		// Extract the data archive (could be .tar.xz, .tar.gz, or .tar.zst)
-		const dataFiles = execSync(
-			`cd "${tempDir}" && ls data.tar.* 2>/dev/null || true`,
-			{
-				encoding: "utf8",
-			},
-		).trim();
-
-		if (dataFiles) {
-			execSync(`cd "${tempDir}" && tar -xf ${dataFiles}`, { stdio: "inherit" });
-		} else {
-			throw new Error("Could not find data archive in .deb package");
-		}
-
-		// Find and copy the library
-		const libFiles = execSync(
-			`cd "${tempDir}" && find . -name "libfuse.so.2*" -type f | head -1`,
-			{ encoding: "utf8" },
-		).trim();
-
-		if (!libFiles) {
-			throw new Error("Could not find libfuse.so.2 in extracted package");
-		}
-
-		const sourcePath = join(tempDir, libFiles);
-		const destPath = join(vendorDir, "libfuse.so.2");
-
-		execSync(`cp "${sourcePath}" "${destPath}"`, { stdio: "inherit" });
-		console.log("✓ libfuse2 vendored successfully");
-
-		// Also copy libfuse.so.2.9.9 as some systems might need the versioned file
-		const versionedDestPath = join(vendorDir, "libfuse.so.2.9.9");
-		execSync(`cp "${sourcePath}" "${versionedDestPath}"`, { stdio: "inherit" });
-	} catch (error) {
-		// If download fails, provide helpful instructions for manual installation
-		console.error("Failed to download libfuse2 automatically");
-		console.log("\nManual installation instructions for common distributions:");
-		console.log("  Ubuntu/Debian:  sudo apt install libfuse2");
-		console.log("  Fedora/RHEL:   sudo dnf install fuse-libs");
-		console.log("  openSUSE:       sudo zypper install libfuse2");
-		console.log("  Arch Linux:     sudo pacman -S fuse2");
-		console.log("  Alpine:         sudo apk add fuse");
-		throw error;
-	} finally {
-		// Clean up temp directory
-		rmSync(tempDir, { recursive: true, force: true });
-	}
-}
-
-// Get the vendor directory path
-function getVendorDir(): string {
-	return join(ELECTROBUN_DEP_PATH, "vendor");
-}
-
-// Get appimagetool command with proper environment if using vendored libfuse2
-function getAppImageToolCommand(): string {
-	const vendorDir = getVendorDir();
-	const vendoredLibfusePath = join(vendorDir, "libfuse.so.2");
-
-	if (existsSync(vendoredLibfusePath)) {
-		// Use vendored libfuse2 by setting LD_LIBRARY_PATH
-		// Also set LD_PRELOAD to ensure our libfuse2 is used over system libs
-		return `LD_LIBRARY_PATH="${vendorDir}:$LD_LIBRARY_PATH" LD_PRELOAD="${vendoredLibfusePath}" appimagetool`;
-	}
-
-	// Use system appimagetool without modifications
-	return "appimagetool";
-}
-
-// AppImage tooling functions
-async function ensureAppImageTooling(): Promise<void> {
-	// Create vendor directory for dependencies
-	const vendorDir = getVendorDir();
-	mkdirSync(vendorDir, { recursive: true });
-
-	// First check if we have vendored libfuse2
-	const vendoredLibfusePath = join(vendorDir, "libfuse.so.2");
-
-	if (existsSync(vendoredLibfusePath)) {
-		console.log("✓ Using vendored libfuse2");
-	} else {
-		// Check if FUSE2 is available system-wide
-		try {
-			execSync("ls /usr/lib/*/libfuse.so.2 || ls /lib/*/libfuse.so.2", {
-				stdio: "ignore",
-			});
-			console.log("✓ System libfuse2 found");
-		} catch (error) {
-			// libfuse2 not found, attempt to download it
-			console.log("📥 libfuse2 not found, downloading vendored copy...");
-
-			try {
-				await downloadLibfuse2(vendorDir);
-			} catch (downloadError) {
-				console.log("");
-				console.log(
-					"═══════════════════════════════════════════════════════════════",
-				);
-				console.log("🚨 FUSE2 DEPENDENCY MISSING");
-				console.log(
-					"═══════════════════════════════════════════════════════════════",
-				);
-				console.log("Failed to download libfuse2 automatically.");
-				console.log("");
-				console.log("You can manually install it using:");
-				console.log("   sudo apt update && sudo apt install -y libfuse2");
-				console.log("");
-				console.log(
-					"Without libfuse2, AppImage creation will fail with FUSE errors.",
-				);
-				console.log(
-					"═══════════════════════════════════════════════════════════════",
-				);
-				console.log("");
-				throw new Error(
-					"libfuse2 is required for AppImage creation but not found. Please install it manually.",
-				);
-			}
-		}
-	}
-
-	try {
-		// Check if appimagetool is available
-		execSync("which appimagetool", { stdio: "ignore" });
-		console.log("✓ appimagetool found");
-		return;
-	} catch (error) {
-		// appimagetool not found, download it automatically
-		console.log("📥 appimagetool not found, downloading...");
-
-		try {
-			// Determine architecture-specific download URL
-			const downloadUrl =
-				ARCH === "arm64"
-					? "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
-					: "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage";
-
-			// Download appimagetool
-			console.log(`Downloading appimagetool from ${downloadUrl}...`);
-			execSync(`wget -q "${downloadUrl}" -O /tmp/appimagetool.AppImage`, {
-				stdio: "inherit",
-			});
-
-			// Make it executable
-			execSync("chmod +x /tmp/appimagetool.AppImage", { stdio: "inherit" });
-
-			// Try to move to /usr/local/bin (with sudo)
-			try {
-				execSync(
-					"sudo mv /tmp/appimagetool.AppImage /usr/local/bin/appimagetool",
-					{ stdio: "inherit" },
-				);
-				console.log("✓ appimagetool installed to /usr/local/bin/appimagetool");
-			} catch (sudoError) {
-				// Fallback: extract and place in user's local bin
-				console.log("sudo not available, installing to ~/.local/bin/...");
-				execSync("mkdir -p ~/.local/bin", { stdio: "inherit" });
-
-				// Extract the AppImage to get the binary
-				// Use vendored libfuse2 if available for extraction
-				const vendorDir = getVendorDir();
-				const vendoredLibfusePath = join(vendorDir, "libfuse.so.2");
-				const extractCmd = existsSync(vendoredLibfusePath)
-					? `LD_LIBRARY_PATH="${vendorDir}:$LD_LIBRARY_PATH" ./appimagetool.AppImage --appimage-extract`
-					: "./appimagetool.AppImage --appimage-extract";
-
-				execSync(`cd /tmp && ${extractCmd} >/dev/null 2>&1`, {
-					stdio: "inherit",
-				});
-				execSync(
-					"cp /tmp/squashfs-root/usr/bin/appimagetool ~/.local/bin/appimagetool",
-					{ stdio: "inherit" },
-				);
-				execSync("chmod +x ~/.local/bin/appimagetool", { stdio: "inherit" });
-
-				// Set up symlink for mksquashfs dependency
-				execSync("mkdir -p ~/.local/lib/appimagekit", { stdio: "inherit" });
-				execSync(
-					"ln -sf /usr/bin/mksquashfs ~/.local/lib/appimagekit/mksquashfs",
-					{ stdio: "inherit" },
-				);
-
-				// Clean up
-				execSync("rm -rf /tmp/appimagetool.AppImage /tmp/squashfs-root", {
-					stdio: "inherit",
-				});
-
-				console.log("✓ appimagetool installed to ~/.local/bin/appimagetool");
-				console.log(
-					"Note: Make sure ~/.local/bin is in your PATH for future use",
-				);
-			}
-		} catch (downloadError) {
-			console.error("Failed to download appimagetool:", downloadError);
-			throw new Error(
-				"Failed to install appimagetool automatically. Please install it manually.",
-			);
-		}
-	}
-}
-
-async function createAppImage(
-	appBundlePath: string,
-	appFileName: string,
-	config: any,
-	buildFolder: string,
+/**
+ * Creates a Linux installer tar.gz containing:
+ * - Self-extracting installer executable (with embedded app archive)
+ * - README.txt with instructions
+ * 
+ * This replaces the AppImage-based installer to avoid libfuse2 dependency.
+ * The installer executable has the compressed app archive embedded within it
+ * using magic markers, similar to how Windows installers work.
+ */
+async function createLinuxInstallerArchive(
+    buildFolder: string,
+    compressedTarPath: string,
+    config: any,
+    buildEnvironment: string,
+    hash: string,
+    targetPaths: ReturnType<typeof getPlatformPaths>,
 ): Promise<string> {
-	console.log(`🚀 CREATING APPIMAGE WITH PATH: ${appBundlePath}`);
-	// console.log(`DEBUG: createAppImage called with:`);
-	// console.log(`  appBundlePath: ${appBundlePath}`);
-	// console.log(`  appFileName: ${appFileName}`);
-	// console.log(`  buildFolder: ${buildFolder}`);
-	// console.log(`  current working directory: ${process.cwd()}`);
+    console.log("Creating Linux installer archive...");
 
-	// Ensure appBundlePath is absolute - fix for when it's passed as basename only
-	let resolvedAppBundlePath = appBundlePath;
-	if (!path.isAbsolute(appBundlePath)) {
-		resolvedAppBundlePath = join(buildFolder, appBundlePath);
-		// console.log(`DEBUG: Converted relative path to absolute: ${resolvedAppBundlePath}`);
-	}
+    // Create installer name (same as old AppImage name for consistency)
+    const installerName = getLinuxAppImageBaseName(
+        config.app.name,
+        buildEnvironment,
+    );
+    
+    // Create temp directory for staging
+    const stagingDir = join(buildFolder, `${installerName}-staging`);
+    if (existsSync(stagingDir)) {
+        rmSync(stagingDir, { recursive: true, force: true });
+    }
+    mkdirSync(stagingDir, { recursive: true });
 
-	// Create AppDir structure
-	const appDirPath = join(buildFolder, `${appFileName}.AppDir`);
-	if (existsSync(appDirPath)) {
-		rmSync(appDirPath, { recursive: true, force: true });
-	}
-	mkdirSync(appDirPath, { recursive: true });
+    try {
+        // 1. Create self-extracting installer binary
+        // Read the extractor binary
+        const extractorBinary = readFileSync(targetPaths.EXTRACTOR);
 
-	try {
-		// Copy the entire app bundle to AppDir/usr/bin/
-		const usrBinPath = join(appDirPath, "usr", "bin");
-		mkdirSync(usrBinPath, { recursive: true });
+        // Read the compressed archive
+        const compressedArchive = readFileSync(compressedTarPath);
 
-		// console.log(`DEBUG: Attempting to copy from: ${resolvedAppBundlePath}`);
-		// console.log(`DEBUG: Does source exist? ${existsSync(resolvedAppBundlePath)}`);
-		// console.log(`DEBUG: To destination: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
+        // Create metadata JSON
+        const metadata = {
+            identifier: config.app.identifier,
+            name: config.app.name,
+            channel: buildEnvironment,
+            hash: hash,
+        };
+        const metadataJson = JSON.stringify(metadata);
+        const metadataBuffer = Buffer.from(metadataJson, "utf8");
 
-		if (!existsSync(resolvedAppBundlePath)) {
-			throw new Error(`Source bundle does not exist: ${resolvedAppBundlePath}`);
-		}
+        // Create marker buffers
+        const metadataMarker = Buffer.from("ELECTROBUN_METADATA_V1", "utf8");
+        const archiveMarker = Buffer.from("ELECTROBUN_ARCHIVE_V1", "utf8");
 
-		// console.log(`DEBUG: About to copy with cpSync:`);
-		// console.log(`  from: ${resolvedAppBundlePath} (exists: ${existsSync(resolvedAppBundlePath)})`);
-		// console.log(`  to: ${join(usrBinPath, basename(resolvedAppBundlePath))}`);
+        // Combine extractor + metadata marker + metadata + archive marker + archive
+        const combinedBuffer = Buffer.concat([
+            new Uint8Array(extractorBinary),
+            new Uint8Array(metadataMarker),
+            new Uint8Array(metadataBuffer),
+            new Uint8Array(archiveMarker),
+            new Uint8Array(compressedArchive),
+        ]);
 
-		cpSync(
-			resolvedAppBundlePath,
-			join(usrBinPath, basename(resolvedAppBundlePath)),
-			{
-				recursive: true,
-				dereference: true,
-			},
-		);
+        // Write the self-extracting installer
+        const installerPath = join(stagingDir, "installer");
+        writeFileSync(installerPath, new Uint8Array(combinedBuffer), {
+            mode: 0o755,
+        });
+        execSync(`chmod +x ${escapePathForTerminal(installerPath)}`);
 
-		// Create AppRun script (the entry point)
-		const appBundleBasename = basename(resolvedAppBundlePath);
-		const appRunContent = `#!/bin/bash
-# AppRun script for ${appFileName}
-HERE="$(dirname "$(readlink -f "\${0}")")"
-EXEC="\${HERE}/usr/bin/${appBundleBasename}/bin/launcher"
+        // 2. Create README for clarity
+        const readmeContent = `${config.app.name} Installer
+========================
 
-# Set up library path for CEF
-export LD_LIBRARY_PATH="\${HERE}/usr/bin/${appBundleBasename}/bin:\${HERE}/usr/bin/${appBundleBasename}/lib:\${LD_LIBRARY_PATH}"
+To install ${config.app.name}:
 
-# Execute the application
-exec "\${EXEC}" "\$@"
+1. Double-click the 'installer' file
+2. Or run from terminal: ./installer
+
+The installer will:
+- Extract the application to ~/.local/share/
+- Create a desktop shortcut with the app's icon
+
+For more information, visit: ${config.app.homepage || 'https://electrobun.dev'}
 `;
 
-		const appRunPath = join(appDirPath, "AppRun");
-		writeFileSync(appRunPath, appRunContent);
-		execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
+        writeFileSync(join(stagingDir, "README.txt"), readmeContent);
 
-		// Create .desktop file in AppDir root
-		// Always include Icon field since we always create an icon (either real or placeholder)
-		const desktopContent = `[Desktop Entry]
-Version=1.0
-Type=Application
-Name=${config.app.name}
-Comment=${config.app.description || ""}
-Exec=${appFileName}
-Icon=${appFileName}
-Terminal=false
-StartupWMClass=${appFileName}
-Categories=Utility;
-`;
+        // 3. Create the tar.gz archive (extract contents directly, no nested folder)
+        const archiveName = `${installerName}.tar.gz`;
+        const archivePath = join(buildFolder, archiveName);
+        
+        console.log(`Creating installer archive: ${archivePath}`);
+        
+        // Use tar to create the archive, preserving executable permissions
+        // The -C changes to the staging dir, then . archives its contents directly
+        execSync(
+            `tar -czf ${escapePathForTerminal(archivePath)} -C ${escapePathForTerminal(stagingDir)} .`,
+            { stdio: 'inherit' }
+        );
 
-		const desktopPath = join(appDirPath, `${appFileName}.desktop`);
-		writeFileSync(desktopPath, desktopContent);
+        // Verify the archive was created
+        if (!existsSync(archivePath)) {
+            throw new Error(`Installer archive was not created at expected path: ${archivePath}`);
+        }
 
-		// Copy icon if available, or create a minimal placeholder
-		if (
-			config.build.linux?.icon &&
-			existsSync(join(projectRoot, config.build.linux.icon))
-		) {
-			const iconSourcePath = join(projectRoot, config.build.linux.icon);
-			const iconDestPath = join(appDirPath, `${appFileName}.png`);
-			const dirIconPath = join(appDirPath, ".DirIcon");
+        const stats = statSync(archivePath);
+        console.log(
+            `✓ Linux installer archive created: ${archivePath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`
+        );
 
-			cpSync(iconSourcePath, iconDestPath, { dereference: true });
-			cpSync(iconSourcePath, dirIconPath, { dereference: true });
-
-			console.log(
-				`Copied icon for AppImage: ${iconSourcePath} -> ${iconDestPath}`,
-			);
-			console.log(`Created .DirIcon: ${iconSourcePath} -> ${dirIconPath}`);
-		} else {
-			// Create a minimal 1x1 transparent PNG as placeholder to satisfy appimagetool
-			// This prevents "Icon entry not found" errors
-			const placeholderPNG = Buffer.from([
-				0x89,
-				0x50,
-				0x4e,
-				0x47,
-				0x0d,
-				0x0a,
-				0x1a,
-				0x0a, // PNG signature
-				0x00,
-				0x00,
-				0x00,
-				0x0d,
-				0x49,
-				0x48,
-				0x44,
-				0x52, // IHDR chunk
-				0x00,
-				0x00,
-				0x00,
-				0x01,
-				0x00,
-				0x00,
-				0x00,
-				0x01, // 1x1 dimensions
-				0x08,
-				0x06,
-				0x00,
-				0x00,
-				0x00,
-				0x1f,
-				0x15,
-				0xc4, // 8-bit RGBA
-				0x89,
-				0x00,
-				0x00,
-				0x00,
-				0x0b,
-				0x49,
-				0x44,
-				0x41, // IDAT chunk
-				0x54,
-				0x08,
-				0x99,
-				0x01,
-				0x00,
-				0x00,
-				0x05,
-				0x00,
-				0x01,
-				0x06,
-				0x7a,
-				0x81,
-				0x7c,
-				0x00,
-				0x00,
-				0x00, // IEND chunk
-				0x00,
-				0x49,
-				0x45,
-				0x4e,
-				0x44,
-				0xae,
-				0x42,
-				0x60,
-				0x82,
-			]);
-
-			const iconDestPath = join(appDirPath, `${appFileName}.png`);
-			const dirIconPath = join(appDirPath, ".DirIcon");
-
-			writeFileSync(iconDestPath, new Uint8Array(placeholderPNG));
-			writeFileSync(dirIconPath, new Uint8Array(placeholderPNG));
-
-			console.log(
-				`Created placeholder icon for AppImage (no icon specified in config)`,
-			);
-		}
-
-		// Generate the AppImage using appimagetool
-		const appImagePath = join(buildFolder, `${appFileName}.AppImage`);
-		if (existsSync(appImagePath)) {
-			unlinkSync(appImagePath);
-		}
-
-		// console.log(`DEBUG: AppDir path: ${appDirPath}`);
-		// console.log(`DEBUG: Does AppDir exist? ${existsSync(appDirPath)}`);
-		console.log(`Generating AppImage: ${appImagePath}`);
-		const appImageArch = ARCH === "arm64" ? "aarch64" : "x86_64";
-
-		// Use full path to appimagetool if not in PATH
-		let appimagetoolBase = "appimagetool";
-		try {
-			execSync("which appimagetool", { stdio: "ignore" });
-		} catch {
-			// Try ~/.local/bin/appimagetool
-			const localBinPath = join(
-				process.env["HOME"] || "",
-				".local",
-				"bin",
-				"appimagetool",
-			);
-			if (existsSync(localBinPath)) {
-				appimagetoolBase = localBinPath;
-			}
-		}
-
-		// Get the command with proper environment for vendored libfuse2
-		const appimagetoolCmd = getAppImageToolCommand().replace(
-			"appimagetool",
-			appimagetoolBase,
-		);
-
-		try {
-			// First try with --no-appstream flag to avoid some FUSE-related issues
-			execSync(
-				`ARCH=${appImageArch} ${appimagetoolCmd} --no-appstream ${escapePathForTerminal(appDirPath)} ${escapePathForTerminal(appImagePath)}`,
-				{
-					stdio: "inherit",
-					env: { ...process.env, ARCH: appImageArch },
-				},
-			);
-		} catch (error) {
-			console.error("Failed to create AppImage:", error);
-			console.log(
-				"Note: If you see FUSE errors, you may need to install libfuse2:",
-			);
-			console.log("  sudo apt update && sudo apt install -y libfuse2");
-			throw error;
-		}
-
-		// Verify the AppImage was created
-		if (!existsSync(appImagePath)) {
-			throw new Error(
-				`AppImage was not created at expected path: ${appImagePath}`,
-			);
-		}
-
-		// Extract and copy icon for desktop shortcut
-		const iconExtractPath = join(buildFolder, `${appFileName}.png`);
-		if (
-			config.build.linux?.icon &&
-			existsSync(join(projectRoot, config.build.linux.icon))
-		) {
-			const iconSourcePath = join(projectRoot, config.build.linux.icon);
-			cpSync(iconSourcePath, iconExtractPath, { dereference: true });
-			console.log(`✓ Icon extracted for desktop shortcut: ${iconExtractPath}`);
-		} else {
-			// Create placeholder icon for desktop shortcut
-			const placeholderPNG = Buffer.from([
-				0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
-				0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-				0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
-				0x0b, 0x49, 0x44, 0x41, 0x54, 0x08, 0x99, 0x01, 0x00, 0x00, 0x05, 0x00,
-				0x01, 0x06, 0x7a, 0x81, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-				0x44, 0xae, 0x42, 0x60, 0x82,
-			]);
-			writeFileSync(iconExtractPath, new Uint8Array(placeholderPNG));
-			console.log(
-				`✓ Created placeholder icon for desktop shortcut: ${iconExtractPath}`,
-			);
-		}
-
-		// Create desktop shortcut alongside the AppImage
-		const desktopShortcutPath = join(buildFolder, `${appFileName}.desktop`);
-
-		const desktopShortcutContent = `[Desktop Entry]
-Version=1.0
-Type=Application
-Name=${config.app.name}
-Comment=${config.app.description || ""}
-Exec=${appImagePath}
-Icon=${iconExtractPath}
-Terminal=false
-StartupWMClass=${appFileName}
-Categories=Utility;
-`;
-
-		writeFileSync(desktopShortcutPath, desktopShortcutContent);
-		execSync(`chmod +x ${escapePathForTerminal(desktopShortcutPath)}`);
-		console.log(`✓ Desktop shortcut created: ${desktopShortcutPath}`);
-
-		console.log(`✓ AppImage created: ${appImagePath}`);
-		return appImagePath;
-	} finally {
-		if (existsSync(appDirPath)) {
-			rmSync(appDirPath, { recursive: true, force: true });
-		}
-	}
+        return archivePath;
+    } finally {
+        // Clean up staging directory
+        if (existsSync(stagingDir)) {
+            rmSync(stagingDir, { recursive: true, force: true });
+        }
+    }
 }
+
+
+
+
 
 // Helper function to generate usage description entries for Info.plist
 function generateUsageDescriptions(
@@ -2080,7 +1592,7 @@ ${schemesXml}
 			}
 		};
 
-		const buildIcons = (appBundleFolderResourcesPath: string) => {
+		const buildIcons = (appBundleFolderResourcesPath: string, appBundleFolderPath: string) => {
 			// Platform-specific icon handling
 			if (targetOS === "macos" && config.build.mac?.icons) {
 				// macOS uses .iconset folders that get converted to .icns using iconutil
@@ -2140,6 +1652,24 @@ ${schemesXml}
 				} else {
 					console.log(`WARNING: Linux icon not found: ${iconSourcePath}`);
 				}
+
+				// Create desktop file template for Linux
+				const desktopContent = `[Desktop Entry]
+Version=1.0
+Type=Application
+Name=${config.app.name}
+Comment=${config.app.description || `${config.app.name} application`}
+Exec=launcher
+Icon=appIcon.png
+Terminal=false
+StartupWMClass=${config.app.name}
+Categories=Utility;Application;
+`;
+
+				const desktopFilePath = join(appBundleFolderPath, `${config.app.name}.desktop`);
+				writeFileSync(desktopFilePath, desktopContent);
+				console.log(`Created Linux desktop file: ${desktopFilePath}`);
+
 			} else if (targetOS === "win" && config.build.win?.icon) {
 				const iconPath = join(projectRoot, config.build.win.icon);
 				if (existsSync(iconPath)) {
@@ -2926,7 +2456,7 @@ ${schemesXml}
 			cpSync(source, destination, { recursive: true, dereference: true });
 		}
 
-		buildIcons(appBundleFolderResourcesPath);
+		buildIcons(appBundleFolderResourcesPath, appBundleFolderPath);
 
 		// Run postBuild script
 		runHook("postBuild");
@@ -3111,10 +2641,18 @@ ${schemesXml}
 					bundleFiles[join(bundleBase, entryPath)] = Bun.file(fullPath);
 				}
 			}
-			const archiveBytes = await new Bun.Archive(bundleFiles).bytes();
-			// Note: wyhash is the default in Bun.hash but that may change in the future
-			// so we're being explicit here.
-			hash = Bun.hash.wyhash(archiveBytes, 43770n).toString(36);
+			// Check if Bun.Archive is available (Bun 1.3.0+)
+			if (typeof Bun.Archive !== 'undefined') {
+				const archiveBytes = await new Bun.Archive(bundleFiles).bytes();
+				// Note: wyhash is the default in Bun.hash but that may change in the future
+				// so we're being explicit here.
+				hash = Bun.hash.wyhash(archiveBytes, 43770n).toString(36);
+			} else {
+				// Fallback for older Bun versions - use a simple hash of file paths
+				console.warn("Bun.Archive not available, using fallback hash method");
+				const fileList = Object.keys(bundleFiles).sort().join('\n');
+				hash = Bun.hash.wyhash(fileList).toString(36);
+			}
 			console.timeEnd("Generate Bundle hash");
 		}
 
@@ -3201,95 +2739,9 @@ ${schemesXml}
 
 		const artifactsToUpload = [];
 
-		// Linux AppImage creation (skip for dev environment)
-		if (targetOS === "linux" && buildEnvironment !== "dev") {
-			// Ensure AppImage tooling is available
-			await ensureAppImageTooling();
-
-			// Create AppImage from the app bundle (for canary and stable builds)
-			console.log(
-				`🔍 CALLING createAppImage with appBundleFolderPath: ${appBundleFolderPath}`,
-			);
-			console.log(`🔍 buildFolder: ${buildFolder}`);
-			console.log(`🔍 appFileName: ${appFileName}`);
-			const appImagePath = await createAppImage(
-				appBundleFolderPath,
-				appFileName,
-				config,
-				buildFolder,
-			);
-
-			console.log(`✓ Linux AppImage created at: ${appImagePath}`);
-
-			// Only create compressed tar for non-dev builds
-			if (buildEnvironment !== "dev") {
-				// For Linux, create a compressed tar containing:
-				// 1. The AppImage
-				// 2. Desktop shortcut file
-				// 3. Icon file
-				// 4. Metadata
-
-				const tempDirName = `${appFileName}-tar-staging`;
-				const tempDirPath = join(buildFolder, tempDirName);
-
-				// Clean up any existing temp directory
-				if (existsSync(tempDirPath)) {
-					rmSync(tempDirPath, { recursive: true });
-				}
-
-				try {
-					// Create temp directory structure
-					mkdirSync(tempDirPath, { recursive: true });
-					const innerDirPath = join(tempDirPath, appFileName);
-					mkdirSync(innerDirPath, { recursive: true });
-
-					// Copy AppImage (the inner app bundle on Linux)
-					const appImageDestPath = join(
-						innerDirPath,
-						`${appFileName}.AppImage`,
-					);
-					cpSync(appImagePath, appImageDestPath, { dereference: true });
-
-					// Copy desktop shortcut and icon (they were created alongside the AppImage)
-					const desktopPath = join(buildFolder, `${appFileName}.desktop`);
-					const iconPath = join(buildFolder, `${appFileName}.png`);
-
-					if (existsSync(desktopPath)) {
-						cpSync(desktopPath, join(innerDirPath, `${appFileName}.desktop`));
-					}
-
-					if (existsSync(iconPath)) {
-						cpSync(iconPath, join(innerDirPath, `${appFileName}.png`));
-					}
-
-					// Create metadata file
-					const metadata = {
-						identifier: config.app.identifier,
-						name: config.app.name,
-						version: config.app.version,
-						channel: buildEnvironment,
-						hash: hash,
-					};
-					writeFileSync(
-						join(innerDirPath, "metadata.json"),
-						JSON.stringify(metadata, null, 2),
-					);
-
-					const appImageTarPath = join(buildFolder, `${appFileName}.tar`);
-					console.log(`Creating tar of installer contents: ${appImageTarPath}`);
-
-					// Tar the inner directory
-					createTar(appImageTarPath, tempDirPath, [appFileName]);
-				} finally {
-					if (existsSync(tempDirPath)) {
-						rmSync(tempDirPath, { recursive: true });
-					}
-				}
-
-				// Leave the tar uncompressed for diff generation; compression happens later.
-				// Note: Don't delete uncompressed tar here - bsdiff needs it later for patch generation.
-			}
-		}
+		// Linux bundle preparation (skip tar creation for dev environment)
+		// For Linux, the app bundle is already in the correct directory structure
+		// The tar will be created in the common code path below
 
 		if (buildEnvironment !== "dev") {
 			// zig-zstd CLI (native zstd)
@@ -3313,10 +2765,11 @@ ${schemesXml}
 				`${appFileName}${targetOS === "macos" ? ".app" : ""}.tar`,
 			);
 
-			// For Linux, we've already created the tar in the AppImage section above
-			// For macOS/Windows, tar the signed and notarized app bundle
-			if (targetOS !== "linux") {
-				createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
+			// Tar the app bundle for all platforms
+			createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
+			
+			// Remove the app bundle folder after tarring (except on Linux where it might be needed for dev)
+			if (targetOS !== "linux" || buildEnvironment !== "dev") {
 				rmdirSync(appBundleFolderPath, { recursive: true });
 			}
 
@@ -3572,7 +3025,7 @@ ${schemesXml}
 				dereference: true,
 			});
 
-			buildIcons(selfExtractingBundle.appBundleFolderResourcesPath);
+			buildIcons(selfExtractingBundle.appBundleFolderResourcesPath, selfExtractingBundle.appBundleFolderPath);
 			await Bun.write(
 				join(selfExtractingBundle.appBundleFolderContentsPath, "Info.plist"),
 				InfoPlistContents,
@@ -3718,29 +3171,21 @@ ${schemesXml}
 					// Also keep the raw exe for backwards compatibility (optional)
 					// artifactsToUpload.push(selfExtractingExePath);
 				} else if (targetOS === "linux") {
-					// On Linux, create a self-extracting AppImage with embedded archive
+					// On Linux, create a self-extracting installer archive
 					// Use the Linux-specific compressed tar path
 					const linuxCompressedTarPath = join(
 						buildFolder,
 						`${appFileName}.tar.zst`,
 					);
-					const selfExtractingAppImagePath =
-						await createLinuxSelfExtractingAppImage(
-							buildFolder,
-							linuxCompressedTarPath,
-							appFileName,
-							config,
-							buildEnvironment,
-							hash,
-						);
-
-					// Wrap the Setup.AppImage in a tar.gz to preserve executable permissions
-					const archivedAppImagePath = await wrapInArchive(
-						selfExtractingAppImagePath,
+					const installerArchivePath = await createLinuxInstallerArchive(
 						buildFolder,
-						"tar.gz",
+						linuxCompressedTarPath,
+						config,
+						buildEnvironment,
+						hash,
+						targetPaths,
 					);
-					artifactsToUpload.push(archivedAppImagePath);
+					artifactsToUpload.push(installerArchivePath);
 				}
 			}
 
@@ -3857,8 +3302,6 @@ ${schemesXml}
 		let bundleExecPath: string;
 		// @ts-expect-error - reserved for future use
 		let _bundleResourcesPath: string;
-		let isAppImage = false;
-
 		if (OS === "macos") {
 			bundleExecPath = join(buildFolder, bundleFileName, "Contents", "MacOS");
 			_bundleResourcesPath = join(
@@ -3868,18 +3311,9 @@ ${schemesXml}
 				"Resources",
 			);
 		} else if (OS === "linux") {
-			// Check if we have an AppImage or directory bundle
-			const appImagePath = join(buildFolder, `${bundleFileName}.AppImage`);
-			if (existsSync(appImagePath)) {
-				// AppImage mode
-				bundleExecPath = appImagePath;
-				_bundleResourcesPath = join(buildFolder, bundleFileName, "Resources"); // For compatibility
-				isAppImage = true;
-			} else {
-				// Directory bundle mode (fallback)
-				bundleExecPath = join(buildFolder, bundleFileName, "bin");
-				_bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
-			}
+			// Directory bundle mode
+			bundleExecPath = join(buildFolder, bundleFileName, "bin");
+			_bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
 		} else if (OS === "win") {
 			bundleExecPath = join(buildFolder, bundleFileName, "bin");
 			_bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
@@ -3889,8 +3323,7 @@ ${schemesXml}
 
 		if (OS === "macos" || OS === "linux") {
 			// For Linux dev mode, update libNativeWrapper.so based on bundleCEF setting
-			if (OS === "linux" && !isAppImage) {
-				// Only update libNativeWrapper for directory bundle mode
+			if (OS === "linux") {
 				const currentLibPath = join(bundleExecPath, "libNativeWrapper.so");
 				const targetPaths = getPlatformPaths("linux", ARCH);
 				const correctLibSource = config.build.linux?.bundleCEF
@@ -3909,20 +3342,11 @@ ${schemesXml}
 				}
 			}
 
-			if (OS === "linux" && isAppImage) {
-				// For Linux AppImage mode, execute the AppImage directly
-				console.log(`Running AppImage: ${bundleExecPath}`);
-				mainProc = Bun.spawn([bundleExecPath], {
-					stdio: ["inherit", "inherit", "inherit"],
-					cwd: dirname(bundleExecPath),
-				});
-			} else {
-				// Use the zig launcher for macOS and directory bundle Linux
-				mainProc = Bun.spawn([join(bundleExecPath, "launcher")], {
-					stdio: ["inherit", "inherit", "inherit"],
-					cwd: bundleExecPath,
-				});
-			}
+			// Use the zig launcher for macOS and Linux
+			mainProc = Bun.spawn([join(bundleExecPath, "launcher")], {
+				stdio: ["inherit", "inherit", "inherit"],
+				cwd: bundleExecPath,
+			});
 		} else if (OS === "win") {
 			mainProc = Bun.spawn([join(bundleExecPath, "launcher.exe")], {
 				stdio: ["inherit", "inherit", "inherit"],
@@ -4224,257 +3648,7 @@ ${schemesXml}
 		});
 	}
 
-	async function wrapInArchive(
-		filePath: string,
-		_buildFolder: string,
-		archiveType: "tar.gz" | "zip",
-	): Promise<string> {
-		const fileName = basename(filePath);
-		const fileDir = dirname(filePath);
 
-		if (archiveType === "tar.gz") {
-			// Output filename: Setup.exe -> Setup.exe.tar.gz, Setup.AppImage -> Setup.tar.gz
-			// For AppImage files, strip the .AppImage extension so archive extracts to .AppImage
-			// Sanitize the archive filename (no spaces in artifact URLs) while inner files keep their original names
-			const sanitizedBase = (
-				fileName.endsWith(".AppImage")
-					? fileName.replace(/\.AppImage$/, "")
-					: fileName
-			).replace(/ /g, "");
-			const archivePath = join(fileDir, `${sanitizedBase}.tar.gz`);
-
-			// For Linux AppImage files, ensure they have executable permissions before archiving
-			if (fileName.endsWith(".AppImage")) {
-				try {
-					// Try to set executable permissions (will only work on Unix-like systems)
-					execSync(`chmod +x ${escapePathForTerminal(filePath)}`, {
-						stdio: "ignore",
-					});
-				} catch {
-					// Ignore errors on Windows hosts
-				}
-			}
-
-			// Create tar.gz archive using system tar (preserves file permissions)
-			createTarGz(archivePath, fileDir, [fileName]);
-
-			console.log(
-				`Created archive: ${archivePath} (preserving executable permissions)`,
-			);
-			return archivePath;
-		} else if (archiveType === "zip") {
-			// Output filename: Setup.exe -> Setup.zip
-			const archivePath = filePath.replace(/\.[^.]+$/, ".zip");
-
-			// Create zip archive
-			const output = createWriteStream(archivePath);
-			const archive = archiver("zip", {
-				zlib: { level: 9 }, // Maximum compression
-			});
-
-			return new Promise((resolve, reject) => {
-				output.on("close", () => {
-					console.log(
-						`Created archive: ${archivePath} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`,
-					);
-					resolve(archivePath);
-				});
-
-				archive.on("error", (err) => {
-					reject(err);
-				});
-
-				archive.pipe(output);
-
-				// Add the file to the archive
-				archive.file(filePath, { name: fileName });
-
-				archive.finalize();
-			});
-		}
-		throw new Error(`Unsupported archive type: ${archiveType}`);
-	}
-
-	async function createLinuxSelfExtractingAppImage(
-		buildFolder: string,
-		compressedTarPath: string,
-		_appFileName: string,
-		config: any,
-		buildEnvironment: string,
-		hash: string,
-	): Promise<string> {
-		console.log("Creating Linux AppImage wrapper...");
-
-		// Create wrapper AppImage filename
-		const wrapperName = getLinuxAppImageBaseName(
-			config.app.name,
-			buildEnvironment,
-		);
-		const wrapperAppImagePath = join(buildFolder, `${wrapperName}.AppImage`);
-		const wrapperAppDirPath = join(buildFolder, `${wrapperName}.AppDir`);
-
-		// Clean up any existing AppDir
-		if (existsSync(wrapperAppDirPath)) {
-			rmSync(wrapperAppDirPath, { recursive: true, force: true });
-		}
-		mkdirSync(wrapperAppDirPath, { recursive: true });
-
-		try {
-			// Create usr/bin directory structure
-			const usrBinPath = join(wrapperAppDirPath, "usr", "bin");
-			mkdirSync(usrBinPath, { recursive: true });
-
-			// Create self-extracting binary with embedded archive (following magic markers pattern)
-			const targetPaths = getPlatformPaths("linux", ARCH);
-
-			// Read the extractor binary
-			const extractorBinary = readFileSync(targetPaths.EXTRACTOR);
-
-			// Read the compressed archive
-			const compressedArchive = readFileSync(compressedTarPath);
-
-			// Create metadata JSON
-			const metadata = {
-				identifier: config.app.identifier,
-				name: config.app.name,
-				channel: buildEnvironment,
-				hash: hash,
-			};
-			const metadataJson = JSON.stringify(metadata);
-			const metadataBuffer = Buffer.from(metadataJson, "utf8");
-
-			// Create marker buffers
-			const metadataMarker = Buffer.from("ELECTROBUN_METADATA_V1", "utf8");
-			const archiveMarker = Buffer.from("ELECTROBUN_ARCHIVE_V1", "utf8");
-
-			// Combine extractor + metadata marker + metadata + archive marker + archive
-			const combinedBuffer = Buffer.concat([
-				new Uint8Array(extractorBinary),
-				new Uint8Array(metadataMarker),
-				new Uint8Array(metadataBuffer),
-				new Uint8Array(archiveMarker),
-				new Uint8Array(compressedArchive),
-			]);
-
-			// Write the self-extracting binary to AppImage/usr/bin/
-			const wrapperExtractorPath = join(usrBinPath, wrapperName);
-			writeFileSync(wrapperExtractorPath, new Uint8Array(combinedBuffer), {
-				mode: 0o755,
-			});
-			execSync(`chmod +x ${escapePathForTerminal(wrapperExtractorPath)}`);
-
-			// Create AppRun script
-			const appRunContent = `#!/bin/bash
-# AppRun script for ${wrapperName}
-HERE="$(dirname "$(readlink -f "\${0}")")"
-EXEC="\${HERE}/usr/bin/${wrapperName}"
-
-# Execute the wrapper extractor
-exec "\${EXEC}" "\$@"
-`;
-
-			const appRunPath = join(wrapperAppDirPath, "AppRun");
-			writeFileSync(appRunPath, appRunContent);
-			execSync(`chmod +x ${escapePathForTerminal(appRunPath)}`);
-
-			// Check if icon will be available
-			const hasWrapperIcon =
-				config.build.linux?.icon &&
-				existsSync(join(projectRoot, config.build.linux.icon));
-
-			// Create desktop file
-			const desktopContent = `[Desktop Entry]
-Version=1.0
-Type=Application
-Name=${config.app.name} Installer
-Comment=Install ${config.app.name}
-Exec=${wrapperName}${hasWrapperIcon ? `\nIcon=${wrapperName}` : ""}
-Terminal=false
-Categories=Utility;
-`;
-
-			const desktopPath = join(wrapperAppDirPath, `${wrapperName}.desktop`);
-			writeFileSync(desktopPath, desktopContent);
-
-			// Copy icon if available
-			if (hasWrapperIcon) {
-				const iconSourcePath = join(projectRoot, config.build.linux.icon);
-				const iconDestPath = join(wrapperAppDirPath, `${wrapperName}.png`);
-				const dirIconPath = join(wrapperAppDirPath, ".DirIcon");
-
-				cpSync(iconSourcePath, iconDestPath, { dereference: true });
-				cpSync(iconSourcePath, dirIconPath, { dereference: true });
-
-				console.log(
-					`Copied icon for wrapper AppImage: ${iconSourcePath} -> ${iconDestPath}`,
-				);
-			}
-
-			// Ensure appimagetool is available
-			await ensureAppImageTooling();
-
-			// Generate the wrapper AppImage
-			if (existsSync(wrapperAppImagePath)) {
-				unlinkSync(wrapperAppImagePath);
-			}
-
-			console.log(`Creating wrapper AppImage: ${wrapperAppImagePath}`);
-			const appImageArch = ARCH === "arm64" ? "aarch64" : "x86_64";
-
-			// Use appimagetool to create the wrapper AppImage
-			let appimagetoolBase = "appimagetool";
-			try {
-				execSync("which appimagetool", { stdio: "ignore" });
-			} catch {
-				const localBinPath = join(
-					process.env["HOME"] || "",
-					".local",
-					"bin",
-					"appimagetool",
-				);
-				if (existsSync(localBinPath)) {
-					appimagetoolBase = localBinPath;
-				}
-			}
-
-			// Get the command with proper environment for vendored libfuse2
-			const appimagetoolCmd = getAppImageToolCommand().replace(
-				"appimagetool",
-				appimagetoolBase,
-			);
-
-			try {
-				execSync(
-					`ARCH=${appImageArch} ${appimagetoolCmd} --no-appstream ${escapePathForTerminal(wrapperAppDirPath)} ${escapePathForTerminal(wrapperAppImagePath)}`,
-					{
-						stdio: "inherit",
-						env: { ...process.env, ARCH: appImageArch },
-					},
-				);
-			} catch (error) {
-				console.error("Failed to create wrapper AppImage:", error);
-				throw error;
-			}
-
-			// Verify the wrapper AppImage was created
-			if (!existsSync(wrapperAppImagePath)) {
-				throw new Error(
-					`Wrapper AppImage was not created at expected path: ${wrapperAppImagePath}`,
-				);
-			}
-
-			const stats = statSync(wrapperAppImagePath);
-			console.log(
-				`✓ Linux wrapper AppImage created: ${wrapperAppImagePath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`,
-			);
-
-			return wrapperAppImagePath;
-		} finally {
-			if (existsSync(wrapperAppDirPath)) {
-				rmSync(wrapperAppDirPath, { recursive: true, force: true });
-			}
-		}
-	}
 
 	function codesignAppBundle(
 		appBundleOrDmgPath: string,

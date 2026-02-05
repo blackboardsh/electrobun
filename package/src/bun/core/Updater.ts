@@ -96,37 +96,6 @@ function emitStatus(
 //             native.symbols.killApp();
 // }, 1000)
 
-// Create launcher script for AppImage
-async function createLinuxAppImageLauncherScript(
-	appImagePath: string,
-): Promise<void> {
-	const parentDir = dirname(appImagePath);
-	const launcherPath = join(parentDir, "run.sh");
-
-	const launcherContent = `#!/bin/bash
-# Electrobun AppImage Launcher
-# This script launches the AppImage
-
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-APPIMAGE_PATH="$SCRIPT_DIR/$(basename "${appImagePath}")"
-
-# Force X11 backend for compatibility
-export GDK_BACKEND=x11
-
-# Launch the AppImage
-exec "$APPIMAGE_PATH" "$@"
-`;
-
-	await Bun.write(launcherPath, launcherContent);
-
-	// Make it executable
-	execSync(`chmod +x "${launcherPath}"`);
-
-	console.log(
-		`Created/updated Linux AppImage launcher script: ${launcherPath}`,
-	);
-}
 
 // Cross-platform app data directory
 function getAppDataDir(): string {
@@ -850,15 +819,15 @@ const Updater = {
 				// Platform-specific path handling
 				let newAppBundlePath: string;
 				if (currentOS === "linux") {
-					// On Linux, the tarball contains a directory named {appFileName}, and inside it is the AppImage
-					// Structure: extractionDir/{appFileName}/{appFileName}.AppImage
-					const innerDirName = localInfo.name.replace(/ /g, "");
-					const appImageName = `${localInfo.name.replace(/ /g, "").replace(/\./g, "-")}.AppImage`;
-					newAppBundlePath = join(extractionDir, innerDirName, appImageName);
+					// On Linux, the tarball contains a directory bundle, not an AppImage
+					// Structure: extractionDir/{appBundleName}
+					const appBundleName = `${localInfo.name.replace(/ /g, "").replace(/\./g, "")}-${localInfo.channel}`;
+					newAppBundlePath = join(extractionDir, appBundleName);
 
-					// Verify the AppImage exists
-					if (!statSync(newAppBundlePath, { throwIfNoEntry: false })) {
-						console.error(`AppImage not found at: ${newAppBundlePath}`);
+					// Verify the app bundle directory exists
+					const bundleStats = statSync(newAppBundlePath, { throwIfNoEntry: false });
+					if (!bundleStats || !bundleStats.isDirectory()) {
+						console.error(`App bundle directory not found at: ${newAppBundlePath}`);
 						console.log("Contents of extraction directory:");
 						try {
 							const files = readdirSync(extractionDir);
@@ -906,20 +875,16 @@ const Updater = {
 				}
 				// Platform-specific app path calculation
 				let runningAppBundlePath: string;
+				const appDataFolder = await Updater.appDataFolder();
+				
 				if (currentOS === "macos") {
 					// On macOS, executable is at Contents/MacOS/binary inside .app bundle
 					runningAppBundlePath = resolve(dirname(process.execPath), "..", "..");
+				} else if (currentOS === "linux" || currentOS === "win") {
+					// On Linux and Windows, use fixed 'app' folder to match extractor
+					runningAppBundlePath = join(appDataFolder, "app");
 				} else {
-					// Platform-specific app path calculation
-					const appDataFolder = await Updater.appDataFolder();
-					if (currentOS === "linux") {
-						// On Linux, store AppImage as a single file
-						const appImageName = `${localInfo.name.replace(/ /g, "").replace(/\./g, "-")}.AppImage`;
-						runningAppBundlePath = join(appDataFolder, appImageName);
-					} else {
-						// On Windows, use fixed 'app' folder to match extractor
-						runningAppBundlePath = join(appDataFolder, "app");
-					}
+					throw new Error(`Unsupported platform: ${currentOS}`);
 				}
 				try {
 					emitStatus("replacing-app", "Removing old version...");
@@ -946,30 +911,29 @@ const Updater = {
 							// Ignore errors - attribute may not exist
 						}
 					} else if (currentOS === "linux") {
-						// On Linux, remove existing AppImage and replace with new one
-						if (statSync(runningAppBundlePath, { throwIfNoEntry: false })) {
-							unlinkSync(runningAppBundlePath);
+						// On Linux, we now have directory bundles instead of AppImage files
+						// The app is stored in {appDataFolder}/app/
+						const appBundleDir = join(appDataFolder, "app");
+						
+						// Remove existing app directory if it exists
+						if (statSync(appBundleDir, { throwIfNoEntry: false })) {
+							rmdirSync(appBundleDir, { recursive: true });
 						}
 
-						// Move new AppImage to app location
-						renameSync(newAppBundlePath, runningAppBundlePath);
+						// Move new app bundle directory to app location
+						renameSync(newAppBundlePath, appBundleDir);
 
-						// Clean up the extracted inner directory (contains leftover icon, shortcut, metadata.json)
-						const innerDirName = localInfo.name.replace(/ /g, "");
-						const extractedInnerDir = join(extractionDir, innerDirName);
-						if (
-							statSync(extractedInnerDir, {
-								throwIfNoEntry: false,
-							})?.isDirectory()
-						) {
-							rmdirSync(extractedInnerDir, { recursive: true });
+						// Ensure launcher binary is executable
+						const launcherPath = join(appBundleDir, "bin", "launcher");
+						if (statSync(launcherPath, { throwIfNoEntry: false })) {
+							execSync(`chmod +x "${launcherPath}"`);
 						}
 
-						// Make AppImage executable
-						execSync(`chmod +x "${runningAppBundlePath}"`);
-
-						// Create/update launcher script that points to the AppImage
-						await createLinuxAppImageLauncherScript(runningAppBundlePath);
+						// Also ensure other binaries are executable
+						const bunPath = join(appBundleDir, "bin", "bun");
+						if (statSync(bunPath, { throwIfNoEntry: false })) {
+							execSync(`chmod +x "${bunPath}"`);
+						}
 					}
 
 					// Clean up stale files in extraction folder
@@ -1078,9 +1042,10 @@ del "%~f0"
 						detached: true,
 					} as any);
 				} else if (currentOS === "linux") {
-					// On Linux, launch the AppImage directly
+					// On Linux, launch the launcher binary inside the app directory
+					const launcherPath = join(runningAppBundlePath, "bin", "launcher");
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
-					Bun.spawn(["sh", "-c", `"${runningAppBundlePath}" &`], {
+					Bun.spawn(["sh", "-c", `"${launcherPath}" &`], {
 						detached: true,
 					} as any);
 				}

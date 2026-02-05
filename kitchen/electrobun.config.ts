@@ -149,6 +149,6 @@ export default {
 	},
 	release: {
 		baseUrl: "https://electrobun-kitchen.blackboard.sh/",
-		generatePatch: true,
+		generatePatch: false,
 	},
 } satisfies ElectrobunConfig;
