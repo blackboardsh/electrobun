@@ -190,7 +190,7 @@ export interface ElectrobunConfig {
 			/**
 			 * macOS entitlements for code signing
 			 */
-			entitlements?: Record<string, boolean | string>;
+			entitlements?: Record<string, boolean | string | string[]>;
 
 			/**
 			 * Path to .iconset folder containing app icons

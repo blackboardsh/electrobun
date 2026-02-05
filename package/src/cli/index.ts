@@ -1800,7 +1800,7 @@ Categories=Utility;
 
 // Helper function to generate usage description entries for Info.plist
 function generateUsageDescriptions(
-	entitlements: Record<string, boolean | string>,
+	entitlements: Record<string, boolean | string | string[]>,
 ): string {
 	const usageEntries: string[] = [];
 
@@ -4034,7 +4034,7 @@ ${schemesXml}
 	}
 
 	function buildEntitlementsFile(
-		entitlements: Record<string, boolean | string>,
+		entitlements: Record<string, boolean | string | string[]>,
 	) {
 		return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -4050,12 +4050,13 @@ ${schemesXml}
 `;
 	}
 
-	function getEntitlementValue(value: boolean | string) {
+	function getEntitlementValue(value: boolean | string | string[]) {
 		if (typeof value === "boolean") {
 			return `<${value.toString()}/>`;
+		} else if (Array.isArray(value)) {
+			return `<array>\n${value.map((v) => `        <string>${v}</string>`).join("\n")}\n    </array>`;
 		} else {
-			// For string values (usage descriptions), still return boolean true for the entitlement
-			return `<true/>`;
+			return `<string>${value}</string>`;
 		}
 	}
 
