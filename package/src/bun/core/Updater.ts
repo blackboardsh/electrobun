@@ -500,7 +500,7 @@ const Updater = {
 
 				// Read the hash from the patched tar without full extraction:
 				// - macOS/Windows: Resources/version.json (inside the app bundle directory)
-				// - Linux: metadata.json (alongside the AppImage, since AppImage is opaque)
+				// - Linux: metadata.json (alongside the app bundle)
 				const resourcesDir = "Resources";
 				const patchedTarBytes = await Bun.file(
 					tmpPatchedTarFilePath,
@@ -786,20 +786,16 @@ const Updater = {
 					mkdirSync(extractionDir, { recursive: true });
 				}
 
-				// Extract tar file using node tar (more compatible than Bun.Archive)
-				const tar = await import("tar");
-				await tar.extract({
-					file: latestTarPath,
-					cwd: extractionDir,
-				});
+				const latestTarBytes = await Bun.file(latestTarPath).arrayBuffer();
+				const latestArchive = new Bun.Archive(latestTarBytes);
+				await latestArchive.extract(extractionDir);
 
 				if (currentOS === "macos") {
-					// Find the .app bundle by scanning extracted file paths
-					const extractedFiles = await latestArchive.files();
-					for (const [filePath] of extractedFiles) {
-						const appMatch = filePath.match(/^([^/]+\.app)\//);
-						if (appMatch) {
-							appBundleSubpath = appMatch[1] + "/";
+					// Find the .app bundle by scanning extracted directory
+					const extractedFiles = readdirSync(extractionDir);
+					for (const file of extractedFiles) {
+						if (file.endsWith('.app')) {
+							appBundleSubpath = file + "/";
 							break;
 						}
 					}
