@@ -1,5 +1,6 @@
 import { ffi, type ApplicationMenuItemConfig } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
+import { roleLabelMap } from "./menuRoles";
 
 type NonDividerMenuItem = {
 	type?: "normal";
@@ -28,32 +29,6 @@ export const on = (
 ) => {
 	const specificName = `${name}`;
 	electrobunEventEmitter.on(specificName, handler);
-};
-
-const roleLabelMap = {
-	quit: "Quit",
-	hide: "Hide",
-	hideOthers: "Hide Others",
-	showAll: "Show All",
-	undo: "Undo",
-	redo: "Redo",
-	cut: "Cut",
-	copy: "Copy",
-	paste: "Paste",
-	pasteAndMatchStyle: "Paste And Match Style",
-	delete: "Delete",
-	selectAll: "Select All",
-	startSpeaking: "Start Speaking",
-	stopSpeaking: "Stop Speaking",
-	enterFullScreen: "Enter FullScreen",
-	exitFullScreen: "Exit FullScreen",
-	toggleFullScreen: "Toggle Full Screen",
-	minimize: "Minimize",
-	zoom: "Zoom",
-	bringAllToFront: "Bring All To Front",
-	close: "Close",
-	cycleThroughWindows: "Cycle Through Windows",
-	showHelp: "Show Help",
 };
 
 const menuConfigWithDefaults = (

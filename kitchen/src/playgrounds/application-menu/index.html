@@ -42,6 +42,10 @@
                     <span class="config-title">Accelerator Matrix</span>
                     <span class="config-desc">Many custom accelerators across menus</span>
                 </button>
+                <button id="config6" class="config-btn">
+                    <span class="config-title">Text Editing Roles</span>
+                    <span class="config-desc">NSResponder selectors (movement, deletion, etc.)</span>
+                </button>
             </div>
 
             <div class="current-config">
@@ -64,6 +68,16 @@
             </div>
             <div id="eventLog" class="event-log">
                 <div class="log-placeholder">Menu click events will appear here...</div>
+            </div>
+
+            <div class="test-area">
+                <h3>Test Text Area</h3>
+                <p class="hint">Use this to test text editing roles (movement, deletion, selection, etc.)</p>
+                <textarea id="testTextarea" placeholder="Type here to test text editing menu roles...&#10;&#10;Try selecting text and using the Movement, Selection, Delete, Transform, or Emacs menus.">The quick brown fox jumps over the lazy dog.
+
+This is a sample text for testing text editing menu roles.
+Try using Option+Arrow to move by word, Cmd+Arrow to move by line,
+or test the delete, transform, and Emacs kill ring commands.</textarea>
             </div>
         </div>
     </div>

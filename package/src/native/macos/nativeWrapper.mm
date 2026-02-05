@@ -86,6 +86,180 @@ static id mouseUpMonitor = nil;
 
 static int g_remoteDebugPort = 9222;
 
+// Menu role to selector mapping
+// This maps Electrobun role strings to their corresponding Objective-C selectors.
+// Roles are grouped by category for easier maintenance.
+static NSDictionary<NSString*, NSString*>* getMenuRoleToSelectorMap() {
+    static NSDictionary<NSString*, NSString*>* map = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        map = @{
+            // Application roles
+            @"about": @"orderFrontStandardAboutPanel:",
+            @"quit": @"terminate:",
+            @"hide": @"hide:",
+            @"hideOthers": @"hideOtherApplications:",
+            @"showAll": @"unhideAllApplications:",
+
+            // Window roles
+            @"minimize": @"performMiniaturize:",
+            @"zoom": @"performZoom:",
+            @"close": @"performClose:",
+            @"bringAllToFront": @"arrangeInFront:",
+            @"cycleThroughWindows": @"selectNextKeyView:",
+            @"enterFullScreen": @"enterFullScreen:",
+            @"exitFullScreen": @"exitFullScreen:",
+            @"toggleFullScreen": @"toggleFullScreen:",
+
+            // Standard edit roles
+            @"undo": @"undo:",
+            @"redo": @"redo:",
+            @"cut": @"cut:",
+            @"copy": @"copy:",
+            @"paste": @"paste:",
+            @"pasteAndMatchStyle": @"pasteAsPlainText:",
+            @"delete": @"delete:",
+            @"selectAll": @"selectAll:",
+
+            // Speech roles
+            @"startSpeaking": @"startSpeaking:",
+            @"stopSpeaking": @"stopSpeaking:",
+
+            // Help
+            @"showHelp": @"showHelp:",
+
+            // Movement - basic
+            @"moveForward": @"moveForward:",
+            @"moveBackward": @"moveBackward:",
+            @"moveLeft": @"moveLeft:",
+            @"moveRight": @"moveRight:",
+            @"moveUp": @"moveUp:",
+            @"moveDown": @"moveDown:",
+
+            // Movement - by word
+            @"moveWordForward": @"moveWordForward:",
+            @"moveWordBackward": @"moveWordBackward:",
+            @"moveWordLeft": @"moveWordLeft:",
+            @"moveWordRight": @"moveWordRight:",
+
+            // Movement - by line
+            @"moveToBeginningOfLine": @"moveToBeginningOfLine:",
+            @"moveToEndOfLine": @"moveToEndOfLine:",
+            @"moveToLeftEndOfLine": @"moveToLeftEndOfLine:",
+            @"moveToRightEndOfLine": @"moveToRightEndOfLine:",
+
+            // Movement - by paragraph
+            @"moveToBeginningOfParagraph": @"moveToBeginningOfParagraph:",
+            @"moveToEndOfParagraph": @"moveToEndOfParagraph:",
+            @"moveParagraphForward": @"moveParagraphForward:",
+            @"moveParagraphBackward": @"moveParagraphBackward:",
+
+            // Movement - by document
+            @"moveToBeginningOfDocument": @"moveToBeginningOfDocument:",
+            @"moveToEndOfDocument": @"moveToEndOfDocument:",
+
+            // Movement with selection - basic
+            @"moveForwardAndModifySelection": @"moveForwardAndModifySelection:",
+            @"moveBackwardAndModifySelection": @"moveBackwardAndModifySelection:",
+            @"moveLeftAndModifySelection": @"moveLeftAndModifySelection:",
+            @"moveRightAndModifySelection": @"moveRightAndModifySelection:",
+            @"moveUpAndModifySelection": @"moveUpAndModifySelection:",
+            @"moveDownAndModifySelection": @"moveDownAndModifySelection:",
+
+            // Movement with selection - by word
+            @"moveWordForwardAndModifySelection": @"moveWordForwardAndModifySelection:",
+            @"moveWordBackwardAndModifySelection": @"moveWordBackwardAndModifySelection:",
+            @"moveWordLeftAndModifySelection": @"moveWordLeftAndModifySelection:",
+            @"moveWordRightAndModifySelection": @"moveWordRightAndModifySelection:",
+
+            // Movement with selection - by line
+            @"moveToBeginningOfLineAndModifySelection": @"moveToBeginningOfLineAndModifySelection:",
+            @"moveToEndOfLineAndModifySelection": @"moveToEndOfLineAndModifySelection:",
+            @"moveToLeftEndOfLineAndModifySelection": @"moveToLeftEndOfLineAndModifySelection:",
+            @"moveToRightEndOfLineAndModifySelection": @"moveToRightEndOfLineAndModifySelection:",
+
+            // Movement with selection - by paragraph
+            @"moveToBeginningOfParagraphAndModifySelection": @"moveToBeginningOfParagraphAndModifySelection:",
+            @"moveToEndOfParagraphAndModifySelection": @"moveToEndOfParagraphAndModifySelection:",
+            @"moveParagraphForwardAndModifySelection": @"moveParagraphForwardAndModifySelection:",
+            @"moveParagraphBackwardAndModifySelection": @"moveParagraphBackwardAndModifySelection:",
+
+            // Movement with selection - by document
+            @"moveToBeginningOfDocumentAndModifySelection": @"moveToBeginningOfDocumentAndModifySelection:",
+            @"moveToEndOfDocumentAndModifySelection": @"moveToEndOfDocumentAndModifySelection:",
+
+            // Page movement
+            @"pageUp": @"pageUp:",
+            @"pageDown": @"pageDown:",
+            @"pageUpAndModifySelection": @"pageUpAndModifySelection:",
+            @"pageDownAndModifySelection": @"pageDownAndModifySelection:",
+
+            // Scrolling
+            @"scrollLineUp": @"scrollLineUp:",
+            @"scrollLineDown": @"scrollLineDown:",
+            @"scrollPageUp": @"scrollPageUp:",
+            @"scrollPageDown": @"scrollPageDown:",
+            @"scrollToBeginningOfDocument": @"scrollToBeginningOfDocument:",
+            @"scrollToEndOfDocument": @"scrollToEndOfDocument:",
+            @"centerSelectionInVisibleArea": @"centerSelectionInVisibleArea:",
+
+            // Deletion - character
+            @"deleteBackward": @"deleteBackward:",
+            @"deleteForward": @"deleteForward:",
+            @"deleteBackwardByDecomposingPreviousCharacter": @"deleteBackwardByDecomposingPreviousCharacter:",
+
+            // Deletion - word
+            @"deleteWordBackward": @"deleteWordBackward:",
+            @"deleteWordForward": @"deleteWordForward:",
+
+            // Deletion - line
+            @"deleteToBeginningOfLine": @"deleteToBeginningOfLine:",
+            @"deleteToEndOfLine": @"deleteToEndOfLine:",
+
+            // Deletion - paragraph
+            @"deleteToBeginningOfParagraph": @"deleteToBeginningOfParagraph:",
+            @"deleteToEndOfParagraph": @"deleteToEndOfParagraph:",
+
+            // Selection
+            @"selectWord": @"selectWord:",
+            @"selectLine": @"selectLine:",
+            @"selectParagraph": @"selectParagraph:",
+            @"selectToMark": @"selectToMark:",
+            @"setMark": @"setMark:",
+            @"swapWithMark": @"swapWithMark:",
+            @"deleteToMark": @"deleteToMark:",
+
+            // Text transformation
+            @"capitalizeWord": @"capitalizeWord:",
+            @"uppercaseWord": @"uppercaseWord:",
+            @"lowercaseWord": @"lowercaseWord:",
+            @"transpose": @"transpose:",
+            @"transposeWords": @"transposeWords:",
+
+            // Insertion
+            @"insertNewline": @"insertNewline:",
+            @"insertLineBreak": @"insertLineBreak:",
+            @"insertParagraphSeparator": @"insertParagraphSeparator:",
+            @"insertTab": @"insertTab:",
+            @"insertBacktab": @"insertBacktab:",
+            @"insertTabIgnoringFieldEditor": @"insertTabIgnoringFieldEditor:",
+            @"insertNewlineIgnoringFieldEditor": @"insertNewlineIgnoringFieldEditor:",
+
+            // Kill ring (Emacs-style)
+            @"yank": @"yank:",
+            @"yankAndSelect": @"yankAndSelect:",
+
+            // Completion
+            @"complete": @"complete:",
+            @"cancelOperation": @"cancelOperation:",
+
+            // Indentation
+            @"indent": @"indent:",
+        };
+    });
+    return map;
+}
+
 static bool IsPortAvailable(int port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
@@ -765,52 +939,11 @@ NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
                                            keyEquivalent:@""];
             menuItem.representedObject = action;
             if (role) {
-                if ([role isEqualToString:@"quit"]) {
-                    menuItem.action = @selector(terminate:);
-                } else if ([role isEqualToString:@"hide"]) {
-                    menuItem.action = @selector(hide:);
-                } else if ([role isEqualToString:@"hideOthers"]) {
-                    menuItem.action = @selector(hideOtherApplications:);
-                } else if ([role isEqualToString:@"showAll"]) {
-                    menuItem.action = @selector(unhideAllApplications:);
-                } else if ([role isEqualToString:@"undo"]) {
-                    menuItem.action = @selector(undo:);
-                } else if ([role isEqualToString:@"redo"]) {
-                    menuItem.action = @selector(redo:);
-                } else if ([role isEqualToString:@"cut"]) {
-                    menuItem.action = @selector(cut:);
-                } else if ([role isEqualToString:@"copy"]) {
-                    menuItem.action = @selector(copy:);
-                } else if ([role isEqualToString:@"paste"]) {
-                    menuItem.action = @selector(paste:);
-                } else if ([role isEqualToString:@"pasteAndMatchStyle"]) {
-                    menuItem.action = @selector(pasteAsPlainText:);
-                } else if ([role isEqualToString:@"delete"]) {
-                    menuItem.action = @selector(delete:);
-                } else if ([role isEqualToString:@"selectAll"]) {
-                    menuItem.action = @selector(selectAll:);
-                } else if ([role isEqualToString:@"startSpeaking"]) {
-                    menuItem.action = @selector(startSpeaking:);
-                } else if ([role isEqualToString:@"stopSpeaking"]) {
-                    menuItem.action = @selector(stopSpeaking:);
-                } else if ([role isEqualToString:@"enterFullScreen"]) {
-                    menuItem.action = @selector(enterFullScreen:);
-                } else if ([role isEqualToString:@"exitFullScreen"]) {
-                    menuItem.action = @selector(exitFullScreen:);
-                } else if ([role isEqualToString:@"toggleFullScreen"]) {
-                    menuItem.action = @selector(toggleFullScreen:);
-                } else if ([role isEqualToString:@"minimize"]) {
-                    menuItem.action = @selector(performMiniaturize:);
-                } else if ([role isEqualToString:@"zoom"]) {
-                    menuItem.action = @selector(performZoom:);
-                } else if ([role isEqualToString:@"bringAllToFront"]) {
-                    menuItem.action = @selector(arrangeInFront:);
-                } else if ([role isEqualToString:@"close"]) {
-                    menuItem.action = @selector(performClose:);
-                } else if ([role isEqualToString:@"cycleThroughWindows"]) {
-                    menuItem.action = @selector(selectNextKeyView:);
-                } else if ([role isEqualToString:@"showHelp"]) {
-                    menuItem.action = @selector(showHelp:);
+                // Look up the selector from the role map
+                NSDictionary<NSString*, NSString*>* roleMap = getMenuRoleToSelectorMap();
+                NSString *selectorName = roleMap[role];
+                if (selectorName) {
+                    menuItem.action = NSSelectorFromString(selectorName);
                 }
                 if (!accelerator) {
                     if ([role isEqualToString:@"undo"]) {

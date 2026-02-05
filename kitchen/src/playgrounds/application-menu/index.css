@@ -203,3 +203,40 @@ h3 {
 .log-entry .accelerator {
     color: #a5b4fc;
 }
+
+.test-area {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #3a3a5a;
+}
+
+.test-area h3 {
+    margin-bottom: 5px;
+}
+
+.test-area .hint {
+    margin-bottom: 10px;
+}
+
+#testTextarea {
+    width: 100%;
+    height: 150px;
+    padding: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    background: #1a1a2e;
+    border: 2px solid #3a3a5a;
+    border-radius: 6px;
+    color: #eee;
+    resize: vertical;
+}
+
+#testTextarea:focus {
+    outline: none;
+    border-color: #4ade80;
+}
+
+#testTextarea::placeholder {
+    color: #555;
+}

@@ -194,6 +194,89 @@ const menuConfigs: MenuConfig[] = [
       },
     ],
   },
+  {
+    id: "config6",
+    title: "Text Editing Roles",
+    description: [
+      "NSResponder text editing selectors",
+      "Movement: word, line, paragraph, document",
+      "Deletion: word backward/forward, to line end",
+      "Selection, transformation, kill ring (yank)",
+    ],
+    menu: [
+      {
+        submenu: [{ label: "Quit", role: "quit" }],
+      },
+      {
+        label: "Movement",
+        submenu: [
+          { role: "moveWordForward" },
+          { role: "moveWordBackward" },
+          { type: "separator" },
+          { role: "moveToBeginningOfLine" },
+          { role: "moveToEndOfLine" },
+          { type: "separator" },
+          { role: "moveToBeginningOfParagraph" },
+          { role: "moveToEndOfParagraph" },
+          { type: "separator" },
+          { role: "moveToBeginningOfDocument" },
+          { role: "moveToEndOfDocument" },
+        ],
+      },
+      {
+        label: "Selection",
+        submenu: [
+          { role: "moveWordForwardAndModifySelection" },
+          { role: "moveWordBackwardAndModifySelection" },
+          { type: "separator" },
+          { role: "moveToBeginningOfLineAndModifySelection" },
+          { role: "moveToEndOfLineAndModifySelection" },
+          { type: "separator" },
+          { role: "selectWord" },
+          { role: "selectLine" },
+          { role: "selectParagraph" },
+        ],
+      },
+      {
+        label: "Delete",
+        submenu: [
+          { role: "deleteBackward" },
+          { role: "deleteForward" },
+          { type: "separator" },
+          { role: "deleteWordBackward" },
+          { role: "deleteWordForward" },
+          { type: "separator" },
+          { role: "deleteToBeginningOfLine" },
+          { role: "deleteToEndOfLine" },
+          { type: "separator" },
+          { role: "deleteToEndOfParagraph" },
+        ],
+      },
+      {
+        label: "Transform",
+        submenu: [
+          { role: "capitalizeWord" },
+          { role: "uppercaseWord" },
+          { role: "lowercaseWord" },
+          { type: "separator" },
+          { role: "transpose" },
+          { role: "transposeWords" },
+        ],
+      },
+      {
+        label: "Emacs",
+        submenu: [
+          { role: "setMark" },
+          { role: "selectToMark" },
+          { role: "swapWithMark" },
+          { role: "deleteToMark" },
+          { type: "separator" },
+          { role: "yank" },
+          { role: "yankAndSelect" },
+        ],
+      },
+    ],
+  },
 ];
 
 const rpc = Electroview.defineRPC<any>({
