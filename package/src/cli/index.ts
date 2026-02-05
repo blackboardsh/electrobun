@@ -28,7 +28,6 @@ import {
 	getPlatformPrefix,
 	getTarballFileName,
 	getWindowsSetupFileName,
-	getLinuxAppImageBaseName,
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	sanitizeVolumeNameForHdiutil as _sanitizeVolumeNameForHdiutil,
 	getDmgVolumeName,
