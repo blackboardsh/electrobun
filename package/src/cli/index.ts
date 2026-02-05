@@ -1198,6 +1198,7 @@ function escapePathForTerminal(path: string): string {
 async function createLinuxInstallerArchive(
     buildFolder: string,
     compressedTarPath: string,
+    appFileName: string,
     config: any,
     buildEnvironment: string,
     hash: string,
@@ -1205,11 +1206,10 @@ async function createLinuxInstallerArchive(
 ): Promise<string> {
     console.log("Creating Linux installer archive...");
 
-    // Create installer name (same as old AppImage name for consistency)
-    const installerName = getLinuxAppImageBaseName(
-        config.app.name,
-        buildEnvironment,
-    );
+    // Create installer name using sanitized app file name (no spaces, URL-safe)
+    const installerName = buildEnvironment === "stable"
+        ? `${appFileName}-Setup`
+        : `${appFileName}-Setup-${buildEnvironment}`;
     
     // Create temp directory for staging
     const stagingDir = join(buildFolder, `${installerName}-staging`);
@@ -3180,6 +3180,7 @@ Categories=Utility;Application;
 					const installerArchivePath = await createLinuxInstallerArchive(
 						buildFolder,
 						linuxCompressedTarPath,
+						appFileName,
 						config,
 						buildEnvironment,
 						hash,
