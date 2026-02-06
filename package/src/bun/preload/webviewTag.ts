@@ -368,8 +368,9 @@ export function initWebviewTag() {
 
 	// Add default styles for <electrobun-webview> elements
 	// These can be easily overridden in the host document
-	const style = document.createElement("style");
-	style.textContent = `
+	const injectStyles = () => {
+		const style = document.createElement("style");
+		style.textContent = `
 electrobun-webview {
 	display: block;
 	width: 800px;
@@ -379,10 +380,18 @@ electrobun-webview {
 	overflow: hidden;
 }
 `;
-	// Insert at the beginning of <head> so app styles take precedence
-	if (document.head?.firstChild) {
-		document.head.insertBefore(style, document.head.firstChild);
-	} else if (document.head) {
-		document.head.appendChild(style);
+		// Insert at the beginning of <head> so app styles take precedence
+		if (document.head?.firstChild) {
+			document.head.insertBefore(style, document.head.firstChild);
+		} else if (document.head) {
+			document.head.appendChild(style);
+		}
+	};
+
+	// document.head may not exist at document start, defer if needed
+	if (document.head) {
+		injectStyles();
+	} else {
+		document.addEventListener("DOMContentLoaded", injectStyles);
 	}
 }

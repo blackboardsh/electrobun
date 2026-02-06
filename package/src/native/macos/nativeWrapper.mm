@@ -1133,13 +1133,6 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         CGFloat adjustedY = floor(subview.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
         CGFloat adjustedYZ = floor(frame.origin.y);
 
-        // Debug: log resize calls for child webviews (non-fullSize)
-        if (!self.fullSize) {
-            NSLog(@"DEBUG resize child webview id=%u: input=(%.1f, %.1f, %.1f, %.1f) adjusted=(%.1f, %.1f, %.1f, %.1f)",
-                  self.webviewId, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
-                  adjustedX, adjustedY, adjustedWidth, adjustedHeight);
-        }
-
         // TODO: move mirrorModeEnabled to abstractView
         if (self.mirrorModeEnabled) {
             subview.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);
@@ -2371,8 +2364,6 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                     [self.webView removeFromSuperview];
                     [window.contentView addSubview:self.webView positioned:NSWindowAbove relativeTo:nil];
                     self.webView.layer.zPosition = 1000;
-                    NSLog(@"DEBUG WKWebView child: id=%u, frame=(%.1f, %.1f, %.1f, %.1f)",
-                          webviewId, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
                 }
 
                 ContainerView *containerView = (ContainerView *)window.contentView;
