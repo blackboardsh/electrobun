@@ -1681,11 +1681,15 @@ public:
     WebviewEventHandler webview_event_handler_ = nullptr;
 
     ElectrobunCefClient(uint32_t webviewId,
+                       HandlePostMessage eventBridgeHandler,
                        HandlePostMessage bunBridgeHandler,
-                       HandlePostMessage internalBridgeHandler)
+                       HandlePostMessage internalBridgeHandler,
+                       bool sandbox)
         : webview_id_(webviewId),
+          event_bridge_handler_(eventBridgeHandler),
           bun_bridge_handler_(bunBridgeHandler),
           webview_tag_handler_(internalBridgeHandler),
+          is_sandboxed_(sandbox),
           osr_enabled_(false) {
         m_loadHandler = new ElectrobunLoadHandler();
         m_loadHandler->SetClient(this); // Set client reference for load handler
@@ -1790,19 +1794,29 @@ public:
         std::string messageContent = message->GetArgumentList()->GetString(0).ToString();
         
         char* contentCopy = strdup(messageContent.c_str());
-        
-        if (messageName == "BunBridgeMessage") {
-            if (bun_bridge_handler_) {
-                bun_bridge_handler_(webview_id_, contentCopy);
-            }
-            return true;
-        } else if (messageName == "internalMessage") {
-            if (webview_tag_handler_) {
-                webview_tag_handler_(webview_id_, contentCopy);
+
+        // eventBridge - event-only bridge (always process for all webviews, including sandboxed)
+        if (messageName == "EventBridgeMessage") {
+            if (event_bridge_handler_) {
+                event_bridge_handler_(webview_id_, contentCopy);
             }
             return true;
         }
-        
+        // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+        else if (!is_sandboxed_) {
+            if (messageName == "BunBridgeMessage") {
+                if (bun_bridge_handler_) {
+                    bun_bridge_handler_(webview_id_, contentCopy);
+                }
+                return true;
+            } else if (messageName == "internalMessage") {
+                if (webview_tag_handler_) {
+                    webview_tag_handler_(webview_id_, contentCopy);
+                }
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -2080,8 +2094,10 @@ public:
 
 private:
     uint32_t webview_id_;
+    HandlePostMessage event_bridge_handler_;
     HandlePostMessage bun_bridge_handler_;
     HandlePostMessage webview_tag_handler_;
+    bool is_sandboxed_;
     std::string electrobun_script_;
     std::string custom_script_;
     CefRefPtr<CefBrowser> browser_;
@@ -2660,6 +2676,7 @@ public:
     std::vector<std::string> navigationRules;
 
     // Bridge handlers
+    ComPtr<BridgeHandler> eventBridgeHandler;  // Event-only bridge (always available)
     ComPtr<BridgeHandler> bunBridgeHandler;
     ComPtr<BridgeHandler> internalBridgeHandler;
     ComPtr<BunBridgeDispatch> bunBridgeDispatch;
@@ -2837,8 +2854,10 @@ private:
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2CompositionController> compositionController;
     ComPtr<ICoreWebView2> webview;
+    HandlePostMessage eventBridgeCallbackHandler;
     HandlePostMessage bunBridgeCallbackHandler;
     HandlePostMessage internalBridgeCallbackHandler;
+    bool isSandboxed;
     HWND containerHwnd = nullptr;  // Container window for masking
 
 public:
@@ -2851,8 +2870,8 @@ public:
     // Static debounce timestamp for ctrl+click handling
     static double lastCtrlClickTime;
 
-    WebView2View(uint32_t webviewId, HandlePostMessage bunBridgeHandler, HandlePostMessage internalBridgeHandler)
-        : bunBridgeCallbackHandler(bunBridgeHandler), internalBridgeCallbackHandler(internalBridgeHandler) {
+    WebView2View(uint32_t webviewId, HandlePostMessage eventBridgeHandler, HandlePostMessage bunBridgeHandler, HandlePostMessage internalBridgeHandler, bool sandbox)
+        : eventBridgeCallbackHandler(eventBridgeHandler), bunBridgeCallbackHandler(bunBridgeHandler), internalBridgeCallbackHandler(internalBridgeHandler), isSandboxed(sandbox) {
         this->webviewId = webviewId;
     }
     
@@ -2888,30 +2907,41 @@ public:
     // Set up the JavaScript bridge objects in the WebView2 context using hostObjects
     void setupJavaScriptBridges() {
         if (!webview) return;
-        
-        // Create COM objects for the bridge handlers
-        bunBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("bunBridge", bunBridgeCallbackHandler, webviewId));
-        internalBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("internalBridge", internalBridgeCallbackHandler, webviewId));
-        
-        // Convert COM objects to VARIANT for AddHostObjectToScript
-        VARIANT bunBridgeVariant = {};
-        VariantInit(&bunBridgeVariant);
-        bunBridgeVariant.vt = VT_DISPATCH;
-        bunBridgeVariant.pdispVal = static_cast<IDispatch*>(bunBridgeHandler.Get());
-        
-        VARIANT internalBridgeVariant = {};
-        VariantInit(&internalBridgeVariant);
-        internalBridgeVariant.vt = VT_DISPATCH;
-        internalBridgeVariant.pdispVal = static_cast<IDispatch*>(internalBridgeHandler.Get());
-        
-        // Add the bridge objects to hostObjects
-        webview->AddHostObjectToScript(L"bunBridge", &bunBridgeVariant);
-        webview->AddHostObjectToScript(L"internalBridge", &internalBridgeVariant);
-        
-        // Clean up VARIANTs
-        VariantClear(&bunBridgeVariant);
-        VariantClear(&internalBridgeVariant);
-        
+
+        // eventBridge - event-only bridge (always set up for all webviews, including sandboxed)
+        eventBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("eventBridge", eventBridgeCallbackHandler, webviewId));
+        VARIANT eventBridgeVariant = {};
+        VariantInit(&eventBridgeVariant);
+        eventBridgeVariant.vt = VT_DISPATCH;
+        eventBridgeVariant.pdispVal = static_cast<IDispatch*>(eventBridgeHandler.Get());
+        webview->AddHostObjectToScript(L"eventBridge", &eventBridgeVariant);
+        VariantClear(&eventBridgeVariant);
+
+        // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+        if (!isSandboxed) {
+            // Create COM objects for the bridge handlers
+            bunBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("bunBridge", bunBridgeCallbackHandler, webviewId));
+            internalBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("internalBridge", internalBridgeCallbackHandler, webviewId));
+
+            // Convert COM objects to VARIANT for AddHostObjectToScript
+            VARIANT bunBridgeVariant = {};
+            VariantInit(&bunBridgeVariant);
+            bunBridgeVariant.vt = VT_DISPATCH;
+            bunBridgeVariant.pdispVal = static_cast<IDispatch*>(bunBridgeHandler.Get());
+
+            VARIANT internalBridgeVariant = {};
+            VariantInit(&internalBridgeVariant);
+            internalBridgeVariant.vt = VT_DISPATCH;
+            internalBridgeVariant.pdispVal = static_cast<IDispatch*>(internalBridgeHandler.Get());
+
+            // Add the bridge objects to hostObjects
+            webview->AddHostObjectToScript(L"bunBridge", &bunBridgeVariant);
+            webview->AddHostObjectToScript(L"internalBridge", &internalBridgeVariant);
+
+            // Clean up VARIANTs
+            VariantClear(&bunBridgeVariant);
+            VariantClear(&internalBridgeVariant);
+        }
     }
     
     void loadURL(const char* urlString) override {
@@ -5337,17 +5367,19 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  const char *partitionIdentifier,
                                                  DecideNavigationCallback navigationCallback,
                                                  WebviewEventHandler webviewEventHandler,
+                                                 HandlePostMessage eventBridgeHandler,
                                                  HandlePostMessage bunBridgeHandler,
                                                  HandlePostMessage internalBridgeHandler,
                                                  const char *electrobunPreloadScript,
                                                  const char *customPreloadScript,
-                                                 bool transparent) {
+                                                 bool transparent,
+                                                 bool sandbox) {
     // Check if WebView2 runtime is available
     LPWSTR versionInfo = nullptr;
     HRESULT result = GetAvailableCoreWebView2BrowserVersionString(nullptr, &versionInfo);
     if (FAILED(result)) {
         ::log("ERROR: WebView2 runtime is not available. Please install Microsoft Edge WebView2 Runtime");
-        auto view = std::make_shared<WebView2View>(webviewId, bunBridgeHandler, internalBridgeHandler);
+        auto view = std::make_shared<WebView2View>(webviewId, eventBridgeHandler, bunBridgeHandler, internalBridgeHandler, sandbox);
         view->setCreationFailed(true);
         return view;
     }
@@ -5362,7 +5394,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     std::string customScript = customPreloadScript ? std::string(customPreloadScript) : "";
     std::string partitionStr = partitionIdentifier ? std::string(partitionIdentifier) : "";
 
-    auto view = std::make_shared<WebView2View>(webviewId, bunBridgeHandler, internalBridgeHandler);
+    auto view = std::make_shared<WebView2View>(webviewId, eventBridgeHandler, bunBridgeHandler, internalBridgeHandler, sandbox);
     view->hwnd = hwnd;
     view->fullSize = autoResize;
     view->webviewEventHandler = webviewEventHandler;
@@ -6144,11 +6176,13 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                                        const char *partitionIdentifier,
                                        DecideNavigationCallback navigationCallback,
                                        WebviewEventHandler webviewEventHandler,
+                                       HandlePostMessage eventBridgeHandler,
                                        HandlePostMessage bunBridgeHandler,
                                        HandlePostMessage internalBridgeHandler,
                                        const char *electrobunPreloadScript,
                                        const char *customPreloadScript,
-                                       bool transparent) {
+                                       bool transparent,
+                                       bool sandbox) {
     
     auto view = std::make_shared<CEFView>(webviewId);
     view->hwnd = hwnd;
@@ -6187,7 +6221,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         }
 
         // Create CEF client with bridge handlers
-        auto client = new ElectrobunCefClient(webviewId, bunBridgeHandler, internalBridgeHandler);
+        auto client = new ElectrobunCefClient(webviewId, eventBridgeHandler, bunBridgeHandler, internalBridgeHandler, sandbox);
 
         // Configure OSR mode for transparent windows
         if (transparent) {
@@ -6232,8 +6266,13 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         // Create browser synchronously (like Mac implementation)
         // Note: OnLoadStart will fire during this call, but the load handler has a direct
         // reference to the client, so preload scripts are available immediately without race condition
+
+        // Pass sandbox flag to renderer process via extra_info
+        CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
+        extra_info->SetBool("sandbox", sandbox);
+
         CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
-            windowInfo, client, url ? url : "about:blank", browserSettings, nullptr, requestContext);
+            windowInfo, client, url ? url : "about:blank", browserSettings, extra_info, requestContext);
 
         if (browser) {
             // Store preload script by browser ID for compatibility with other code paths
@@ -6479,11 +6518,13 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *partitionIdentifier,
                          DecideNavigationCallback navigationCallback,
                          WebviewEventHandler webviewEventHandler,
+                         HandlePostMessage eventBridgeHandler,
                          HandlePostMessage bunBridgeHandler,
                          HandlePostMessage internalBridgeHandler,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript,
-                         bool transparent) {
+                         bool transparent,
+                         bool sandbox) {
 
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
@@ -6497,14 +6538,14 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     if (renderer && strcmp(renderer, "cef") == 0 && isCEFAvailable()) {
         auto cefView = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
-                                    bunBridgeHandler, internalBridgeHandler,
-                                    electrobunPreloadScript, customPreloadScript, transparent);
+                                    eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
+                                    electrobunPreloadScript, customPreloadScript, transparent, sandbox);
         view = cefView.get();
     } else {
         auto webview2View = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
                                               partitionIdentifier, navigationCallback, webviewEventHandler,
-                                              bunBridgeHandler, internalBridgeHandler,
-                                              electrobunPreloadScript, customPreloadScript, transparent);
+                                              eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
+                                              electrobunPreloadScript, customPreloadScript, transparent, sandbox);
         view = webview2View.get();
     }
     

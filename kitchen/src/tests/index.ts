@@ -12,6 +12,7 @@ import { sessionTests } from "./session.test";
 import { eventsTests } from "./events.test";
 import { preloadTests } from "./preload.test";
 import { updaterTests } from "./updater.test";
+import { sandboxTests } from "./sandbox.test";
 
 // Interactive tests
 import { dialogTests } from "./interactive/dialogs.test";
@@ -35,6 +36,7 @@ export const allTests: TestDefinition[] = [
   ...eventsTests,
   ...preloadTests,
   ...updaterTests,
+  ...sandboxTests,
 
   // Interactive tests (run sequentially, require user)
   ...dialogTests,
@@ -62,6 +64,7 @@ export {
   eventsTests,
   preloadTests,
   updaterTests,
+  sandboxTests,
   dialogTests,
   trayTests,
   shortcutTests,

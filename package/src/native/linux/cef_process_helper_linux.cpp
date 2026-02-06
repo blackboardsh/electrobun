@@ -1,4 +1,6 @@
 #include <iostream>
+#include <map>
+#include <mutex>
 #include "include/cef_app.h"
 #include "include/cef_client.h"
 #include "include/cef_v8.h"
@@ -10,8 +12,8 @@ public:
 
     // CefApp methods:
     virtual void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
-        registrar->AddCustomScheme("views", 
-            CEF_SCHEME_OPTION_STANDARD | 
+        registrar->AddCustomScheme("views",
+            CEF_SCHEME_OPTION_STANDARD |
             CEF_SCHEME_OPTION_CORS_ENABLED |
             CEF_SCHEME_OPTION_SECURE | // treat it like https
             CEF_SCHEME_OPTION_CSP_BYPASSING | // allow things like crypto.subtle
@@ -23,35 +25,73 @@ public:
     }
 
     // CefRenderProcessHandler methods:
+
+    // Called when a browser is created - receive sandbox flag via extra_info
+    virtual void OnBrowserCreated(CefRefPtr<CefBrowser> browser,
+                                  CefRefPtr<CefDictionaryValue> extra_info) override {
+        if (extra_info && extra_info->HasKey("sandbox")) {
+            bool sandbox = extra_info->GetBool("sandbox");
+            std::lock_guard<std::mutex> lock(sandbox_map_mutex_);
+            sandbox_map_[browser->GetIdentifier()] = sandbox;
+        }
+    }
+
+    // Called when a browser is destroyed - cleanup sandbox flag
+    virtual void OnBrowserDestroyed(CefRefPtr<CefBrowser> browser) override {
+        std::lock_guard<std::mutex> lock(sandbox_map_mutex_);
+        sandbox_map_.erase(browser->GetIdentifier());
+    }
+
     virtual void OnContextCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefRefPtr<CefV8Context> context) override {
+        // Check if this browser is sandboxed
+        bool is_sandboxed = false;
+        {
+            std::lock_guard<std::mutex> lock(sandbox_map_mutex_);
+            auto it = sandbox_map_.find(browser->GetIdentifier());
+            if (it != sandbox_map_.end()) {
+                is_sandboxed = it->second;
+            }
+        }
+
         // Log the context creation
         std::string frameUrl = frame->GetURL().ToString();
-        
+
         // Get the global window object
         CefRefPtr<CefV8Context> v8Context = frame->GetV8Context();
         v8Context->Enter();
-        
+
         CefRefPtr<CefV8Value> window = context->GetGlobal();
 
-        // Create bunBridge
-        CefRefPtr<CefV8Value> bunBridge = CefV8Value::CreateObject(nullptr, nullptr);
-        CefRefPtr<CefV8Value> bunPostMessage = CreatePostMessageFunction(browser, "BunBridgeMessage");
-        bunBridge->SetValue("postMessage", bunPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
-        window->SetValue("bunBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
+        // Create eventBridge - event-only bridge (always available for all webviews, including sandboxed)
+        CefRefPtr<CefV8Value> eventBridge = CefV8Value::CreateObject(nullptr, nullptr);
+        CefRefPtr<CefV8Value> eventPostMessage = CreatePostMessageFunction(browser, "EventBridgeMessage");
+        eventBridge->SetValue("postMessage", eventPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
+        window->SetValue("__electrobunEventBridge", eventBridge, V8_PROPERTY_ATTRIBUTE_NONE);
 
-        // Create internalBridge
-        CefRefPtr<CefV8Value> internalBridge = CefV8Value::CreateObject(nullptr, nullptr);
-        CefRefPtr<CefV8Value> internalPostMessage = CreatePostMessageFunction(browser, "internalMessage");
-        internalBridge->SetValue("postMessage", internalPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
-        window->SetValue("internalBridge", internalBridge, V8_PROPERTY_ATTRIBUTE_NONE);
+        // Only create bunBridge and internalBridge for non-sandboxed webviews
+        if (!is_sandboxed) {
+            // Create bunBridge - user RPC bridge
+            CefRefPtr<CefV8Value> bunBridge = CefV8Value::CreateObject(nullptr, nullptr);
+            CefRefPtr<CefV8Value> bunPostMessage = CreatePostMessageFunction(browser, "BunBridgeMessage");
+            bunBridge->SetValue("postMessage", bunPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
+            window->SetValue("__electrobunBunBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
 
+            // Create internalBridge - internal RPC bridge
+            CefRefPtr<CefV8Value> internalBridge = CefV8Value::CreateObject(nullptr, nullptr);
+            CefRefPtr<CefV8Value> internalPostMessage = CreatePostMessageFunction(browser, "internalMessage");
+            internalBridge->SetValue("postMessage", internalPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
+            window->SetValue("__electrobunInternalBridge", internalBridge, V8_PROPERTY_ATTRIBUTE_NONE);
+        }
 
         v8Context->Exit();
     }
 
 private:
+    // Map of browser ID to sandbox flag
+    std::map<int, bool> sandbox_map_;
+    std::mutex sandbox_map_mutex_;
     // Helper class to handle V8 function calls
     class V8Handler : public CefV8Handler {
     public:

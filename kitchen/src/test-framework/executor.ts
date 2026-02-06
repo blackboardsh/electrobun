@@ -119,6 +119,7 @@ export class TestExecutor {
           },
           rpc: options.rpc,
           titleBarStyle: options.titleBarStyle,
+          sandbox: options.sandbox || false,
         });
 
         // Wait a bit for window to be created

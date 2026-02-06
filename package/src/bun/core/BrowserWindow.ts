@@ -32,6 +32,10 @@ export type WindowOptionsType<T = undefined> = {
 	// transparent: when true, window background is transparent (see-through)
 	transparent: boolean;
 	navigationRules: string | null;
+	// Sandbox mode: when true, disables RPC and only allows event emission
+	// Use for untrusted content (remote URLs) to prevent malicious sites from
+	// accessing internal APIs, creating OOPIFs, or communicating with Bun
+	sandbox: boolean;
 };
 
 const defaultOptions: WindowOptionsType = {
@@ -49,6 +53,7 @@ const defaultOptions: WindowOptionsType = {
 	titleBarStyle: "default",
 	transparent: false,
 	navigationRules: null,
+	sandbox: false,
 };
 
 export const BrowserWindowMap: {
@@ -78,6 +83,8 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	renderer: "native" | "cef" = "native";
 	transparent: boolean = false;
 	navigationRules: string | null = null;
+	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
+	sandbox: boolean = false;
 	frame: {
 		x: number;
 		y: number;
@@ -103,6 +110,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.renderer = options.renderer || defaultOptions.renderer;
 		this.transparent = options.transparent ?? false;
 		this.navigationRules = options.navigationRules || null;
+		this.sandbox = options.sandbox ?? false;
 
 		this.init(options);
 	}
@@ -182,6 +190,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			// does this mean browserView needs to track the windowId or handle it ephemerally?
 			windowId: this.id,
 			navigationRules: this.navigationRules,
+			sandbox: this.sandbox,
 		});
 
 		console.log("setting webviewId: ", webview.id);

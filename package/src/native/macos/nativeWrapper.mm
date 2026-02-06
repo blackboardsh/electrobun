@@ -678,6 +678,7 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL fullSize;
     @property (nonatomic, assign) BOOL isRemoved;
     @property (nonatomic, assign) BOOL isInFullscreen;
+    @property (nonatomic, assign) BOOL isSandboxed;  // When true, only eventBridge is active (no RPC)
     @property (nonatomic, strong) CALayer *storedLayerMask;
     @property (nonatomic, strong) NSArray<NSString *> *navigationRules;
 
@@ -778,7 +779,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 
 // ----------------------- Webview Implementations -----------------------
 @interface WKWebViewImpl : AbstractView
-    @property (nonatomic, strong) WKWebView *webView;    
+    @property (nonatomic, strong) WKWebView *webView;
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window
@@ -788,11 +789,13 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
                 webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+                eventBridgeHandler:(HandlePostMessage)eventBridgeHandler
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
                 internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript
-                transparent:(bool)transparent;
+                transparent:(bool)transparent
+                sandbox:(bool)sandbox;
 @end
 
 
@@ -1118,23 +1121,30 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
 
-    - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {            
+    - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {
         NSView *subview = self.nsView;
         if (!subview) {
-            return;    
-        }                        
-        
+            return;
+        }
+
         CGFloat adjustedX = floor(frame.origin.x);
         CGFloat adjustedWidth = ceilf(frame.size.width);
         CGFloat adjustedHeight = ceilf(frame.size.height);
         CGFloat adjustedY = floor(subview.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
-        CGFloat adjustedYZ = floor(frame.origin.y);   
+        CGFloat adjustedYZ = floor(frame.origin.y);
+
+        // Debug: log resize calls for child webviews (non-fullSize)
+        if (!self.fullSize) {
+            NSLog(@"DEBUG resize child webview id=%u: input=(%.1f, %.1f, %.1f, %.1f) adjusted=(%.1f, %.1f, %.1f, %.1f)",
+                  self.webviewId, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+                  adjustedX, adjustedY, adjustedWidth, adjustedHeight);
+        }
 
         // TODO: move mirrorModeEnabled to abstractView
-        if (self.mirrorModeEnabled) {               
+        if (self.mirrorModeEnabled) {
             subview.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);
-            subview.layer.position = CGPointMake(adjustedX, adjustedY);                       
-        } else {            
+            subview.layer.position = CGPointMake(adjustedX, adjustedY);
+        } else {
             subview.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
         }
 
@@ -2248,16 +2258,19 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
                 webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+                eventBridgeHandler:(HandlePostMessage)eventBridgeHandler
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
                 internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript
                 transparent:(bool)transparent
+                sandbox:(bool)sandbox
     {
         self = [super init];
         if (self) {
             self.webviewId = webviewId;
-            
+            self.isSandboxed = sandbox;
+
             // TODO: rewrite this so we can return a reference to the AbstractRenderer and then call
             // init from zig after the handle is added to the webviewMap then we don't need this async stuff
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -2277,13 +2290,17 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 assetSchemeHandler.webviewId = webviewId;
                 [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
                 
-                // create WKWebView 
+                // create WKWebView
                 self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
-                
-                [self.webView setValue:@NO forKey:@"drawsBackground"];
-                self.webView.layer.backgroundColor = [[NSColor clearColor] CGColor];
-                self.webView.layer.opaque = NO;
-                
+
+                // Only set transparent background for main window webviews (autoResize/fullscreen)
+                // Child webviews (OOPIFs) need a visible background to render properly
+                if (autoResize) {
+                    [self.webView setValue:@NO forKey:@"drawsBackground"];
+                    self.webView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+                    self.webView.layer.opaque = NO;
+                }
+
                 self.webView.autoresizingMask = NSViewNotSizable;
                 
                 [self.webView addObserver:self forKeyPath:@"fullscreenState" options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionOld context:nil];
@@ -2310,29 +2327,53 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 self.webView.UIDelegate = uiDelegate;
                 objc_setAssociatedObject(self.webView, "UIDelegate", uiDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);                                    
 
-                // postmessage
-                // bunBridge
-                MyScriptMessageHandler *bunHandler = [[MyScriptMessageHandler alloc] init];
-                bunHandler.zigCallback = bunBridgeHandler;
-                bunHandler.webviewId = webviewId;
-                [self.webView.configuration.userContentController addScriptMessageHandler:bunHandler
-                                                                                name:[NSString stringWithUTF8String:"bunBridge"]];
+                // postmessage handlers
 
-                objc_setAssociatedObject(self.webView, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                // eventBridge - event-only bridge (always set up for all webviews, including sandboxed)
+                MyScriptMessageHandler *eventHandler = [[MyScriptMessageHandler alloc] init];
+                eventHandler.zigCallback = eventBridgeHandler;
+                eventHandler.webviewId = webviewId;
+                [self.webView.configuration.userContentController addScriptMessageHandler:eventHandler
+                                                                                name:[NSString stringWithUTF8String:"eventBridge"]];
+                objc_setAssociatedObject(self.webView, "eventBridgeHandler", eventHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-                // internalBridge
-                MyScriptMessageHandler *webviewTagHandler = [[MyScriptMessageHandler alloc] init];
-                webviewTagHandler.zigCallback = internalBridgeHandler;
-                webviewTagHandler.webviewId = webviewId;
-                [self.webView.configuration.userContentController addScriptMessageHandler:webviewTagHandler
-                                                                                name:[NSString stringWithUTF8String:"internalBridge"]];
+                // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+                if (!sandbox) {
+                    // bunBridge - user RPC bridge
+                    MyScriptMessageHandler *bunHandler = [[MyScriptMessageHandler alloc] init];
+                    bunHandler.zigCallback = bunBridgeHandler;
+                    bunHandler.webviewId = webviewId;
+                    [self.webView.configuration.userContentController addScriptMessageHandler:bunHandler
+                                                                                    name:[NSString stringWithUTF8String:"bunBridge"]];
+                    objc_setAssociatedObject(self.webView, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-                objc_setAssociatedObject(self.webView, "webviewTagHandler", webviewTagHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    // internalBridge - internal RPC bridge (for webview tags, drag regions, etc.)
+                    MyScriptMessageHandler *webviewTagHandler = [[MyScriptMessageHandler alloc] init];
+                    webviewTagHandler.zigCallback = internalBridgeHandler;
+                    webviewTagHandler.webviewId = webviewId;
+                    [self.webView.configuration.userContentController addScriptMessageHandler:webviewTagHandler
+                                                                                    name:[NSString stringWithUTF8String:"internalBridge"]];
+                    objc_setAssociatedObject(self.webView, "webviewTagHandler", webviewTagHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
 
                 // add subview
                 [window.contentView addSubview:self.webView positioned:NSWindowAbove relativeTo:nil];
                 CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
                 self.webView.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+
+                // Ensure the webview is properly layer-backed and visible
+                self.webView.wantsLayer = YES;
+                self.webView.hidden = NO;
+
+                // For child webviews (non-autoResize), ensure they appear on top
+                if (!autoResize) {
+                    // Bring child webview to front of the view hierarchy
+                    [self.webView removeFromSuperview];
+                    [window.contentView addSubview:self.webView positioned:NSWindowAbove relativeTo:nil];
+                    self.webView.layer.zPosition = 1000;
+                    NSLog(@"DEBUG WKWebView child: id=%u, frame=(%.1f, %.1f, %.1f, %.1f)",
+                          webviewId, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+                }
 
                 ContainerView *containerView = (ContainerView *)window.contentView;
                 [containerView addAbstractView:self];
@@ -3023,10 +3064,12 @@ class ElectrobunClient : public CefClient,
                         public CefDownloadHandler  {
 private:
     uint32_t webview_id_;
+    HandlePostMessage event_bridge_handler_;
     HandlePostMessage bun_bridge_handler_;
     HandlePostMessage webview_tag_handler_;
     WebviewEventHandler webview_event_handler_;
     DecideNavigationCallback navigation_callback_;
+    bool is_sandboxed_;
 
     // OSR (Off-Screen Rendering) support
     CEFOSRView* osr_view_ = nullptr;
@@ -3287,15 +3330,19 @@ public:
     }
 
     ElectrobunClient(uint32_t webviewId,
+                     HandlePostMessage eventBridgeHandler,
                      HandlePostMessage bunBridgeHandler,
                      HandlePostMessage internalBridgeHandler,
                      WebviewEventHandler webviewEventHandler,
-                     DecideNavigationCallback navigationCallback)
+                     DecideNavigationCallback navigationCallback,
+                     bool sandbox)
         : webview_id_(webviewId)
+        , event_bridge_handler_(eventBridgeHandler)
         , bun_bridge_handler_(bunBridgeHandler)
-        , webview_tag_handler_(internalBridgeHandler) 
+        , webview_tag_handler_(internalBridgeHandler)
         , webview_event_handler_(webviewEventHandler)
-        , navigation_callback_(navigationCallback) {}    
+        , navigation_callback_(navigationCallback)
+        , is_sandboxed_(sandbox) {}    
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
         electrobun_script_ = {script, false};
@@ -3637,13 +3684,21 @@ public:
     
     char* contentCopy = strdup(messageContent.c_str());
     bool result = false;
-    
-    if (messageName == "BunBridgeMessage") {
-        bun_bridge_handler_(webview_id_, contentCopy);
+
+    // eventBridge - event-only bridge (always process for all webviews, including sandboxed)
+    if (messageName == "EventBridgeMessage") {
+        event_bridge_handler_(webview_id_, contentCopy);
         result = true;
-    } else if (messageName == "internalMessage") {
-        webview_tag_handler_(webview_id_, contentCopy);
-        result = true;
+    }
+    // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+    else if (!is_sandboxed_) {
+        if (messageName == "BunBridgeMessage") {
+            bun_bridge_handler_(webview_id_, contentCopy);
+            result = true;
+        } else if (messageName == "internalMessage") {
+            webview_tag_handler_(webview_id_, contentCopy);
+            result = true;
+        }
     }
 
     // Note: threadsafe JSCallbacks are invoked on the js worker thread, When called frequently they
@@ -4147,11 +4202,13 @@ void RemoteDevToolsClosed(void* ctx, int target_id) {
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
                 webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+                eventBridgeHandler:(HandlePostMessage)eventBridgeHandler
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
                 internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript
-                transparent:(bool)transparent;
+                transparent:(bool)transparent
+                sandbox:(bool)sandbox;
 
 @end
 
@@ -4520,15 +4577,18 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 partitionIdentifier:(const char *)partitionIdentifier
                 navigationCallback:(DecideNavigationCallback)navigationCallback
                 webviewEventHandler:(WebviewEventHandler)webviewEventHandler
+                eventBridgeHandler:(HandlePostMessage)eventBridgeHandler
                 bunBridgeHandler:(HandlePostMessage)bunBridgeHandler
             internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
             electrobunPreloadScript:(const char *)electrobunPreloadScript
             customPreloadScript:(const char *)customPreloadScript
             transparent:(bool)transparent
+            sandbox:(bool)sandbox
     {
         self = [super init];
         if (self) {
             self.webviewId = webviewId;
+            self.isSandboxed = sandbox;
 
             if (autoResize) {
                 self.fullSize = YES;
@@ -4584,10 +4644,12 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
                 self.client = new ElectrobunClient(
                     webviewId,
+                    eventBridgeHandler,
                     bunBridgeHandler,
                     internalBridgeHandler,
                     webviewEventHandler,
-                    navigationCallback
+                    navigationCallback,
+                    sandbox
                 );
 
                 // Configure OSR if enabled
@@ -4617,11 +4679,17 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 // Otherwise we get a race condition where OOPIF events hit bun then get passed to the parent
                 // webview which is still in the middle of a CreateBrowserSync and fails to call
                 // self.browser->GetMainFrame()->ExecuteJavascript.
-                NSLog(@"DEBUG CEF: Creating browser, OSR mode: %@, view size: %dx%d",
+                NSLog(@"DEBUG CEF: Creating browser, OSR mode: %@, view size: %dx%d, sandbox: %@",
                       self.isOSRMode ? @"YES" : @"NO",
-                      (int)frame.size.width, (int)frame.size.height);
+                      (int)frame.size.width, (int)frame.size.height,
+                      sandbox ? @"YES" : @"NO");
+
+                // Pass sandbox flag to renderer process via extra_info
+                CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
+                extra_info->SetBool("sandbox", sandbox);
+
                 self.browser = CefBrowserHost::CreateBrowserSync(
-                    window_info, self.client, CefString("about:blank"), browserSettings, nullptr, requestContext);
+                    window_info, self.client, CefString("about:blank"), browserSettings, extra_info, requestContext);
                 NSLog(@"DEBUG CEF: Browser created successfully");
 
                 if (self.browser) {
@@ -5088,11 +5156,13 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         const char *partitionIdentifier,
                         DecideNavigationCallback navigationCallback,
                         WebviewEventHandler webviewEventHandler,
+                        HandlePostMessage eventBridgeHandler,
                         HandlePostMessage bunBridgeHandler,
                         HandlePostMessage internalBridgeHandler,
                         const char *electrobunPreloadScript,
                         const char *customPreloadScript,
-                        bool transparent ) {
+                        bool transparent,
+                        bool sandbox ) {
 
     // Validate frame values - use defaults if NaN or invalid
     if (isnan(x) || isinf(x)) {
@@ -5127,11 +5197,13 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                                         partitionIdentifier:strdup(partitionIdentifier)
                                         navigationCallback:navigationCallback
                                         webviewEventHandler:webviewEventHandler
+                                        eventBridgeHandler:eventBridgeHandler
                                         bunBridgeHandler:bunBridgeHandler
                                         internalBridgeHandler:internalBridgeHandler
                                         electrobunPreloadScript:strdup(electrobunPreloadScript)
                                         customPreloadScript:strdup(customPreloadScript)
-                                        transparent:transparent];
+                                        transparent:transparent
+                                        sandbox:sandbox];
 
     });
 

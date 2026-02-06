@@ -3,7 +3,10 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import ElectrobunEvent from "../events/event";
 import { BrowserView } from "../core/BrowserView";
 import { Tray } from "../core/Tray";
-import { preloadScript } from "../preload/.generated/compiled";
+import {
+	preloadScript,
+	preloadScriptSandboxed,
+} from "../preload/.generated/compiled";
 
 // Menu data reference system to avoid serialization overhead
 const menuDataRegistry = new Map<string, any>();
@@ -183,11 +186,13 @@ export const native = (() => {
 					FFIType.cstring, // partition
 					FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
 					FFIType.function, // webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
-					FFIType.function, //  bunBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
-					FFIType.function, //  internalBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void,
+					FFIType.function, // eventBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void (events only, always active)
+					FFIType.function, // bunBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void (user RPC, disabled in sandbox)
+					FFIType.function, // internalBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void (internal RPC, disabled in sandbox)
 					FFIType.cstring, // electrobunPreloadScript
 					FFIType.cstring, // customPreloadScript
 					FFIType.bool, // transparent
+					FFIType.bool, // sandbox - when true, bunBridge and internalBridge are not set up
 				],
 				returns: FFIType.ptr,
 			},
@@ -881,6 +886,7 @@ export const ffi = {
 			};
 			autoResize: boolean;
 			navigationRules: string | null;
+			sandbox: boolean;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -896,6 +902,7 @@ export const ffi = {
 				preload,
 				frame: { x, y, width, height },
 				autoResize,
+				sandbox,
 			} = params;
 
 			const parentWindow = BrowserWindow.getById(windowId);
@@ -908,15 +915,41 @@ export const ffi = {
 			}
 
 			// Dynamic setup per-webview (variables that change for each webview)
-			const dynamicPreload = `
+			// EventBridge is available for ALL webviews (including sandboxed) for event emission
+			// InternalBridge and BunBridge are only available for trusted (non-sandboxed) webviews
+			let dynamicPreload: string;
+			let selectedPreloadScript: string;
+
+			if (sandbox) {
+				// Sandboxed webview: minimal preload with only event emission capability
+				// Note: We set up internalBridge for event emission fallback (until native code
+				// adds dedicated eventBridge handler). The security is enforced because:
+				// 1. Sandboxed preload has NO RPC code - it can only emit events
+				// 2. No bunBridge is set up - no user RPC communication
+				// 3. No secretKey/rpcPort - no encrypted socket RPC
+				// 4. No webview tag support - can't create OOPIFs
+				dynamicPreload = `
+window.__electrobunWebviewId = ${id};
+window.__electrobunWindowId = ${windowId};
+window.__electrobunEventBridge = window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
+window.__electrobunInternalBridge = window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
+`;
+				selectedPreloadScript = preloadScriptSandboxed;
+			} else {
+				// Trusted webview: all bridges, full preload
+				dynamicPreload = `
 window.__electrobunWebviewId = ${id};
 window.__electrobunWindowId = ${windowId};
 window.__electrobunRpcSocketPort = ${rpcPort};
 window.__electrobunSecretKeyBytes = [${secretKey}];
+window.__electrobunEventBridge = window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
 window.__electrobunInternalBridge = window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
 window.__electrobunBunBridge = window.webkit?.messageHandlers?.bunBridge || window.bunBridge || window.chrome?.webview?.hostObjects?.bunBridge;
 `;
-			const electrobunPreload = dynamicPreload + preloadScript;
+				selectedPreloadScript = preloadScript;
+			}
+
+			const electrobunPreload = dynamicPreload + selectedPreloadScript;
 
 			const customPreload = preload;
 
@@ -933,11 +966,13 @@ window.__electrobunBunBridge = window.webkit?.messageHandlers?.bunBridge || wind
 				toCString(partition || "persist:default"),
 				webviewDecideNavigation,
 				webviewEventJSCallback,
-				bunBridgePostmessageHandler,
-				internalBridgeHandler,
+				eventBridgeHandler, // Event-only bridge (always active, for dom-ready, navigation, etc.)
+				bunBridgePostmessageHandler, // User RPC bridge (disabled in sandbox mode)
+				internalBridgeHandler, // Internal RPC bridge (disabled in sandbox mode)
 				toCString(electrobunPreload),
 				toCString(customPreload || ""),
 				transparent,
+				sandbox, // When true, bunBridge and internalBridge are not set up in native code
 			);
 
 			if (!webviewPtr) {
@@ -1837,6 +1872,34 @@ const bunBridgePostmessageHandler = new JSCallback(
 // BrowserView.rpc (user defined bun <-> browser rpc unique to each webview)
 // nativeRPC (internal bun <-> native rpc)
 
+// eventBridgeHandler: handles ONLY webview events (dom-ready, navigation, etc.)
+// This is available on ALL webviews including sandboxed ones.
+// It cannot process RPC requests - only event emission.
+const eventBridgeHandler = new JSCallback(
+	(_id: number, msg: number) => {
+		try {
+			const message = new CString(msg as unknown as Pointer);
+			const jsonMessage = JSON.parse(message.toString());
+
+			// Only handle webviewEvent messages - no RPC
+			if (jsonMessage.id === "webviewEvent") {
+				const { payload } = jsonMessage;
+				webviewEventHandler(payload.id, payload.eventName, payload.detail);
+			}
+			// Silently ignore any other message types - sandboxed webviews shouldn't send them
+		} catch (err) {
+			console.error("error in eventBridgeHandler: ", err);
+		}
+	},
+	{
+		args: [FFIType.u32, FFIType.cstring],
+		returns: FFIType.void,
+		threadsafe: true,
+	},
+);
+
+// internalBridgeHandler: handles internal RPC (webview tags, drag regions, etc.)
+// This is only available on trusted (non-sandboxed) webviews.
 const internalBridgeHandler = new JSCallback(
 	(_id: number, msg: number) => {
 		try {
@@ -2004,6 +2067,7 @@ type WebviewTagInitParams = {
 	hostWebviewId: number;
 	windowId: number;
 	navigationRules: string | null;
+	sandbox: boolean;
 };
 
 export const internalRpcHandlers = {
@@ -2019,6 +2083,7 @@ export const internalRpcHandlers = {
 				partition,
 				frame,
 				navigationRules,
+				sandbox,
 			} = params;
 
 			const url = !params.url && !html ? "https://electrobun.dev" : params.url;
@@ -2034,6 +2099,7 @@ export const internalRpcHandlers = {
 				windowId,
 				renderer, //: "cef",
 				navigationRules,
+				sandbox,
 			});
 
 			return webviewForTag.id;

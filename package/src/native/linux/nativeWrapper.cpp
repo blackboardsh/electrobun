@@ -791,11 +791,13 @@ class ElectrobunClient : public CefClient,
                         public CefRenderHandler {
 private:
     uint32_t webview_id_;
+    HandlePostMessage event_bridge_handler_;
     HandlePostMessage bun_bridge_handler_;
     HandlePostMessage webview_tag_handler_;
     WebviewEventHandler webview_event_handler_;
     DecideNavigationCallback navigation_callback_;
-    
+    bool is_sandboxed_;
+
     std::string electrobun_script_;
     std::string custom_script_;
     CefRefPtr<CefBrowser> browser_;
@@ -816,16 +818,20 @@ private:
 
 public:
     ElectrobunClient(uint32_t webviewId,
+                     HandlePostMessage eventBridgeHandler,
                      HandlePostMessage bunBridgeHandler,
                      HandlePostMessage internalBridgeHandler,
                      WebviewEventHandler webviewEventHandler,
                      DecideNavigationCallback navigationCallback,
-                     GtkWidget* gtkWidget)
+                     GtkWidget* gtkWidget,
+                     bool sandbox)
         : webview_id_(webviewId)
+        , event_bridge_handler_(eventBridgeHandler)
         , bun_bridge_handler_(bunBridgeHandler)
         , webview_tag_handler_(internalBridgeHandler)
         , webview_event_handler_(webviewEventHandler)
         , navigation_callback_(navigationCallback)
+        , is_sandboxed_(sandbox)
         , gtk_widget_(gtkWidget)
         , x11_window_(0)
         , display_(nullptr)
@@ -1408,15 +1414,23 @@ public:
         
         char* contentCopy = strdup(messageContent.c_str());
         bool result = false;
-        
-        if (messageName == "BunBridgeMessage") {
-            // printf("CEF: Forwarding BunBridgeMessage to handler\n");
-            bun_bridge_handler_(webview_id_, contentCopy);
+
+        // eventBridge - event-only bridge (always process for all webviews, including sandboxed)
+        if (messageName == "EventBridgeMessage") {
+            event_bridge_handler_(webview_id_, contentCopy);
             result = true;
-        } else if (messageName == "internalMessage") {
-            // printf("CEF: Forwarding internalMessage to handler\n");
-            webview_tag_handler_(webview_id_, contentCopy);
-            result = true;
+        }
+        // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+        else if (!is_sandboxed_) {
+            if (messageName == "BunBridgeMessage") {
+                // printf("CEF: Forwarding BunBridgeMessage to handler\n");
+                bun_bridge_handler_(webview_id_, contentCopy);
+                result = true;
+            } else if (messageName == "internalMessage") {
+                // printf("CEF: Forwarding internalMessage to handler\n");
+                webview_tag_handler_(webview_id_, contentCopy);
+                result = true;
+            }
         }
 
         // Free the copied string after a delay to ensure the callback has time to process it
@@ -2126,8 +2140,10 @@ public:
     WebKitUserContentManager* manager;
     DecideNavigationCallback navigationCallback;
     WebviewEventHandler eventHandler;
+    HandlePostMessage eventBridgeHandler;
     HandlePostMessage bunBridgeHandler;
     HandlePostMessage internalBridgeHandler;
+    bool isSandboxed;
     std::string electrobunPreloadScript;
     std::string customPreloadScript;
     std::string partition;
@@ -2135,7 +2151,7 @@ public:
     // Navigation state tracking
     bool lastNavigationWasBlocked = false;
     
-    WebKitWebViewImpl(uint32_t webviewId, 
+    WebKitWebViewImpl(uint32_t webviewId,
                       GtkWidget* window,
                       const char* url,
                       double x, double y,
@@ -2144,13 +2160,16 @@ public:
                       const char* partitionIdentifier,
                       DecideNavigationCallback navigationCallback,
                       WebviewEventHandler webviewEventHandler,
+                      HandlePostMessage eventBridgeHandler,
                       HandlePostMessage bunBridgeHandler,
                       HandlePostMessage internalBridgeHandler,
                       const char* electrobunPreloadScript,
-                      const char* customPreloadScript) 
-        : AbstractView(webviewId), navigationCallback(navigationCallback), 
-          eventHandler(webviewEventHandler), bunBridgeHandler(bunBridgeHandler),
-          internalBridgeHandler(internalBridgeHandler),
+                      const char* customPreloadScript,
+                      bool sandbox)
+        : AbstractView(webviewId), navigationCallback(navigationCallback),
+          eventHandler(webviewEventHandler), eventBridgeHandler(eventBridgeHandler),
+          bunBridgeHandler(bunBridgeHandler),
+          internalBridgeHandler(internalBridgeHandler), isSandboxed(sandbox),
           electrobunPreloadScript(electrobunPreloadScript ? electrobunPreloadScript : ""),
           customPreloadScript(customPreloadScript ? customPreloadScript : ""),
           partition(partitionIdentifier ? partitionIdentifier : "")
@@ -2223,16 +2242,27 @@ public:
         }
         
         // Set up message handlers
-        if (bunBridgeHandler) {
-            g_signal_connect(manager, "script-message-received::bunBridge", 
-                           G_CALLBACK(onBunBridgeMessage), this);
-            webkit_user_content_manager_register_script_message_handler(manager, "bunBridge");
+
+        // eventBridge - event-only bridge (always set up for all webviews, including sandboxed)
+        if (eventBridgeHandler) {
+            g_signal_connect(manager, "script-message-received::eventBridge",
+                           G_CALLBACK(onEventBridgeMessage), this);
+            webkit_user_content_manager_register_script_message_handler(manager, "eventBridge");
         }
-        
-        if (internalBridgeHandler) {
-            g_signal_connect(manager, "script-message-received::internalBridge", 
-                           G_CALLBACK(onInternalBridgeMessage), this);
-            webkit_user_content_manager_register_script_message_handler(manager, "internalBridge");
+
+        // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+        if (!isSandboxed) {
+            if (bunBridgeHandler) {
+                g_signal_connect(manager, "script-message-received::bunBridge",
+                               G_CALLBACK(onBunBridgeMessage), this);
+                webkit_user_content_manager_register_script_message_handler(manager, "bunBridge");
+            }
+
+            if (internalBridgeHandler) {
+                g_signal_connect(manager, "script-message-received::internalBridge",
+                               G_CALLBACK(onInternalBridgeMessage), this);
+                webkit_user_content_manager_register_script_message_handler(manager, "internalBridge");
+            }
         }
         
         // Connect navigation decision handler for both navigation callbacks AND navigation rules
@@ -2485,6 +2515,37 @@ public:
     }
     
     // Static callback functions
+
+    // eventBridge handler - event-only bridge for all webviews (including sandboxed)
+    static void onEventBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (impl->eventBridgeHandler && js_result) {
+            // Use the newer JSC API recommended by WebKit2GTK
+            JSCValue* value = webkit_javascript_result_get_js_value(js_result);
+            if (value && JSC_IS_VALUE(value) && jsc_value_is_string(value)) {
+                gchar* str_value = jsc_value_to_string(value);
+                if (str_value) {
+                    // Create a copy for the callback to avoid memory issues
+                    size_t len = strlen(str_value);
+                    char* message_copy = new char[len + 1];
+                    strcpy(message_copy, str_value);
+
+                    // Call the callback
+                    impl->eventBridgeHandler(impl->webviewId, message_copy);
+
+                    // Schedule cleanup after a delay to avoid premature deallocation
+                    std::thread([message_copy, str_value]() {
+                        std::this_thread::sleep_for(std::chrono::seconds(1));
+                        delete[] message_copy;
+                        g_free(str_value);
+                    }).detach();
+                } else {
+                    g_free(str_value);
+                }
+            }
+        }
+    }
+
     static void onBunBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
         WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
         if (impl->bunBridgeHandler && js_result) {
@@ -3107,8 +3168,10 @@ public:
     CefRefPtr<ElectrobunClient> client;
     DecideNavigationCallback navigationCallback;
     WebviewEventHandler eventHandler;
+    HandlePostMessage eventBridgeHandler;
     HandlePostMessage bunBridgeHandler;
     HandlePostMessage internalBridgeHandler;
+    bool isSandboxed;
     std::string electrobunPreloadScript;
     std::string customPreloadScript;
     std::string partition;
@@ -3145,13 +3208,16 @@ public:
                    const char* partitionIdentifier,
                    DecideNavigationCallback navigationCallback,
                    WebviewEventHandler webviewEventHandler,
+                   HandlePostMessage eventBridgeHandler,
                    HandlePostMessage bunBridgeHandler,
                    HandlePostMessage internalBridgeHandler,
                    const char* electrobunPreloadScript,
-                   const char* customPreloadScript)
+                   const char* customPreloadScript,
+                   bool sandbox)
         : AbstractView(webviewId), navigationCallback(navigationCallback),
-          eventHandler(webviewEventHandler), bunBridgeHandler(bunBridgeHandler),
-          internalBridgeHandler(internalBridgeHandler),
+          eventHandler(webviewEventHandler), eventBridgeHandler(eventBridgeHandler),
+          bunBridgeHandler(bunBridgeHandler),
+          internalBridgeHandler(internalBridgeHandler), isSandboxed(sandbox),
           electrobunPreloadScript(electrobunPreloadScript ? electrobunPreloadScript : ""),
           customPreloadScript(customPreloadScript ? customPreloadScript : ""),
           partition(partitionIdentifier ? partitionIdentifier : "")
@@ -3237,11 +3303,13 @@ public:
         // Create client
         client = new ElectrobunClient(
             webviewId,
+            eventBridgeHandler,
             bunBridgeHandler,
             internalBridgeHandler,
             eventHandler,
             navigationCallback,
-            nullptr  // No GTK window needed
+            nullptr,  // No GTK window needed
+            isSandboxed
         );
         
         // Set parent window handle for proper CEF window parenting
@@ -3314,7 +3382,12 @@ public:
         // Create the browser with partition-specific request context
         std::string loadUrl = deferredUrl.empty() ? "https://www.wikipedia.org" : deferredUrl;
         CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(partition.c_str(), webviewId);
-        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, nullptr, requestContext);
+
+        // Pass sandbox flag to renderer process via extra_info
+        CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
+        extra_info->SetBool("sandbox", isSandboxed);
+
+        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
         
         if (!create_result) {
             creationFailed = true;
@@ -5525,10 +5598,12 @@ AbstractView* initCEFWebview(uint32_t webviewId,
                          const char* partitionIdentifier,
                          DecideNavigationCallback navigationCallback,
                          WebviewEventHandler webviewEventHandler,
+                         HandlePostMessage eventBridgeHandler,
                          HandlePostMessage bunBridgeHandler,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
-                         const char* customPreloadScript) {
+                         const char* customPreloadScript,
+                         bool sandbox) {
     
     AbstractView* result = dispatch_sync_main([&]() -> AbstractView* {
         try {
@@ -5538,8 +5613,8 @@ AbstractView* initCEFWebview(uint32_t webviewId,
                 webviewId, (GtkWidget*)window,  // window is now X11Window* cast to void*
                 url, x, y, width, height, autoResize,
                 partitionIdentifier, navigationCallback, webviewEventHandler,
-                bunBridgeHandler, internalBridgeHandler,
-                electrobunPreloadScript, customPreloadScript
+                eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
+                electrobunPreloadScript, customPreloadScript, sandbox
             );
             
             if (webview->creationFailed) {
@@ -5605,10 +5680,12 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          const char* partitionIdentifier,
                          DecideNavigationCallback navigationCallback,
                          WebviewEventHandler webviewEventHandler,
+                         HandlePostMessage eventBridgeHandler,
                          HandlePostMessage bunBridgeHandler,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
-                         const char* customPreloadScript) {
+                         const char* customPreloadScript,
+                         bool sandbox) {
     
     
     AbstractView* result = dispatch_sync_main([&]() -> AbstractView* {
@@ -5618,8 +5695,8 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                 webviewId, GTK_WIDGET(window),
                 url, x, y, width, height, autoResize,
                 partitionIdentifier, navigationCallback, webviewEventHandler,
-                bunBridgeHandler, internalBridgeHandler,
-                electrobunPreloadScript, customPreloadScript
+                eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
+                electrobunPreloadScript, customPreloadScript, sandbox
             );
             
             // Set fullSize flag for auto-resize functionality
@@ -5662,11 +5739,13 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char* partitionIdentifier,
                          DecideNavigationCallback navigationCallback,
                          WebviewEventHandler webviewEventHandler,
+                         HandlePostMessage eventBridgeHandler,
                          HandlePostMessage bunBridgeHandler,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
-                         bool transparent) {
+                         bool transparent,
+                         bool sandbox) {
     // TODO: Implement transparent handling for Linux
     
     // Null pointer checks
@@ -5681,13 +5760,13 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     if (isCEFAvailable()) {
         return initCEFWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                               partitionIdentifier, navigationCallback, webviewEventHandler,
-                              bunBridgeHandler, internalBridgeHandler,
-                              electrobunPreloadScript, customPreloadScript);
+                              eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
+                              electrobunPreloadScript, customPreloadScript, sandbox);
     } else {
         return initGTKWebkitWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
-                                    bunBridgeHandler, internalBridgeHandler,
-                                    electrobunPreloadScript, customPreloadScript);
+                                    eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
+                                    electrobunPreloadScript, customPreloadScript, sandbox);
     }
        
 }

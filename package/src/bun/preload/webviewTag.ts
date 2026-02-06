@@ -39,6 +39,8 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	transparent = false;
 	passthroughEnabled = false;
 	hidden = false;
+	// Sandbox mode: when true, disables RPC and only allows event emission in the child webview
+	sandboxed = false;
 	private _eventListeners: Record<string, Array<(event: CustomEvent) => void>> =
 		{};
 
@@ -76,6 +78,9 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			| "native"
 			| "cef";
 		const masks = this.getAttribute("masks");
+		// Sandbox attribute: when present, the child webview is sandboxed (no RPC, events only)
+		const sandbox = this.hasAttribute("sandbox");
+		this.sandboxed = sandbox;
 
 		if (masks) {
 			masks.split(",").forEach((s) => this.maskSelectors.add(s.trim()));
@@ -97,6 +102,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 					y: rect.y,
 				},
 				navigationRules: null,
+				sandbox,
 			})) as number;
 
 			this.webviewId = webviewId;
@@ -346,6 +352,11 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	}
 	set renderer(value: "native" | "cef") {
 		this.setAttribute("renderer", value);
+	}
+
+	// Sandbox is read-only after creation (set via attribute before adding to DOM)
+	get sandbox(): boolean {
+		return this.sandboxed;
 	}
 }
 

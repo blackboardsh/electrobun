@@ -7,9 +7,15 @@ declare global {
 		__electrobunWindowId: number;
 		__electrobunRpcSocketPort: number;
 		__electrobunSecretKeyBytes: number[];
+		// Event-only bridge (all webviews, including sandboxed)
+		__electrobunEventBridge?: {
+			postMessage: (message: string) => void;
+		};
+		// Internal RPC bridge (trusted webviews only)
 		__electrobunInternalBridge?: {
 			postMessage: (message: string) => void;
 		};
+		// User RPC bridge (trusted webviews only)
 		__electrobunBunBridge?: {
 			postMessage: (message: string) => void;
 		};
