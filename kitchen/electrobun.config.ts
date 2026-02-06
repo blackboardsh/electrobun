@@ -64,6 +64,9 @@ export default {
 			"playgrounds/transparent-window": {
 				entrypoint: "src/playgrounds/transparent-window/index.ts",
 			},
+			"playgrounds/multiwindow-cef": {
+				entrypoint: "src/playgrounds/multiwindow-cef/index.ts",
+			},
 		},
 		copy: {
 			"src/test-runner/index.html": "views/test-runner/index.html",
@@ -114,6 +117,8 @@ export default {
 				"views/playgrounds/custom-titlebar/index.html",
 			"src/playgrounds/transparent-window/index.html":
 				"views/playgrounds/transparent-window/index.html",
+			"src/playgrounds/multiwindow-cef/index.html":
+				"views/playgrounds/multiwindow-cef/index.html",
 		},
 		mac: {
 			codesign: true,

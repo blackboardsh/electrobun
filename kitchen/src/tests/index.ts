@@ -23,6 +23,7 @@ import { clipboardInteractiveTests } from "./interactive/clipboard.test";
 import { menuTests } from "./interactive/menus.test";
 import { windowEventTests } from "./interactive/window-events.test";
 import { chromelessTests } from "./interactive/chromeless.test";
+import { multiwindowCefTests } from "./interactive/multiwindow-cef.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -47,6 +48,7 @@ export const allTests: TestDefinition[] = [
   ...menuTests,
   ...windowEventTests,
   ...chromelessTests,
+  ...multiwindowCefTests,
 ];
 
 // Export by category for selective running
@@ -73,4 +75,5 @@ export {
   menuTests,
   windowEventTests,
   chromelessTests,
+  multiwindowCefTests,
 };

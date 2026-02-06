@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Multi-Window CEF Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      padding: 15px 20px;
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+    }
+    .header h2 {
+      font-size: 16px;
+      font-weight: 500;
+    }
+    .header .window-id {
+      color: #e94560;
+      font-weight: 600;
+    }
+    .status {
+      padding: 10px 20px;
+      background: #0f3460;
+      font-size: 13px;
+    }
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #666;
+    }
+    .status-dot.success { background: #4ade80; }
+    .status-dot.pending { background: #fbbf24; }
+    .status-dot.error { background: #ef4444; }
+    .content {
+      flex: 1;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+    }
+    .oopif-container {
+      flex: 1;
+      border: 2px dashed #0f3460;
+      border-radius: 8px;
+      overflow: hidden;
+      min-height: 200px;
+    }
+    electrobun-webview {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    .instructions {
+      margin-top: 15px;
+      padding: 12px;
+      background: #16213e;
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h2>Window <span class="window-id" id="windowId">?</span></h2>
+  </div>
+  <div class="status">
+    <div class="status-item">
+      <span class="status-dot" id="windowStatus"></span>
+      <span>Window created</span>
+    </div>
+    <div class="status-item">
+      <span class="status-dot" id="oopifStatus"></span>
+      <span>OOPIF webview loaded</span>
+    </div>
+  </div>
+  <div class="content">
+    <div class="oopif-container">
+      <electrobun-webview id="testWebview" src="https://example.com" renderer="cef"></electrobun-webview>
+    </div>
+    <div class="instructions">
+      This window contains an OOPIF (out-of-process iframe) via &lt;webview&gt; tag.<br>
+      Verify the webview content loads without needing to move the mouse.
+    </div>
+  </div>
+  <script type="module" src="index.js"></script>
+</body>
+</html>
