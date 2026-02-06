@@ -4715,8 +4715,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 }                                                                                             
             };
             
-            // TODO: revisit bug with 3 windows where 2nd windows' oopifs don't get created
-            // until moving the mouse and where createCEFBrowser() after async causes a crash
+            // TODO: revisit bug with 3+ CEF windows created in rapid succession - the 3rd window's
+            // OOPIF fails to initialize/render. Windows 1 & 2 work fine. Separately opened windows
+            // also work. Likely a race condition in concurrent browser creation.
+            // Test: kitchen sink "Multi-window CEF OOPIF test" in interactive tests.
             NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
             NSArray *notificationNames = @[ NSWindowDidUpdateNotification ];
             __block BOOL hasCreatedBrowser = NO;

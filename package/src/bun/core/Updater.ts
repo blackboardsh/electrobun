@@ -298,8 +298,6 @@ const Updater = {
 		let patchesApplied = 0;
 		let usedPatchPath = false;
 
-		// todo (yoav): add a check to the while loop that checks for a hash we've seen before
-		// so that update loops that are cyclical can be broken
 		if (!(await Bun.file(latestTarPath).exists())) {
 			emitStatus(
 				"checking-local-tar",
