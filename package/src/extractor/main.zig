@@ -1615,18 +1615,49 @@ pub const Header = struct {
     /// Includes prefix concatenated, if any.
     /// Return value may point into Header buffer, or might point into the
     /// argument buffer.
-    /// TODO: check against "../" and other nefarious things
+    /// Returns error.PathTraversal if the path attempts to escape the extraction directory.
     pub fn fullFileName(header: Header, buffer: *[255]u8) ![]const u8 {
         const n = name(header);
-        if (!is_ustar(header))
-            return n;
-        const p = prefix(header);
-        if (p.len == 0)
-            return n;
-        @memcpy(buffer[0..p.len], p);
-        buffer[p.len] = '/';
-        @memcpy(buffer[p.len + 1 ..][0..n.len], n);
-        return buffer[0 .. p.len + 1 + n.len];
+        const result = blk: {
+            if (!is_ustar(header))
+                break :blk n;
+            const p = prefix(header);
+            if (p.len == 0)
+                break :blk n;
+            @memcpy(buffer[0..p.len], p);
+            buffer[p.len] = '/';
+            @memcpy(buffer[p.len + 1 ..][0..n.len], n);
+            break :blk buffer[0 .. p.len + 1 + n.len];
+        };
+
+        // Security: reject paths that could escape the extraction directory
+        // Check for absolute paths (Unix-style / or Windows-style \ or drive letters)
+        if (result.len > 0 and (result[0] == '/' or result[0] == '\\')) {
+            return error.PathTraversal;
+        }
+        // Check for Windows drive letters (e.g., C:)
+        if (result.len >= 2 and result[1] == ':') {
+            return error.PathTraversal;
+        }
+
+        // Check for path traversal components (..)
+        // Handle both Unix (/) and Windows (\) separators
+        var i: usize = 0;
+        while (i < result.len) {
+            // Find the end of this path component
+            var j = i;
+            while (j < result.len and result[j] != '/' and result[j] != '\\') {
+                j += 1;
+            }
+            const component = result[i..j];
+            if (std.mem.eql(u8, component, "..")) {
+                return error.PathTraversal;
+            }
+            // Skip the separator
+            i = if (j < result.len) j + 1 else j;
+        }
+
+        return result;
     }
 
     pub fn mode(header: Header) !u32 {
