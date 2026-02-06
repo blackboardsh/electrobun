@@ -32,7 +32,7 @@ class Electroview<T extends RPCWithTransport> {
 
 		// Set up handler for user RPC messages from bun
 		// Note: receiveInternalMessageFromBun is set up by the preload script
-		window.__electrobun.receiveMessageFromBun =
+		window.__electrobun!.receiveMessageFromBun =
 			this.receiveMessageFromBun.bind(this);
 
 		if (this.rpc) {

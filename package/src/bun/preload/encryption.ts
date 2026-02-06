@@ -14,7 +14,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
 function uint8ArrayToBase64(uint8Array: Uint8Array): string {
 	let binary = "";
 	for (let i = 0; i < uint8Array.length; i++) {
-		binary += String.fromCharCode(uint8Array[i]);
+		binary += String.fromCharCode(uint8Array[i]!);
 	}
 	return btoa(binary);
 }
@@ -22,7 +22,7 @@ function uint8ArrayToBase64(uint8Array: Uint8Array): string {
 async function generateKeyFromBytes(rawKey: Uint8Array): Promise<CryptoKey> {
 	return await window.crypto.subtle.importKey(
 		"raw",
-		rawKey,
+		rawKey as unknown as ArrayBuffer,
 		{ name: "AES-GCM" },
 		true,
 		["encrypt", "decrypt"],
@@ -72,9 +72,9 @@ export async function initEncryption(): Promise<void> {
 		combinedData.set(tag, encryptedData.length);
 
 		const decryptedBuffer = await window.crypto.subtle.decrypt(
-			{ name: "AES-GCM", iv },
+			{ name: "AES-GCM", iv: iv as unknown as ArrayBuffer },
 			secretKey,
-			combinedData,
+			combinedData as unknown as ArrayBuffer,
 		);
 
 		const decoder = new TextDecoder();

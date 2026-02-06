@@ -40,8 +40,8 @@ async function buildPreload() {
 		throw new Error("Failed to build sandboxed preload script");
 	}
 
-	const fullPreloadJs = await fullResult.outputs[0].text();
-	const sandboxedPreloadJs = await sandboxedResult.outputs[0].text();
+	const fullPreloadJs = await fullResult.outputs[0]!.text();
+	const sandboxedPreloadJs = await sandboxedResult.outputs[0]!.text();
 
 	const outputContent = `// Auto-generated file. Do not edit directly.
 // Run "bun build.ts" or "bun build:dev" from the package folder to regenerate.

@@ -229,7 +229,7 @@ export const sandboxTests = [
       log(`BrowserViews before: ${viewsBefore}`);
 
       log("Creating sandboxed window with page containing webview tag");
-      const win = await createWindow({
+      await createWindow({
         url: "views://test-oopif/index.html",
         title: "Sandbox OOPIF Test",
         sandbox: true,
@@ -266,7 +266,7 @@ export const sandboxTests = [
       log(`BrowserViews before: ${viewsBefore}`);
 
       log("Creating non-sandboxed window with page containing webview tag");
-      const win = await createWindow({
+      await createWindow({
         url: "views://test-oopif/index.html",
         title: "Non-Sandbox OOPIF Test",
         sandbox: false,

@@ -62,7 +62,7 @@ export const multiwindowCefTests = [
 
           // Send window ID to the view
           win.webview.on("dom-ready", () => {
-            win.webview.rpc?.send.setWindowId({ id: windowIndex });
+            (win.webview.rpc as any)?.send?.setWindowId({ id: windowIndex });
           });
 
           // Timeout after 30 seconds
