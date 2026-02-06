@@ -110,6 +110,8 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			webviewRegistry[webviewId] = this;
 
 			this.setupObservers();
+		// Force immediate sync after initialization
+		this.syncDimensions(true);
 		} catch (err) {
 			console.error("Failed to init webview:", err);
 		}

@@ -3662,13 +3662,31 @@ public:
             // CEF webviews don't have GTK widgets (widget = nullptr)
             // They manage their own X11 windows, so we only need to sync CEF positioning
             
+            // Transform viewport-relative coordinates to window-relative coordinates
+            GdkRectangle adjustedFrame = frame;
+            
+            // Handle negative coordinates (when element is scrolled partially out of view)
+            // Clamp to 0 and adjust size accordingly
+            if (adjustedFrame.x < 0) {
+                adjustedFrame.width += adjustedFrame.x;
+                adjustedFrame.x = 0;
+            }
+            if (adjustedFrame.y < 0) {
+                adjustedFrame.height += adjustedFrame.y;
+                adjustedFrame.y = 0;
+            }
+            
+            // Ensure positive dimensions
+            if (adjustedFrame.width < 0) adjustedFrame.width = 0;
+            if (adjustedFrame.height < 0) adjustedFrame.height = 0;
+            
             // Notify CEF that the browser was resized
             browser->GetHost()->WasResized();
             
-            // Sync CEF browser window position using frame coordinates
-            syncCEFPositionWithFrame(frame);
+            // Sync CEF browser window position using adjusted frame coordinates
+            syncCEFPositionWithFrame(adjustedFrame);
             
-            visualBounds = frame;
+            visualBounds = adjustedFrame;
         }
         maskJSON = masksJson ? masksJson : "";
         
