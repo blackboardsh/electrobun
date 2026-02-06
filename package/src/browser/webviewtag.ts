@@ -48,9 +48,6 @@ interface WebviewTagElement extends HTMLElement {
 	loadURL(url: string): void;
 	loadHTML(html: string): void;
 
-	// JavaScript execution
-	callAsyncJavaScript(options: { script: string }): Promise<unknown>;
-
 	// Visibility and interaction
 	toggleTransparent(transparent?: boolean, bypassState?: boolean): void;
 	togglePassthrough(enablePassthrough?: boolean, bypassState?: boolean): void;
@@ -196,44 +193,6 @@ const ConfigureWebviewTags = (
 			// todo: replace bun -> webviewtag communication with a global instead of
 			// queryselector based on id
 			this.setAttribute("id", this.id);
-		}
-
-		asyncResolvers: {
-			[id: string]: { resolve: (arg: any) => void; reject: (arg: any) => void };
-		} = {};
-
-		callAsyncJavaScript({ script }: { script: string }) {
-			return new Promise((resolve, reject) => {
-				const messageId = "" + Date.now() + Math.random();
-				this.asyncResolvers[messageId] = {
-					resolve,
-					reject,
-				};
-
-				this.internalRpc.request.webviewTagCallAsyncJavaScript({
-					messageId,
-					webviewId: this.webviewId,
-					hostWebviewId: window.__electrobunWebviewId,
-					script,
-				});
-			});
-		}
-
-		setCallAsyncJavaScriptResponse(messageId: string, response: any) {
-			const resolvers = this.asyncResolvers[messageId];
-			delete this.asyncResolvers[messageId];
-			if (!resolvers) return;
-			try {
-				response = JSON.parse(response);
-
-				if (response.result) {
-					resolvers.resolve(response.result);
-				} else {
-					resolvers.reject(response.error);
-				}
-			} catch (e: any) {
-				resolvers.reject(e.message);
-			}
 		}
 
 		async canGoBack() {

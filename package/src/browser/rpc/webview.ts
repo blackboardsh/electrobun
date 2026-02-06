@@ -1,18 +1,7 @@
 import type { RPCSchema } from "../../shared/rpc.js";
 
-// todo (yoav): move this stuff to browser/rpc/webview.ts
 export type InternalWebviewHandlers = RPCSchema<{
-	requests: {
-		webviewTagCallAsyncJavaScript: {
-			params: {
-				messageId: string;
-				webviewId: number;
-				hostWebviewId: number;
-				script: string;
-			};
-			response: void;
-		};
-	};
+	requests: {};
 }>;
 
 export type WebviewTagHandlers = RPCSchema<{

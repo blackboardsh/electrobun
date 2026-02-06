@@ -159,8 +159,6 @@ function cleanupExtractionFolder(
 }
 
 const Updater = {
-	// workaround for some weird state stuff in this old version of bun
-	// todo: revisit after updating to the latest bun
 	updateInfo: () => {
 		return updateInfo;
 	},

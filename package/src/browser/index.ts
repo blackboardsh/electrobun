@@ -12,7 +12,6 @@ import {
 	type WebviewTagElement,
 	type WebviewEventTypes,
 } from "./webviewtag";
-// todo: should this just be injected as a preload script?
 import { isAppRegionDrag } from "./stylesAndElements";
 import type {
 	InternalWebviewHandlers,

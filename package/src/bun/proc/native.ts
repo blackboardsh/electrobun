@@ -201,14 +201,8 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.bool,
 			},
-			// TODO: Curently CEF doesn't support this directly
-			// revisit after refactor
-			// callAsyncJavaScript: {
-			//   args: [
-			//     FFIType.
-			//   ],
-			//   returns: FFIType.void
-			// },
+			// Note: callAsyncJavaScript not implemented - CEF doesn't support this directly.
+			// Users can use RPC for JavaScript execution.
 			resizeWebview: {
 				args: [
 					FFIType.ptr, // webview handle
@@ -268,7 +262,6 @@ export const native = (() => {
 				returns: FFIType.void,
 			},
 			webviewSetTransparent: {
-				// TODO XX: bools or ints?
 				args: [FFIType.ptr, FFIType.bool],
 				returns: FFIType.void,
 			},
@@ -554,7 +547,6 @@ export const native = (() => {
 // in only about 8 going through then params after that. I think it may be similar to
 // a zig bug I ran into last year. So check number of args in a signature when alignment issues occur.
 
-// TODO XX: maybe this should actually be inside BrowserWindow and BrowserView as static methods
 export const ffi = {
 	request: {
 		createWindow: (params: {
@@ -1928,7 +1920,6 @@ const webviewEventHandler = (id: number, eventName: string, detail: string) => {
 		"load-finished": "loadFinished",
 	};
 
-	// todo: the events map should use the same hyphenated names instead of camelCase
 	const mappedName = eventMap[eventName];
 	const handler = mappedName
 		? (electrobunEventEmitter.events.webview as Record<string, unknown>)[
@@ -2254,13 +2245,6 @@ export const internalRpcHandlers = {
 			}
 
 			return native.symbols.webviewCanGoForward(webviewPtr);
-		},
-		webviewTagCallAsyncJavaScript: (params: { id: number; script: string }) => {
-			console.log(
-				"TODO: webviewTagCallAsyncJavaScript NOT YET IMPLEMENTED",
-				params,
-			);
-			// Not implemented - users can use RPC for JavaScript execution if needed
 		},
 	},
 	message: {
