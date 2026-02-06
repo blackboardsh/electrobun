@@ -3,6 +3,7 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import ElectrobunEvent from "../events/event";
 import { BrowserView } from "../core/BrowserView";
 import { Tray } from "../core/Tray";
+import { preloadScript } from "../preload/.generated/compiled";
 
 // Menu data reference system to avoid serialization overhead
 const menuDataRegistry = new Map<string, any>();
@@ -906,206 +907,17 @@ export const ffi = {
 				throw `Can't add webview to window. window no longer exists`;
 			}
 
-			const electrobunPreload =
-				`
-         window.__electrobunWebviewId = ${id};
-         window.__electrobunWindowId = ${windowId};
-         window.__electrobunRpcSocketPort = ${rpcPort};
-         window.__electrobunInternalBridge = window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
-         window.__electrobunBunBridge = window.webkit?.messageHandlers?.bunBridge || window.bunBridge || window.chrome?.webview?.hostObjects?.bunBridge;
-        (async () => {
-        
-         function base64ToUint8Array(base64) {
-           return new Uint8Array(atob(base64).split('').map(char => char.charCodeAt(0)));
-         }
-        
-        function uint8ArrayToBase64(uint8Array) {
-         let binary = '';
-         for (let i = 0; i < uint8Array.length; i++) {
-           binary += String.fromCharCode(uint8Array[i]);
-         }
-         return btoa(binary);
-        }
-         const generateKeyFromText = async (rawKey) => {        
-           return await window.crypto.subtle.importKey(
-             'raw',                  // Key format
-             rawKey,                 // Key data
-             { name: 'AES-GCM' },    // Algorithm details
-             true,                   // Extractable (set to false for better security)
-             ['encrypt', 'decrypt']  // Key usages
-           );
-         };        
-         const secretKey = await generateKeyFromText(new Uint8Array([${secretKey}]));
-        
-         const encryptString = async (plaintext) => {
-           const encoder = new TextEncoder();
-           const encodedText = encoder.encode(plaintext);
-           const iv = window.crypto.getRandomValues(new Uint8Array(12)); // Initialization vector (12 bytes)
-           const encryptedBuffer = await window.crypto.subtle.encrypt(
-            {
-             name: "AES-GCM",
-             iv: iv,
-            },
-            secretKey,
-            encodedText
-           );
-                
-                
-           // Split the tag (last 16 bytes) from the ciphertext
-           const encryptedData = new Uint8Array(encryptedBuffer.slice(0, -16));
-           const tag = new Uint8Array(encryptedBuffer.slice(-16));
-        
-           return { encryptedData: uint8ArrayToBase64(encryptedData), iv: uint8ArrayToBase64(iv), tag: uint8ArrayToBase64(tag) };
-         };
-         
-         // All args passed in as base64 strings
-         const decryptString = async (encryptedData, iv, tag) => {
-          encryptedData = base64ToUint8Array(encryptedData);
-          iv = base64ToUint8Array(iv);
-          tag = base64ToUint8Array(tag);
-          // Combine encrypted data and tag to match the format expected by SubtleCrypto
-          const combinedData = new Uint8Array(encryptedData.length + tag.length);
-          combinedData.set(encryptedData);
-          combinedData.set(tag, encryptedData.length);
-          const decryptedBuffer = await window.crypto.subtle.decrypt(
-            {
-              name: "AES-GCM",
-              iv: iv,
-            },
-            secretKey,
-            combinedData // Pass the combined data (ciphertext + tag)
-          );
-          const decoder = new TextDecoder();
-          return decoder.decode(decryptedBuffer);
-         };
-        
-         window.__electrobun_encrypt = encryptString;
-         window.__electrobun_decrypt = decryptString;
-        })();
-        ` +
-				`
-         function emitWebviewEvent (eventName, detail) {
-           // Note: There appears to be some race bug with Bun FFI where sites can
-           // init (like views://myview/index.html) so fast while the Bun FFI to load a url is still executing
-           // or something where the JSCallback that this postMessage fires is not available or busy or
-           // its memory is allocated to something else or something and the handler receives garbage data in Bun.
-           setTimeout(() => {
-              window.__electrobunInternalBridge?.postMessage(JSON.stringify({id: 'webviewEvent', type: 'message', payload: {id: window.__electrobunWebviewId, eventName, detail}}));
-          });
-         };
+			// Dynamic setup per-webview (variables that change for each webview)
+			const dynamicPreload = `
+window.__electrobunWebviewId = ${id};
+window.__electrobunWindowId = ${windowId};
+window.__electrobunRpcSocketPort = ${rpcPort};
+window.__electrobunSecretKeyBytes = [${secretKey}];
+window.__electrobunInternalBridge = window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
+window.__electrobunBunBridge = window.webkit?.messageHandlers?.bunBridge || window.bunBridge || window.chrome?.webview?.hostObjects?.bunBridge;
+`;
+			const electrobunPreload = dynamicPreload + preloadScript;
 
-         // Allow preload scripts to send custom messages to the host webview
-         // Usage: window.__electrobunSendToHost({ type: 'myEvent', data: {...} })
-         window.__electrobunSendToHost = function(message) {
-           emitWebviewEvent('host-message', JSON.stringify(message));
-         };                 
-        
-         window.addEventListener('load', function(event) {
-           // Check if the current window is the top-level window        
-           if (window === window.top) {        
-            emitWebviewEvent('dom-ready', document.location.href);
-           }
-         });
-        
-         window.addEventListener('popstate', function(event) {
-          emitWebviewEvent('did-navigate-in-page', window.location.href);
-         });
-
-         window.addEventListener('hashchange', function(event) {
-          emitWebviewEvent('did-navigate-in-page', window.location.href);
-         });
-
-         // Track cmd key state for SPA navigation detection
-         let __electrobunCmdKeyHeld = false;
-         let __electrobunCmdKeyTimestamp = 0;
-         const CMD_KEY_THRESHOLD_MS = 500; // How long after cmd release to still consider it a cmd+click
-
-         window.addEventListener('keydown', function(event) {
-           if (event.key === 'Meta' || event.metaKey) {
-             __electrobunCmdKeyHeld = true;
-             __electrobunCmdKeyTimestamp = Date.now();
-           }
-         }, true);
-
-         window.addEventListener('keyup', function(event) {
-           if (event.key === 'Meta') {
-             __electrobunCmdKeyHeld = false;
-             __electrobunCmdKeyTimestamp = Date.now();
-           }
-         }, true);
-
-         // Also track on blur in case key release happens outside window
-         window.addEventListener('blur', function() {
-           __electrobunCmdKeyHeld = false;
-         });
-
-         function __electrobunIsCmdHeld() {
-           if (__electrobunCmdKeyHeld) return true;
-           // Also return true if cmd was released very recently (for race conditions)
-           return (Date.now() - __electrobunCmdKeyTimestamp) < CMD_KEY_THRESHOLD_MS && __electrobunCmdKeyTimestamp > 0;
-         }
-
-         // Intercept cmd+clicks on anchors before SPA frameworks (like Turbo) can handle them
-         // Uses capture phase on window - this fires before document capture listeners
-         window.addEventListener('click', function(event) {
-           if (event.metaKey || event.ctrlKey) {
-             // Find the closest anchor element (handles clicks on nested elements inside <a>)
-             const anchor = event.target.closest('a');
-             if (anchor && anchor.href) {
-               event.preventDefault();
-               event.stopPropagation();
-               event.stopImmediatePropagation();
-               emitWebviewEvent('new-window-open', JSON.stringify({
-                 url: anchor.href,
-                 isCmdClick: true,
-                 isSPANavigation: false
-               }));
-             }
-           }
-         }, true);
-
-         // Intercept history.pushState and replaceState for SPA navigation
-         // This catches cases where cmd is held but the SPA still manages to call pushState
-         const originalPushState = history.pushState;
-         const originalReplaceState = history.replaceState;
-
-         history.pushState = function(state, title, url) {
-           if (__electrobunIsCmdHeld() && url) {
-             // Resolve relative URLs
-             const resolvedUrl = new URL(url, window.location.href).href;
-             emitWebviewEvent('new-window-open', JSON.stringify({
-               url: resolvedUrl,
-               isCmdClick: true,
-               isSPANavigation: true
-             }));
-             // Don't call original - block the navigation
-             return;
-           }
-           return originalPushState.apply(this, arguments);
-         };
-
-         history.replaceState = function(state, title, url) {
-           if (__electrobunIsCmdHeld() && url) {
-             const resolvedUrl = new URL(url, window.location.href).href;
-             emitWebviewEvent('new-window-open', JSON.stringify({
-               url: resolvedUrl,
-               isCmdClick: true,
-               isSPANavigation: true
-             }));
-             return;
-           }
-           return originalReplaceState.apply(this, arguments);
-         };
-        
-         // prevent overscroll
-         document.addEventListener('DOMContentLoaded', () => {        
-          var style = document.createElement('style');
-          style.type = 'text/css';
-          style.appendChild(document.createTextNode('html, body { overscroll-behavior: none; }'));
-          document.head.appendChild(style);
-         });
-                
-        `;
 			const customPreload = preload;
 
 			const webviewPtr = native.symbols.initWebview(

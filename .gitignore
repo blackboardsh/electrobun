@@ -18,5 +18,6 @@ electrobun-core*
 electrobun-cli*
 dist-*
 /package/src/cli/templates/embedded.ts
+/package/src/bun/preload/.generated
 *.tar.gz
 settings.local.json

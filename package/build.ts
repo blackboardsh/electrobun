@@ -480,6 +480,10 @@ async function build() {
 	console.log("Generating template embeddings...");
 	await generateTemplateEmbeddings();
 
+	// Build preload script (compiles TypeScript to JS for webview injection)
+	console.log("Building preload script...");
+	await buildPreload();
+
 	await Promise.all([
 		buildSelfExtractor(),
 		buildLauncher(),
@@ -1882,6 +1886,44 @@ async function buildCli() {
 
 	// Use vendored Bun for building CLI to ensure consistency with CI and proper code signing
 	await $`BUN_INSTALL_CACHE_DIR=/tmp/bun-cache ${PATH.bun.RUNTIME} build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
+}
+
+async function buildPreload() {
+	// The preload script (drag regions, internal RPC, encryption, webview tags) is written
+	// in TypeScript for maintainability. We pre-compile it here because:
+	// 1. At runtime, the app runs from an ASAR bundle where source .ts files don't exist
+	// 2. Only the bundled JS is shipped, so Bun.build() can't compile at runtime
+	// The compiled output is imported by native.ts and injected into each webview.
+	const preloadEntry = join(process.cwd(), "src", "bun", "preload", "index.ts");
+	const outputDir = join(process.cwd(), "src", "bun", "preload", ".generated");
+	const outputPath = join(outputDir, "compiled.ts");
+
+	// Ensure output directory exists
+	mkdirSync(outputDir, { recursive: true });
+
+	const bunModule = await import("bun");
+	const result = await bunModule.build({
+		entrypoints: [preloadEntry],
+		target: "browser",
+		format: "iife", // IIFE format for script injection (no export statements)
+		minify: false,
+	});
+
+	if (!result.success) {
+		console.error("Preload build failed:", result.logs);
+		throw new Error("Failed to build preload script");
+	}
+
+	const compiledJs = await result.outputs[0].text();
+
+	const outputContent = `// Auto-generated file. Do not edit directly.
+// Run "bun build.ts" or "bun build:dev" from the package folder to regenerate.
+
+export const preloadScript = ${JSON.stringify(compiledJs)};
+`;
+
+	writeFileSync(outputPath, outputContent);
+	console.log("Preload script compiled successfully");
 }
 
 async function generateTemplateEmbeddings() {
