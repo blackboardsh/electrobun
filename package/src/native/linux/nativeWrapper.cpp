@@ -60,6 +60,7 @@ using namespace electrobun;
 // ASAR C FFI declarations are in shared/asar.h
 static AsarArchive* g_asarArchive = nullptr;
 static std::once_flag g_asarArchiveInitFlag;
+static std::mutex g_asarReadMutex; // Mutex to protect ASAR read operations
 
 // Global shutdown flag to prevent race conditions during cleanup
 // Note: shared/shutdown_guard.h provides ShutdownManager singleton for new code
@@ -523,13 +524,22 @@ public:
                 std::string asarFilePath = "views/" + fullPath;
 
                 size_t fileSize = 0;
-                const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &fileSize);
+                const uint8_t* fileData = nullptr;
+                
+                // Protect ASAR read operations with mutex
+                {
+                    std::lock_guard<std::mutex> lock(g_asarReadMutex);
+                    fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &fileSize);
+                    
+                    if (fileData && fileSize > 0) {
+                        // Create std::string that copies the buffer while holding the lock
+                        data_ = std::string(reinterpret_cast<const char*>(fileData), fileSize);
+                        // Free the ASAR buffer before releasing the lock
+                        asar_free_buffer(fileData, fileSize);
+                    }
+                }
 
-                if (fileData && fileSize > 0) {
-                    // Create std::string that copies the buffer (we'll free it after)
-                    data_ = std::string(reinterpret_cast<const char*>(fileData), fileSize);
-                    // Free the ASAR buffer
-                    asar_free_buffer(fileData, fileSize);
+                if (!data_.empty()) {
 
                     // Determine MIME type
                     std::string mimeType = "application/octet-stream";
@@ -4485,17 +4495,25 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
             std::string asarFilePath = "views/" + std::string(fullPath);
 
             size_t asarFileSize = 0;
-            const uint8_t* fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &asarFileSize);
-
-            if (fileData && asarFileSize > 0) {
-                fflush(stdout);
-                // Copy the data (glib will free it)
-                fileContents = (gchar*)g_memdup2(fileData, asarFileSize);
-                fileSize = asarFileSize;
-                foundFile = true;
-                // Free the ASAR buffer
-                asar_free_buffer(fileData, asarFileSize);
-            } else {
+            const uint8_t* fileData = nullptr;
+            
+            // Protect ASAR read operations with mutex
+            {
+                std::lock_guard<std::mutex> lock(g_asarReadMutex);
+                fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &asarFileSize);
+                
+                if (fileData && asarFileSize > 0) {
+                    fflush(stdout);
+                    // Copy the data (glib will free it)
+                    fileContents = (gchar*)g_memdup2(fileData, asarFileSize);
+                    fileSize = asarFileSize;
+                    foundFile = true;
+                    // Free the ASAR buffer before releasing the lock
+                    asar_free_buffer(fileData, asarFileSize);
+                }
+            }
+            
+            if (!foundFile) {
                 fflush(stdout);
                 // Fall through to flat file reading
             }
@@ -7668,8 +7686,14 @@ ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
             // Try to load from ASAR archive first if available
             if (g_asarArchive) {
                 size_t fileSize = 0;
-                const uint8_t* fileData = asar_read_file(g_asarArchive, 
-                    ("views/" + viewPath).c_str(), &fileSize);
+                const uint8_t* fileData = nullptr;
+                
+                // Protect ASAR read operations with mutex
+                {
+                    std::lock_guard<std::mutex> lock(g_asarReadMutex);
+                    fileData = asar_read_file(g_asarArchive, 
+                        ("views/" + viewPath).c_str(), &fileSize);
+                }
                 
                 if (fileData && fileSize > 0) {
                     // Create pixbuf from memory
@@ -7695,7 +7719,13 @@ ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
                     }
                     
                     g_object_unref(loader);
-                    asar_free_buffer(fileData, fileSize);
+                    
+                    // Free ASAR buffer with mutex protection
+                    {
+                        std::lock_guard<std::mutex> lock(g_asarReadMutex);
+                        asar_free_buffer(fileData, fileSize);
+                    }
+                    
                     if (error) g_error_free(error);
                     return;
                 }
