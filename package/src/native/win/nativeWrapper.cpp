@@ -290,6 +290,7 @@ private:
 // Global ASAR archive handle (lazy-loaded) with thread-safe initialization
 static AsarArchive* g_asarArchive = nullptr;
 static std::once_flag g_asarArchiveInitFlag;
+static std::mutex g_asarReadMutex; // Mutex to protect ASAR read operations
 
 // Export ASAR functions for launcher to use (compatible with libasar.dll API)
 extern "C" __declspec(dllexport) void* asar_open(const char* path) {
@@ -8765,7 +8766,13 @@ std::string loadViewsFile(const std::string& path) {
             // The ASAR contains the entire app directory, so prepend "views/" to the path
             std::string asarFilePath = "views/" + path;
 
-            std::vector<uint8_t> fileData = g_asarArchive->readFile(asarFilePath);
+            // Protect ASAR read operations with mutex to prevent race conditions
+            // when multiple assets are requested concurrently
+            std::vector<uint8_t> fileData;
+            {
+                std::lock_guard<std::mutex> lock(g_asarReadMutex);
+                fileData = g_asarArchive->readFile(asarFilePath);
+            }
 
             if (!fileData.empty()) {
                 ::log("DEBUG loadViewsFile: Read " + std::to_string(fileData.size()) + " bytes from ASAR for " + path);
