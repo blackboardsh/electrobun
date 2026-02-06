@@ -103,16 +103,16 @@ private:
                            const CefV8ValueList& arguments,
                            CefRefPtr<CefV8Value>& retval,
                            CefString& exception) override {
-
-            
             if (arguments.size() > 0 && arguments[0]->IsString()) {
                 std::string msgContent = arguments[0]->GetStringValue();
-              
-                
+
                 // Create and send process message to the main process
-                CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(message_name_);
-                message->GetArgumentList()->SetString(0, msgContent);
-                browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, message);
+                CefRefPtr<CefFrame> mainFrame = browser_->GetMainFrame();
+                if (mainFrame) {
+                    CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(message_name_);
+                    message->GetArgumentList()->SetString(0, msgContent);
+                    mainFrame->SendProcessMessage(PID_BROWSER, message);
+                }
                 return true;
             }
             return false;

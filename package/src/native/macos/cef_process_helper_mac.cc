@@ -104,9 +104,12 @@ private:
                            CefString& exception) override {
             if (arguments.size() > 0 && arguments[0]->IsString()) {
                 // Create and send process message to the main process
-                CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(message_name_);
-                message->GetArgumentList()->SetString(0, arguments[0]->GetStringValue());
-                browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, message);
+                CefRefPtr<CefFrame> mainFrame = browser_->GetMainFrame();
+                if (mainFrame) {
+                    CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(message_name_);
+                    message->GetArgumentList()->SetString(0, arguments[0]->GetStringValue());
+                    mainFrame->SendProcessMessage(PID_BROWSER, message);
+                }
                 return true;
             }
             return false;

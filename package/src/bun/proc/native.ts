@@ -928,23 +928,25 @@ export const ffi = {
 				// 2. No bunBridge is set up - no user RPC communication
 				// 3. No secretKey/rpcPort - no encrypted socket RPC
 				// 4. No webview tag support - can't create OOPIFs
+				// Note: Check existing value first to preserve bridges already set by CEF's OnContextCreated
 				dynamicPreload = `
 window.__electrobunWebviewId = ${id};
 window.__electrobunWindowId = ${windowId};
-window.__electrobunEventBridge = window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
-window.__electrobunInternalBridge = window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
+window.__electrobunEventBridge = window.__electrobunEventBridge || window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
+window.__electrobunInternalBridge = window.__electrobunInternalBridge || window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
 `;
 				selectedPreloadScript = preloadScriptSandboxed;
 			} else {
 				// Trusted webview: all bridges, full preload
+				// Note: Check existing value first to preserve bridges already set by CEF's OnContextCreated
 				dynamicPreload = `
 window.__electrobunWebviewId = ${id};
 window.__electrobunWindowId = ${windowId};
 window.__electrobunRpcSocketPort = ${rpcPort};
 window.__electrobunSecretKeyBytes = [${secretKey}];
-window.__electrobunEventBridge = window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
-window.__electrobunInternalBridge = window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
-window.__electrobunBunBridge = window.webkit?.messageHandlers?.bunBridge || window.bunBridge || window.chrome?.webview?.hostObjects?.bunBridge;
+window.__electrobunEventBridge = window.__electrobunEventBridge || window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
+window.__electrobunInternalBridge = window.__electrobunInternalBridge || window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
+window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.messageHandlers?.bunBridge || window.bunBridge || window.chrome?.webview?.hostObjects?.bunBridge;
 `;
 				selectedPreloadScript = preloadScript;
 			}
