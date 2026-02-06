@@ -70,7 +70,8 @@ class Electroview<T extends RPCWithTransport> {
 	}
 
 	initSocketToBun() {
-		// todo: upgrade to tls
+		// Note: Using ws:// for localhost is intentional - all RPC messages are
+		// encrypted with per-webview AES-GCM keys, making TLS redundant
 		const socket = new WebSocket(
 			`ws://localhost:${RPC_SOCKET_PORT}/socket?webviewId=${WEBVIEW_ID}`,
 		);

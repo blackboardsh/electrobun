@@ -35,6 +35,11 @@ export interface ElectrobunConfig {
 		version: string;
 
 		/**
+		 * Optional description of the application
+		 */
+		description?: string;
+
+		/**
 		 * Custom URL schemes to register for deep linking (e.g., ["myapp", "myapp-dev"])
 		 * This allows your app to be opened via URLs like myapp://some/path
 		 *
@@ -301,10 +306,28 @@ export interface ElectrobunConfig {
 	 */
 	scripts?: {
 		/**
+		 * Script to run before the build starts
+		 * Can be a path to a script file
+		 */
+		preBuild?: string;
+
+		/**
 		 * Script to run after build completes
 		 * Can be a path to a script file
 		 */
 		postBuild?: string;
+
+		/**
+		 * Script to run after the app is wrapped (macOS .app bundle created)
+		 * Can be a path to a script file
+		 */
+		postWrap?: string;
+
+		/**
+		 * Script to run after packaging is complete
+		 * Can be a path to a script file
+		 */
+		postPackage?: string;
 	};
 
 	/**

@@ -1896,13 +1896,13 @@ const webviewEventHandler = (id: number, eventName: string, detail: string) => {
 		}
 
 		// This is a webviewtag so we should send the event into the parent as well
-		// TODO XX: escape event name and detail to remove `
 		// NOTE: for new-window-open and host-message the detail is a json string that needs to be parsed
 		let js;
 		if (eventName === "new-window-open" || eventName === "host-message") {
-			js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, ${detail});`;
+			// detail is already a JSON string that will be parsed as a JS object
+			js = `document.querySelector('#electrobun-webview-${id}').emit(${JSON.stringify(eventName)}, ${detail});`;
 		} else {
-			js = `document.querySelector('#electrobun-webview-${id}').emit(\`${eventName}\`, \`${detail}\`);`;
+			js = `document.querySelector('#electrobun-webview-${id}').emit(${JSON.stringify(eventName)}, ${JSON.stringify(detail)});`;
 		}
 
 		native.symbols.evaluateJavaScriptWithNoCompletion(

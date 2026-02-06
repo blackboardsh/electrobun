@@ -80,6 +80,13 @@ interface WebviewTagElement extends HTMLElement {
 	toggleDevTools(): void;
 }
 
+// Augment global types so querySelector('electrobun-webview') returns WebviewTagElement
+declare global {
+	interface HTMLElementTagNameMap {
+		"electrobun-webview": WebviewTagElement;
+	}
+}
+
 const ConfigureWebviewTags = (
 	enableWebviewTags: boolean,
 	internalRpc: unknown,
@@ -88,8 +95,6 @@ const ConfigureWebviewTags = (
 	if (!enableWebviewTags) {
 		return;
 	}
-
-	// todo: provide global types for <electrobun-webview> tag elements (like querySelector results etc.)
 
 	class WebviewTag extends HTMLElement {
 		// todo (yoav): come up with a better mechanism to eliminate collisions with bun created
@@ -182,7 +187,7 @@ const ConfigureWebviewTags = (
 					x: rect.x,
 					y: rect.y,
 				},
-				// todo: wire up to a param and a method to update them
+				// Note: Use setNavigationRules() after creation to configure rules dynamically
 				navigationRules: null,
 			});
 			console.log("electrobun webviewid: ", webviewId);

@@ -137,7 +137,6 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	init() {
 		this.createStreams();
 
-		// TODO: add a then to this that fires an onReady event
 		return ffi.request.createWebview({
 			id: this.id,
 			windowId: this.windowId,
