@@ -74,9 +74,9 @@ export const navigationTests = [
   }),
 
   defineTest({
-    name: "Navigation rules - whitelist",
+    name: "Navigation rules - allowlist",
     category: "Navigation",
-    description: "Test that navigation rules allow whitelisted URLs",
+    description: "Test that navigation rules allow allowlisted URLs",
     timeout: 15000,
     async run({ createWindow, log }) {
       let willNavigateFired = false;
@@ -84,7 +84,7 @@ export const navigationTests = [
 
       const win = await createWindow({
         url: "views://test-harness/index.html",
-        title: "Nav Rules Whitelist Test",
+        title: "Nav Rules Allowlist Test",
         renderer: 'cef', // Use CEF renderer
       });
 
@@ -122,7 +122,7 @@ export const navigationTests = [
       // Both events should fire for allowed navigation
       expect(willNavigateFired).toBe(true);
       expect(didNavigateFired).toBe(true);
-      log("Successfully navigated to whitelisted URL");
+      log("Successfully navigated to allowlisted URL");
 
       // Reset rules to allow normal navigation after test
       win.webview.setNavigationRules([]);
@@ -132,7 +132,7 @@ export const navigationTests = [
   defineTest({
     name: "Navigation rules - block",
     category: "Navigation", 
-    description: "Test that navigation rules block non-whitelisted URLs",
+    description: "Test that navigation rules block non-allowlisted URLs",
     timeout: 15000,
     async run({ createWindow, log }) {
       let willNavigateFired = false;
