@@ -7,7 +7,7 @@ const tabs = new Map();
 let nextTabId = 1;
 let mainRPC: any = null; // Will be set after window creation
 
-// Set up RPC using the correct API pattern from interactive-playground
+// Set up RPC
 const rpc = BrowserView.defineRPC<any>({
 	maxRequestTime: 10000,
 	handlers: {
