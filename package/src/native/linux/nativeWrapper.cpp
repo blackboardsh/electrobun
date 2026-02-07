@@ -1,5 +1,6 @@
 #include <gtk/gtk.h>
-#include <glib-unix.h>
+#include <signal.h>
+#include <fcntl.h>
 #include <webkit2/webkit2.h>
 #include <jsc/jsc.h>
 #ifndef NO_APPINDICATOR
@@ -72,6 +73,11 @@ static std::atomic<bool> g_shuttingDown{false};
 static QuitRequestedHandler g_quitRequestedHandler = nullptr;
 static std::atomic<bool> g_shutdownComplete{false};
 static std::atomic<bool> g_eventLoopStopping{false};
+
+// Self-pipe for async-signal-safe signal handling.
+// Signal handler writes to pipe, GLib IO watch reads and dispatches.
+static int g_signal_pipe[2] = {-1, -1};
+static int g_sigint_count = 0;
 
 // Additional race condition protection
 static std::atomic<int> g_activeOperations{0};
@@ -7030,37 +7036,6 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
         g_electrobunChannel = std::string(channel);
     }
 
-    // Set up GLib signal sources for SIGINT and SIGTERM so they work regardless
-    // of which event loop is running. bun's process.on("SIGINT") depends on bun's
-    // event loop to forward signals to the Worker, which doesn't work when the
-    // main thread is blocked in gtk_main(). g_unix_signal_add delivers signal
-    // events through the GLib main loop, which gtk_main() processes.
-    static int sigint_count = 0;
-
-    g_unix_signal_add(SIGINT, [](gpointer) -> gboolean {
-        sigint_count++;
-        if (sigint_count == 1) {
-            if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
-                g_quitRequestedHandler();
-            } else {
-                stopEventLoop();
-            }
-        } else {
-            // Second Ctrl+C: force kill entire process group
-            kill(0, SIGKILL);
-        }
-        return G_SOURCE_CONTINUE;
-    }, nullptr);
-
-    g_unix_signal_add(SIGTERM, [](gpointer) -> gboolean {
-        if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
-            g_quitRequestedHandler();
-        } else {
-            stopEventLoop();
-        }
-        return G_SOURCE_CONTINUE;
-    }, nullptr);
-
     // Linux uses runEventLoop instead
     runEventLoop();
 }
@@ -7096,8 +7071,71 @@ ELECTROBUN_EXPORT void forceExit(int code) {
     _exit(code);
 }
 
+// C signal handler for SIGINT/SIGTERM - writes to self-pipe (async-signal-safe)
+static void linux_signal_writer(int sig) {
+    int saved_errno = errno;
+    write(g_signal_pipe[1], &sig, sizeof(sig));
+    errno = saved_errno;
+}
+
+// GLib IO watch callback - reads from self-pipe and dispatches quit logic
+static gboolean linux_signal_pipe_read(GIOChannel* source, GIOCondition condition, gpointer data) {
+    int sig;
+    if (read(g_signal_pipe[0], &sig, sizeof(sig)) != sizeof(sig)) {
+        return G_SOURCE_CONTINUE;
+    }
+
+    if (sig == SIGINT) {
+        g_sigint_count++;
+        if (g_sigint_count == 1) {
+            if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
+                g_quitRequestedHandler();
+            } else {
+                stopEventLoop();
+            }
+        } else {
+            // Second Ctrl+C: force kill entire process group
+            kill(0, SIGKILL);
+        }
+    } else if (sig == SIGTERM) {
+        if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
+            g_quitRequestedHandler();
+        } else {
+            stopEventLoop();
+        }
+    }
+
+    return G_SOURCE_CONTINUE;
+}
+
 ELECTROBUN_EXPORT void setQuitRequestedHandler(QuitRequestedHandler handler) {
     g_quitRequestedHandler = handler;
+
+    // Set up signal handling via self-pipe + GLib IO watch.
+    // This MUST be done here (not in startEventLoop) because bun's Worker sets up
+    // its own SIGINT handler via process.on("SIGINT") before calling this function.
+    // By installing our sigaction handler here, we override bun's handler.
+    // bun's handler can't forward signals to the Worker when the main thread is
+    // blocked in gtk_main(), so we handle signals ourselves.
+    if (g_signal_pipe[0] == -1) {
+        if (pipe(g_signal_pipe) == 0) {
+            fcntl(g_signal_pipe[0], F_SETFL, O_NONBLOCK);
+            fcntl(g_signal_pipe[1], F_SETFL, O_NONBLOCK);
+
+            GIOChannel* channel = g_io_channel_unix_new(g_signal_pipe[0]);
+            g_io_add_watch(channel, G_IO_IN, linux_signal_pipe_read, nullptr);
+            g_io_channel_unref(channel);
+        }
+    }
+
+    // Install our signal handlers, overriding bun's
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = linux_signal_writer;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
 }
 
 ELECTROBUN_EXPORT void shutdownApplication() {
