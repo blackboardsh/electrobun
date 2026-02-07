@@ -11,7 +11,7 @@ function ensureBeforeQuitHandler() {
   if (beforeQuitRegistered) return;
   beforeQuitRegistered = true;
 
-  Electrobun.events.on("before-quit", (event: any) => {
+  Electrobun.events.on("before-quit", (_event: any) => {
     console.log("before-quit handler running");
     
     // Send message to the UI so the user can see it fired
@@ -91,8 +91,8 @@ export const quitTests = [
               },
             },
             messages: {
-              beforeQuitFired: (data: { message: string }) => {},
-              beforeQuitDone: (data: { message: string }) => {},
+              beforeQuitFired: (_data: { message: string }) => {},
+              beforeQuitDone: (_data: { message: string }) => {},
             },
           },
         });

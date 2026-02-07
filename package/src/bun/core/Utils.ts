@@ -140,7 +140,6 @@ export const quit = () => {
 };
 
 // Override process.exit so that calling it triggers proper native cleanup
-const originalProcessExit = process.exit;
 process.exit = ((code?: number) => {
 	if (isQuitting) {
 		// Already in quit sequence — force-terminate immediately
