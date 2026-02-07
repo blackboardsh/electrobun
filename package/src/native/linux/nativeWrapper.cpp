@@ -4040,6 +4040,7 @@ public:
                 view->resize(frame, "");
             }
             // OOPIFs (fullSize=false) keep their positioning and don't auto-resize
+            // The JavaScript ResizeObserver will handle repositioning them
         }
         
         // Ensure the overlay spans the entire window for proper layering
@@ -5026,35 +5027,49 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
         x11WindowHandle = windowIt->second->window;
     }
     
-    // Find all webviews that belong to this window and have fullSize=true
-    std::vector<std::pair<uint32_t, std::shared_ptr<AbstractView>>> webviews_copy;
+    // Find all webviews that belong to this window
+    std::vector<std::pair<uint32_t, std::shared_ptr<AbstractView>>> fullSizeWebviews;
+    std::vector<std::pair<uint32_t, std::shared_ptr<AbstractView>>> oopifWebviews;
     {
         std::lock_guard<std::mutex> lock(g_webviewMapMutex);
-        // Create a copy of webviews to iterate safely
+        // Create separate copies for fullSize and non-fullSize webviews
         for (auto& [webviewId, webview] : g_webviewMap) {
-            if (webview && webview->fullSize) {
-                webviews_copy.push_back({webviewId, webview});
+            if (webview) {
+                CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
+                if (cefView && cefView->parentXWindow == x11WindowHandle) {
+                    if (webview->fullSize) {
+                        fullSizeWebviews.push_back({webviewId, webview});
+                    } else {
+                        oopifWebviews.push_back({webviewId, webview});
+                    }
+                }
             }
         }
     }
     
-    // Process webviews outside the lock to avoid deadlock
-    for (auto& [webviewId, webview] : webviews_copy) {
+    // Process fullSize webviews - resize them to fill the window
+    for (auto& [webviewId, webview] : fullSizeWebviews) {
         if (webview && webview->fullSize) {
-            // Check if this webview belongs to the specified window
-            // For CEF webviews, we need to check their parent window
+            // Check if the webview is already the right size to avoid infinite resize loops
+            GdkRectangle currentBounds = webview->visualBounds;
+            if (currentBounds.width == width && currentBounds.height == height) {
+                continue;
+            }
+            
+            // For auto-resize, typically want to fill the entire window starting from (0,0)
+            GdkRectangle frame = { 0, 0, width, height };
+            webview->resize(frame, "");
+        }
+    }
+    
+    // Process OOPIF webviews - trigger position sync to maintain visibility
+    for (auto& [webviewId, webview] : oopifWebviews) {
+        if (webview && !webview->fullSize) {
             CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
-            if (cefView && cefView->parentXWindow == x11WindowHandle) {
-                // Check if the webview is already the right size to avoid infinite resize loops
-                GdkRectangle currentBounds = webview->visualBounds;
-                if (currentBounds.width == width && currentBounds.height == height) {
-                    continue;
-                }
-                
-                
-                // For auto-resize, typically want to fill the entire window starting from (0,0)
-                GdkRectangle frame = { 0, 0, width, height };
-                webview->resize(frame, "");
+            if (cefView && cefView->browser) {
+                // Trigger position sync with current bounds to maintain visibility
+                // The JavaScript ResizeObserver will send updated positions shortly
+                cefView->syncCEFPositionWithFrame(cefView->visualBounds);
             }
         }
     }
