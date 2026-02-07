@@ -429,7 +429,10 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     defer allocator.free(dots_removed);
     std.debug.print("DEBUG: dots_removed = '{s}'\n", .{dots_removed});
 
-    const app_bundle_name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ dots_removed, metadata.channel });
+    const app_bundle_name = if (std.mem.eql(u8, metadata.channel, "stable"))
+        try allocator.dupe(u8, dots_removed)
+    else
+        try std.fmt.allocPrint(allocator, "{s}-{s}", .{ dots_removed, metadata.channel });
     defer allocator.free(app_bundle_name);
     std.debug.print("DEBUG: app_bundle_name = '{s}'\n", .{app_bundle_name});
 

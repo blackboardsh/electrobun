@@ -10,7 +10,7 @@ import {
 } from "fs";
 import { execSync } from "child_process";
 import { OS as currentOS, ARCH as currentArch } from "../../shared/platform";
-import { getPlatformPrefix, getTarballFileName } from "../../shared/naming";
+import { getPlatformPrefix, getTarballFileName, getAppFileName } from "../../shared/naming";
 import { quit } from "./Utils";
 
 // Update status types for granular progress tracking
@@ -854,10 +854,8 @@ const Updater = {
 					}
 				} else if (currentOS === "win") {
 					// On Windows, the actual app is inside a subdirectory
-					// Use same sanitization as extractor: remove spaces and dots
-					const appBundleName = localInfo.name
-						.replace(/ /g, "")
-						.replace(/\./g, "-");
+					// Use same naming logic as CLI and extractor
+					const appBundleName = getAppFileName(localInfo.name, localInfo.channel);
 					newAppBundlePath = join(extractionDir, appBundleName);
 
 					// Verify the extracted app exists
@@ -1043,7 +1041,7 @@ del "%~f0"
 				if (currentOS === "macos") {
 					// Use a detached shell so relaunch survives after killApp terminates the current process
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
-					await Bun.spawn(["sh", "-c", `open "${runningAppBundlePath}" &`], {
+					Bun.spawn(["sh", "-c", `open "${runningAppBundlePath}" &`], {
 						detached: true,
 					} as any);
 				} else if (currentOS === "linux") {
