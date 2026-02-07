@@ -528,6 +528,10 @@ export const native = (() => {
 				args: [FFIType.i32],
 				returns: FFIType.void,
 			},
+			forceExit: {
+				args: [FFIType.i32],
+				returns: FFIType.void,
+			},
 			setQuitRequestedHandler: {
 				args: [FFIType.function],
 				returns: FFIType.void,
@@ -1249,6 +1253,8 @@ process.on("uncaughtException", (err) => {
 	console.error("Uncaught exception in worker:", err);
 	// Fast path for crashes - skip beforeQuit, just stop the event loop
 	native.symbols.stopEventLoop();
+	native.symbols.waitForShutdownComplete(5000);
+	native.symbols.forceExit(1);
 });
 
 process.on("unhandledRejection", (reason, _promise) => {

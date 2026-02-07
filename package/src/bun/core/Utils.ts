@@ -133,15 +133,18 @@ export const quit = () => {
 	// Phase 2: Wait for native shutdown to complete (CefShutdown etc.)
 	// This blocks the worker thread until the main thread finishes cleanup.
 	native.symbols.waitForShutdownComplete(5000);
-	// Phase 3: Now safe to exit - CEF is fully shut down
-	originalProcessExit(0);
+	// Phase 3: Now safe to exit - CEF is fully shut down.
+	// Use _exit() via forceExit to guarantee termination. process.exit() from
+	// a Worker thread can fail to terminate when the main thread is blocked in FFI.
+	native.symbols.forceExit(0);
 };
 
 // Override process.exit so that calling it triggers proper native cleanup
 const originalProcessExit = process.exit;
 process.exit = ((code?: number) => {
 	if (isQuitting) {
-		originalProcessExit(code);
+		// Already in quit sequence — force-terminate immediately
+		native.symbols.forceExit(code ?? 0);
 		return;
 	}
 	quit();

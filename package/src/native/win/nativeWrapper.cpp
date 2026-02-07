@@ -6462,8 +6462,11 @@ ELECTROBUN_EXPORT void stopEventLoop() {
     std::cout << "[stopEventLoop] Initiating clean event loop exit" << std::endl;
 
     if (isCEFAvailable() && g_cef_initialized) {
-        // CefQuitMessageLoop is thread-safe
-        CefQuitMessageLoop();
+        // CefQuitMessageLoop must be called on the main thread.
+        // Dispatch via the hidden message window that CefRunMessageLoop processes.
+        MainThreadDispatcher::dispatch_async([]() {
+            CefQuitMessageLoop();
+        });
     } else {
         // Post WM_QUIT to the main thread's message queue
         if (g_mainThreadId != 0) {
