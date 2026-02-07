@@ -39,7 +39,6 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	transparent = false;
 	passthroughEnabled = false;
 	hidden = false;
-	private autoHidden = false; // true when syncDimensions auto-hid due to zero-size element
 	// Sandbox mode: when true, disables RPC and only allows event emission in the child webview
 	sandboxed = false;
 	private _eventListeners: Record<string, Array<(event: CustomEvent) => void>> =
@@ -137,24 +136,6 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			width: rect.width,
 			height: rect.height,
 		};
-
-		// If the element has zero size (e.g. display:none, unslotted from shadow DOM),
-		// hide the native webview instead of resizing to (0,0,0,0) which gets clamped
-		// to a small visible rect at the origin.
-		if (newRect.width === 0 && newRect.height === 0) {
-			if (!this.hidden) {
-				this.autoHidden = true;
-				this.toggleHidden(true);
-			}
-			this.lastRect = newRect;
-			return;
-		}
-
-		// Element is visible again — unhide only if we were the ones that hid it
-		if (this.autoHidden) {
-			this.autoHidden = false;
-			this.toggleHidden(false);
-		}
 
 		if (
 			!force &&
