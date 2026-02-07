@@ -12,6 +12,8 @@ function ensureBeforeQuitHandler() {
   beforeQuitRegistered = true;
 
   Electrobun.events.on("before-quit", (event: any) => {
+    console.log("before-quit handler running");
+    
     // Send message to the UI so the user can see it fired
     try {
       activeRpc?.send.beforeQuitFired({
