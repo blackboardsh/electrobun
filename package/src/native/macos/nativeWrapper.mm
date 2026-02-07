@@ -40,6 +40,7 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <atomic>
 
 // Shared cross-platform utilities
 #include "../shared/glob_match.h"
@@ -487,6 +488,9 @@ typedef struct {
 typedef SnapshotCallback zigSnapshotCallback;
 typedef StatusItemHandler ZigStatusItemHandler;
 static URLOpenHandler g_urlOpenHandler = nullptr;
+static QuitRequestedHandler g_quitRequestedHandler = nullptr;
+static std::atomic<bool> g_shutdownComplete{false};
+static std::atomic<bool> g_eventLoopStopping{false};
 
 typedef struct {
 } MenuItemConfig;
@@ -4982,6 +4986,18 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
 @implementation AppDelegate
     - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+        // If we're already in shutdown sequence (stopEventLoop was called), allow termination
+        if (g_eventLoopStopping.load()) {
+            return NSTerminateNow;
+        }
+
+        // If a quit handler is registered, ask bun to run its quit sequence
+        if (g_quitRequestedHandler) {
+            g_quitRequestedHandler();
+            return NSTerminateCancel;
+        }
+
+        // No handler registered, allow immediate termination (fallback)
         return NSTerminateNow;
     }
 
@@ -5091,50 +5107,83 @@ extern "C" void startEventLoop(const char* identifier, const char* name, const c
             retainObjCObject(delegate);
             [NSApp finishLaunching];
             CefRunMessageLoop();
-            CefShutdown();            
+            CefShutdown();
+            g_shutdownComplete.store(true);
         }
-    } else {      
+    } else {
         NSApplication *app = [NSApplication sharedApplication];
         AppDelegate *delegate = [[AppDelegate alloc] init];
         [app setDelegate:delegate];
-        retainObjCObject(delegate);  
+        retainObjCObject(delegate);
         [app run];
+        g_shutdownComplete.store(true);
+    }
+}
+
+extern "C" void stopEventLoop() {
+    if (g_eventLoopStopping.exchange(true)) {
+        NSLog(@"[stopEventLoop] Already stopping, ignoring duplicate call");
+        return;
+    }
+
+    // Intentionally no log here - output after shell prompt return is confusing in dev mode
+
+    if (useCEF) {
+        // CefQuitMessageLoop must be called on the main thread on macOS because
+        // CEF's message loop is integrated with the Cocoa run loop.
+        // dispatch_async to the main queue is processed by CefRunMessageLoop().
+        dispatch_async(dispatch_get_main_queue(), ^{
+            CefQuitMessageLoop();
+        });
+    } else {
+        // [NSApp stop:nil] is thread-safe per Apple docs
+        // Post a dummy event to ensure the run loop wakes up and processes the stop
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSApplication sharedApplication] stop:nil];
+            NSEvent *event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                               location:NSMakePoint(0, 0)
+                                          modifierFlags:0
+                                              timestamp:0
+                                           windowNumber:0
+                                                context:nil
+                                                subtype:0
+                                                  data1:0
+                                                  data2:0];
+            [[NSApplication sharedApplication] postEvent:event atStart:YES];
+        });
     }
 }
 
 extern "C" void killApp() {
-    // Execute on main thread for graceful shutdown
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSLog(@"[killApp] Initiating graceful shutdown");
-        
-        // Set a flag to prevent double cleanup
-        static BOOL isShuttingDown = NO;
-        if (isShuttingDown) {
-            NSLog(@"[killApp] Already shutting down, ignoring duplicate call");
-            return;
-        }
-        isShuttingDown = YES;
-        
-        // Terminate any child processes by sending SIGTERM to process group
-        kill(0, SIGTERM);
-        
-        // Let NSApplication handle the cleanup naturally
-        NSApplication *app = [NSApplication sharedApplication];
-        if (app) {
-            NSLog(@"[killApp] Terminating application gracefully");
-            [app terminate:nil];
-        } else {
-            // Fallback to direct exit if NSApplication isn't available
-            NSLog(@"[killApp] NSApplication not available, forcing exit");
-            exit(0);
-        }
-    });
+    // Deprecated - delegates to stopEventLoop for backward compatibility
+    stopEventLoop();
+}
+
+extern "C" void waitForShutdownComplete(int timeoutMs) {
+    int waited = 0;
+    while (!g_shutdownComplete.load() && waited < timeoutMs) {
+        usleep(10000); // 10ms
+        waited += 10;
+    }
+    if (!g_shutdownComplete.load()) {
+        NSLog(@"[waitForShutdownComplete] Timed out after %dms", timeoutMs);
+    }
+}
+
+extern "C" void forceExit(int code) {
+    // Last-resort exit that skips atexit handlers.
+    // Used when waitForShutdownComplete times out and calling exit() would
+    // deadlock on atexit handlers trying to join still-running CEF threads.
+    _exit(code);
+}
+
+extern "C" void setQuitRequestedHandler(QuitRequestedHandler handler) {
+    g_quitRequestedHandler = handler;
 }
 
 extern "C" void shutdownApplication() {
-    dispatch_async(dispatch_get_main_queue(), ^{   
-        CefShutdown();
-    });
+    // Deprecated - CefShutdown now runs inline in startEventLoop after event loop returns
+    stopEventLoop();
 }
 
 

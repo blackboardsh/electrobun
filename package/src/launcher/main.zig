@@ -3,10 +3,12 @@ const builtin = @import("builtin");
 const c = @cImport({
     @cInclude("signal.h");
     @cInclude("unistd.h");
+    @cInclude("stdlib.h");
 });
 
 var child_pid: std.process.Child.Id = undefined;
 var should_exit: bool = false;
+var sigint_count: u32 = 0;
 
 // Windows-specific imports for production builds (GUI subsystem with hidden console)
 const windows_imports = if (builtin.os.tag == .windows) struct {
@@ -66,20 +68,35 @@ const windows_imports = if (builtin.os.tag == .windows) struct {
     const INFINITE: DWORD = 0xFFFFFFFF;
 } else struct {};
 
-// Signal handler that forwards signals to child process
-fn signalHandler(sig: c_int) callconv(.C) void {
-    std.debug.print("Launcher received signal {d}, forwarding to child PID {d}\n", .{ sig, child_pid });
+// SIGALRM handler - safety net timeout for hung shutdowns
+fn alarmHandler(_: c_int) callconv(.C) void {
+    // Timeout expired - app hung during shutdown. Kill entire process group.
+    _ = c.kill(0, c.SIGKILL);
+}
 
-    // Forward the signal to the child process
-    const result = c.kill(@intCast(child_pid), sig);
-    if (result == 0) {
-        std.debug.print("Signal {d} forwarded successfully\n", .{sig});
-    } else {
-        std.debug.print("Failed to forward signal {d}, kill returned: {d}\n", .{ sig, result });
+// Signal handler for graceful shutdown coordination
+fn signalHandler(sig: c_int) callconv(.C) void {
+    if (sig == c.SIGINT) {
+        sigint_count += 1;
+        if (sigint_count == 1) {
+            // First Ctrl+C: The child process already received SIGINT from the
+            // process group. It will run its graceful quit sequence.
+            // Set a safety timeout in case the app hangs during shutdown.
+            // No message here - the CLI prints the user-facing message.
+            _ = c.alarm(10);
+            return;
+        } else {
+            // Second Ctrl+C: force kill entire process group
+            _ = c.alarm(0);
+            _ = c.kill(0, c.SIGKILL);
+            return;
+        }
     }
 
-    // Set exit flag for certain signals
-    if (sig == c.SIGINT or sig == c.SIGTERM) {
+    // For other signals (SIGTERM, SIGHUP), forward to child
+    _ = c.kill(@intCast(child_pid), sig);
+
+    if (sig == c.SIGTERM) {
         should_exit = true;
     }
 }
@@ -98,6 +115,7 @@ pub fn main() !void {
         _ = c.signal(c.SIGINT, signalHandler);
         _ = c.signal(c.SIGTERM, signalHandler);
         _ = c.signal(c.SIGHUP, signalHandler);
+        _ = c.signal(c.SIGALRM, alarmHandler);
     }
 
     // Platform-specific paths
@@ -246,13 +264,16 @@ pub fn main() !void {
 
         switch (result) {
             .Exited => |code| {
-                std.debug.print("Child process exited with code: {d}\n", .{code});
                 if (code != 0) {
+                    std.debug.print("Child process exited with code: {d}\n", .{code});
                     std.process.exit(@intCast(code));
                 }
             },
             .Signal => |sig| {
-                std.debug.print("Child process terminated by signal: {d}\n", .{sig});
+                // Don't print on SIGINT/SIGTERM - these are expected during graceful shutdown
+                if (sig != c.SIGINT and sig != c.SIGTERM) {
+                    std.debug.print("Child process terminated by signal: {d}\n", .{sig});
+                }
                 std.process.exit(128 + @as(u8, @intCast(sig)));
             },
             else => {

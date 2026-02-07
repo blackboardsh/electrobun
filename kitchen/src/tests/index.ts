@@ -24,6 +24,7 @@ import { menuTests } from "./interactive/menus.test";
 import { windowEventTests } from "./interactive/window-events.test";
 import { chromelessTests } from "./interactive/chromeless.test";
 import { multiwindowCefTests } from "./interactive/multiwindow-cef.test";
+import { quitTests } from "./interactive/quit-test.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -49,6 +50,7 @@ export const allTests: TestDefinition[] = [
   ...windowEventTests,
   ...chromelessTests,
   ...multiwindowCefTests,
+  ...quitTests,
 ];
 
 // Export by category for selective running
@@ -76,4 +78,5 @@ export {
   windowEventTests,
   chromelessTests,
   multiwindowCefTests,
+  quitTests,
 };

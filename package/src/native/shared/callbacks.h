@@ -35,6 +35,10 @@ typedef void (*SnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char
 // URL open handler for deep linking
 typedef void (*URLOpenHandler)(const char* url);
 
+// Quit request handler - called by native code when quit is requested externally
+// (e.g., dock icon quit, system shutdown, console close)
+typedef void (*QuitRequestedHandler)();
+
 // JS Utils callbacks (DEPRECATED: Now using map-based approach instead)
 typedef const char* (*GetMimeType)(const char* filePath);
 typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);

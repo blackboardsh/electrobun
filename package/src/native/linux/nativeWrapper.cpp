@@ -67,6 +67,11 @@ static std::mutex g_asarReadMutex; // Mutex to protect ASAR read operations
 // This local atomic is kept for direct access patterns used throughout this file
 static std::atomic<bool> g_shuttingDown{false};
 
+// Quit/shutdown coordination
+static QuitRequestedHandler g_quitRequestedHandler = nullptr;
+static std::atomic<bool> g_shutdownComplete{false};
+static std::atomic<bool> g_eventLoopStopping{false};
+
 // Additional race condition protection
 static std::atomic<int> g_activeOperations{0};
 static std::mutex g_cefBrowserMutex;
@@ -5201,16 +5206,18 @@ void runCEFEventLoop() {
     if (g_cefInitialized) {
         CefShutdown();
     }
+    g_shutdownComplete.store(true);
 }
 
 void runGTKEventLoop() {
     // Initialize GTK on the main thread (this MUST be done here)
     initializeGTK();
     printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === GTK EVENT LOOP STARTED ===\n");
-    
+
     // Note: GDK_BACKEND=x11 forced for Wayland compatibility
-    
+
     gtk_main();
+    g_shutdownComplete.store(true);
 }
 
 void runEventLoop() {    
@@ -7023,26 +7030,44 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
     runEventLoop();
 }
 
-ELECTROBUN_EXPORT void killApp() {
-    // Set shutdown flag to prevent race conditions
+ELECTROBUN_EXPORT void stopEventLoop() {
+    if (g_eventLoopStopping.exchange(true)) {
+        return;
+    }
     g_shuttingDown.store(true);
-    printf("DEBUG: killApp called - immediate shutdown\n");
-    
-    // Properly shutdown GTK and then exit
-    gtk_main_quit();
-    exit(0);
+    printf("[stopEventLoop] Initiating clean event loop exit\n");
+
+    // gtk_main_quit should be called from the GTK thread
+    g_idle_add([](gpointer) -> gboolean {
+        gtk_main_quit();
+        return G_SOURCE_REMOVE;
+    }, nullptr);
+}
+
+ELECTROBUN_EXPORT void killApp() {
+    // Deprecated - delegates to stopEventLoop for backward compatibility
+    stopEventLoop();
+}
+
+ELECTROBUN_EXPORT void waitForShutdownComplete(int timeoutMs) {
+    int waited = 0;
+    while (!g_shutdownComplete.load() && waited < timeoutMs) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        waited += 10;
+    }
+}
+
+ELECTROBUN_EXPORT void forceExit(int code) {
+    _exit(code);
+}
+
+ELECTROBUN_EXPORT void setQuitRequestedHandler(QuitRequestedHandler handler) {
+    g_quitRequestedHandler = handler;
 }
 
 ELECTROBUN_EXPORT void shutdownApplication() {
-    // Set shutdown flag to prevent race conditions
-    g_shuttingDown.store(true);
-    printf("DEBUG: Application shutdown initiated\n");
-    
-    // Brief delay to allow ongoing operations to complete
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    
-    // Graceful shutdown
-    gtk_main_quit();
+    // Deprecated - use stopEventLoop() instead
+    stopEventLoop();
 }
 
 void* createNSRectWrapper(double x, double y, double width, double height) {

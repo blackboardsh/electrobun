@@ -3321,6 +3321,62 @@ Categories=Utility;Application;
 			throw new Error(`Unsupported OS: ${OS}`);
 		}
 
+		// Take over as the terminal's foreground process group (macOS/Linux).
+		// This prevents the parent bun script runner from receiving SIGINT
+		// when Ctrl+C is pressed, keeping the terminal busy until the app
+		// finishes shutting down gracefully.
+		let restoreForeground = () => {};
+		if (OS !== "win") {
+			try {
+				const { dlopen, ptr } = await import("bun:ffi");
+				const libName = OS === "macos" ? "libSystem.B.dylib" : "libc.so.6";
+				const libc = dlopen(libName, {
+					open: { args: ["ptr", "i32"], returns: "i32" },
+					close: { args: ["i32"], returns: "i32" },
+					getpid: { args: [], returns: "i32" },
+					setpgid: { args: ["i32", "i32"], returns: "i32" },
+					tcgetpgrp: { args: ["i32"], returns: "i32" },
+					tcsetpgrp: { args: ["i32", "i32"], returns: "i32" },
+					signal: { args: ["i32", "ptr"], returns: "ptr" },
+				});
+
+				const ttyPathBuf = new Uint8Array(Buffer.from("/dev/tty\0"));
+				const ttyFd = libc.symbols.open(ptr(ttyPathBuf), 2); // O_RDWR
+
+				if (ttyFd >= 0) {
+					const originalPgid = libc.symbols.tcgetpgrp(ttyFd);
+					if (originalPgid >= 0) {
+						// Ignore SIGTTOU at C level so tcsetpgrp works from background group.
+						// bun's process.on("SIGTTOU") doesn't set the C-level disposition.
+						// SIG_IGN = (void(*)(int))1, SIGTTOU = 22 on macOS/Linux
+						libc.symbols.signal(22, 1);
+
+						if (libc.symbols.setpgid(0, 0) === 0) {
+							const myPid = libc.symbols.getpid();
+							if (libc.symbols.tcsetpgrp(ttyFd, myPid) === 0) {
+								restoreForeground = () => {
+									try {
+										libc.symbols.signal(22, 1);
+										libc.symbols.tcsetpgrp(ttyFd, originalPgid);
+										libc.symbols.close(ttyFd);
+									} catch {}
+								};
+							} else {
+								libc.symbols.setpgid(0, originalPgid);
+								libc.symbols.close(ttyFd);
+							}
+						} else {
+							libc.symbols.close(ttyFd);
+						}
+					} else {
+						libc.symbols.close(ttyFd);
+					}
+				}
+			} catch {
+				// Fall back to default behavior (prompt may return early on Ctrl+C)
+			}
+		}
+
 		if (OS === "macos" || OS === "linux") {
 			// For Linux dev mode, update libNativeWrapper.so based on bundleCEF setting
 			if (OS === "linux") {
@@ -3354,32 +3410,36 @@ Categories=Utility;Application;
 			});
 		}
 
+		let sigintCount = 0;
+
 		process.on("SIGINT", () => {
-			console.log(
-				"[electrobun dev] Received SIGINT, initiating graceful shutdown...",
-			);
+			sigintCount++;
 
-			if (mainProc) {
-				// First attempt graceful shutdown by sending SIGINT to child
+			if (sigintCount === 1) {
+				// First Ctrl+C: The app already received SIGINT from the process group.
+				// Its SIGINT handler calls quit() which fires beforeQuit and shuts down
+				// gracefully. Don't send another signal - just wait.
 				console.log(
-					"[electrobun dev] Requesting graceful shutdown from app...",
+					"\n[electrobun dev] Shutting down gracefully... (press Ctrl+C again to force quit)",
 				);
-				mainProc.kill("SIGINT");
-
-				// Give the app time to clean up (e.g., call killApp())
-				setTimeout(() => {
-					if (mainProc && !mainProc.killed) {
-						console.log(
-							"[electrobun dev] App did not exit gracefully, forcing termination...",
-						);
-						mainProc.kill("SIGKILL");
-					}
-					process.exit(0);
-				}, 2000); // 2 second timeout for graceful shutdown
 			} else {
+				// Second Ctrl+C: force kill entire process group
+				console.log(
+					"\n[electrobun dev] Force quitting...",
+				);
+				try { process.kill(0, "SIGKILL"); } catch {}
 				process.exit(0);
 			}
 		});
+
+		// Wait for the child process to exit before returning.
+		// This keeps the CLI alive so it doesn't return to the shell prompt
+		// while the app is still shutting down.
+		if (mainProc) {
+			const code = await mainProc.exited;
+			restoreForeground();
+			process.exit(code ?? 0);
+		}
 	}
 
 	// Helper functions

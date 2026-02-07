@@ -67,6 +67,9 @@ export default {
 			"playgrounds/multiwindow-cef": {
 				entrypoint: "src/playgrounds/multiwindow-cef/index.ts",
 			},
+			"playgrounds/quit-test": {
+				entrypoint: "src/playgrounds/quit-test/index.ts",
+			},
 		},
 		copy: {
 			"src/test-runner/index.html": "views/test-runner/index.html",
@@ -119,6 +122,10 @@ export default {
 				"views/playgrounds/transparent-window/index.html",
 			"src/playgrounds/multiwindow-cef/index.html":
 				"views/playgrounds/multiwindow-cef/index.html",
+			"src/playgrounds/quit-test/index.html":
+				"views/playgrounds/quit-test/index.html",
+			"src/playgrounds/quit-test/index.css":
+				"views/playgrounds/quit-test/index.css",
 		},
 		mac: {
 			codesign: true,

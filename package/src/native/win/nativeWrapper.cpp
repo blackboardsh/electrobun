@@ -25,6 +25,7 @@
 #include <shellapi.h>
 #include <commctrl.h>
 #include <mutex>
+#include <atomic>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/base.h>
 #include <shobjidl.h>  // For IFileOpenDialog
@@ -514,6 +515,12 @@ static bool g_cef_initialized = false;
 static CefRefPtr<CefApp> g_cef_app;
 static std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
 static HANDLE g_job_object = nullptr;  // Job object to track all child processes
+
+// Quit/shutdown coordination
+static QuitRequestedHandler g_quitRequestedHandler = nullptr;
+static std::atomic<bool> g_shutdownComplete{false};
+static std::atomic<bool> g_eventLoopStopping{false};
+static DWORD g_mainThreadId = 0;
 
 // Simple CEF App class for minimal implementation
 class ElectrobunCefApp : public CefApp, public CefBrowserProcessHandler {
@@ -4168,7 +4175,11 @@ void handleApplicationMenuSelection(UINT menuId) {
         
         if (g_appMenuTarget && g_appMenuTarget->zigHandler) {
             if (action == "__quit__") {
-                PostQuitMessage(0);
+                if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
+                    g_quitRequestedHandler();
+                } else {
+                    PostQuitMessage(0);
+                }
             } else if (action == "__undo__") {
                 HWND focusedWindow = GetFocus();
                 if (focusedWindow) {
@@ -4928,8 +4939,11 @@ void handleMenuItemSelection(UINT menuId, NSStatusItem* statusItem) {
 
         if (statusItem && statusItem->handler) {
             if (action == "__quit__") {
-                // Handle quit specially
-                PostQuitMessage(0);
+                if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
+                    g_quitRequestedHandler();
+                } else {
+                    PostQuitMessage(0);
+                }
             } else {
                 statusItem->handler(statusItem->trayId, action.c_str());
             }
@@ -6330,48 +6344,23 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
         case CTRL_CLOSE_EVENT:
         case CTRL_LOGOFF_EVENT:
         case CTRL_SHUTDOWN_EVENT:
-            std::cout << "[CEF] Received shutdown signal, closing browsers..." << std::endl;
-            
-            if (g_cef_initialized) {
-                // Close all CEF browsers first - this will trigger OnBeforeClose handlers
-                // which will call CefQuitMessageLoop() when the last browser closes
-                std::cout << "[CEF] Closing " << g_browser_count << " browsers..." << std::endl;
-                
-                // Create a copy of the map to avoid iterator invalidation
-                auto browsers_copy = g_cefBrowsers;
-                for (auto& pair : browsers_copy) {
-                    if (pair.second) {
-                        std::cout << "[CEF] Closing browser ID " << pair.first << std::endl;
-                        pair.second->GetHost()->CloseBrowser(true); // Force close
-                    }
+            std::cout << "[shutdown] Received console shutdown signal" << std::endl;
+
+            if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
+                // Route through bun's quit sequence for proper beforeQuit handling
+                g_quitRequestedHandler();
+                // Wait for orderly shutdown (Windows gives ~5s for CTRL_CLOSE_EVENT)
+                int waited = 0;
+                while (!g_shutdownComplete.load() && waited < 4000) {
+                    Sleep(10);
+                    waited += 10;
                 }
-                
-                // Give browsers time to close gracefully
-                // OnBeforeClose will call CefQuitMessageLoop() when last browser closes
-                Sleep(1000);  // Reduced from 3000ms for faster response
-                
-                // If browsers didn't close properly, force quit
-                if (g_browser_count > 0) {
-                    std::cout << "[CEF] Browsers didn't close, forcing CEF shutdown" << std::endl;
+            } else {
+                // Fallback: direct shutdown
+                if (g_cef_initialized) {
                     CefQuitMessageLoop();
-                    Sleep(500);  // Brief wait
                 }
-                
-                // Explicitly terminate any remaining CEF helper processes
-                std::cout << "[CEF] Terminating any remaining helper processes..." << std::endl;
-                TerminateCEFHelperProcesses();
             }
-            
-            // Close the job object to terminate any remaining child processes
-            if (g_job_object) {
-                std::cout << "[CEF] Closing job object to terminate all child processes" << std::endl;
-                CloseHandle(g_job_object);
-                g_job_object = nullptr;
-            }
-            
-            // Force termination if still running
-            std::cout << "[CEF] Forcing application exit" << std::endl;
-            ExitProcess(0);
             return TRUE;
         default:
             return FALSE;
@@ -6381,6 +6370,8 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
 extern "C" {
 
 ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, const char* channel) {
+    g_mainThreadId = GetCurrentThreadId();
+
     // Store identifier, name, and channel globally for use in CEF initialization
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
@@ -6433,6 +6424,7 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
             }
             
             CefShutdown();
+            g_shutdownComplete.store(true);
         } else {
             // Fall back to Windows message loop if CEF init fails
             MSG msg;
@@ -6444,6 +6436,7 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
             }
+            g_shutdownComplete.store(true);
         }
     } else {
         // Use Windows message loop if CEF is not available
@@ -6456,55 +6449,53 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
+        g_shutdownComplete.store(true);
     }
 }
 
 
-ELECTROBUN_EXPORT void killApp() {
-    if (isCEFAvailable() && g_cef_initialized) {
-        std::cout << "[CEF] Initiating graceful shutdown via CefQuitMessageLoop()" << std::endl;
-        
-        // Close all browsers first
-        auto browsers_copy = g_cefBrowsers;
-        for (auto& pair : browsers_copy) {
-            if (pair.second) {
-                pair.second->GetHost()->CloseBrowser(true);
-            }
-        }
-        
-        // Brief wait for browsers to close
-        Sleep(500);
-        
-        // Quit CEF message loop
-        CefQuitMessageLoop();
-        
-        // Terminate any remaining helper processes
-        TerminateCEFHelperProcesses();
-        
-        // Close job object to ensure all child processes are terminated
-        if (g_job_object) {
-            CloseHandle(g_job_object);
-            g_job_object = nullptr;
-        }
-        
-        ::log("CEF shutdown initiated");
-    } else {
-        // If CEF is not running, still check for helper processes
-        TerminateCEFHelperProcesses();
-        
-        // Close job object if it exists
-        if (g_job_object) {
-            CloseHandle(g_job_object);
-            g_job_object = nullptr;
-        }
-        
-        // Exit directly
-        ExitProcess(1);
+ELECTROBUN_EXPORT void stopEventLoop() {
+    if (g_eventLoopStopping.exchange(true)) {
+        return;
     }
+
+    std::cout << "[stopEventLoop] Initiating clean event loop exit" << std::endl;
+
+    if (isCEFAvailable() && g_cef_initialized) {
+        // CefQuitMessageLoop is thread-safe
+        CefQuitMessageLoop();
+    } else {
+        // Post WM_QUIT to the main thread's message queue
+        if (g_mainThreadId != 0) {
+            PostThreadMessage(g_mainThreadId, WM_QUIT, 0, 0);
+        }
+    }
+}
+
+ELECTROBUN_EXPORT void killApp() {
+    // Deprecated - delegates to stopEventLoop for backward compatibility
+    stopEventLoop();
+}
+
+ELECTROBUN_EXPORT void waitForShutdownComplete(int timeoutMs) {
+    int waited = 0;
+    while (!g_shutdownComplete.load() && waited < timeoutMs) {
+        Sleep(10);
+        waited += 10;
+    }
+}
+
+ELECTROBUN_EXPORT void forceExit(int code) {
+    _exit(code);
+}
+
+ELECTROBUN_EXPORT void setQuitRequestedHandler(QuitRequestedHandler handler) {
+    g_quitRequestedHandler = handler;
 }
 
 ELECTROBUN_EXPORT void shutdownApplication() {
-    // Stub implementation
+    // Deprecated - use stopEventLoop() instead
+    stopEventLoop();
 }
 
 // Clean, elegant initWebview function - Windows version matching Mac pattern

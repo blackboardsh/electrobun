@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quit/Shutdown Test Playground</title>
+    <script src="views://playgrounds/quit-test/index.js"></script>
+    <link rel="stylesheet" href="views://playgrounds/quit-test/index.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>Quit/Shutdown Test</h1>
+                <p class="subtitle">Test different quit modes and verify beforeQuit handler fires</p>
+            </div>
+            <button id="doneBtn" class="done-btn">Done</button>
+        </div>
+
+        <div class="section">
+            <h2>Programmatic Quit Triggers</h2>
+            <p class="hint">The beforeQuit handler will log a message below and wait 2 seconds before allowing quit.</p>
+            <div class="button-row">
+                <button id="utilsQuitBtn" class="primary-btn">Utils.quit()</button>
+                <button id="processExitBtn" class="primary-btn">process.exit(0)</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>System-Initiated Quit (Manual)</h2>
+            <p class="hint">These require manual action. The beforeQuit handler should still fire and log below.</p>
+            <div class="instructions">
+                <div class="instruction-item">
+                    <strong>Dock Icon Quit (macOS):</strong>
+                    Right-click the app icon in the Dock and choose "Quit"
+                </div>
+                <div class="instruction-item">
+                    <strong>Cmd+Q / Menu Quit:</strong>
+                    Press Cmd+Q or use the app menu to quit
+                </div>
+                <div class="instruction-item">
+                    <strong>SIGINT (Ctrl+C):</strong>
+                    If running from terminal, press Ctrl+C
+                </div>
+                <div class="instruction-item">
+                    <strong>SIGTERM:</strong>
+                    Send SIGTERM from another terminal: <code>kill &lt;pid&gt;</code>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Event Log</h2>
+            <div id="eventLog" class="log-box">
+                <span class="placeholder">Events will appear here...</span>
+            </div>
+            <button id="clearLogBtn" class="secondary-btn" style="margin-top: 10px;">Clear Log</button>
+        </div>
+    </div>
+</body>
+</html>

@@ -520,6 +520,18 @@ export const native = (() => {
 				args: [],
 				returns: FFIType.void,
 			},
+			stopEventLoop: {
+				args: [],
+				returns: FFIType.void,
+			},
+			waitForShutdownComplete: {
+				args: [FFIType.i32],
+				returns: FFIType.void,
+			},
+			setQuitRequestedHandler: {
+				args: [FFIType.function],
+				returns: FFIType.void,
+			},
 			testFFI2: {
 				args: [FFIType.function],
 				returns: FFIType.void,
@@ -1235,9 +1247,8 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 // Worker management. Move to a different file
 process.on("uncaughtException", (err) => {
 	console.error("Uncaught exception in worker:", err);
-	// Since the main js event loop is blocked by the native event loop
-	// we use FFI to dispatch a kill command to main
-	native.symbols.killApp();
+	// Fast path for crashes - skip beforeQuit, just stop the event loop
+	native.symbols.stopEventLoop();
 });
 
 process.on("unhandledRejection", (reason, _promise) => {
@@ -1245,17 +1256,15 @@ process.on("unhandledRejection", (reason, _promise) => {
 });
 
 process.on("SIGINT", () => {
-	console.log(
-		"[electrobun] Received SIGINT, calling killApp() for graceful shutdown...",
-	);
-	native.symbols.killApp();
+	console.log("[electrobun] Received SIGINT, running quit sequence...");
+	const { quit } = require("../core/Utils");
+	quit();
 });
 
 process.on("SIGTERM", () => {
-	console.log(
-		"[electrobun] Received SIGTERM, calling killApp() for graceful shutdown...",
-	);
-	native.symbols.killApp();
+	console.log("[electrobun] Received SIGTERM, running quit sequence...");
+	const { quit } = require("../core/Utils");
+	quit();
 });
 
 // const testCallback = new JSCallback(
@@ -1403,6 +1412,24 @@ const urlOpenCallback = new JSCallback(
 if (process.platform === "darwin") {
 	native.symbols.setURLOpenHandler(urlOpenCallback);
 }
+
+// Quit requested callback - invoked by native code when system quit is requested
+// (dock icon quit, menu quit, console close, etc.)
+const quitRequestedCallback = new JSCallback(
+	() => {
+		// Dynamic require to avoid circular dependency (Utils.ts imports from native.ts)
+		const { quit } = require("../core/Utils");
+		quit();
+	},
+	{
+		args: [],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+// Register the quit handler with native code (all platforms)
+native.symbols.setQuitRequestedHandler(quitRequestedCallback);
 
 // Global shortcut storage and callback
 const globalShortcutHandlers = new Map<string, () => void>();

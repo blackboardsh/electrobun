@@ -128,8 +128,13 @@ export const quit = () => {
 		return;
 	}
 
-	native.symbols.killApp();
-	process.exit();
+	// Phase 1: Signal the native event loop to stop
+	native.symbols.stopEventLoop();
+	// Phase 2: Wait for native shutdown to complete (CefShutdown etc.)
+	// This blocks the worker thread until the main thread finishes cleanup.
+	native.symbols.waitForShutdownComplete(5000);
+	// Phase 3: Now safe to exit - CEF is fully shut down
+	originalProcessExit(0);
 };
 
 // Override process.exit so that calling it triggers proper native cleanup
