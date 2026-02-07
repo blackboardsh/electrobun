@@ -499,6 +499,11 @@ async function buildForNpm() {
 	console.log("Building main.js...");
 	await buildMainJs();
 
+	// Build preload script (compiles TypeScript to JS for webview injection)
+	// Must run before copyApiFiles so the generated file is included
+	console.log("Building preload script...");
+	await buildPreload();
+
 	console.log("Copying API files...");
 	await copyApiFiles();
 
