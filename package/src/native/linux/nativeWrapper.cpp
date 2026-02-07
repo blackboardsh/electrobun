@@ -1,4 +1,5 @@
 #include <gtk/gtk.h>
+#include <glib-unix.h>
 #include <webkit2/webkit2.h>
 #include <jsc/jsc.h>
 #ifndef NO_APPINDICATOR
@@ -7014,6 +7015,9 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
     }
 }
 
+// Forward declaration - stopEventLoop is defined after startEventLoop
+ELECTROBUN_EXPORT void stopEventLoop();
+
 // Note: `name` parameter is accepted for API consistency with Windows but not used on Linux
 ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, const char* channel) {
     (void)name; // Unused on Linux - kept for API consistency with Windows
@@ -7025,6 +7029,37 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
     if (channel && channel[0]) {
         g_electrobunChannel = std::string(channel);
     }
+
+    // Set up GLib signal sources for SIGINT and SIGTERM so they work regardless
+    // of which event loop is running. bun's process.on("SIGINT") depends on bun's
+    // event loop to forward signals to the Worker, which doesn't work when the
+    // main thread is blocked in gtk_main(). g_unix_signal_add delivers signal
+    // events through the GLib main loop, which gtk_main() processes.
+    static int sigint_count = 0;
+
+    g_unix_signal_add(SIGINT, [](gpointer) -> gboolean {
+        sigint_count++;
+        if (sigint_count == 1) {
+            if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
+                g_quitRequestedHandler();
+            } else {
+                stopEventLoop();
+            }
+        } else {
+            // Second Ctrl+C: force kill entire process group
+            kill(0, SIGKILL);
+        }
+        return G_SOURCE_CONTINUE;
+    }, nullptr);
+
+    g_unix_signal_add(SIGTERM, [](gpointer) -> gboolean {
+        if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
+            g_quitRequestedHandler();
+        } else {
+            stopEventLoop();
+        }
+        return G_SOURCE_CONTINUE;
+    }, nullptr);
 
     // Linux uses runEventLoop instead
     runEventLoop();
