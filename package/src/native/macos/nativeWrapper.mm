@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <signal.h>
 
 // CEF includes
 #include "include/base/cef_ref_counted.h"
@@ -5070,6 +5071,9 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
 // Note: This is executed from the main bun thread
 // Note: `name` parameter is accepted for API consistency with Windows but not used on macOS
+// Forward declaration - stopEventLoop is defined after startEventLoop
+extern "C" void stopEventLoop();
+
 extern "C" void startEventLoop(const char* identifier, const char* name, const char* channel) {
     (void)name; // Unused on macOS - kept for API consistency with Windows/Linux
 
@@ -5096,9 +5100,48 @@ extern "C" void startEventLoop(const char* identifier, const char* name, const c
         NSLog(@"Initialized webview HTML content storage");
     }
     
+    // Set up dispatch sources for SIGINT and SIGTERM so they work regardless of
+    // which event loop is running (CefRunMessageLoop or [NSApp run]).
+    // bun's process.on("SIGINT") depends on bun's event loop to forward signals
+    // to the Worker, which doesn't work when the main thread is in [NSApp run].
+    // Dispatch sources deliver signal events on the main queue, which both
+    // [NSApp run] and CefRunMessageLoop process.
+    signal(SIGINT, SIG_IGN);
+    signal(SIGTERM, SIG_IGN);
+
+    static int sigint_count = 0;
+
+    dispatch_source_t sigintSource = dispatch_source_create(
+        DISPATCH_SOURCE_TYPE_SIGNAL, SIGINT, 0, dispatch_get_main_queue());
+    dispatch_source_set_event_handler(sigintSource, ^{
+        sigint_count++;
+        if (sigint_count == 1) {
+            if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
+                g_quitRequestedHandler();
+            } else {
+                stopEventLoop();
+            }
+        } else {
+            // Second Ctrl+C: force kill entire process group
+            kill(0, SIGKILL);
+        }
+    });
+    dispatch_resume(sigintSource);
+
+    dispatch_source_t sigtermSource = dispatch_source_create(
+        DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, dispatch_get_main_queue());
+    dispatch_source_set_event_handler(sigtermSource, ^{
+        if (g_quitRequestedHandler && !g_eventLoopStopping.load()) {
+            g_quitRequestedHandler();
+        } else {
+            stopEventLoop();
+        }
+    });
+    dispatch_resume(sigtermSource);
+
     if (useCEF) {
         @autoreleasepool {
-            if (!initializeCEF()) {                
+            if (!initializeCEF()) {
                 return;
             }
             NSApplication *app = [NSApplication sharedApplication];
