@@ -686,6 +686,7 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL isSandboxed;  // When true, only eventBridge is active (no RPC)
     @property (nonatomic, strong) CALayer *storedLayerMask;
     @property (nonatomic, strong) NSArray<NSString *> *navigationRules;
+    @property (atomic, assign) uint32_t resizeGeneration;
 
     - (void)loadURL:(const char *)urlString;
     - (void)loadHTML:(const char *)htmlString;
@@ -711,6 +712,7 @@ void releaseObjCObject(id objcObject) {
     - (void)updateCustomPreloadScript:(const char*)jsString;
 
     - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson;
+    - (void)resizeWithFrame:(NSRect)frame parsedMasks:(NSArray *)parsedMasks;
 
     - (void)setNavigationRulesFromJSON:(const char*)rulesJson;
     - (BOOL)shouldAllowNavigationToURL:(NSString *)url;
@@ -1100,33 +1102,52 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
 
-    - (void)toggleMirrorMode:(BOOL)enable {        
-        NSView *subview = self.nsView;                
-        
-        if (self.mirrorModeEnabled == enable) {            
+    - (void)toggleMirrorMode:(BOOL)enable {
+        NSView *subview = self.nsView;
+
+        if (self.mirrorModeEnabled == enable) {
             return;
         }
         BOOL isLeftMouseButtonDown = ([NSEvent pressedMouseButtons] & (1 << 0)) != 0;
-        if (isLeftMouseButtonDown) {            
+        if (isLeftMouseButtonDown) {
             return;
         }
         self.mirrorModeEnabled = enable;
-        
-        if (enable) {        
+
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        if (enable) {
             CGFloat positionX = subview.frame.origin.x;
-            CGFloat positionY = subview.frame.origin.y;                        
+            CGFloat positionY = subview.frame.origin.y;
             subview.frame = CGRectOffset(subview.frame, OFFSCREEN_OFFSET, OFFSCREEN_OFFSET);
-            subview.layer.position = CGPointMake(positionX, positionY);            
-        } else {            
+            subview.layer.position = CGPointMake(positionX, positionY);
+        } else {
             subview.frame = CGRectMake(subview.layer.position.x,
                                     subview.layer.position.y,
                                     subview.frame.size.width,
-                                    subview.frame.size.height);            
+                                    subview.frame.size.height);
         }
+        [CATransaction commit];
     }
 
 
+    // Internal callers (e.g. fullSize resize on window resize) use this entry point
     - (void)resize:(NSRect)frame withMasksJSON:(const char *)masksJson {
+        NSArray *parsedMasks = nil;
+        if (masksJson && strlen(masksJson) > 0) {
+            NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
+            NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
+            if (jsonData) {
+                NSError *error = nil;
+                parsedMasks = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+                if (error) parsedMasks = nil;
+            }
+        }
+        [self resizeWithFrame:frame parsedMasks:parsedMasks];
+    }
+
+    // Optimized resize — accepts pre-parsed masks (JSON parsing done off main thread)
+    - (void)resizeWithFrame:(NSRect)frame parsedMasks:(NSArray *)parsedMasks {
         NSView *subview = self.nsView;
         if (!subview) {
             return;
@@ -1136,9 +1157,10 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         CGFloat adjustedWidth = ceilf(frame.size.width);
         CGFloat adjustedHeight = ceilf(frame.size.height);
         CGFloat adjustedY = floor(subview.superview.bounds.size.height - ceilf(frame.origin.y) - adjustedHeight);
-        CGFloat adjustedYZ = floor(frame.origin.y);
 
-        // TODO: move mirrorModeEnabled to abstractView
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+
         if (self.mirrorModeEnabled) {
             subview.frame = NSMakeRect(OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, adjustedWidth, adjustedHeight);
             subview.layer.position = CGPointMake(adjustedX, adjustedY);
@@ -1146,25 +1168,12 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             subview.frame = NSMakeRect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
         }
 
-        CAShapeLayer* (^createMaskLayer)(void) = ^CAShapeLayer* {
-            if (!masksJson || strlen(masksJson) == 0) {
-                return nil;
-            }
-            NSString *jsonString = [NSString stringWithUTF8String:masksJson ?: ""];
-            NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
-            if (!jsonData) {
-                return nil;
-            }
-            NSError *error = nil;
-            NSArray *rectsArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-            if (!rectsArray || error) {
-                return nil;
-            }
+        CAShapeLayer *maskLayer = nil;
+        if (parsedMasks && parsedMasks.count > 0) {
             CGFloat heightToAdjust = self.nsView.layer.geometryFlipped ? 0 : adjustedHeight;
-            
-            NSArray<NSValue *> *processedRects = addOverlapRects(rectsArray, heightToAdjust);
+            NSArray<NSValue *> *processedRects = addOverlapRects(parsedMasks, heightToAdjust);
 
-            CAShapeLayer *maskLayer = [CAShapeLayer layer];
+            maskLayer = [CAShapeLayer layer];
             maskLayer.frame = self.nsView.layer.bounds;
             CGMutablePathRef path = CGPathCreateMutable();
             CGPathAddRect(path, NULL, maskLayer.bounds);
@@ -1175,10 +1184,11 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             maskLayer.fillRule = kCAFillRuleEvenOdd;
             maskLayer.path = path;
             CGPathRelease(path);
-            return maskLayer;
-        };
+        }
+        self.nsView.layer.mask = maskLayer;
 
-        self.nsView.layer.mask = createMaskLayer();
+        [CATransaction commit];
+
         NSPoint currentMousePosition = [self.nsView.window mouseLocationOutsideOfEventStream];
         ContainerView *containerView = (ContainerView *)self.nsView.superview;
         [containerView updateActiveWebviewForMousePosition:currentMousePosition];
@@ -5871,8 +5881,26 @@ extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, do
     if (isnan(height) || isinf(height) || height <= 0) height = 100;
 
     NSRect frame = NSMakeRect(x, y, width, height);
+
+    // Pre-parse masks JSON off the main thread (NSJSONSerialization is thread-safe)
+    NSArray *parsedMasks = nil;
+    if (masksJson && strlen(masksJson) > 0) {
+        NSString *jsonString = [NSString stringWithUTF8String:masksJson];
+        NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
+        if (jsonData) {
+            NSError *error = nil;
+            parsedMasks = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+            if (error) parsedMasks = nil;
+        }
+    }
+
+    // Coalesce rapid resize calls — only the latest one matters
+    uint32_t generation = ++abstractView.resizeGeneration;
+
     dispatch_async(dispatch_get_main_queue(), ^{
-        [abstractView resize:frame withMasksJSON:masksJson];
+        // Skip if a newer resize was already queued
+        if (generation != abstractView.resizeGeneration) return;
+        [abstractView resizeWithFrame:frame parsedMasks:parsedMasks];
     });
 }
 
