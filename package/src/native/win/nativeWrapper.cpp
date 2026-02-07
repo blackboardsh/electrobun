@@ -3124,7 +3124,8 @@ public:
             
             visualBounds = frame;
             bool maskChanged = false;
-            if (masksJson) {
+            // Check if masksJson is nullptr, empty, or just "[]" (empty array)
+            if (masksJson && strlen(masksJson) > 0 && strcmp(masksJson, "[]") != 0) {
                 std::string newMaskJSON = masksJson;
                 if (newMaskJSON != maskJSON) {
                     maskJSON = newMaskJSON;
@@ -3134,7 +3135,7 @@ public:
                 maskJSON = "";
                 maskChanged = true;
             }
-            
+
             // Only apply visual mask if mask data changed
             if (maskChanged) {
                 applyVisualMask();
@@ -3143,7 +3144,7 @@ public:
             ::log("[WebView2] ERROR: Controller is NULL, cannot resize");
         }
     }
-    
+
     ComPtr<ICoreWebView2Controller> getController() {
         return controller;
     }
@@ -3420,9 +3421,10 @@ public:
             // Notify CEF that the browser was resized
             browser->GetHost()->WasResized();
             visualBounds = frame;
-            
+
             bool maskChanged = false;
-            if (masksJson) {
+            // Check if masksJson is nullptr, empty, or just "[]" (empty array)
+            if (masksJson && strlen(masksJson) > 0 && strcmp(masksJson, "[]") != 0) {
                 std::string newMaskJSON = masksJson;
                 if (newMaskJSON != maskJSON) {
                     maskJSON = newMaskJSON;
@@ -3432,14 +3434,14 @@ public:
                 maskJSON = "";
                 maskChanged = true;
             }
-            
+
             // Only apply visual mask if mask data changed
             if (maskChanged) {
                 applyVisualMask();
             }
         }
     }
-    
+
     // CEF-specific implementation of mask functionality
     void applyVisualMask() override {
         if (!browser) {
