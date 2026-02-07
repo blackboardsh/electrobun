@@ -3703,7 +3703,8 @@ public:
         maskJSON = masksJson ? masksJson : "";
         
         // Apply visual mask if maskJSON is provided
-        if (masksJson && strlen(masksJson) > 0) {
+        // Check if masksJson is nullptr, empty, or just "[]" (empty array)
+        if (masksJson && strlen(masksJson) > 0 && strcmp(masksJson, "[]") != 0) {
             applyVisualMask();
         } else {
             // If no masks, remove any existing masks
