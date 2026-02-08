@@ -4,7 +4,7 @@ export default {
 	app: {
 		name: "Electrobun Kitchen Sink",
 		identifier: "sh.blackboard.electrobun-kitchen",
-		version: "1.12.1",
+		version: "1.12.2-beta.0",
 		urlSchemes: ["electrobun-playground"],
 	},
 	runtime: {
