@@ -207,7 +207,7 @@ jobs:
           rm certificate.p12
 
       - name: Build Kitchen
-        run: cd ../kitchen && bun install && bun build:stable
+        run: cd ../kitchen && bun install && bun build:${{ steps.release-type.outputs.env }}
         working-directory: package
         env:
           ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '' }}
