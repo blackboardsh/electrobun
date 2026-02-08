@@ -88,6 +88,10 @@ function main() {
 				args: ["cstring", "cstring", "cstring"],
 				returns: "void",
 			},
+			forceExit: {
+				args: ["i32"],
+				returns: "void",
+			},
 		});
 	} catch (error) {
 		console.error(
@@ -99,6 +103,10 @@ function main() {
 			lib = dlopen(absoluteLibPath, {
 				startEventLoop: {
 					args: ["cstring", "cstring", "cstring"],
+					returns: "void",
+				},
+				forceExit: {
+					args: ["i32"],
 					returns: "void",
 				},
 			});
@@ -244,8 +252,12 @@ ${fileData.toString("utf8")}
 	);
 
 	// Safety net: if startEventLoop returns (event loop stopped),
-	// ensure the process exits even if the worker is still running
-	process.exit(0);
+	// ensure the process exits even if the worker is still running.
+	// Must use _exit() (via forceExit) instead of process.exit() because
+	// CefShutdown() may leave threads still tearing down. Regular exit()
+	// runs atexit handlers that try to pthread_join those threads, causing
+	// a crash (SIGTRAP in CEF's CFThreadLoop TSD cleanup).
+	lib.symbols.forceExit(0);
 }
 
 // Call the main function
