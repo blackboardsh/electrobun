@@ -64,9 +64,44 @@ const windows_imports = if (builtin.os.tag == .windows) struct {
     extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) callconv(win.WINAPI) BOOL;
     extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(win.WINAPI) BOOL;
 
+    // Console attachment for dev mode
+    extern "kernel32" fn AttachConsole(dwProcessId: DWORD) callconv(win.WINAPI) BOOL;
+    extern "kernel32" fn FreeConsole() callconv(win.WINAPI) BOOL;
+    extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(win.WINAPI) ?HANDLE;
+    extern "kernel32" fn SetStdHandle(nStdHandle: DWORD, hHandle: HANDLE) callconv(win.WINAPI) BOOL;
+
+    const ATTACH_PARENT_PROCESS: DWORD = 0xFFFFFFFF;
+    const STD_OUTPUT_HANDLE: DWORD = 0xFFFFFFF5; // -11
+    const STD_ERROR_HANDLE: DWORD = 0xFFFFFFF4; // -12
     const CREATE_NO_WINDOW: DWORD = 0x08000000;
     const INFINITE: DWORD = 0xFFFFFFFF;
 } else struct {};
+
+// Check if this is a dev build by reading version.json
+fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
+    // Build path to version.json: exe_dir/../Resources/version.json
+    const version_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "version.json" }) catch return false;
+    defer allocator.free(version_path);
+
+    // Read the file
+    const file = std.fs.openFileAbsolute(version_path, .{}) catch return false;
+    defer file.close();
+
+    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return false;
+    defer allocator.free(content);
+
+    // Parse JSON and look for "channel":"dev"
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return false;
+    defer parsed.deinit();
+
+    if (parsed.value.object.get("channel")) |channel_value| {
+        if (channel_value == .string) {
+            return std.mem.eql(u8, channel_value.string, "dev");
+        }
+    }
+
+    return false;
+}
 
 // SIGALRM handler - safety net timeout for hung shutdowns
 fn alarmHandler(_: c_int) callconv(.C) void {
@@ -193,12 +228,26 @@ pub fn main() !void {
 
     std.debug.print("Spawning: {s} {s}\n", .{ argv[0], if (argv.len > 1) argv[1] else "" });
 
-    // Production Windows builds (GUI subsystem): Use CreateProcessW with CREATE_NO_WINDOW
-    // Dev builds and other platforms: Use standard spawn with inherited I/O
-    const is_production_windows = builtin.os.tag == .windows and builtin.mode != .Debug;
+    // Check if console mode is forced via environment variable
+    const force_console = if (std.process.getEnvVarOwned(arena_alloc, "ELECTROBUN_CONSOLE")) |val| blk: {
+        defer arena_alloc.free(val);
+        break :blk std.mem.eql(u8, val, "1");
+    } else |_| false;
 
-    if (is_production_windows) {
-        // Windows production build - use CreateProcessW with CREATE_NO_WINDOW
+    // Check if this is a dev build by reading version.json, or if console is forced
+    const is_dev_build = force_console or isDevBuild(arena_alloc, exe_dir);
+    if (force_console) {
+        std.debug.print("Console mode forced via ELECTROBUN_CONSOLE=1\n", .{});
+    } else if (is_dev_build) {
+        std.debug.print("Dev build detected - console output enabled\n", .{});
+    }
+
+    // Windows non-dev builds: Use CreateProcessW with CREATE_NO_WINDOW (no console)
+    // Dev builds and other platforms: Use standard spawn with inherited I/O
+    const use_gui_mode = builtin.os.tag == .windows and !is_dev_build;
+
+    if (use_gui_mode) {
+        // Windows non-dev build - use CreateProcessW with CREATE_NO_WINDOW
         const win = windows_imports;
 
         // Build command line (needs to be mutable for CreateProcessW)
@@ -247,7 +296,16 @@ pub fn main() !void {
             std.process.exit(@intCast(exit_code));
         }
     } else {
-        // Dev build or non-Windows: Use standard spawn with inherited I/O for CLI interaction
+        // Dev build or non-Windows: Use standard spawn with inherited I/O
+
+        // On Windows dev builds, attach to parent console for output
+        if (builtin.os.tag == .windows) {
+            const win = windows_imports;
+            if (win.AttachConsole(win.ATTACH_PARENT_PROCESS) != 0) {
+                std.debug.print("Attached to parent console\n", .{});
+            }
+        }
+
         child_process.stdout_behavior = .Inherit;
         child_process.stderr_behavior = .Inherit;
 
@@ -271,7 +329,7 @@ pub fn main() !void {
             },
             .Signal => |sig| {
                 // Don't print on SIGINT/SIGTERM - these are expected during graceful shutdown
-                if (sig != c.SIGINT and sig != c.SIGTERM) {
+                if (builtin.os.tag != .windows and sig != c.SIGINT and sig != c.SIGTERM) {
                     std.debug.print("Child process terminated by signal: {d}\n", .{sig});
                 }
                 std.process.exit(128 + @as(u8, @intCast(sig)));
