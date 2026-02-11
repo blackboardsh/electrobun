@@ -1087,7 +1087,6 @@ const defaultConfig = {
 	build: {
 		buildFolder: "build",
 		artifactFolder: "artifacts",
-		targets: undefined as unknown, // Will default to current platform if not specified
 		useAsar: false,
 		asarUnpack: undefined as string[] | undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
 		cefVersion: undefined as string | undefined, // Override CEF version: "CEF_VERSION+chromium-CHROMIUM_VERSION"
