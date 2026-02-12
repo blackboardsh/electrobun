@@ -1039,11 +1039,24 @@ del "%~f0"
 
 				// Cross-platform app launch (Windows is handled above with its own update script)
 				if (currentOS === "macos") {
-					// Use a detached shell so relaunch survives after killApp terminates the current process
+					// Wait for the current process to fully exit before relaunching.
+					// macOS 'open' on an already-running app just activates the existing
+					// instance instead of launching a new one, so we must ensure the
+					// current process has exited first. The detached shell survives our
+					// exit and polls until the process is gone.
+					const pid = process.pid;
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
-					Bun.spawn(["sh", "-c", `open "${runningAppBundlePath}" &`], {
-						detached: true,
-					} as any);
+					Bun.spawn(
+						[
+							"sh",
+							"-c",
+							`while kill -0 ${pid} 2>/dev/null; do sleep 0.5; done; sleep 1; open "${runningAppBundlePath}"`,
+						],
+						{
+							detached: true,
+							stdio: ["ignore", "ignore", "ignore"],
+						} as any,
+					);
 				} else if (currentOS === "linux") {
 					// On Linux, launch the launcher binary inside the app directory
 					const launcherPath = join(runningAppBundlePath, "bin", "launcher");
