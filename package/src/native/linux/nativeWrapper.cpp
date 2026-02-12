@@ -2038,6 +2038,8 @@ public:
     bool isMousePassthroughEnabled = false;
     bool mirrorModeEnabled = false;
     bool fullSize = false;
+    bool pendingStartTransparent = false;
+    bool pendingStartPassthrough = false;
     bool isReceivingInput = true;
     std::string maskJSON;
     GdkRectangle visualBounds = {};
@@ -5706,7 +5708,15 @@ AbstractView* initCEFWebview(uint32_t webviewId,
                 std::lock_guard<std::mutex> lock(g_webviewMapMutex);
                 g_webviewMap[webviewId] = webview;
             }
-            
+
+            // Apply deferred initial transparent/passthrough state now that view is ready
+            if (webview->pendingStartTransparent) {
+                webview->setTransparent(true);
+            }
+            if (webview->pendingStartPassthrough) {
+                webview->setPassthrough(true);
+            }
+
             return webview.get();
         } catch (const std::exception& e) {
             printf("ERROR: Failed to create webview: %s\n", e.what());
@@ -5714,7 +5724,7 @@ AbstractView* initCEFWebview(uint32_t webviewId,
             return nullptr;
         }
     });
-    
+
     return result;
 }
 
@@ -5767,14 +5777,33 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                     }
                 }
             }
-            
+
+            // Apply deferred initial transparent/passthrough state now that view is ready
+            if (webview->pendingStartTransparent) {
+                webview->setTransparent(true);
+            }
+            if (webview->pendingStartPassthrough) {
+                webview->setPassthrough(true);
+            }
+
             return webview.get();
         } catch (const std::exception& e) {
             return nullptr;
         }
     });
-    
+
     return result;
+}
+
+// Global flags set by setNextWebviewFlags, consumed by initWebview
+static struct {
+    bool startTransparent;
+    bool startPassthrough;
+} g_nextWebviewFlags = {false, false};
+
+ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
+    g_nextWebviewFlags.startTransparent = startTransparent;
+    g_nextWebviewFlags.startPassthrough = startPassthrough;
 }
 
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
@@ -5794,29 +5823,44 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char* customPreloadScript,
                          bool transparent,
                          bool sandbox) {
+    // Read and clear pre-set flags
+    bool startTransparent = g_nextWebviewFlags.startTransparent;
+    bool startPassthrough = g_nextWebviewFlags.startPassthrough;
+    g_nextWebviewFlags = {false, false};
+
     // TODO: Implement transparent handling for Linux
-    
+
     // Null pointer checks
     if (!window) {
         fprintf(stderr, "ERROR: initWebview called with null window pointer\n");
         return nullptr;
     }
-    
+
     // Wait for GTK initialization to complete before creating any webviews
     waitForGTKInit();
-    
+
+    AbstractView* view = nullptr;
     if (isCEFAvailable()) {
-        return initCEFWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
+        view = initCEFWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                               partitionIdentifier, navigationCallback, webviewEventHandler,
                               eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
                               electrobunPreloadScript, customPreloadScript, sandbox);
     } else {
-        return initGTKWebkitWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
+        view = initGTKWebkitWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
                                     electrobunPreloadScript, customPreloadScript, sandbox);
     }
-       
+
+    // Store initial state flags — applied later when the view is fully initialized
+    // (browser may not be available yet due to deferred creation)
+    if (view) {
+        view->pendingStartTransparent = startTransparent;
+        view->pendingStartPassthrough = startPassthrough;
+    }
+
+    return view;
+
 }
 
 ELECTROBUN_EXPORT void loadURLInWebView(AbstractView* abstractView, const char* urlString) {

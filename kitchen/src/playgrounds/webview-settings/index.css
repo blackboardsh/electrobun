@@ -1,0 +1,104 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    padding: 20px;
+}
+
+.container { max-width: 900px; }
+
+h1 { margin-bottom: 4px; font-size: 20px; }
+h2 { margin: 0 0 10px 0; font-size: 15px; color: #aaa; }
+p { color: #888; margin-bottom: 16px; font-size: 13px; }
+
+.done-btn {
+    position: fixed; top: 10px; right: 10px; z-index: 9999;
+    padding: 8px 20px; font-size: 13px; font-weight: 600;
+    background: #4ade80; border: none; border-radius: 6px;
+    color: #1a1a2e; cursor: pointer;
+}
+.done-btn:hover { background: #22c55e; }
+
+.section {
+    background: #252540; border-radius: 8px; padding: 14px;
+    margin-bottom: 14px;
+}
+
+.option-row {
+    display: flex; gap: 14px; align-items: center;
+    margin-bottom: 10px; flex-wrap: wrap;
+}
+
+.checkbox-label {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 13px; cursor: pointer;
+}
+
+label { font-size: 13px; display: flex; align-items: center; gap: 4px; }
+
+input[type="text"], input[type="number"], select {
+    padding: 4px 8px; border: 1px solid #444; border-radius: 4px;
+    background: #1a1a2e; color: #eee; font-size: 13px;
+}
+
+.primary-btn {
+    padding: 8px 18px; background: #6366f1; color: #fff;
+    border: none; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: 600;
+}
+.primary-btn:hover { background: #4f46e5; }
+
+.placeholder {
+    color: #666; font-size: 13px; padding: 20px; text-align: center;
+}
+
+.webview-card {
+    background: #1e1e36; border: 1px solid #333; border-radius: 8px;
+    margin-bottom: 10px; overflow: hidden;
+}
+
+.card-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; background: #252540;
+}
+
+.card-title { font-weight: 600; font-size: 13px; }
+
+.card-attrs {
+    font-size: 11px; color: #888; flex: 1;
+    font-family: monospace;
+}
+
+.remove-btn {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: none; background: #dc2626; color: #fff;
+    font-size: 16px; font-weight: bold; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    line-height: 1;
+}
+.remove-btn:hover { background: #b91c1c; }
+
+.card-controls {
+    display: flex; gap: 6px; padding: 8px 12px;
+    align-items: center; flex-wrap: wrap;
+}
+
+.card-controls button {
+    padding: 4px 10px; font-size: 12px; cursor: pointer;
+    border: 1px solid #444; border-radius: 4px;
+    background: #2a2a4a; color: #ddd;
+}
+.card-controls button:hover { background: #3a3a5a; }
+
+.card-status {
+    font-size: 11px; color: #6366f1; margin-left: auto;
+    font-family: monospace;
+}
+
+.webview-container { padding: 0 12px 12px 12px; }
+
+electrobun-webview {
+    border: 1px solid #444;
+    border-radius: 4px;
+}

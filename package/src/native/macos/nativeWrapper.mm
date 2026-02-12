@@ -684,6 +684,8 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL isRemoved;
     @property (nonatomic, assign) BOOL isInFullscreen;
     @property (nonatomic, assign) BOOL isSandboxed;  // When true, only eventBridge is active (no RPC)
+    @property (nonatomic, assign) BOOL pendingStartTransparent;
+    @property (nonatomic, assign) BOOL pendingStartPassthrough;
     @property (nonatomic, strong) CALayer *storedLayerMask;
     @property (nonatomic, strong) NSArray<NSString *> *navigationRules;
     @property (atomic, assign) uint32_t resizeGeneration;
@@ -1093,12 +1095,10 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
     - (void)setTransparent:(BOOL)transparent {
-        if (transparent) {
-            self.nsView.layer.opacity = 0;
-        } else {
-            self.nsView.layer.opacity = 1;
+        if (self.nsView) {
+            [self.nsView setWantsLayer:YES];
+            self.nsView.layer.opacity = transparent ? 0 : 1;
         }
-        
     }
 
 
@@ -2388,7 +2388,15 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 
                 
                 // Note: in WkWebkit the webview is an NSView
-                self.nsView = self.webView;            
+                self.nsView = self.webView;
+
+                // Apply deferred initial transparent/passthrough state now that nsView is set
+                if (self.pendingStartTransparent) {
+                    [self setTransparent:YES];
+                }
+                if (self.pendingStartPassthrough) {
+                    [self setPassthrough:YES];
+                }
 
                 [self addPreloadScriptToWebView:electrobunPreloadScript];
                 
@@ -4725,9 +4733,17 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 ContainerView *containerView = (ContainerView *)window.contentView;
                 [containerView addAbstractView:self];
 
-                if (url && url[0] != '\0') {    
+                // Apply deferred initial transparent/passthrough state now that nsView is set
+                if (self.pendingStartTransparent) {
+                    [self setTransparent:YES];
+                }
+                if (self.pendingStartPassthrough) {
+                    [self setPassthrough:YES];
+                }
+
+                if (url && url[0] != '\0') {
                     self.browser->GetMainFrame()->LoadURL(CefString(url));
-                }                                                                                             
+                }
             };
             
             // TODO: revisit bug with 3+ CEF windows created in rapid succession - the 3rd window's
@@ -5241,6 +5257,17 @@ extern "C" void shutdownApplication() {
 
 
 
+// Global flags set by setNextWebviewFlags, consumed by initWebview
+static struct {
+    bool startTransparent;
+    bool startPassthrough;
+} g_nextWebviewFlags = {false, false};
+
+extern "C" void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
+    g_nextWebviewFlags.startTransparent = startTransparent;
+    g_nextWebviewFlags.startPassthrough = startPassthrough;
+}
+
 extern "C" AbstractView* initWebview(uint32_t webviewId,
                         NSWindow *window,
                         const char *renderer,
@@ -5258,6 +5285,11 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         const char *customPreloadScript,
                         bool transparent,
                         bool sandbox ) {
+
+    // Read and clear pre-set flags
+    bool startTransparent = g_nextWebviewFlags.startTransparent;
+    bool startPassthrough = g_nextWebviewFlags.startPassthrough;
+    g_nextWebviewFlags = {false, false};
 
     // Validate frame values - use defaults if NaN or invalid
     if (isnan(x) || isinf(x)) {
@@ -5277,12 +5309,12 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
         height = 100;
     }
 
-    NSRect frame = NSMakeRect(x, y, width, height);     
- 
+    NSRect frame = NSMakeRect(x, y, width, height);
+
     __block AbstractView *impl = nil;
 
     dispatch_sync(dispatch_get_main_queue(), ^{
-        Class ImplClass = (strcmp(renderer, "cef") == 0 && useCEF) ? [CEFWebViewImpl class] : [WKWebViewImpl class];    
+        Class ImplClass = (strcmp(renderer, "cef") == 0 && useCEF) ? [CEFWebViewImpl class] : [WKWebViewImpl class];
 
         impl = [[ImplClass alloc] initWithWebviewId:webviewId
                                         window:window
@@ -5299,6 +5331,11 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                                         customPreloadScript:strdup(customPreloadScript)
                                         transparent:transparent
                                         sandbox:sandbox];
+
+        // Store initial state flags — applied later in each impl's deferred creation block
+        // (nsView is nil at this point because view creation is async)
+        impl.pendingStartTransparent = startTransparent;
+        impl.pendingStartPassthrough = startPassthrough;
 
     });
 

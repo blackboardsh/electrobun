@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webview Settings Playground</title>
+    <script src="views://playgrounds/webview-settings/index.js"></script>
+    <link rel="stylesheet" href="views://playgrounds/webview-settings/index.css">
+</head>
+<body>
+    <button id="doneBtn" class="done-btn">Done</button>
+
+    <div class="container">
+        <h1>Webview Settings Playground</h1>
+        <p>Add webview tags with different initial settings, then toggle them at runtime.</p>
+
+        <div class="section">
+            <h2>New Webview Settings</h2>
+            <div class="option-row">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="optTransparent"> transparent
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="optPassthrough"> passthrough
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="optSandbox"> sandbox
+                </label>
+            </div>
+            <div class="option-row">
+                <label>renderer:
+                    <select id="optRenderer">
+                        <option value="cef">cef</option>
+                        <option value="native">native</option>
+                    </select>
+                </label>
+                <label>src:
+                    <input type="text" id="optSrc" value="https://electrobun.dev" style="width: 260px;">
+                </label>
+            </div>
+            <div class="option-row">
+                <label>width:
+                    <input type="number" id="optWidth" value="500" style="width: 70px;">
+                </label>
+                <label>height:
+                    <input type="number" id="optHeight" value="300" style="width: 70px;">
+                </label>
+            </div>
+            <button id="addBtn" class="primary-btn">+ Add Webview</button>
+        </div>
+
+        <div class="section">
+            <h2>Active Webviews</h2>
+            <div id="webviewList"></div>
+            <div id="emptyMsg" class="placeholder">No webviews yet. Click "+ Add Webview" above.</div>
+        </div>
+    </div>
+
+    <script>
+        let webviewCounter = 0;
+
+        function addWebview() {
+            const transparent = document.getElementById('optTransparent').checked;
+            const passthrough = document.getElementById('optPassthrough').checked;
+            const sandbox = document.getElementById('optSandbox').checked;
+            const renderer = document.getElementById('optRenderer').value;
+            const src = document.getElementById('optSrc').value;
+            const width = parseInt(document.getElementById('optWidth').value) || 500;
+            const height = parseInt(document.getElementById('optHeight').value) || 300;
+
+            webviewCounter++;
+            const id = webviewCounter;
+
+            const emptyMsg = document.getElementById('emptyMsg');
+            if (emptyMsg) emptyMsg.style.display = 'none';
+
+            const card = document.createElement('div');
+            card.className = 'webview-card';
+            card.id = 'card-' + id;
+            card.innerHTML = `
+                <div class="card-header">
+                    <span class="card-title">Webview #${id}</span>
+                    <span class="card-attrs">${transparent ? 'transparent ' : ''}${passthrough ? 'passthrough ' : ''}${sandbox ? 'sandbox ' : ''}${renderer}</span>
+                    <button class="remove-btn" onclick="removeWebview(${id})">-</button>
+                </div>
+                <div class="card-controls">
+                    <button onclick="toggleAttr(${id}, 'transparent')">Toggle Transparent</button>
+                    <button onclick="toggleAttr(${id}, 'passthrough')">Toggle Passthrough</button>
+                    <button onclick="toggleAttr(${id}, 'hidden')">Toggle Hidden</button>
+                    <span class="card-status" id="status-${id}"></span>
+                </div>
+                <div class="webview-container" id="container-${id}"></div>
+            `;
+
+            document.getElementById('webviewList').appendChild(card);
+
+            // Create the webview element
+            const wv = document.createElement('electrobun-webview');
+            wv.setAttribute('renderer', renderer);
+            wv.setAttribute('src', src);
+            wv.style.width = width + 'px';
+            wv.style.height = height + 'px';
+            if (transparent) wv.setAttribute('transparent', '');
+            if (passthrough) wv.setAttribute('passthrough', '');
+            if (sandbox) wv.setAttribute('sandbox', '');
+
+            document.getElementById('container-' + id).appendChild(wv);
+            updateStatus(id, wv);
+        }
+
+        function removeWebview(id) {
+            const card = document.getElementById('card-' + id);
+            if (card) {
+                card.remove();
+                // Show empty message if no cards left
+                if (document.getElementById('webviewList').children.length === 0) {
+                    document.getElementById('emptyMsg').style.display = '';
+                }
+            }
+        }
+
+        function toggleAttr(id, attr) {
+            const container = document.getElementById('container-' + id);
+            if (!container) return;
+            const wv = container.querySelector('electrobun-webview');
+            if (!wv) return;
+
+            if (attr === 'transparent') {
+                wv.toggleTransparent();
+            } else if (attr === 'passthrough') {
+                wv.togglePassthrough();
+            } else if (attr === 'hidden') {
+                wv.toggleHidden();
+            }
+            updateStatus(id, wv);
+        }
+
+        function updateStatus(id, wv) {
+            const el = document.getElementById('status-' + id);
+            if (!el) return;
+            const parts = [];
+            if (wv.transparent) parts.push('transparent');
+            if (wv.passthroughEnabled) parts.push('passthrough');
+            if (wv.hidden) parts.push('hidden');
+            el.textContent = parts.length ? parts.join(', ') : 'visible';
+        }
+
+        document.getElementById('addBtn').addEventListener('click', addWebview);
+    </script>
+</body>
+</html>

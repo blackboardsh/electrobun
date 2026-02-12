@@ -70,6 +70,9 @@ export default {
 			"playgrounds/quit-test": {
 				entrypoint: "src/playgrounds/quit-test/index.ts",
 			},
+			"playgrounds/webview-settings": {
+				entrypoint: "src/playgrounds/webview-settings/index.ts",
+			},
 		},
 		copy: {
 			"src/test-runner/index.html": "views/test-runner/index.html",
@@ -126,6 +129,10 @@ export default {
 				"views/playgrounds/quit-test/index.html",
 			"src/playgrounds/quit-test/index.css":
 				"views/playgrounds/quit-test/index.css",
+			"src/playgrounds/webview-settings/index.html":
+				"views/playgrounds/webview-settings/index.html",
+			"src/playgrounds/webview-settings/index.css":
+				"views/playgrounds/webview-settings/index.css",
 		},
 		mac: {
 			codesign: true,

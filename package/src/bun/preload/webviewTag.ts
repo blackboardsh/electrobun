@@ -81,6 +81,13 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		// Sandbox attribute: when present, the child webview is sandboxed (no RPC, events only)
 		const sandbox = this.hasAttribute("sandbox");
 		this.sandboxed = sandbox;
+		// Read transparent/passthrough attributes for initial state (avoids flash)
+		const transparent = this.hasAttribute("transparent");
+		const passthrough = this.hasAttribute("passthrough");
+		this.transparent = transparent;
+		this.passthroughEnabled = passthrough;
+		if (transparent) this.style.opacity = "0";
+		if (passthrough) this.style.pointerEvents = "none";
 
 		if (masks) {
 			masks.split(",").forEach((s) => this.maskSelectors.add(s.trim()));
@@ -103,6 +110,8 @@ export class ElectrobunWebviewTag extends HTMLElement {
 				},
 				navigationRules: null,
 				sandbox,
+				transparent,
+				passthrough,
 			})) as number;
 
 			this.webviewId = webviewId;
@@ -219,6 +228,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	toggleTransparent(value?: boolean) {
 		if (this.webviewId === null) return;
 		this.transparent = value !== undefined ? value : !this.transparent;
+		this.style.opacity = this.transparent ? "0" : "";
 		send("webviewTagSetTransparent", {
 			id: this.webviewId,
 			transparent: this.transparent,
@@ -229,6 +239,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		if (this.webviewId === null) return;
 		this.passthroughEnabled =
 			value !== undefined ? value : !this.passthroughEnabled;
+		this.style.pointerEvents = this.passthroughEnabled ? "none" : "";
 		send("webviewTagSetPassthrough", {
 			id: this.webviewId,
 			enablePassthrough: this.passthroughEnabled,

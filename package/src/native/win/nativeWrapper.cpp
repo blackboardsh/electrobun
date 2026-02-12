@@ -2672,6 +2672,8 @@ public:
     bool isMousePassthroughEnabled = false;
     bool mirrorModeEnabled = false;
     bool fullSize = false;
+    bool pendingStartTransparent = false;
+    bool pendingStartPassthrough = false;
 
     // Common state
     bool isReceivingInput = true;
@@ -6011,6 +6013,14 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             view->setCreationComplete(true);
                             container->AddAbstractView(view);
 
+                            // Apply deferred initial transparent/passthrough state now that view is ready
+                            if (view->pendingStartTransparent) {
+                                view->setTransparent(true);
+                            }
+                            if (view->pendingStartPassthrough) {
+                                view->setPassthrough(true);
+                            }
+
                             // Register in global AbstractView map for navigation rules
                             {
                                 std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
@@ -6020,8 +6030,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Store WebView2View in global map for JavaScript execution
                             HWND containerHwnd = container->GetHwnd();
                             g_webview2Views[containerHwnd] = view.get();
-                            
-                            
+
+
                             return S_OK;
                         }).Get());
             });
@@ -6321,20 +6331,28 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             g_cefViews[mapKey] = view.get();
 
             printf("CEF: Registered view with hwnd=%p (transparent=%d)\n", mapKey, transparent);
-            
+
             // Set browser on client for script execution
             client->SetBrowser(browser);
-            
+
             // Set initial bounds on view before calling resize
             RECT initialBounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
             view->visualBounds = initialBounds;
-            
+
             // Handle z-ordering immediately since browser is ready
             view->resize(initialBounds, nullptr);
-            
+
+            // Apply deferred initial transparent/passthrough state now that browser is ready
+            if (view->pendingStartTransparent) {
+                view->setTransparent(true);
+            }
+            if (view->pendingStartPassthrough) {
+                view->setPassthrough(true);
+            }
+
         }
     });
-    
+
     return view;
 }
 
@@ -6503,6 +6521,17 @@ ELECTROBUN_EXPORT void shutdownApplication() {
     stopEventLoop();
 }
 
+// Global flags set by setNextWebviewFlags, consumed by initWebview
+static struct {
+    bool startTransparent;
+    bool startPassthrough;
+} g_nextWebviewFlags = {false, false};
+
+ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
+    g_nextWebviewFlags.startTransparent = startTransparent;
+    g_nextWebviewFlags.startPassthrough = startPassthrough;
+}
+
 // Clean, elegant initWebview function - Windows version matching Mac pattern
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          NSWindow *window,  // Actually HWND on Windows
@@ -6522,15 +6551,20 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          bool transparent,
                          bool sandbox) {
 
+    // Read and clear pre-set flags
+    bool startTransparent = g_nextWebviewFlags.startTransparent;
+    bool startPassthrough = g_nextWebviewFlags.startPassthrough;
+    g_nextWebviewFlags = {false, false};
+
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
 
-    
+
     HWND hwnd = reinterpret_cast<HWND>(window);
-    
-    // Factory pattern - choose implementation based on renderer  
+
+    // Factory pattern - choose implementation based on renderer
     AbstractView* view = nullptr;
-    
+
     if (renderer && strcmp(renderer, "cef") == 0 && isCEFAvailable()) {
         auto cefView = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
@@ -6544,9 +6578,17 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                               electrobunPreloadScript, customPreloadScript, transparent, sandbox);
         view = webview2View.get();
     }
-    
+
     // Note: Object lifetime is managed by the ContainerView which holds shared_ptr references
     // The factories add the views to containers, so they remain alive after this function returns
+
+    // Store initial state flags — applied later when the view is fully initialized
+    // (browser/HWND may not be available yet due to async creation)
+    if (view) {
+        view->pendingStartTransparent = startTransparent;
+        view->pendingStartPassthrough = startPassthrough;
+    }
+
     return view;
 
 }

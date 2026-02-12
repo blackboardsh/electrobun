@@ -196,6 +196,14 @@ export const native = (() => {
 				],
 				returns: FFIType.ptr,
 			},
+			// Pre-set flags for the next initWebview call (workaround for FFI param count limits)
+			setNextWebviewFlags: {
+				args: [
+					FFIType.bool, // startTransparent
+					FFIType.bool, // startPassthrough
+				],
+				returns: FFIType.void,
+			},
 
 			// webviewtag
 			webviewCanGoBack: {
@@ -903,7 +911,10 @@ export const ffi = {
 			autoResize: boolean;
 			navigationRules: string | null;
 			sandbox: boolean;
+			startTransparent: boolean;
+			startPassthrough: boolean;
 		}): FFIType.ptr => {
+
 			const {
 				id,
 				windowId,
@@ -919,6 +930,8 @@ export const ffi = {
 				frame: { x, y, width, height },
 				autoResize,
 				sandbox,
+				startTransparent,
+				startPassthrough,
 			} = params;
 
 			const parentWindow = BrowserWindow.getById(windowId);
@@ -971,6 +984,8 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 
 			const customPreload = preload;
 
+			// Pre-set flags before initWebview (workaround for FFI param count limits)
+			native.symbols.setNextWebviewFlags(startTransparent, startPassthrough);
 			const webviewPtr = native.symbols.initWebview(
 				id,
 				windowPtr,
@@ -2103,6 +2118,8 @@ type WebviewTagInitParams = {
 	windowId: number;
 	navigationRules: string | null;
 	sandbox: boolean;
+	transparent: boolean;
+	passthrough: boolean;
 };
 
 export const internalRpcHandlers = {
@@ -2119,6 +2136,8 @@ export const internalRpcHandlers = {
 				frame,
 				navigationRules,
 				sandbox,
+				transparent,
+				passthrough,
 			} = params;
 
 			const url = !params.url && !html ? "https://electrobun.dev" : params.url;
@@ -2135,6 +2154,8 @@ export const internalRpcHandlers = {
 				renderer, //: "cef",
 				navigationRules,
 				sandbox,
+				startTransparent: transparent,
+				startPassthrough: passthrough,
 			});
 
 			return webviewForTag.id;

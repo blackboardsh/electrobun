@@ -40,6 +40,10 @@ export type BrowserViewOptions<T = undefined> = {
 	// Use for untrusted content (remote URLs) to prevent malicious sites from
 	// accessing internal APIs, creating OOPIFs, or communicating with Bun
 	sandbox: boolean;
+	// Set transparent on the AbstractView at creation (before first paint)
+	startTransparent: boolean;
+	// Set passthrough on the AbstractView at creation (before first paint)
+	startPassthrough: boolean;
 	// renderer:
 };
 
@@ -93,6 +97,8 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
+	startTransparent: boolean = false;
+	startPassthrough: boolean = false;
 
 	constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
 		// const rpc = options.rpc;
@@ -118,6 +124,8 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.navigationRules = options.navigationRules || null;
 		this.renderer = options.renderer ?? defaultOptions.renderer ?? "native";
 		this.sandbox = options.sandbox ?? false;
+		this.startTransparent = options.startTransparent ?? false;
+		this.startPassthrough = options.startPassthrough ?? false;
 
 		BrowserViewMap[this.id] = this;
 		this.ptr = this.init() as Pointer;
@@ -167,6 +175,8 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			autoResize: this.autoResize,
 			navigationRules: this.navigationRules,
 			sandbox: this.sandbox,
+			startTransparent: this.startTransparent,
+			startPassthrough: this.startPassthrough,
 			// transparent is looked up from parent window in native.ts
 		});
 	}

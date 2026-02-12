@@ -25,6 +25,7 @@ import { windowEventTests } from "./interactive/window-events.test";
 import { chromelessTests } from "./interactive/chromeless.test";
 import { multiwindowCefTests } from "./interactive/multiwindow-cef.test";
 import { quitTests } from "./interactive/quit-test.test";
+import { webviewSettingsTests } from "./interactive/webview-settings.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -51,6 +52,7 @@ export const allTests: TestDefinition[] = [
   ...chromelessTests,
   ...multiwindowCefTests,
   ...quitTests,
+  ...webviewSettingsTests,
 ];
 
 // Export by category for selective running
@@ -79,4 +81,5 @@ export {
   chromelessTests,
   multiwindowCefTests,
   quitTests,
+  webviewSettingsTests,
 };
