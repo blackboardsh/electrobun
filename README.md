@@ -27,6 +27,7 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 
 ## Apps Built with Electrobun
 - [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
+- [Audio TTS](https://github.com/blackboardsh/audio-tts) - desktop text-to-speech app using Qwen3-TTS for voice design, cloning, and generation
 
 ## Star History
 
