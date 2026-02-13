@@ -600,27 +600,36 @@ public:
     }
 
     // DoClose is called when the browser window is about to close.
-    // Return false to allow the close to proceed without affecting the parent window.
+    // Return true for OOPIFs to prevent CEF from closing the parent window.
+    // Return false only for the main/last browser when actually quitting the app.
     bool DoClose(CefRefPtr<CefBrowser> browser) override {
-        // Return false to proceed with normal close handling.
-        // This prevents CEF from sending close messages to the parent window.
+        std::cout << "[CEF] DoClose: Browser ID " << browser->GetIdentifier()
+                  << ", browser_count=" << g_browser_count << std::endl;
+
+        // For OOPIFs (when there are other browsers still open, or when we're not shutting down),
+        // return true to prevent CEF from sending WM_CLOSE to the parent window.
+        // We handle the actual close ourselves in remove() by calling CloseBrowser.
+        if (!g_eventLoopStopping.load()) {
+            std::cout << "[CEF] DoClose: Returning true to prevent parent window close" << std::endl;
+            return true;  // We'll handle the close - prevents CEF from closing parent
+        }
+
+        std::cout << "[CEF] DoClose: Returning false - app is shutting down" << std::endl;
         return false;
     }
 
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
         std::cout << "[CEF] OnBeforeClose: Browser ID " << browser->GetIdentifier() << " closing" << std::endl;
-        
+
         // Remove browser from global tracking
         g_cefBrowsers.erase(browser->GetIdentifier());
         g_browser_count--;
-        
+
         std::cout << "[CEF] Remaining browsers: " << g_browser_count << std::endl;
-        
-        // If this was the last browser, quit the CEF message loop
-        if (g_browser_count == 0) {
-            std::cout << "[CEF] Last browser closed, quitting message loop" << std::endl;
-            CefQuitMessageLoop();
-        }
+
+        // Note: Do NOT quit the message loop here when browser count reaches 0.
+        // OOPIFs are CEF browsers that can be removed while the main window stays open.
+        // Window/app closing is handled separately by the window close handlers.
     }
 
 private:
@@ -3411,6 +3420,8 @@ public:
     
     void remove() override {
         if (browser) {
+            std::cout << "[CEF] CEFView::remove() called for browser ID " << browser->GetIdentifier() << std::endl;
+
             // Get the browser host before we clear the reference
             CefRefPtr<CefBrowserHost> host = browser->GetHost();
 
@@ -3424,9 +3435,11 @@ public:
             browser = nullptr;
 
             // Defer the actual browser close to avoid synchronous window message issues
-            // This matches macOS behavior where removeFromSuperview is deferred
+            // Use CloseBrowser(true) to force close since we return true from DoClose
+            // to prevent CEF from sending WM_CLOSE to parent window
             MainThreadDispatcher::dispatch_async([host]() {
-                host->CloseBrowser(false);
+                std::cout << "[CEF] Calling CloseBrowser(true) from dispatch_async" << std::endl;
+                host->CloseBrowser(true);  // force=true since DoClose returns true
             });
         }
     }
