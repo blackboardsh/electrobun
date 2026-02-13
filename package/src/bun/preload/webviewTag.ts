@@ -121,6 +121,17 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			this.setupObservers();
 		// Force immediate sync after initialization
 		this.syncDimensions(true);
+		
+		// When adding a new webview, force all existing webviews to re-sync their positions
+		// This handles layout changes caused by the new webview
+		// Use requestAnimationFrame to ensure DOM layout is complete
+		requestAnimationFrame(() => {
+			Object.values(webviewRegistry).forEach(webview => {
+				if (webview !== this && webview.webviewId !== null) {
+					webview.syncDimensions(true);
+				}
+			});
+		});
 		} catch (err) {
 			console.error("Failed to init webview:", err);
 		}

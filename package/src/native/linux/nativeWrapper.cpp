@@ -818,6 +818,7 @@ private:
     std::function<void()> positioning_callback_;
     std::function<void(CefRefPtr<CefBrowser>)> browser_created_callback_;
     std::function<void()> browser_close_callback_;  // Callback to clear parent webview browser
+    std::function<void()> load_end_callback_;  // Callback for page load completion
     
     // OSR (Off-Screen Rendering) members for transparency
     Window x11_window_;
@@ -886,6 +887,10 @@ public:
     
     void SetBrowserCloseCallback(std::function<void()> callback) {
         browser_close_callback_ = callback;
+    }
+    
+    void SetLoadEndCallback(std::function<void()> callback) {
+        load_end_callback_ = callback;
     }
     
     void SetBrowserPreloadScript(int browserId, const std::string& script) {
@@ -1080,6 +1085,11 @@ public:
         if (frame->IsMain() && webview_event_handler_) {
             std::string url = frame->GetURL().ToString();
             webview_event_handler_(webview_id_, strdup("did-navigate"), strdup(url.c_str()));
+        }
+        
+        // Call load end callback for deferred operations (like transparency)
+        if (frame->IsMain() && load_end_callback_) {
+            load_end_callback_();
         }
         
     }
@@ -1301,9 +1311,9 @@ public:
         
         // Clear browser reference to prevent use-after-free
         std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
+        
         if (browser_ && browser_->IsSame(browser)) {
             browser_ = nullptr;
-            printf("CEF: Browser reference cleared in OnBeforeClose\n");
             
             // Notify parent webview to clear its browser reference too
             if (browser_close_callback_) {
@@ -2041,6 +2051,7 @@ public:
     bool pendingStartTransparent = false;
     bool pendingStartPassthrough = false;
     bool isReceivingInput = true;
+    bool isRemoved = false;  // Flag to prevent operations on removed webviews
     std::string maskJSON;
     GdkRectangle visualBounds = {};
     bool creationFailed = false;
@@ -2179,7 +2190,9 @@ public:
                       HandlePostMessage internalBridgeHandler,
                       const char* electrobunPreloadScript,
                       const char* customPreloadScript,
-                      bool sandbox)
+                      bool sandbox,
+                      bool startTransparent,
+                      bool startPassthrough)
         : AbstractView(webviewId), navigationCallback(navigationCallback),
           eventHandler(webviewEventHandler), eventBridgeHandler(eventBridgeHandler),
           bunBridgeHandler(bunBridgeHandler),
@@ -2188,6 +2201,10 @@ public:
           customPreloadScript(customPreloadScript ? customPreloadScript : ""),
           partition(partitionIdentifier ? partitionIdentifier : "")
     {
+        // Set initial state flags
+        this->pendingStartTransparent = startTransparent;
+        this->pendingStartPassthrough = startPassthrough;
+        
         // Create the user content controller and manager
         manager = webkit_user_content_manager_new();
         if (!manager) {
@@ -2315,6 +2332,18 @@ public:
         
         // Widget will be realized after it's added to a container in addWebview()
         
+        // Apply initial transparency if requested
+        if (this->pendingStartTransparent) {
+            this->setTransparent(true);
+            this->pendingStartTransparent = false;
+        }
+        
+        // Apply initial passthrough if requested
+        if (this->pendingStartPassthrough) {
+            this->setPassthrough(true);
+            this->pendingStartPassthrough = false;
+        }
+        
         // Load URL if provided
         if (url && strlen(url) > 0) {
             loadURL(url);
@@ -2322,9 +2351,8 @@ public:
     }
     
     ~WebKitWebViewImpl() {
-        if (webview) {
-            gtk_widget_destroy(webview);
-        }
+        // Don't destroy widgets here - they should be destroyed in remove()
+        // Just clean up the manager
         if (manager) {
             g_object_unref(manager);
         }
@@ -2365,9 +2393,37 @@ public:
     }
     
     void remove() override {
-        if (webview && gtk_widget_get_parent(webview)) {
-            gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(webview)), webview);
+        // Remove from global webview map first
+        {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+            g_webviewMap.erase(webviewId);
         }
+        
+        // Mark as removed to prevent further operations
+        isRemoved = true;
+        
+        if (webview) {
+            // First remove from parent synchronously to avoid race conditions
+            if (gtk_widget_get_parent(webview)) {
+                GtkWidget* parent = gtk_widget_get_parent(webview);
+                gtk_container_remove(GTK_CONTAINER(parent), webview);
+            }
+            
+            // Schedule GTK widget destruction on idle
+            GtkWidget* widget_to_destroy = webview;
+            webview = nullptr;  // Clear our reference immediately
+            
+            g_idle_add([](gpointer data) -> gboolean {
+                GtkWidget* widget = static_cast<GtkWidget*>(data);
+                
+                if (GTK_IS_WIDGET(widget)) {
+                    gtk_widget_destroy(widget);
+                }
+                
+                return G_SOURCE_REMOVE;
+            }, widget_to_destroy);
+        }
+        
     }
     
     bool canGoBack() override {
@@ -2524,6 +2580,38 @@ public:
                 gtk_widget_hide(webview);
             } else {
                 gtk_widget_show(webview);
+            }
+        }
+    }
+    
+    void setTransparent(bool transparent) override {
+        printf("DEBUG: WebKit setTransparent called: transparent=%s\n", transparent ? "true" : "false");
+        
+        // Use the same approach as setHidden: simple GTK widget opacity
+        if (webview) {
+            gtk_widget_set_opacity(webview, transparent ? 0.0 : 1.0);
+            printf("DEBUG: WebKit set widget opacity to %s\n", transparent ? "0.0" : "1.0");
+        } else {
+            printf("DEBUG: WebKit webview is null\n");
+        }
+    }
+    
+    void setPassthrough(bool enable) override {
+        AbstractView::setPassthrough(enable); // Set the flag
+        
+        if (webview) {
+            // For GTK WebKit, we use input shape to make it pass through mouse events
+            GdkWindow* window = gtk_widget_get_window(webview);
+            if (window) {
+                if (enable) {
+                    // Make the webview pass through mouse events
+                    cairo_region_t* region = cairo_region_create();
+                    gdk_window_input_shape_combine_region(window, region, 0, 0);
+                    cairo_region_destroy(region);
+                } else {
+                    // Reset to receive mouse events normally
+                    gdk_window_input_shape_combine_region(window, NULL, 0, 0);
+                }
             }
         }
     }
@@ -3227,7 +3315,9 @@ public:
                    HandlePostMessage internalBridgeHandler,
                    const char* electrobunPreloadScript,
                    const char* customPreloadScript,
-                   bool sandbox)
+                   bool sandbox,
+                   bool startTransparent,
+                   bool startPassthrough)
         : AbstractView(webviewId), navigationCallback(navigationCallback),
           eventHandler(webviewEventHandler), eventBridgeHandler(eventBridgeHandler),
           bunBridgeHandler(bunBridgeHandler),
@@ -3236,6 +3326,10 @@ public:
           customPreloadScript(customPreloadScript ? customPreloadScript : ""),
           partition(partitionIdentifier ? partitionIdentifier : "")
     {
+        // Set initial state flags
+        this->pendingStartTransparent = startTransparent;
+        this->pendingStartPassthrough = startPassthrough;
+        
         // Initialize CEF if not already done
         if (!g_cefInitialized && !initializeCEF()) {
             creationFailed = true;
@@ -3346,6 +3440,20 @@ public:
                 hasPendingFrame = false;
             }
             
+            // Apply deferred initial transparent/passthrough state now that browser is ready
+            // Don't apply transparency immediately - wait for page load to complete
+            // (CEF navigation events will re-map the window, undoing our transparency)
+            if (this->pendingStartPassthrough) {
+                this->setPassthrough(true);
+                this->pendingStartPassthrough = false;
+                
+                // Double-check that passthrough was applied
+                CefWindowHandle handle = browser->GetHost()->GetWindowHandle();
+                if (!handle) {
+                    this->pendingStartPassthrough = true; // Keep pending
+                }
+            }
+            
             // For transparent OSR windows, setup event handling
             if (this->parentTransparent && x11win && x11win->transparent) {
                 // Create a data structure to pass to the timer callback
@@ -3380,9 +3488,26 @@ public:
         
         // Set up browser close callback to clear browser reference
         client->SetBrowserCloseCallback([this]() {
-            std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
+            // Don't acquire the mutex here - OnBeforeClose already has it
             this->browser = nullptr;
             printf("CEF: Browser reference cleared in CEFWebViewImpl\n");
+        });
+        
+        // Set up load end callback for deferred transparency and passthrough application
+        client->SetLoadEndCallback([this]() {
+            if (this->pendingStartTransparent) {
+                this->setTransparent(true);
+                this->pendingStartTransparent = false;
+            }
+            if (this->pendingStartPassthrough) {
+                this->setPassthrough(true);
+                this->pendingStartPassthrough = false;
+            }
+            
+            // Also re-apply passthrough if it was already set (in case it got reset)
+            if (this->isMousePassthroughEnabled && !this->pendingStartPassthrough) {
+                this->setPassthrough(true);
+            }
         });
         
         // Add preload scripts to the client
@@ -3439,11 +3564,21 @@ public:
             return;
         }
         
-        XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
-        XFlush(display);
+        // Check current window state before modifying
+        XWindowAttributes currentAttrs;
+        bool isCurrentlyMapped = false;
+        if (XGetWindowAttributes(display, (Window)cefWindow, &currentAttrs) != 0) {
+            isCurrentlyMapped = (currentAttrs.map_state != IsUnmapped);
+        }
         
-        // Ensure the window is mapped and raised
-        XMapRaised(display, (Window)cefWindow);
+        // For mapped windows, configure position/size without changing stacking order
+        if (isCurrentlyMapped) {
+            // Simply move and resize without changing z-order
+            XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
+        } else {
+            // Window is unmapped (transparent), just move/resize without mapping
+            XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
+        }
         XFlush(display);
                 
         // Check if the resize actually took effect
@@ -3587,17 +3722,57 @@ public:
     
     void remove() override {
         OperationGuard guard;
-        if (!guard.isValid()) return;
-        
-        std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
-        if (browser) {
-            // Don't nullify browser immediately - let CEF cleanup complete
-            browser->GetHost()->CloseBrowser(true);
-            // browser will be nullified in OnBeforeClose callback
+        if (!guard.isValid()) {
+            return;
         }
-        if (widget) {
-            gtk_widget_destroy(widget);
+        
+        // Remove from global webview map first
+        {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+            g_webviewMap.erase(webviewId);
+        }
+        
+        // Mark as removed to prevent further operations
+        isRemoved = true;
+        
+        // Don't hold the mutex while calling CloseBrowser - schedule it async
+        CefRefPtr<CefBrowser> browser_to_close;
+        GtkWidget* widget_to_destroy = nullptr;
+        
+        {
+            std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
+            
+            browser_to_close = browser;
+            widget_to_destroy = widget;
+            
+            // Clear our references immediately
+            browser = nullptr;
             widget = nullptr;
+        }
+        
+        // Close browser asynchronously outside the lock
+        if (browser_to_close) {
+            // Schedule browser close on idle
+            g_idle_add([](gpointer data) -> gboolean {
+                CefRefPtr<CefBrowser>* browser_ref = static_cast<CefRefPtr<CefBrowser>*>(data);
+                if (*browser_ref) {
+                    (*browser_ref)->GetHost()->CloseBrowser(false);
+                }
+                delete browser_ref;
+                return G_SOURCE_REMOVE;
+            }, new CefRefPtr<CefBrowser>(browser_to_close));
+        }
+        
+        // Destroy widget asynchronously
+        if (widget_to_destroy) {
+            g_idle_add([](gpointer data) -> gboolean {
+                GtkWidget* widget = static_cast<GtkWidget*>(data);
+                if (widget) {
+                    gtk_widget_hide(widget);
+                    gtk_widget_destroy(widget);
+                }
+                return G_SOURCE_REMOVE;
+            }, widget_to_destroy);
         }
     }
     
@@ -3817,21 +3992,21 @@ public:
     }
     
     void setTransparent(bool transparent) override {
+        // Use the same approach as setHidden: XUnmapWindow/XMapWindow
         if (browser) {
-            // Use X11 APIs to set window transparency
             CefWindowHandle window = browser->GetHost()->GetWindowHandle();
             if (window) {
                 Display* display = gdk_x11_get_default_xdisplay();
                 if (transparent) {
-                    // Set window to be transparent
-                    Atom atom = XInternAtom(display, "_NET_WM_WINDOW_OPACITY", False);
-                    unsigned long opacity = 0xC0000000; // 75% opacity
-                    XChangeProperty(display, window, atom, XA_CARDINAL, 32,
-                                   PropModeReplace, (unsigned char*)&opacity, 1);
+                    XUnmapWindow(display, window);
                 } else {
-                    // Remove transparency
-                    Atom atom = XInternAtom(display, "_NET_WM_WINDOW_OPACITY", False);
-                    XDeleteProperty(display, window, atom);
+                    XMapWindow(display, window);
+                    
+                    // When making visible again, sync position to ensure it's in the right place
+                    // This is needed because unmapped windows don't receive position updates
+                    if (visualBounds.width && visualBounds.height) {
+                        syncCEFPositionWithFrame(visualBounds);
+                    }
                 }
                 XFlush(display);
             }
@@ -3974,6 +4149,16 @@ public:
                 gtk_widget_realize(view->widget);
                 printf("DEBUG: First webview (ID: %u) realized successfully\n", view->webviewId);
                 fflush(stdout);
+                
+                // Apply pending transparency/passthrough flags now that widget is realized
+                if (view->pendingStartTransparent) {
+                    view->setTransparent(true);
+                    view->pendingStartTransparent = false;
+                }
+                if (view->pendingStartPassthrough) {
+                    view->setPassthrough(true);
+                    view->pendingStartPassthrough = false;
+                }
             } else {
                 // For OOPIFs, wrap in a fixed container to enforce size constraints
                 GtkWidget* wrapper = gtk_fixed_new();
@@ -3992,6 +4177,16 @@ public:
                 gtk_widget_realize(view->widget);
                 printf("DEBUG: Subsequent webview (ID: %u) realized successfully\n", view->webviewId);
                 fflush(stdout);
+                
+                // Apply pending transparency/passthrough flags now that widget is realized
+                if (view->pendingStartTransparent) {
+                    view->setTransparent(true);
+                    view->pendingStartTransparent = false;
+                }
+                if (view->pendingStartPassthrough) {
+                    view->setPassthrough(true);
+                    view->pendingStartPassthrough = false;
+                }
                 
                 // Add wrapper as overlay layer
                 gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
@@ -4036,6 +4231,10 @@ public:
         GdkRectangle frame = { 0, 0, width, height };
         
         for (auto& view : abstractViews) {
+            // Skip removed webviews
+            if (view->isRemoved) {
+                continue;
+            }
             
             if (view->fullSize) {
                 // Auto-resize webviews should fill the entire window
@@ -5653,7 +5852,9 @@ AbstractView* initCEFWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
-                         bool sandbox) {
+                         bool sandbox,
+                         bool startTransparent,
+                         bool startPassthrough) {
     
     AbstractView* result = dispatch_sync_main([&]() -> AbstractView* {
         try {
@@ -5664,7 +5865,8 @@ AbstractView* initCEFWebview(uint32_t webviewId,
                 url, x, y, width, height, autoResize,
                 partitionIdentifier, navigationCallback, webviewEventHandler,
                 eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                electrobunPreloadScript, customPreloadScript, sandbox
+                electrobunPreloadScript, customPreloadScript, sandbox,
+                startTransparent, startPassthrough
             );
             
             if (webview->creationFailed) {
@@ -5728,6 +5930,12 @@ AbstractView* initCEFWebview(uint32_t webviewId,
     return result;
 }
 
+// Global flags set by setNextWebviewFlags, consumed by initWebview
+static struct {
+    bool startTransparent;
+    bool startPassthrough;
+} g_nextWebviewFlags = {false, false};
+
 AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          void* window,
                          const char* renderer,
@@ -5743,8 +5951,11 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
-                         bool sandbox) {
+                         bool sandbox,
+                         bool startTransparent,
+                         bool startPassthrough) {
     
+    // Flags are passed from the main initWebview function
     
     AbstractView* result = dispatch_sync_main([&]() -> AbstractView* {
         try {
@@ -5754,7 +5965,8 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                 url, x, y, width, height, autoResize,
                 partitionIdentifier, navigationCallback, webviewEventHandler,
                 eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                electrobunPreloadScript, customPreloadScript, sandbox
+                electrobunPreloadScript, customPreloadScript, sandbox,
+                startTransparent, startPassthrough
             );
             
             // Set fullSize flag for auto-resize functionality
@@ -5778,13 +5990,7 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                 }
             }
 
-            // Apply deferred initial transparent/passthrough state now that view is ready
-            if (webview->pendingStartTransparent) {
-                webview->setTransparent(true);
-            }
-            if (webview->pendingStartPassthrough) {
-                webview->setPassthrough(true);
-            }
+            // Flags are now set in the constructor
 
             return webview.get();
         } catch (const std::exception& e) {
@@ -5794,12 +6000,6 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
 
     return result;
 }
-
-// Global flags set by setNextWebviewFlags, consumed by initWebview
-static struct {
-    bool startTransparent;
-    bool startPassthrough;
-} g_nextWebviewFlags = {false, false};
 
 ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
     g_nextWebviewFlags.startTransparent = startTransparent;
@@ -5844,20 +6044,17 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         view = initCEFWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                               partitionIdentifier, navigationCallback, webviewEventHandler,
                               eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                              electrobunPreloadScript, customPreloadScript, sandbox);
+                              electrobunPreloadScript, customPreloadScript, sandbox,
+                              startTransparent, startPassthrough);
     } else {
         view = initGTKWebkitWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                                    electrobunPreloadScript, customPreloadScript, sandbox);
+                                    electrobunPreloadScript, customPreloadScript, sandbox,
+                                    startTransparent, startPassthrough);
     }
 
-    // Store initial state flags — applied later when the view is fully initialized
-    // (browser may not be available yet due to deferred creation)
-    if (view) {
-        view->pendingStartTransparent = startTransparent;
-        view->pendingStartPassthrough = startPassthrough;
-    }
+    // Flags are now set in the constructor, no need to set them here
 
     return view;
 
@@ -5907,9 +6104,47 @@ ELECTROBUN_EXPORT void webviewReload(AbstractView* abstractView) {
 
 ELECTROBUN_EXPORT void webviewRemove(AbstractView* abstractView) {
     if (abstractView) {
-        dispatch_sync_main_void([&]() {
-            abstractView->remove();
-        });
+        printf("DEBUG: webviewRemove called for abstractView=%p\n", abstractView);
+        
+        // Get the webview ID before scheduling async removal
+        uint32_t webviewId = abstractView->webviewId;
+        
+        // Find the shared_ptr for this view to keep it alive during async removal
+        std::shared_ptr<AbstractView> viewPtr;
+        {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+            auto it = g_webviewMap.find(webviewId);
+            if (it != g_webviewMap.end()) {
+                viewPtr = it->second;
+                printf("DEBUG: Found shared_ptr for webview %u\n", webviewId);
+            } else {
+                printf("DEBUG: WARNING - No shared_ptr found for webview %u\n", webviewId);
+                return;
+            }
+        }
+        
+        // Use g_idle_add to remove the webview asynchronously on the main thread
+        // Pass the shared_ptr to keep the object alive
+        struct RemoveData {
+            std::shared_ptr<AbstractView> view;
+        };
+        
+        RemoveData* data = new RemoveData{viewPtr};
+        
+        g_idle_add([](gpointer user_data) -> gboolean {
+            RemoveData* data = static_cast<RemoveData*>(user_data);
+            printf("DEBUG: webviewRemove g_idle_add callback started\n");
+            
+            if (data && data->view) {
+                data->view->remove();
+            }
+            
+            printf("DEBUG: webviewRemove g_idle_add callback completed\n");
+            delete data;
+            return G_SOURCE_REMOVE; // Only run once
+        }, data);
+        
+        printf("DEBUG: webviewRemove g_idle_add scheduled\n");
     }
 }
 
@@ -5939,6 +6174,11 @@ void updateActiveWebviewForMousePosition(uint32_t windowId, int mouseX, int mous
     // Iterate through webviews in reverse order (topmost webview first)
     for (auto it = container->abstractViews.rbegin(); it != container->abstractViews.rend(); ++it) {
         auto webview = *it;
+        
+        // Skip removed webviews
+        if (webview->isRemoved) {
+            continue;
+        }
         
         // Check if mouse is within the webview bounds
         if (mouseX >= webview->visualBounds.x && 
@@ -5983,14 +6223,46 @@ void updateActiveWebviewForMousePosition(uint32_t windowId, int mouseX, int mous
 }
 
 ELECTROBUN_EXPORT void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
-    if (abstractView) {
-        
-        std::string masksStr(masksJson ? masksJson : "");  // Copy the string to ensure it survives
-        dispatch_sync_main_void([abstractView, x, y, width, height, masksStr]() {  // Capture by value
-            GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
-            abstractView->resize(frame, masksStr.c_str());
-        });
+    printf("DEBUG: resizeWebview called for view=%p\n", abstractView);
+    
+    if (!abstractView) {
+        printf("DEBUG: resizeWebview - null abstractView\n");
+        return;
     }
+    
+    if (abstractView->isRemoved) {
+        printf("DEBUG: resizeWebview - webview is marked as removed, skipping\n");
+        return;
+    }
+    
+    printf("DEBUG: resizeWebview - proceeding with resize\n");
+    
+    std::string masksStr(masksJson ? masksJson : "");  // Copy the string to ensure it survives
+    
+    // Use async dispatch to avoid potential deadlocks
+    struct ResizeData {
+        AbstractView* view;
+        double x, y, width, height;
+        std::string masks;
+    };
+    
+    ResizeData* data = new ResizeData{abstractView, x, y, width, height, masksStr};
+    
+    g_idle_add([](gpointer userData) -> gboolean {
+        ResizeData* resizeData = static_cast<ResizeData*>(userData);
+        
+        printf("DEBUG: resizeWebview async callback for view=%p\n", resizeData->view);
+        
+        if (resizeData->view && !resizeData->view->isRemoved) {
+            GdkRectangle frame = { (int)resizeData->x, (int)resizeData->y, (int)resizeData->width, (int)resizeData->height };
+            resizeData->view->resize(frame, resizeData->masks.c_str());
+        } else {
+            printf("DEBUG: resizeWebview async callback - webview removed, skipping\n");
+        }
+        
+        delete resizeData;
+        return G_SOURCE_REMOVE;
+    }, data);
 }
 
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView* abstractView, const char* js) {
