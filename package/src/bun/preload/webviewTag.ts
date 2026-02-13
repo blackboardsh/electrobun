@@ -157,6 +157,12 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			height: rect.height,
 		};
 
+		// Skip sync when element is hidden (e.g. display:none parent returns 0x0).
+		// This prevents resizing webviews to 0x0 which triggers mobile breakpoints.
+		if (newRect.width === 0 && newRect.height === 0) {
+			return;
+		}
+
 		if (
 			!force &&
 			newRect.x === this.lastRect.x &&
