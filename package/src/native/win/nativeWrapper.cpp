@@ -599,6 +599,14 @@ public:
         // Note: Browser setup is now handled synchronously during CreateBrowserSync
     }
 
+    // DoClose is called when the browser window is about to close.
+    // Return false to allow the close to proceed without affecting the parent window.
+    bool DoClose(CefRefPtr<CefBrowser> browser) override {
+        // Return false to proceed with normal close handling.
+        // This prevents CEF from sending close messages to the parent window.
+        return false;
+    }
+
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
         std::cout << "[CEF] OnBeforeClose: Browser ID " << browser->GetIdentifier() << " closing" << std::endl;
         
@@ -2099,6 +2107,18 @@ public:
         return it != devtools_hosts_.end() && it->second.is_open;
     }
 
+    // Set load-end callback for deferred operations (like applying transparency after page load)
+    void SetLoadEndCallback(std::function<void()> callback) {
+        load_end_callback_ = callback;
+    }
+
+    // Called by load handler when page load completes
+    void OnLoadEnd() {
+        if (load_end_callback_) {
+            load_end_callback_();
+        }
+    }
+
 private:
     uint32_t webview_id_;
     HandlePostMessage event_bridge_handler_;
@@ -2118,6 +2138,7 @@ private:
     CefRefPtr<ElectrobunKeyboardHandler> m_keyboardHandler;
     CefRefPtr<ElectrobunRenderHandler> m_renderHandler;
     bool osr_enabled_;
+    std::function<void()> load_end_callback_;  // Callback for page load completion
 
     // Remote DevTools state - tracked per CefBrowser (by identifier)
     struct DevToolsHost {
@@ -2243,6 +2264,11 @@ void ElectrobunLoadHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<C
     if (frame->IsMain() && webview_event_handler_) {
         std::string url = frame->GetURL().ToString();
         webview_event_handler_(webview_id_, _strdup("did-navigate"), _strdup(url.c_str()));
+    }
+
+    // Call load end callback for deferred operations (like transparency)
+    if (frame->IsMain() && client_) {
+        client_->OnLoadEnd();
     }
 }
 
@@ -3030,7 +3056,75 @@ public:
         }
         webview = nullptr;
     }
-    
+
+    // Override transparency implementation for WebView2
+    void setTransparent(bool transparent) override {
+        if (!controller) {
+            return;
+        }
+
+        // Use WebView2's built-in visibility control
+        controller->put_IsVisible(transparent ? FALSE : TRUE);
+    }
+
+    // Override passthrough implementation for WebView2
+    void setPassthrough(bool enable) override {
+        AbstractView::setPassthrough(enable); // Call base implementation to set the flag
+
+        if (!controller || !containerHwnd) {
+            return;
+        }
+
+        // Get the bounds of this WebView to identify its child windows
+        RECT viewBounds;
+        controller->get_Bounds(&viewBounds);
+
+        // Find WebView2's Chrome child windows and apply/remove WS_EX_TRANSPARENT
+        struct PassthroughEnumData {
+            RECT targetBounds;
+            HWND containerHwnd;
+            bool enablePassthrough;
+        };
+
+        PassthroughEnumData enumData;
+        enumData.targetBounds = viewBounds;
+        enumData.containerHwnd = containerHwnd;
+        enumData.enablePassthrough = enable;
+
+        EnumChildWindows(containerHwnd, [](HWND child, LPARAM lParam) -> BOOL {
+            PassthroughEnumData* data = (PassthroughEnumData*)lParam;
+
+            char className[256];
+            GetClassNameA(child, className, sizeof(className));
+
+            // Look for WebView2/Chrome child windows
+            if (strstr(className, "Chrome_WidgetWin") ||
+                strstr(className, "Chrome_RenderWidgetHostHWND")) {
+
+                RECT childRect;
+                GetWindowRect(child, &childRect);
+
+                // Convert to container coordinates
+                POINT topLeft = {childRect.left, childRect.top};
+                ScreenToClient(data->containerHwnd, &topLeft);
+
+                // Check if this matches our WebView's bounds (with some tolerance)
+                if (abs(topLeft.x - data->targetBounds.left) < 5 &&
+                    abs(topLeft.y - data->targetBounds.top) < 5) {
+                    // This is our WebView's child window - apply WS_EX_TRANSPARENT
+                    LONG exStyle = GetWindowLong(child, GWL_EXSTYLE);
+                    if (data->enablePassthrough) {
+                        SetWindowLong(child, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT);
+                    } else {
+                        SetWindowLong(child, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
+                    }
+                    return FALSE; // Stop enumeration
+                }
+            }
+            return TRUE; // Continue enumeration
+        }, (LPARAM)&enumData);
+    }
+
     bool canGoBack() override {
         if (webview) {
             BOOL canGoBack = FALSE;
@@ -3317,8 +3411,23 @@ public:
     
     void remove() override {
         if (browser) {
-            browser->GetHost()->CloseBrowser(true);
+            // Get the browser host before we clear the reference
+            CefRefPtr<CefBrowserHost> host = browser->GetHost();
+
+            // First, hide the browser window to make removal appear instant
+            HWND browserHwnd = host->GetWindowHandle();
+            if (browserHwnd) {
+                ShowWindow(browserHwnd, SW_HIDE);
+            }
+
+            // Clear our reference
             browser = nullptr;
+
+            // Defer the actual browser close to avoid synchronous window message issues
+            // This matches macOS behavior where removeFromSuperview is deferred
+            MainThreadDispatcher::dispatch_async([host]() {
+                host->CloseBrowser(false);
+            });
         }
     }
     
@@ -6016,9 +6125,11 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Apply deferred initial transparent/passthrough state now that view is ready
                             if (view->pendingStartTransparent) {
                                 view->setTransparent(true);
+                                view->pendingStartTransparent = false;
                             }
                             if (view->pendingStartPassthrough) {
                                 view->setPassthrough(true);
+                                view->pendingStartPassthrough = false;
                             }
 
                             // Register in global AbstractView map for navigation rules
@@ -6283,6 +6394,24 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
 
         view->setClient(client);
 
+        // Set up load-end callback for deferred transparency/passthrough application
+        // CEF navigation events can reset window state, so we re-apply after page load
+        CEFView* viewPtr = view.get();
+        client->SetLoadEndCallback([viewPtr]() {
+            if (viewPtr->pendingStartTransparent) {
+                viewPtr->setTransparent(true);
+                viewPtr->pendingStartTransparent = false;
+            }
+            if (viewPtr->pendingStartPassthrough) {
+                viewPtr->setPassthrough(true);
+                viewPtr->pendingStartPassthrough = false;
+            }
+            // Re-apply passthrough if it was already set (in case navigation reset it)
+            if (viewPtr->isMousePassthroughEnabled && !viewPtr->pendingStartPassthrough) {
+                viewPtr->setPassthrough(true);
+            }
+        });
+
         // Create request context for partition isolation
         CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(
             partitionIdentifier,
@@ -6343,11 +6472,15 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             view->resize(initialBounds, nullptr);
 
             // Apply deferred initial transparent/passthrough state now that browser is ready
+            // Note: We apply immediately here, but also have a load-end callback to re-apply
+            // after page load completes (since CEF navigation can reset window state)
             if (view->pendingStartTransparent) {
                 view->setTransparent(true);
+                // Don't clear yet - load-end callback will handle it after page loads
             }
             if (view->pendingStartPassthrough) {
                 view->setPassthrough(true);
+                // Don't clear yet - load-end callback will handle it after page loads
             }
 
         }
@@ -6657,8 +6790,7 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
         ::log("ERROR: Invalid AbstractView in webviewRemove");
         return;
     }
-    
-    
+
     abstractView->remove();
 }
 
