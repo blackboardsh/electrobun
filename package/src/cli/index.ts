@@ -52,6 +52,8 @@ function createTar(tarPath: string, cwd: string, entries: string[]) {
 		{
 			cwd,
 			stdio: "pipe",
+			// Prevent macOS tar from including Apple Double (._*) files. No-op on other platforms.
+			env: { ...process.env, COPYFILE_DISABLE: "1" },
 		},
 	);
 }
@@ -1282,7 +1284,7 @@ For more information, visit: ${config.app.homepage || 'https://electrobun.dev'}
         // The -C changes to the staging dir, then . archives its contents directly
         execSync(
             `tar -czf ${escapePathForTerminal(archivePath)} -C ${escapePathForTerminal(stagingDir)} .`,
-            { stdio: 'inherit' }
+            { stdio: 'inherit', env: { ...process.env, COPYFILE_DISABLE: "1" } }
         );
 
         // Verify the archive was created
