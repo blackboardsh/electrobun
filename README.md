@@ -26,8 +26,12 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
 ## Apps Built with Electrobun
-- [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
 - [Audio TTS](https://github.com/blackboardsh/audio-tts) - desktop text-to-speech app using Qwen3-TTS for voice design, cloning, and generation
+- [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
+
+[![Audio TTS Demo](https://img.youtube.com/vi/Z4dNK1d6l6E/maxresdefault.jpg)](https://www.youtube.com/watch?v=Z4dNK1d6l6E)
+
+[![Co(lab) Demo](https://img.youtube.com/vi/WWTCqGmE86w/maxresdefault.jpg)](https://www.youtube.com/watch?v=WWTCqGmE86w)
 
 ## Star History
 
