@@ -29,6 +29,8 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - [Audio TTS](https://github.com/blackboardsh/audio-tts) - desktop text-to-speech app using Qwen3-TTS for voice design, cloning, and generation
 - [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
 
+### Video Demos
+
 [![Audio TTS Demo](https://img.youtube.com/vi/Z4dNK1d6l6E/maxresdefault.jpg)](https://www.youtube.com/watch?v=Z4dNK1d6l6E)
 
 [![Co(lab) Demo](https://img.youtube.com/vi/WWTCqGmE86w/maxresdefault.jpg)](https://www.youtube.com/watch?v=WWTCqGmE86w)
