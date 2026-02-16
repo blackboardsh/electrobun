@@ -34,6 +34,8 @@
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
 #include "include/cef_download_handler.h"
+#include "include/cef_devtools_message_observer.h"
+#include "include/cef_registration.h"
 #include <string>
 #include <vector>
 #include <list>
@@ -60,6 +62,7 @@
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+#include "../shared/devtools_cdp.h"
 
 using namespace electrobun;
 
@@ -87,6 +90,11 @@ static id mouseDraggedMonitor = nil;
 static id mouseUpMonitor = nil;
 
 static int g_remoteDebugPort = 9222;
+
+// CDP (Chrome DevTools Protocol) message passing callbacks.
+// Set once from Bun via setDevToolsCDPCallbacks() and shared by all webviews.
+static CDPMethodResultCallback g_cdpMethodResultCallback = nullptr;
+static CDPEventCallback g_cdpEventCallback = nullptr;
 
 // Menu role to selector mapping
 // This maps Electrobun role strings to their corresponding Objective-C selectors.
@@ -330,6 +338,78 @@ private:
     int target_id_ = 0;
 
     IMPLEMENT_REFCOUNTING(RemoteDevToolsClient);
+};
+
+// CDP message observer — receives all DevTools Protocol responses and events
+// for a specific webview. Routes them to Bun via the global callbacks.
+class ElectrobunDevToolsObserver : public CefDevToolsMessageObserver {
+public:
+    explicit ElectrobunDevToolsObserver(uint32_t webviewId)
+        : webview_id_(webviewId) {}
+
+    // Called for every raw CDP message (method results and events).
+    // Return true to suppress further processing, false to allow default handling.
+    bool OnDevToolsMessage(CefRefPtr<CefBrowser> browser,
+                           const void* message,
+                           size_t message_size) override {
+        // Let CEF also process the message so OnDevToolsMethodResult / OnDevToolsEvent fire.
+        return false;
+    }
+
+    // Called when a CDP method call returns a result.
+    void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser,
+                                int message_id,
+                                bool success,
+                                const void* result,
+                                size_t result_size) override {
+        if (g_cdpMethodResultCallback) {
+            // Heap-allocate copy — threadsafe JSCallback defers execution to Bun's
+            // event loop thread, so stack-local data is freed before JS reads it.
+            char* resultCopy = nullptr;
+            if (result && result_size > 0) {
+                resultCopy = static_cast<char*>(malloc(result_size));
+                memcpy(resultCopy, result, result_size);
+            }
+            g_cdpMethodResultCallback(webview_id_, message_id,
+                                      success ? 1 : 0,
+                                      resultCopy, result_size);
+            // resultCopy freed by JS via cdpFreeBuffer after reading
+        }
+    }
+
+    // Called when a CDP event fires (e.g. "Page.loadEventFired").
+    void OnDevToolsEvent(CefRefPtr<CefBrowser> browser,
+                         const CefString& method,
+                         const void* params,
+                         size_t params_size) override {
+        if (g_cdpEventCallback) {
+            // Method name: null-terminated copy (small, safe to keep on stack for CString)
+            std::string methodStr = method.ToString();
+            // Params: heap-allocate (same threadsafe deferral issue as method results)
+            char* paramsCopy = nullptr;
+            if (params && params_size > 0) {
+                paramsCopy = static_cast<char*>(malloc(params_size));
+                memcpy(paramsCopy, params, params_size);
+            }
+            // Method string: also heap-allocate for safety
+            char* methodCopy = static_cast<char*>(malloc(methodStr.size() + 1));
+            memcpy(methodCopy, methodStr.c_str(), methodStr.size() + 1);
+            g_cdpEventCallback(webview_id_, methodCopy, paramsCopy, params_size);
+            // Both freed by JS via cdpFreeBuffer after reading
+        }
+    }
+
+    void OnDevToolsAgentAttached(CefRefPtr<CefBrowser> browser) override {
+        NSLog(@"[CDP] DevTools agent attached for webview %u", webview_id_);
+    }
+
+    void OnDevToolsAgentDetached(CefRefPtr<CefBrowser> browser) override {
+        NSLog(@"[CDP] DevTools agent detached for webview %u", webview_id_);
+    }
+
+private:
+    uint32_t webview_id_;
+    IMPLEMENT_REFCOUNTING(ElectrobunDevToolsObserver);
 };
 
 @interface RemoteDevToolsWindowDelegate : NSObject <NSWindowDelegate> {
@@ -726,6 +806,11 @@ void releaseObjCObject(id objcObject) {
     - (void)openDevTools;
     - (void)closeDevTools;
     - (void)toggleDevTools;
+
+    // CDP (Chrome DevTools Protocol) message passing
+    - (BOOL)sendDevToolsMessage:(const char*)jsonMessage length:(size_t)length;
+    - (void*)addDevToolsObserver;
+    - (void)removeDevToolsObserver:(void*)registration;
 @end
 
 // Global map to track all AbstractView instances by their webviewId
@@ -1257,6 +1342,18 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
     - (void)toggleDevTools {
         [self doesNotRecognizeSelector:_cmd];
+    }
+
+    - (BOOL)sendDevToolsMessage:(const char*)jsonMessage length:(size_t)length {
+        return NO; // Subclasses override
+    }
+
+    - (void*)addDevToolsObserver {
+        return nullptr; // Subclasses override
+    }
+
+    - (void)removeDevToolsObserver:(void*)registration {
+        // Subclasses override
     }
 @end
 
@@ -2750,6 +2847,21 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 }
             }
         });
+    }
+
+    // WKWebView does not support programmatic CDP — return no-op / failure
+    - (BOOL)sendDevToolsMessage:(const char*)jsonMessage length:(size_t)length {
+        NSLog(@"[CDP] sendDevToolsMessage not supported on WKWebView backend");
+        return NO;
+    }
+
+    - (void*)addDevToolsObserver {
+        NSLog(@"[CDP] addDevToolsObserver not supported on WKWebView backend");
+        return nullptr;
+    }
+
+    - (void)removeDevToolsObserver:(void*)registration {
+        // no-op for WKWebView
     }
 
 @end
@@ -5006,6 +5118,38 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         });
     }
 
+    // ── CDP (Chrome DevTools Protocol) message passing ──
+
+    - (BOOL)sendDevToolsMessage:(const char*)jsonMessage length:(size_t)length {
+        if (!self.browser || !self.browser->GetHost()) return NO;
+        return self.browser->GetHost()->SendDevToolsMessage(jsonMessage, length) ? YES : NO;
+    }
+
+    - (void*)addDevToolsObserver {
+        if (!self.browser || !self.browser->GetHost()) return nullptr;
+
+        CefRefPtr<ElectrobunDevToolsObserver> observer =
+            new ElectrobunDevToolsObserver(self.webviewId);
+
+        CefRefPtr<CefRegistration> registration =
+            self.browser->GetHost()->AddDevToolsMessageObserver(observer);
+
+        if (!registration) return nullptr;
+
+        // Prevent CefRegistration from being destroyed when this scope ends.
+        // Caller is responsible for releasing via removeDevToolsObserver.
+        CefRegistration* rawPtr = registration.get();
+        rawPtr->AddRef();
+        return static_cast<void*>(rawPtr);
+    }
+
+    - (void)removeDevToolsObserver:(void*)registration {
+        if (!registration) return;
+        CefRegistration* rawPtr = static_cast<CefRegistration*>(registration);
+        // Release the ref we added in addDevToolsObserver — CEF will clean up.
+        rawPtr->Release();
+    }
+
 @end
 
 
@@ -5628,6 +5772,65 @@ extern "C" void webviewToggleDevTools(AbstractView *abstractView) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [abstractView toggleDevTools];
     });
+}
+
+// ── CDP (Chrome DevTools Protocol) FFI exports ──
+
+// Register global CDP callbacks from Bun. Call once at startup.
+extern "C" void setDevToolsCDPCallbacks(
+    CDPMethodResultCallback methodResultCallback,
+    CDPEventCallback eventCallback
+) {
+    g_cdpMethodResultCallback = methodResultCallback;
+    g_cdpEventCallback = eventCallback;
+}
+
+// Send a raw CDP JSON message to a webview's browser.
+// Returns true if the message was successfully submitted.
+extern "C" bool webviewSendDevToolsMessage(
+    AbstractView *abstractView,
+    const char *jsonMessage,
+    size_t messageLength
+) {
+    __block bool result = false;
+    // SendDevToolsMessage must be called on the CEF UI thread.
+    // Use dispatch_sync so we can return the result to the caller.
+    if ([NSThread isMainThread]) {
+        result = [abstractView sendDevToolsMessage:jsonMessage length:messageLength] ? true : false;
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            result = [abstractView sendDevToolsMessage:jsonMessage length:messageLength] ? true : false;
+        });
+    }
+    return result;
+}
+
+// Register a DevTools message observer for a webview.
+// Returns an opaque registration handle. Pass to webviewRemoveDevToolsObserver to detach.
+extern "C" void* webviewAddDevToolsObserver(AbstractView *abstractView) {
+    __block void* result = nullptr;
+    if ([NSThread isMainThread]) {
+        result = [abstractView addDevToolsObserver];
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            result = [abstractView addDevToolsObserver];
+        });
+    }
+    return result;
+}
+
+// Remove a previously registered DevTools message observer.
+extern "C" void webviewRemoveDevToolsObserver(
+    AbstractView *abstractView,
+    void *registration
+) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView removeDevToolsObserver:registration];
+    });
+}
+
+extern "C" void cdpFreeBuffer(void *buffer) {
+    if (buffer) free(buffer);
 }
 
 extern "C" NSRect createNSRectWrapper(double x, double y, double width, double height) {

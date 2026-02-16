@@ -315,6 +315,27 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
+			// CDP (Chrome DevTools Protocol) message passing
+			setDevToolsCDPCallbacks: {
+				args: [FFIType.function, FFIType.function],
+				returns: FFIType.void,
+			},
+			webviewSendDevToolsMessage: {
+				args: [FFIType.ptr, FFIType.cstring, FFIType.u64],
+				returns: FFIType.bool,
+			},
+			webviewAddDevToolsObserver: {
+				args: [FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			webviewRemoveDevToolsObserver: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
+			cdpFreeBuffer: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
 			// Tray
 			createTray: {
 				args: [
@@ -1525,6 +1546,110 @@ export const GlobalShortcut = {
 	 */
 	isRegistered: (accelerator: string): boolean => {
 		return native.symbols.isGlobalShortcutRegistered(toCString(accelerator));
+	},
+};
+
+// ── CDP (Chrome DevTools Protocol) message passing ──
+// Routes CDP method results and events from native to the appropriate BrowserView instance.
+
+export type CDPMethodResultHandler = (
+	webviewId: number,
+	messageId: number,
+	success: boolean,
+	result: string,
+) => void;
+
+export type CDPEventHandler = (
+	webviewId: number,
+	method: string,
+	params: string,
+) => void;
+
+// Global CDP handlers — set by BrowserView when CDP is enabled
+let cdpMethodResultHandler: CDPMethodResultHandler | null = null;
+let cdpEventHandler: CDPEventHandler | null = null;
+
+const cdpMethodResultCallback = new JSCallback(
+	(webviewId: number, messageId: number, success: number, resultPtr: any, resultSize: number) => {
+		let result = "";
+		try {
+			if (resultPtr && resultSize > 0) {
+				const buf = Buffer.from(toArrayBuffer(resultPtr, 0, Number(resultSize)));
+				result = buf.toString("utf8");
+			}
+		} catch (e) {
+			console.error("[CDP] Failed to read result:", e);
+		} finally {
+			// Free the malloc'd buffer from C++ side
+			if (resultPtr) native.symbols.cdpFreeBuffer(resultPtr);
+		}
+		if (cdpMethodResultHandler) {
+			cdpMethodResultHandler(webviewId, messageId, success !== 0, result);
+		}
+	},
+	{
+		args: [FFIType.u32, FFIType.i32, FFIType.u32, FFIType.ptr, FFIType.u64],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+const cdpEventCallback = new JSCallback(
+	(webviewId: number, methodPtr: any, paramsPtr: any, paramsSize: number) => {
+		let method = "";
+		let params = "";
+		try {
+			if (methodPtr) method = new CString(methodPtr).toString();
+			if (paramsPtr && paramsSize > 0) {
+				const buf = Buffer.from(toArrayBuffer(paramsPtr, 0, Number(paramsSize)));
+				params = buf.toString("utf8");
+			}
+		} catch (e) {
+			console.error("[CDP] Failed to read event:", e);
+		} finally {
+			// Free the malloc'd buffers from C++ side
+			if (methodPtr) native.symbols.cdpFreeBuffer(methodPtr);
+			if (paramsPtr) native.symbols.cdpFreeBuffer(paramsPtr);
+		}
+		if (cdpEventHandler) {
+			cdpEventHandler(webviewId, method, params);
+		}
+	},
+	{
+		args: [FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.u64],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+// CDP callbacks are registered lazily on first use (not at module init)
+let cdpCallbacksRegistered = false;
+function ensureCDPCallbacksRegistered() {
+	if (cdpCallbacksRegistered) return;
+	cdpCallbacksRegistered = true;
+	native.symbols.setDevToolsCDPCallbacks(cdpMethodResultCallback, cdpEventCallback);
+}
+
+export const cdpNative = {
+	setMethodResultHandler(handler: CDPMethodResultHandler) {
+		cdpMethodResultHandler = handler;
+	},
+	setEventHandler(handler: CDPEventHandler) {
+		cdpEventHandler = handler;
+	},
+	sendMessage(viewPtr: Pointer, json: string): boolean {
+		return native.symbols.webviewSendDevToolsMessage(
+			viewPtr,
+			toCString(json),
+			json.length,
+		);
+	},
+	addObserver(viewPtr: Pointer): Pointer | null {
+		ensureCDPCallbacksRegistered();
+		return native.symbols.webviewAddDevToolsObserver(viewPtr) as Pointer | null;
+	},
+	removeObserver(viewPtr: Pointer, registrationPtr: Pointer): void {
+		native.symbols.webviewRemoveDevToolsObserver(viewPtr, registrationPtr);
 	},
 };
 

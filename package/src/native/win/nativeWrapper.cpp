@@ -6983,6 +6983,32 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
     }
 }
 
+// ── CDP (Chrome DevTools Protocol) FFI exports ──
+// TODO: Implement for Windows using CEF's SendDevToolsMessage / AddDevToolsMessageObserver APIs.
+// These stubs allow the shared FFI layer to load without link errors.
+
+ELECTROBUN_EXPORT void setDevToolsCDPCallbacks(void* methodResultCallback, void* eventCallback) {
+    // Stub — not yet implemented on Windows
+}
+
+ELECTROBUN_EXPORT bool webviewSendDevToolsMessage(AbstractView *abstractView, const char *jsonMessage, size_t messageLength) {
+    // Stub — not yet implemented on Windows
+    return false;
+}
+
+ELECTROBUN_EXPORT void* webviewAddDevToolsObserver(AbstractView *abstractView) {
+    // Stub — not yet implemented on Windows
+    return nullptr;
+}
+
+ELECTROBUN_EXPORT void webviewRemoveDevToolsObserver(AbstractView *abstractView, void *registration) {
+    // Stub — not yet implemented on Windows
+}
+
+ELECTROBUN_EXPORT void cdpFreeBuffer(void *buffer) {
+    if (buffer) free(buffer);
+}
+
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {
     // Stub implementation
     NSRect rect = {x, y, width, height};

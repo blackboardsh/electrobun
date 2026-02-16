@@ -6356,6 +6356,32 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView* abstractView) {
     }
 }
 
+// ── CDP (Chrome DevTools Protocol) FFI exports ──
+// TODO: Implement for Linux using CEF's SendDevToolsMessage / AddDevToolsMessageObserver APIs.
+// These stubs allow the shared FFI layer to load without link errors.
+
+ELECTROBUN_EXPORT void setDevToolsCDPCallbacks(void* methodResultCallback, void* eventCallback) {
+    // Stub — not yet implemented on Linux
+}
+
+ELECTROBUN_EXPORT bool webviewSendDevToolsMessage(AbstractView* abstractView, const char* jsonMessage, size_t messageLength) {
+    // Stub — not yet implemented on Linux
+    return false;
+}
+
+ELECTROBUN_EXPORT void* webviewAddDevToolsObserver(AbstractView* abstractView) {
+    // Stub — not yet implemented on Linux
+    return nullptr;
+}
+
+ELECTROBUN_EXPORT void webviewRemoveDevToolsObserver(AbstractView* abstractView, void* registration) {
+    // Stub — not yet implemented on Linux
+}
+
+ELECTROBUN_EXPORT void cdpFreeBuffer(void* buffer) {
+    if (buffer) free(buffer);
+}
+
 ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView* abstractView, const char* scriptIdentifier, const char* scriptContent, bool forMainFrameOnly) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {

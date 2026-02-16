@@ -1,4 +1,4 @@
-import { native, toCString, ffi } from "../proc/native";
+import { native, toCString, ffi, cdpNative } from "../proc/native";
 import * as fs from "fs";
 import electrobunEventEmitter from "../events/eventEmitter";
 import {
@@ -277,6 +277,146 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 
 	toggleDevTools() {
 		native.symbols.webviewToggleDevTools(this.ptr);
+	}
+
+	// ── CDP (Chrome DevTools Protocol) message passing ──
+	// Provides programmatic access to CDP without a remote debugging port.
+	// Uses CEF's internal SendDevToolsMessage / AddDevToolsMessageObserver APIs.
+
+	private _cdpObserverRegistration: Pointer | null = null;
+	private _cdpNextId = 1;
+	private _cdpPending = new Map<
+		number,
+		{ resolve: (result: any) => void; reject: (error: Error) => void }
+	>();
+	private _cdpEventHandlers = new Map<string, Set<(params: any) => void>>();
+	private _cdpGlobalHandlers = new Set<(method: string, params: any) => void>();
+
+	/**
+	 * Attach the CDP observer. Must be called before sending CDP messages.
+	 * Safe to call multiple times — only attaches once.
+	 */
+	cdpAttach(): void {
+		if (this._cdpObserverRegistration) return;
+
+		// Wire up the global native callbacks to route to this instance.
+		// Multiple BrowserViews are supported — handlers dispatch by webviewId.
+		const viewId = this.id;
+		cdpNative.setMethodResultHandler(
+			(webviewId, messageId, success, result) => {
+				const view = BrowserView.getById(webviewId);
+				if (!view) return;
+				const pending = view._cdpPending.get(messageId);
+				if (!pending) return;
+				view._cdpPending.delete(messageId);
+				if (success) {
+					try {
+						pending.resolve(JSON.parse(result));
+					} catch {
+						pending.resolve(result);
+					}
+				} else {
+					pending.reject(new Error(result));
+				}
+			},
+		);
+		cdpNative.setEventHandler(
+			(webviewId, method, params) => {
+				const view = BrowserView.getById(webviewId);
+				if (!view) return;
+				let parsed: any;
+				try {
+					parsed = JSON.parse(params);
+				} catch {
+					parsed = params;
+				}
+				// Fire method-specific handlers
+				const handlers = view._cdpEventHandlers.get(method);
+				if (handlers) {
+					for (const h of handlers) h(parsed);
+				}
+				// Fire global event handlers
+				for (const h of view._cdpGlobalHandlers) h(method, parsed);
+			},
+		);
+
+		this._cdpObserverRegistration = cdpNative.addObserver(this.ptr);
+	}
+
+	/**
+	 * Detach the CDP observer and clean up.
+	 */
+	cdpDetach(): void {
+		if (this._cdpObserverRegistration) {
+			cdpNative.removeObserver(this.ptr, this._cdpObserverRegistration);
+			this._cdpObserverRegistration = null;
+		}
+		// Reject any pending requests
+		for (const [, pending] of this._cdpPending) {
+			pending.reject(new Error("CDP detached"));
+		}
+		this._cdpPending.clear();
+		this._cdpEventHandlers.clear();
+		this._cdpGlobalHandlers.clear();
+	}
+
+	/**
+	 * Send a CDP command and await the result.
+	 * @example
+	 * const { data } = await view.cdpSend('Page.captureScreenshot', { format: 'png' });
+	 */
+	cdpSend(method: string, params: Record<string, any> = {}): Promise<any> {
+		if (!this._cdpObserverRegistration) {
+			this.cdpAttach();
+		}
+		const id = this._cdpNextId++;
+		const json = JSON.stringify({ id, method, params });
+		return new Promise((resolve, reject) => {
+			this._cdpPending.set(id, { resolve, reject });
+			const sent = cdpNative.sendMessage(this.ptr, json);
+			if (!sent) {
+				this._cdpPending.delete(id);
+				reject(new Error(`Failed to send CDP message: ${method}`));
+			}
+		});
+	}
+
+	/**
+	 * Subscribe to a specific CDP event.
+	 * @returns An unsubscribe function.
+	 * @example
+	 * const unsub = view.cdpOn('Page.loadEventFired', (params) => { ... });
+	 */
+	cdpOn(method: string, handler: (params: any) => void): () => void {
+		if (!this._cdpObserverRegistration) {
+			this.cdpAttach();
+		}
+		let handlers = this._cdpEventHandlers.get(method);
+		if (!handlers) {
+			handlers = new Set();
+			this._cdpEventHandlers.set(method, handlers);
+		}
+		handlers.add(handler);
+		return () => {
+			handlers!.delete(handler);
+			if (handlers!.size === 0) {
+				this._cdpEventHandlers.delete(method);
+			}
+		};
+	}
+
+	/**
+	 * Subscribe to all CDP events.
+	 * @returns An unsubscribe function.
+	 */
+	cdpOnAll(handler: (method: string, params: any) => void): () => void {
+		if (!this._cdpObserverRegistration) {
+			this.cdpAttach();
+		}
+		this._cdpGlobalHandlers.add(handler);
+		return () => {
+			this._cdpGlobalHandlers.delete(handler);
+		};
 	}
 
 	// todo (yoav): move this to a class that also has off, append, prepend, etc.
