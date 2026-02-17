@@ -2952,6 +2952,23 @@ public:
         }
     }
 
+    /**
+     * Remove a browser from the tracking list without calling CloseBrowser.
+     * Used when removing a BrowserView from a shared window — CloseBrowser
+     * sends performClose: to the host NSWindow, which would close the entire
+     * window even though other browsers still live in it.
+     */
+    static void DetachBrowser(CefRefPtr<CefBrowser> browser) {
+        if (!g_instance) return;
+        auto& list = g_instance->browser_list_;
+        for (auto it = list.begin(); it != list.end(); ++it) {
+            if ((*it)->IsSame(browser)) {
+                list.erase(it);
+                break;
+            }
+        }
+    }
+
 private:
     static ElectrobunHandler* g_instance;
     typedef std::list<CefRefPtr<CefBrowser>> BrowserList;
@@ -4954,14 +4971,17 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     }
 
     - (void)remove {
-        
-        // Stop loading, close the browser, remove from superview, etc.
+
+        // Remove the browser WITHOUT calling CloseBrowser.
+        // CloseBrowser(false) sends [window performClose:] which would close the
+        // entire host NSWindow — catastrophic when other BrowserViews still live in it.
+        // Instead: stop loading, detach from the handler's tracking list, and release.
         if (self.browser) {
-            NSLog(@"CEFWebViewImpl remove: closing CEF browser for webview %u", self.webviewId);
-            // Tells CEF to close the browser window
-            self.browser->GetHost()->CloseBrowser(false);
+            NSLog(@"CEFWebViewImpl remove: detaching CEF browser for webview %u", self.webviewId);
+            self.browser->StopLoad();
+            ElectrobunHandler::DetachBrowser(self.browser);
             self.browser = nullptr;
-            NSLog(@"CEFWebViewImpl remove: CEF browser closed and set to nullptr for webview %u", self.webviewId);
+            NSLog(@"CEFWebViewImpl remove: CEF browser detached for webview %u", self.webviewId);
         } else {
             NSLog(@"CEFWebViewImpl remove: browser is already null for webview %u", self.webviewId);
         }
