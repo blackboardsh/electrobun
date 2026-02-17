@@ -192,7 +192,6 @@ export const native = (() => {
 					FFIType.cstring, // electrobunPreloadScript
 					FFIType.cstring, // customPreloadScript
 					FFIType.bool, // transparent
-					FFIType.bool, // sandbox - when true, bunBridge and internalBridge are not set up
 				],
 				returns: FFIType.ptr,
 			},
@@ -201,6 +200,7 @@ export const native = (() => {
 				args: [
 					FFIType.bool, // startTransparent
 					FFIType.bool, // startPassthrough
+					FFIType.bool, // sandbox
 				],
 				returns: FFIType.void,
 			},
@@ -1006,7 +1006,7 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			const customPreload = preload;
 
 			// Pre-set flags before initWebview (workaround for FFI param count limits)
-			native.symbols.setNextWebviewFlags(startTransparent, startPassthrough);
+			native.symbols.setNextWebviewFlags(startTransparent, startPassthrough, sandbox);
 			const webviewPtr = native.symbols.initWebview(
 				id,
 				windowPtr,
@@ -1026,7 +1026,6 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 				toCString(electrobunPreload),
 				toCString(customPreload || ""),
 				transparent,
-				sandbox, // When true, bunBridge and internalBridge are not set up in native code
 			);
 
 			if (!webviewPtr) {

@@ -5433,11 +5433,13 @@ extern "C" void shutdownApplication() {
 static struct {
     bool startTransparent;
     bool startPassthrough;
-} g_nextWebviewFlags = {false, false};
+    bool sandbox;
+} g_nextWebviewFlags = {false, false, false};
 
-extern "C" void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
+extern "C" void setNextWebviewFlags(bool startTransparent, bool startPassthrough, bool sandbox) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+    g_nextWebviewFlags.sandbox = sandbox;
 }
 
 extern "C" AbstractView* initWebview(uint32_t webviewId,
@@ -5455,13 +5457,13 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         HandlePostMessage internalBridgeHandler,
                         const char *electrobunPreloadScript,
                         const char *customPreloadScript,
-                        bool transparent,
-                        bool sandbox ) {
+                        bool transparent ) {
 
     // Read and clear pre-set flags
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
-    g_nextWebviewFlags = {false, false};
+    bool sandbox = g_nextWebviewFlags.sandbox;
+    g_nextWebviewFlags = {false, false, false};
 
     // Validate frame values - use defaults if NaN or invalid
     if (isnan(x) || isinf(x)) {
