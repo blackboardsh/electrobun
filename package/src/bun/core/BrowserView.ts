@@ -279,6 +279,29 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		native.symbols.webviewToggleDevTools(this.ptr);
 	}
 
+	/** Resize and reposition this view within its parent window. */
+	setFrame(frame: { x: number; y: number; width: number; height: number }) {
+		this.frame = frame;
+		native.symbols.resizeWebview(
+			this.ptr,
+			frame.x,
+			frame.y,
+			frame.width,
+			frame.height,
+			toCString("[]"),
+		);
+	}
+
+	/** Remove this view from its parent window and clean up native resources. */
+	remove() {
+		native.symbols.webviewRemove(this.ptr);
+	}
+
+	/** Show or hide this view. */
+	setHidden(hidden: boolean) {
+		native.symbols.webviewSetHidden(this.ptr, hidden);
+	}
+
 	// ── CDP (Chrome DevTools Protocol) message passing ──
 	// Provides programmatic access to CDP without a remote debugging port.
 	// Uses CEF's internal SendDevToolsMessage / AddDevToolsMessageObserver APIs.

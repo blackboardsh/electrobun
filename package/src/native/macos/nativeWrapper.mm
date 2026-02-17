@@ -3762,14 +3762,19 @@ public:
         CefRefPtr<CefFrame> frame,
         CefRefPtr<CefRequest> request,
         CefRefPtr<CefResponse> response) override {
-        
+
+        // Sandboxed views don't need the response filter (no RPC injection needed).
+        // This prevents SIGTRAP crashes when CDP DevTools agent is attached,
+        // because the response filter conflicts with CDP's internal plumbing.
+        if (is_sandboxed_) return nullptr;
+
         // Only filter main frame HTML responses
-        if (frame->IsMain() && 
+        if (frame->IsMain() &&
             response->GetMimeType().ToString().find("html") != std::string::npos) {
             NSLog(@"Creating response filter for HTML content");
             return new ElectrobunResponseFilter(electrobun_script_, custom_script_);
         }
-        
+
         return nullptr;
     }
 
@@ -4784,20 +4789,23 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                     self.client->SetViewSize((int)frame.size.width, (int)frame.size.height);
                 }                
 
-                // store the script values
-                [self addPreloadScriptToWebView:electrobunPreloadScript];
-                
-                // Note: For custom preload scripts we support either inline js or a views:// style
-                // url to a js file in the bundled views folder.
-                if (strncmp(customPreloadScript, "views://", 8) == 0) {                    
-                    NSData *scriptData = readViewsFile(customPreloadScript);
-                    if (scriptData) {                        
-                        NSString *scriptString = [[NSString alloc] initWithData:scriptData encoding:NSUTF8StringEncoding];                        
-                        const char *scriptCString = [scriptString UTF8String];
-                        [self updateCustomPreloadScript:scriptCString];
+                // Sandboxed views skip preload scripts — no RPC bridges needed
+                if (!sandbox) {
+                    // store the script values
+                    [self addPreloadScriptToWebView:electrobunPreloadScript];
+
+                    // Note: For custom preload scripts we support either inline js or a views:// style
+                    // url to a js file in the bundled views folder.
+                    if (strncmp(customPreloadScript, "views://", 8) == 0) {
+                        NSData *scriptData = readViewsFile(customPreloadScript);
+                        if (scriptData) {
+                            NSString *scriptString = [[NSString alloc] initWithData:scriptData encoding:NSUTF8StringEncoding];
+                            const char *scriptCString = [scriptString UTF8String];
+                            [self updateCustomPreloadScript:scriptCString];
+                        }
+                    } else {
+                        [self updateCustomPreloadScript:customPreloadScript];
                     }
-                } else {
-                    [self updateCustomPreloadScript:customPreloadScript];
                 }                            
 
 
