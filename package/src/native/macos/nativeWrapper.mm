@@ -39,6 +39,7 @@
 #include <string>
 #include <vector>
 #include <list>
+#include <deque>
 #include <cstdint>
 #include <chrono>
 #include <map>
@@ -91,10 +92,34 @@ static id mouseUpMonitor = nil;
 
 static int g_remoteDebugPort = 9222;
 
-// CDP (Chrome DevTools Protocol) message passing callbacks.
-// Set once from Bun via setDevToolsCDPCallbacks() and shared by all webviews.
+// CDP (Chrome DevTools Protocol) message passing.
+// Two modes: callback (legacy JSCallback, crashes on ARM64) or queue (poll-based, safe).
+// Set g_cdpUseQueue = true via cdpEnableQueue() to use the poll-based path.
 static CDPMethodResultCallback g_cdpMethodResultCallback = nullptr;
 static CDPEventCallback g_cdpEventCallback = nullptr;
+
+// ── Poll-based CDP queue (avoids JSCallback PAC crash on ARM64) ──
+static bool g_cdpUseQueue = false;
+
+struct CDPQueuedResult {
+    uint32_t webviewId;
+    int32_t messageId;
+    uint32_t success;
+    char* data;       // heap-allocated, caller frees via cdpFreeBuffer
+    uint32_t dataSize;
+};
+
+struct CDPQueuedEvent {
+    uint32_t webviewId;
+    char* method;     // heap-allocated, caller frees via cdpFreeBuffer
+    char* params;     // heap-allocated, caller frees via cdpFreeBuffer
+    uint32_t paramsSize;
+};
+
+static std::mutex g_cdpResultMutex;
+static std::deque<CDPQueuedResult> g_cdpResultQueue;
+static std::mutex g_cdpEventMutex;
+static std::deque<CDPQueuedEvent> g_cdpEventQueue;
 
 // Menu role to selector mapping
 // This maps Electrobun role strings to their corresponding Objective-C selectors.
@@ -362,18 +387,29 @@ public:
                                 bool success,
                                 const void* result,
                                 size_t result_size) override {
-        if (g_cdpMethodResultCallback) {
-            // Heap-allocate copy — threadsafe JSCallback defers execution to Bun's
-            // event loop thread, so stack-local data is freed before JS reads it.
-            char* resultCopy = nullptr;
-            if (result && result_size > 0) {
-                resultCopy = static_cast<char*>(malloc(result_size));
-                memcpy(resultCopy, result, result_size);
-            }
+        // Heap-allocate copy — data is only valid for the duration of this callback.
+        char* resultCopy = nullptr;
+        if (result && result_size > 0) {
+            resultCopy = static_cast<char*>(malloc(result_size));
+            memcpy(resultCopy, result, result_size);
+        }
+
+        if (g_cdpUseQueue) {
+            // Poll-based path: push to thread-safe queue, JS polls via FFI.
+            // No cross-thread function pointer call → no ARM64 PAC crash.
+            std::lock_guard<std::mutex> lock(g_cdpResultMutex);
+            g_cdpResultQueue.push_back({
+                webview_id_, message_id,
+                success ? 1u : 0u,
+                resultCopy, static_cast<uint32_t>(result_size)
+            });
+        } else if (g_cdpMethodResultCallback) {
+            // Legacy callback path (may crash on ARM64 due to PAC).
             g_cdpMethodResultCallback(webview_id_, message_id,
                                       success ? 1 : 0,
                                       resultCopy, result_size);
-            // resultCopy freed by JS via cdpFreeBuffer after reading
+        } else {
+            if (resultCopy) free(resultCopy);
         }
     }
 
@@ -382,20 +418,29 @@ public:
                          const CefString& method,
                          const void* params,
                          size_t params_size) override {
-        if (g_cdpEventCallback) {
-            // Method name: null-terminated copy (small, safe to keep on stack for CString)
-            std::string methodStr = method.ToString();
-            // Params: heap-allocate (same threadsafe deferral issue as method results)
-            char* paramsCopy = nullptr;
-            if (params && params_size > 0) {
-                paramsCopy = static_cast<char*>(malloc(params_size));
-                memcpy(paramsCopy, params, params_size);
-            }
-            // Method string: also heap-allocate for safety
-            char* methodCopy = static_cast<char*>(malloc(methodStr.size() + 1));
-            memcpy(methodCopy, methodStr.c_str(), methodStr.size() + 1);
+        std::string methodStr = method.ToString();
+        // Heap-allocate copies — data is only valid for the duration of this callback.
+        char* paramsCopy = nullptr;
+        if (params && params_size > 0) {
+            paramsCopy = static_cast<char*>(malloc(params_size));
+            memcpy(paramsCopy, params, params_size);
+        }
+        char* methodCopy = static_cast<char*>(malloc(methodStr.size() + 1));
+        memcpy(methodCopy, methodStr.c_str(), methodStr.size() + 1);
+
+        if (g_cdpUseQueue) {
+            // Poll-based path: push to thread-safe queue.
+            std::lock_guard<std::mutex> lock(g_cdpEventMutex);
+            g_cdpEventQueue.push_back({
+                webview_id_, methodCopy,
+                paramsCopy, static_cast<uint32_t>(params_size)
+            });
+        } else if (g_cdpEventCallback) {
+            // Legacy callback path.
             g_cdpEventCallback(webview_id_, methodCopy, paramsCopy, params_size);
-            // Both freed by JS via cdpFreeBuffer after reading
+        } else {
+            if (methodCopy) free(methodCopy);
+            if (paramsCopy) free(paramsCopy);
         }
     }
 
@@ -5861,6 +5906,99 @@ extern "C" void webviewRemoveDevToolsObserver(
 
 extern "C" void cdpFreeBuffer(void *buffer) {
     if (buffer) free(buffer);
+}
+
+// ── Poll-based CDP queue API (avoids JSCallback PAC crash on ARM64) ──
+
+// Enable queue mode. Once called, OnDevToolsMethodResult/OnDevToolsEvent
+// push to queues instead of calling JSCallbacks.
+extern "C" void cdpEnableQueue() {
+    g_cdpUseQueue = true;
+}
+
+// Dequeue the next CDP method result.
+// Returns a packed buffer: [u32 webviewId][i32 messageId][u32 success][u32 dataSize][data...]
+// Total: 16 + dataSize bytes. Caller must free via cdpFreeBuffer().
+// Returns nullptr if queue is empty.
+extern "C" void* cdpDequeueResult(uint32_t* outTotalSize) {
+    std::lock_guard<std::mutex> lock(g_cdpResultMutex);
+    if (g_cdpResultQueue.empty()) {
+        *outTotalSize = 0;
+        return nullptr;
+    }
+
+    auto front = g_cdpResultQueue.front();
+    g_cdpResultQueue.pop_front();
+
+    uint32_t headerSize = 16;
+    uint32_t totalSize = headerSize + front.dataSize;
+    char* buf = static_cast<char*>(malloc(totalSize));
+
+    // Pack header (little-endian, native on ARM64 and x86)
+    memcpy(buf + 0,  &front.webviewId, 4);
+    memcpy(buf + 4,  &front.messageId, 4);
+    memcpy(buf + 8,  &front.success,   4);
+    memcpy(buf + 12, &front.dataSize,  4);
+
+    // Pack data
+    if (front.data && front.dataSize > 0) {
+        memcpy(buf + 16, front.data, front.dataSize);
+        free(front.data);
+    }
+
+    *outTotalSize = totalSize;
+    return buf;
+}
+
+// Dequeue the next CDP event.
+// Returns a packed buffer: [u32 webviewId][u32 methodLen][u32 paramsSize][methodStr...][params...]
+// Total: 12 + methodLen + paramsSize bytes. Caller must free via cdpFreeBuffer().
+// Returns nullptr if queue is empty.
+extern "C" void* cdpDequeueEvent(uint32_t* outTotalSize) {
+    std::lock_guard<std::mutex> lock(g_cdpEventMutex);
+    if (g_cdpEventQueue.empty()) {
+        *outTotalSize = 0;
+        return nullptr;
+    }
+
+    auto front = g_cdpEventQueue.front();
+    g_cdpEventQueue.pop_front();
+
+    uint32_t methodLen = front.method ? static_cast<uint32_t>(strlen(front.method)) : 0;
+    uint32_t headerSize = 12;
+    uint32_t totalSize = headerSize + methodLen + front.paramsSize;
+    char* buf = static_cast<char*>(malloc(totalSize));
+
+    // Pack header
+    memcpy(buf + 0, &front.webviewId,  4);
+    memcpy(buf + 4, &methodLen,        4);
+    memcpy(buf + 8, &front.paramsSize, 4);
+
+    // Pack method string (not null-terminated in buffer)
+    if (front.method && methodLen > 0) {
+        memcpy(buf + 12, front.method, methodLen);
+        free(front.method);
+    }
+
+    // Pack params
+    if (front.params && front.paramsSize > 0) {
+        memcpy(buf + 12 + methodLen, front.params, front.paramsSize);
+        free(front.params);
+    }
+
+    *outTotalSize = totalSize;
+    return buf;
+}
+
+// Check if there are pending results/events (non-blocking).
+extern "C" uint32_t cdpResultQueueSize() {
+    std::lock_guard<std::mutex> lock(g_cdpResultMutex);
+    return static_cast<uint32_t>(g_cdpResultQueue.size());
+}
+
+extern "C" uint32_t cdpEventQueueSize() {
+    std::lock_guard<std::mutex> lock(g_cdpEventMutex);
+    return static_cast<uint32_t>(g_cdpEventQueue.size());
 }
 
 extern "C" NSRect createNSRectWrapper(double x, double y, double width, double height) {

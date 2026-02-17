@@ -336,6 +336,27 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
+			// CDP poll-based queue (avoids JSCallback PAC crash on ARM64)
+			cdpEnableQueue: {
+				args: [],
+				returns: FFIType.void,
+			},
+			cdpDequeueResult: {
+				args: [FFIType.ptr], // outTotalSize: u32*
+				returns: FFIType.ptr,
+			},
+			cdpDequeueEvent: {
+				args: [FFIType.ptr], // outTotalSize: u32*
+				returns: FFIType.ptr,
+			},
+			cdpResultQueueSize: {
+				args: [],
+				returns: FFIType.u32,
+			},
+			cdpEventQueueSize: {
+				args: [],
+				returns: FFIType.u32,
+			},
 			// Tray
 			createTray: {
 				args: [
@@ -1549,7 +1570,9 @@ export const GlobalShortcut = {
 };
 
 // ── CDP (Chrome DevTools Protocol) message passing ──
-// Routes CDP method results and events from native to the appropriate BrowserView instance.
+// Poll-based architecture: C++ queues results/events, JS polls via FFI.
+// This avoids cross-thread JSCallback which crashes on ARM64 due to
+// TCC-generated trampolines lacking PAC (Pointer Authentication) instructions.
 
 export type CDPMethodResultHandler = (
 	webviewId: number,
@@ -1568,65 +1591,133 @@ export type CDPEventHandler = (
 let cdpMethodResultHandler: CDPMethodResultHandler | null = null;
 let cdpEventHandler: CDPEventHandler | null = null;
 
-const cdpMethodResultCallback = new JSCallback(
-	(webviewId: number, messageId: number, success: number, resultPtr: any, resultSize: number) => {
-		let result = "";
+// Poll timer handle
+let cdpPollTimer: ReturnType<typeof setInterval> | null = null;
+let cdpPollActive = false;
+
+// Shared buffer for outTotalSize parameter (4 bytes, reused across polls)
+const outSizeBuf = new Uint32Array(1);
+const outSizePtr = ptr(outSizeBuf);
+
+/**
+ * Drain the CDP result queue from C++. Called on each poll tick.
+ * Reads packed buffers: [u32 webviewId][i32 messageId][u32 success][u32 dataSize][data...]
+ */
+function drainResultQueue(): void {
+	for (let i = 0; i < 64; i++) { // Safety cap per tick
+		outSizeBuf[0] = 0;
+		const bufPtr = native.symbols.cdpDequeueResult(outSizePtr);
+		const totalSize = outSizeBuf[0];
+		if (!bufPtr || totalSize === 0) break;
+
 		try {
-			if (resultPtr && resultSize > 0) {
-				const buf = Buffer.from(toArrayBuffer(resultPtr, 0, Number(resultSize)));
-				result = buf.toString("utf8");
+			const headerBuf = Buffer.from(toArrayBuffer(bufPtr, 0, 16));
+			const webviewId = headerBuf.readUInt32LE(0);
+			const messageId = headerBuf.readInt32LE(4);
+			const success = headerBuf.readUInt32LE(8);
+			const dataSize = headerBuf.readUInt32LE(12);
+
+			console.log(`[CDP poll] dequeued result: wv=${webviewId} msg=${messageId} ok=${success} size=${dataSize}`);
+
+			let result = "";
+			if (dataSize > 0) {
+				const dataBuf = Buffer.from(toArrayBuffer(bufPtr, 16, dataSize));
+				result = dataBuf.toString("utf8");
+			}
+
+			if (cdpMethodResultHandler) {
+				cdpMethodResultHandler(webviewId, messageId, success !== 0, result);
 			}
 		} catch (e) {
-			console.error("[CDP] Failed to read result:", e);
+			console.error("[CDP poll] Failed to read result:", e);
 		} finally {
-			// Free the malloc'd buffer from C++ side
-			if (resultPtr) native.symbols.cdpFreeBuffer(resultPtr);
+			native.symbols.cdpFreeBuffer(bufPtr);
 		}
-		if (cdpMethodResultHandler) {
-			cdpMethodResultHandler(webviewId, messageId, success !== 0, result);
-		}
-	},
-	{
-		args: [FFIType.u32, FFIType.i32, FFIType.u32, FFIType.ptr, FFIType.u64],
-		returns: "void",
-		threadsafe: true,
-	},
-);
+	}
+}
 
-const cdpEventCallback = new JSCallback(
-	(webviewId: number, methodPtr: any, paramsPtr: any, paramsSize: number) => {
-		let method = "";
-		let params = "";
+/**
+ * Drain the CDP event queue from C++.
+ * Reads packed buffers: [u32 webviewId][u32 methodLen][u32 paramsSize][method...][params...]
+ */
+function drainEventQueue(): void {
+	for (let i = 0; i < 64; i++) {
+		outSizeBuf[0] = 0;
+		const bufPtr = native.symbols.cdpDequeueEvent(outSizePtr);
+		const totalSize = outSizeBuf[0];
+		if (!bufPtr || totalSize === 0) break;
+
 		try {
-			if (methodPtr) method = new CString(methodPtr).toString();
-			if (paramsPtr && paramsSize > 0) {
-				const buf = Buffer.from(toArrayBuffer(paramsPtr, 0, Number(paramsSize)));
-				params = buf.toString("utf8");
+			const headerBuf = Buffer.from(toArrayBuffer(bufPtr, 0, 12));
+			const webviewId = headerBuf.readUInt32LE(0);
+			const methodLen = headerBuf.readUInt32LE(4);
+			const paramsSize = headerBuf.readUInt32LE(8);
+
+			let method = "";
+			if (methodLen > 0) {
+				const methodBuf = Buffer.from(toArrayBuffer(bufPtr, 12, methodLen));
+				method = methodBuf.toString("utf8");
+			}
+
+			let params = "";
+			if (paramsSize > 0) {
+				const paramsBuf = Buffer.from(toArrayBuffer(bufPtr, 12 + methodLen, paramsSize));
+				params = paramsBuf.toString("utf8");
+			}
+
+			if (cdpEventHandler) {
+				cdpEventHandler(webviewId, method, params);
 			}
 		} catch (e) {
-			console.error("[CDP] Failed to read event:", e);
+			console.error("[CDP poll] Failed to read event:", e);
 		} finally {
-			// Free the malloc'd buffers from C++ side
-			if (methodPtr) native.symbols.cdpFreeBuffer(methodPtr);
-			if (paramsPtr) native.symbols.cdpFreeBuffer(paramsPtr);
+			native.symbols.cdpFreeBuffer(bufPtr);
 		}
-		if (cdpEventHandler) {
-			cdpEventHandler(webviewId, method, params);
-		}
-	},
-	{
-		args: [FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.u64],
-		returns: "void",
-		threadsafe: true,
-	},
-);
+	}
+}
 
-// CDP callbacks are registered lazily on first use (not at module init)
-let cdpCallbacksRegistered = false;
-function ensureCDPCallbacksRegistered() {
-	if (cdpCallbacksRegistered) return;
-	cdpCallbacksRegistered = true;
-	native.symbols.setDevToolsCDPCallbacks(cdpMethodResultCallback, cdpEventCallback);
+// Poll diagnostics
+let pollTickCount = 0;
+let lastPollLog = 0;
+
+/** Single poll tick — drain both queues */
+function cdpPollTick(): void {
+	pollTickCount++;
+	// Log every 5 seconds to prove the poll loop is alive
+	const now = Date.now();
+	if (now - lastPollLog > 5000) {
+		const rqs = native.symbols.cdpResultQueueSize();
+		const eqs = native.symbols.cdpEventQueueSize();
+		if (rqs > 0 || eqs > 0 || lastPollLog === 0) {
+			console.log(`[CDP poll] tick #${pollTickCount}, resultQ=${rqs}, eventQ=${eqs}`);
+		}
+		lastPollLog = now;
+	}
+	drainResultQueue();
+	drainEventQueue();
+}
+
+/** Start the CDP poll loop (1ms interval). No-op if already running. */
+function startCDPPolling(): void {
+	if (cdpPollActive) return;
+	cdpPollActive = true;
+	// Enable queue mode in C++ (switches from callback to queue)
+	native.symbols.cdpEnableQueue();
+	console.log("[CDP poll] Starting poll loop (1ms interval)");
+	// Poll at 1ms — fast enough for interactive use, cheap when idle
+	cdpPollTimer = setInterval(cdpPollTick, 1);
+}
+
+/** Stop the CDP poll loop. */
+function stopCDPPolling(): void {
+	if (!cdpPollActive) return;
+	cdpPollActive = false;
+	if (cdpPollTimer) {
+		clearInterval(cdpPollTimer);
+		cdpPollTimer = null;
+	}
+	// Final drain to pick up any remaining items
+	cdpPollTick();
 }
 
 export const cdpNative = {
@@ -1644,7 +1735,8 @@ export const cdpNative = {
 		);
 	},
 	addObserver(viewPtr: Pointer): Pointer | null {
-		ensureCDPCallbacksRegistered();
+		// Start polling on first observer attach
+		startCDPPolling();
 		return native.symbols.webviewAddDevToolsObserver(viewPtr) as Pointer | null;
 	},
 	removeObserver(viewPtr: Pointer, registrationPtr: Pointer): void {
