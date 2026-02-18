@@ -53,6 +53,26 @@ Building apps with Electrobun is as easy as updating your package.json dependenc
 
 **This section is for building Electrobun from source locally in order to contribute fixes to it.**
 
+## Linux Runtime Dependencies
+
+Electrobun requires system GTK/WebKit libraries at runtime on Linux.
+
+### Arch Linux
+
+```bash
+sudo pacman -S webkit2gtk-4.1 gtk3 libayatana-appindicator
+```
+
+### Ubuntu/Debian
+
+```bash
+sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1
+```
+
+If you see errors like `libwebkit2gtk-4.1.so.0: cannot open shared object file` or
+`libayatana-appindicator3.so.1: cannot open shared object file`, install the
+packages above.
+
 ### Prerequisites
 
 **macOS:**

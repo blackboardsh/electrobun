@@ -8,6 +8,37 @@ const pathToMacOS = dirname(process.argv0); // bun is still in MacOS/bin directo
 const libPath = join(pathToMacOS, `libNativeWrapper.${suffix}`);
 const absoluteLibPath = resolve(libPath);
 
+function printLinuxMissingDeps(message: string) {
+	if (process.platform !== "linux") {
+		return false;
+	}
+
+	const missing: string[] = [];
+
+	if (message.includes("libwebkit2gtk-4.1")) {
+		missing.push("WebKitGTK 4.1");
+	}
+	if (message.includes("libgtk-3")) {
+		missing.push("GTK 3");
+	}
+	if (message.includes("libayatana-appindicator")) {
+		missing.push("Ayatana AppIndicator");
+	}
+
+	if (missing.length === 0) {
+		return false;
+	}
+
+	console.error("[LAUNCHER] Missing Linux runtime dependencies:");
+	console.error(`[LAUNCHER] ${missing.join(", ")}`);
+	console.error("[LAUNCHER] Install with:");
+	console.error("[LAUNCHER] Arch: sudo pacman -S webkit2gtk-4.1 gtk3 libayatana-appindicator");
+	console.error(
+		"[LAUNCHER] Ubuntu/Debian: sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1",
+	);
+	return true;
+}
+
 // Wrap main logic in a function to avoid top-level return
 function main() {
 	// Read version.json early to get identifier, name, and channel for CEF initialization
@@ -97,6 +128,7 @@ function main() {
 		console.error(
 			`[LAUNCHER] Failed to load library: ${(error as Error).message}`,
 		);
+		printLinuxMissingDeps((error as Error).message);
 
 		// Try with absolute path as fallback
 		try {
@@ -111,6 +143,7 @@ function main() {
 				},
 			});
 		} catch (absError) {
+			printLinuxMissingDeps((absError as Error).message);
 			console.error(
 				`[LAUNCHER] Library loading failed. Try running: ldd ${libPath}`,
 			);
