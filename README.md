@@ -38,7 +38,7 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left&cache=1)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
 
 ## Contributing
 Ways to get involved:
