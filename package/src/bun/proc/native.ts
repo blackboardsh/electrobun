@@ -605,6 +605,7 @@ export const ffi = {
 			};
 			titleBarStyle: string;
 			transparent: boolean;
+			show?: boolean;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -667,7 +668,10 @@ export const ffi = {
 			}
 
 			native.symbols.setWindowTitle(windowPtr, toCString(title));
-			native.symbols.showWindow(windowPtr);
+
+			if (params.show !== false) {
+				native.symbols.showWindow(windowPtr);
+			}
 
 			return windowPtr;
 		},
