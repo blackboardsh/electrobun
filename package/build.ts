@@ -1382,7 +1382,7 @@ async function vendorCEF() {
 
 			// Compile the Windows helper process
 			await runMsvcCommand(
-				`cl /c /EHsc /std:c++20 /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/build/process_helper_win.obj src/native/win/cef_process_helper_win.cpp`,
+				`cl /c /EHsc /std:c++20 /DNOMINMAX /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/build/process_helper_win.obj src/native/win/cef_process_helper_win.cpp`,
 			);
 
 			// Link to create the helper executable
@@ -1638,7 +1638,7 @@ async function buildNative() {
 		// Use /MT to statically link the C runtime (matches libcpmt.lib that CEF uses)
 		await $`mkdir -p src/native/win/build`;
 		await runMsvcCommand(
-			`cl /c /EHsc /std:c++20 /MT /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`,
+			`cl /c /EHsc /std:c++20 /DNOMINMAX /MT /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`,
 		);
 
 		// Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
