@@ -5,12 +5,11 @@ import {
 	readFileSync,
 	writeFileSync,
 	cpSync,
-	rmdirSync,
+	rmSync,
 	mkdirSync,
 	createWriteStream,
 	unlinkSync,
 	readdirSync,
-	rmSync,
 	symlinkSync,
 	statSync,
 	copyFileSync,
@@ -1684,7 +1683,7 @@ Categories=Utility;Application;
 
 		// refresh build folder
 		if (existsSync(buildFolder)) {
-			rmdirSync(buildFolder, { recursive: true });
+			rmSync(buildFolder, { recursive: true });
 		}
 		mkdirSync(buildFolder, { recursive: true });
 		// bundle bun to build/bun
@@ -2613,7 +2612,7 @@ Categories=Utility;Application;
 				console.log("✓ Created app.asar");
 
 				// Remove the entire app folder since it's now packed in ASAR
-				rmdirSync(appDirPath, { recursive: true });
+				rmSync(appDirPath, { recursive: true });
 				console.log("✓ Removed app/ folder (now in ASAR)");
 			}
 		}
@@ -2770,7 +2769,7 @@ Categories=Utility;Application;
 			
 			// Remove the app bundle folder after tarring (except on Linux where it might be needed for dev)
 			if (targetOS !== "linux" || buildEnvironment !== "dev") {
-				rmdirSync(appBundleFolderPath, { recursive: true });
+				rmSync(appBundleFolderPath, { recursive: true });
 			}
 
 			// generate bsdiff
@@ -3194,7 +3193,7 @@ Categories=Utility;Application;
 			console.log("creating artifacts folder...");
 			if (existsSync(artifactFolder)) {
 				console.info("deleting artifact folder: ", artifactFolder);
-				rmdirSync(artifactFolder, { recursive: true });
+				rmSync(artifactFolder, { recursive: true });
 			}
 
 			mkdirSync(artifactFolder, { recursive: true });
