@@ -1533,7 +1533,7 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         8,  // bits per component
         width * 4,  // bytes per row
         colorSpace,
-        kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little  // BGRA
+        (CGBitmapInfo)kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little  // BGRA
     );
 
     if (bitmapContext) {
