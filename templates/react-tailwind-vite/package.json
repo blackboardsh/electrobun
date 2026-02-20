@@ -20,10 +20,8 @@
 		"@types/react": "^18.3.12",
 		"@types/react-dom": "^18.3.1",
 		"@vitejs/plugin-react": "^4.3.4",
-		"autoprefixer": "^10.4.20",
 		"concurrently": "^9.1.0",
-		"postcss": "^8.4.49",
-		"tailwindcss": "^3.4.16",
+		"tailwindcss": "^4.2.0",
 		"typescript": "^5.7.2",
 		"vite": "^6.0.3"
 	}
