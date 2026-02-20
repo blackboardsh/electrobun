@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Electrobun
+.electrobun/
+
+
+# Build output
+build/
+dist/
+*.app
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
