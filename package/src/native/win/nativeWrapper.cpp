@@ -1741,6 +1741,12 @@ public:
         }
     }
 
+    void ClearOSRWindow() {
+        if (m_renderHandler) {
+            m_renderHandler->SetOSRWindow(nullptr);
+        }
+    }
+
     bool IsOSREnabled() const {
         return osr_enabled_;
     }
@@ -3370,6 +3376,40 @@ public:
     }
 
     ~CEFView() {
+        // If remove() wasn't called (e.g. window destroyed directly via WM_DESTROY
+        // without explicit webview removal), clean up the browser properly.
+        if (browser) {
+            // Invalidate render handler's OSR pointer before we delete it
+            if (client) {
+                client->ClearOSRWindow();
+            }
+
+            CefRefPtr<CefBrowserHost> host = browser->GetHost();
+            browser = nullptr;
+            client = nullptr;
+
+            if (host) {
+                host->CloseBrowser(true);
+            }
+        } else if (client) {
+            // remove() was called (browser is null) but client might still be set
+            // in older code paths - clear the OSR pointer just in case
+            client->ClearOSRWindow();
+            client = nullptr;
+        }
+
+        // Clean up global maps that hold raw pointers to this object
+        for (auto it = g_cefViews.begin(); it != g_cefViews.end(); ++it) {
+            if (it->second == this) {
+                g_cefViews.erase(it);
+                break;
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+            g_abstractViews.erase(this->webviewId);
+        }
+
         if (osr_window) {
             delete osr_window;
             osr_window = nullptr;
@@ -3431,8 +3471,31 @@ public:
                 ShowWindow(browserHwnd, SW_HIDE);
             }
 
-            // Clear our reference
+            // Invalidate the render handler's OSR window pointer BEFORE async close.
+            // CEF may still fire OnPaint() callbacks during the close sequence, and
+            // the OSRWindow will be deleted when this CEFView is destroyed.
+            if (client) {
+                client->ClearOSRWindow();
+            }
+
+            // Clean up global maps to prevent stale pointer access from window messages
+            for (auto it = g_cefViews.begin(); it != g_cefViews.end(); ++it) {
+                if (it->second == this) {
+                    g_cefViews.erase(it);
+                    break;
+                }
+            }
+            for (auto it = g_cefClients.begin(); it != g_cefClients.end();) {
+                if (it->second == client) {
+                    it = g_cefClients.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+
+            // Clear our references
             browser = nullptr;
+            client = nullptr;
 
             // Defer the actual browser close to avoid synchronous window message issues
             // Use CloseBrowser(true) to force close since we return true from DoClose
