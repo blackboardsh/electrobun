@@ -223,11 +223,23 @@ pub fn main() !void {
         
         const hr = win.SetCurrentProcessExplicitAppUserModelID(app_id_utf16.ptr);
         
+        // Check if this is a dev channel (before force_console env var is available)
+        const is_dev_channel = if (version_info) |info| blk: {
+            if (info.channel) |ch| {
+                break :blk std.mem.eql(u8, ch, "dev");
+            }
+            break :blk false;
+        } else false;
+        
         // Hide console window immediately (console windows prevent taskbar grouping)
-        const console_hwnd = win.GetConsoleWindow();
-        const console_hidden = if (console_hwnd) |hwnd| blk: {
-            _ = win.ShowWindow(hwnd, win.SW_HIDE);
-            break :blk true;
+        // BUT: Keep console visible for dev channel builds
+        const console_hidden = if (!is_dev_channel) blk: {
+            const console_hwnd = win.GetConsoleWindow();
+            if (console_hwnd) |hwnd| {
+                _ = win.ShowWindow(hwnd, win.SW_HIDE);
+                break :blk true;
+            }
+            break :blk false;
         } else false;
         
         // Log to %temp%\electrobun-launcher.log (before any console output)
@@ -436,14 +448,7 @@ pub fn main() !void {
         }
     } else {
         // Dev build or non-Windows: Use standard spawn with inherited I/O
-
-        // On Windows dev builds, attach to parent console for output
-        if (builtin.os.tag == .windows) {
-            const win = windows_imports;
-            if (win.AttachConsole(win.ATTACH_PARENT_PROCESS) != 0) {
-                std.debug.print("Attached to parent console\n", .{});
-            }
-        }
+        // Console is already visible for dev builds (not hidden at startup)
 
         child_process.stdout_behavior = .Inherit;
         child_process.stderr_behavior = .Inherit;
