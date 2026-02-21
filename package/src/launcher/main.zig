@@ -132,16 +132,20 @@ const VersionInfo = struct {
 };
 
 // Read version.json once and extract all needed fields (DRY)
+// Check if this is a dev build by reading version.json
 fn readVersionInfo(allocator: std.mem.Allocator, exe_dir: []const u8) ?VersionInfo {
+    // Build path to version.json: exe_dir/../Resources/version.json
     const version_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "version.json" }) catch return null;
     defer allocator.free(version_path);
 
+    // Read the file
     const file = std.fs.openFileAbsolute(version_path, .{}) catch return null;
     defer file.close();
 
     const content = file.readToEndAlloc(allocator, 1024 * 10) catch return null;
     defer allocator.free(content);
 
+    // Parse JSON and look for "channel":"dev"
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return null;
     defer parsed.deinit();
 
@@ -304,9 +308,11 @@ pub fn main() !void {
 
     // Handle platform-specific environment setup
     // Prepare environment for child process
+    // On Windows and macOS, get environment and inherit it
     var env_map = try std.process.getEnvMap(arena_alloc);
     
     if (builtin.os.tag == .linux) {
+        // Check for CEF libraries that need LD_PRELOAD
         // On Linux, check for CEF and SwiftShader libraries
         const cef_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libcef.so" });
         const swiftshader_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libvk_swiftshader.so" });
@@ -332,6 +338,7 @@ pub fn main() !void {
             break :blk true;
         };
 
+        // Check if CEF libraries exist and set LD_PRELOAD if needed
         if (cef_exists or swiftshader_exists) {
             var preload_libs = std.ArrayList([]const u8).init(arena_alloc);
             if (cef_exists) try preload_libs.append("./libcef.so");
@@ -360,7 +367,7 @@ pub fn main() !void {
         break :blk std.mem.eql(u8, val, "1");
     } else |_| false;
 
-    // Check if this is a dev build using version_info.channel
+    // Check if this is a dev build by reading version_info.channel, or if console is forced
     const is_dev_build = force_console or (if (version_info) |info| blk: {
         if (info.channel) |ch| {
             break :blk std.mem.eql(u8, ch, "dev");
@@ -387,6 +394,7 @@ pub fn main() !void {
         // Build command line (needs to be mutable for CreateProcessW)
         const cmd_line = try std.fmt.allocPrintZ(arena_alloc, "\"{s}\" \"{s}\"", .{ argv[0], argv[1] });
         const cmd_line_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, cmd_line);
+        // Convert current directory to UTF-16
         const cwd_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, exe_dir);
 
         const env_block_w = try createWindowsEnvBlock(arena_alloc, &env_map);
@@ -418,7 +426,7 @@ pub fn main() !void {
             @constCast(cmd_line_w.ptr),
             null,
             null,
-            0,
+            0, // Don't inherit handles
             win.CREATE_NO_WINDOW | 0x00000400,
             env_block_w.ptr,
             cwd_w.ptr,
@@ -448,7 +456,7 @@ pub fn main() !void {
         }
     } else {
         // Dev build or non-Windows: Use standard spawn with inherited I/O
-        // Console is already visible for dev builds (not hidden at startup)
+        // Console attachment for dev mode
 
         child_process.stdout_behavior = .Inherit;
         child_process.stderr_behavior = .Inherit;
