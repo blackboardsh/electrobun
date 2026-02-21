@@ -18,5 +18,17 @@ pub fn build(b: *std.Build) void {
     // Use Console subsystem on all platforms so users can see extraction progress
     // The console window will automatically close when extraction completes
 
+    if (target.result.os.tag == .windows) {
+        exe.addCSourceFile(.{
+            .file = b.path("shortcut_helper.cpp"),
+            .flags = &.{"-std=c++17"},
+        });
+        exe.linkSystemLibrary("ole32");
+        exe.linkSystemLibrary("shell32");
+        exe.linkSystemLibrary("shlwapi");
+        exe.linkSystemLibrary("propsys");
+        exe.linkLibCpp();
+    }
+
     b.installArtifact(exe);
 }

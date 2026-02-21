@@ -2,6 +2,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zstd = std.compress.zstd;
 
+extern "c" fn CreateShortcutWithAppId(
+    shortcut_path: [*:0]const u16,
+    target_path: [*:0]const u16,
+    working_dir: [*:0]const u16,
+    icon_path: [*:0]const u16,
+    app_id: [*:0]const u16,
+    description: [*:0]const u16,
+) callconv(.C) i32;
+
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "/Users/yoav/code/electrobun/example/build/canary/ElectrobunPlayground-0-0-1-canary.app/Contents/Resources/compressed.tar.zst";
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "../Resources/compressed.tar.zst";
 const BUNLE_RESOURCES_REL_PATH = "../Resources/";
@@ -1070,53 +1079,46 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
 }
 
-fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8, icon_path: []const u8) !void {
-    // Create a .lnk shortcut using PowerShell
+fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8, icon_path: []const u8, app_identifier: []const u8) !void {
     const lnk_name = try std.fmt.allocPrint(allocator, "{s}.lnk", .{app_name});
     defer allocator.free(lnk_name);
 
     const lnk_path = try std.fs.path.join(allocator, &.{ shortcut_dir, lnk_name });
     defer allocator.free(lnk_path);
 
-    // Create PowerShell script to create the shortcut with icon
-    const ps_content = try std.fmt.allocPrint(allocator,
-        \\$WshShell = New-Object -ComObject WScript.Shell
-        \\$Shortcut = $WshShell.CreateShortcut("{s}")
-        \\$Shortcut.TargetPath = "{s}"
-        \\$Shortcut.WorkingDirectory = "{s}"
-        \\$Shortcut.IconLocation = "{s}"
-        \\$Shortcut.WindowStyle = 1
-        \\$Shortcut.Save()
-        \\
-    , .{ lnk_path, target_path, working_dir, icon_path });
-    defer allocator.free(ps_content);
+    const lnk_path_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, lnk_path);
+    defer allocator.free(lnk_path_w);
 
-    // Execute PowerShell command
-    const ps_args = [_][]const u8{
-        "powershell",
-        "-NoProfile",
-        "-NonInteractive",
-        "-WindowStyle",
-        "Hidden",
-        "-Command",
-        ps_content,
-    };
+    const target_path_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, target_path);
+    defer allocator.free(target_path_w);
 
-    var child = std.process.Child.init(&ps_args, allocator);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
+    const working_dir_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, working_dir);
+    defer allocator.free(working_dir_w);
 
-    _ = child.spawn() catch |err| {
-        std.debug.print("Warning: Could not spawn PowerShell to create shortcut: {}\n", .{err});
+    const icon_path_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, icon_path);
+    defer allocator.free(icon_path_w);
+
+    const app_id_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, app_identifier);
+    defer allocator.free(app_id_w);
+    
+    const description = std.unicode.utf8ToUtf16LeStringLiteral("");
+
+    const hr = CreateShortcutWithAppId(
+        lnk_path_w.ptr,
+        target_path_w.ptr,
+        working_dir_w.ptr,
+        icon_path_w.ptr,
+        app_id_w.ptr,
+        description,
+    );
+
+    if (hr != 0) {
+        std.debug.print("Warning: COM shortcut creation failed with HRESULT: 0x{x}\n", .{hr});
+        std.debug.print("Check %TEMP%\\electrobun-shortcut.log for details\n", .{});
         return;
-    };
+    }
 
-    _ = child.wait() catch |err| {
-        std.debug.print("Warning: PowerShell shortcut creation failed: {}\n", .{err});
-        return;
-    };
-
-    std.debug.print("Created Windows shortcut: {s}\n", .{lnk_path});
+    std.debug.print("Created Windows shortcut with AppUserModelID: {s}\n", .{lnk_path});
 }
 
 fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
@@ -1157,14 +1159,11 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     const icon_to_use = target_path;
 
     // Create desktop shortcut
-    try createWindowsShortcutFile(allocator, desktop_dir, metadata.name, target_path, working_dir, icon_to_use);
+    try createWindowsShortcutFile(allocator, desktop_dir, metadata.name, target_path, working_dir, icon_to_use, metadata.identifier);
 
     // Create Start Menu shortcut
-    // Make sure Start Menu directory exists
-    std.fs.cwd().makePath(start_menu_dir) catch {
-        std.debug.print("Warning: Could not create Start Menu directory\n", .{});
-    };
-    try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, target_path, working_dir, icon_to_use);
+    std.debug.print("Creating Start Menu shortcut...\n", .{});
+    try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, target_path, working_dir, icon_to_use, metadata.identifier);
 
     std.debug.print("Created Windows shortcuts for: {s}\n", .{metadata.name});
 

@@ -16,6 +16,7 @@ const windows_imports = if (builtin.os.tag == .windows) struct {
     const BOOL = win.BOOL;
     const DWORD = win.DWORD;
     const HANDLE = win.HANDLE;
+    const HWND = win.HWND;
     const LPWSTR = win.LPWSTR;
     const LPVOID = win.LPVOID;
 
@@ -63,44 +64,102 @@ const windows_imports = if (builtin.os.tag == .windows) struct {
     extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) callconv(win.WINAPI) DWORD;
     extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) callconv(win.WINAPI) BOOL;
     extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(win.WINAPI) BOOL;
+    extern "kernel32" fn GetCurrentProcessId() callconv(win.WINAPI) DWORD;
+    extern "kernel32" fn GetCurrentThreadId() callconv(win.WINAPI) DWORD;
+    extern "kernel32" fn GetConsoleWindow() callconv(win.WINAPI) ?HWND;
+    extern "user32" fn ShowWindow(hWnd: HWND, nCmdShow: c_int) callconv(win.WINAPI) BOOL;
 
-    // Console attachment for dev mode
     extern "kernel32" fn AttachConsole(dwProcessId: DWORD) callconv(win.WINAPI) BOOL;
     extern "kernel32" fn FreeConsole() callconv(win.WINAPI) BOOL;
     extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(win.WINAPI) ?HANDLE;
     extern "kernel32" fn SetStdHandle(nStdHandle: DWORD, hHandle: HANDLE) callconv(win.WINAPI) BOOL;
+    extern "shell32" fn SetCurrentProcessExplicitAppUserModelID(AppID: [*:0]const u16) callconv(win.WINAPI) win.HRESULT;
 
     const ATTACH_PARENT_PROCESS: DWORD = 0xFFFFFFFF;
     const STD_OUTPUT_HANDLE: DWORD = 0xFFFFFFF5; // -11
     const STD_ERROR_HANDLE: DWORD = 0xFFFFFFF4; // -12
     const CREATE_NO_WINDOW: DWORD = 0x08000000;
     const INFINITE: DWORD = 0xFFFFFFFF;
+    const SW_HIDE: c_int = 0;
+    const SW_SHOW: c_int = 5;
 } else struct {};
 
-// Check if this is a dev build by reading version.json
-fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
-    // Build path to version.json: exe_dir/../Resources/version.json
-    const version_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "version.json" }) catch return false;
+// Version info from version.json
+// Convert env_map to Windows environment block format (UTF-16LE, double-null-terminated)
+// Based on Zig's std/process.zig createWindowsEnvBlock implementation
+fn createWindowsEnvBlock(allocator: std.mem.Allocator, env_map: *const std.process.EnvMap) ![]u16 {
+    const max_chars_needed = blk: {
+        var max_chars: usize = if (env_map.count() == 0) 2 else 1;
+        var it = env_map.iterator();
+        while (it.next()) |pair| {
+            max_chars += pair.key_ptr.len + pair.value_ptr.len + 2;
+        }
+        break :blk max_chars;
+    };
+
+    const result = try allocator.alloc(u16, max_chars_needed);
+    errdefer allocator.free(result);
+
+    var it = env_map.iterator();
+    var i: usize = 0;
+    while (it.next()) |pair| {
+        i += try std.unicode.utf8ToUtf16Le(result[i..], pair.key_ptr.*);
+        result[i] = '=';
+        i += 1;
+        i += try std.unicode.utf8ToUtf16Le(result[i..], pair.value_ptr.*);
+        result[i] = 0;
+        i += 1;
+    }
+    result[i] = 0;
+    i += 1;
+
+    if (env_map.count() == 0) {
+        result[i] = 0;
+        i += 1;
+    }
+
+    return try allocator.realloc(result, i);
+}
+
+const VersionInfo = struct {
+    identifier: ?[]const u8,
+    channel: ?[]const u8,
+    
+    fn deinit(self: *VersionInfo, allocator: std.mem.Allocator) void {
+        if (self.identifier) |id| allocator.free(id);
+        if (self.channel) |ch| allocator.free(ch);
+    }
+};
+
+// Read version.json once and extract all needed fields (DRY)
+fn readVersionInfo(allocator: std.mem.Allocator, exe_dir: []const u8) ?VersionInfo {
+    const version_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "version.json" }) catch return null;
     defer allocator.free(version_path);
 
-    // Read the file
-    const file = std.fs.openFileAbsolute(version_path, .{}) catch return false;
+    const file = std.fs.openFileAbsolute(version_path, .{}) catch return null;
     defer file.close();
 
-    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return false;
+    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return null;
     defer allocator.free(content);
 
-    // Parse JSON and look for "channel":"dev"
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return false;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return null;
     defer parsed.deinit();
 
-    if (parsed.value.object.get("channel")) |channel_value| {
-        if (channel_value == .string) {
-            return std.mem.eql(u8, channel_value.string, "dev");
+    var info = VersionInfo{ .identifier = null, .channel = null };
+
+    if (parsed.value.object.get("identifier")) |id_value| {
+        if (id_value == .string) {
+            info.identifier = allocator.dupe(u8, id_value.string) catch null;
         }
     }
 
-    return false;
+    if (parsed.value.object.get("channel")) |ch_value| {
+        if (ch_value == .string) {
+            info.channel = allocator.dupe(u8, ch_value.string) catch null;
+        }
+    }
+
+    return info;
 }
 
 // SIGALRM handler - safety net timeout for hung shutdowns
@@ -142,6 +201,58 @@ pub fn main() !void {
     var exePathBuffer: [1024]u8 = undefined;
     const exe_dir = try std.fs.selfExeDirPath(exePathBuffer[0..]);
 
+    // Read version.json once for all needed fields (DRY)
+    var version_info = readVersionInfo(alloc, exe_dir);
+    defer if (version_info) |*info| info.deinit(alloc);
+
+    // CRITICAL: Set AppUserModelID FIRST, before any console output or window creation.
+    // This ensures Windows taskbar groups launcher.exe and bun.exe correctly.
+    // If set too late, the console window gets its own taskbar identity.
+    if (builtin.os.tag == .windows) {
+        const win = windows_imports;
+        
+        // Use identifier from version.json, fallback to generic ID
+        const identifier = if (version_info) |info| info.identifier orelse "com.electrobun.app" else "com.electrobun.app";
+        
+        const app_id_utf16 = std.unicode.utf8ToUtf16LeWithNull(alloc, identifier) catch {
+            const fallback = std.unicode.utf8ToUtf16LeStringLiteral("com.electrobun.app");
+            _ = win.SetCurrentProcessExplicitAppUserModelID(fallback);
+            return;
+        };
+        defer alloc.free(app_id_utf16);
+        
+        const hr = win.SetCurrentProcessExplicitAppUserModelID(app_id_utf16.ptr);
+        
+        // Hide console window immediately (console windows prevent taskbar grouping)
+        const console_hwnd = win.GetConsoleWindow();
+        const console_hidden = if (console_hwnd) |hwnd| blk: {
+            _ = win.ShowWindow(hwnd, win.SW_HIDE);
+            break :blk true;
+        } else false;
+        
+        // Log to %temp%\electrobun-launcher.log (before any console output)
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+        
+        const temp_dir = std.process.getEnvVarOwned(arena_alloc, "TEMP") catch "C:\\Windows\\Temp";
+        defer arena_alloc.free(temp_dir);
+        const log_path = std.fs.path.join(arena_alloc, &.{ temp_dir, "electrobun-launcher.log" }) catch "";
+        if (log_path.len > 0) {
+            const log_file = std.fs.cwd().createFile(log_path, .{ .truncate = false }) catch null;
+            if (log_file) |file| {
+                defer file.close();
+                _ = file.seekFromEnd(0) catch {};
+                const pid = win.GetCurrentProcessId();
+                const tid = win.GetCurrentThreadId();
+                const log_msg = std.fmt.allocPrint(arena_alloc, 
+                    "[LAUNCHER EARLY] PID={d} TID={d} SetCurrentProcessExplicitAppUserModelID(\"{s}\") result: 0x{x} (0x0=success) | Console hidden: {}\n", 
+                    .{pid, tid, identifier, hr, console_hidden}) catch "";
+                _ = file.writeAll(log_msg) catch {};
+            }
+        }
+    }
+
     std.debug.print("Launcher starting on {s}...\n", .{@tagName(builtin.os.tag)});
     std.debug.print("Current directory: {s}\n", .{exe_dir});
 
@@ -180,12 +291,13 @@ pub fn main() !void {
     child_process.cwd = exe_dir;
 
     // Handle platform-specific environment setup
+    // Prepare environment for child process
+    var env_map = try std.process.getEnvMap(arena_alloc);
+    
     if (builtin.os.tag == .linux) {
-        // Check for CEF libraries that need LD_PRELOAD
+        // On Linux, check for CEF and SwiftShader libraries
         const cef_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libcef.so" });
         const swiftshader_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libvk_swiftshader.so" });
-
-        var env_map = try std.process.getEnvMap(arena_alloc);
 
         // Set LD_LIBRARY_PATH to include current directory
         if (env_map.get("LD_LIBRARY_PATH")) |existing_ld_path| {
@@ -195,7 +307,6 @@ pub fn main() !void {
             try env_map.put("LD_LIBRARY_PATH", exe_dir);
         }
 
-        // Check if CEF libraries exist and set LD_PRELOAD if needed
         const cef_exists = blk: {
             std.fs.accessAbsolute(cef_lib_path, .{}) catch {
                 break :blk false;
@@ -218,13 +329,16 @@ pub fn main() !void {
             try env_map.put("LD_PRELOAD", ld_preload);
             std.debug.print("Setting LD_PRELOAD: {s}\n", .{ld_preload});
         }
-
-        child_process.env_map = &env_map;
-    } else {
-        // On Windows and macOS, get environment and inherit it
-        var env_map = try std.process.getEnvMap(arena_alloc);
-        child_process.env_map = &env_map;
     }
+
+    // Pass app identifier to bun for unique AppUserModelID
+    if (version_info) |info| {
+        if (info.identifier) |id| {
+            try env_map.put("ELECTROBUN_APP_IDENTIFIER", id);
+        }
+    }
+
+    child_process.env_map = &env_map;
 
     std.debug.print("Spawning: {s} {s}\n", .{ argv[0], if (argv.len > 1) argv[1] else "" });
 
@@ -234,8 +348,14 @@ pub fn main() !void {
         break :blk std.mem.eql(u8, val, "1");
     } else |_| false;
 
-    // Check if this is a dev build by reading version.json, or if console is forced
-    const is_dev_build = force_console or isDevBuild(arena_alloc, exe_dir);
+    // Check if this is a dev build using version_info.channel
+    const is_dev_build = force_console or (if (version_info) |info| blk: {
+        if (info.channel) |ch| {
+            break :blk std.mem.eql(u8, ch, "dev");
+        }
+        break :blk false;
+    } else false);
+    
     if (force_console) {
         std.debug.print("Console mode forced via ELECTROBUN_CONSOLE=1\n", .{});
     } else if (is_dev_build) {
@@ -250,12 +370,31 @@ pub fn main() !void {
         // Windows non-dev build - use CreateProcessW with CREATE_NO_WINDOW
         const win = windows_imports;
 
+        // Note: AppUserModelID already set at start of main() for proper taskbar grouping
+        
         // Build command line (needs to be mutable for CreateProcessW)
         const cmd_line = try std.fmt.allocPrintZ(arena_alloc, "\"{s}\" \"{s}\"", .{ argv[0], argv[1] });
         const cmd_line_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, cmd_line);
-
-        // Convert current directory to UTF-16
         const cwd_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, exe_dir);
+
+        const env_block_w = try createWindowsEnvBlock(arena_alloc, &env_map);
+        defer arena_alloc.free(env_block_w);
+
+        const temp_dir = std.process.getEnvVarOwned(arena_alloc, "TEMP") catch "C:\\Windows\\Temp";
+        defer arena_alloc.free(temp_dir);
+        const log_path = std.fs.path.join(arena_alloc, &.{ temp_dir, "electrobun-launcher.log" }) catch "";
+        if (log_path.len > 0) {
+            const log_file = std.fs.cwd().createFile(log_path, .{ .truncate = false }) catch null;
+            if (log_file) |file| {
+                defer file.close();
+                _ = file.seekFromEnd(0) catch {};
+                const identifier_for_log = if (version_info) |info| info.identifier orelse "com.electrobun.app" else "com.electrobun.app";
+                const log_msg = std.fmt.allocPrint(arena_alloc,
+                    "[LAUNCHER GUI] Passing env block to CreateProcessW with ELECTROBUN_APP_IDENTIFIER=\"{s}\"\n",
+                    .{identifier_for_log}) catch "";
+                _ = file.writeAll(log_msg) catch {};
+            }
+        }
 
         var si: win.STARTUPINFOW = std.mem.zeroes(win.STARTUPINFOW);
         si.cb = @sizeOf(win.STARTUPINFOW);
@@ -267,9 +406,9 @@ pub fn main() !void {
             @constCast(cmd_line_w.ptr),
             null,
             null,
-            0, // Don't inherit handles
-            win.CREATE_NO_WINDOW,
-            null,
+            0,
+            win.CREATE_NO_WINDOW | 0x00000400,
+            env_block_w.ptr,
             cwd_w.ptr,
             &si,
             &pi,
