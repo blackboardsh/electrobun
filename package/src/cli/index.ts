@@ -3904,6 +3904,28 @@ Categories=Utility;Application;
 			}
 		}
 
+		// Sign .node native modules in Resources/app/bun
+		const resourcesPath = join(contentsPath, "Resources", "app", "bun");
+		if (existsSync(resourcesPath)) {
+			console.log("Signing native modules in Resources/app/bun...");
+			try {
+				const nodeFiles = execSync(`find "${resourcesPath}" -name "*.node" -type f`, {
+					encoding: "utf8",
+				}).trim().split("\n").filter(Boolean);
+
+				for (const nodeFile of nodeFiles) {
+					if (nodeFile) {
+						console.log(`Signing native module: ${nodeFile.replace(resourcesPath + "/", "")}`);
+						execSync(
+							`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${escapePathForTerminal(nodeFile)}`,
+						);
+					}
+				}
+			} catch (err) {
+				console.error("Error signing native modules:", err);
+			}
+		}
+
 		// Note: main.js is now in Resources and will be automatically sealed when signing the app bundle
 
 		// Sign the main executable (launcher) - this should use the app's bundle identifier, not "launcher"
@@ -3983,6 +4005,10 @@ Categories=Utility;Application;
 
 		let statusInfo: string;
 		if (useApiKey) {
+			if (!existsSync(ELECTROBUN_APPLEAPIKEYPATH)) {
+				console.error(`ELECTROBUN_APPLEAPIKEYPATH does not exist: ${ELECTROBUN_APPLEAPIKEYPATH}`);
+				process.exit(1);
+			}
 			statusInfo = execSync(
 				`xcrun notarytool submit --key "${ELECTROBUN_APPLEAPIKEYPATH}" --key-id "${ELECTROBUN_APPLEAPIKEY}" --issuer "${ELECTROBUN_APPLEAPIISSUER}" --wait ${escapePathForTerminal(
 					fileToNotarize,
