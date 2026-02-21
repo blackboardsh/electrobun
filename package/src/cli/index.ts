@@ -506,7 +506,7 @@ async function downloadCustomBun(
 				{ stdio: "inherit" },
 			);
 		} else {
-			execSync(`unzip -o "${tempZipPath}" -d "${overrideDir}"`, {
+			execSync(`unzip -o ${escapePathForTerminal(tempZipPath)} -d ${escapePathForTerminal(overrideDir)}`, {
 				stdio: "inherit",
 			});
 		}
@@ -521,7 +521,7 @@ async function downloadCustomBun(
 
 		// Set execute permissions on non-Windows
 		if (platformOS !== "win") {
-			execSync(`chmod +x "${overrideBinary}"`);
+			execSync(`chmod +x ${escapePathForTerminal(overrideBinary)}`);
 		}
 
 		// Write version stamp
@@ -1184,7 +1184,11 @@ function escapeXml(str: string): string {
 
 // Helper functions
 function escapePathForTerminal(path: string): string {
-	return `"${path.replace(/"/g, '\\"')}"`;
+	if (OS === "win") {
+		return `"${path.replace(/"/g, '""')}"`;
+	} else {
+		return `'${path.replace(/'/g, "'\\''")}'`;
+	}
 }
 
 /**
@@ -2252,7 +2256,7 @@ Categories=Utility;Application;
 								// Fallback to copying the file
 								cpSync(cefFilePath, mainDirPath, { dereference: true });
 								console.log(
-									`Fallback: Copied CEF library to main directory: ${soFile}`,
+									`Fallback: Copying CEF library to main directory: ${soFile}`,
 								);
 							}
 						}
@@ -3851,7 +3855,7 @@ Categories=Utility;Application;
 					} else if (entry.isFile()) {
 						// Check if it's an executable or library
 						try {
-							const fileInfo = execSync(`file -b "${fullPath}"`, {
+							const fileInfo = execSync(`file -b ${escapePathForTerminal(fullPath)}`, {
 								encoding: "utf8",
 							}).trim();
 							if (
