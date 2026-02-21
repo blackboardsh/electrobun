@@ -31,8 +31,6 @@ const AppMetadata = struct {
 const ProgressIndicator = struct {
     child_process: ?std.process.Child,
     allocator: std.mem.Allocator,
-    spinner_thread: ?std.Thread = null,
-    should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     app_name: []const u8 = "",
 
     fn init(allocator: std.mem.Allocator, metadata: AppMetadata) ProgressIndicator {
@@ -51,30 +49,12 @@ const ProgressIndicator = struct {
         return self;
     }
 
-    fn spinnerThread(self: *ProgressIndicator) void {
-        const spinner_chars = [_]u8{ '|', '/', '-', '\\' };
-        var frame: usize = 0;
 
-        // Print initial message once
-        std.debug.print("Installing {s}... ", .{self.app_name});
-
-        while (!self.should_stop.load(.acquire)) {
-            // Print spinner character and backspace over it
-            std.debug.print("{c}\x08", .{spinner_chars[frame]});
-            frame = (frame + 1) % spinner_chars.len;
-            std.time.sleep(100 * std.time.ns_per_ms);
-        }
-
-        // Print final state
-        std.debug.print("Done!\n", .{});
-    }
 
     fn startProgressDialog(self: *ProgressIndicator, metadata: AppMetadata) !void {
-        // On Windows, start a spinner thread in the console
+        // On Windows, use simple console output (no spinner thread to avoid deadlock)
         if (builtin.os.tag == .windows) {
-            // Start spinner thread
-            self.spinner_thread = try std.Thread.spawn(.{}, spinnerThread, .{self});
-            return;
+            return error.NoProgressDialog; // Fallback to simple print
         }
 
         if (builtin.os.tag != .linux) return;
@@ -123,12 +103,6 @@ const ProgressIndicator = struct {
     }
 
     fn deinit(self: *ProgressIndicator) void {
-        // Stop spinner thread if running
-        if (self.spinner_thread) |thread| {
-            self.should_stop.store(true, .release);
-            thread.join();
-        }
-
         if (self.child_process) |*child| {
             // Close stdin to signal completion for zenity
             if (child.stdin) |stdin| {
@@ -406,22 +380,34 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     var decompressed_data = std.ArrayList(u8).init(allocator);
     defer decompressed_data.deinit();
 
-    // Decompress in chunks
+    // Decompress in chunks with progress dots
+    std.debug.print("Decompressing", .{});
     var buffer: [4096]u8 = undefined;
+    var bytes_processed: usize = 0;
+    const dot_interval = 10 * 1024 * 1024; // Print dot every 10MB
+    
     while (true) {
         const read_size = try decompressor.reader().read(&buffer);
         if (read_size == 0) break;
         try decompressed_data.appendSlice(buffer[0..read_size]);
+        
+        bytes_processed += read_size;
+        if (bytes_processed >= dot_interval) {
+            std.debug.print(".", .{});
+            bytes_processed = 0;
+        }
     }
+    std.debug.print(" Done!\n", .{});
 
     // For Linux: Save the compressed archive to self-extraction directory (for future updates)
     // This is similar to what macOS does to enable the Updater API to apply patches
     // We'll save tar files after extraction to avoid them being deleted
 
     // Extract tar archive to self-extraction directory first
-    std.debug.print("Extracting application files...\n", .{});
+    std.debug.print("Extracting files", .{});
 
     try extractTar(allocator, decompressed_data.items, self_extraction_dir);
+    std.debug.print(" Done!\n", .{});
 
     // Now move the extracted app to the app directory
     // The app bundle is nested inside self-extraction, we need to find it
@@ -517,6 +503,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
 
         // Copy contents from extracted path to app directory
         try copyDirectory(allocator, extracted_app_path, app_dir);
+        std.debug.print(".", .{});
 
         // Remove the extracted directory after successful copy
         std.fs.cwd().deleteTree(extracted_app_path) catch {};
@@ -551,6 +538,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
 
     if (builtin.os.tag == .windows) {
         try createWindowsShortcut(allocator, app_dir, metadata);
+        std.debug.print(".", .{});
     }
 
     // Save tar file for Updater API on Linux and Windows after everything else is done
@@ -589,6 +577,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         }
     }
 
+    std.debug.print(" Done!\n", .{});
     std.debug.print("Installation completed successfully!\n", .{});
     return true;
 }
