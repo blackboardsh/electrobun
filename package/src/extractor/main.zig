@@ -503,7 +503,6 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
 
         // Copy contents from extracted path to app directory
         try copyDirectory(allocator, extracted_app_path, app_dir);
-        std.debug.print(".", .{});
 
         // Remove the extracted directory after successful copy
         std.fs.cwd().deleteTree(extracted_app_path) catch {};
@@ -538,7 +537,6 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
 
     if (builtin.os.tag == .windows) {
         try createWindowsShortcut(allocator, app_dir, metadata);
-        std.debug.print(".", .{});
     }
 
     // Save tar file for Updater API on Linux and Windows after everything else is done
