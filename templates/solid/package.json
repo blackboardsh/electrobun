@@ -1,0 +1,24 @@
+{
+	"name": "electrobun-solid",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "Electrobun app with SolidJS and Vite HMR",
+	"scripts": {
+		"start": "vite build && electrobun dev",
+		"dev": "electrobun dev --watch",
+		"dev:hmr": "concurrently \"bun run hmr\" \"bun run start\"",
+		"hmr": "vite --port 5173",
+		"build:canary": "vite build && electrobun build --env=canary"
+	},
+	"dependencies": {
+		"electrobun": "latest"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"concurrently": "^9.1.0",
+		"solid-js": "^1.9.3",
+		"typescript": "^5.7.2",
+		"vite": "^6.0.3",
+		"vite-plugin-solid": "^2.11.0"
+	}
+}

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Notes</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h1>Notes</h1>
+          <button id="new-note" class="icon-btn" title="New Note">+</button>
+        </div>
+        <div id="note-list" class="note-list"></div>
+      </aside>
+      <main class="editor">
+        <div id="editor-empty" class="editor-empty">
+          <p>Select a note or create a new one</p>
+        </div>
+        <div id="editor-active" class="editor-active" style="display: none;">
+          <div class="editor-header">
+            <input type="text" id="note-title" placeholder="Note title..." />
+            <div class="editor-actions">
+              <button id="export-btn" class="action-btn" title="Export">Export</button>
+              <button id="delete-btn" class="action-btn danger" title="Delete">Delete</button>
+            </div>
+          </div>
+          <textarea id="note-content" placeholder="Start writing..."></textarea>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="index.ts"></script>
+  </body>
+</html>

@@ -3,7 +3,6 @@ import { BrowserWindow, Updater } from "electrobun/bun";
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
 
-// Check if Vite dev server is running for HMR
 async function getMainViewUrl(): Promise<string> {
 	const channel = await Updater.localInfo.channel();
 	if (channel === "dev") {
@@ -20,11 +19,10 @@ async function getMainViewUrl(): Promise<string> {
 	return "views://mainview/index.html";
 }
 
-// Create the main application window
 const url = await getMainViewUrl();
 
 const mainWindow = new BrowserWindow({
-	title: "React + Tailwind + Vite",
+	title: "Angular App",
 	url,
 	frame: {
 		width: 900,
@@ -34,4 +32,4 @@ const mainWindow = new BrowserWindow({
 	},
 });
 
-console.log("React Tailwind Vite app started!");
+console.log("Angular app started!");

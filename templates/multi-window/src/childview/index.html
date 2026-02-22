@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Child Window</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1 id="window-title">Child Window</h1>
+
+      <div class="card">
+        <h2>Send Message</h2>
+        <div class="input-group">
+          <input type="text" id="message-input" placeholder="Type a message to main window..." />
+          <button id="send-main" class="primary">Send to Main</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Messages</h2>
+        <div id="messages" class="message-log">
+          <div class="empty-state">No messages yet</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="index.ts"></script>
+  </body>
+</html>

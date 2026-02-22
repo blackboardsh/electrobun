@@ -1,0 +1,28 @@
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	padding: 0;
+	font-family:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+		Cantarell, sans-serif;
+}
+
+.container {
+	max-width: 500px;
+	margin: 60px auto;
+	text-align: center;
+	color: #333;
+}
+
+h1 {
+	font-size: 2rem;
+	margin-bottom: 10px;
+}
+
+p {
+	color: #666;
+	line-height: 1.6;
+}

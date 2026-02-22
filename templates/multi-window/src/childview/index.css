@@ -1,0 +1,105 @@
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	padding: 0;
+	font-family:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+		Cantarell, sans-serif;
+	background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+	min-height: 100vh;
+}
+
+.container {
+	max-width: 500px;
+	margin: 0 auto;
+	padding: 30px 20px;
+}
+
+h1 {
+	color: white;
+	font-size: 1.8rem;
+	text-align: center;
+	margin-bottom: 20px;
+	text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.card {
+	background: white;
+	border-radius: 12px;
+	padding: 20px;
+	margin-bottom: 16px;
+	box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+h2 {
+	color: #a18cd1;
+	margin-top: 0;
+	margin-bottom: 12px;
+	font-size: 1.1rem;
+}
+
+.input-group {
+	display: flex;
+	gap: 10px;
+}
+
+input[type="text"] {
+	flex: 1;
+	padding: 10px 14px;
+	font-size: 0.9rem;
+	border: 2px solid #e0e0e0;
+	border-radius: 8px;
+	outline: none;
+}
+
+input[type="text"]:focus {
+	border-color: #a18cd1;
+}
+
+button.primary {
+	padding: 10px 18px;
+	font-size: 0.9rem;
+	font-weight: 500;
+	border: none;
+	border-radius: 8px;
+	cursor: pointer;
+	background: #a18cd1;
+	color: white;
+	transition: all 0.2s ease;
+}
+
+button.primary:hover {
+	background: #8e7ab5;
+	transform: translateY(-1px);
+}
+
+.message-log {
+	max-height: 200px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.message-entry {
+	padding: 8px 12px;
+	background: #f5f0ff;
+	border-radius: 6px;
+	font-size: 0.9rem;
+	color: #333;
+}
+
+.message-entry .from {
+	font-weight: 600;
+	color: #a18cd1;
+}
+
+.empty-state {
+	color: #999;
+	font-style: italic;
+	text-align: center;
+	padding: 20px;
+}

@@ -1,4 +1,4 @@
-import { BrowserWindow, BrowserView, Utils } from "electrobun/bun";
+import { BrowserWindow, BrowserView } from "electrobun/bun";
 
 console.log("🌐 Multitab Browser starting...");
 
@@ -133,10 +133,5 @@ const mainWindow = new BrowserWindow({
 
 // Store reference to mainWindow RPC for sending messages
 mainRPC = mainWindow.webview.rpc;
-
-// Quit the app when the main window is closed
-mainWindow.on("close", () => {
-	Utils.quit();
-});
 
 console.log("✅ Multitab Browser initialized");

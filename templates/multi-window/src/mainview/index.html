@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multi-Window Demo</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Multi-Window Demo</h1>
+      <p class="subtitle">Create and communicate between windows</p>
+
+      <div class="card">
+        <h2>Windows</h2>
+        <div class="button-group">
+          <button id="open-child" class="primary">Open New Window</button>
+        </div>
+        <div id="child-list" class="child-list"></div>
+      </div>
+
+      <div class="card">
+        <h2>Send Message</h2>
+        <div class="input-group">
+          <select id="target-window">
+            <option value="">Select a window...</option>
+          </select>
+          <input type="text" id="message-input" placeholder="Type a message..." />
+          <button id="send-btn" class="primary">Send</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Messages</h2>
+        <div id="messages" class="message-log"></div>
+      </div>
+    </div>
+    <script type="module" src="index.ts"></script>
+  </body>
+</html>

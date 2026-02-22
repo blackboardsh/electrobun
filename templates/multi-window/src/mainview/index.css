@@ -1,0 +1,157 @@
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	padding: 0;
+	font-family:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+		Cantarell, sans-serif;
+	background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+	min-height: 100vh;
+}
+
+.container {
+	max-width: 700px;
+	margin: 0 auto;
+	padding: 40px 20px;
+}
+
+h1 {
+	color: white;
+	font-size: 2.5rem;
+	text-align: center;
+	margin-bottom: 8px;
+	text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.subtitle {
+	color: rgba(255, 255, 255, 0.9);
+	font-size: 1.1rem;
+	text-align: center;
+	margin-top: 0;
+	margin-bottom: 30px;
+}
+
+.card {
+	background: white;
+	border-radius: 12px;
+	padding: 24px;
+	margin-bottom: 16px;
+	box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+h2 {
+	color: #667eea;
+	margin-top: 0;
+	margin-bottom: 15px;
+	font-size: 1.2rem;
+}
+
+.button-group {
+	display: flex;
+	gap: 10px;
+	margin-bottom: 15px;
+}
+
+button {
+	padding: 10px 20px;
+	font-size: 0.9rem;
+	font-weight: 500;
+	border: none;
+	border-radius: 8px;
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+button.primary {
+	background: #667eea;
+	color: white;
+}
+
+button.primary:hover {
+	background: #5a6fd6;
+	transform: translateY(-1px);
+}
+
+button.danger {
+	background: #e74c3c;
+	color: white;
+	padding: 6px 12px;
+	font-size: 0.8rem;
+}
+
+button.danger:hover {
+	background: #c0392b;
+}
+
+.child-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.child-item {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 10px 15px;
+	background: #f8f9fa;
+	border-radius: 8px;
+	color: #333;
+}
+
+.input-group {
+	display: flex;
+	gap: 10px;
+}
+
+select, input[type="text"] {
+	padding: 10px 14px;
+	font-size: 0.9rem;
+	border: 2px solid #e0e0e0;
+	border-radius: 8px;
+	outline: none;
+	transition: border-color 0.2s;
+}
+
+select:focus, input[type="text"]:focus {
+	border-color: #667eea;
+}
+
+select {
+	min-width: 160px;
+}
+
+input[type="text"] {
+	flex: 1;
+}
+
+.message-log {
+	max-height: 200px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.message-entry {
+	padding: 8px 12px;
+	background: #f0f2ff;
+	border-radius: 6px;
+	font-size: 0.9rem;
+	color: #333;
+}
+
+.message-entry .from {
+	font-weight: 600;
+	color: #667eea;
+}
+
+.empty-state {
+	color: #999;
+	font-style: italic;
+	text-align: center;
+	padding: 20px;
+}
