@@ -1149,6 +1149,14 @@ const defaultConfig = {
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
 			chromiumFlags: undefined as Record<string, string | true> | undefined,
+			flatpak: undefined as
+				| {
+						enabled?: boolean;
+						runtimeVersion?: string;
+						categories?: string[];
+						extraFinishArgs?: string[];
+				  }
+				| undefined,
 		},
 		bun: {
 			entrypoint: "src/bun/index.ts",
@@ -1217,6 +1225,203 @@ function escapeXml(str: string): string {
 // Helper functions
 function escapePathForTerminal(path: string): string {
 	return `"${path.replace(/"/g, '\\"')}"`;
+}
+
+// ---------------------------------------------------------------------------
+// Flatpak support helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a Flatpak manifest YAML string for the given app.
+ *
+ * The app bundle directory (appFileName/) is copied verbatim into /app/ so the
+ * launcher's existing relative-path logic keeps working unchanged.
+ */
+function generateFlatpakManifest(
+	config: any,
+	appFileName: string,
+): string {
+	const appId: string = config.app.identifier;
+	const runtimeVersion: string = config.build.linux?.flatpak?.runtimeVersion ?? "24.08";
+	const extraFinishArgs: string[] = config.build.linux?.flatpak?.extraFinishArgs ?? [];
+
+	const extraLines = extraFinishArgs.map((a) => `  - ${a}`).join("\n");
+
+	return `app-id: ${appId}
+runtime: org.freedesktop.Platform
+runtime-version: '${runtimeVersion}'
+sdk: org.freedesktop.Sdk
+command: launcher
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --share=network
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Notifications${extraLines ? "\n" + extraLines : ""}
+
+modules:
+  - name: ${appFileName}
+    buildsystem: simple
+    build-commands:
+      - cp -r ${appFileName} /app/${appFileName}
+      - mkdir -p /app/bin
+      - ln -sf /app/${appFileName}/bin/launcher /app/bin/launcher
+      - install -Dm644 ${appId}.desktop /app/share/applications/${appId}.desktop
+      - install -Dm644 icon.png /app/share/icons/hicolor/256x256/apps/${appId}.png
+    sources:
+      - type: dir
+        path: .
+`;
+}
+
+/**
+ * Generate a .desktop file for the Flatpak bundle.
+ */
+function generateFlatpakDesktopFile(config: any, appFileName: string): string {
+	const categories: string[] =
+		config.build.linux?.flatpak?.categories ?? ["Utility"];
+	const categoriesStr = categories.join(";") + ";";
+	return `[Desktop Entry]
+Name=${config.app.name}
+Exec=launcher
+Icon=${config.app.identifier}
+Type=Application
+Categories=${categoriesStr}
+`;
+}
+
+/**
+ * Generate a minimal AppStream metainfo XML file.
+ * Required for Flathub submission; harmless otherwise.
+ */
+function generateFlatpakAppdata(config: any): string {
+	const appId: string = config.app.identifier;
+	const name: string = config.app.name;
+	const summary: string = config.app.description ?? `${name} application`;
+	const homepage: string = config.app.homepage ?? "";
+	const version: string = config.app.version ?? "0.0.1";
+	const date: string = new Date().toISOString().split("T")[0];
+
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>${appId}</id>
+  <name>${name}</name>
+  <summary>${summary}</summary>
+  <description>
+    <p>${summary}</p>
+  </description>
+  <url type="homepage">${homepage}</url>
+  <releases>
+    <release version="${version}" date="${date}"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>
+`;
+}
+
+/**
+ * Build a .flatpak bundle from the already-assembled app directory.
+ *
+ * Requires `flatpak` and `flatpak-builder` to be installed on the build host.
+ * If they are not found the function prints a warning and returns null.
+ *
+ * Returns the path to the produced .flatpak file on success, null on skip.
+ */
+async function createFlatpakBundle(
+	buildFolder: string,
+	appBundlePath: string,
+	appFileName: string,
+	config: any,
+): Promise<string | null> {
+	// Check for required tools
+	const hasFlatpakBuilder = Bun.spawnSync(["which", "flatpak-builder"]).exitCode === 0;
+	const hasFlatpak = Bun.spawnSync(["which", "flatpak"]).exitCode === 0;
+	if (!hasFlatpakBuilder || !hasFlatpak) {
+		console.warn(
+			"WARNING: flatpak and/or flatpak-builder not found — skipping Flatpak bundle. " +
+			"Install them with: sudo apt install flatpak flatpak-builder  (or equivalent)",
+		);
+		return null;
+	}
+
+	const appId: string = config.app.identifier;
+	const stagingDir = join(buildFolder, "flatpak-staging");
+	const flatpakBuildDir = join(buildFolder, "flatpak-build");
+	const flatpakFile = join(buildFolder, `${appFileName}.flatpak`);
+
+	// Clean up any previous staging artefacts
+	if (existsSync(stagingDir)) {
+		rmSync(stagingDir, { recursive: true, force: true });
+	}
+	if (existsSync(flatpakBuildDir)) {
+		rmSync(flatpakBuildDir, { recursive: true, force: true });
+	}
+
+	mkdirSync(stagingDir, { recursive: true });
+
+	// 1. Write manifest, .desktop and appdata into staging dir
+	writeFileSync(join(stagingDir, `${appId}.yml`), generateFlatpakManifest(config, appFileName));
+	writeFileSync(join(stagingDir, `${appId}.desktop`), generateFlatpakDesktopFile(config, appFileName));
+	writeFileSync(join(stagingDir, `${appId}.metainfo.xml`), generateFlatpakAppdata(config));
+
+	// 2. Copy the assembled app bundle into staging dir
+	cpSync(appBundlePath, join(stagingDir, appFileName), { recursive: true, dereference: true });
+
+	// 3. Copy icon if available
+	const iconSourcePath = config.build.linux?.icon
+		? join(process.cwd(), config.build.linux.icon)
+		: null;
+	if (iconSourcePath && existsSync(iconSourcePath)) {
+		cpSync(iconSourcePath, join(stagingDir, "icon.png"), { dereference: true });
+	} else {
+		// Create a 1×1 transparent PNG placeholder so the build doesn't fail
+		const placeholder = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+			"base64",
+		);
+		writeFileSync(join(stagingDir, "icon.png"), placeholder);
+	}
+
+	// 4. Run flatpak-builder
+	console.log(`Running flatpak-builder for ${appId}…`);
+	const builderResult = Bun.spawnSync(
+		[
+			"flatpak-builder",
+			"--force-clean",
+			"--repo=" + join(flatpakBuildDir, "repo"),
+			join(flatpakBuildDir, "build"),
+			join(stagingDir, `${appId}.yml`),
+		],
+		{ cwd: stagingDir, stdio: ["ignore", "inherit", "inherit"] },
+	);
+	if (builderResult.exitCode !== 0) {
+		throw new Error(`flatpak-builder failed with exit code ${builderResult.exitCode}`);
+	}
+
+	// 5. Create the .flatpak bundle
+	console.log(`Creating ${appFileName}.flatpak bundle…`);
+	const bundleResult = Bun.spawnSync(
+		[
+			"flatpak",
+			"build-bundle",
+			join(flatpakBuildDir, "repo"),
+			flatpakFile,
+			appId,
+		],
+		{ cwd: stagingDir, stdio: ["ignore", "inherit", "inherit"] },
+	);
+	if (bundleResult.exitCode !== 0) {
+		throw new Error(`flatpak build-bundle failed with exit code ${bundleResult.exitCode}`);
+	}
+
+	const stats = statSync(flatpakFile);
+	console.log(
+		`✓ Flatpak bundle created: ${flatpakFile} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`,
+	);
+	return flatpakFile;
 }
 
 /**
@@ -2851,6 +3056,19 @@ Categories=Utility;Application;
 
 			// Tar the app bundle for all platforms
 			createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
+
+			// Build Flatpak bundle for Linux (before removing the app bundle folder)
+			if (targetOS === "linux" && config.build.linux?.flatpak?.enabled) {
+				const flatpakPath = await createFlatpakBundle(
+					buildFolder,
+					appBundleFolderPath,
+					appFileName,
+					config,
+				);
+				if (flatpakPath) {
+					artifactsToUpload.push(flatpakPath);
+				}
+			}
 
 			// Remove the app bundle folder after tarring (except on Linux where it might be needed for dev)
 			if (targetOS !== "linux" || buildEnvironment !== "dev") {
