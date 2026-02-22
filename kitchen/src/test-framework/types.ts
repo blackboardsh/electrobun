@@ -57,6 +57,7 @@ export interface WindowOptions {
   titleBarStyle?: 'default' | 'hiddenInset';
   renderer?: 'cef' | 'native';
   sandbox?: boolean; // When true, disables RPC and only allows event emission
+  contentProtection?: boolean; // macOS only: prevents screen capture/sharing
 }
 
 export interface TestWindow {

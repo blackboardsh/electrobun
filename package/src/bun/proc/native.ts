@@ -92,11 +92,15 @@ export const native = (() => {
 					FFIType.function, // closeHandler
 					FFIType.function, // moveHandler
 					FFIType.function, // resizeHandler
-					FFIType.function, // focusHandler
-				],
-				returns: FFIType.ptr,
-			},
-			setWindowTitle: {
+				FFIType.function, // focusHandler
+			],
+			returns: FFIType.ptr,
+		},
+		setWindowContentProtection: {
+			args: [FFIType.ptr, FFIType.bool],
+			returns: FFIType.void,
+		},
+		setWindowTitle: {
 				args: [
 					FFIType.ptr, // window ptr
 					FFIType.cstring, // title
@@ -605,6 +609,7 @@ export const ffi = {
 			};
 			titleBarStyle: string;
 			transparent: boolean;
+			contentProtection: boolean;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -625,11 +630,12 @@ export const ffi = {
 					NonactivatingPanel,
 					HUDWindow,
 				},
-				titleBarStyle,
-				transparent,
-			} = params;
+			titleBarStyle,
+			transparent,
+			contentProtection,
+		} = params;
 
-			const styleMask = native.symbols.getWindowStyle(
+		const styleMask = native.symbols.getWindowStyle(
 				Borderless,
 				Titled,
 				Closable,
@@ -667,6 +673,11 @@ export const ffi = {
 			}
 
 			native.symbols.setWindowTitle(windowPtr, toCString(title));
+
+			if (contentProtection) {
+				native.symbols.setWindowContentProtection(windowPtr, true);
+			}
+
 			native.symbols.showWindow(windowPtr);
 
 			return windowPtr;
@@ -813,6 +824,17 @@ export const ffi = {
 			}
 
 			return native.symbols.isWindowAlwaysOnTop(windowPtr);
+		},
+
+		setWindowContentProtection: (params: { winId: number; enabled: boolean }) => {
+			const { winId, enabled } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+			if (!windowPtr) {
+				throw `Can't set content protection. Window no longer exists`;
+			}
+
+			native.symbols.setWindowContentProtection(windowPtr, enabled);
 		},
 
 		setWindowPosition: (params: { winId: number; x: number; y: number }) => {

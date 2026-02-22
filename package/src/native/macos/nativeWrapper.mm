@@ -5847,6 +5847,16 @@ extern "C" void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
     });
 }
 
+extern "C" void setWindowContentProtection(NSWindow *window, bool enabled) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if (enabled) {
+            [window setSharingType:NSWindowSharingNone];
+        } else {
+            [window setSharingType:NSWindowSharingReadOnly];
+        }
+    });
+}
+
 extern "C" bool isWindowAlwaysOnTop(NSWindow *window) {
     __block bool result = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
