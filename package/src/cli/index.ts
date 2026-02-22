@@ -1388,8 +1388,7 @@ command: launcher
 
 finish-args:
   - --share=ipc
-  - --socket=fallback-x11
-  - --socket=wayland
+  - --socket=x11
   - --device=dri
   - --share=network
   - --talk-name=org.kde.StatusNotifierWatcher
