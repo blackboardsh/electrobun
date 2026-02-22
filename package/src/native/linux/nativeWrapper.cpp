@@ -4908,15 +4908,22 @@ void initializeGTK() {
     {
         std::unique_lock<std::mutex> lock(g_gtkInitMutex);
         if (!g_gtkInitialized) {
-            // Force X11 backend on Wayland systems
-            setenv("GDK_BACKEND", "x11", 1);
-            
+            // CEF requires X11 (no native Wayland support). When CEF is
+            // bundled, force GDK_BACKEND=x11 so everything runs under
+            // XWayland. When CEF is absent, let GTK choose the best backend
+            // (Wayland-native on a Wayland session, X11 otherwise).
+            if (isCEFAvailable()) {
+                setenv("GDK_BACKEND", "x11", 1);
+            }
+
             // Disable setlocale before gtk_init to prevent CEF conflicts
             gtk_disable_setlocale();
             gtk_init(nullptr, nullptr);
-            
-            // Install X11 error handler for debugging
-            XSetErrorHandler(x11_error_handler);
+
+            // Install X11 error handler — only valid for X11 displays
+            if (GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
+                XSetErrorHandler(x11_error_handler);
+            }
             
             g_gtkInitialized = true;
             
@@ -5462,8 +5469,6 @@ void runGTKEventLoop() {
     // Initialize GTK on the main thread (this MUST be done here)
     initializeGTK();
     printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === GTK EVENT LOOP STARTED ===\n");
-
-    // Note: GDK_BACKEND=x11 forced for Wayland compatibility
 
     gtk_main();
     g_shutdownComplete.store(true);
