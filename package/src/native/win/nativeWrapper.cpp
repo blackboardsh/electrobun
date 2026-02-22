@@ -8984,6 +8984,25 @@ ELECTROBUN_EXPORT bool isWindowVisibleOnAllWorkspaces(NSWindow *window) {
     return false;
 }
 
+// Note: WDA_EXCLUDEFROMCAPTURE is available on Windows 10 version 2004 and newer.
+// For older versions, WDA_MONITOR (0x01) can be used.
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
+
+ELECTROBUN_EXPORT void setWindowContentProtection(NSWindow *window, bool enabled) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in setWindowContentProtection");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        SetWindowDisplayAffinity(hwnd, enabled ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+    });
+}
+
 ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     if (!IsWindow(hwnd)) return;

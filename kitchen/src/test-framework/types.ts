@@ -60,6 +60,7 @@ export interface WindowOptions {
   renderer?: 'cef' | 'native';
   hidden?: boolean;
   sandbox?: boolean; // When true, disables RPC and only allows event emission
+  contentProtection?: boolean; // macOS only: prevents screen capture/sharing
 }
 
 export interface TestWindow {

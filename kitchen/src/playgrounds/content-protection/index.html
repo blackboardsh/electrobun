@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Content Protection Playground</title>
+		<script src="views://playgrounds/content-protection/index.js"></script>
+		<style>
+			body {
+				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+					sans-serif;
+				background-color: #1a1a1a;
+				color: #e0e0e0;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				height: 100vh;
+				margin: 0;
+				text-align: center;
+			}
+			.container {
+				background-color: #2d2d2d;
+				padding: 2rem;
+				border-radius: 12px;
+				box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+				max-width: 500px;
+			}
+			h1 {
+				color: #4ade80;
+				margin-bottom: 1rem;
+			}
+			p {
+				line-height: 1.5;
+				margin-bottom: 2rem;
+			}
+			.status-box {
+				padding: 1rem;
+				border-radius: 8px;
+				margin-bottom: 2rem;
+				font-weight: bold;
+				transition: all 0.3s ease;
+			}
+			.status-on {
+				background-color: #064e3b;
+				color: #4ade80;
+				border: 1px solid #4ade80;
+			}
+			.status-off {
+				background-color: #451a1a;
+				color: #f87171;
+				border: 1px solid #f87171;
+			}
+			button {
+				background-color: #3b82f6;
+				color: white;
+				border: none;
+				padding: 12px 24px;
+				border-radius: 6px;
+				font-size: 16px;
+				font-weight: 600;
+				cursor: pointer;
+				transition: background-color 0.2s;
+			}
+			button:hover {
+				background-color: #2563eb;
+			}
+			.instructions {
+				margin-top: 2rem;
+				font-size: 14px;
+				color: #a0a0a0;
+				text-align: left;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="container">
+			<h1>🛡️ Content Protection</h1>
+
+			<div id="statusBox" class="status-box status-on">PROTECTION IS ON</div>
+
+			<p>
+				When protection is <b>ON</b>, this window should be blacked out or invisible in
+				screenshots (Cmd+Shift+4) and screen sharing apps.
+			</p>
+
+			<button id="toggleBtn">Toggle Protection</button>
+
+			<div class="instructions">
+				<b>To test:</b>
+				<ol>
+					<li>Try taking a screenshot of this window.</li>
+					<li>Toggle protection OFF and try again.</li>
+					<li>Verify the difference.</li>
+				</ol>
+			</div>
+		</div>
+	</body>
+</html>

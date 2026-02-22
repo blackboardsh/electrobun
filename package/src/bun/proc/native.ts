@@ -106,6 +106,10 @@ export const native = (() => {
 				],
 				returns: FFIType.ptr,
 			},
+			setWindowContentProtection: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
 			setWindowTitle: {
 				args: [
 					FFIType.ptr, // window ptr
@@ -757,6 +761,7 @@ export const ffi = {
 			titleBarStyle: string;
 			transparent: boolean;
 			hidden?: boolean;
+			contentProtection: boolean;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -780,9 +785,10 @@ export const ffi = {
 				titleBarStyle,
 				transparent,
 				hidden = false,
+				contentProtection,
 			} = params;
 
-			const styleMask = native.symbols.getWindowStyle(
+		const styleMask = native.symbols.getWindowStyle(
 				Borderless,
 				Titled,
 				Closable,
@@ -822,6 +828,10 @@ export const ffi = {
 			}
 
 			native.symbols.setWindowTitle(windowPtr, toCString(title));
+			if (contentProtection) {
+				native.symbols.setWindowContentProtection(windowPtr, true);
+			}
+
 			if (!hidden) {
 				native.symbols.showWindow(windowPtr);
 			}
@@ -999,6 +1009,17 @@ export const ffi = {
 			}
 
 			return native.symbols.isWindowVisibleOnAllWorkspaces(windowPtr);
+		},
+
+		setWindowContentProtection: (params: { winId: number; enabled: boolean }) => {
+			const { winId, enabled } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+			if (!windowPtr) {
+				throw `Can't set content protection. Window no longer exists`;
+			}
+
+			native.symbols.setWindowContentProtection(windowPtr, enabled);
 		},
 
 		setWindowPosition: (params: { winId: number; x: number; y: number }) => {
