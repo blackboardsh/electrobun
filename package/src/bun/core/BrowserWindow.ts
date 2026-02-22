@@ -36,6 +36,8 @@ export type WindowOptionsType<T = undefined> = {
 	// Use for untrusted content (remote URLs) to prevent malicious sites from
 	// accessing internal APIs, creating OOPIFs, or communicating with Bun
 	sandbox: boolean;
+	// contentProtection: when true, prevents the window from being captured or shared (macOS only)
+	contentProtection: boolean;
 };
 
 const defaultOptions: WindowOptionsType = {
@@ -54,6 +56,7 @@ const defaultOptions: WindowOptionsType = {
 	transparent: false,
 	navigationRules: null,
 	sandbox: false,
+	contentProtection: false,
 };
 
 export const BrowserWindowMap: {
@@ -64,8 +67,7 @@ export const BrowserWindowMap: {
 electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
 	delete BrowserWindowMap[event.data.id];
 
-	const exitOnLastWindowClosed =
-		buildConfig.runtime?.exitOnLastWindowClosed ?? true;
+	const exitOnLastWindowClosed = buildConfig.runtime?.exitOnLastWindowClosed ?? true;
 
 	if (exitOnLastWindowClosed && Object.keys(BrowserWindowMap).length === 0) {
 		quit();
@@ -85,6 +87,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
+	contentProtection: boolean = false;
 	frame: {
 		x: number;
 		y: number;
@@ -111,6 +114,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.transparent = options.transparent ?? false;
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
+		this.contentProtection = options.contentProtection ?? false;
 
 		this.init(options);
 	}
@@ -120,6 +124,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		styleMask,
 		titleBarStyle,
 		transparent,
+		contentProtection,
 	}: Partial<WindowOptionsType<T>>) {
 		this.ptr = ffi.request.createWindow({
 			id: this.id,
@@ -162,6 +167,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
+			contentProtection: contentProtection ?? false,
 		}) as Pointer;
 
 		BrowserWindowMap[this.id] = this;
@@ -263,6 +269,11 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 
 	isAlwaysOnTop(): boolean {
 		return ffi.request.isWindowAlwaysOnTop({ winId: this.id });
+	}
+
+	setContentProtection(enabled: boolean) {
+		this.contentProtection = enabled;
+		return ffi.request.setWindowContentProtection({ winId: this.id, enabled });
 	}
 
 	setPosition(x: number, y: number) {
