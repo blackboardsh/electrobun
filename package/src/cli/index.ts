@@ -367,7 +367,13 @@ function getEffectiveCEFDir(
 	cefVersion?: string,
 ): string {
 	if (cefVersion) {
-		return join(projectRoot, "node_modules", ".electrobun-cache", "cef-override", `${platformOS}-${platformArch}`);
+		return join(
+			projectRoot,
+			"node_modules",
+			".electrobun-cache",
+			"cef-override",
+			`${platformOS}-${platformArch}`,
+		);
 	}
 	return getPlatformPaths(platformOS, platformArch).CEF_DIR;
 }
@@ -387,7 +393,13 @@ async function ensureBunBinary(
 	}
 
 	const binExt = targetOS === "win" ? ".exe" : "";
-	const overrideDir = join(projectRoot, "node_modules", ".electrobun-cache", "bun-override", `${targetOS}-${targetArch}`);
+	const overrideDir = join(
+		projectRoot,
+		"node_modules",
+		".electrobun-cache",
+		"bun-override",
+		`${targetOS}-${targetArch}`,
+	);
 	const overrideBinary = join(overrideDir, `bun${binExt}`);
 	const versionFile = join(overrideDir, ".bun-version");
 
@@ -431,17 +443,29 @@ async function downloadCustomBun(
 		bunUrlSegment = "bun-windows-x64-baseline.zip";
 		bunDirName = "bun-windows-x64-baseline";
 	} else if (platformOS === "macos") {
-		bunUrlSegment = platformArch === "arm64" ? "bun-darwin-aarch64.zip" : "bun-darwin-x64.zip";
-		bunDirName = platformArch === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
+		bunUrlSegment =
+			platformArch === "arm64"
+				? "bun-darwin-aarch64.zip"
+				: "bun-darwin-x64.zip";
+		bunDirName =
+			platformArch === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
 	} else if (platformOS === "linux") {
-		bunUrlSegment = platformArch === "arm64" ? "bun-linux-aarch64.zip" : "bun-linux-x64.zip";
-		bunDirName = platformArch === "arm64" ? "bun-linux-aarch64" : "bun-linux-x64";
+		bunUrlSegment =
+			platformArch === "arm64" ? "bun-linux-aarch64.zip" : "bun-linux-x64.zip";
+		bunDirName =
+			platformArch === "arm64" ? "bun-linux-aarch64" : "bun-linux-x64";
 	} else {
 		throw new Error(`Unsupported platform for custom Bun: ${platformOS}`);
 	}
 
 	const binExt = platformOS === "win" ? ".exe" : "";
-	const overrideDir = join(projectRoot, "node_modules", ".electrobun-cache", "bun-override", `${platformOS}-${platformArch}`);
+	const overrideDir = join(
+		projectRoot,
+		"node_modules",
+		".electrobun-cache",
+		"bun-override",
+		`${platformOS}-${platformArch}`,
+	);
 	const overrideBinary = join(overrideDir, `bun${binExt}`);
 	const bunUrl = `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/${bunUrlSegment}`;
 
@@ -516,7 +540,9 @@ async function downloadCustomBun(
 		if (existsSync(extractedBinary)) {
 			renameSync(extractedBinary, overrideBinary);
 		} else {
-			throw new Error(`Bun binary not found after extraction at ${extractedBinary}`);
+			throw new Error(
+				`Bun binary not found after extraction at ${extractedBinary}`,
+			);
 		}
 
 		// Set execute permissions on non-Windows
@@ -530,7 +556,8 @@ async function downloadCustomBun(
 		// Clean up
 		if (existsSync(tempZipPath)) unlinkSync(tempZipPath);
 		const extractedDir = join(overrideDir, bunDirName);
-		if (existsSync(extractedDir)) rmSync(extractedDir, { recursive: true, force: true });
+		if (existsSync(extractedDir))
+			rmSync(extractedDir, { recursive: true, force: true });
 
 		console.log(
 			`Custom Bun ${bunVersion} for ${platformOS}-${platformArch} set up successfully`,
@@ -569,7 +596,11 @@ async function ensureCEFDependencies(
 	// If custom CEF version specified, download from Spotify CDN
 	// Custom CEF is stored in vendors/cef-override/ to survive dist rebuilds
 	if (cefVersion) {
-		const overrideDir = getEffectiveCEFDir(platformOS, platformArch, cefVersion);
+		const overrideDir = getEffectiveCEFDir(
+			platformOS,
+			platformArch,
+			cefVersion,
+		);
 		// Check if already downloaded with matching version
 		const cefVersionFile = join(overrideDir, ".cef-version");
 		if (existsSync(overrideDir) && existsSync(cefVersionFile)) {
@@ -978,10 +1009,9 @@ async function downloadAndExtractCustomCEF(
 		);
 
 		// Extract tar.bz2 using system tar (bz2 requires it)
-		execSync(
-			`tar -xjf "${tempFile}" --strip-components=1 -C "${cefDir}"`,
-			{ stdio: "inherit" },
-		);
+		execSync(`tar -xjf "${tempFile}" --strip-components=1 -C "${cefDir}"`, {
+			stdio: "inherit",
+		});
 
 		// The Spotify distribution layout has runtime files in Release/ and Resources/
 		// subdirectories, but the CLI expects them at the cef/ root. Copy them up.
@@ -1127,6 +1157,8 @@ const defaultConfig = {
 			| Record<string, { entrypoint: string; [key: string]: unknown }>
 			| undefined,
 		copy: undefined as Record<string, string> | undefined,
+		watch: undefined as string[] | undefined,
+		watchIgnore: undefined as string[] | undefined,
 	},
 	runtime: {} as Record<string, unknown>,
 	scripts: {
@@ -1191,73 +1223,73 @@ function escapePathForTerminal(path: string): string {
  * Creates a Linux installer tar.gz containing:
  * - Self-extracting installer executable (with embedded app archive)
  * - README.txt with instructions
- * 
+ *
  * This replaces the AppImage-based installer to avoid libfuse2 dependency.
  * The installer executable has the compressed app archive embedded within it
  * using magic markers, similar to how Windows installers work.
  */
 async function createLinuxInstallerArchive(
-    buildFolder: string,
-    compressedTarPath: string,
-    appFileName: string,
-    config: any,
-    buildEnvironment: string,
-    hash: string,
-    targetPaths: ReturnType<typeof getPlatformPaths>,
+	buildFolder: string,
+	compressedTarPath: string,
+	appFileName: string,
+	config: any,
+	buildEnvironment: string,
+	hash: string,
+	targetPaths: ReturnType<typeof getPlatformPaths>,
 ): Promise<string> {
-    console.log("Creating Linux installer archive...");
+	console.log("Creating Linux installer archive...");
 
-    // Create installer name using sanitized app file name (no spaces, URL-safe)
-    // Note: appFileName already includes the channel suffix for non-stable builds
-    const installerName = `${appFileName}-Setup`;
-    
-    // Create temp directory for staging
-    const stagingDir = join(buildFolder, `${installerName}-staging`);
-    if (existsSync(stagingDir)) {
-        rmSync(stagingDir, { recursive: true, force: true });
-    }
-    mkdirSync(stagingDir, { recursive: true });
+	// Create installer name using sanitized app file name (no spaces, URL-safe)
+	// Note: appFileName already includes the channel suffix for non-stable builds
+	const installerName = `${appFileName}-Setup`;
 
-    try {
-        // 1. Create self-extracting installer binary
-        // Read the extractor binary
-        const extractorBinary = readFileSync(targetPaths.EXTRACTOR);
+	// Create temp directory for staging
+	const stagingDir = join(buildFolder, `${installerName}-staging`);
+	if (existsSync(stagingDir)) {
+		rmSync(stagingDir, { recursive: true, force: true });
+	}
+	mkdirSync(stagingDir, { recursive: true });
 
-        // Read the compressed archive
-        const compressedArchive = readFileSync(compressedTarPath);
+	try {
+		// 1. Create self-extracting installer binary
+		// Read the extractor binary
+		const extractorBinary = readFileSync(targetPaths.EXTRACTOR);
 
-        // Create metadata JSON
-        const metadata = {
-            identifier: config.app.identifier,
-            name: config.app.name,
-            channel: buildEnvironment,
-            hash: hash,
-        };
-        const metadataJson = JSON.stringify(metadata);
-        const metadataBuffer = Buffer.from(metadataJson, "utf8");
+		// Read the compressed archive
+		const compressedArchive = readFileSync(compressedTarPath);
 
-        // Create marker buffers
-        const metadataMarker = Buffer.from("ELECTROBUN_METADATA_V1", "utf8");
-        const archiveMarker = Buffer.from("ELECTROBUN_ARCHIVE_V1", "utf8");
+		// Create metadata JSON
+		const metadata = {
+			identifier: config.app.identifier,
+			name: config.app.name,
+			channel: buildEnvironment,
+			hash: hash,
+		};
+		const metadataJson = JSON.stringify(metadata);
+		const metadataBuffer = Buffer.from(metadataJson, "utf8");
 
-        // Combine extractor + metadata marker + metadata + archive marker + archive
-        const combinedBuffer = Buffer.concat([
-            new Uint8Array(extractorBinary),
-            new Uint8Array(metadataMarker),
-            new Uint8Array(metadataBuffer),
-            new Uint8Array(archiveMarker),
-            new Uint8Array(compressedArchive),
-        ]);
+		// Create marker buffers
+		const metadataMarker = Buffer.from("ELECTROBUN_METADATA_V1", "utf8");
+		const archiveMarker = Buffer.from("ELECTROBUN_ARCHIVE_V1", "utf8");
 
-        // Write the self-extracting installer
-        const installerPath = join(stagingDir, "installer");
-        writeFileSync(installerPath, new Uint8Array(combinedBuffer), {
-            mode: 0o755,
-        });
-        execSync(`chmod +x ${escapePathForTerminal(installerPath)}`);
+		// Combine extractor + metadata marker + metadata + archive marker + archive
+		const combinedBuffer = Buffer.concat([
+			new Uint8Array(extractorBinary),
+			new Uint8Array(metadataMarker),
+			new Uint8Array(metadataBuffer),
+			new Uint8Array(archiveMarker),
+			new Uint8Array(compressedArchive),
+		]);
 
-        // 2. Create README for clarity
-        const readmeContent = `${config.app.name} Installer
+		// Write the self-extracting installer
+		const installerPath = join(stagingDir, "installer");
+		writeFileSync(installerPath, new Uint8Array(combinedBuffer), {
+			mode: 0o755,
+		});
+		execSync(`chmod +x ${escapePathForTerminal(installerPath)}`);
+
+		// 2. Create README for clarity
+		const readmeContent = `${config.app.name} Installer
 ========================
 
 To install ${config.app.name}:
@@ -1269,46 +1301,44 @@ The installer will:
 - Extract the application to ~/.local/share/
 - Create a desktop shortcut with the app's icon
 
-For more information, visit: ${config.app.homepage || 'https://electrobun.dev'}
+For more information, visit: ${config.app.homepage || "https://electrobun.dev"}
 `;
 
-        writeFileSync(join(stagingDir, "README.txt"), readmeContent);
+		writeFileSync(join(stagingDir, "README.txt"), readmeContent);
 
-        // 3. Create the tar.gz archive (extract contents directly, no nested folder)
-        const archiveName = `${installerName}.tar.gz`;
-        const archivePath = join(buildFolder, archiveName);
-        
-        console.log(`Creating installer archive: ${archivePath}`);
-        
-        // Use tar to create the archive, preserving executable permissions
-        // The -C changes to the staging dir, then . archives its contents directly
-        execSync(
-            `tar -czf ${escapePathForTerminal(archivePath)} -C ${escapePathForTerminal(stagingDir)} .`,
-            { stdio: 'inherit', env: { ...process.env, COPYFILE_DISABLE: "1" } }
-        );
+		// 3. Create the tar.gz archive (extract contents directly, no nested folder)
+		const archiveName = `${installerName}.tar.gz`;
+		const archivePath = join(buildFolder, archiveName);
 
-        // Verify the archive was created
-        if (!existsSync(archivePath)) {
-            throw new Error(`Installer archive was not created at expected path: ${archivePath}`);
-        }
+		console.log(`Creating installer archive: ${archivePath}`);
 
-        const stats = statSync(archivePath);
-        console.log(
-            `✓ Linux installer archive created: ${archivePath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`
-        );
+		// Use tar to create the archive, preserving executable permissions
+		// The -C changes to the staging dir, then . archives its contents directly
+		execSync(
+			`tar -czf ${escapePathForTerminal(archivePath)} -C ${escapePathForTerminal(stagingDir)} .`,
+			{ stdio: "inherit", env: { ...process.env, COPYFILE_DISABLE: "1" } },
+		);
 
-        return archivePath;
-    } finally {
-        // Clean up staging directory
-        if (existsSync(stagingDir)) {
-            rmSync(stagingDir, { recursive: true, force: true });
-        }
-    }
+		// Verify the archive was created
+		if (!existsSync(archivePath)) {
+			throw new Error(
+				`Installer archive was not created at expected path: ${archivePath}`,
+			);
+		}
+
+		const stats = statSync(archivePath);
+		console.log(
+			`✓ Linux installer archive created: ${archivePath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`,
+		);
+
+		return archivePath;
+	} finally {
+		// Clean up staging directory
+		if (existsSync(stagingDir)) {
+			rmSync(stagingDir, { recursive: true, force: true });
+		}
+	}
 }
-
-
-
-
 
 // Helper function to generate usage description entries for Info.plist
 function generateUsageDescriptions(
@@ -1508,6 +1538,40 @@ ${schemesXml}
 			? envArg
 			: "dev";
 
+		try {
+			await runBuild(config, buildEnvironment);
+		} catch (error) {
+			if (error instanceof Error) {
+				console.error(error.message);
+			}
+			process.exit(1);
+		}
+	} else if (commandArg === "run") {
+		const config = await getConfig();
+		await runAppWithSignalHandling(config);
+	} else if (commandArg === "dev") {
+		const config = await getConfig();
+		const watchMode = process.argv.includes("--watch");
+
+		if (watchMode) {
+			await runDevWatch(config);
+		} else {
+			try {
+				await runBuild(config, "dev");
+			} catch (error) {
+				if (error instanceof Error) {
+					console.error(error.message);
+				}
+				process.exit(1);
+			}
+			await runAppWithSignalHandling(config);
+		}
+	}
+
+	async function runBuild(
+		config: Awaited<ReturnType<typeof getConfig>>,
+		buildEnvironment: string,
+	) {
 		// Determine current platform as default target
 		const currentTarget = { os: OS, arch: ARCH };
 
@@ -1588,11 +1652,14 @@ ${schemesXml}
 				console.error("Tried to run with bun at:", hostPaths.BUN_BINARY);
 				console.error("Script path:", hookScript);
 				console.error("Working directory:", projectRoot);
-				process.exit(1);
+				throw new Error("Build failed: hook script failed");
 			}
 		};
 
-		const buildIcons = (appBundleFolderResourcesPath: string, appBundleFolderPath: string) => {
+		const buildIcons = (
+			appBundleFolderResourcesPath: string,
+			appBundleFolderPath: string,
+		) => {
 			// Platform-specific icon handling
 			if (targetOS === "macos" && config.build.mac?.icons) {
 				// macOS uses .iconset folders that get converted to .icns using iconutil
@@ -1666,10 +1733,12 @@ StartupWMClass=${config.app.name}
 Categories=Utility;Application;
 `;
 
-				const desktopFilePath = join(appBundleFolderPath, `${config.app.name}.desktop`);
+				const desktopFilePath = join(
+					appBundleFolderPath,
+					`${config.app.name}.desktop`,
+				);
 				writeFileSync(desktopFilePath, desktopContent);
 				console.log(`Created Linux desktop file: ${desktopFilePath}`);
-
 			} else if (targetOS === "win" && config.build.win?.icon) {
 				const iconPath = join(projectRoot, config.build.win.icon);
 				if (existsSync(iconPath)) {
@@ -1692,10 +1761,9 @@ Categories=Utility;Application;
 		const bunSource = join(projectRoot, bunConfig.entrypoint);
 
 		if (!existsSync(bunSource)) {
-			console.error(
+			throw new Error(
 				`failed to bundle ${bunSource} because it doesn't exist.\n You need a config.build.bun.entrypoint source file to build.`,
 			);
-			process.exit(1);
 		}
 
 		// build macos bundle
@@ -1872,7 +1940,11 @@ Categories=Utility;Application;
 
 		// Bun runtime binary
 		// todo (yoav): this only works for the current architecture
-		const bunBinarySourcePath = await ensureBunBinary(currentTarget.os, currentTarget.arch, config.build.bunVersion);
+		const bunBinarySourcePath = await ensureBunBinary(
+			currentTarget.os,
+			currentTarget.arch,
+			config.build.bunVersion,
+		);
 		// Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
 		// in node_modules, so we have to dereference here to get the actual binary in the bundle.
 		const bunBinaryDestInBundlePath =
@@ -1970,7 +2042,9 @@ Categories=Utility;Application;
 				cpSync(nativeWrapperLinuxSource, nativeWrapperLinuxDestination, {
 					dereference: true,
 				});
-				console.log(`Using ${useCEF ? "CEF (with weak linking)" : "GTK-only"} native wrapper for Linux`);
+				console.log(
+					`Using ${useCEF ? "CEF (with weak linking)" : "GTK-only"} native wrapper for Linux`,
+				);
 			} else {
 				throw new Error(
 					`Native wrapper not found: ${nativeWrapperLinuxSource}`,
@@ -2020,9 +2094,16 @@ Categories=Utility;Application;
 			(targetOS === "win" && config.build.win?.bundleCEF) ||
 			(targetOS === "linux" && config.build.linux?.bundleCEF)
 		) {
-			const effectiveCEFDir = await ensureCEFDependencies(currentTarget.os, currentTarget.arch, config.build.cefVersion);
+			const effectiveCEFDir = await ensureCEFDependencies(
+				currentTarget.os,
+				currentTarget.arch,
+				config.build.cefVersion,
+			);
 			if (targetOS === "macos") {
-				const cefFrameworkSource = join(effectiveCEFDir, "Chromium Embedded Framework.framework");
+				const cefFrameworkSource = join(
+					effectiveCEFDir,
+					"Chromium Embedded Framework.framework",
+				);
 				const cefFrameworkDestination = join(
 					appBundleFolderFrameworksPath,
 					"Chromium Embedded Framework.framework",
@@ -2387,7 +2468,7 @@ Categories=Utility;Application;
 
 		if (!buildResult.success) {
 			console.error("failed to build", bunSource, buildResult.logs);
-			process.exit(1);
+			throw new Error("Build failed: bun build failed");
 		}
 
 		// transpile developer's view code
@@ -2532,7 +2613,7 @@ Categories=Utility;Application;
 				if (!existsSync(zigAsarCli)) {
 					console.error(`zig-asar CLI not found at: ${zigAsarCli}`);
 					console.error("Make sure to run setup/vendoring first");
-					process.exit(1);
+					throw new Error("Build failed: zig-asar CLI not found");
 				}
 
 				// Build zig-asar command arguments
@@ -2601,13 +2682,14 @@ Categories=Utility;Application;
 						);
 					}
 					console.error("Command:", zigAsarCli, ...asarArgs);
-					process.exit(1);
+					throw new Error("Build failed: ASAR packing failed");
 				}
 
 				// Verify ASAR was created
 				if (!existsSync(asarPath)) {
-					console.error("ASAR file was not created:", asarPath);
-					process.exit(1);
+					throw new Error(
+						"Build failed: ASAR file was not created: " + asarPath,
+					);
 				}
 
 				console.log("✓ Created app.asar");
@@ -2642,7 +2724,7 @@ Categories=Utility;Application;
 				}
 			}
 			// Check if Bun.Archive is available (Bun 1.3.0+)
-			if (typeof Bun.Archive !== 'undefined') {
+			if (typeof Bun.Archive !== "undefined") {
 				const archiveBytes = await new Bun.Archive(bundleFiles).bytes();
 				// Note: wyhash is the default in Bun.hash but that may change in the future
 				// so we're being explicit here.
@@ -2650,7 +2732,7 @@ Categories=Utility;Application;
 			} else {
 				// Fallback for older Bun versions - use a simple hash of file paths
 				console.warn("Bun.Archive not available, using fallback hash method");
-				const fileList = Object.keys(bundleFiles).sort().join('\n');
+				const fileList = Object.keys(bundleFiles).sort().join("\n");
 				hash = Bun.hash.wyhash(fileList).toString(36);
 			}
 			console.timeEnd("Generate Bundle hash");
@@ -2690,7 +2772,9 @@ Categories=Utility;Application;
 			defaultRenderer: platformConfig?.defaultRenderer ?? "native",
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
 			runtime: config.runtime ?? {},
-			...(bundlesCEF ? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING } : {}),
+			...(bundlesCEF
+				? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING }
+				: {}),
 			bunVersion: config.build?.bunVersion ?? BUN_VERSION,
 		};
 
@@ -2767,7 +2851,7 @@ Categories=Utility;Application;
 
 			// Tar the app bundle for all platforms
 			createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
-			
+
 			// Remove the app bundle folder after tarring (except on Linux where it might be needed for dev)
 			if (targetOS !== "linux" || buildEnvironment !== "dev") {
 				rmdirSync(appBundleFolderPath, { recursive: true });
@@ -3025,7 +3109,10 @@ Categories=Utility;Application;
 				dereference: true,
 			});
 
-			buildIcons(selfExtractingBundle.appBundleFolderResourcesPath, selfExtractingBundle.appBundleFolderPath);
+			buildIcons(
+				selfExtractingBundle.appBundleFolderResourcesPath,
+				selfExtractingBundle.appBundleFolderPath,
+			);
 			await Bun.write(
 				join(selfExtractingBundle.appBundleFolderContentsPath, "Info.plist"),
 				InfoPlistContents,
@@ -3255,48 +3342,87 @@ Categories=Utility;Application;
 		// for a dmg.
 		// can also use stapler validate -v to validate the dmg and look for teamId, signingId, and the response signedTicket
 		// stapler validate -v <app path>
-	} else if (commandArg === "dev") {
-		// todo (yoav): rename to start
+	}
 
-		// run the project in dev mode
-		// this runs the bundled bun binary with main.js directly
+	// Take over as the terminal's foreground process group (macOS/Linux).
+	// This prevents the parent bun script runner from receiving SIGINT
+	// when Ctrl+C is pressed, keeping the terminal busy until the app
+	// finishes shutting down gracefully.
+	// Call once per CLI session — returns a restore function.
+	async function takeoverForeground(): Promise<() => void> {
+		let restoreFn = () => {};
+		if (OS === "win") return restoreFn;
+		try {
+			const { dlopen, ptr } = await import("bun:ffi");
+			const libName = OS === "macos" ? "libSystem.B.dylib" : "libc.so.6";
+			const libc = dlopen(libName, {
+				open: { args: ["ptr", "i32"], returns: "i32" },
+				close: { args: ["i32"], returns: "i32" },
+				getpid: { args: [], returns: "i32" },
+				setpgid: { args: ["i32", "i32"], returns: "i32" },
+				tcgetpgrp: { args: ["i32"], returns: "i32" },
+				tcsetpgrp: { args: ["i32", "i32"], returns: "i32" },
+				signal: { args: ["i32", "ptr"], returns: "ptr" },
+			});
 
-		// Get config for dev mode
-		const config = await getConfig();
+			const ttyPathBuf = new Uint8Array(Buffer.from("/dev/tty\0"));
+			const ttyFd = libc.symbols.open(ptr(ttyPathBuf), 2); // O_RDWR
 
-		// Set up dev build variables (similar to build mode)
+			if (ttyFd >= 0) {
+				const originalPgid = libc.symbols.tcgetpgrp(ttyFd);
+				if (originalPgid >= 0) {
+					// Ignore SIGTTOU at C level so tcsetpgrp works from background group.
+					// bun's process.on("SIGTTOU") doesn't set the C-level disposition.
+					// SIG_IGN = (void(*)(int))1, SIGTTOU = 22 on macOS/Linux
+					libc.symbols.signal(22, 1);
+
+					if (libc.symbols.setpgid(0, 0) === 0) {
+						const myPid = libc.symbols.getpid();
+						if (libc.symbols.tcsetpgrp(ttyFd, myPid) === 0) {
+							restoreFn = () => {
+								try {
+									libc.symbols.signal(22, 1);
+									libc.symbols.tcsetpgrp(ttyFd, originalPgid);
+									libc.symbols.close(ttyFd);
+								} catch {}
+							};
+						} else {
+							libc.symbols.setpgid(0, originalPgid);
+							libc.symbols.close(ttyFd);
+						}
+					} else {
+						libc.symbols.close(ttyFd);
+					}
+				} else {
+					libc.symbols.close(ttyFd);
+				}
+			}
+		} catch {
+			// Fall back to default behavior (prompt may return early on Ctrl+C)
+		}
+		return restoreFn;
+	}
+
+	async function runApp(
+		config: Awaited<ReturnType<typeof getConfig>>,
+		options?: { onExit?: () => void },
+	): Promise<{ kill: () => void; exited: Promise<number> }> {
+		// Launch the already-built dev bundle
+
 		const buildEnvironment = "dev";
-		const currentTarget = { os: OS, arch: ARCH };
 		const appFileName = getAppFileName(config.app.name, buildEnvironment);
-		// macOS uses display name with spaces for the actual .app folder
 		const macOSBundleDisplayName = getMacOSBundleDisplayName(
 			config.app.name,
 			buildEnvironment,
 		);
-		const buildSubFolder = `${buildEnvironment}-${currentTarget.os}-${currentTarget.arch}`;
+		const buildSubFolder = `${buildEnvironment}-${OS}-${ARCH}`;
 		const buildFolder = join(
 			projectRoot,
 			config.build.buildFolder,
 			buildSubFolder,
 		);
-		// Use display name for macOS bundles (with spaces), sanitized name for other platforms
 		const bundleFileName =
 			OS === "macos" ? `${macOSBundleDisplayName}.app` : appFileName;
-
-		// Note: this cli will be a bun single-file-executable
-		// Note: we want to use the version of bun that's packaged with electrobun
-		// const bunPath = join(projectRoot, 'node_modules', '.bin', 'bun');
-		// const mainPath = join(buildFolder, 'bun', 'index.js');
-		// const mainPath = join(buildFolder, bundleFileName);
-		// console.log('running ', bunPath, mainPath);
-
-		// Note: open will open the app bundle as a completely different process
-		// This is critical to fully test the app (including plist configuration, etc.)
-		// but also to get proper cmd+tab and dock behaviour and not run the windowed app
-		// as a child of the terminal process which steels keyboard focus from any descendant nswindows.
-		// Bun.spawn(["open", mainPath], {
-		//   env: {},
-		// });
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let mainProc: any;
@@ -3312,7 +3438,6 @@ Categories=Utility;Application;
 				"Resources",
 			);
 		} else if (OS === "linux") {
-			// Directory bundle mode
 			bundleExecPath = join(buildFolder, bundleFileName, "bin");
 			_bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
 		} else if (OS === "win") {
@@ -3320,62 +3445,6 @@ Categories=Utility;Application;
 			_bundleResourcesPath = join(buildFolder, bundleFileName, "Resources");
 		} else {
 			throw new Error(`Unsupported OS: ${OS}`);
-		}
-
-		// Take over as the terminal's foreground process group (macOS/Linux).
-		// This prevents the parent bun script runner from receiving SIGINT
-		// when Ctrl+C is pressed, keeping the terminal busy until the app
-		// finishes shutting down gracefully.
-		let restoreForeground = () => {};
-		if (OS !== "win") {
-			try {
-				const { dlopen, ptr } = await import("bun:ffi");
-				const libName = OS === "macos" ? "libSystem.B.dylib" : "libc.so.6";
-				const libc = dlopen(libName, {
-					open: { args: ["ptr", "i32"], returns: "i32" },
-					close: { args: ["i32"], returns: "i32" },
-					getpid: { args: [], returns: "i32" },
-					setpgid: { args: ["i32", "i32"], returns: "i32" },
-					tcgetpgrp: { args: ["i32"], returns: "i32" },
-					tcsetpgrp: { args: ["i32", "i32"], returns: "i32" },
-					signal: { args: ["i32", "ptr"], returns: "ptr" },
-				});
-
-				const ttyPathBuf = new Uint8Array(Buffer.from("/dev/tty\0"));
-				const ttyFd = libc.symbols.open(ptr(ttyPathBuf), 2); // O_RDWR
-
-				if (ttyFd >= 0) {
-					const originalPgid = libc.symbols.tcgetpgrp(ttyFd);
-					if (originalPgid >= 0) {
-						// Ignore SIGTTOU at C level so tcsetpgrp works from background group.
-						// bun's process.on("SIGTTOU") doesn't set the C-level disposition.
-						// SIG_IGN = (void(*)(int))1, SIGTTOU = 22 on macOS/Linux
-						libc.symbols.signal(22, 1);
-
-						if (libc.symbols.setpgid(0, 0) === 0) {
-							const myPid = libc.symbols.getpid();
-							if (libc.symbols.tcsetpgrp(ttyFd, myPid) === 0) {
-								restoreForeground = () => {
-									try {
-										libc.symbols.signal(22, 1);
-										libc.symbols.tcsetpgrp(ttyFd, originalPgid);
-										libc.symbols.close(ttyFd);
-									} catch {}
-								};
-							} else {
-								libc.symbols.setpgid(0, originalPgid);
-								libc.symbols.close(ttyFd);
-							}
-						} else {
-							libc.symbols.close(ttyFd);
-						}
-					} else {
-						libc.symbols.close(ttyFd);
-					}
-				}
-			} catch {
-				// Fall back to default behavior (prompt may return early on Ctrl+C)
-			}
 		}
 
 		if (OS === "macos" || OS === "linux") {
@@ -3399,7 +3468,6 @@ Categories=Utility;Application;
 				}
 			}
 
-			// Use the zig launcher for macOS and Linux
 			mainProc = Bun.spawn([join(bundleExecPath, "launcher")], {
 				stdio: ["inherit", "inherit", "inherit"],
 				cwd: bundleExecPath,
@@ -3411,36 +3479,288 @@ Categories=Utility;Application;
 			});
 		}
 
-		let sigintCount = 0;
+		if (!mainProc) {
+			throw new Error("Failed to spawn app process");
+		}
 
+		const exitedPromise = mainProc.exited.then((code: number) => {
+			options?.onExit?.();
+			return code ?? 0;
+		});
+
+		return {
+			kill: () => {
+				try {
+					mainProc.kill();
+				} catch {}
+			},
+			exited: exitedPromise,
+		};
+	}
+
+	async function runAppWithSignalHandling(
+		config: Awaited<ReturnType<typeof getConfig>>,
+	) {
+		const restoreForeground = await takeoverForeground();
+		const handle = await runApp(config);
+
+		let sigintCount = 0;
 		process.on("SIGINT", () => {
 			sigintCount++;
-
 			if (sigintCount === 1) {
-				// First Ctrl+C: The app already received SIGINT from the process group.
-				// Its SIGINT handler calls quit() which fires beforeQuit and shuts down
-				// gracefully. Don't send another signal - just wait.
 				console.log(
 					"\n[electrobun dev] Shutting down gracefully... (press Ctrl+C again to force quit)",
 				);
 			} else {
-				// Second Ctrl+C: force kill entire process group
-				console.log(
-					"\n[electrobun dev] Force quitting...",
-				);
-				try { process.kill(0, "SIGKILL"); } catch {}
+				console.log("\n[electrobun dev] Force quitting...");
+				try {
+					process.kill(0, "SIGKILL");
+				} catch {}
 				process.exit(0);
 			}
 		});
 
-		// Wait for the child process to exit before returning.
-		// This keeps the CLI alive so it doesn't return to the shell prompt
-		// while the app is still shutting down.
-		if (mainProc) {
-			const code = await mainProc.exited;
-			restoreForeground();
-			process.exit(code ?? 0);
+		const code = await handle.exited;
+		restoreForeground();
+		process.exit(code);
+	}
+
+	async function runDevWatch(config: Awaited<ReturnType<typeof getConfig>>) {
+		const { watch } = await import("fs");
+
+		// Collect watch directories from config entrypoints
+		const watchDirs = new Set<string>();
+
+		// Bun entrypoint directory
+		if (config.build.bun?.entrypoint) {
+			watchDirs.add(join(projectRoot, dirname(config.build.bun.entrypoint)));
 		}
+
+		// View entrypoint directories
+		if (config.build.views) {
+			for (const viewConfig of Object.values(config.build.views)) {
+				if (viewConfig.entrypoint) {
+					watchDirs.add(join(projectRoot, dirname(viewConfig.entrypoint)));
+				}
+			}
+		}
+
+		// Copy source directories
+		if (config.build.copy) {
+			for (const src of Object.keys(config.build.copy)) {
+				const srcPath = join(projectRoot, src);
+				try {
+					const stat = statSync(srcPath);
+					watchDirs.add(stat.isDirectory() ? srcPath : dirname(srcPath));
+				} catch {
+					watchDirs.add(dirname(srcPath));
+				}
+			}
+		}
+
+		// User-specified additional watch paths
+		if (config.build.watch) {
+			for (const entry of config.build.watch) {
+				const entryPath = join(projectRoot, entry);
+				try {
+					const stat = statSync(entryPath);
+					watchDirs.add(stat.isDirectory() ? entryPath : dirname(entryPath));
+				} catch {
+					// Path doesn't exist yet — watch its parent directory
+					watchDirs.add(dirname(entryPath));
+				}
+			}
+		}
+
+		// Deduplicate overlapping directories (remove children if parent is watched)
+		const sortedDirs = [...watchDirs].sort();
+		const dedupedDirs = sortedDirs.filter((dir, i) => {
+			return !sortedDirs.some(
+				(other, j) => j < i && dir.startsWith(other + "/"),
+			);
+		});
+
+		if (dedupedDirs.length === 0) {
+			console.error(
+				"[electrobun dev --watch] No directories to watch. Check your config entrypoints.",
+			);
+			process.exit(1);
+		}
+
+		console.log(`
+╔══════════════════════════════════════════════════════════════╗
+║  ELECTROBUN DEV --watch                                     ║
+║  Watching ${String(dedupedDirs.length).padEnd(2)} director${dedupedDirs.length === 1 ? "y " : "ies"}                                          ║
+╚══════════════════════════════════════════════════════════════╝
+`);
+		for (const dir of dedupedDirs) {
+			console.log(`  ${dir}`);
+		}
+
+		// Set up terminal foreground takeover once for the whole session
+		const restoreForeground = await takeoverForeground();
+
+		// Paths to ignore in file watcher (build output, node_modules, artifacts)
+		const buildDir = join(projectRoot, config.build.buildFolder);
+		const artifactDir = join(projectRoot, config.build.artifactFolder);
+		const ignoreDirs = [
+			buildDir,
+			artifactDir,
+			join(projectRoot, "node_modules"),
+		];
+
+		// Compile watchIgnore glob patterns
+		const ignoreGlobs = (config.build.watchIgnore || []).map(
+			(pattern) => new Bun.Glob(pattern),
+		);
+
+		function shouldIgnore(fullPath: string): boolean {
+			// Check built-in ignore dirs
+			if (
+				ignoreDirs.some(
+					(ignored) =>
+						fullPath.startsWith(ignored + "/") || fullPath === ignored,
+				)
+			) {
+				return true;
+			}
+			// Check user-configured watchIgnore globs (match against project-relative path)
+			const relativePath = fullPath.replace(projectRoot + "/", "");
+			if (ignoreGlobs.some((glob) => glob.match(relativePath))) {
+				return true;
+			}
+			return false;
+		}
+
+		let appHandle: { kill: () => void; exited: Promise<number> } | null = null;
+		let lastChangedFile = "";
+		let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+		let shuttingDown = false;
+		let watchers: ReturnType<typeof watch>[] = [];
+
+		function startWatchers() {
+			for (const dir of dedupedDirs) {
+				const watcher = watch(dir, { recursive: true }, (_event, filename) => {
+					if (shuttingDown) return;
+
+					if (filename) {
+						const fullPath = join(dir, filename);
+						if (shouldIgnore(fullPath)) {
+							return;
+						}
+						lastChangedFile = fullPath;
+					}
+
+					if (debounceTimer) clearTimeout(debounceTimer);
+					debounceTimer = setTimeout(() => {
+						triggerRebuild();
+					}, 300);
+				});
+				watchers.push(watcher);
+			}
+		}
+
+		function stopWatchers() {
+			for (const watcher of watchers) {
+				try { watcher.close(); } catch {}
+			}
+			watchers = [];
+		}
+
+		async function triggerRebuild() {
+			if (shuttingDown) return;
+
+			// Stop watching during build so build output doesn't trigger more events
+			stopWatchers();
+
+			const changedDisplay = lastChangedFile
+				? lastChangedFile.replace(projectRoot + "/", "")
+				: "unknown";
+			console.log(`
+╔══════════════════════════════════════════════════════════════╗
+║  FILE CHANGED: ${changedDisplay.padEnd(44)}║
+║  Rebuilding...                                              ║
+╚══════════════════════════════════════════════════════════════╝
+`);
+
+			// Kill running app if any
+			if (appHandle) {
+				appHandle.kill();
+				try {
+					await appHandle.exited;
+				} catch {}
+				appHandle = null;
+			}
+
+			try {
+				await runBuild(config, "dev");
+				console.log(
+					"[electrobun dev --watch] Build succeeded, launching app...",
+				);
+
+				appHandle = await runApp(config, {
+					onExit: () => {
+						appHandle = null;
+					},
+				});
+			} catch (error) {
+				console.error("[electrobun dev --watch] Build failed:", error);
+				console.log("[electrobun dev --watch] Waiting for file changes...");
+			}
+
+			// Resume watching after build + hooks are done
+			if (!shuttingDown) {
+				startWatchers();
+			}
+		}
+
+		function cleanup() {
+			shuttingDown = true;
+			if (debounceTimer) clearTimeout(debounceTimer);
+			stopWatchers();
+			if (appHandle) {
+				appHandle.kill();
+			}
+			restoreForeground();
+		}
+
+		// Ctrl+C handling for watch mode
+		let sigintCount = 0;
+		process.on("SIGINT", () => {
+			sigintCount++;
+			if (sigintCount === 1) {
+				console.log(
+					"\n[electrobun dev --watch] Shutting down... (press Ctrl+C again to force quit)",
+				);
+				cleanup();
+				// Wait briefly for app to exit, then exit
+				setTimeout(() => process.exit(0), 2000);
+			} else {
+				try {
+					process.kill(0, "SIGKILL");
+				} catch {}
+				process.exit(0);
+			}
+		});
+
+		// Initial build + launch (watchers start after build completes)
+		try {
+			await runBuild(config, "dev");
+			appHandle = await runApp(config, {
+				onExit: () => {
+					appHandle = null;
+				},
+			});
+		} catch (error) {
+			console.error("[electrobun dev --watch] Initial build failed:", error);
+			console.log("[electrobun dev --watch] Waiting for file changes...");
+		}
+
+		// Start watching only after initial build + all hooks are done
+		startWatchers();
+
+		// Keep the process alive
+		await new Promise(() => {});
 	}
 
 	// Helper functions
@@ -3708,8 +4028,6 @@ Categories=Utility;Application;
 			archive.finalize();
 		});
 	}
-
-
 
 	function codesignAppBundle(
 		appBundleOrDmgPath: string,

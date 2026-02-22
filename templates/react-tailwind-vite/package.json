@@ -3,12 +3,11 @@
 	"version": "1.0.0",
 	"description": "Electrobun app with React, Tailwind CSS, and Vite HMR",
 	"scripts": {
-		"dev": "bun run build && electrobun dev",
-		"dev:hmr": "concurrently \"bun run hmr\" \"bun run dev\"",
+		"start": "vite build && electrobun dev",
+		"dev": "electrobun dev --watch",
+		"dev:hmr": "concurrently \"bun run hmr\" \"bun run start\"",
 		"hmr": "vite --port 5173",
-		"build": "vite build && electrobun build",
-		"build:prod": "vite build && electrobun build --channel prod",
-		"start": "bun run dev"
+		"build:canary": "vite build && electrobun build --env=canary"
 	},
 	"dependencies": {
 		"electrobun": "latest",

@@ -1,15 +1,15 @@
 {
-    "scripts": {        
-        "start": "electrobun dev",
-        "build:dev": "electrobun build",
-        "build:canary": "electrobun build --env=canary",
-        "build:stable": "electrobun build --env=stable",
-        "start:canary": "electrobun dev --env=canary"
-    },
-    "dependencies": {
-        "electrobun": "file:../package"
-    },
-    "devDependencies": {
-        "typescript": "^5.9.3"
-    }
+	"scripts": {
+		"start": "electrobun run",
+		"dev": "electrobun dev",
+		"build:canary": "electrobun build --env=canary",
+		"build:stable": "electrobun build --env=stable",
+		"start:canary": "electrobun dev --env=canary"
+	},
+	"dependencies": {
+		"electrobun": "file:../package"
+	},
+	"devDependencies": {
+		"typescript": "^5.9.3"
+	}
 }
