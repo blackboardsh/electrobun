@@ -1231,6 +1231,10 @@ function escapePathForTerminal(path: string): string {
 // Flatpak support helpers
 // ---------------------------------------------------------------------------
 
+function xmlEscape(s: string): string {
+	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
 /**
  * Generate a Flatpak manifest YAML string for the given app.
  *
@@ -1244,6 +1248,17 @@ function generateFlatpakManifest(
 	const appId: string = config.app.identifier;
 	const runtimeVersion: string = config.build.linux?.flatpak?.runtimeVersion ?? "24.08";
 	const extraFinishArgs: string[] = config.build.linux?.flatpak?.extraFinishArgs ?? [];
+
+	// Validate app ID — must be reverse-DNS format to avoid YAML injection
+	if (!/^[a-zA-Z][a-zA-Z0-9_-]*(\.[a-zA-Z][a-zA-Z0-9_-]*){2,}$/.test(appId)) {
+		throw new Error(`Invalid Flatpak app ID: "${appId}". Must be reverse-DNS format (e.g. com.example.App).`);
+	}
+	// Validate extraFinishArgs — each entry must be a single line
+	for (const arg of extraFinishArgs) {
+		if (/[\r\n]/.test(arg)) {
+			throw new Error(`extraFinishArgs entry contains a newline: "${arg}"`);
+		}
+	}
 
 	const extraLines = extraFinishArgs.map((a) => `  - ${a}`).join("\n");
 
@@ -1260,7 +1275,7 @@ finish-args:
   - --device=dri
   - --share=network
   - --talk-name=org.kde.StatusNotifierWatcher
-  - --talk-name=org.freedesktop.Notifications${extraLines ? "\n" + extraLines : ""}
+  - --talk-name=org.freedesktop.portal.Desktop${extraLines ? "\n" + extraLines : ""}
 
 modules:
   - name: ${appFileName}
@@ -1270,6 +1285,7 @@ modules:
       - mkdir -p /app/bin
       - ln -sf /app/${appFileName}/bin/launcher /app/bin/launcher
       - install -Dm644 ${appId}.desktop /app/share/applications/${appId}.desktop
+      - install -Dm644 ${appId}.metainfo.xml /app/share/metainfo/${appId}.metainfo.xml
       - install -Dm644 icon.png /app/share/icons/hicolor/256x256/apps/${appId}.png
     sources:
       - type: dir
@@ -1290,6 +1306,7 @@ Exec=launcher
 Icon=${config.app.identifier}
 Type=Application
 Categories=${categoriesStr}
+StartupWMClass=${appFileName}
 `;
 }
 
@@ -1299,10 +1316,10 @@ Categories=${categoriesStr}
  */
 function generateFlatpakAppdata(config: any): string {
 	const appId: string = config.app.identifier;
-	const name: string = config.app.name;
-	const summary: string = config.app.description ?? `${name} application`;
-	const homepage: string = config.app.homepage ?? "";
-	const version: string = config.app.version ?? "0.0.1";
+	const name: string = xmlEscape(config.app.name ?? "");
+	const summary: string = xmlEscape(config.app.description ?? `${config.app.name} application`);
+	const homepage: string = xmlEscape(config.app.homepage ?? "");
+	const version: string = xmlEscape(config.app.version ?? "0.0.1");
 	const date: string = new Date().toISOString().split("T")[0];
 
 	return `<?xml version="1.0" encoding="UTF-8"?>
@@ -1361,6 +1378,7 @@ async function createFlatpakBundle(
 	}
 
 	mkdirSync(stagingDir, { recursive: true });
+	mkdirSync(flatpakBuildDir, { recursive: true });
 
 	// 1. Write manifest, .desktop and appdata into staging dir
 	writeFileSync(join(stagingDir, `${appId}.yml`), generateFlatpakManifest(config, appFileName));
@@ -3059,14 +3077,18 @@ Categories=Utility;Application;
 
 			// Build Flatpak bundle for Linux (before removing the app bundle folder)
 			if (targetOS === "linux" && config.build.linux?.flatpak?.enabled) {
-				const flatpakPath = await createFlatpakBundle(
-					buildFolder,
-					appBundleFolderPath,
-					appFileName,
-					config,
-				);
-				if (flatpakPath) {
-					artifactsToUpload.push(flatpakPath);
+				try {
+					const flatpakPath = await createFlatpakBundle(
+						buildFolder,
+						appBundleFolderPath,
+						appFileName,
+						config,
+					);
+					if (flatpakPath) {
+						artifactsToUpload.push(flatpakPath);
+					}
+				} catch (err) {
+					console.error("Flatpak bundle creation failed:", err);
 				}
 			}
 

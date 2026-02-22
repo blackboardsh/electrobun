@@ -354,6 +354,7 @@ std::string getExecutableDir() {
 }
 
 // Return XDG directory, falling back to $HOME/<fallbackSuffix> if not set.
+// fallbackSuffix must be a path relative to $HOME (e.g. "/.cache").
 // Flatpak sets XDG_CACHE_HOME / XDG_DATA_HOME to sandbox-appropriate paths;
 // outside Flatpak these env vars are normally unset so the fallback is used.
 static std::string getXdgDir(const char* envVar, const char* fallbackSuffix) {
@@ -361,6 +362,13 @@ static std::string getXdgDir(const char* envVar, const char* fallbackSuffix) {
     if (val && val[0]) return std::string(val);
     const char* home = getenv("HOME");
     return std::string(home ? home : "/tmp") + fallbackSuffix;
+}
+
+// Return $XDG_RUNTIME_DIR, falling back to /tmp if unset.
+// Unlike getXdgDir, XDG_RUNTIME_DIR has an absolute fallback, not one relative to $HOME.
+static std::string getXdgRuntimeDir() {
+    const char* val = getenv("XDG_RUNTIME_DIR");
+    return val && val[0] ? std::string(val) : "/tmp";
 }
 
 // CEF availability check - runtime check for CEF files in app bundle
@@ -4378,7 +4386,13 @@ public:
     void setImage(const char* newImage) {
         imagePath = newImage ? newImage : "";
         if (indicator && !imagePath.empty()) {
-            app_indicator_set_icon_full(indicator, imagePath.c_str(), "Electrobun Tray Icon");
+            // Mirror the constructor logic: use the theme icon name inside Flatpak
+            // so the host compositor can resolve it; use the absolute path otherwise.
+            const char* flatpak_id = getenv("FLATPAK_ID");
+            const char* iconName = (flatpak_id && flatpak_id[0])
+                ? flatpak_id
+                : imagePath.c_str();
+            app_indicator_set_icon_full(indicator, iconName, "Electrobun Tray Icon");
         }
     }
     
@@ -6608,7 +6622,7 @@ void testFFI2(void (*completionHandler)()) {
     fflush(stdout);
     
     // Write to log file as well
-    std::string logPath = getXdgDir("XDG_RUNTIME_DIR", "/tmp") + "/electrobun-tray.log";
+    std::string logPath = getXdgRuntimeDir() + "/electrobun-tray.log";
     FILE* logFile = fopen(logPath.c_str(), "a");
     if (logFile) {
         fprintf(logFile, "testFFI2 called from FFI! Callback pointer: %p\n", completionHandler);
@@ -6709,16 +6723,26 @@ ELECTROBUN_EXPORT bool openExternal(const char* urlString) {
 
     GError* error = nullptr;
 
-    // Use g_app_info_launch_default_for_uri to open the URL with default app
+    // Use g_app_info_launch_default_for_uri to open the URL with default app.
+    // This is portal-aware and works inside a Flatpak sandbox.
     gboolean result = g_app_info_launch_default_for_uri(urlString, nullptr, &error);
 
-    if (error) {
-        fprintf(stderr, "GIO failed to open URL: %s\n", error->message);
-        g_error_free(error);
+    if (!result || error) {
+        if (error) {
+            fprintf(stderr, "GIO failed to open URL: %s\n", error->message);
+            g_error_free(error);
+        }
+        // Outside Flatpak, fall back to xdg-open for minimal/unusual desktop setups
+        // where GIO may not have a handler registered but xdg-open still works.
+        const char* flatpak_id = getenv("FLATPAK_ID");
+        if (!flatpak_id || !flatpak_id[0]) {
+            std::string cmd = "xdg-open " + std::string(urlString) + " &";
+            return system(cmd.c_str()) == 0;
+        }
         return false;
     }
 
-    return result == TRUE;
+    return true;
 }
 
 // Open a file or folder with the default application
@@ -6743,24 +6767,34 @@ ELECTROBUN_EXPORT bool openPath(const char* pathString) {
 
     GError* error = nullptr;
 
-    // Use g_app_info_launch_default_for_uri to open with default app
+    // Use g_app_info_launch_default_for_uri to open with default app.
+    // This is portal-aware and works inside a Flatpak sandbox.
     gboolean result = g_app_info_launch_default_for_uri(uri, nullptr, &error);
 
-    if (error) {
-        fprintf(stderr, "GIO failed to open path: %s\n", error->message);
-        g_error_free(error);
+    if (!result || error) {
+        if (error) {
+            fprintf(stderr, "GIO failed to open path: %s\n", error->message);
+            g_error_free(error);
+        }
         g_free(uri);
+        // Outside Flatpak, fall back to xdg-open for minimal/unusual desktop setups.
+        const char* flatpak_id = getenv("FLATPAK_ID");
+        if (!flatpak_id || !flatpak_id[0]) {
+            std::string cmd = "xdg-open " + std::string(pathString) + " &";
+            return system(cmd.c_str()) == 0;
+        }
         return false;
     }
 
     g_free(uri);
-    return result == TRUE;
+    return true;
 }
 
 // Show a native desktop notification via the org.freedesktop.portal.Notification
 // D-Bus interface.  This works both inside and outside a Flatpak sandbox — the
 // portal is available on the session bus in all modern desktop environments —
 // and avoids the dependency on the notify-send binary.
+static std::atomic<uint32_t> g_notificationCounter{0};
 void showNotification(const char* title, const char* body, const char* subtitle, bool silent) {
     if (!title) {
         fprintf(stderr, "ERROR: NULL title passed to showNotification\n");
@@ -6778,11 +6812,13 @@ void showNotification(const char* title, const char* body, const char* subtitle,
         bodyStr = std::string(body);
     }
 
-    // Copy strings for the thread (title / body must outlive this stack frame)
+    // Copy strings for the thread (title / body must outlive this stack frame).
+    // Assign a unique per-notification ID so rapid calls don't overwrite each other.
     std::string titleStr(title);
     bool silentCopy = silent;
+    std::string notifId = "electrobun-notification-" + std::to_string(g_notificationCounter.fetch_add(1));
 
-    std::thread([titleStr, bodyStr, silentCopy]() {
+    std::thread([titleStr, bodyStr, silentCopy, notifId]() {
         GError* busError = nullptr;
         GDBusConnection* bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &busError);
         if (!bus) {
@@ -6810,7 +6846,7 @@ void showNotification(const char* title, const char* body, const char* subtitle,
             "/org/freedesktop/portal/desktop",
             "org.freedesktop.portal.Notification",
             "AddNotification",
-            g_variant_new("(s@a{sv})", "electrobun-notification",
+            g_variant_new("(s@a{sv})", notifId.c_str(),
                           g_variant_builder_end(&notif)),
             nullptr,
             G_DBUS_CALL_FLAGS_NONE,
