@@ -1,23 +1,20 @@
-// TODO: have a context specific menu that excludes role
-import { ffi, type ApplicationMenuItemConfig } from "../proc/native";
+import { ffi, type ContextMenuItemConfig } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
-import { roleLabelMap } from "./menuRoles";
 
 type NonDividerMenuItem = {
 	type?: "normal";
 	label?: string;
 	tooltip?: string;
 	action?: string;
-	role?: string;
 	data?: unknown;
-	submenu?: Array<ApplicationMenuItemConfig>;
+	submenu?: Array<ContextMenuItemConfig>;
 	enabled?: boolean;
 	checked?: boolean;
 	hidden?: boolean;
 	accelerator?: string;
 };
 
-export const showContextMenu = (menu: Array<ApplicationMenuItemConfig>) => {
+export const showContextMenu = (menu: Array<ContextMenuItemConfig>) => {
 	const menuWithDefaults = menuConfigWithDefaults(menu);
 	ffi.request.showContextMenu({
 		menuConfig: JSON.stringify(menuWithDefaults),
@@ -33,8 +30,8 @@ export const on = (
 };
 
 const menuConfigWithDefaults = (
-	menu: Array<ApplicationMenuItemConfig>,
-): Array<ApplicationMenuItemConfig> => {
+	menu: Array<ContextMenuItemConfig>,
+): Array<ContextMenuItemConfig> => {
 	return menu.map((item) => {
 		if (item.type === "divider" || item.type === "separator") {
 			return { type: "divider" } as const;
@@ -47,15 +44,9 @@ const menuConfigWithDefaults = (
 			);
 
 			return {
-				label:
-					menuItem.label ||
-					roleLabelMap[menuItem.role as keyof typeof roleLabelMap] ||
-					"",
+				label: menuItem.label || "",
 				type: menuItem.type || "normal",
-				// application menus can either have an action or a role. not both.
-				...(menuItem.role
-					? { role: menuItem.role }
-					: { action: actionWithDataId }),
+				action: actionWithDataId,
 				// default enabled to true unless explicitly set to false
 				enabled: menuItem.enabled === false ? false : true,
 				checked: Boolean(menuItem.checked),
