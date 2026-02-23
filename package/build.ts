@@ -2021,8 +2021,20 @@ async function generateTemplateEmbeddings() {
 					readDirectory(fullPath, relativePath);
 				} else {
 					try {
-						const content = readFileSync(fullPath, "utf-8");
-						files[relativePath] = content;
+						const ext = entry.name.split(".").pop()?.toLowerCase();
+						const binaryExtensions = new Set([
+							"png", "jpg", "jpeg", "gif", "bmp", "ico", "webp",
+							"woff", "woff2", "ttf", "eot", "otf",
+							"zip", "tar", "gz", "br", "zst",
+							"wasm", "pdf",
+						]);
+						if (ext && binaryExtensions.has(ext)) {
+							const content = readFileSync(fullPath);
+							files[relativePath] = "base64:" + content.toString("base64");
+						} else {
+							const content = readFileSync(fullPath, "utf-8");
+							files[relativePath] = content;
+						}
 					} catch (error) {
 						console.warn(`Warning: Could not read ${fullPath}:`, error);
 					}

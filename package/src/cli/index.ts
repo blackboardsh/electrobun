@@ -1498,8 +1498,12 @@ ${schemesXml}
 				// Create directory if it doesn't exist
 				mkdirSync(dir, { recursive: true });
 
-				// Write file
-				writeFileSync(fullPath, content, "utf-8");
+				// Write file (binary files are base64-encoded with a "base64:" prefix)
+				if (content.startsWith("base64:")) {
+					writeFileSync(fullPath, Buffer.from(content.slice(7), "base64"));
+				} else {
+					writeFileSync(fullPath, content, "utf-8");
+				}
 				fileCount++;
 			}
 
