@@ -4,7 +4,7 @@
 	"type": "module",
 	"description": "A transparent 3D bunny that follows your mouse",
 	"scripts": {
-		"start": "electrobun build && electrobun dev",
+		"start": "electrobun dev",
 		"dev": "electrobun dev --watch",
 		"build:canary": "electrobun build --env=canary"
 	},
