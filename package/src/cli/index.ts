@@ -1500,7 +1500,7 @@ ${schemesXml}
 
 				// Write file (binary files are base64-encoded with a "base64:" prefix)
 				if (content.startsWith("base64:")) {
-					writeFileSync(fullPath, Buffer.from(content.slice(7), "base64"));
+					writeFileSync(fullPath, new Uint8Array(Buffer.from(content.slice(7), "base64")));
 				} else {
 					writeFileSync(fullPath, content, "utf-8");
 				}
