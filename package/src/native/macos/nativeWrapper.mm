@@ -2482,61 +2482,59 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     }
 
     - (void)remove {
-        if (self.webView) {
-            [self.webView stopLoading];
-            
-            // Remove from ContainerView's tracking array first
-            if (self.webView.superview && [self.webView.superview isKindOfClass:[ContainerView class]]) {
-                ContainerView *containerView = (ContainerView *)self.webView.superview;
-                [containerView removeAbstractViewWithId:self.webviewId];
-            }
-            
-            // Keep a weak reference to the view for delayed removal
-            WKWebView *webViewToRemove = self.webView;
-            uint32_t webviewIdForLogging = self.webviewId;
-            
-            // Set delegates to nil and clean up immediately
-            self.webView.navigationDelegate = nil;
-            self.webView.UIDelegate = nil;
-            
-            NSLog(@"WKWebViewImpl remove: evaluating cleanup JavaScript for webview %u", self.webviewId);
-            [self.webView evaluateJavaScript:@"document.body.innerHTML='';" completionHandler:nil];
-            
-            NSLog(@"WKWebViewImpl remove: releasing webView object for webview %u", self.webviewId);
-            releaseObjCObject(self.webView);
-            self.webView = nil;
-            NSLog(@"WKWebViewImpl remove: webView set to nil for webview %u", self.webviewId);
-            
-            // Check if the view is still in a superview before trying to remove it
-            if (webViewToRemove.superview != nil) {
-                NSLog(@"WKWebViewImpl remove: scheduling delayed removeFromSuperview for webview %u", webviewIdForLogging);
-                
-                // Delay the removeFromSuperview call to allow WebKit to finish cleanup
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    NSLog(@"WKWebViewImpl remove: executing delayed removeFromSuperview for webview %u", webviewIdForLogging);
-                    
-                    @try {
-                        // Double-check superview still exists at execution time
-                        if (webViewToRemove.superview != nil) {
-                            [webViewToRemove removeFromSuperview];
-                            NSLog(@"WKWebViewImpl remove: delayed removeFromSuperview completed for webview %u", webviewIdForLogging);
-                        } else {
-                            NSLog(@"WKWebViewImpl remove: superview became nil before delayed removal for webview %u", webviewIdForLogging);
-                        }
-                    } @catch (NSException *exception) {
-                        NSLog(@"WKWebViewImpl remove: EXCEPTION during delayed removeFromSuperview for webview %u: %@", webviewIdForLogging, exception);
-                    } @finally {
-                        NSLog(@"WKWebViewImpl remove: delayed removeFromSuperview attempt finished for webview %u", webviewIdForLogging);
-                    }
-                });
-            } else {
-                NSLog(@"WKWebViewImpl remove: webView has no superview, skipping removeFromSuperview");
-            }
-        } else {
+        if (!self.webView) {
             NSLog(@"WKWebViewImpl remove: webView is already nil for webview %u", self.webviewId);
+            return;
         }
-        
-        NSLog(@"WKWebViewImpl remove: COMPLETED cleanup for webview %u", self.webviewId);
+
+        uint32_t webviewIdForLogging = self.webviewId;
+        WKWebView *webViewToClean = self.webView;
+
+        // Dispatch all cleanup to main queue since WKWebView operations require it
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSLog(@"WKWebViewImpl remove: cleaning up webview %u on main queue", webviewIdForLogging);
+
+            [webViewToClean stopLoading];
+
+            // Remove KVO observer
+            @try {
+                [webViewToClean removeObserver:self forKeyPath:@"fullscreenState"];
+            } @catch (NSException *exception) {
+                // Observer may not be registered yet if remove is called during init
+            }
+
+            // Remove script message handlers — WKUserContentController strongly retains
+            // these handlers, preventing WKWebView deallocation
+            WKUserContentController *ucc = webViewToClean.configuration.userContentController;
+            @try { [ucc removeScriptMessageHandlerForName:@"eventBridge"]; } @catch (NSException *e) {}
+            @try { [ucc removeScriptMessageHandlerForName:@"bunBridge"]; } @catch (NSException *e) {}
+            @try { [ucc removeScriptMessageHandlerForName:@"internalBridge"]; } @catch (NSException *e) {}
+            // Remove all user scripts as well
+            [ucc removeAllUserScripts];
+
+            // Nil delegates
+            webViewToClean.navigationDelegate = nil;
+            webViewToClean.UIDelegate = nil;
+
+            // Remove from ContainerView tracking
+            if (webViewToClean.superview && [webViewToClean.superview isKindOfClass:[ContainerView class]]) {
+                ContainerView *containerView = (ContainerView *)webViewToClean.superview;
+                [containerView removeAbstractViewWithId:webviewIdForLogging];
+            }
+
+            // Remove from view hierarchy immediately
+            [webViewToClean removeFromSuperview];
+
+            // Load about:blank to force WebKit to release the WebContent process
+            [webViewToClean loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"about:blank"]]];
+
+            NSLog(@"WKWebViewImpl remove: COMPLETED cleanup for webview %u", webviewIdForLogging);
+        });
+
+        // Release our strong reference immediately so the main queue block
+        // holds the last reference and deallocation happens after cleanup
+        self.webView = nil;
+        self.nsView = nil;
     }
 
 
@@ -2676,7 +2674,11 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
     // Cleanup KVO observers when the webview is deallocated
     - (void)dealloc {
-        [self.webView removeObserver:self forKeyPath:@"fullscreenState"];
+        @try {
+            [self.webView removeObserver:self forKeyPath:@"fullscreenState"];
+        } @catch (NSException *exception) {
+            // Observer already removed in -remove
+        }
     }
 
     - (void)findInPage:(const char*)searchText forward:(BOOL)forward matchCase:(BOOL)matchCase {

@@ -62,7 +62,15 @@ export const BrowserWindowMap: {
 
 // Clean up the window map when a window closes and optionally quit the app
 electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
-	delete BrowserWindowMap[event.data.id];
+	const windowId = event.data.id;
+	delete BrowserWindowMap[windowId];
+
+	// Clean up all webviews associated with this window
+	for (const view of BrowserView.getAll()) {
+		if (view.windowId === windowId) {
+			view.remove();
+		}
+	}
 
 	const exitOnLastWindowClosed =
 		buildConfig.runtime?.exitOnLastWindowClosed ?? true;

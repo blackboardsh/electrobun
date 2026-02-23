@@ -73,6 +73,9 @@ export default {
 			"playgrounds/webview-settings": {
 				entrypoint: "src/playgrounds/webview-settings/index.ts",
 			},
+			"playgrounds/webview-cleanup": {
+				entrypoint: "src/playgrounds/webview-cleanup/index.ts",
+			},
 		},
 		copy: {
 			"src/test-runner/index.html": "views/test-runner/index.html",
@@ -133,6 +136,12 @@ export default {
 				"views/playgrounds/webview-settings/index.html",
 			"src/playgrounds/webview-settings/index.css":
 				"views/playgrounds/webview-settings/index.css",
+			"src/playgrounds/webview-cleanup/index.html":
+				"views/playgrounds/webview-cleanup/index.html",
+			"src/playgrounds/webview-cleanup/index.css":
+				"views/playgrounds/webview-cleanup/index.css",
+			"src/playgrounds/webview-cleanup/assets/bunny.png":
+				"views/playgrounds/webview-cleanup/assets/bunny.png",
 		},
 		mac: {
 			codesign: true,

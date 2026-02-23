@@ -2,8 +2,8 @@ import type { ElectrobunConfig } from "electrobun";
 
 export default {
 	app: {
-		name: "tray-app",
-		identifier: "trayapp.electrobun.dev",
+		name: "bunny",
+		identifier: "bunny.electrobun.dev",
 		version: "0.0.1",
 	},
 	build: {
@@ -18,6 +18,7 @@ export default {
 		copy: {
 			"src/mainview/index.html": "views/mainview/index.html",
 			"src/mainview/index.css": "views/mainview/index.css",
+			"src/mainview/assets": "views/mainview/assets",
 		},
 		mac: {
 			bundleCEF: false,

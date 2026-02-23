@@ -12,8 +12,12 @@ export default {
 		},
 		views: {
 			mainview: {
-				src: "src/mainview",
+				entrypoint: "src/mainview/index.ts",
 			},
+		},
+		copy: {
+			"src/mainview/index.html": "views/mainview/index.html",
+			"src/mainview/index.css": "views/mainview/index.css",
 		},
 		mac: {
 			bundleCEF: false,

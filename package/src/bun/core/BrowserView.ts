@@ -322,6 +322,11 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		};
 	};
 
+	remove() {
+		native.symbols.webviewRemove(this.ptr);
+		delete BrowserViewMap[this.id];
+	}
+
 	static getById(id: number) {
 		return BrowserViewMap[id];
 	}
