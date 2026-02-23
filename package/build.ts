@@ -435,6 +435,8 @@ async function checkDependencies() {
 			console.error(
 				"   sudo apt update && sudo apt install -y build-essential cmake",
 			);
+			console.error("   -- or on Arch-based distros --");
+			console.error("   sudo pacman -Syu --needed base-devel cmake");
 		}
 
 		// In CI, just warn but continue; locally throw an error
@@ -1365,9 +1367,6 @@ async function vendorCEF() {
 			// Generate Visual Studio project with sandbox disabled
 			await $`cd vendors/cef/build && "${CMAKE_BIN}" -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
 			// Build the wrapper library only
-			// await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
-			// const msbuildPath = await $`"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe | head -n 1`.text();
-			// await $`cd vendors/cef/build && "${msbuildPath.trim()}" cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
 			await $`cd vendors/cef/build && "${CMAKE_BIN}" --build . --config Release --target libcef_dll_wrapper`;
 		}
 
@@ -1516,90 +1515,158 @@ async function vendorWebview2() {
 
 async function vendorLinuxDeps() {
 	if (OS === "linux") {
-		// We can't check the package manager of every Linux distro,
-		// so lets just do Ubuntu/Debian for now since thats what CI uses.
-
-		const requiredPackages = [
-			"build-essential",
-			"cmake",
-			"pkg-config",
-			"libgtk-3-dev",
-			"libwebkit2gtk-4.1-dev",
-			"libayatana-appindicator3-dev",
-			"librsvg2-dev",
-			"fuse",
-			"libfuse2",
-		];
-
+		// Detect distro family
 		const distroInfo = await $`grep -E '^(ID|ID_LIKE)=' /etc/os-release`.catch(
 			() => null,
 		);
-		if (
-			!distroInfo ||
-			!(
-				String(distroInfo.stdout).includes("debian") ||
-				String(distroInfo.stdout).includes("ubuntu")
-			)
-		) {
+		const distroStr = distroInfo ? String(distroInfo.stdout) : "";
+
+		const isDebian =
+			distroStr.includes("debian") || distroStr.includes("ubuntu");
+		const isArch =
+			distroStr.includes("arch") || distroStr.includes("manjaro") ||
+      distroStr.includes("endeavouros") || distroStr.includes("garuda") ||
+      distroStr.includes("prismlinux");
+
+		if (!isDebian && !isArch) {
+			const genericPackages = [
+				"cmake", "pkg-config", "gtk3", "webkit2gtk-4.1", "fuse2",
+			];
 			console.log(
-				"Cannot determine Linux distro or not Debian/Ubuntu based - skipping automatic dependency check",
+				"Cannot determine Linux distro or not Debian/Ubuntu/Arch based - skipping automatic dependency check",
 			);
 			console.log(
-				`Please ensure required packages are installed: ${requiredPackages.join(", ")}`,
+				`Please ensure required packages are installed: ${genericPackages.join(", ")}`,
 			);
 			return;
 		}
 
-		console.log("Detected Debian/Ubuntu based Linux. Checking dependencies...");
-		const missingPackages: string[] = [];
-		for (const pkg of requiredPackages) {
-			const result = await $`dpkg -l | grep ${pkg}`.catch(() => null);
-			if (!result || String(result.stdout).trim() === "") {
-				missingPackages.push(pkg);
-			}
-		}
-		if (missingPackages.length > 0) {
-			console.log("");
-			console.log(
-				"═══════════════════════════════════════════════════════════════",
-			);
-			console.log("🚨 MISSING REQUIRED LINUX DEPENDENCIES");
-			console.log(
-				"═══════════════════════════════════════════════════════════════",
-			);
-			console.log(`Missing packages: ${missingPackages.join(", ")}`);
-			console.log("");
-			console.log("Please install them using:");
-			console.log(
-				`   sudo apt update && sudo apt install -y ${missingPackages.join(" ")}`,
-			);
-			console.log("");
+		if (isDebian) {
+			const requiredPackages = [
+				"build-essential",
+				"cmake",
+				"pkg-config",
+				"libgtk-3-dev",
+				"libwebkit2gtk-4.1-dev",
+				"libayatana-appindicator3-dev",
+				"librsvg2-dev",
+				"fuse",
+				"libfuse2",
+			];
 
-			// Check specifically for libfuse2 since it affects AppImage creation
-			if (missingPackages.includes("libfuse2")) {
-				console.log("⚠️  libfuse2 is required for AppImage creation");
+			console.log("Detected Debian/Ubuntu based Linux. Checking dependencies...");
+			const missingPackages: string[] = [];
+			for (const pkg of requiredPackages) {
+				const result = await $`dpkg -l | grep ${pkg}`.catch(() => null);
+				if (!result || String(result.stdout).trim() === "") {
+					missingPackages.push(pkg);
+				}
+			}
+
+			if (missingPackages.length > 0) {
+				console.log("");
 				console.log(
-					"   Without it, AppImage generation will fail with FUSE errors",
+					"═══════════════════════════════════════════════════════════════",
+				);
+				console.log("🚨 MISSING REQUIRED LINUX DEPENDENCIES");
+				console.log(
+					"═══════════════════════════════════════════════════════════════",
+				);
+				console.log(`Missing packages: ${missingPackages.join(", ")}`);
+				console.log("");
+				console.log("Please install them using:");
+				console.log(
+					`   sudo apt update && sudo apt install -y ${missingPackages.join(" ")}`,
 				);
 				console.log("");
+
+				if (missingPackages.includes("libfuse2")) {
+					console.log("⚠️  libfuse2 is required for AppImage creation");
+					console.log(
+						"   Without it, AppImage generation will fail with FUSE errors",
+					);
+					console.log("");
+				}
+
+				if (process.env["GITHUB_ACTIONS"]) {
+					console.warn("⚠️  Running in CI - continuing despite missing packages");
+					console.warn(
+						"   The CI workflow should have already installed these packages",
+					);
+				} else {
+					console.warn("⚠️  Some features may not work without these packages");
+					console.warn("   Continuing with build...");
+				}
+				console.log(
+					"═══════════════════════════════════════════════════════════════",
+				);
+				console.log("");
+			} else {
+				console.log("All required packages are installed");
+			}
+		} else if (isArch) {
+			const requiredPackages = [
+				"base-devel",
+				"cmake",
+				"pkgconf",
+				"gtk3",
+				"webkit2gtk-4.1",
+				"libayatana-appindicator",
+				"librsvg",
+				"fuse2",
+			];
+
+			console.log("Detected Arch-based Linux. Checking dependencies...");
+			const missingPackages: string[] = [];
+			for (const pkg of requiredPackages) {
+				// pacman -Q exits non-zero when the package is not installed
+				const result = await $`pacman -Q ${pkg}`.quiet().catch(() => null);
+				if (!result || result.exitCode !== 0) {
+					missingPackages.push(pkg);
+				}
 			}
 
-			// In CI, just warn but continue; locally show message and continue
-			if (process.env["GITHUB_ACTIONS"]) {
-				console.warn("⚠️  Running in CI - continuing despite missing packages");
-				console.warn(
-					"   The CI workflow should have already installed these packages",
+			if (missingPackages.length > 0) {
+				console.log("");
+				console.log(
+					"═══════════════════════════════════════════════════════════════",
 				);
+				console.log("🚨 MISSING REQUIRED LINUX DEPENDENCIES");
+				console.log(
+					"═══════════════════════════════════════════════════════════════",
+				);
+				console.log(`Missing packages: ${missingPackages.join(", ")}`);
+				console.log("");
+				console.log("Please install them using:");
+				console.log(
+					`   sudo pacman -Syu --needed ${missingPackages.join(" ")}`,
+				);
+				if (missingPackages.includes("fuse2")) {
+					console.log("");
+					console.log("⚠️  fuse2 is required for AppImage creation");
+					console.log(
+						"   Without it, AppImage generation will fail with FUSE errors",
+					);
+				}
+				console.log("");
+
+				if (process.env["GITHUB_ACTIONS"]) {
+					console.warn("⚠️  Running in CI - continuing despite missing packages");
+					console.warn(
+						"   The CI workflow should have already installed these packages",
+					);
+				} else {
+					console.warn("⚠️  Some features may not work without these packages");
+					console.warn("   Continuing with build...");
+				}
+				console.log(
+					"═══════════════════════════════════════════════════════════════",
+				);
+				console.log("");
 			} else {
-				console.warn("⚠️  Some features may not work without these packages");
-				console.warn("   Continuing with build...");
+				console.log("All required packages are installed");
 			}
-			console.log(
-				"═══════════════════════════════════════════════════════════════",
-			);
-			console.log("");
 		}
-		console.log("All required packages are installed");
 	}
 }
 
