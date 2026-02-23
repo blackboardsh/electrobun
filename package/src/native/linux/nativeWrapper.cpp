@@ -483,10 +483,13 @@ public:
     IMPLEMENT_REFCOUNTING(ElectrobunResponseFilter);
 };
 
+// Forward declaration — defined after CEFWebViewImpl
+static uint32_t getWebviewIdForBrowser(int browserId);
+
 // CEF views:// scheme handler implementation
 class ViewsResourceHandler : public CefResourceHandler {
 public:
-    ViewsResourceHandler() : offset_(0) {}
+    ViewsResourceHandler(int browserId) : offset_(0), browser_id_(browserId) {}
 
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
         std::string url = request->GetURL();
@@ -500,7 +503,8 @@ public:
         // Check if this is the internal HTML request
         if (fullPath == "internal/index.html") {
             // Use stored HTML content instead of JSCallback
-            const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
+            uint32_t webviewId = getWebviewIdForBrowser(browser_id_);
+            const char* htmlContent = getWebviewHTMLContent(webviewId);
             if (htmlContent) {
                 data_ = std::string(htmlContent);
                 mimeType_ = "text/html";
@@ -583,7 +587,6 @@ public:
         gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
         gchar* filePath = g_build_filename(viewsDir, fullPath.c_str(), nullptr);
 
-
         // Check if file exists and read it
         if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
             gsize fileSize;
@@ -596,7 +599,6 @@ public:
 
                 // Determine MIME type using shared function
                 mimeType_ = getMimeTypeFromUrl(fullPath);
-
 
                 g_free(cwd);
                 g_free(viewsDir);
@@ -650,6 +652,7 @@ private:
     std::string data_;
     std::string mimeType_;
     size_t offset_;
+    int browser_id_;
 
     IMPLEMENT_REFCOUNTING(ViewsResourceHandler);
 };
@@ -659,7 +662,7 @@ class ViewsSchemeHandlerFactory : public CefSchemeHandlerFactory {
 public:
     CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
                                        const CefString& scheme_name, CefRefPtr<CefRequest> request) override {
-        return new ViewsResourceHandler();
+        return new ViewsResourceHandler(browser ? browser->GetIdentifier() : 0);
     }
 
 private:
@@ -3351,6 +3354,18 @@ public:
         }
     }
 
+    // Helper to find the webview ID for a given CEF browser ID
+    static uint32_t getWebviewIdForBrowser(int browserId) {
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        for (auto& [webviewId, view] : g_webviewMap) {
+            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(view.get());
+            if (cefView && cefView->browser && cefView->browser->GetIdentifier() == browserId) {
+                return webviewId;
+            }
+        }
+        return 0;
+    }
+
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
 
         // NO GTK widget needed - CEF will be a direct child of the X11 window
@@ -4753,7 +4768,19 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     if (strcmp(fullPath, "internal/index.html") == 0) {
         fflush(stdout);
         // Use stored HTML content instead of JSCallback
-        const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
+        WebKitWebView* wv = webkit_uri_scheme_request_get_web_view(request);
+        uint32_t webviewId = 0;
+        if (wv) {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+            for (auto& [wid, view] : g_webviewMap) {
+                WebKitWebViewImpl* wkView = dynamic_cast<WebKitWebViewImpl*>(view.get());
+                if (wkView && WEBKIT_WEB_VIEW(wkView->webview) == wv) {
+                    webviewId = wid;
+                    break;
+                }
+            }
+        }
+        const char* htmlContent = getWebviewHTMLContent(webviewId);
         if (htmlContent) {
             gsize contentLength = strlen(htmlContent);
             GInputStream* stream = g_memory_input_stream_new_from_data(g_strdup(htmlContent), contentLength, g_free);
