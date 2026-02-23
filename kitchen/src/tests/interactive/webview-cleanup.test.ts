@@ -58,8 +58,8 @@ export const webviewCleanupTests = [
 				return { width: size, height: size, x, y };
 			}
 
-			await new Promise<void>((resolve, reject) => {
-				const windows: BrowserWindow[] = [];
+			await new Promise<void>((resolve) => {
+				const windows: BrowserWindow<any>[] = [];
 				const ready = new Set<BrowserWindow>();
 				const MAX_BUNNIES = 10;
 
@@ -77,7 +77,6 @@ export const webviewCleanupTests = [
 						url: "views://playgrounds/webview-cleanup/index.html",
 						titleBarStyle: "hidden",
 						transparent: true,
-						passthrough: true,
 						frame: randomFrame(),
 						rpc,
 					});

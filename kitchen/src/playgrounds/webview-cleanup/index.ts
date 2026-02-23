@@ -35,7 +35,7 @@ const rpc = Electroview.defineRPC<any>({
 	},
 });
 
-const electrobun = new Electrobun.Electroview({ rpc });
+new Electrobun.Electroview({ rpc });
 
 function animate() {
 	const forceX = (targetRotateX - currentRotateX) * SPRING;
