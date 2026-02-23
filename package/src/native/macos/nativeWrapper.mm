@@ -6447,10 +6447,12 @@ extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
 
 
 extern "C" void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {
+    // Copy the JSON string before dispatch_async (same GC race as setApplicationMenu)
+    NSString *jsonCopy = [NSString stringWithUTF8String:jsonString];
     dispatch_async(dispatch_get_main_queue(), ^{
         if (statusItem) {
             StatusItemTarget *target = objc_getAssociatedObject(statusItem.button, "statusItemTarget");
-            NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+            NSData *jsonData = [jsonCopy dataUsingEncoding:NSUTF8StringEncoding];
             NSError *error;
             NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
             if (error) {
@@ -6479,8 +6481,12 @@ extern "C" void removeTray(NSStatusItem *statusItem) {
 
 extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
     NSLog(@"Setting application menu from JSON in objc");
+    // Copy the JSON string before dispatch_async. The original pointer comes
+    // from Bun's FFI and may be freed/overwritten by JS GC before the main
+    // thread dequeues this block.
+    NSString *jsonCopy = [NSString stringWithUTF8String:jsonString];
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSData *jsonData = [jsonCopy dataUsingEncoding:NSUTF8StringEncoding];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
         if (error) {
@@ -6497,8 +6503,10 @@ extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler 
 }
 
 extern "C" void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
+    // Copy the JSON string before dispatch_async (same GC race as setApplicationMenu)
+    NSString *jsonCopy = [NSString stringWithUTF8String:jsonString];
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSData *jsonData = [jsonCopy dataUsingEncoding:NSUTF8StringEncoding];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
         if (error) {
