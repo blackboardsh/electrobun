@@ -1,9 +1,9 @@
-import { BrowserView, BrowserWindow, Utils, type RPCSchema, paths } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Utils, type RPCSchema } from "electrobun/bun";
 import { join } from "path";
 import { mkdirSync, existsSync, readdirSync, unlinkSync } from "fs";
 
 // Store notes in app data directory
-const notesDir = join(paths.userData, "notes");
+const notesDir = join(Utils.paths.userData, "notes");
 if (!existsSync(notesDir)) {
 	mkdirSync(notesDir, { recursive: true });
 }

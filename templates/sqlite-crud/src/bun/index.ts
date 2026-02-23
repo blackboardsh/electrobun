@@ -1,10 +1,10 @@
-import { BrowserView, BrowserWindow, type RPCSchema, paths } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Utils, type RPCSchema } from "electrobun/bun";
 import Database from "bun:sqlite";
 import { join } from "path";
 import { mkdirSync, existsSync } from "fs";
 
 // Ensure data directory exists
-const dataDir = paths.userData;
+const dataDir = Utils.paths.userData;
 if (!existsSync(dataDir)) {
 	mkdirSync(dataDir, { recursive: true });
 }

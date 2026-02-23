@@ -6449,18 +6449,23 @@ extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
 
 
 extern "C" void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {
+    // Copy the string before dispatch_async since the JS-side buffer may be GC'd
+    char *jsonCopy = strdup(jsonString);
     dispatch_async(dispatch_get_main_queue(), ^{
         if (statusItem) {
             StatusItemTarget *target = objc_getAssociatedObject(statusItem.button, "statusItemTarget");
-            NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+            NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
             NSError *error;
             NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+            free(jsonCopy);
             if (error) {
                 NSLog(@"Failed to parse JSON: %@", error);
                 return;
             }
             NSMenu *menu = createMenuFromConfig(menuArray, target);
             [statusItem setMenu:menu];
+        } else {
+            free(jsonCopy);
         }
     });
 }

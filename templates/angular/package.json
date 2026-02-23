@@ -1,31 +1,35 @@
 {
-	"name": "electrobun-angular",
-	"version": "1.0.0",
-	"type": "module",
-	"description": "Electrobun app with Angular and Vite HMR",
-	"scripts": {
-		"start": "vite build && electrobun dev",
-		"dev": "electrobun dev --watch",
-		"dev:hmr": "concurrently \"bun run hmr\" \"bun run start\"",
-		"hmr": "vite --port 5173",
-		"build:canary": "vite build && electrobun build --env=canary"
-	},
-	"dependencies": {
-		"@angular/common": "^19.0.0",
-		"@angular/compiler": "^19.0.0",
-		"@angular/core": "^19.0.0",
-		"@angular/platform-browser": "^19.0.0",
-		"@angular/platform-browser-dynamic": "^19.0.0",
-		"electrobun": "latest",
-		"rxjs": "^7.8.1",
-		"zone.js": "^0.15.0"
-	},
-	"devDependencies": {
-		"@analogjs/vite-plugin-angular": "^1.11.0",
-		"@angular/compiler-cli": "^19.0.0",
-		"@types/bun": "latest",
-		"concurrently": "^9.1.0",
-		"typescript": "^5.7.2",
-		"vite": "^6.0.3"
-	}
+  "name": "electrobun-angular",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Electrobun app with Angular and Vite HMR",
+  "scripts": {
+    "start": "vite build && electrobun dev",
+    "dev": "electrobun dev --watch",
+    "dev:hmr": "concurrently \"bun run hmr\" \"bun run start\"",
+    "hmr": "vite --port 5173",
+    "build:canary": "vite build && electrobun build --env=canary"
+  },
+  "dependencies": {
+    "@angular/common": "^19.0.0",
+    "@angular/compiler": "^19.0.0",
+    "@angular/core": "^19.0.0",
+    "@angular/platform-browser": "^19.0.0",
+    "@angular/platform-browser-dynamic": "^19.0.0",
+    "electrobun": "latest",
+    "rxjs": "^7.8.1",
+    "zone.js": "^0.15.0"
+  },
+  "devDependencies": {
+    "@analogjs/vite-plugin-angular": "^1.11.0",
+    "@angular/build": "^19.0.0",
+    "@angular/compiler-cli": "^19.0.0",
+    "@types/bun": "latest",
+    "concurrently": "^9.1.0",
+    "typescript": "~5.8.0",
+    "vite": "^6.0.3"
+  },
+  "trustedDependencies": [
+    "@parcel/watcher"
+  ]
 }
