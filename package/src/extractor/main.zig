@@ -2,6 +2,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zstd = std.compress.zstd;
 
+extern "c" fn CreateShortcutWithAppId(
+    shortcut_path: [*:0]const u16,
+    target_path: [*:0]const u16,
+    working_dir: [*:0]const u16,
+    icon_path: [*:0]const u16,
+    app_id: [*:0]const u16,
+    description: [*:0]const u16,
+) callconv(.C) i32;
+
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "/Users/yoav/code/electrobun/example/build/canary/ElectrobunPlayground-0-0-1-canary.app/Contents/Resources/compressed.tar.zst";
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "../Resources/compressed.tar.zst";
 const BUNLE_RESOURCES_REL_PATH = "../Resources/";
@@ -22,8 +31,6 @@ const AppMetadata = struct {
 const ProgressIndicator = struct {
     child_process: ?std.process.Child,
     allocator: std.mem.Allocator,
-    spinner_thread: ?std.Thread = null,
-    should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     app_name: []const u8 = "",
 
     fn init(allocator: std.mem.Allocator, metadata: AppMetadata) ProgressIndicator {
@@ -42,30 +49,12 @@ const ProgressIndicator = struct {
         return self;
     }
 
-    fn spinnerThread(self: *ProgressIndicator) void {
-        const spinner_chars = [_]u8{ '|', '/', '-', '\\' };
-        var frame: usize = 0;
 
-        // Print initial message once
-        std.debug.print("Installing {s}... ", .{self.app_name});
-
-        while (!self.should_stop.load(.acquire)) {
-            // Print spinner character and backspace over it
-            std.debug.print("{c}\x08", .{spinner_chars[frame]});
-            frame = (frame + 1) % spinner_chars.len;
-            std.time.sleep(100 * std.time.ns_per_ms);
-        }
-
-        // Print final state
-        std.debug.print("Done!\n", .{});
-    }
 
     fn startProgressDialog(self: *ProgressIndicator, metadata: AppMetadata) !void {
-        // On Windows, start a spinner thread in the console
+        // On Windows, use simple console output (no spinner thread to avoid deadlock)
         if (builtin.os.tag == .windows) {
-            // Start spinner thread
-            self.spinner_thread = try std.Thread.spawn(.{}, spinnerThread, .{self});
-            return;
+            return error.NoProgressDialog; // Fallback to simple print
         }
 
         if (builtin.os.tag != .linux) return;
@@ -114,12 +103,6 @@ const ProgressIndicator = struct {
     }
 
     fn deinit(self: *ProgressIndicator) void {
-        // Stop spinner thread if running
-        if (self.spinner_thread) |thread| {
-            self.should_stop.store(true, .release);
-            thread.join();
-        }
-
         if (self.child_process) |*child| {
             // Close stdin to signal completion for zenity
             if (child.stdin) |stdin| {
@@ -397,22 +380,34 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     var decompressed_data = std.ArrayList(u8).init(allocator);
     defer decompressed_data.deinit();
 
-    // Decompress in chunks
+    // Decompress in chunks with progress dots
+    std.debug.print("Decompressing", .{});
     var buffer: [4096]u8 = undefined;
+    var bytes_processed: usize = 0;
+    const dot_interval = 10 * 1024 * 1024; // Print dot every 10MB
+    
     while (true) {
         const read_size = try decompressor.reader().read(&buffer);
         if (read_size == 0) break;
         try decompressed_data.appendSlice(buffer[0..read_size]);
+        
+        bytes_processed += read_size;
+        if (bytes_processed >= dot_interval) {
+            std.debug.print(".", .{});
+            bytes_processed = 0;
+        }
     }
+    std.debug.print(" Done!\n", .{});
 
     // For Linux: Save the compressed archive to self-extraction directory (for future updates)
     // This is similar to what macOS does to enable the Updater API to apply patches
     // We'll save tar files after extraction to avoid them being deleted
 
     // Extract tar archive to self-extraction directory first
-    std.debug.print("Extracting application files...\n", .{});
+    std.debug.print("Extracting files", .{});
 
     try extractTar(allocator, decompressed_data.items, self_extraction_dir);
+    std.debug.print(" Done!\n", .{});
 
     // Now move the extracted app to the app directory
     // The app bundle is nested inside self-extraction, we need to find it
@@ -580,6 +575,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         }
     }
 
+    std.debug.print(" Done!\n", .{});
     std.debug.print("Installation completed successfully!\n", .{});
     return true;
 }
@@ -1070,53 +1066,46 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
 }
 
-fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8, icon_path: []const u8) !void {
-    // Create a .lnk shortcut using PowerShell
+fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8, icon_path: []const u8, app_identifier: []const u8) !void {
     const lnk_name = try std.fmt.allocPrint(allocator, "{s}.lnk", .{app_name});
     defer allocator.free(lnk_name);
 
     const lnk_path = try std.fs.path.join(allocator, &.{ shortcut_dir, lnk_name });
     defer allocator.free(lnk_path);
 
-    // Create PowerShell script to create the shortcut with icon
-    const ps_content = try std.fmt.allocPrint(allocator,
-        \\$WshShell = New-Object -ComObject WScript.Shell
-        \\$Shortcut = $WshShell.CreateShortcut("{s}")
-        \\$Shortcut.TargetPath = "{s}"
-        \\$Shortcut.WorkingDirectory = "{s}"
-        \\$Shortcut.IconLocation = "{s}"
-        \\$Shortcut.WindowStyle = 1
-        \\$Shortcut.Save()
-        \\
-    , .{ lnk_path, target_path, working_dir, icon_path });
-    defer allocator.free(ps_content);
+    const lnk_path_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, lnk_path);
+    defer allocator.free(lnk_path_w);
 
-    // Execute PowerShell command
-    const ps_args = [_][]const u8{
-        "powershell",
-        "-NoProfile",
-        "-NonInteractive",
-        "-WindowStyle",
-        "Hidden",
-        "-Command",
-        ps_content,
-    };
+    const target_path_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, target_path);
+    defer allocator.free(target_path_w);
 
-    var child = std.process.Child.init(&ps_args, allocator);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
+    const working_dir_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, working_dir);
+    defer allocator.free(working_dir_w);
 
-    _ = child.spawn() catch |err| {
-        std.debug.print("Warning: Could not spawn PowerShell to create shortcut: {}\n", .{err});
+    const icon_path_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, icon_path);
+    defer allocator.free(icon_path_w);
+
+    const app_id_w = try std.unicode.utf8ToUtf16LeWithNull(allocator, app_identifier);
+    defer allocator.free(app_id_w);
+    
+    const description = std.unicode.utf8ToUtf16LeStringLiteral("");
+
+    const hr = CreateShortcutWithAppId(
+        lnk_path_w.ptr,
+        target_path_w.ptr,
+        working_dir_w.ptr,
+        icon_path_w.ptr,
+        app_id_w.ptr,
+        description,
+    );
+
+    if (hr != 0) {
+        std.debug.print("Warning: COM shortcut creation failed with HRESULT: 0x{x}\n", .{hr});
+        std.debug.print("Check %TEMP%\\electrobun-shortcut.log for details\n", .{});
         return;
-    };
+    }
 
-    _ = child.wait() catch |err| {
-        std.debug.print("Warning: PowerShell shortcut creation failed: {}\n", .{err});
-        return;
-    };
-
-    std.debug.print("Created Windows shortcut: {s}\n", .{lnk_path});
+    std.debug.print("Created Windows shortcut with AppUserModelID: {s}\n", .{lnk_path});
 }
 
 fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
@@ -1157,14 +1146,11 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     const icon_to_use = target_path;
 
     // Create desktop shortcut
-    try createWindowsShortcutFile(allocator, desktop_dir, metadata.name, target_path, working_dir, icon_to_use);
+    try createWindowsShortcutFile(allocator, desktop_dir, metadata.name, target_path, working_dir, icon_to_use, metadata.identifier);
 
     // Create Start Menu shortcut
-    // Make sure Start Menu directory exists
-    std.fs.cwd().makePath(start_menu_dir) catch {
-        std.debug.print("Warning: Could not create Start Menu directory\n", .{});
-    };
-    try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, target_path, working_dir, icon_to_use);
+    std.debug.print("Creating Start Menu shortcut...\n", .{});
+    try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, target_path, working_dir, icon_to_use, metadata.identifier);
 
     std.debug.print("Created Windows shortcuts for: {s}\n", .{metadata.name});
 

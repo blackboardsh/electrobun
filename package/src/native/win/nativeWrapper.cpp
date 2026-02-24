@@ -7095,6 +7095,37 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             classRegistered = true;
         }
 
+        // Set Windows taskbar identity (must be called before any UI is shown)
+        static bool appIdSet = false;
+        if (!appIdSet) {
+            char identifier_from_launcher[256] = {0};
+            DWORD env_result = GetEnvironmentVariableA("ELECTROBUN_APP_IDENTIFIER", identifier_from_launcher, sizeof(identifier_from_launcher));
+            
+            wchar_t app_id_wide[256];
+            if (env_result > 0 && env_result < sizeof(identifier_from_launcher)) {
+                MultiByteToWideChar(CP_UTF8, 0, identifier_from_launcher, -1, app_id_wide, 256);
+            } else {
+                wcscpy_s(app_id_wide, 256, L"com.electrobun.app");
+            }
+            
+            HRESULT hr = SetCurrentProcessExplicitAppUserModelID(app_id_wide);
+            appIdSet = true;
+            
+            char temp_path[MAX_PATH];
+            if (GetEnvironmentVariableA("TEMP", temp_path, MAX_PATH) > 0) {
+                std::string log_path = std::string(temp_path) + "\\electrobun-bun.log";
+                std::ofstream log_file(log_path, std::ios::app);
+                if (log_file.is_open()) {
+                    DWORD pid = GetCurrentProcessId();
+                    DWORD tid = GetCurrentThreadId();
+                    log_file << "[BUN EARLY] PID=" << pid << " TID=" << tid 
+                             << " SetCurrentProcessExplicitAppUserModelID(\"" << identifier_from_launcher << "\") result: 0x" 
+                             << std::hex << hr << std::dec << " (0x0=success)" << std::endl;
+                    log_file.close();
+                }
+            }
+        }
+
         // Create window data structure to store callbacks
         WindowData* data = (WindowData*)malloc(sizeof(WindowData));
         if (!data) return NULL;
