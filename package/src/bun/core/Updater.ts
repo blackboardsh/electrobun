@@ -4,7 +4,7 @@ import {
 	renameSync,
 	unlinkSync,
 	mkdirSync,
-	rmdirSync,
+	rmSync,
 	statSync,
 	readdirSync,
 } from "fs";
@@ -145,7 +145,7 @@ function cleanupExtractionFolder(
 			try {
 				const s = statSync(fullPath);
 				if (s.isDirectory()) {
-					rmdirSync(fullPath, { recursive: true });
+					rmSync(fullPath, { recursive: true });
 				} else {
 					unlinkSync(fullPath);
 				}
@@ -895,7 +895,7 @@ const Updater = {
 					if (currentOS === "macos") {
 						// Remove existing app before installing the new one
 						if (statSync(runningAppBundlePath, { throwIfNoEntry: false })) {
-							rmdirSync(runningAppBundlePath, { recursive: true });
+							rmSync(runningAppBundlePath, { recursive: true });
 						}
 
 						emitStatus("replacing-app", "Installing new version...");
@@ -920,7 +920,7 @@ const Updater = {
 						
 						// Remove existing app directory if it exists
 						if (statSync(appBundleDir, { throwIfNoEntry: false })) {
-							rmdirSync(appBundleDir, { recursive: true });
+							rmSync(appBundleDir, { recursive: true });
 						}
 
 						// Move new app bundle directory to app location
