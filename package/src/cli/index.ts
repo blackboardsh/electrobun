@@ -22,6 +22,7 @@ import archiver from "archiver";
 import { OS, ARCH } from "../shared/platform";
 import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
 import { BUN_VERSION } from "../shared/bun-version";
+import { ELECTROBUN_VERSION } from "../shared/electrobun-version";
 import {
 	getAppFileName,
 	getBundleFileName,
@@ -75,7 +76,21 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
 );
 const commandArg = process.argv[indexOfElectrobun + 1] || "build";
 
-const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
+// Walk up from projectRoot to find electrobun in node_modules (supports hoisted monorepo layouts)
+function resolveElectrobunDir(): string {
+	let dir = projectRoot;
+	while (dir !== dirname(dir)) {
+		const candidate = join(dir, "node_modules", "electrobun");
+		if (existsSync(join(candidate, "package.json"))) {
+			return candidate;
+		}
+		dir = dirname(dir);
+	}
+	return join(projectRoot, "node_modules", "electrobun");
+}
+
+const ELECTROBUN_DEP_PATH = resolveElectrobunDir();
+const ELECTROBUN_CACHE_PATH = join(dirname(ELECTROBUN_DEP_PATH), ".electrobun-cache");
 
 // When debugging electrobun with the example app use the builds (dev or release) right from the source folder
 // For developers using electrobun cli via npm use the release versions in /dist
@@ -183,18 +198,7 @@ async function ensureCoreDependencies(
 	);
 	console.log(`Downloading core binaries for ${platformOS}-${platformArch}...`);
 
-	// Get the current Electrobun version from package.json
-	const packageJsonPath = join(ELECTROBUN_DEP_PATH, "package.json");
-	let version = "latest";
-
-	if (existsSync(packageJsonPath)) {
-		try {
-			const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-			version = `v${packageJson.version}`;
-		} catch (error) {
-			console.warn("Could not read package version, using latest");
-		}
-	}
+	const version = `v${ELECTROBUN_VERSION}`;
 
 	const platformName =
 		platformOS === "macos" ? "darwin" : platformOS === "win" ? "win" : "linux";
@@ -367,13 +371,7 @@ function getEffectiveCEFDir(
 	cefVersion?: string,
 ): string {
 	if (cefVersion) {
-		return join(
-			projectRoot,
-			"node_modules",
-			".electrobun-cache",
-			"cef-override",
-			`${platformOS}-${platformArch}`,
-		);
+		return join(ELECTROBUN_CACHE_PATH, "cef-override", `${platformOS}-${platformArch}`);
 	}
 	return getPlatformPaths(platformOS, platformArch).CEF_DIR;
 }
@@ -393,13 +391,7 @@ async function ensureBunBinary(
 	}
 
 	const binExt = targetOS === "win" ? ".exe" : "";
-	const overrideDir = join(
-		projectRoot,
-		"node_modules",
-		".electrobun-cache",
-		"bun-override",
-		`${targetOS}-${targetArch}`,
-	);
+	const overrideDir = join(ELECTROBUN_CACHE_PATH, "bun-override", `${targetOS}-${targetArch}`);
 	const overrideBinary = join(overrideDir, `bun${binExt}`);
 	const versionFile = join(overrideDir, ".bun-version");
 
@@ -459,13 +451,7 @@ async function downloadCustomBun(
 	}
 
 	const binExt = platformOS === "win" ? ".exe" : "";
-	const overrideDir = join(
-		projectRoot,
-		"node_modules",
-		".electrobun-cache",
-		"bun-override",
-		`${platformOS}-${platformArch}`,
-	);
+	const overrideDir = join(ELECTROBUN_CACHE_PATH, "bun-override", `${platformOS}-${platformArch}`);
 	const overrideBinary = join(overrideDir, `bun${binExt}`);
 	const bunUrl = `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/${bunUrlSegment}`;
 
@@ -637,18 +623,7 @@ async function ensureCEFDependencies(
 		`CEF dependencies not found for ${platformOS}-${platformArch}, downloading...`,
 	);
 
-	// Get the current Electrobun version from package.json
-	const packageJsonPath = join(ELECTROBUN_DEP_PATH, "package.json");
-	let version = "latest";
-
-	if (existsSync(packageJsonPath)) {
-		try {
-			const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-			version = `v${packageJson.version}`;
-		} catch (error) {
-			console.warn("Could not read package version, using latest");
-		}
-	}
+	const version = `v${ELECTROBUN_VERSION}`;
 
 	const platformName =
 		platformOS === "macos" ? "darwin" : platformOS === "win" ? "win" : "linux";
