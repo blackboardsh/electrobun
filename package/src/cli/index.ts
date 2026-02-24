@@ -4251,6 +4251,28 @@ Categories=Utility;Application;
 			}
 		}
 
+		// Sign .node native modules in Resources/app/bun
+		const resourcesPath = join(contentsPath, "Resources", "app", "bun");
+		if (existsSync(resourcesPath)) {
+			console.log("Signing native modules in Resources/app/bun...");
+			try {
+				const nodeFiles = execSync(`find "${resourcesPath}" -name "*.node" -type f`, {
+					encoding: "utf8",
+				}).trim().split("\n").filter(Boolean);
+
+				for (const nodeFile of nodeFiles) {
+					if (nodeFile) {
+						console.log(`Signing native module: ${nodeFile.replace(resourcesPath + "/", "")}`);
+						execSync(
+							`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${escapePathForTerminal(nodeFile)}`,
+						);
+					}
+				}
+			} catch (err) {
+				console.error("Error signing native modules:", err);
+			}
+		}
+
 		// Note: main.js is now in Resources and will be automatically sealed when signing the app bundle
 
 		// Sign the main executable (launcher) - this should use the app's bundle identifier, not "launcher"
@@ -4313,43 +4335,58 @@ Categories=Utility;Application;
 		// }
 
 		const ELECTROBUN_APPLEID = process.env["ELECTROBUN_APPLEID"];
-
-		if (!ELECTROBUN_APPLEID) {
-			console.error("Env var ELECTROBUN_APPLEID is required to notarize");
-			process.exit(1);
-		}
-
 		const ELECTROBUN_APPLEIDPASS = process.env["ELECTROBUN_APPLEIDPASS"];
-
-		if (!ELECTROBUN_APPLEIDPASS) {
-			console.error("Env var ELECTROBUN_APPLEIDPASS is required to notarize");
-			process.exit(1);
-		}
-
 		const ELECTROBUN_TEAMID = process.env["ELECTROBUN_TEAMID"];
 
-		if (!ELECTROBUN_TEAMID) {
-			console.error("Env var ELECTROBUN_TEAMID is required to notarize");
+		const ELECTROBUN_APPLEAPIISSUER = process.env["ELECTROBUN_APPLEAPIISSUER"];
+		const ELECTROBUN_APPLEAPIKEY = process.env["ELECTROBUN_APPLEAPIKEY"];
+		const ELECTROBUN_APPLEAPIKEYPATH = process.env["ELECTROBUN_APPLEAPIKEYPATH"];
+
+		const useApiKey = ELECTROBUN_APPLEAPIISSUER && ELECTROBUN_APPLEAPIKEY && ELECTROBUN_APPLEAPIKEYPATH;
+		const useAppleId = ELECTROBUN_APPLEID && ELECTROBUN_APPLEIDPASS && ELECTROBUN_TEAMID;
+
+		if (!useApiKey && !useAppleId) {
+			console.error("Provide either App Store Connect API key credentials (ELECTROBUN_APPLEAPIISSUER, ELECTROBUN_APPLEAPIKEY, ELECTROBUN_APPLEAPIKEYPATH) or Apple ID credentials (ELECTROBUN_APPLEID, ELECTROBUN_APPLEIDPASS, ELECTROBUN_TEAMID) to notarize");
 			process.exit(1);
 		}
 
-		// notarize
-		// todo (yoav): follow up on options here like --s3-acceleration and --webhook
-		// todo (yoav): don't use execSync since it's blocking and we'll only see the output at the end
-		const statusInfo = execSync(
-			`xcrun notarytool submit --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" --wait ${escapePathForTerminal(
-				fileToNotarize,
-			)}`,
-		).toString();
+		let statusInfo: string;
+		if (useApiKey) {
+			if (!existsSync(ELECTROBUN_APPLEAPIKEYPATH)) {
+				console.error(`ELECTROBUN_APPLEAPIKEYPATH does not exist: ${ELECTROBUN_APPLEAPIKEYPATH}`);
+				process.exit(1);
+			}
+			statusInfo = execSync(
+				`xcrun notarytool submit --key "${ELECTROBUN_APPLEAPIKEYPATH}" --key-id "${ELECTROBUN_APPLEAPIKEY}" --issuer "${ELECTROBUN_APPLEAPIISSUER}" --wait ${escapePathForTerminal(
+					fileToNotarize,
+				)}`,
+			).toString();
+		} else {
+			// notarize
+			// todo (yoav): follow up on options here like --s3-acceleration and --webhook
+			// todo (yoav): don't use execSync since it's blocking and we'll only see the output at the end
+			statusInfo = execSync(
+				`xcrun notarytool submit --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" --wait ${escapePathForTerminal(
+					fileToNotarize,
+				)}`,
+			).toString();
+		}
 		const uuid = statusInfo.match(/id: ([^\n]+)/)?.[1];
 		console.log("statusInfo", statusInfo);
 		console.log("uuid", uuid);
 
 		if (statusInfo.match("Current status: Invalid")) {
 			console.error("notarization failed", statusInfo);
-			const log = execSync(
-				`xcrun notarytool log --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" ${uuid}`,
-			).toString();
+			let log: string;
+			if (useApiKey) {
+				log = execSync(
+					`xcrun notarytool log --key "${ELECTROBUN_APPLEAPIKEYPATH}" --key-id "${ELECTROBUN_APPLEAPIKEY}" --issuer "${ELECTROBUN_APPLEAPIISSUER}" ${uuid}`,
+				).toString();
+			} else {
+				log = execSync(
+					`xcrun notarytool log --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" ${uuid}`,
+				).toString();
+			}
 			console.log("log", log);
 			process.exit(1);
 		}
