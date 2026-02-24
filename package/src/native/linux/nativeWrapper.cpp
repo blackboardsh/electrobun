@@ -6364,16 +6364,6 @@ ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView* abstractView, 
     }
 }
 
-// Helper: returns true when running under a native Wayland compositor
-static bool isWaylandDisplay() {
-    // GDK_BACKEND=x11 forces X11 even when WAYLAND_DISPLAY is set
-    const char* gdkBackend = getenv("GDK_BACKEND");
-    if (gdkBackend && strstr(gdkBackend, "x11")) {
-        return false;
-    }
-    return getenv("WAYLAND_DISPLAY") != nullptr;
-}
-
 // Forward declaration
 void stopWindowMove();
 
