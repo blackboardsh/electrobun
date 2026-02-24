@@ -3640,6 +3640,8 @@ Categories=Utility;Application;
 		let lastChangedFile = "";
 		let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 		let shuttingDown = false;
+		let isBuilding = false;
+		let rebuildPending = false;
 		let watchers: ReturnType<typeof watch>[] = [];
 
 		function startWatchers() {
@@ -3674,8 +3676,24 @@ Categories=Utility;Application;
 		async function triggerRebuild() {
 			if (shuttingDown) return;
 
+			// Guard against concurrent builds — if already building, mark
+			// that another rebuild is needed and let the current one finish.
+			if (isBuilding) {
+				rebuildPending = true;
+				return;
+			}
+			isBuilding = true;
+			rebuildPending = false;
+
 			// Stop watching during build so build output doesn't trigger more events
 			stopWatchers();
+
+			// Cancel any lingering debounce timer that may have been queued
+			// before stopWatchers took effect.
+			if (debounceTimer) {
+				clearTimeout(debounceTimer);
+				debounceTimer = null;
+			}
 
 			const changedDisplay = lastChangedFile
 				? lastChangedFile.replace(projectRoot + "/", "")
@@ -3712,9 +3730,16 @@ Categories=Utility;Application;
 				console.log("[electrobun dev --watch] Waiting for file changes...");
 			}
 
+			isBuilding = false;
+
 			// Resume watching after build + hooks are done
 			if (!shuttingDown) {
 				startWatchers();
+			}
+
+			// If a file change came in while we were building, rebuild again.
+			if (rebuildPending && !shuttingDown) {
+				triggerRebuild();
 			}
 		}
 
