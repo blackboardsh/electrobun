@@ -192,7 +192,6 @@ export const native = (() => {
 					FFIType.cstring, // electrobunPreloadScript
 					FFIType.cstring, // customPreloadScript
 					FFIType.bool, // transparent
-					FFIType.bool, // sandbox - when true, bunBridge and internalBridge are not set up
 				],
 				returns: FFIType.ptr,
 			},
@@ -201,6 +200,7 @@ export const native = (() => {
 				args: [
 					FFIType.bool, // startTransparent
 					FFIType.bool, // startPassthrough
+					FFIType.bool, // sandbox
 				],
 				returns: FFIType.void,
 			},
@@ -314,6 +314,48 @@ export const native = (() => {
 			webviewToggleDevTools: {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
+			},
+			// CDP (Chrome DevTools Protocol) message passing
+			setDevToolsCDPCallbacks: {
+				args: [FFIType.function, FFIType.function],
+				returns: FFIType.void,
+			},
+			webviewSendDevToolsMessage: {
+				args: [FFIType.ptr, FFIType.cstring, FFIType.u64],
+				returns: FFIType.bool,
+			},
+			webviewAddDevToolsObserver: {
+				args: [FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			webviewRemoveDevToolsObserver: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
+			cdpFreeBuffer: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			// CDP poll-based queue (avoids JSCallback PAC crash on ARM64)
+			cdpEnableQueue: {
+				args: [],
+				returns: FFIType.void,
+			},
+			cdpDequeueResult: {
+				args: [FFIType.ptr], // outTotalSize: u32*
+				returns: FFIType.ptr,
+			},
+			cdpDequeueEvent: {
+				args: [FFIType.ptr], // outTotalSize: u32*
+				returns: FFIType.ptr,
+			},
+			cdpResultQueueSize: {
+				args: [],
+				returns: FFIType.u32,
+			},
+			cdpEventQueueSize: {
+				args: [],
+				returns: FFIType.u32,
 			},
 			// Tray
 			createTray: {
@@ -985,7 +1027,7 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			const customPreload = preload;
 
 			// Pre-set flags before initWebview (workaround for FFI param count limits)
-			native.symbols.setNextWebviewFlags(startTransparent, startPassthrough);
+			native.symbols.setNextWebviewFlags(startTransparent, startPassthrough, sandbox);
 			const webviewPtr = native.symbols.initWebview(
 				id,
 				windowPtr,
@@ -1005,7 +1047,6 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 				toCString(electrobunPreload),
 				toCString(customPreload || ""),
 				transparent,
-				sandbox, // When true, bunBridge and internalBridge are not set up in native code
 			);
 
 			if (!webviewPtr) {
@@ -1525,6 +1566,181 @@ export const GlobalShortcut = {
 	 */
 	isRegistered: (accelerator: string): boolean => {
 		return native.symbols.isGlobalShortcutRegistered(toCString(accelerator));
+	},
+};
+
+// ── CDP (Chrome DevTools Protocol) message passing ──
+// Poll-based architecture: C++ queues results/events, JS polls via FFI.
+// This avoids cross-thread JSCallback which crashes on ARM64 due to
+// TCC-generated trampolines lacking PAC (Pointer Authentication) instructions.
+
+export type CDPMethodResultHandler = (
+	webviewId: number,
+	messageId: number,
+	success: boolean,
+	result: string,
+) => void;
+
+export type CDPEventHandler = (
+	webviewId: number,
+	method: string,
+	params: string,
+) => void;
+
+// Global CDP handlers — set by BrowserView when CDP is enabled
+let cdpMethodResultHandler: CDPMethodResultHandler | null = null;
+let cdpEventHandler: CDPEventHandler | null = null;
+
+// Poll timer handle
+let cdpPollTimer: ReturnType<typeof setInterval> | null = null;
+let cdpPollActive = false;
+
+// Shared buffer for outTotalSize parameter (4 bytes, reused across polls)
+const outSizeBuf = new Uint32Array(1);
+const outSizePtr = ptr(outSizeBuf);
+
+/**
+ * Drain the CDP result queue from C++. Called on each poll tick.
+ * Reads packed buffers: [u32 webviewId][i32 messageId][u32 success][u32 dataSize][data...]
+ */
+function drainResultQueue(): void {
+	for (let i = 0; i < 64; i++) { // Safety cap per tick
+		outSizeBuf[0] = 0;
+		const bufPtr = native.symbols.cdpDequeueResult(outSizePtr);
+		const totalSize = outSizeBuf[0];
+		if (!bufPtr || totalSize === 0) break;
+
+		try {
+			const headerBuf = Buffer.from(toArrayBuffer(bufPtr, 0, 16));
+			const webviewId = headerBuf.readUInt32LE(0);
+			const messageId = headerBuf.readInt32LE(4);
+			const success = headerBuf.readUInt32LE(8);
+			const dataSize = headerBuf.readUInt32LE(12);
+
+			console.log(`[CDP poll] dequeued result: wv=${webviewId} msg=${messageId} ok=${success} size=${dataSize}`);
+
+			let result = "";
+			if (dataSize > 0) {
+				const dataBuf = Buffer.from(toArrayBuffer(bufPtr, 16, dataSize));
+				result = dataBuf.toString("utf8");
+			}
+
+			if (cdpMethodResultHandler) {
+				cdpMethodResultHandler(webviewId, messageId, success !== 0, result);
+			}
+		} catch (e) {
+			console.error("[CDP poll] Failed to read result:", e);
+		} finally {
+			native.symbols.cdpFreeBuffer(bufPtr);
+		}
+	}
+}
+
+/**
+ * Drain the CDP event queue from C++.
+ * Reads packed buffers: [u32 webviewId][u32 methodLen][u32 paramsSize][method...][params...]
+ */
+function drainEventQueue(): void {
+	for (let i = 0; i < 64; i++) {
+		outSizeBuf[0] = 0;
+		const bufPtr = native.symbols.cdpDequeueEvent(outSizePtr);
+		const totalSize = outSizeBuf[0];
+		if (!bufPtr || totalSize === 0) break;
+
+		try {
+			const headerBuf = Buffer.from(toArrayBuffer(bufPtr, 0, 12));
+			const webviewId = headerBuf.readUInt32LE(0);
+			const methodLen = headerBuf.readUInt32LE(4);
+			const paramsSize = headerBuf.readUInt32LE(8);
+
+			let method = "";
+			if (methodLen > 0) {
+				const methodBuf = Buffer.from(toArrayBuffer(bufPtr, 12, methodLen));
+				method = methodBuf.toString("utf8");
+			}
+
+			let params = "";
+			if (paramsSize > 0) {
+				const paramsBuf = Buffer.from(toArrayBuffer(bufPtr, 12 + methodLen, paramsSize));
+				params = paramsBuf.toString("utf8");
+			}
+
+			if (cdpEventHandler) {
+				cdpEventHandler(webviewId, method, params);
+			}
+		} catch (e) {
+			console.error("[CDP poll] Failed to read event:", e);
+		} finally {
+			native.symbols.cdpFreeBuffer(bufPtr);
+		}
+	}
+}
+
+// Poll diagnostics
+let pollTickCount = 0;
+let lastPollLog = 0;
+
+/** Single poll tick — drain both queues */
+function cdpPollTick(): void {
+	pollTickCount++;
+	// Log every 5 seconds to prove the poll loop is alive
+	const now = Date.now();
+	if (now - lastPollLog > 5000) {
+		const rqs = native.symbols.cdpResultQueueSize();
+		const eqs = native.symbols.cdpEventQueueSize();
+		if (rqs > 0 || eqs > 0 || lastPollLog === 0) {
+			console.log(`[CDP poll] tick #${pollTickCount}, resultQ=${rqs}, eventQ=${eqs}`);
+		}
+		lastPollLog = now;
+	}
+	drainResultQueue();
+	drainEventQueue();
+}
+
+/** Start the CDP poll loop (1ms interval). No-op if already running. */
+function startCDPPolling(): void {
+	if (cdpPollActive) return;
+	cdpPollActive = true;
+	// Enable queue mode in C++ (switches from callback to queue)
+	native.symbols.cdpEnableQueue();
+	console.log("[CDP poll] Starting poll loop (1ms interval)");
+	// Poll at 1ms — fast enough for interactive use, cheap when idle
+	cdpPollTimer = setInterval(cdpPollTick, 1);
+}
+
+/** Stop the CDP poll loop. */
+function stopCDPPolling(): void {
+	if (!cdpPollActive) return;
+	cdpPollActive = false;
+	if (cdpPollTimer) {
+		clearInterval(cdpPollTimer);
+		cdpPollTimer = null;
+	}
+	// Final drain to pick up any remaining items
+	cdpPollTick();
+}
+
+export const cdpNative = {
+	setMethodResultHandler(handler: CDPMethodResultHandler) {
+		cdpMethodResultHandler = handler;
+	},
+	setEventHandler(handler: CDPEventHandler) {
+		cdpEventHandler = handler;
+	},
+	sendMessage(viewPtr: Pointer, json: string): boolean {
+		return native.symbols.webviewSendDevToolsMessage(
+			viewPtr,
+			toCString(json),
+			json.length,
+		);
+	},
+	addObserver(viewPtr: Pointer): Pointer | null {
+		// Start polling on first observer attach
+		startCDPPolling();
+		return native.symbols.webviewAddDevToolsObserver(viewPtr) as Pointer | null;
+	},
+	removeObserver(viewPtr: Pointer, registrationPtr: Pointer): void {
+		native.symbols.webviewRemoveDevToolsObserver(viewPtr, registrationPtr);
 	},
 };
 

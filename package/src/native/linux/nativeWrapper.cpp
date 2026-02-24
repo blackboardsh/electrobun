@@ -5934,7 +5934,8 @@ AbstractView* initCEFWebview(uint32_t webviewId,
 static struct {
     bool startTransparent;
     bool startPassthrough;
-} g_nextWebviewFlags = {false, false};
+    bool sandbox;
+} g_nextWebviewFlags = {false, false, false};
 
 AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          void* window,
@@ -6001,9 +6002,10 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
     return result;
 }
 
-ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
+ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough, bool sandbox) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+    g_nextWebviewFlags.sandbox = sandbox;
 }
 
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
@@ -6021,12 +6023,12 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
-                         bool transparent,
-                         bool sandbox) {
+                         bool transparent) {
     // Read and clear pre-set flags
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
-    g_nextWebviewFlags = {false, false};
+    bool sandbox = g_nextWebviewFlags.sandbox;
+    g_nextWebviewFlags = {false, false, false};
 
     // TODO: Implement transparent handling for Linux
 
@@ -6354,6 +6356,32 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView* abstractView) {
             abstractView->toggleDevTools();
         });
     }
+}
+
+// ── CDP (Chrome DevTools Protocol) FFI exports ──
+// TODO: Implement for Linux using CEF's SendDevToolsMessage / AddDevToolsMessageObserver APIs.
+// These stubs allow the shared FFI layer to load without link errors.
+
+ELECTROBUN_EXPORT void setDevToolsCDPCallbacks(void* methodResultCallback, void* eventCallback) {
+    // Stub — not yet implemented on Linux
+}
+
+ELECTROBUN_EXPORT bool webviewSendDevToolsMessage(AbstractView* abstractView, const char* jsonMessage, size_t messageLength) {
+    // Stub — not yet implemented on Linux
+    return false;
+}
+
+ELECTROBUN_EXPORT void* webviewAddDevToolsObserver(AbstractView* abstractView) {
+    // Stub — not yet implemented on Linux
+    return nullptr;
+}
+
+ELECTROBUN_EXPORT void webviewRemoveDevToolsObserver(AbstractView* abstractView, void* registration) {
+    // Stub — not yet implemented on Linux
+}
+
+ELECTROBUN_EXPORT void cdpFreeBuffer(void* buffer) {
+    if (buffer) free(buffer);
 }
 
 ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView* abstractView, const char* scriptIdentifier, const char* scriptContent, bool forMainFrameOnly) {

@@ -6734,11 +6734,13 @@ ELECTROBUN_EXPORT void shutdownApplication() {
 static struct {
     bool startTransparent;
     bool startPassthrough;
-} g_nextWebviewFlags = {false, false};
+    bool sandbox;
+} g_nextWebviewFlags = {false, false, false};
 
-ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
+ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough, bool sandbox) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+    g_nextWebviewFlags.sandbox = sandbox;
 }
 
 // Clean, elegant initWebview function - Windows version matching Mac pattern
@@ -6757,13 +6759,13 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript,
-                         bool transparent,
-                         bool sandbox) {
+                         bool transparent) {
 
     // Read and clear pre-set flags
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
-    g_nextWebviewFlags = {false, false};
+    bool sandbox = g_nextWebviewFlags.sandbox;
+    g_nextWebviewFlags = {false, false, false};
 
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
@@ -7044,6 +7046,32 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
             abstractView->toggleDevTools();
         });
     }
+}
+
+// ── CDP (Chrome DevTools Protocol) FFI exports ──
+// TODO: Implement for Windows using CEF's SendDevToolsMessage / AddDevToolsMessageObserver APIs.
+// These stubs allow the shared FFI layer to load without link errors.
+
+ELECTROBUN_EXPORT void setDevToolsCDPCallbacks(void* methodResultCallback, void* eventCallback) {
+    // Stub — not yet implemented on Windows
+}
+
+ELECTROBUN_EXPORT bool webviewSendDevToolsMessage(AbstractView *abstractView, const char *jsonMessage, size_t messageLength) {
+    // Stub — not yet implemented on Windows
+    return false;
+}
+
+ELECTROBUN_EXPORT void* webviewAddDevToolsObserver(AbstractView *abstractView) {
+    // Stub — not yet implemented on Windows
+    return nullptr;
+}
+
+ELECTROBUN_EXPORT void webviewRemoveDevToolsObserver(AbstractView *abstractView, void *registration) {
+    // Stub — not yet implemented on Windows
+}
+
+ELECTROBUN_EXPORT void cdpFreeBuffer(void *buffer) {
+    if (buffer) free(buffer);
 }
 
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {
