@@ -7260,3 +7260,23 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
 extern "C" void setWindowIcon(void* window, const char* iconPath) {
     // Not supported on macOS - macOS windows use the app bundle icon
 }
+
+extern "C" void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSWindowCollectionBehavior behavior = [window collectionBehavior];
+        if (visible) {
+            behavior |= NSWindowCollectionBehaviorCanJoinAllSpaces;
+        } else {
+            behavior &= ~NSWindowCollectionBehaviorCanJoinAllSpaces;
+        }
+        [window setCollectionBehavior:behavior];
+    });
+}
+
+extern "C" bool isWindowVisibleOnAllWorkspaces(NSWindow *window) {
+    __block bool result = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = ([window collectionBehavior] & NSWindowCollectionBehaviorCanJoinAllSpaces) != 0;
+    });
+    return result;
+}
