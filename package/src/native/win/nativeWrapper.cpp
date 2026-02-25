@@ -4349,6 +4349,7 @@ typedef struct {
     WindowMoveHandler moveHandler;
     WindowResizeHandler resizeHandler;
     WindowFocusHandler focusHandler;
+    WindowBlurHandler blurHandler;
 } WindowData;
 
 
@@ -4630,7 +4631,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_ACTIVATE:
             // Window activation - WA_ACTIVE or WA_CLICKACTIVE means window is being activated
-            if (LOWORD(wParam) != WA_INACTIVE) {
+            if (LOWORD(wParam) == WA_INACTIVE) {
+                if (data && data->blurHandler) {
+                    data->blurHandler(data->windowId);
+                }
+            } else {
                 if (data && data->focusHandler) {
                     data->focusHandler(data->windowId);
                 }
@@ -7057,7 +7062,8 @@ ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
                                          WindowCloseHandler zigCloseHandler,
                                          WindowMoveHandler zigMoveHandler,
                                          WindowResizeHandler zigResizeHandler,
-                                         WindowFocusHandler zigFocusHandler) {
+                                         WindowFocusHandler zigFocusHandler,
+                                         WindowBlurHandler zigBlurHandler) {
     // Stub implementation
     return new NSWindow();
 }
@@ -7079,7 +7085,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
-    WindowFocusHandler zigFocusHandler) {
+    WindowFocusHandler zigFocusHandler,
+    WindowBlurHandler zigBlurHandler) {
 
     // Everything GUI-related needs to be dispatched to main thread
     HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
@@ -7104,6 +7111,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         data->moveHandler = zigMoveHandler;
         data->resizeHandler = zigResizeHandler;
         data->focusHandler = zigFocusHandler;
+        data->blurHandler = zigBlurHandler;
 
         // Map style mask to Windows style
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default

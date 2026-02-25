@@ -16,4 +16,5 @@ export default {
 		new ElectrobunEvent<ResizeData, {}>("resize", data),
 	move: (data: MoveData) => new ElectrobunEvent<MoveData, {}>("move", data),
 	focus: (data: IdData) => new ElectrobunEvent<IdData, {}>("focus", data),
+	blur: (data: IdData) => new ElectrobunEvent<IdData, {}>("blur", data),
 };

@@ -825,6 +825,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) WindowMoveHandler moveHandler;
     @property (nonatomic, assign) WindowResizeHandler resizeHandler;
     @property (nonatomic, assign) WindowFocusHandler focusHandler;
+    @property (nonatomic, assign) WindowBlurHandler blurHandler;
     @property (nonatomic, assign) uint32_t windowId;
     @property (nonatomic, strong) NSWindow *window;
 @end
@@ -5089,6 +5090,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             self.focusHandler(self.windowId);
         }
     }
+    - (void)windowDidResignKey:(NSNotification *)notification {
+        if (self.blurHandler) {
+            self.blurHandler(self.windowId);
+        }
+    }
 @end
 
 /*
@@ -5642,7 +5648,8 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      WindowCloseHandler zigCloseHandler,
                                                      WindowMoveHandler zigMoveHandler,
                                                      WindowResizeHandler zigResizeHandler,
-                                                     WindowFocusHandler zigFocusHandler) {
+                                                     WindowFocusHandler zigFocusHandler,
+                                                     WindowBlurHandler zigBlurHandler) {
     
     NSScreen *primaryScreen = [NSScreen screens][0];
     NSRect screenFrame = [primaryScreen frame];
@@ -5664,6 +5671,7 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     delegate.resizeHandler = zigResizeHandler;
     delegate.moveHandler = zigMoveHandler;
     delegate.focusHandler = zigFocusHandler;
+    delegate.blurHandler = zigBlurHandler;
     delegate.windowId = windowId;
     delegate.window = window;
     [window setDelegate:delegate];
@@ -5695,7 +5703,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   WindowCloseHandler zigCloseHandler,
   WindowMoveHandler zigMoveHandler,
   WindowResizeHandler zigResizeHandler,
-  WindowFocusHandler zigFocusHandler
+  WindowFocusHandler zigFocusHandler,
+  WindowBlurHandler zigBlurHandler
   ) {
 
     // Validate frame values - use defaults if NaN or invalid
@@ -5722,7 +5731,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             zigCloseHandler,
             zigMoveHandler,
             zigResizeHandler,
-            zigFocusHandler
+            zigFocusHandler,
+            zigBlurHandler
         );
 
         // Handle transparent window background
