@@ -5056,23 +5056,24 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         NSWindow *window = [notification object];
         NSRect windowFrame = [window frame];
         ContainerView *containerView = [window contentView];
-        NSRect fullFrame = [window frame];
-        fullFrame.origin.x = 0;
-        fullFrame.origin.y = 0;                
-                
-        for (AbstractView *abstractView in containerView.abstractViews) {                              
-            if (abstractView.fullSize) {                
-                [abstractView resize:fullFrame withMasksJSON:""];                
+        NSRect contentBounds = [containerView bounds];
+        contentBounds.origin.x = 0;
+        contentBounds.origin.y = 0;
+
+        for (AbstractView *abstractView in containerView.abstractViews) {
+            if (abstractView.fullSize) {
+                [abstractView resize:contentBounds withMasksJSON:""];
             }
 
         }
         if (self.resizeHandler) {
             NSScreen *primaryScreen = [NSScreen screens][0];
             NSRect screenFrame = [primaryScreen frame];
-            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;                        
+            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
+            NSRect contentRect = [window contentRectForFrameRect:windowFrame];
             self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
-                            windowFrame.size.width, windowFrame.size.height);
-        }                
+                            contentRect.size.width, contentRect.size.height);
+        }
     }
     - (void)windowDidMove:(NSNotification *)notification {
         if (self.moveHandler) {
