@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    h2 { margin-bottom: 20px; color: #fff; }
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .info-box {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 15px;
+    }
+    .info-box h3 {
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 8px;
+    }
+    .info-box .value {
+      font-size: 24px;
+      font-weight: bold;
+      font-family: monospace;
+    }
+    .status-section {
+      margin-top: auto;
+    }
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid #333;
+    }
+    .status-item:last-child { border-bottom: none; }
+    .indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #444;
+    }
+    .indicator.detected { background: #4ade80; }
+    .status-text { color: #888; }
+    .status-text.detected { color: #4ade80; }
+    .done-message {
+      margin-top: 15px;
+      padding: 15px;
+      background: #166534;
+      border-radius: 8px;
+      text-align: center;
+      display: none;
+    }
+    .done-message.show { display: block; }
+    button {
+      margin-top: 15px;
+      padding: 10px 20px;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover { background: #2563eb; }
+  </style>
+</head>
+<body>
+  <h2>Window Move & Resize Events Detection</h2>
+
+  <div class="info-grid">
+    <div class="info-box">
+      <h3>Position</h3>
+      <div class="value" id="position">---, ---</div>
+    </div>
+    <div class="info-box">
+      <h3>Size</h3>
+      <div class="value" id="size">--- x ---</div>
+    </div>
+  </div>
+
+  <div class="status-section">
+    <div class="status-item">
+      <div class="indicator" id="move-indicator"></div>
+      <span class="status-text" id="move-status">Move: Drag the window...</span>
+    </div>
+    <div class="status-item">
+      <div class="indicator" id="resize-indicator"></div>
+      <span class="status-text" id="resize-status">Resize: Drag window edges...</span>
+    </div>
+  </div>
+
+  <div class="done-message" id="done-message">
+    Both events detected! Closing in 2 seconds...
+  </div>
+
+  <button id="closeBtn">Close Window</button>
+  <script src="index.js"></script>
+</body>
+</html>
