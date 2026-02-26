@@ -83,6 +83,10 @@ static int g_sigint_count = 0;
 static std::atomic<int> g_activeOperations{0};
 static std::mutex g_cefBrowserMutex;
 
+// Map from CEF browser identifier to electrobun webviewId, used by scheme handlers
+static std::map<int, uint32_t> g_browserIdToWebviewId;
+static std::mutex g_browserIdToWebviewIdMutex;
+
 // Use OperationGuard from shared/shutdown_guard.h
 using electrobun::OperationGuard;
 
@@ -486,7 +490,7 @@ public:
 // CEF views:// scheme handler implementation
 class ViewsResourceHandler : public CefResourceHandler {
 public:
-    ViewsResourceHandler() : offset_(0) {}
+    explicit ViewsResourceHandler(uint32_t webviewId) : offset_(0), webviewId_(webviewId) {}
     
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
         std::string url = request->GetURL();
@@ -499,8 +503,8 @@ public:
         
         // Check if this is the internal HTML request
         if (fullPath == "internal/index.html") {
-            // Use stored HTML content instead of JSCallback
-            const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
+            // Use stored HTML content for this specific webview
+            const char* htmlContent = getWebviewHTMLContent(webviewId_);
             if (htmlContent) {
                 data_ = std::string(htmlContent);
                 mimeType_ = "text/html";
@@ -650,6 +654,7 @@ private:
     std::string data_;
     std::string mimeType_;
     size_t offset_;
+    uint32_t webviewId_;
     
     IMPLEMENT_REFCOUNTING(ViewsResourceHandler);
 };
@@ -659,7 +664,16 @@ class ViewsSchemeHandlerFactory : public CefSchemeHandlerFactory {
 public:
     CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, 
                                        const CefString& scheme_name, CefRefPtr<CefRequest> request) override {
-        return new ViewsResourceHandler();
+        // Resolve the webviewId for the browser making this request
+        uint32_t webviewId = 0;
+        if (browser) {
+            std::lock_guard<std::mutex> lock(g_browserIdToWebviewIdMutex);
+            auto it = g_browserIdToWebviewId.find(browser->GetIdentifier());
+            if (it != g_browserIdToWebviewId.end()) {
+                webviewId = it->second;
+            }
+        }
+        return new ViewsResourceHandler(webviewId);
     }
     
 private:
@@ -1184,6 +1198,12 @@ public:
         // Set the browser reference
         SetBrowser(browser);
         
+        // Register browser ID → webviewId so scheme handlers can look up content
+        {
+            std::lock_guard<std::mutex> lock(g_browserIdToWebviewIdMutex);
+            g_browserIdToWebviewId[browser->GetIdentifier()] = webview_id_;
+        }
+        
         // Notify CEFWebViewImpl that browser is created
         if (browser_created_callback_) {
             browser_created_callback_(browser);
@@ -1308,6 +1328,12 @@ public:
     // Critical: Handle browser cleanup to prevent use-after-free
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
         printf("CEF: OnBeforeClose called for browser %d\n", browser->GetIdentifier());
+        
+        // Remove browser ID → webviewId mapping
+        {
+            std::lock_guard<std::mutex> lock(g_browserIdToWebviewIdMutex);
+            g_browserIdToWebviewId.erase(browser->GetIdentifier());
+        }
         
         // Clear browser reference to prevent use-after-free
         std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
@@ -2403,19 +2429,27 @@ public:
         isRemoved = true;
         
         if (webview) {
-            // First remove from parent synchronously to avoid race conditions
-            if (gtk_widget_get_parent(webview)) {
-                GtkWidget* parent = gtk_widget_get_parent(webview);
-                gtk_container_remove(GTK_CONTAINER(parent), webview);
-            }
-            
-            // Schedule GTK widget destruction on idle
             GtkWidget* widget_to_destroy = webview;
             webview = nullptr;  // Clear our reference immediately
             
+            // gtk_widget_destroy on the parent window recursively destroys all
+            // children, so the webview widget may already be invalid by the time
+            // this idle callback runs. Guard every GTK call with GTK_IS_WIDGET.
             g_idle_add([](gpointer data) -> gboolean {
                 GtkWidget* widget = static_cast<GtkWidget*>(data);
                 
+                if (!GTK_IS_WIDGET(widget)) {
+                    // Already destroyed by parent window teardown — nothing to do.
+                    return G_SOURCE_REMOVE;
+                }
+                
+                // Only try to unparent if the widget still has a live parent.
+                GtkWidget* parent = gtk_widget_get_parent(widget);
+                if (parent && GTK_IS_CONTAINER(parent)) {
+                    gtk_container_remove(GTK_CONTAINER(parent), widget);
+                }
+                
+                // Final destroy (no-op if GTK already freed it via the parent).
                 if (GTK_IS_WIDGET(widget)) {
                     gtk_widget_destroy(widget);
                 }
@@ -3763,11 +3797,12 @@ public:
             }, new CefRefPtr<CefBrowser>(browser_to_close));
         }
         
-        // Destroy widget asynchronously
+        // Destroy widget asynchronously. The parent window may have already
+        // destroyed this widget via gtk_widget_destroy cascade — guard accordingly.
         if (widget_to_destroy) {
             g_idle_add([](gpointer data) -> gboolean {
                 GtkWidget* widget = static_cast<GtkWidget*>(data);
-                if (widget) {
+                if (GTK_IS_WIDGET(widget)) {
                     gtk_widget_hide(widget);
                     gtk_widget_destroy(widget);
                 }
@@ -4752,8 +4787,23 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     // Check if this is the internal HTML request
     if (strcmp(fullPath, "internal/index.html") == 0) {
         fflush(stdout);
-        // Use stored HTML content instead of JSCallback
-        const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
+        
+        // Resolve the webviewId by matching the requesting WebKitWebView to g_webviewMap
+        uint32_t webviewId = 0;
+        WebKitWebView* requestingWebView = webkit_uri_scheme_request_get_web_view(request);
+        if (requestingWebView) {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+            for (auto& [id, view] : g_webviewMap) {
+                auto* wkImpl = dynamic_cast<WebKitWebViewImpl*>(view.get());
+                if (wkImpl && wkImpl->webview == GTK_WIDGET(requestingWebView)) {
+                    webviewId = id;
+                    break;
+                }
+            }
+        }
+        
+        // Use stored HTML content for this specific webview
+        const char* htmlContent = getWebviewHTMLContent(webviewId);
         if (htmlContent) {
             gsize contentLength = strlen(htmlContent);
             GInputStream* stream = g_memory_input_stream_new_from_data(g_strdup(htmlContent), contentLength, g_free);
@@ -5701,11 +5751,15 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         // Connect window delete event to handle X button clicks properly
         g_signal_connect(window, "delete-event", G_CALLBACK(onWindowDeleteEvent), container.get());
 
-        // Connect destroy signal to clean up the container
+        // Connect destroy signal to clean up the container.
+        // Note: cleanupWebviewsForWindow() may have already erased the container from
+        // g_containers. We guard with windowId > 0 and hold g_containersMutex so the
+        // erase is safe and idempotent.
         g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget* widget, gpointer user_data) {
             ContainerView* container = static_cast<ContainerView*>(user_data);
-            if (container) {
+            if (container && container->windowId > 0) {
                 printf("DEBUG: Window destroyed, cleaning up container for window ID: %u\n", container->windowId);
+                std::lock_guard<std::mutex> lock(g_containersMutex);
                 g_containers.erase(container->windowId);
             }
         }), container.get());
@@ -7558,31 +7612,33 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
             GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
             printf("DEBUG: closeWindow called for GTK window\n");
             
-            // Find the container for this window to get the windowId and callback
+            // Find the container for this window to get the windowId and callback.
+            // Hold a shared_ptr so the ContainerView stays alive through gtk_widget_destroy
+            // (the "destroy" signal handler accesses it via raw pointer).
             uint32_t windowId = 0;
             WindowCloseCallback closeCallback = nullptr;
+            std::shared_ptr<ContainerView> containerRef;
             {
                 std::lock_guard<std::mutex> lock(g_containersMutex);
                 for (auto& [id, container] : g_containers) {
                     if (container->window == gtkWindow) {
                         windowId = id;
                         closeCallback = container->closeCallback;
+                        containerRef = container; // keep alive
                         break;
                     }
                 }
             }
             
-            // Clean up webviews first
-            if (windowId > 0) {
-                cleanupWebviewsForWindow(windowId);
-            }
-            
-            // Call the close callback before destroying the window
+            // Call the close callback before destroying the widget.
             if (closeCallback && windowId > 0) {
                 printf("DEBUG: Calling close callback for GTK window ID: %u\n", windowId);
                 closeCallback(windowId);
             }
             
+            // gtk_widget_destroy fires the "destroy" signal synchronously.
+            // containerRef keeps the ContainerView alive so the signal handler's
+            // raw ContainerView* user_data is valid for the duration of the call.
             printf("DEBUG: Destroying GTK window\n");
             gtk_widget_destroy(gtkWindow);
         } else {
@@ -7613,20 +7669,21 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                 auto display = x11win->display;
                 auto x11_window = x11win->window;
                 
-                // Clean up webviews first
-                cleanupWebviewsForWindow(windowId);
+                // Call the close callback BEFORE removing from maps.
+                // Zig's handler enqueues webviewRemove() calls asynchronously; those
+                // calls need g_webviewMap entries to still be present when they fire.
+                if (callback) {
+                    printf("DEBUG: Calling close callback for X11 window ID: %u\n", windowId);
+                    callback(windowId);
+                }
                 
-                // Remove from global maps first to prevent any access during callback
+                // Remove the X11 window from global maps. Do NOT call
+                // cleanupWebviewsForWindow here — that would erase g_webviewMap entries
+                // before Zig's queued webviewRemove calls get to run.
                 {
                     std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
                     g_x11_window_to_id.erase(x11_window);
                     g_x11_windows.erase(windowId);
-                }
-                
-                // Call the close callback
-                if (callback) {
-                    printf("DEBUG: Calling close callback for X11 window ID: %u\n", windowId);
-                    callback(windowId);
                 }
                 
                 printf("DEBUG: Destroying X11 window\n");
