@@ -7670,16 +7670,12 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                 auto x11_window = x11win->window;
                 
                 // Call the close callback BEFORE removing from maps.
-                // Zig's handler enqueues webviewRemove() calls asynchronously; those
-                // calls need g_webviewMap entries to still be present when they fire.
                 if (callback) {
                     printf("DEBUG: Calling close callback for X11 window ID: %u\n", windowId);
                     callback(windowId);
                 }
                 
-                // Remove the X11 window from global maps. Do NOT call
-                // cleanupWebviewsForWindow here — that would erase g_webviewMap entries
-                // before Zig's queued webviewRemove calls get to run.
+                // Remove the X11 window from global maps.
                 {
                     std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
                     g_x11_window_to_id.erase(x11_window);
