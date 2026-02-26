@@ -1,6 +1,6 @@
 // BrowserWindow Tests - Tests for window creation and management
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, type TitleBarStyle } from "../test-framework/types";
 import { BrowserWindow } from "electrobun/bun";
 
 export const windowTests = [
@@ -301,8 +301,8 @@ export const windowTests = [
     },
   }),
 
-  defineTest({
-    name: "Window focus and blur events",
+  ...(['default', 'hiddenInset', 'hidden'] satisfies TitleBarStyle[]).map(titleBarStyle => defineTest({
+    name: `Window focus and blur events (titleBarStyle: ${titleBarStyle})`,
     category: "BrowserWindow",
     description: "Test that focus and blur events fire when windows gain and lose focus",
     async run({ createWindow, log }) {
@@ -313,6 +313,7 @@ export const windowTests = [
         url: "views://test-harness/index.html",
         title: "Focus Event Test",
         renderer: 'cef',
+        titleBarStyle,
       });
 
       win1.window.on("blur", () => { blurEventFired = true; });
@@ -324,6 +325,7 @@ export const windowTests = [
         url: "views://test-harness/index.html",
         title: "Focus Stealer",
         renderer: 'cef',
+        titleBarStyle,
       });
 
       win2.window.on("focus", () => { focusEventFired = true; });
@@ -342,7 +344,7 @@ export const windowTests = [
       log("Blur event fired successfully");
       log("Focus event fired successfully");
     },
-  }),
+  })),
 
   defineTest({
     name: "BrowserWindow.getById",

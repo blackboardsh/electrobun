@@ -5643,6 +5643,14 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
 }
 
 
+@interface ElectrobunWindow : NSWindow
+@end
+
+@implementation ElectrobunWindow
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return YES; }
+@end
+
 NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      createNSWindowWithFrameAndStyleParams config,
                                                      WindowCloseHandler zigCloseHandler,
@@ -5655,11 +5663,11 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     NSRect screenFrame = [primaryScreen frame];
     config.frame.origin.y = screenFrame.size.height - config.frame.origin.y;
     
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:config.frame
-                                                   styleMask:config.styleMask
-                                                     backing:NSBackingStoreBuffered
-                                                       defer:YES
-                                                      screen:primaryScreen];
+    NSWindow *window = [[ElectrobunWindow alloc] initWithContentRect:config.frame
+                                                          styleMask:config.styleMask
+                                                            backing:NSBackingStoreBuffered
+                                                              defer:YES
+                                                             screen:primaryScreen];
     
     [window setFrameTopLeftPoint:config.frame.origin];
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
