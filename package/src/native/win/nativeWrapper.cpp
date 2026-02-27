@@ -7487,6 +7487,15 @@ ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(NSWindow *window) {
     return (exStyle & WS_EX_TOPMOST) != 0;
 }
 
+ELECTROBUN_EXPORT void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) {
+    // Not applicable on Windows - no-op
+}
+
+ELECTROBUN_EXPORT bool isWindowVisibleOnAllWorkspaces(NSWindow *window) {
+    // Not applicable on Windows
+    return false;
+}
+
 ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     if (!IsWindow(hwnd)) return;
