@@ -3205,6 +3205,103 @@ public:
 
 };
 
+// WGPUView implementation (non-webview rendering surface)
+class WGPUViewImpl : public AbstractView {
+public:
+    GtkWidget* viewWidget = nullptr;
+
+    WGPUViewImpl(uint32_t webviewId)
+        : AbstractView(webviewId) {}
+
+    void loadURL(const char* urlString) override {}
+    void loadHTML(const char* htmlString) override {}
+    void goBack() override {}
+    void goForward() override {}
+    void reload() override {}
+    void evaluateJavaScriptWithNoCompletion(const char* jsString) override {}
+    void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) override {}
+    void addPreloadScriptToWebView(const char* jsString) override {}
+    void updateCustomPreloadScript(const char* jsString) override {}
+
+    void resize(const GdkRectangle& frame, const char* masksJson) override {
+        if (viewWidget) {
+            gtk_widget_set_size_request(viewWidget, frame.width, frame.height);
+
+            GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(viewWidget), "wrapper");
+            if (wrapper) {
+                int clampedX = MAX(0, frame.x);
+                int clampedY = MAX(0, frame.y);
+                int offsetX = frame.x - clampedX;
+                int offsetY = frame.y - clampedY;
+
+                gtk_widget_set_size_request(wrapper, frame.width, frame.height);
+                gtk_widget_set_margin_start(wrapper, clampedX);
+                gtk_widget_set_margin_top(wrapper, clampedY);
+                gtk_fixed_move(GTK_FIXED(wrapper), viewWidget, offsetX / 2, offsetY / 2);
+            } else {
+                gtk_widget_set_margin_start(viewWidget, MAX(0, frame.x));
+                gtk_widget_set_margin_top(viewWidget, MAX(0, frame.y));
+            }
+
+            visualBounds = frame;
+        }
+        maskJSON = masksJson ? masksJson : "";
+    }
+
+    void applyVisualMask() override {}
+    void removeMasks() override {}
+
+    void toggleMirrorMode(bool enable) override {
+        if (mirrorModeEnabled == enable) return;
+        mirrorModeEnabled = enable;
+        if (viewWidget) {
+            gtk_widget_set_sensitive(viewWidget, enable ? FALSE : TRUE);
+        }
+    }
+
+    void setHidden(bool hidden) override {
+        if (viewWidget) {
+            hidden ? gtk_widget_hide(viewWidget) : gtk_widget_show(viewWidget);
+        }
+    }
+
+    void setTransparent(bool transparent) override {
+        if (viewWidget) {
+            gtk_widget_set_opacity(viewWidget, transparent ? 0.0 : 1.0);
+        }
+    }
+
+    void setPassthrough(bool enable) override {
+        AbstractView::setPassthrough(enable);
+        if (viewWidget) {
+            gtk_widget_set_sensitive(viewWidget, enable ? FALSE : TRUE);
+        }
+    }
+
+    void findInPage(const char* searchText, bool forward, bool matchCase) override {}
+    void stopFindInPage() override {}
+    void openDevTools() override {}
+    void closeDevTools() override {}
+    void toggleDevTools() override {}
+
+    void remove() override {
+        if (viewWidget) {
+            GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(viewWidget), "wrapper");
+            if (wrapper) {
+                gtk_widget_destroy(wrapper);
+            } else {
+                gtk_widget_destroy(viewWidget);
+            }
+            viewWidget = nullptr;
+            widget = nullptr;
+        }
+        isRemoved = true;
+    }
+
+    bool canGoBack() override { return false; }
+    bool canGoForward() override { return false; }
+};
+
 // Initialize static debounce timestamp for ctrl+click handling
 double WebKitWebViewImpl::lastCtrlClickTime = 0;
 
@@ -6060,12 +6157,141 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
 
 }
 
+ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
+                         void* window,
+                         double x, double y,
+                         double width, double height,
+                         bool autoResize,
+                         bool startTransparent,
+                         bool startPassthrough) {
+    if (!window) {
+        fprintf(stderr, "ERROR: initWGPUView called with null window pointer\n");
+        return nullptr;
+    }
+
+    waitForGTKInit();
+
+    auto view = std::make_shared<WGPUViewImpl>(webviewId);
+    view->fullSize = autoResize;
+    view->pendingStartTransparent = startTransparent;
+    view->pendingStartPassthrough = startPassthrough;
+
+    GtkWidget* windowWidget = static_cast<GtkWidget*>(window);
+
+    dispatch_sync_main_void([&]() {
+        auto container = GetOrCreateContainer(windowWidget);
+        if (!container) {
+            fprintf(stderr, "ERROR: Failed to create container for WGPUView\n");
+            view->creationFailed = true;
+            return;
+        }
+
+        view->viewWidget = gtk_drawing_area_new();
+        view->widget = view->viewWidget;
+
+        gtk_widget_set_size_request(view->viewWidget, (int)width, (int)height);
+        container->addWebview(view, x, y);
+
+        GdkRectangle frame = {(int)x, (int)y, (int)width, (int)height};
+        view->resize(frame, "");
+    });
+
+    {
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        g_webviewMap[webviewId] = view;
+    }
+
+    return view.get();
+}
+
 ELECTROBUN_EXPORT void loadURLInWebView(AbstractView* abstractView, const char* urlString) {
     if (abstractView && urlString) {
         std::string urlStr(urlString);  // Copy the string to ensure it survives
         dispatch_sync_main_void([abstractView, urlStr]() {  // Capture by value
             abstractView->loadURL(urlStr.c_str());
         });
+    }
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetFrame(AbstractView* abstractView, double x, double y, double width, double height) {
+    if (!abstractView) return;
+    GdkRectangle frame = {(int)x, (int)y, (int)width, (int)height};
+    dispatch_sync_main_void([&]() {
+        abstractView->resize(frame, "");
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetTransparent(AbstractView* abstractView, bool transparent) {
+    if (!abstractView) return;
+    dispatch_sync_main_void([&]() {
+        abstractView->setTransparent(transparent);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetPassthrough(AbstractView* abstractView, bool enablePassthrough) {
+    if (!abstractView) return;
+    dispatch_sync_main_void([&]() {
+        abstractView->setPassthrough(enablePassthrough);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetHidden(AbstractView* abstractView, bool hidden) {
+    if (!abstractView) return;
+    dispatch_sync_main_void([&]() {
+        abstractView->setHidden(hidden);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView* abstractView) {
+    if (!abstractView) return;
+    uint32_t viewId = abstractView->webviewId;
+    dispatch_sync_main_void([&]() {
+        abstractView->remove();
+    });
+    {
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        g_webviewMap.erase(viewId);
+    }
+}
+
+ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView* abstractView) {
+    (void)abstractView;
+    return nullptr;
+}
+
+// WGPU main-thread shims (no-op on Linux for now)
+ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descriptor) {
+    (void)instance;
+    (void)descriptor;
+    return nullptr;
+}
+
+ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(void* surface, void* config) {
+    (void)surface;
+    (void)config;
+}
+
+ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
+    (void)surface;
+    (void)surfaceTexture;
+}
+
+ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
+    (void)surface;
+    return 0;
+}
+
+ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
+    (void)abstractView;
+}
+
+ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void* surfacePtr, void* outAdapterDevice) {
+    (void)instancePtr;
+    (void)surfacePtr;
+    if (outAdapterDevice) {
+        uint64_t* out = (uint64_t*)outAdapterDevice;
+        out[0] = 0;
+        out[1] = 0;
     }
 }
 

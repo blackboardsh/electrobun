@@ -379,6 +379,105 @@ function getEffectiveCEFDir(
 }
 
 /**
+ * Returns the effective WGPU directory path. WGPU files are stored in
+ * node_modules/.electrobun-cache/ to survive dist rebuilds and bun install.
+ */
+function getEffectiveWGPUDir(
+	platformOS: "macos" | "win" | "linux",
+	platformArch: "arm64" | "x64",
+): string {
+	return join(
+		projectRoot,
+		"node_modules",
+		".electrobun-cache",
+		"wgpu",
+		`${platformOS}-${platformArch}`,
+	);
+}
+
+/**
+ * Trims an ICU .dat file to only include the specified locales.
+ * Uses icupkg (from ICU tools) to list and remove unwanted locale data.
+ */
+async function trimICUData(
+	source: string,
+	dest: string,
+	locales: string[],
+): Promise<void> {
+	// Copy the full .dat file first
+	cpSync(source, dest);
+
+	// Try to find icupkg in PATH or common locations
+	let icupkgPath = "icupkg";
+	try {
+		execSync(`${icupkgPath} --help`, { stdio: "ignore" });
+	} catch {
+		// icupkg not available, skip trimming
+		throw new Error(
+			"icupkg not found in PATH. Install ICU tools to enable locale trimming.",
+		);
+	}
+
+	// List all items in the .dat file
+	const listOutput = execSync(`${icupkgPath} -l "${dest}"`, {
+		encoding: "utf-8",
+	});
+	const allItems = listOutput.split("\n").filter((line) => line.trim());
+
+	// Locale-specific directories in ICU data
+	const localeDirs = [
+		"brkitr/",
+		"coll/",
+		"curr/",
+		"lang/",
+		"locales/",
+		"rbnf/",
+		"region/",
+		"unit/",
+		"zone/",
+	];
+
+	const toRemove = allItems.filter((item) => {
+		// Only consider items in locale-specific directories
+		const isLocaleItem = localeDirs.some((dir) => item.startsWith(dir));
+		if (!isLocaleItem) return false;
+
+		// Extract the basename (after the last /)
+		const basename = item.split("/").pop() || "";
+		// Remove file extension for matching
+		const name = basename.replace(/\.res$/, "");
+
+		// Keep items matching requested locales (exact match or with region suffix)
+		return !locales.some(
+			(l) =>
+				name === l ||
+				name === "root" ||
+				name.startsWith(`${l}_`) ||
+				name.startsWith(`${l}-`),
+		);
+	});
+
+	if (toRemove.length > 0) {
+		// Write removal list to temp file
+		const { tmpdir } = await import("os");
+		const removeListPath = join(tmpdir(), "icu-remove.txt");
+		writeFileSync(removeListPath, toRemove.join("\n"));
+
+		try {
+			execSync(`${icupkgPath} -r "@${removeListPath}" "${dest}"`, {
+				stdio: "inherit",
+			});
+		} finally {
+			try {
+				unlinkSync(removeListPath);
+			} catch {
+				// ignore cleanup errors
+			}
+		}
+	}
+}
+
+/**
  * Ensures the correct Bun binary is available for bundling. When a custom
  * bunVersion is specified in the config, downloads that version from GitHub
  * releases and caches it. Otherwise returns the default binary path.
@@ -901,6 +1000,163 @@ async function ensureCEFDependencies(
 	}
 }
 
+async function ensureWGPUDependencies(
+	targetOS?: "macos" | "win" | "linux",
+	targetArch?: "arm64" | "x64",
+	wgpuVersion?: string,
+): Promise<string> {
+	const platformOS = targetOS || OS;
+	const platformArch = targetArch || ARCH;
+	const wgpuDir = getEffectiveWGPUDir(platformOS, platformArch);
+	const versionFile = join(wgpuDir, ".wgpu-version");
+
+	const normalizedVersion =
+		wgpuVersion && wgpuVersion.length > 0
+			? wgpuVersion.startsWith("v")
+				? wgpuVersion
+				: `v${wgpuVersion}`
+			: "latest";
+
+	if (existsSync(wgpuDir) && existsSync(versionFile)) {
+		const cachedVersion = readFileSync(versionFile, "utf8").trim();
+		if (cachedVersion === normalizedVersion) {
+			console.log(
+				`WGPU ${normalizedVersion} already cached for ${platformOS}-${platformArch} at ${wgpuDir}`,
+			);
+			return wgpuDir;
+		}
+		console.log(
+			`Cached WGPU version "${cachedVersion}" does not match requested "${normalizedVersion}", re-downloading...`,
+		);
+		rmSync(wgpuDir, { recursive: true, force: true });
+	} else if (existsSync(wgpuDir)) {
+		rmSync(wgpuDir, { recursive: true, force: true });
+	}
+
+	const platformName =
+		platformOS === "macos" ? "darwin" : platformOS === "win" ? "win32" : "linux";
+	const archName = platformArch;
+	const baseUrl =
+		normalizedVersion === "latest"
+			? "https://github.com/blackboardsh/electrobun-dawn/releases/latest/download"
+			: `https://github.com/blackboardsh/electrobun-dawn/releases/download/${normalizedVersion}`;
+	const tarballUrl = `${baseUrl}/electrobun-dawn-${platformName}-${archName}.tar.gz`;
+
+	async function downloadWithRetry(
+		url: string,
+		filePath: string,
+		maxRetries = 3,
+	): Promise<void> {
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			try {
+				console.log(
+					`Downloading WGPU (attempt ${attempt}/${maxRetries}) from: ${url}`,
+				);
+				const response = await fetch(url);
+				if (!response.ok) {
+					throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+				}
+
+				const fileStream = createWriteStream(filePath);
+				if (response.body) {
+					const reader = response.body.getReader();
+					while (true) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						fileStream.write(Buffer.from(value));
+					}
+				}
+
+				await new Promise((resolve, reject) => {
+					fileStream.end((err: Error | null | undefined) => {
+						if (err) reject(err);
+						else resolve(null);
+					});
+				});
+				return;
+			} catch (error) {
+				if (attempt === maxRetries) throw error;
+				console.log(`Download failed, retrying... (${attempt}/${maxRetries})`);
+			}
+		}
+	}
+
+	try {
+		console.log(
+			`WGPU dependencies not found for ${platformOS}-${platformArch}, downloading...`,
+		);
+		const tempFile = join(
+			ELECTROBUN_DEP_PATH,
+			`wgpu-${platformOS}-${platformArch}-${Date.now()}.tar.gz`,
+		);
+		await downloadWithRetry(tarballUrl, tempFile);
+
+		if (!existsSync(tempFile)) {
+			throw new Error(`Downloaded file not found: ${tempFile}`);
+		}
+		const fileSize = require("fs").statSync(tempFile).size;
+		if (fileSize === 0) {
+			throw new Error(`Downloaded file is empty: ${tempFile}`);
+		}
+
+		const tempExtractDir = join(
+			ELECTROBUN_DEP_PATH,
+			`wgpu-extract-${platformOS}-${platformArch}-${Date.now()}`,
+		);
+		mkdirSync(tempExtractDir, { recursive: true });
+
+		const tarBytes = await Bun.file(tempFile).arrayBuffer();
+		const archive = new Bun.Archive(tarBytes);
+		await archive.extract(tempExtractDir);
+
+		mkdirSync(wgpuDir, { recursive: true });
+		const extractedItems = readdirSync(tempExtractDir);
+
+		const moveAll = (fromDir: string) => {
+			for (const item of readdirSync(fromDir)) {
+				const src = join(fromDir, item);
+				const dest = join(wgpuDir, item);
+				if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
+				renameSync(src, dest);
+			}
+		};
+
+		if (extractedItems.length === 1) {
+			const single = join(tempExtractDir, extractedItems[0]);
+			const stat = require("fs").statSync(single);
+			if (stat.isDirectory()) {
+				moveAll(single);
+			} else {
+				moveAll(tempExtractDir);
+			}
+		} else {
+			moveAll(tempExtractDir);
+		}
+
+		writeFileSync(versionFile, normalizedVersion);
+
+		rmSync(tempExtractDir, { recursive: true, force: true });
+		unlinkSync(tempFile);
+
+		console.log(
+			`✓ WGPU dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`,
+		);
+		return wgpuDir;
+	} catch (error: any) {
+		if (existsSync(wgpuDir)) {
+			try {
+				rmSync(wgpuDir, { recursive: true, force: true });
+			} catch {}
+		}
+		console.error(
+			`Failed to download WGPU dependencies for ${platformOS}-${platformArch}:`,
+			error.message,
+		);
+		console.error("Please ensure you have an internet connection and the release exists.");
+		process.exit(1);
+	}
+}
+
 /**
  * Downloads CEF runtime files from Spotify CDN for a custom version override.
  * Extracts the minimal distribution and restructures runtime files to the
@@ -1122,11 +1378,13 @@ const defaultConfig = {
 		useAsar: false,
 		asarUnpack: undefined as string[] | undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
 		cefVersion: undefined as string | undefined, // Override CEF version: "CEF_VERSION+chromium-CHROMIUM_VERSION"
+		wgpuVersion: undefined as string | undefined, // Override Dawn (WebGPU) version: "0.2.3" or "v0.2.3-beta.0"
 		bunVersion: undefined as string | undefined, // Override Bun runtime version: "1.4.2"
 		mac: {
 			codesign: false,
 			notarize: false,
 			bundleCEF: false,
+			bundleWGPU: false,
 			entitlements: {
 				// This entitlement is required for Electrobun apps with a hardened runtime (required for notarization) to run on macos
 				"com.apple.security.cs.allow-jit": true,
@@ -1140,12 +1398,14 @@ const defaultConfig = {
 		},
 		win: {
 			bundleCEF: false,
+			bundleWGPU: false,
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
 			chromiumFlags: undefined as Record<string, string | true> | undefined,
 		},
 		linux: {
 			bundleCEF: false,
+			bundleWGPU: false,
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
 			chromiumFlags: undefined as Record<string, string | true> | undefined,
@@ -1962,6 +2222,34 @@ Categories=Utility;Application;
 			dereference: true,
 		});
 
+		// Copy ICU data file if it exists (Linux/Windows external ICU builds)
+		// ICU version varies per platform WebKit build, so detect the filename dynamically
+		const bunDir = dirname(bunBinarySourcePath);
+		const icuDataFileName = readdirSync(bunDir).find((f) => /^icudt\d+l\.dat$/.test(f));
+		const icuDataSource = icuDataFileName ? join(bunDir, icuDataFileName) : "";
+		if (icuDataFileName && existsSync(icuDataSource) && targetOS !== "macos") {
+			const icuDataDest = join(appBundleMacOSPath, icuDataFileName);
+
+			const locales = config.build?.locales;
+			if (locales && locales !== "*" && Array.isArray(locales) && locales.length > 0) {
+				// Trim ICU data to specified locales using icupkg
+				try {
+					await trimICUData(icuDataSource, icuDataDest, locales);
+					const originalSize = statSync(icuDataSource).size;
+					const trimmedSize = statSync(icuDataDest).size;
+					console.log(
+						`Trimmed ICU data: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(trimmedSize / 1024 / 1024).toFixed(1)}MB (locales: ${locales.join(", ")})`,
+					);
+				} catch (error) {
+					console.warn(`Warning: Failed to trim ICU data, copying full file: ${error}`);
+					cpSync(icuDataSource, icuDataDest);
+				}
+			} else {
+				cpSync(icuDataSource, icuDataDest);
+				console.log(`Copied ICU data file: ${icuDataFileName}`);
+			}
+		}
+
 		// Embed icon into bun.exe on Windows
 		if (targetOS === "win" && config.build.win?.icon) {
 			const iconSourcePath =
@@ -2364,6 +2652,48 @@ Categories=Utility;Application;
 					}
 				}
 			}
+		}
+
+		// Download WGPU (Dawn) binaries if needed when bundleWGPU is enabled
+		if (
+			(targetOS === "macos" && config.build.mac?.bundleWGPU) ||
+			(targetOS === "win" && config.build.win?.bundleWGPU) ||
+			(targetOS === "linux" && config.build.linux?.bundleWGPU)
+		) {
+			const effectiveWGPUDir = await ensureWGPUDependencies(
+				currentTarget.os,
+				currentTarget.arch,
+				config.build.wgpuVersion,
+			);
+
+			const libCandidates =
+				targetOS === "macos"
+					? [
+							join(effectiveWGPUDir, "lib", "libwebgpu_dawn.dylib"),
+							join(effectiveWGPUDir, "lib", "libwebgpu_dawn_shared.dylib"),
+						]
+					: targetOS === "win"
+						? [
+								join(effectiveWGPUDir, "bin", "webgpu_dawn.dll"),
+								join(effectiveWGPUDir, "bin", "libwebgpu_dawn.dll"),
+								join(effectiveWGPUDir, "lib", "webgpu_dawn.dll"),
+								join(effectiveWGPUDir, "lib", "libwebgpu_dawn.dll"),
+							]
+						: [
+								join(effectiveWGPUDir, "lib", "libwebgpu_dawn.so"),
+								join(effectiveWGPUDir, "lib", "libwebgpu_dawn_shared.so"),
+							];
+
+			const libSource = libCandidates.find((p) => existsSync(p));
+			if (!libSource) {
+				throw new Error(
+					`WGPU shared library not found in ${effectiveWGPUDir}. Checked: ${libCandidates.join(", ")}`,
+				);
+			}
+
+			const libDest = join(appBundleMacOSPath, basename(libSource));
+			cpSync(libSource, libDest, { dereference: true });
+			console.log(`Copied WGPU library to bundle: ${libDest}`);
 		}
 
 		// copy native bindings

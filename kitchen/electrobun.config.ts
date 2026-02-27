@@ -147,6 +147,7 @@ export default {
 			codesign: true,
 			notarize: true,
 			bundleCEF: true,
+			bundleWGPU: true,
 			entitlements: {},
 			chromiumFlags: {
 				// "show-paint-rects": true,
@@ -156,6 +157,7 @@ export default {
 		},
 		linux: {
 			bundleCEF: true,
+			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {
 				// "show-paint-rects": true,
@@ -165,6 +167,7 @@ export default {
 		},
 		win: {
 			bundleCEF: true,
+			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {
 				// "show-paint-rects": true,

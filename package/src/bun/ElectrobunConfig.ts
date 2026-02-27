@@ -140,6 +140,16 @@ export interface ElectrobunConfig {
 		cefVersion?: string;
 
 		/**
+		 * Override the Dawn (WebGPU) version.
+		 * Format: semver string (e.g., "0.2.3") or tag (e.g., "v0.2.3-beta.0")
+		 *
+		 * This downloads the specified electrobun-dawn release and uses it
+		 * instead of the latest release.
+		 * @default Uses the latest electrobun-dawn release
+		 */
+		wgpuVersion?: string;
+
+		/**
 		 * Override the Bun runtime version.
 		 * Format: semver string (e.g., "1.4.2")
 		 *
@@ -148,6 +158,14 @@ export interface ElectrobunConfig {
 		 * @default Uses the version bundled with this Electrobun release
 		 */
 		bunVersion?: string;
+
+		/**
+		 * Locales to include in the ICU data file (Linux/Windows only).
+		 * Set to '*' to include all locales, or specify a subset like ['en', 'de']
+		 * to reduce app size. Has no effect on macOS (uses system ICU).
+		 * @default '*'
+		 */
+		locales?: string[] | "*";
 
 		/**
 		 * macOS-specific build configuration
@@ -170,6 +188,12 @@ export interface ElectrobunConfig {
 			 * @default false
 			 */
 			bundleCEF?: boolean;
+
+			/**
+			 * Bundle Dawn (WebGPU) for GPU-native rendering
+			 * @default false
+			 */
+			bundleWGPU?: boolean;
 
 			/**
 			 * Default renderer for webviews when not explicitly specified
@@ -215,6 +239,12 @@ export interface ElectrobunConfig {
 			bundleCEF?: boolean;
 
 			/**
+			 * Bundle Dawn (WebGPU) for GPU-native rendering
+			 * @default false
+			 */
+			bundleWGPU?: boolean;
+
+			/**
 			 * Default renderer for webviews when not explicitly specified
 			 * @default 'native'
 			 */
@@ -254,6 +284,12 @@ export interface ElectrobunConfig {
 			 * @default false
 			 */
 			bundleCEF?: boolean;
+
+			/**
+			 * Bundle Dawn (WebGPU) for GPU-native rendering
+			 * @default false
+			 */
+			bundleWGPU?: boolean;
 
 			/**
 			 * Default renderer for webviews when not explicitly specified

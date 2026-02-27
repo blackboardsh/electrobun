@@ -2,6 +2,7 @@ import { join } from "path";
 import electrobunEventEmitter from "../events/eventEmitter";
 import ElectrobunEvent from "../events/event";
 import { BrowserView } from "../core/BrowserView";
+import { WGPUView } from "../core/WGPUView";
 import { Tray } from "../core/Tray";
 import {
 	preloadScript,
@@ -70,6 +71,13 @@ import {
 	type Pointer,
 } from "bun:ffi";
 import { BrowserWindow } from "../core/BrowserWindow";
+import { GpuWindow } from "../core/GpuWindow";
+
+function getWindowPtr(winId: number) {
+	return (
+		BrowserWindow.getById(winId)?.ptr ?? GpuWindow.getById(winId)?.ptr ?? null
+	);
+}
 
 export const native = (() => {
 	try {
@@ -196,6 +204,20 @@ export const native = (() => {
 				],
 				returns: FFIType.ptr,
 			},
+			initWGPUView: {
+				args: [
+					FFIType.u32, // viewId
+					FFIType.ptr, // windowPtr
+					FFIType.f64,
+					FFIType.f64, // x, y
+					FFIType.f64,
+					FFIType.f64, // width, height
+					FFIType.bool, // autoResize
+					FFIType.bool, // startTransparent
+					FFIType.bool, // startPassthrough
+				],
+				returns: FFIType.ptr,
+			},
 			// Pre-set flags for the next initWebview call (workaround for FFI param count limits)
 			setNextWebviewFlags: {
 				args: [
@@ -313,6 +335,60 @@ export const native = (() => {
 			},
 			webviewToggleDevTools: {
 				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuViewSetFrame: {
+				args: [
+					FFIType.ptr,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+				],
+				returns: FFIType.void,
+			},
+			wgpuViewSetTransparent: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			wgpuViewSetPassthrough: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			wgpuViewSetHidden: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			wgpuViewRemove: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuViewGetNativeHandle: {
+				args: [FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			wgpuInstanceCreateSurfaceMainThread: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			wgpuSurfaceConfigureMainThread: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuSurfaceGetCurrentTextureMainThread: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuSurfacePresentMainThread: {
+				args: [FFIType.ptr],
+				returns: FFIType.i32,
+			},
+			wgpuRunGPUTest: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuCreateAdapterDeviceMainThread: {
+				args: [FFIType.ptr, FFIType.ptr, FFIType.ptr],
 				returns: FFIType.void,
 			},
 			// Tray
@@ -673,7 +749,7 @@ export const ffi = {
 		},
 		setTitle: (params: { winId: number; title: string }) => {
 			const { winId, title } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't add webview to window. window no longer exists`;
@@ -684,7 +760,7 @@ export const ffi = {
 
 		closeWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't close window. Window no longer exists`;
@@ -696,7 +772,7 @@ export const ffi = {
 
 		focusWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't focus window. Window no longer exists`;
@@ -707,7 +783,7 @@ export const ffi = {
 
 		minimizeWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't minimize window. Window no longer exists`;
@@ -718,7 +794,7 @@ export const ffi = {
 
 		restoreWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't restore window. Window no longer exists`;
@@ -729,7 +805,7 @@ export const ffi = {
 
 		isWindowMinimized: (params: { winId: number }): boolean => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return false;
@@ -740,7 +816,7 @@ export const ffi = {
 
 		maximizeWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't maximize window. Window no longer exists`;
@@ -751,7 +827,7 @@ export const ffi = {
 
 		unmaximizeWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't unmaximize window. Window no longer exists`;
@@ -762,7 +838,7 @@ export const ffi = {
 
 		isWindowMaximized: (params: { winId: number }): boolean => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return false;
@@ -773,7 +849,7 @@ export const ffi = {
 
 		setWindowFullScreen: (params: { winId: number; fullScreen: boolean }) => {
 			const { winId, fullScreen } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set fullscreen. Window no longer exists`;
@@ -784,7 +860,7 @@ export const ffi = {
 
 		isWindowFullScreen: (params: { winId: number }): boolean => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return false;
@@ -795,7 +871,7 @@ export const ffi = {
 
 		setWindowAlwaysOnTop: (params: { winId: number; alwaysOnTop: boolean }) => {
 			const { winId, alwaysOnTop } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set always on top. Window no longer exists`;
@@ -806,7 +882,7 @@ export const ffi = {
 
 		isWindowAlwaysOnTop: (params: { winId: number }): boolean => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return false;
@@ -817,7 +893,7 @@ export const ffi = {
 
 		setWindowPosition: (params: { winId: number; x: number; y: number }) => {
 			const { winId, x, y } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set window position. Window no longer exists`;
@@ -832,7 +908,7 @@ export const ffi = {
 			height: number;
 		}) => {
 			const { winId, width, height } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set window size. Window no longer exists`;
@@ -849,7 +925,7 @@ export const ffi = {
 			height: number;
 		}) => {
 			const { winId, x, y, width, height } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set window frame. Window no longer exists`;
@@ -862,7 +938,7 @@ export const ffi = {
 			winId: number;
 		}): { x: number; y: number; width: number; height: number } => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return { x: 0, y: 0, width: 0, height: 0 };
@@ -1013,6 +1089,139 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			}
 
 			return webviewPtr;
+		},
+
+		createWGPUView: (params: {
+			id: number;
+			windowId: number;
+			frame: {
+				x: number;
+				y: number;
+				width: number;
+				height: number;
+			};
+			autoResize: boolean;
+			startTransparent: boolean;
+			startPassthrough: boolean;
+		}): FFIType.ptr => {
+			const {
+				id,
+				windowId,
+				frame: { x, y, width, height },
+				autoResize,
+				startTransparent,
+				startPassthrough,
+			} = params;
+
+			const windowPtr = getWindowPtr(windowId);
+			if (!windowPtr) {
+				throw `Can't add WGPUView to window. window no longer exists`;
+			}
+
+			const viewPtr = native.symbols.initWGPUView(
+				id,
+				windowPtr,
+				x,
+				y,
+				width,
+				height,
+				autoResize,
+				startTransparent,
+				startPassthrough,
+			);
+
+			if (!viewPtr) {
+				throw "Failed to create WGPUView";
+			}
+
+			return viewPtr;
+		},
+
+		wgpuViewSetFrame: (params: {
+			id: number;
+			x: number;
+			y: number;
+			width: number;
+			height: number;
+		}) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewSetFrame: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewSetFrame(
+				view.ptr,
+				params.x,
+				params.y,
+				params.width,
+				params.height,
+			);
+		},
+
+		wgpuViewSetTransparent: (params: { id: number; transparent: boolean }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewSetTransparent: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewSetTransparent(view.ptr, params.transparent);
+		},
+
+		wgpuViewSetPassthrough: (params: {
+			id: number;
+			passthrough: boolean;
+		}) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewSetPassthrough: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewSetPassthrough(view.ptr, params.passthrough);
+		},
+
+		wgpuViewSetHidden: (params: { id: number; hidden: boolean }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewSetHidden: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewSetHidden(view.ptr, params.hidden);
+		},
+
+		wgpuViewRemove: (params: { id: number }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewRemove: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewRemove(view.ptr);
+		},
+		wgpuViewGetNativeHandle: (params: { id: number }): Pointer | null => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewGetNativeHandle: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return null;
+			}
+
+			const handle = native.symbols.wgpuViewGetNativeHandle(view.ptr);
+			return handle || null;
 		},
 
 		evaluateJavascriptWithNoCompletion: (params: {
@@ -1261,6 +1470,49 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 		serializeMenuAction,
 		deserializeMenuAction,
 	},
+};
+
+export const WGPUBridge = {
+	available: !!native?.symbols?.wgpuInstanceCreateSurfaceMainThread,
+	instanceCreateSurface: (instancePtr: Pointer, descriptorPtr: Pointer): Pointer =>
+		native.symbols.wgpuInstanceCreateSurfaceMainThread(
+			instancePtr as any,
+			descriptorPtr as any,
+		),
+	surfaceConfigure: (surfacePtr: Pointer, configPtr: Pointer) =>
+		native.symbols.wgpuSurfaceConfigureMainThread(
+			surfacePtr as any,
+			configPtr as any,
+		),
+	surfaceGetCurrentTexture: (surfacePtr: Pointer, surfaceTexturePtr: Pointer) =>
+		native.symbols.wgpuSurfaceGetCurrentTextureMainThread(
+			surfacePtr as any,
+			surfaceTexturePtr as any,
+		),
+	surfacePresent: (surfacePtr: Pointer): number =>
+		native.symbols.wgpuSurfacePresentMainThread(surfacePtr as any),
+	runTest: (viewId: number) => {
+		const view = WGPUView.getById(viewId);
+		if (!view?.ptr) {
+			console.error(`wgpuRunGPUTest: WGPUView not found for id ${viewId}`);
+			return;
+		}
+		if (!native?.symbols?.wgpuRunGPUTest) {
+			console.error("wgpuRunGPUTest not available");
+			return;
+		}
+		native.symbols.wgpuRunGPUTest(view.ptr);
+	},
+	createAdapterDeviceMainThread: (
+		instancePtr: Pointer,
+		surfacePtr: Pointer,
+		outAdapterDevicePtr: Pointer,
+	) =>
+		native.symbols.wgpuCreateAdapterDeviceMainThread(
+			instancePtr as any,
+			surfacePtr as any,
+			outAdapterDevicePtr as any,
+		),
 };
 
 // Worker management. Move to a different file
@@ -2289,9 +2541,9 @@ export const internalRpcHandlers = {
 			native.symbols.webviewRemove(webview.ptr);
 		},
 		startWindowMove: (params: { id: number }) => {
-			const window = BrowserWindow.getById(params.id);
-			if (!window) return;
-			native.symbols.startWindowMove(window.ptr);
+			const windowPtr = getWindowPtr(params.id);
+			if (!windowPtr) return;
+			native.symbols.startWindowMove(windowPtr);
 		},
 		stopWindowMove: (_params: unknown) => {
 			native.symbols.stopWindowMove();

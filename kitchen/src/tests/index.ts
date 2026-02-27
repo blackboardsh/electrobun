@@ -27,6 +27,7 @@ import { multiwindowCefTests } from "./interactive/multiwindow-cef.test";
 import { quitTests } from "./interactive/quit-test.test";
 import { webviewSettingsTests } from "./interactive/webview-settings.test";
 import { webviewCleanupTests } from "./interactive/webview-cleanup.test";
+import { wgpuViewTests } from "./interactive/wgpu-view.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -55,6 +56,7 @@ export const allTests: TestDefinition[] = [
   ...quitTests,
   ...webviewSettingsTests,
   ...webviewCleanupTests,
+  ...wgpuViewTests,
 ];
 
 // Export by category for selective running
@@ -85,4 +87,5 @@ export {
   quitTests,
   webviewSettingsTests,
   webviewCleanupTests,
+  wgpuViewTests,
 };

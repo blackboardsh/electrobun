@@ -3870,6 +3870,71 @@ public:
     }
 };
 
+// WGPUView class - simple native child window surface
+class WGPUView : public AbstractView {
+public:
+    WGPUView(uint32_t webviewId) {
+        this->webviewId = webviewId;
+    }
+
+    void loadURL(const char* urlString) override {}
+    void loadHTML(const char* htmlString) override {}
+    void goBack() override {}
+    void goForward() override {}
+    void reload() override {}
+    bool canGoBack() override { return false; }
+    bool canGoForward() override { return false; }
+    void evaluateJavaScriptWithNoCompletion(const char* jsString) override {}
+    void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) override {}
+    void addPreloadScriptToWebView(const char* jsString) override {}
+    void updateCustomPreloadScript(const char* jsString) override {}
+
+    void resize(const RECT& frame, const char* masksJson) override {
+        if (hwnd) {
+            int width = frame.right - frame.left;
+            int height = frame.bottom - frame.top;
+            SetWindowPos(hwnd, HWND_TOP, frame.left, frame.top, width, height,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+        visualBounds = frame;
+        maskJSON = masksJson ? masksJson : "";
+    }
+
+    void setTransparent(bool transparent) override {
+        if (!hwnd) return;
+        LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+        SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+        BYTE alpha = transparent ? 0 : 255;
+        SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
+    }
+
+    void setPassthrough(bool enable) override {
+        AbstractView::setPassthrough(enable);
+        if (hwnd) {
+            EnableWindow(hwnd, enable ? FALSE : TRUE);
+        }
+    }
+
+    void setHidden(bool hidden) override {
+        if (hwnd) {
+            ShowWindow(hwnd, hidden ? SW_HIDE : SW_SHOW);
+        }
+    }
+
+    void findInPage(const char* searchText, bool forward, bool matchCase) override {}
+    void stopFindInPage() override {}
+    void openDevTools() override {}
+    void closeDevTools() override {}
+    void toggleDevTools() override {}
+
+    void remove() override {
+        if (hwnd) {
+            DestroyWindow(hwnd);
+            hwnd = NULL;
+        }
+    }
+};
+
 // Helper function to set browser on CEFView (defined after CEFView class)
 void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser) {
     auto viewIt = g_cefViews.find(parentWindow);
@@ -4248,6 +4313,9 @@ public:
                 BringWebView2ChildWindowToFront(view.get());
             } else if (cefView) {
                 BringCEFChildWindowToFront(view.get());
+            } else if (view->hwnd) {
+                SetWindowPos(view->hwnd, HWND_TOP, 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
             }
         }
     }
@@ -6802,6 +6870,77 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
 
 }
 
+ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
+                         NSWindow *window,  // Actually HWND on Windows
+                         double x, double y,
+                         double width, double height,
+                         bool autoResize,
+                         bool startTransparent,
+                         bool startPassthrough) {
+
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: initWGPUView called with invalid window handle");
+        return nullptr;
+    }
+
+    auto container = GetOrCreateContainer(hwnd);
+    if (!container) {
+        ::log("ERROR: Failed to create container for WGPUView");
+        return nullptr;
+    }
+
+    auto view = std::make_shared<WGPUView>(webviewId);
+    view->fullSize = autoResize;
+
+    MainThreadDispatcher::dispatch_sync([view, container, x, y, width, height, startTransparent, startPassthrough]() {
+        HWND containerHwnd = container->GetHwnd();
+        if (!IsWindow(containerHwnd)) {
+            ::log("ERROR: Container window handle invalid for WGPUView");
+            return;
+        }
+
+        view->hwnd = CreateWindowExA(
+            0,
+            "STATIC",
+            "",
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+            (int)x,
+            (int)y,
+            (int)width,
+            (int)height,
+            containerHwnd,
+            NULL,
+            GetModuleHandle(NULL),
+            NULL
+        );
+
+        if (!view->hwnd) {
+            ::log("ERROR: Failed to create WGPUView child window");
+            return;
+        }
+
+        RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+        view->visualBounds = bounds;
+
+        if (startTransparent) {
+            view->setTransparent(true);
+        }
+        if (startPassthrough) {
+            view->setPassthrough(true);
+        }
+    });
+
+    container->AddAbstractView(view);
+
+    {
+        std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+        g_abstractViews[webviewId] = view.get();
+    }
+
+    return view.get();
+}
+
 ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView,
                                                               uint32_t webviewId,
                                                               const char *name,
@@ -6821,6 +6960,81 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
     // Use virtual method which handles threading and implementation details
     
     abstractView->loadURL(urlString);
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetFrame(AbstractView *abstractView, double x, double y, double width, double height) {
+    if (!abstractView) return;
+    RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+    MainThreadDispatcher::dispatch_sync([abstractView, bounds]() {
+        abstractView->resize(bounds, "");
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetTransparent(AbstractView *abstractView, BOOL transparent) {
+    if (!abstractView) return;
+    MainThreadDispatcher::dispatch_sync([abstractView, transparent]() {
+        abstractView->setTransparent(transparent);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
+    if (!abstractView) return;
+    MainThreadDispatcher::dispatch_sync([abstractView, enablePassthrough]() {
+        abstractView->setPassthrough(enablePassthrough);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetHidden(AbstractView *abstractView, BOOL hidden) {
+    if (!abstractView) return;
+    MainThreadDispatcher::dispatch_sync([abstractView, hidden]() {
+        abstractView->setHidden(hidden);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView *abstractView) {
+    if (!abstractView) return;
+    uint32_t viewId = abstractView->webviewId;
+    MainThreadDispatcher::dispatch_sync([abstractView]() {
+        abstractView->remove();
+    });
+    {
+        std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+        g_abstractViews.erase(viewId);
+    }
+}
+
+ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
+    if (!abstractView) return nullptr;
+    return abstractView->hwnd;
+}
+
+// WGPU main-thread shims (no-op on Windows for now)
+ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descriptor) {
+    return nullptr;
+}
+
+ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(void* surface, void* config) {
+}
+
+ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
+}
+
+ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
+    return 0;
+}
+
+ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
+    (void)abstractView;
+}
+
+ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void* surfacePtr, void* outAdapterDevice) {
+    (void)instancePtr;
+    (void)surfacePtr;
+    if (outAdapterDevice) {
+        uint64_t* out = (uint64_t*)outAdapterDevice;
+        out[0] = 0;
+        out[1] = 0;
+    }
 }
 
 ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView *abstractView, const char *htmlString) {

@@ -1,0 +1,18 @@
+{
+	"name": "electrobun-bunny-wgpu",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "A transparent bunny demo using WebGPU rendering",
+	"scripts": {
+		"start": "electrobun dev",
+		"dev": "electrobun dev --watch",
+		"build:canary": "electrobun build --env=canary"
+	},
+	"dependencies": {
+		"electrobun": "latest"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	}
+}

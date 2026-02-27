@@ -10,6 +10,12 @@
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonCrypto.h>
 #import <QuartzCore/QuartzCore.h>
+#import <QuartzCore/CAMetalLayer.h>
+#import <Metal/Metal.h>
+#import <MetalKit/MetalKit.h>
+#include <dlfcn.h>
+#include <math.h>
+#include "dawn/webgpu.h"
 #import <UserNotifications/UserNotifications.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -805,6 +811,13 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
                 customPreloadScript:(const char *)customPreloadScript
                 transparent:(bool)transparent
                 sandbox:(bool)sandbox;
+@end
+
+@interface WGPUViewImpl : AbstractView
+    - (instancetype)initWithWebviewId:(uint32_t)webviewId
+                            window:(NSWindow *)window
+                            frame:(NSRect)frame
+                        autoResize:(bool)autoResize;
 @end
 
 
@@ -2755,6 +2768,734 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     }
 
 @end
+
+// ----------------------- WGPUViewImpl -----------------------
+@implementation WGPUViewImpl
+
+    - (instancetype)initWithWebviewId:(uint32_t)webviewId
+                            window:(NSWindow *)window
+                            frame:(NSRect)frame
+                        autoResize:(bool)autoResize {
+        self = [super init];
+        if (self) {
+            self.webviewId = webviewId;
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+                MTKView *view = [[MTKView alloc] initWithFrame:frame device:device];
+                view.paused = YES;
+                view.enableSetNeedsDisplay = NO;
+                view.colorPixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+                view.framebufferOnly = NO;
+                view.wantsLayer = YES;
+                view.layer.backgroundColor = [[NSColor clearColor] CGColor];
+                CAMetalLayer *metalLayer = (CAMetalLayer *)view.layer;
+                metalLayer.device = device;
+                metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+                metalLayer.framebufferOnly = NO;
+                metalLayer.opaque = YES;
+                metalLayer.presentsWithTransaction = YES;
+                CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+                metalLayer.colorspace = cs;
+                CGColorSpaceRelease(cs);
+                CGFloat scale = window.backingScaleFactor;
+                view.layer.contentsScale = scale;
+                metalLayer.drawableSize = CGSizeMake(frame.size.width * scale, frame.size.height * scale);
+                NSLog(@"WGPUViewImpl init: frame=%.1fx%.1f scale=%.2f drawable=%.1fx%.1f",
+                      frame.size.width, frame.size.height, scale,
+                      metalLayer.drawableSize.width, metalLayer.drawableSize.height);
+
+                view.autoresizingMask = NSViewNotSizable;
+
+                if (autoResize) {
+                    self.fullSize = YES;
+                } else {
+                    self.fullSize = NO;
+                }
+
+                [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];
+                CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
+                view.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+
+                ContainerView *containerView = (ContainerView *)window.contentView;
+                [containerView addAbstractView:self];
+
+                self.nsView = view;
+
+                if (self.pendingStartTransparent) {
+                    [self setTransparent:YES];
+                }
+                if (self.pendingStartPassthrough) {
+                    [self setPassthrough:YES];
+                }
+            });
+        }
+
+        if (globalAbstractViews) {
+            globalAbstractViews[@(self.webviewId)] = self;
+        }
+
+        return self;
+    }
+
+    - (void)loadURL:(const char *)urlString {}
+    - (void)loadHTML:(const char *)htmlString {}
+    - (void)goBack {}
+    - (void)goForward {}
+    - (void)reload {}
+    - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {}
+    - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {}
+    - (void)addPreloadScriptToWebView:(const char*)jsString {}
+    - (void)updateCustomPreloadScript:(const char*)jsString {}
+
+    - (void)findInPage:(const char*)searchText forward:(BOOL)forward matchCase:(BOOL)matchCase {}
+    - (void)stopFindInPage {}
+    - (void)openDevTools {}
+    - (void)closeDevTools {}
+    - (void)toggleDevTools {}
+
+    - (void)remove {
+        if (!self.nsView) {
+            return;
+        }
+
+        uint32_t webviewIdForLogging = self.webviewId;
+        NSView *viewToRemove = self.nsView;
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (viewToRemove.superview && [viewToRemove.superview isKindOfClass:[ContainerView class]]) {
+                ContainerView *containerView = (ContainerView *)viewToRemove.superview;
+                [containerView removeAbstractViewWithId:webviewIdForLogging];
+            }
+            [viewToRemove removeFromSuperview];
+        });
+
+        if (globalAbstractViews) {
+            [globalAbstractViews removeObjectForKey:@(self.webviewId)];
+        }
+    }
+@end
+
+// ----------------------- WGPU Main-Thread Shims -----------------------
+
+typedef void* (*PFN_wgpuInstanceCreateSurface)(void* instance, const void* descriptor);
+typedef void (*PFN_wgpuSurfaceConfigure)(void* surface, const void* config);
+typedef void (*PFN_wgpuSurfaceGetCurrentTexture)(void* surface, void* surfaceTexture);
+typedef int32_t (*PFN_wgpuSurfacePresent)(void* surface);
+
+static void* wgpuLibHandle = nullptr;
+static PFN_wgpuInstanceCreateSurface p_wgpuInstanceCreateSurface = nullptr;
+static PFN_wgpuSurfaceConfigure p_wgpuSurfaceConfigure = nullptr;
+static PFN_wgpuSurfaceGetCurrentTexture p_wgpuSurfaceGetCurrentTexture = nullptr;
+static PFN_wgpuSurfacePresent p_wgpuSurfacePresent = nullptr;
+
+static void* loadWgpuLibrary() {
+    if (wgpuLibHandle) return wgpuLibHandle;
+    NSString* execDir = [[[NSBundle mainBundle] executableURL] URLByDeletingLastPathComponent].path;
+    NSString* bundlePath = [execDir stringByAppendingPathComponent:@"libwebgpu_dawn.dylib"];
+    wgpuLibHandle = dlopen(bundlePath.UTF8String, RTLD_NOW | RTLD_LOCAL);
+    if (!wgpuLibHandle) {
+        wgpuLibHandle = dlopen("libwebgpu_dawn.dylib", RTLD_NOW | RTLD_LOCAL);
+    }
+    if (!wgpuLibHandle) {
+        NSLog(@"WGPU: failed to load libwebgpu_dawn.dylib: %s", dlerror());
+    }
+    return wgpuLibHandle;
+}
+
+static bool ensureWgpuSymbols() {
+    if (p_wgpuInstanceCreateSurface && p_wgpuSurfaceConfigure && p_wgpuSurfaceGetCurrentTexture && p_wgpuSurfacePresent) {
+        return true;
+    }
+    void* handle = loadWgpuLibrary();
+    if (!handle) return false;
+    p_wgpuInstanceCreateSurface = (PFN_wgpuInstanceCreateSurface)dlsym(handle, "wgpuInstanceCreateSurface");
+    p_wgpuSurfaceConfigure = (PFN_wgpuSurfaceConfigure)dlsym(handle, "wgpuSurfaceConfigure");
+    p_wgpuSurfaceGetCurrentTexture = (PFN_wgpuSurfaceGetCurrentTexture)dlsym(handle, "wgpuSurfaceGetCurrentTexture");
+    p_wgpuSurfacePresent = (PFN_wgpuSurfacePresent)dlsym(handle, "wgpuSurfacePresent");
+    if (!p_wgpuInstanceCreateSurface || !p_wgpuSurfaceConfigure || !p_wgpuSurfaceGetCurrentTexture || !p_wgpuSurfacePresent) {
+        NSLog(@"WGPU: missing symbols (create=%p configure=%p getTexture=%p present=%p)",
+              p_wgpuInstanceCreateSurface, p_wgpuSurfaceConfigure, p_wgpuSurfaceGetCurrentTexture, p_wgpuSurfacePresent);
+        return false;
+    }
+    return true;
+}
+
+static void* runOnMainThreadSyncPtr(void* (^block)(void)) {
+    if ([NSThread isMainThread]) {
+        return block();
+    }
+    __block void* result = nullptr;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = block();
+    });
+    return result;
+}
+
+static void runOnMainThreadSyncVoid(void (^block)(void)) {
+    if ([NSThread isMainThread]) {
+        block();
+        return;
+    }
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        block();
+    });
+}
+
+extern "C" void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descriptor) {
+    if (!ensureWgpuSymbols()) return nullptr;
+    return runOnMainThreadSyncPtr(^{
+        return p_wgpuInstanceCreateSurface(instance, descriptor);
+    });
+}
+
+extern "C" void wgpuSurfaceConfigureMainThread(void* surface, void* config) {
+    if (!ensureWgpuSymbols()) return;
+    runOnMainThreadSyncVoid(^{
+        p_wgpuSurfaceConfigure(surface, config);
+    });
+}
+
+extern "C" void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
+    if (!ensureWgpuSymbols()) return;
+    runOnMainThreadSyncVoid(^{
+        p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture);
+    });
+}
+
+extern "C" int32_t wgpuSurfacePresentMainThread(void* surface) {
+    if (!ensureWgpuSymbols()) return 0;
+    return (int32_t)(intptr_t)runOnMainThreadSyncPtr(^{
+        return (void*)(intptr_t)p_wgpuSurfacePresent(surface);
+    });
+}
+
+
+// ----------------------- WGPU Native Test (macOS) -----------------------
+
+typedef WGPUInstance (*PFN_wgpuCreateInstance)(WGPUInstanceDescriptor const* descriptor);
+typedef WGPUFuture (*PFN_wgpuInstanceRequestAdapter)(WGPUInstance instance, WGPURequestAdapterOptions const* options, WGPURequestAdapterCallbackInfo callbackInfo);
+typedef WGPUFuture (*PFN_wgpuAdapterRequestDevice)(WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
+typedef WGPUQueue (*PFN_wgpuDeviceGetQueue)(WGPUDevice device);
+typedef void (*PFN_wgpuSurfaceGetCapabilities)(WGPUSurface surface, WGPUAdapter adapter, WGPUSurfaceCapabilities* capabilities);
+typedef void (*PFN_wgpuSurfaceCapabilitiesFreeMembers)(WGPUSurfaceCapabilities capabilities);
+typedef WGPUShaderModule (*PFN_wgpuDeviceCreateShaderModule)(WGPUDevice device, WGPUShaderModuleDescriptor const* descriptor);
+typedef WGPURenderPipeline (*PFN_wgpuDeviceCreateRenderPipeline)(WGPUDevice device, WGPURenderPipelineDescriptor const* descriptor);
+typedef void (*PFN_wgpuDeviceSetLabel)(WGPUDevice device, WGPUStringView label);
+typedef WGPUBuffer (*PFN_wgpuDeviceCreateBuffer)(WGPUDevice device, WGPUBufferDescriptor const* descriptor);
+typedef void (*PFN_wgpuQueueWriteBuffer)(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset, void const* data, size_t size);
+typedef WGPUCommandEncoder (*PFN_wgpuDeviceCreateCommandEncoder)(WGPUDevice device, WGPUCommandEncoderDescriptor const* descriptor);
+typedef WGPURenderPassEncoder (*PFN_wgpuCommandEncoderBeginRenderPass)(WGPUCommandEncoder encoder, WGPURenderPassDescriptor const* descriptor);
+typedef void (*PFN_wgpuRenderPassEncoderSetPipeline)(WGPURenderPassEncoder pass, WGPURenderPipeline pipeline);
+typedef void (*PFN_wgpuRenderPassEncoderSetVertexBuffer)(WGPURenderPassEncoder pass, uint32_t slot, WGPUBuffer buffer, uint64_t offset, uint64_t size);
+typedef void (*PFN_wgpuRenderPassEncoderDraw)(WGPURenderPassEncoder pass, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance);
+typedef void (*PFN_wgpuRenderPassEncoderEnd)(WGPURenderPassEncoder pass);
+typedef WGPUCommandBuffer (*PFN_wgpuCommandEncoderFinish)(WGPUCommandEncoder encoder, WGPUCommandBufferDescriptor const* descriptor);
+typedef void (*PFN_wgpuQueueSubmit)(WGPUQueue queue, size_t commandCount, WGPUCommandBuffer const* commands);
+typedef WGPUTextureView (*PFN_wgpuTextureCreateView)(WGPUTexture texture, WGPUTextureViewDescriptor const* descriptor);
+typedef void (*PFN_wgpuTextureViewRelease)(WGPUTextureView view);
+typedef void (*PFN_wgpuTextureRelease)(WGPUTexture texture);
+typedef void (*PFN_wgpuCommandBufferRelease)(WGPUCommandBuffer buffer);
+typedef void (*PFN_wgpuCommandEncoderRelease)(WGPUCommandEncoder encoder);
+
+static PFN_wgpuCreateInstance p_wgpuCreateInstance = nullptr;
+static PFN_wgpuInstanceRequestAdapter p_wgpuInstanceRequestAdapter = nullptr;
+static PFN_wgpuAdapterRequestDevice p_wgpuAdapterRequestDevice = nullptr;
+static PFN_wgpuDeviceGetQueue p_wgpuDeviceGetQueue = nullptr;
+static PFN_wgpuSurfaceGetCapabilities p_wgpuSurfaceGetCapabilities = nullptr;
+static PFN_wgpuSurfaceCapabilitiesFreeMembers p_wgpuSurfaceCapabilitiesFreeMembers = nullptr;
+static PFN_wgpuDeviceCreateShaderModule p_wgpuDeviceCreateShaderModule = nullptr;
+static PFN_wgpuDeviceCreateRenderPipeline p_wgpuDeviceCreateRenderPipeline = nullptr;
+static PFN_wgpuDeviceSetLabel p_wgpuDeviceSetLabel = nullptr;
+static PFN_wgpuDeviceCreateBuffer p_wgpuDeviceCreateBuffer = nullptr;
+static PFN_wgpuQueueWriteBuffer p_wgpuQueueWriteBuffer = nullptr;
+static PFN_wgpuDeviceCreateCommandEncoder p_wgpuDeviceCreateCommandEncoder = nullptr;
+static PFN_wgpuCommandEncoderBeginRenderPass p_wgpuCommandEncoderBeginRenderPass = nullptr;
+static PFN_wgpuRenderPassEncoderSetPipeline p_wgpuRenderPassEncoderSetPipeline = nullptr;
+static PFN_wgpuRenderPassEncoderSetVertexBuffer p_wgpuRenderPassEncoderSetVertexBuffer = nullptr;
+static PFN_wgpuRenderPassEncoderDraw p_wgpuRenderPassEncoderDraw = nullptr;
+static PFN_wgpuRenderPassEncoderEnd p_wgpuRenderPassEncoderEnd = nullptr;
+static PFN_wgpuCommandEncoderFinish p_wgpuCommandEncoderFinish = nullptr;
+static PFN_wgpuQueueSubmit p_wgpuQueueSubmit = nullptr;
+static PFN_wgpuTextureCreateView p_wgpuTextureCreateView = nullptr;
+static PFN_wgpuTextureViewRelease p_wgpuTextureViewRelease = nullptr;
+static PFN_wgpuTextureRelease p_wgpuTextureRelease = nullptr;
+static PFN_wgpuCommandBufferRelease p_wgpuCommandBufferRelease = nullptr;
+static PFN_wgpuCommandEncoderRelease p_wgpuCommandEncoderRelease = nullptr;
+
+static void uncapturedErrorCallback(WGPUDevice const* device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2);
+
+static bool ensureWgpuTestSymbols() {
+    if (!ensureWgpuSymbols()) return false;
+    void* handle = loadWgpuLibrary();
+    if (!handle) return false;
+#define LOAD_SYM(name) \
+    p_##name = (decltype(p_##name))dlsym(handle, #name); \
+    if (!p_##name) { \
+        NSLog(@"WGPU: missing symbol %s", #name); \
+        return false; \
+    }
+    LOAD_SYM(wgpuCreateInstance);
+    LOAD_SYM(wgpuInstanceRequestAdapter);
+    LOAD_SYM(wgpuAdapterRequestDevice);
+    LOAD_SYM(wgpuDeviceGetQueue);
+    LOAD_SYM(wgpuSurfaceGetCapabilities);
+    LOAD_SYM(wgpuSurfaceCapabilitiesFreeMembers);
+    LOAD_SYM(wgpuDeviceCreateShaderModule);
+    LOAD_SYM(wgpuDeviceCreateRenderPipeline);
+    LOAD_SYM(wgpuDeviceSetLabel);
+    LOAD_SYM(wgpuDeviceCreateBuffer);
+    LOAD_SYM(wgpuQueueWriteBuffer);
+    LOAD_SYM(wgpuDeviceCreateCommandEncoder);
+    LOAD_SYM(wgpuCommandEncoderBeginRenderPass);
+    LOAD_SYM(wgpuRenderPassEncoderSetPipeline);
+    LOAD_SYM(wgpuRenderPassEncoderSetVertexBuffer);
+    LOAD_SYM(wgpuRenderPassEncoderDraw);
+    LOAD_SYM(wgpuRenderPassEncoderEnd);
+    LOAD_SYM(wgpuCommandEncoderFinish);
+    LOAD_SYM(wgpuQueueSubmit);
+    LOAD_SYM(wgpuTextureCreateView);
+    LOAD_SYM(wgpuTextureViewRelease);
+    LOAD_SYM(wgpuTextureRelease);
+    LOAD_SYM(wgpuCommandBufferRelease);
+    LOAD_SYM(wgpuCommandEncoderRelease);
+#undef LOAD_SYM
+    return true;
+}
+
+extern "C" void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void* surfacePtr, void* outAdapterDevice) {
+    if (!ensureWgpuTestSymbols()) return;
+    runOnMainThreadSyncVoid(^{
+        WGPUInstance instance = (WGPUInstance)instancePtr;
+        WGPUSurface surface = (WGPUSurface)surfacePtr;
+
+        __block WGPUAdapter adapter = nullptr;
+        __block WGPUDevice device = nullptr;
+
+        dispatch_semaphore_t adapterSem = dispatch_semaphore_create(0);
+        dispatch_semaphore_t deviceSem = dispatch_semaphore_create(0);
+
+        WGPURequestAdapterOptions opts = {};
+        opts.compatibleSurface = surface;
+        WGPURequestAdapterCallbackInfo adapterInfo = {};
+        adapterInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        adapterInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter cbAdapter, WGPUStringView message, void* userdata1, void* userdata2) {
+            (void)message;
+            (void)userdata2;
+            struct {
+                WGPUAdapter* adapter;
+                dispatch_semaphore_t sem;
+            }* ctx = (decltype(ctx))userdata1;
+            if (status == WGPURequestAdapterStatus_Success) {
+                *(ctx->adapter) = cbAdapter;
+            }
+            dispatch_semaphore_signal(ctx->sem);
+        };
+        struct {
+            WGPUAdapter* adapter;
+            dispatch_semaphore_t sem;
+        } adapterCtx = { &adapter, adapterSem };
+        adapterInfo.userdata1 = &adapterCtx;
+        p_wgpuInstanceRequestAdapter(instance, &opts, adapterInfo);
+
+        dispatch_semaphore_wait(adapterSem, DISPATCH_TIME_FOREVER);
+        if (!adapter) {
+            return;
+        }
+
+        WGPURequestDeviceCallbackInfo deviceInfo = {};
+        deviceInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        deviceInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice cbDevice, WGPUStringView message, void* userdata1, void* userdata2) {
+            (void)message;
+            (void)userdata2;
+            struct {
+                WGPUDevice* device;
+                dispatch_semaphore_t sem;
+            }* ctx = (decltype(ctx))userdata1;
+            if (status == WGPURequestDeviceStatus_Success) {
+                *(ctx->device) = cbDevice;
+            }
+            dispatch_semaphore_signal(ctx->sem);
+        };
+        struct {
+            WGPUDevice* device;
+            dispatch_semaphore_t sem;
+        } deviceCtx = { &device, deviceSem };
+        deviceInfo.userdata1 = &deviceCtx;
+        WGPUDeviceDescriptor deviceDesc = {};
+        deviceDesc.uncapturedErrorCallbackInfo.callback = uncapturedErrorCallback;
+        deviceDesc.uncapturedErrorCallbackInfo.userdata1 = &deviceCtx;
+        p_wgpuAdapterRequestDevice(adapter, &deviceDesc, deviceInfo);
+
+        dispatch_semaphore_wait(deviceSem, DISPATCH_TIME_FOREVER);
+
+        if (outAdapterDevice) {
+            uint64_t* out = (uint64_t*)outAdapterDevice;
+            out[0] = (uint64_t)adapter;
+            out[1] = (uint64_t)device;
+        }
+    });
+}
+
+struct GPUTestState {
+    WGPUInstance instance = nullptr;
+    WGPUSurface surface = nullptr;
+    WGPUAdapter adapter = nullptr;
+    WGPUDevice device = nullptr;
+    WGPUQueue queue = nullptr;
+    WGPURenderPipeline pipeline = nullptr;
+    WGPUBuffer vertexBuffer = nullptr;
+    WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8UnormSrgb;
+    WGPUCompositeAlphaMode alphaMode = WGPUCompositeAlphaMode_Opaque;
+    CAMetalLayer* layer = nil;
+    dispatch_source_t timer = nullptr;
+    float angle = 0.0f;
+    CGSize lastDrawable = {0, 0};
+    bool running = false;
+};
+
+static GPUTestState g_gpuTest;
+
+static const float kCubeVertices[] = {
+    // front
+    -0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+    -0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+    // back
+    -0.5f,-0.5f,-0.5f, -0.5f, 0.5f,-0.5f,  0.5f, 0.5f,-0.5f,
+    -0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f,-0.5f,-0.5f,
+    // left
+    -0.5f,-0.5f,-0.5f, -0.5f,-0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+    -0.5f,-0.5f,-0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,-0.5f,
+    // right
+     0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,
+     0.5f,-0.5f,-0.5f,  0.5f, 0.5f, 0.5f,  0.5f,-0.5f, 0.5f,
+    // top
+    -0.5f, 0.5f,-0.5f, -0.5f, 0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+    -0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,  0.5f, 0.5f,-0.5f,
+    // bottom
+    -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f,
+    -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
+};
+
+static void buildRotatedVertices(float angle, float* out, size_t count) {
+    const float sinY = sinf(angle);
+    const float cosY = cosf(angle);
+    const float sinX = sinf(angle * 0.7f);
+    const float cosX = cosf(angle * 0.7f);
+    for (size_t i = 0; i < count; i += 3) {
+        float x = kCubeVertices[i];
+        float y = kCubeVertices[i + 1];
+        float z = kCubeVertices[i + 2];
+        float x1 = x * cosY + z * sinY;
+        float z1 = -x * sinY + z * cosY;
+        float y1 = y * cosX - z1 * sinX;
+        float z2 = y * sinX + z1 * cosX;
+        float depth = z2 + 2.5f;
+        float proj = 1.2f / depth;
+        out[i] = x1 * proj;
+        out[i + 1] = y1 * proj;
+        out[i + 2] = 0.0f;
+    }
+}
+
+static void configureSurface(GPUTestState* state) {
+    if (!state->surface || !state->device || !state->layer) return;
+    WGPUSurfaceCapabilities caps = {};
+    p_wgpuSurfaceGetCapabilities(state->surface, state->adapter, &caps);
+    if (caps.formatCount > 0 && caps.formats) {
+        state->surfaceFormat = caps.formats[0];
+    }
+    if (caps.alphaModeCount > 0 && caps.alphaModes) {
+        state->alphaMode = caps.alphaModes[0];
+    }
+    p_wgpuSurfaceCapabilitiesFreeMembers(caps);
+
+    CGSize drawable = state->layer.drawableSize;
+    state->lastDrawable = drawable;
+
+    WGPUSurfaceConfiguration config = {};
+    config.device = state->device;
+    config.format = state->surfaceFormat;
+    config.usage = WGPUTextureUsage_RenderAttachment;
+    config.width = (uint32_t)drawable.width;
+    config.height = (uint32_t)drawable.height;
+    config.presentMode = WGPUPresentMode_Fifo;
+    config.alphaMode = state->alphaMode;
+    p_wgpuSurfaceConfigure(state->surface, &config);
+}
+
+static void setupPipeline(GPUTestState* state) {
+    if (!state->device) return;
+    const char* shaderSrc = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
+}
+)WGSL";
+
+    WGPUShaderSourceWGSL wgsl = {};
+    wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgsl.code.data = shaderSrc;
+    wgsl.code.length = WGPU_STRLEN;
+
+    WGPUShaderModuleDescriptor shaderDesc = {};
+    shaderDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgsl);
+
+    WGPUShaderModule shader = p_wgpuDeviceCreateShaderModule(state->device, &shaderDesc);
+    if (!shader) {
+        NSLog(@"WGPU test: failed to create shader module");
+    }
+
+    WGPUStringView vsEntry = { "vs_main", WGPU_STRLEN };
+    WGPUStringView fsEntry = { "fs_main", WGPU_STRLEN };
+
+    WGPUVertexAttribute attr = {};
+    attr.format = WGPUVertexFormat_Float32x3;
+    attr.offset = 0;
+    attr.shaderLocation = 0;
+
+    WGPUVertexBufferLayout vbuf = {};
+    vbuf.arrayStride = sizeof(float) * 3;
+    vbuf.attributeCount = 1;
+    vbuf.attributes = &attr;
+    vbuf.stepMode = WGPUVertexStepMode_Vertex;
+
+    WGPUVertexState vstate = {};
+    vstate.module = shader;
+    vstate.entryPoint = vsEntry;
+    vstate.bufferCount = 1;
+    vstate.buffers = &vbuf;
+
+    WGPUColorTargetState colorTarget = {};
+    colorTarget.format = state->surfaceFormat;
+    colorTarget.writeMask = WGPUColorWriteMask_All;
+
+    WGPUFragmentState fstate = {};
+    fstate.module = shader;
+    fstate.entryPoint = fsEntry;
+    fstate.targetCount = 1;
+    fstate.targets = &colorTarget;
+
+    WGPUPrimitiveState prim = {};
+    prim.topology = WGPUPrimitiveTopology_TriangleList;
+    prim.stripIndexFormat = WGPUIndexFormat_Undefined;
+    prim.frontFace = WGPUFrontFace_CCW;
+    prim.cullMode = WGPUCullMode_None;
+    prim.unclippedDepth = false;
+
+    WGPUMultisampleState ms = {};
+    ms.count = 1;
+    ms.mask = 0xFFFFFFFF;
+    ms.alphaToCoverageEnabled = false;
+
+    WGPURenderPipelineDescriptor rpDesc = {};
+    rpDesc.vertex = vstate;
+    rpDesc.primitive = prim;
+    rpDesc.multisample = ms;
+    rpDesc.fragment = &fstate;
+
+    state->pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
+    if (!state->pipeline) {
+        NSLog(@"WGPU test: failed to create render pipeline");
+    }
+
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
+    bufDesc.size = sizeof(kCubeVertices);
+    bufDesc.mappedAtCreation = false;
+    state->vertexBuffer = p_wgpuDeviceCreateBuffer(state->device, &bufDesc);
+
+    float initialVerts[sizeof(kCubeVertices) / sizeof(float)];
+    buildRotatedVertices(0.0f, initialVerts, sizeof(kCubeVertices) / sizeof(float));
+    p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, initialVerts, sizeof(initialVerts));
+}
+
+static void renderFrame(GPUTestState* state) {
+    if (!state->device || !state->surface || !state->queue) return;
+    if (!state->layer) return;
+    if (!state->pipeline) return;
+
+    CGSize drawable = state->layer.drawableSize;
+    if (drawable.width <= 1 || drawable.height <= 1) return;
+    if (drawable.width != state->lastDrawable.width || drawable.height != state->lastDrawable.height) {
+        configureSurface(state);
+    }
+
+    state->angle += 0.02f;
+    float verts[sizeof(kCubeVertices) / sizeof(float)];
+    buildRotatedVertices(state->angle, verts, sizeof(kCubeVertices) / sizeof(float));
+    p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
+
+    static bool loggedDrawable = false;
+    if (!loggedDrawable) {
+        id<CAMetalDrawable> drawable = [state->layer nextDrawable];
+        if (drawable) {
+            NSLog(@"WGPU test: CAMetalLayer nextDrawable OK");
+        } else {
+            NSLog(@"WGPU test: CAMetalLayer nextDrawable is NULL");
+        }
+        loggedDrawable = true;
+    }
+
+    WGPUSurfaceTexture surfaceTexture = {};
+    p_wgpuSurfaceGetCurrentTexture(state->surface, &surfaceTexture);
+    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+        surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+        return;
+    }
+    if (!surfaceTexture.texture) return;
+
+    WGPUTextureView view = p_wgpuTextureCreateView(surfaceTexture.texture, nullptr);
+
+    WGPURenderPassColorAttachment colorAtt = {};
+    colorAtt.view = view;
+    colorAtt.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    colorAtt.loadOp = WGPULoadOp_Clear;
+    colorAtt.storeOp = WGPUStoreOp_Store;
+    colorAtt.clearValue = {0.05, 0.05, 0.1, 1.0};
+
+    WGPURenderPassDescriptor passDesc = {};
+    passDesc.colorAttachmentCount = 1;
+    passDesc.colorAttachments = &colorAtt;
+
+    WGPUCommandEncoder encoder = p_wgpuDeviceCreateCommandEncoder(state->device, nullptr);
+    WGPURenderPassEncoder pass = p_wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    p_wgpuRenderPassEncoderSetPipeline(pass, state->pipeline);
+    p_wgpuRenderPassEncoderSetVertexBuffer(pass, 0, state->vertexBuffer, 0, sizeof(kCubeVertices));
+    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)(sizeof(kCubeVertices) / (sizeof(float) * 3)), 1, 0, 0);
+    p_wgpuRenderPassEncoderEnd(pass);
+
+    WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(encoder, nullptr);
+    p_wgpuQueueSubmit(state->queue, 1, &cmd);
+    p_wgpuSurfacePresent(state->surface);
+
+    p_wgpuTextureViewRelease(view);
+    p_wgpuTextureRelease(surfaceTexture.texture);
+    p_wgpuCommandBufferRelease(cmd);
+    p_wgpuCommandEncoderRelease(encoder);
+}
+
+static void requestDeviceCallback(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2);
+
+static void logStringView(const char* prefix, WGPUStringView view) {
+    if (!view.data) {
+        NSLog(@"%s (null)", prefix);
+        return;
+    }
+    size_t len = view.length == WGPU_STRLEN ? strlen(view.data) : (size_t)view.length;
+    std::string msg(view.data, view.data + len);
+    NSLog(@"%s %s", prefix, msg.c_str());
+}
+
+static void uncapturedErrorCallback(WGPUDevice const* device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2) {
+    (void)device;
+    (void)userdata1;
+    (void)userdata2;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "WGPU uncaptured error type=%d:", (int)type);
+    logStringView(buf, message);
+}
+
+static void requestAdapterCallback(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView message, void* userdata1, void* userdata2) {
+    if (status != WGPURequestAdapterStatus_Success) {
+        logStringView("WGPU test: adapter error:", message);
+    }
+    (void)userdata2;
+    GPUTestState* state = (GPUTestState*)userdata1;
+    if (!state || status != WGPURequestAdapterStatus_Success || !adapter) {
+        NSLog(@"WGPU test: adapter request failed (%d)", status);
+        return;
+    }
+    state->adapter = adapter;
+    WGPURequestDeviceCallbackInfo cbInfo = {};
+    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    cbInfo.callback = requestDeviceCallback;
+    cbInfo.userdata1 = state;
+    WGPUDeviceDescriptor deviceDesc = {};
+    deviceDesc.uncapturedErrorCallbackInfo.callback = uncapturedErrorCallback;
+    deviceDesc.uncapturedErrorCallbackInfo.userdata1 = state;
+    p_wgpuAdapterRequestDevice(adapter, &deviceDesc, cbInfo);
+}
+
+static void requestDeviceCallback(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2) {
+    if (status != WGPURequestDeviceStatus_Success) {
+        logStringView("WGPU test: device error:", message);
+    }
+    (void)userdata2;
+    GPUTestState* state = (GPUTestState*)userdata1;
+    if (!state || status != WGPURequestDeviceStatus_Success || !device) {
+        NSLog(@"WGPU test: device request failed (%d)", status);
+        return;
+    }
+    state->device = device;
+    if (p_wgpuDeviceSetLabel) {
+        WGPUStringView label = { "Electrobun WGPU Device", WGPU_STRLEN };
+        p_wgpuDeviceSetLabel(device, label);
+    }
+    state->queue = p_wgpuDeviceGetQueue(device);
+    configureSurface(state);
+    setupPipeline(state);
+
+    if (state->timer) {
+        dispatch_source_cancel(state->timer);
+        state->timer = nullptr;
+    }
+    state->timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(state->timer, dispatch_time(DISPATCH_TIME_NOW, 0), (uint64_t)(16 * NSEC_PER_MSEC), (uint64_t)(1 * NSEC_PER_MSEC));
+    dispatch_source_set_event_handler(state->timer, ^{
+        renderFrame(state);
+    });
+    dispatch_resume(state->timer);
+}
+
+extern "C" void wgpuRunGPUTest(AbstractView* abstractView) {
+    if (!abstractView) return;
+    if (!ensureWgpuTestSymbols()) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSView* nsView = [abstractView nsView];
+        if (!nsView || ![nsView.layer isKindOfClass:[CAMetalLayer class]]) {
+            NSLog(@"WGPU test: no CAMetalLayer found");
+            return;
+        }
+        CAMetalLayer* layer = (CAMetalLayer*)nsView.layer;
+        g_gpuTest.layer = layer;
+        if (!g_gpuTest.instance) {
+            g_gpuTest.instance = p_wgpuCreateInstance(nullptr);
+        }
+        if (!g_gpuTest.instance) {
+            NSLog(@"WGPU test: failed to create instance");
+            return;
+        }
+        WGPUSurfaceSourceMetalLayer metalSource = {};
+        metalSource.chain.sType = WGPUSType_SurfaceSourceMetalLayer;
+        metalSource.layer = (__bridge void*)layer;
+        WGPUSurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&metalSource);
+        g_gpuTest.surface = (WGPUSurface)p_wgpuInstanceCreateSurface(g_gpuTest.instance, &surfaceDesc);
+        if (!g_gpuTest.surface) {
+            NSLog(@"WGPU test: failed to create surface");
+            return;
+        }
+        WGPURequestAdapterOptions opts = {};
+        opts.compatibleSurface = g_gpuTest.surface;
+        WGPURequestAdapterCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = requestAdapterCallback;
+        cbInfo.userdata1 = &g_gpuTest;
+        p_wgpuInstanceRequestAdapter(g_gpuTest.instance, &opts, cbInfo);
+    });
+}
 
 // ----------------------- CEF and NSApplication Setup (C++ and ObjC) -----------------------
 
@@ -5344,6 +6085,36 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
     return impl;
 }
 
+extern "C" AbstractView* initWGPUView(uint32_t webviewId,
+                        NSWindow *window,
+                        double x, double y,
+                        double width, double height,
+                        bool autoResize,
+                        bool startTransparent,
+                        bool startPassthrough) {
+
+    // Validate frame values - use defaults if NaN or invalid
+    if (isnan(x) || isinf(x)) x = 0;
+    if (isnan(y) || isinf(y)) y = 0;
+    if (isnan(width) || isinf(width) || width <= 0) width = 100;
+    if (isnan(height) || isinf(height) || height <= 0) height = 100;
+
+    NSRect frame = NSMakeRect(x, y, width, height);
+
+    __block AbstractView *impl = nil;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        impl = [[WGPUViewImpl alloc] initWithWebviewId:webviewId
+                                                window:window
+                                                 frame:frame
+                                            autoResize:autoResize];
+        impl.pendingStartTransparent = startTransparent;
+        impl.pendingStartPassthrough = startPassthrough;
+    });
+
+    return impl;
+}
+
 extern "C" MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView,
                                                                              uint32_t webviewId,
                                                                              const char *name,
@@ -5407,6 +6178,59 @@ extern "C" void webviewGoBack(AbstractView *abstractView) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [abstractView goBack];
     });
+}
+
+extern "C" void wgpuViewSetFrame(AbstractView *abstractView, double x, double y, double width, double height) {
+    if (!abstractView) {
+        NSLog(@"wgpuViewSetFrame: abstractView is null");
+        return;
+    }
+    NSRect frame = NSMakeRect(x, y, width, height);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [abstractView resizeWithFrame:frame parsedMasks:nil];
+        if (abstractView.nsView && [abstractView.nsView.layer isKindOfClass:[CAMetalLayer class]]) {
+            CAMetalLayer *layer = (CAMetalLayer *)abstractView.nsView.layer;
+            CGFloat scale = abstractView.nsView.window.backingScaleFactor;
+            layer.contentsScale = scale;
+            CGSize size = abstractView.nsView.bounds.size;
+            layer.drawableSize = CGSizeMake(size.width * scale, size.height * scale);
+            NSLog(@"wgpuViewSetFrame: bounds=%.1fx%.1f scale=%.2f drawable=%.1fx%.1f",
+                  size.width, size.height, scale, layer.drawableSize.width, layer.drawableSize.height);
+        }
+    });
+}
+
+extern "C" void wgpuViewSetTransparent(AbstractView *abstractView, BOOL transparent) {    
+    if (!abstractView) return;
+    [abstractView setTransparent:transparent];
+}
+
+extern "C" void wgpuViewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
+    if (!abstractView) return;
+    [abstractView setPassthrough:enablePassthrough];
+}
+
+extern "C" void wgpuViewSetHidden(AbstractView *abstractView, BOOL hidden) {
+    if (!abstractView) return;
+    [abstractView setHidden:hidden];
+}
+
+extern "C" void wgpuViewRemove(AbstractView *abstractView) {
+    if (!abstractView) return;
+    [abstractView remove];
+}
+
+extern "C" void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
+    if (!abstractView) return nullptr;
+    __block void* result = nullptr;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if (!abstractView.nsView) return;
+        CALayer *layer = abstractView.nsView.layer;
+        if ([layer isKindOfClass:[CAMetalLayer class]]) {
+            result = (__bridge void*)layer;
+        }
+    });
+    return result;
 }
 
 extern "C" void webviewGoForward(AbstractView *abstractView) {
