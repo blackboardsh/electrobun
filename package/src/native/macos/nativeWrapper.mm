@@ -825,6 +825,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) WindowMoveHandler moveHandler;
     @property (nonatomic, assign) WindowResizeHandler resizeHandler;
     @property (nonatomic, assign) WindowFocusHandler focusHandler;
+    @property (nonatomic, assign) WindowBlurHandler blurHandler;
     @property (nonatomic, assign) uint32_t windowId;
     @property (nonatomic, strong) NSWindow *window;
 @end
@@ -5089,6 +5090,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             self.focusHandler(self.windowId);
         }
     }
+    - (void)windowDidResignKey:(NSNotification *)notification {
+        if (self.blurHandler) {
+            self.blurHandler(self.windowId);
+        }
+    }
 @end
 
 /*
@@ -5637,22 +5643,31 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
 }
 
 
+@interface ElectrobunWindow : NSWindow
+@end
+
+@implementation ElectrobunWindow
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return YES; }
+@end
+
 NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      createNSWindowWithFrameAndStyleParams config,
                                                      WindowCloseHandler zigCloseHandler,
                                                      WindowMoveHandler zigMoveHandler,
                                                      WindowResizeHandler zigResizeHandler,
-                                                     WindowFocusHandler zigFocusHandler) {
+                                                     WindowFocusHandler zigFocusHandler,
+                                                     WindowBlurHandler zigBlurHandler) {
     
     NSScreen *primaryScreen = [NSScreen screens][0];
     NSRect screenFrame = [primaryScreen frame];
     config.frame.origin.y = screenFrame.size.height - config.frame.origin.y;
     
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:config.frame
-                                                   styleMask:config.styleMask
-                                                     backing:NSBackingStoreBuffered
-                                                       defer:YES
-                                                      screen:primaryScreen];
+    NSWindow *window = [[ElectrobunWindow alloc] initWithContentRect:config.frame
+                                                          styleMask:config.styleMask
+                                                            backing:NSBackingStoreBuffered
+                                                              defer:YES
+                                                             screen:primaryScreen];
     
     [window setFrameTopLeftPoint:config.frame.origin];
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
@@ -5664,6 +5679,7 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     delegate.resizeHandler = zigResizeHandler;
     delegate.moveHandler = zigMoveHandler;
     delegate.focusHandler = zigFocusHandler;
+    delegate.blurHandler = zigBlurHandler;
     delegate.windowId = windowId;
     delegate.window = window;
     [window setDelegate:delegate];
@@ -5695,7 +5711,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   WindowCloseHandler zigCloseHandler,
   WindowMoveHandler zigMoveHandler,
   WindowResizeHandler zigResizeHandler,
-  WindowFocusHandler zigFocusHandler
+  WindowFocusHandler zigFocusHandler,
+  WindowBlurHandler zigBlurHandler
   ) {
 
     // Validate frame values - use defaults if NaN or invalid
@@ -5722,7 +5739,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             zigCloseHandler,
             zigMoveHandler,
             zigResizeHandler,
-            zigFocusHandler
+            zigFocusHandler,
+            zigBlurHandler
         );
 
         // Handle transparent window background

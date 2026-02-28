@@ -1,6 +1,6 @@
 // BrowserWindow Tests - Tests for window creation and management
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, type TitleBarStyle } from "../test-framework/types";
 import { BrowserWindow } from "electrobun/bun";
 
 export const windowTests = [
@@ -301,50 +301,50 @@ export const windowTests = [
     },
   }),
 
-  defineTest({
-    name: "Window focus event",
+  ...(['default', 'hiddenInset', 'hidden'] satisfies TitleBarStyle[]).map(titleBarStyle => defineTest({
+    name: `Window focus and blur events (titleBarStyle: ${titleBarStyle})`,
     category: "BrowserWindow",
-    description: "Test that focus event fires when window gains focus",
+    description: "Test that focus and blur events fire when windows gain and lose focus",
     async run({ createWindow, log }) {
+      let blurEventFired = false;
       let focusEventFired = false;
 
-      const win = await createWindow({
+      const win1 = await createWindow({
         url: "views://test-harness/index.html",
         title: "Focus Event Test",
         renderer: 'cef',
+        titleBarStyle,
       });
 
-      win.window.on("focus", () => {
-        focusEventFired = true;
-      });
+      win1.window.on("blur", () => { blurEventFired = true; });
 
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      log("Triggering focus");
-      win.window.focus();
-      
-      // Give more time for focus event in automated environment
+      log("Creating second window to steal focus");
+      const win2 = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Focus Stealer",
+        renderer: 'cef',
+        titleBarStyle,
+      });
+
+      win2.window.on("focus", () => { focusEventFired = true; });
+
+      win1.window.focus();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      win2.window.focus();
+
+      // Give time for blur/focus events to fire
       await new Promise((resolve) => setTimeout(resolve, 800));
 
-      if (!focusEventFired) {
-        log("Focus event didn't fire, trying to activate window...");
-        // On some Linux window managers, we need to ensure the window is visible
-        win.window.show();
-        win.window.focus();
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
+      expect(blurEventFired).toBe(true);
+      expect(focusEventFired).toBe(true);
 
-      if (!focusEventFired) {
-        log("WARNING: Window focus event not supported in this environment");
-        log("This is common in automated test environments on Linux");
-        // Skip this test in automated environments
-        return;
-      }
-
-      // At this point focusEventFired is guaranteed to be true
+      log("Blur event fired successfully");
       log("Focus event fired successfully");
     },
-  }),
+  })),
 
   defineTest({
     name: "BrowserWindow.getById",
