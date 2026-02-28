@@ -163,6 +163,14 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.bool,
 			},
+			setWindowVisibleOnAllWorkspaces: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			isWindowVisibleOnAllWorkspaces: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
 			setWindowPosition: {
 				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
 				returns: FFIType.void,
@@ -895,6 +903,34 @@ export const ffi = {
 			return native.symbols.isWindowAlwaysOnTop(windowPtr);
 		},
 
+		setWindowVisibleOnAllWorkspaces: (params: {
+			winId: number;
+			visibleOnAllWorkspaces: boolean;
+		}) => {
+			const { winId, visibleOnAllWorkspaces } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+			if (!windowPtr) {
+				throw `Can't set visible on all workspaces. Window no longer exists`;
+			}
+
+			native.symbols.setWindowVisibleOnAllWorkspaces(
+				windowPtr,
+				visibleOnAllWorkspaces,
+			);
+		},
+
+		isWindowVisibleOnAllWorkspaces: (params: { winId: number }): boolean => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+			if (!windowPtr) {
+				return false;
+			}
+
+			return native.symbols.isWindowVisibleOnAllWorkspaces(windowPtr);
+		},
+
 		setWindowPosition: (params: { winId: number; x: number; y: number }) => {
 			const { winId, x, y } = params;
 			const windowPtr = getWindowPtr(winId);
@@ -994,7 +1030,6 @@ export const ffi = {
 			startTransparent: boolean;
 			startPassthrough: boolean;
 		}): FFIType.ptr => {
-
 			const {
 				id,
 				windowId,

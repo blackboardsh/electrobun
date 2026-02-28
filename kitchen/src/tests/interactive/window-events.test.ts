@@ -103,4 +103,69 @@ export const windowEventTests = [
       });
     },
   }),
+  defineTest({
+    name: "Window visibleOnAllWorkspaces (macOS)",
+    category: "Window Events (Interactive)",
+    description: "Test window appears on all macOS Spaces",
+    interactive: true,
+    timeout: 120000,
+    async run({ createWindow, log, showInstructions, waitForUserVerification }) {
+      // Only relevant on macOS
+      if (process.platform !== "darwin") {
+        log("Skipping test - only available on macOS");
+        return;
+      }
+
+      await showInstructions([
+        "A test window will open",
+        "Use Mission Control (Ctrl+Up or swipe up) to switch to another Space/Desktop",
+        "Verify the test window appears on ALL Spaces, not just the current one",
+        "Then return to this Space",
+      ]);
+
+      log("Creating test window for visibleOnAllWorkspaces");
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Visible On All Workspaces Test",
+        renderer: "cef",
+        width: 400,
+        height: 300,
+      });
+
+      log("Checking initial visibleOnAllWorkspaces state");
+      if (win.window.isVisibleOnAllWorkspaces()) {
+        throw new Error("Window should not be visible on all workspaces initially");
+      }
+
+      log("Setting window visible on all workspaces");
+      win.window.setAlwaysOnTop(true); // Just for better DX
+
+      win.window.setVisibleOnAllWorkspaces(true);
+
+      log("Verifying state is set to true");
+      if (!win.window.isVisibleOnAllWorkspaces()) {
+        throw new Error("Window should be visible on all workspaces after setting");
+      }
+
+      log("Window is now visible on all workspaces - verify in Mission Control");
+      const result = await waitForUserVerification();
+
+      if (result.action === "pass") {
+        log("Test passed - window successfully visible on all workspaces");
+      } else if (result.action === "fail") {
+        throw new Error("User reported window not visible on all workspaces");
+      } else if (result.action === "retest") {
+        log("Re-test requested");
+        return;
+      }
+
+      // Cleanup
+      log("Setting window back to single workspace");
+      win.window.setVisibleOnAllWorkspaces(false);
+      if (win.window.isVisibleOnAllWorkspaces()) {
+        throw new Error("Window should not be visible on all workspaces after unsetting");
+      }
+      log("Test completed successfully");
+    },
+  }),
 ];

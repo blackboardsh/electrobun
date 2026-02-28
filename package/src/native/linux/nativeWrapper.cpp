@@ -8275,6 +8275,15 @@ ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(void* window) {
     return result;
 }
 
+ELECTROBUN_EXPORT void setWindowVisibleOnAllWorkspaces(void* window, bool visible) {
+    // Not applicable on Linux - no-op
+}
+
+ELECTROBUN_EXPORT bool isWindowVisibleOnAllWorkspaces(void* window) {
+    // Not applicable on Linux
+    return false;
+}
+
 ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
     if (!window) return;
 

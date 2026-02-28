@@ -201,7 +201,37 @@ export const windowTests = [
 
       log("AlwaysOnTop toggle completed");
     },
-  }),
+  }), 
+ 
+  defineTest({
+    name: "Window visibleOnAllWorkspaces",
+    category: "BrowserWindow",
+    description: "Test window visible on all workspaces behavior",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Visible On All Workspaces Test",
+        renderer: 'cef',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      log("Checking initial visibleOnAllWorkspaces state");
+      expect(win.window.isVisibleOnAllWorkspaces()).toBe(false);
+
+      log("Setting visibleOnAllWorkspaces to true");
+      win.window.setVisibleOnAllWorkspaces(true);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(win.window.isVisibleOnAllWorkspaces()).toBe(true);
+
+      log("Setting visibleOnAllWorkspaces to false");
+      win.window.setVisibleOnAllWorkspaces(false);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(win.window.isVisibleOnAllWorkspaces()).toBe(false);
+
+      log("VisibleOnAllWorkspaces toggle completed");
+     },
+ }),
 
   defineTest({
     name: "Window focus",

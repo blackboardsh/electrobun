@@ -276,6 +276,14 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	isAlwaysOnTop(): boolean {
 		return ffi.request.isWindowAlwaysOnTop({ winId: this.id });
 	}
+	
+	setVisibleOnAllWorkspaces(visibleOnAllWorkspaces: boolean) {
+		return ffi.request.setWindowVisibleOnAllWorkspaces({ winId: this.id, visibleOnAllWorkspaces });
+	}
+	
+	isVisibleOnAllWorkspaces(): boolean {
+		return ffi.request.isWindowVisibleOnAllWorkspaces({ winId: this.id });
+	}
 
 	setPosition(x: number, y: number) {
 		this.frame.x = x;
