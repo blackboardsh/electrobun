@@ -8964,6 +8964,10 @@ ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
     return strdup(result.str().c_str());
 }
 
+ELECTROBUN_EXPORT uint64_t getMouseButtons() {
+    return 0;
+}
+
 /*
  * =============================================================================
  * COOKIE MANAGEMENT API

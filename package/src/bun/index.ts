@@ -28,6 +28,9 @@ import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
 import * as Socket from "./core/Socket";
 import WGPU from "./webGPU";
+import webgpu from "./webgpuAdapter";
+import * as three from "three";
+import * as babylon from "@babylonjs/core";
 import type { ElectrobunConfig } from "./ElectrobunConfig";
 import { GlobalShortcut, Screen, Session, WGPUBridge } from "./proc/native";
 import type {
@@ -82,6 +85,9 @@ export {
 	PATHS,
 	Socket,
 	WGPU,
+	webgpu,
+	three,
+	babylon,
 	GlobalShortcut,
 	Screen,
 	Session,
@@ -109,6 +115,9 @@ const Electrobun = {
 	PATHS,
 	Socket,
 	WGPU,
+	webgpu,
+	three,
+	babylon,
 };
 
 // Electrobun

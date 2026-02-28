@@ -3,6 +3,7 @@
 import type { TestDefinition } from "../test-framework/types";
 
 // Automated tests
+import { wgpuFfiTests } from "./wgpu-ffi.test";
 import { rpcTests } from "./rpc.test";
 import { windowTests } from "./window.test";
 import { navigationTests } from "./navigation.test";
@@ -42,6 +43,7 @@ export const allTests: TestDefinition[] = [
   ...preloadTests,
   ...updaterTests,
   ...sandboxTests,
+  ...wgpuFfiTests,
 
   // Interactive tests (run sequentially, require user)
   ...dialogTests,
@@ -75,6 +77,7 @@ export {
   preloadTests,
   updaterTests,
   sandboxTests,
+  wgpuFfiTests,
   dialogTests,
   trayTests,
   shortcutTests,

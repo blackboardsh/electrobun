@@ -16,6 +16,14 @@
 #include <dlfcn.h>
 #include <math.h>
 #include "dawn/webgpu.h"
+
+static bool wgpuDebugEnabled() {
+    static int cached = -1;
+    if (cached >= 0) return cached == 1;
+    const char* val = getenv("ELECTROBUN_WGPU_DEBUG");
+    cached = (val && strcmp(val, "1") == 0) ? 1 : 0;
+    return cached == 1;
+}
 #import <UserNotifications/UserNotifications.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -2782,28 +2790,31 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-                MTKView *view = [[MTKView alloc] initWithFrame:frame device:device];
-                view.paused = YES;
-                view.enableSetNeedsDisplay = NO;
-                view.colorPixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
-                view.framebufferOnly = NO;
+                NSView *view = [[NSView alloc] initWithFrame:frame];
                 view.wantsLayer = YES;
                 view.layer.backgroundColor = [[NSColor clearColor] CGColor];
-                CAMetalLayer *metalLayer = (CAMetalLayer *)view.layer;
+
+                CAMetalLayer *metalLayer = [CAMetalLayer layer];
                 metalLayer.device = device;
-                metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+                metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
                 metalLayer.framebufferOnly = NO;
-                metalLayer.opaque = YES;
+                metalLayer.opaque = NO;
+                metalLayer.backgroundColor = [[NSColor clearColor] CGColor];
                 metalLayer.presentsWithTransaction = YES;
+                metalLayer.allowsNextDrawableTimeout = NO;
                 CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
                 metalLayer.colorspace = cs;
                 CGColorSpaceRelease(cs);
                 CGFloat scale = window.backingScaleFactor;
-                view.layer.contentsScale = scale;
+                metalLayer.contentsScale = scale;
                 metalLayer.drawableSize = CGSizeMake(frame.size.width * scale, frame.size.height * scale);
-                NSLog(@"WGPUViewImpl init: frame=%.1fx%.1f scale=%.2f drawable=%.1fx%.1f",
-                      frame.size.width, frame.size.height, scale,
-                      metalLayer.drawableSize.width, metalLayer.drawableSize.height);
+                view.layer = metalLayer;
+
+                if (wgpuDebugEnabled()) {
+                    NSLog(@"WGPUViewImpl init: frame=%.1fx%.1f scale=%.2f drawable=%.1fx%.1f",
+                          frame.size.width, frame.size.height, scale,
+                          metalLayer.drawableSize.width, metalLayer.drawableSize.height);
+                }
 
                 view.autoresizingMask = NSViewNotSizable;
 
@@ -2816,6 +2827,11 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];
                 CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
                 view.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+
+                if (self.pendingStartTransparent) {
+                    window.opaque = NO;
+                    window.backgroundColor = [NSColor clearColor];
+                }
 
                 ContainerView *containerView = (ContainerView *)window.contentView;
                 [containerView addAbstractView:self];
@@ -2853,6 +2869,34 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     - (void)openDevTools {}
     - (void)closeDevTools {}
     - (void)toggleDevTools {}
+
+    - (void)setTransparent:(BOOL)transparent {
+        if (!self.nsView) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.nsView setWantsLayer:YES];
+            self.nsView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+            self.nsView.layer.opaque = !transparent ? YES : NO;
+            NSWindow *window = self.nsView.window;
+            if (window) {
+                window.opaque = !transparent ? YES : NO;
+                window.backgroundColor = transparent ? [NSColor clearColor] : [NSColor windowBackgroundColor];
+                if (transparent) {
+                    window.hasShadow = NO;
+                }
+                NSView *contentView = window.contentView;
+                if (contentView) {
+                    contentView.wantsLayer = YES;
+                    contentView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+                    contentView.layer.opaque = !transparent ? YES : NO;
+                }
+            }
+            if ([self.nsView.layer isKindOfClass:[CAMetalLayer class]]) {
+                CAMetalLayer *metalLayer = (CAMetalLayer *)self.nsView.layer;
+                metalLayer.opaque = !transparent ? YES : NO;
+                metalLayer.backgroundColor = [[NSColor clearColor] CGColor];
+            }
+        });
+    }
 
     - (void)remove {
         if (!self.nsView) {
@@ -3338,7 +3382,7 @@ static void renderFrame(GPUTestState* state) {
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
 
     static bool loggedDrawable = false;
-    if (!loggedDrawable) {
+    if (!loggedDrawable && wgpuDebugEnabled()) {
         id<CAMetalDrawable> drawable = [state->layer nextDrawable];
         if (drawable) {
             NSLog(@"WGPU test: CAMetalLayer nextDrawable OK");
@@ -6194,8 +6238,10 @@ extern "C" void wgpuViewSetFrame(AbstractView *abstractView, double x, double y,
             layer.contentsScale = scale;
             CGSize size = abstractView.nsView.bounds.size;
             layer.drawableSize = CGSizeMake(size.width * scale, size.height * scale);
-            NSLog(@"wgpuViewSetFrame: bounds=%.1fx%.1f scale=%.2f drawable=%.1fx%.1f",
-                  size.width, size.height, scale, layer.drawableSize.width, layer.drawableSize.height);
+            if (wgpuDebugEnabled()) {
+                NSLog(@"wgpuViewSetFrame: bounds=%.1fx%.1f scale=%.2f drawable=%.1fx%.1f",
+                      size.width, size.height, scale, layer.drawableSize.width, layer.drawableSize.height);
+            }
         }
     });
 }
@@ -7769,6 +7815,10 @@ extern "C" const char* getCursorScreenPoint(void) {
         NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
         return strdup([jsonString UTF8String]);
     }
+}
+
+extern "C" uint64_t getMouseButtons(void) {
+    return (uint64_t)[NSEvent pressedMouseButtons];
 }
 
 /*

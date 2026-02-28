@@ -489,6 +489,10 @@ export const native = (() => {
 				args: [],
 				returns: FFIType.cstring,
 			},
+			getMouseButtons: {
+				args: [],
+				returns: FFIType.u64,
+			},
 
 			openFileDialog: {
 				args: [
@@ -1860,6 +1864,17 @@ export const Screen = {
 			return JSON.parse(jsonStr.toString());
 		} catch {
 			return { x: 0, y: 0 };
+		}
+	},
+
+	/**
+	 * Get current mouse button bitmask (bit 0 = left, bit 1 = right, bit 2 = middle)
+	 */
+	getMouseButtons: (): bigint => {
+		try {
+			return native.symbols.getMouseButtons();
+		} catch {
+			return 0n;
 		}
 	},
 };

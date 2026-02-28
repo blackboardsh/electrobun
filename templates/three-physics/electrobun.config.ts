@@ -2,11 +2,12 @@ import type { ElectrobunConfig } from "electrobun";
 
 export default {
 	app: {
-		name: "bunny-wgpu",
-		identifier: "bunny-wgpu.electrobun.dev",
+		name: "three-physics",
+		identifier: "three-physics.electrobun.dev",
 		version: "0.0.1",
 	},
 	build: {
+		useAsar: false,
 		bun: {
 			entrypoint: "src/bun/index.ts",
 		},
@@ -18,7 +19,7 @@ export default {
 		copy: {
 			"src/mainview/index.html": "views/mainview/index.html",
 			"src/mainview/index.css": "views/mainview/index.css",
-			"src/mainview/assets": "views/mainview/assets",
+			"src/assets": "assets",
 		},
 		mac: {
 			bundleCEF: false,

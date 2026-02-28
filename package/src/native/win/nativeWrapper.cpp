@@ -9858,6 +9858,10 @@ extern "C" ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
     return _strdup("{\"x\":0,\"y\":0}");
 }
 
+extern "C" ELECTROBUN_EXPORT uint64_t getMouseButtons() {
+    return 0;
+}
+
 /*
  * =============================================================================
  * COOKIE MANAGEMENT API
