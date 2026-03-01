@@ -131,7 +131,9 @@ let bindGroup: any = null;
 let inputBuffer: any = null;
 let templateBuffer: any = null;
 let outputBuffer: any = null;
-let readBuffer: any = null;
+let readBuffers: any[] = [];
+let readIndex = 0;
+let didReadbackSanity = false;
 let inFlight = false;
 let pendingInput: Float32Array | null = null;
 
@@ -180,14 +182,20 @@ async function initGPU() {
       size: templateMatrix.byteLength,
       usage: BufferUsage.Storage | BufferUsage.CopyDst,
     });
-    outputBuffer = device.createBuffer({
-      size: CLASS_COUNT * 4,
-      usage: BufferUsage.Storage | BufferUsage.CopySrc,
-    });
-    readBuffer = device.createBuffer({
+  outputBuffer = device.createBuffer({
+    size: CLASS_COUNT * 4,
+    usage: BufferUsage.Storage | BufferUsage.CopySrc | BufferUsage.CopyDst,
+  });
+  readBuffers = [
+    device.createBuffer({
       size: CLASS_COUNT * 4,
       usage: BufferUsage.MapRead | BufferUsage.CopyDst,
-    });
+    }),
+    device.createBuffer({
+      size: CLASS_COUNT * 4,
+      usage: BufferUsage.MapRead | BufferUsage.CopyDst,
+    }),
+  ];
     console.log("[wgpu-mlp] GPU buffers created");
 
     device.queue.writeBuffer(templateBuffer, 0, templateMatrix);
@@ -239,6 +247,40 @@ async function gpuClassify(input: Float32Array) {
     return null;
   }
   inFlight = true;
+  if (!didReadbackSanity) {
+    didReadbackSanity = true;
+    try {
+      const pattern = new Float32Array(CLASS_COUNT);
+      for (let i = 0; i < CLASS_COUNT; i += 1) {
+        pattern[i] = i + 0.5;
+      }
+      device.queue.writeBuffer(outputBuffer, 0, pattern);
+      const sanityEncoder = device.createCommandEncoder();
+      sanityEncoder.copyBufferToBuffer(
+        outputBuffer,
+        0,
+        readBuffers[readIndex]!,
+        0,
+        CLASS_COUNT * 4,
+      );
+      device.queue.submit([sanityEncoder.finish()]);
+      const readbackBytes = new Uint8Array(CLASS_COUNT * 4);
+      const status = await readBuffers[readIndex]!.readbackAsync(
+        readbackBytes,
+        0,
+        CLASS_COUNT * 4,
+        2000,
+      );
+      if (status === 1) {
+        const test = new Float32Array(readbackBytes.buffer.slice(0));
+        console.log("[wgpu-mlp] readback sanity", Array.from(test));
+      } else {
+        console.log("[wgpu-mlp] readback sanity failed status", status);
+      }
+    } catch (err) {
+      console.log("[wgpu-mlp] readback sanity error", String(err));
+    }
+  }
   device.queue.writeBuffer(inputBuffer, 0, input);
 
   const encoder = device.createCommandEncoder();
@@ -247,14 +289,20 @@ async function gpuClassify(input: Float32Array) {
   pass.setBindGroup(0, bindGroup);
   pass.dispatchWorkgroups(CLASS_COUNT);
   pass.end();
+  const readBuffer = readBuffers[readIndex]!;
   encoder.copyBufferToBuffer(outputBuffer, 0, readBuffer, 0, CLASS_COUNT * 4);
   const cmd = encoder.finish();
   device.queue.submit([cmd]);
 
-  await readBuffer.mapAsync();
-  const mapped = readBuffer.getMappedRange(0, CLASS_COUNT * 4);
-  const out = new Float32Array(mapped.slice(0));
-  readBuffer.unmap();
+  const readbackBytes = new Uint8Array(CLASS_COUNT * 4);
+  const status = await readBuffer.readbackAsync(readbackBytes, 0, CLASS_COUNT * 4, 2000);
+  if (status !== 1) {
+    console.log("[wgpu-mlp] readback async failed status", status);
+    inFlight = false;
+    return null;
+  }
+  const out = new Float32Array(readbackBytes.buffer.slice(0));
+  readIndex = (readIndex + 1) % readBuffers.length;
   inFlight = false;
   if (pendingInput) {
     const next = pendingInput;
@@ -324,7 +372,8 @@ const rpc = BrowserView.defineRPC<MlpRPC>({
               } else {
                 throw new Error("gpu scores unavailable");
               }
-            } catch {
+            } catch (err) {
+              console.log("[wgpu-mlp] GPU classify failed", String(err));
               source = "cpu";
             }
           }

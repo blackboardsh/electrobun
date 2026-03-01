@@ -115,6 +115,8 @@ const WGPUMapMode_Read = 0x0000000000000001n;
 const WGPUMapMode_Write = 0x0000000000000002n;
 const WGPUCallbackMode_AllowSpontaneous = 0x00000003;
 const WGPUBufferMapState_Mapped = 0x00000003;
+const WGPUMapAsyncStatus_Success = 0x00000001;
+const WGPUQueueWorkDoneStatus_Success = 0x00000001;
 const WGPUColorWriteMask_All = 0x000000000000000F;
 const WGPUBlendOperation_Add = 0x00000001;
 const WGPUBlendFactor_One = 0x00000002;
@@ -144,7 +146,8 @@ const WGPU_DEPTH_SLICE_UNDEFINED = 0xffffffff;
 const WGPU_KEEPALIVE: any[] = [];
 let LAST_SURFACE_PTR: number | null = null;
 let LAST_SURFACE_HAS_TEXTURE = false;
-const MAP_ASYNC_RESOLVERS = new Map<number, (status: number) => void>();
+const MAP_ASYNC_RESOLVERS = new Map<number, (mapped: boolean) => void>();
+const WORK_DONE_RESOLVERS = new Map<number, (ok: boolean) => void>();
 
 const bufferMapCallback = new JSCallback(
 	(status: number, _message: number, userdata1: number, _userdata2: number) => {
@@ -152,7 +155,7 @@ const bufferMapCallback = new JSCallback(
 		const resolve = MAP_ASYNC_RESOLVERS.get(key);
 		if (resolve) {
 			MAP_ASYNC_RESOLVERS.delete(key);
-			resolve(status);
+			resolve(status === WGPUMapAsyncStatus_Success);
 		}
 	},
 	{
@@ -162,6 +165,23 @@ const bufferMapCallback = new JSCallback(
 	},
 );
 WGPU_KEEPALIVE.push(bufferMapCallback);
+
+const queueWorkDoneCallback = new JSCallback(
+	(status: number, _message: number, userdata1: number, _userdata2: number) => {
+		const key = Number(userdata1);
+		const resolve = WORK_DONE_RESOLVERS.get(key);
+		if (resolve) {
+			WORK_DONE_RESOLVERS.delete(key);
+			resolve(status === WGPUQueueWorkDoneStatus_Success);
+		}
+	},
+	{
+		args: ["u32", "ptr", "ptr", "ptr"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+WGPU_KEEPALIVE.push(queueWorkDoneCallback);
 
 function toBigInt(value: unknown, fallback = 0n) {
 	if (typeof value === "bigint") return value;
@@ -602,6 +622,22 @@ function makeBufferMapCallbackInfo(
 	return { buffer, ptr: ptr(buffer) };
 }
 
+function makeQueueWorkDoneCallbackInfo(
+	callbackPtr: number,
+	userdata1: number,
+	userdata2: number,
+) {
+	const buffer = new ArrayBuffer(40);
+	const view = new DataView(buffer);
+	writePtr(view, 0, 0);
+	writeU32(view, 8, WGPUCallbackMode_AllowSpontaneous);
+	writeU32(view, 12, 0);
+	writePtr(view, 16, callbackPtr);
+	writePtr(view, 24, userdata1);
+	writePtr(view, 32, userdata2);
+	return { buffer, ptr: ptr(buffer) };
+}
+
 function makeBindGroupLayoutEntry(entry: {
 	binding: number;
 	visibility: number;
@@ -913,6 +949,7 @@ class GPUTextureView {
 
 class GPUQueue {
 	ptr: number;
+	_device?: GPUDevice;
 	constructor(ptr: number) {
 		this.ptr = ptr;
 	}
@@ -1042,7 +1079,45 @@ class GPUQueue {
 		);
 	}
 	onSubmittedWorkDone() {
-		return Promise.resolve();
+		const callbackPtr = (queueWorkDoneCallback as any).ptr ?? queueWorkDoneCallback;
+		const info = makeQueueWorkDoneCallbackInfo(
+			Number(callbackPtr),
+			this.ptr,
+			0,
+		);
+		WGPU_KEEPALIVE.push(info.buffer);
+		WGPUBridge.queueOnSubmittedWorkDone(
+			this.ptr as any,
+			info.ptr as any,
+		);
+		return new Promise<boolean>((resolve) => {
+			let done = false;
+			const resolveOnce = () => {
+				if (done) return;
+				done = true;
+				resolve(true);
+			};
+			WORK_DONE_RESOLVERS.set(this.ptr, () => resolveOnce());
+
+			const start = Date.now();
+			const poll = () => {
+				if (done) return;
+				try {
+					if ((this as any)._device?.instancePtr) {
+						WGPUNative.symbols.wgpuInstanceProcessEvents(
+							(this as any)._device.instancePtr,
+						);
+					}
+					WGPUNative.symbols.wgpuDeviceTick((this as any)._device?.ptr ?? 0);
+				} catch {}
+				if (Date.now() - start > 5000) {
+					resolve(false);
+					return;
+				}
+				setTimeout(poll, 5);
+			};
+			setTimeout(poll, 5);
+		});
 	}
 }
 
@@ -1052,9 +1127,12 @@ class GPUDevice {
 	features = new Set<string>();
 	limits: Record<string, number> = {};
 	_uncapturedErrorListeners: ((event: { error: Error }) => void)[] = [];
-	constructor(ptr: number) {
+	instancePtr: number | null = null;
+	constructor(ptr: number, instancePtr?: number) {
 		this.ptr = ptr;
+		this.instancePtr = instancePtr ?? null;
 		this.queue = new GPUQueue(WGPUNative.symbols.wgpuDeviceGetQueue(ptr));
+		this.queue._device = this;
 	}
 	destroy() {
 		if (!this.ptr) return;
@@ -1531,6 +1609,9 @@ class GPUBuffer {
 			BigInt(_offset),
 			BigInt(size),
 		);
+		if (!mapped) {
+			return new ArrayBuffer(0);
+		}
 		return toArrayBuffer(mapped as any, 0, size);
 	}
 	mapAsync(mode?: number, offset = 0, size?: number) {
@@ -1547,30 +1628,39 @@ class GPUBuffer {
 			0,
 		);
 		WGPU_KEEPALIVE.push(info.buffer);
-		WGPUNative.symbols.wgpuBufferMapAsync(
-			this.ptr,
+		WGPUBridge.bufferMapAsync(
+			this.ptr as any,
 			BigInt(mapMode),
 			BigInt(offset),
 			BigInt(mapSize),
 			info.ptr as any,
 		);
-		return new Promise<void>((resolve) => {
+		return new Promise<boolean>((resolve) => {
 			let done = false;
 			const resolveOnce = () => {
 				if (done) return;
 				done = true;
-				resolve();
+				resolve(true);
 			};
 
-			MAP_ASYNC_RESOLVERS.set(this.ptr, () => {
-				this._mapped = true;
-				resolveOnce();
+			MAP_ASYNC_RESOLVERS.set(this.ptr, (mapped) => {
+				if (mapped) {
+					this._mapped = true;
+					resolveOnce();
+				} else {
+					resolve(false);
+				}
 			});
 
 			const start = Date.now();
 			const poll = () => {
 				if (done) return;
 				try {
+					if (this._device.instancePtr) {
+						WGPUNative.symbols.wgpuInstanceProcessEvents(
+							this._device.instancePtr,
+						);
+					}
 					WGPUNative.symbols.wgpuDeviceTick(this._device.ptr);
 				} catch {
 					// ignore
@@ -1582,7 +1672,7 @@ class GPUBuffer {
 					return;
 				}
 				if (Date.now() - start > 2000) {
-					resolveOnce();
+					resolve(false);
 					return;
 				}
 				setTimeout(poll, 5);
@@ -1593,6 +1683,54 @@ class GPUBuffer {
 	unmap() {
 		WGPUNative.symbols.wgpuBufferUnmap(this.ptr);
 		this._mapped = false;
+	}
+	readSync(offset = 0, size?: number, timeoutNs = 2_000_000_000) {
+		if (!this._device.instancePtr) return null;
+		const readSize = Math.max(0, size ?? this.size - offset);
+		const out = new ArrayBuffer(readSize);
+		const ok = WGPUBridge.bufferReadSyncInto(
+			this._device.instancePtr as any,
+			this.ptr as any,
+			BigInt(offset),
+			BigInt(readSize),
+			BigInt(timeoutNs),
+			ptr(out) as any,
+		);
+		if (!ok) return null;
+		return out;
+	}
+	readbackAsync(
+		dst: Uint8Array,
+		offset = 0,
+		size?: number,
+		timeoutMs = 2000,
+	) {
+		const readSize = Math.max(0, size ?? dst.byteLength);
+		const jobPtr = WGPUBridge.bufferReadbackBegin(
+			this.ptr as any,
+			BigInt(offset),
+			BigInt(readSize),
+			ptr(dst) as any,
+		);
+		if (!jobPtr) return Promise.resolve(0);
+		return new Promise<number>((resolve) => {
+			const start = Date.now();
+			const poll = () => {
+				const status = WGPUBridge.bufferReadbackStatus(jobPtr as any);
+				if (status === 1) {
+					WGPUBridge.bufferReadbackFree(jobPtr as any);
+					resolve(1);
+					return;
+				}
+				if (status === 2 || status === 3 || Date.now() - start > timeoutMs) {
+					WGPUBridge.bufferReadbackFree(jobPtr as any);
+					resolve(status === 0 ? 2 : status);
+					return;
+				}
+				setTimeout(poll, 5);
+			};
+			setTimeout(poll, 5);
+		});
 	}
 	destroy() {
 		WGPUNative.symbols.wgpuBufferDestroy(this.ptr);
@@ -1964,7 +2102,7 @@ class GPUAdapter {
 			ptr(adapterDevice),
 		);
 		const device = Number(adapterDevice[1]);
-		return new GPUDevice(device);
+		return new GPUDevice(device, this.instancePtr);
 	}
 }
 

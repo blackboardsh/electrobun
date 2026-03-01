@@ -384,6 +384,38 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.i32,
 			},
+			wgpuQueueOnSubmittedWorkDoneShim: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.u64,
+			},
+			wgpuBufferMapAsyncShim: {
+				args: [FFIType.ptr, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.ptr],
+				returns: FFIType.u64,
+			},
+			wgpuInstanceWaitAnyShim: {
+				args: [FFIType.ptr, FFIType.u64, FFIType.u64],
+				returns: FFIType.i32,
+			},
+			wgpuBufferReadSyncShim: {
+				args: [FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			wgpuBufferReadSyncIntoShim: {
+				args: [FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.ptr],
+				returns: FFIType.i32,
+			},
+			wgpuBufferReadbackBeginShim: {
+				args: [FFIType.ptr, FFIType.u64, FFIType.u64, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			wgpuBufferReadbackStatusShim: {
+				args: [FFIType.ptr],
+				returns: FFIType.i32,
+			},
+			wgpuBufferReadbackFreeShim: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
 			wgpuRunGPUTest: {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
@@ -1497,6 +1529,83 @@ export const WGPUBridge = {
 		),
 	surfacePresent: (surfacePtr: Pointer): number =>
 		native.symbols.wgpuSurfacePresentMainThread(surfacePtr as any),
+	queueOnSubmittedWorkDone: (queuePtr: Pointer, callbackInfoPtr: Pointer): bigint =>
+		native.symbols.wgpuQueueOnSubmittedWorkDoneShim(
+			queuePtr as any,
+			callbackInfoPtr as any,
+		),
+	bufferMapAsync: (
+		bufferPtr: Pointer,
+		mode: bigint,
+		offset: bigint,
+		size: bigint,
+		callbackInfoPtr: Pointer,
+	): bigint =>
+		native.symbols.wgpuBufferMapAsyncShim(
+			bufferPtr as any,
+			mode as any,
+			offset as any,
+			size as any,
+			callbackInfoPtr as any,
+		),
+	instanceWaitAny: (
+		instancePtr: Pointer,
+		futureId: bigint,
+		timeoutNs: bigint,
+	): number =>
+		native.symbols.wgpuInstanceWaitAnyShim(
+			instancePtr as any,
+			futureId as any,
+			timeoutNs as any,
+		),
+	bufferReadSync: (
+		instancePtr: Pointer,
+		bufferPtr: Pointer,
+		offset: bigint,
+		size: bigint,
+		timeoutNs: bigint,
+		outSizePtr: Pointer,
+	): Pointer =>
+		native.symbols.wgpuBufferReadSyncShim(
+			instancePtr as any,
+			bufferPtr as any,
+			offset as any,
+			size as any,
+			timeoutNs as any,
+			outSizePtr as any,
+		),
+	bufferReadSyncInto: (
+		instancePtr: Pointer,
+		bufferPtr: Pointer,
+		offset: bigint,
+		size: bigint,
+		timeoutNs: bigint,
+		dstPtr: Pointer,
+	): number =>
+		native.symbols.wgpuBufferReadSyncIntoShim(
+			instancePtr as any,
+			bufferPtr as any,
+			offset as any,
+			size as any,
+			timeoutNs as any,
+			dstPtr as any,
+		),
+	bufferReadbackBegin: (
+		bufferPtr: Pointer,
+		offset: bigint,
+		size: bigint,
+		dstPtr: Pointer,
+	): Pointer =>
+		native.symbols.wgpuBufferReadbackBeginShim(
+			bufferPtr as any,
+			offset as any,
+			size as any,
+			dstPtr as any,
+		),
+	bufferReadbackStatus: (jobPtr: Pointer): number =>
+		native.symbols.wgpuBufferReadbackStatusShim(jobPtr as any),
+	bufferReadbackFree: (jobPtr: Pointer) =>
+		native.symbols.wgpuBufferReadbackFreeShim(jobPtr as any),
 	runTest: (viewId: number) => {
 		const view = WGPUView.getById(viewId);
 		if (!view?.ptr) {
