@@ -6633,160 +6633,78 @@ static gboolean onWindowDragButtonRelease(GtkWidget* widget, GdkEventButton* eve
     return FALSE; // Let other handlers process the event
 }
 
-ELECTROBUN_EXPORT void startWindowMove(void* window) {
-    dispatch_sync_main_void([&]() {
-        // Handle both GTK and X11 windows
-        if (isCEFAvailable()) {
-            // For X11/CEF windows, we need to use X11 APIs
-            X11Window* x11win = static_cast<X11Window*>(window);
-            if (x11win && x11win->display && x11win->window) {
-                // Get current mouse position
-                Window root, child;
-                int rootX, rootY, winX, winY;
-                unsigned int mask;
-                XQueryPointer(x11win->display, x11win->window, &root, &child, 
-                            &rootX, &rootY, &winX, &winY, &mask);
-                
-                // Start window move using X11's built-in window manager support
-                XEvent xev;
-                memset(&xev, 0, sizeof(xev));
-                xev.xclient.type = ClientMessage;
-                xev.xclient.window = x11win->window;
-                xev.xclient.message_type = XInternAtom(x11win->display, "_NET_WM_MOVERESIZE", False);
-                xev.xclient.format = 32;
-                xev.xclient.data.l[0] = rootX;
-                xev.xclient.data.l[1] = rootY;
-                xev.xclient.data.l[2] = 8; // _NET_WM_MOVERESIZE_MOVE
-                xev.xclient.data.l[3] = Button1;
-                xev.xclient.data.l[4] = 1;
-                
-                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
-                          SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-                XFlush(x11win->display);
-            }
-        } else {
-            // For GTK windows
-            GtkWidget* gtkWindow = GTK_WIDGET(window);
-            if (!gtkWindow || !GTK_IS_WINDOW(gtkWindow)) {
-                fprintf(stderr, "Invalid window provided to startWindowMove\n");
-                return;
-            }
-            
-            // Check if widget is realized
-            if (!gtk_widget_get_realized(gtkWindow)) {
-                fprintf(stderr, "Window not realized, cannot start window move\n");
-                return;
-            }
-            
-            // Get the GDK window and validate it
-            GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
-            if (!gdkWindow) {
-                fprintf(stderr, "No GDK window available for startWindowMove\n");
-                return;
-            }
-            
-            // Clean up any existing drag
-            stopWindowMove();
-            
-            // Store the window being dragged
-            g_draggedWindow = gtkWindow;
-            
-            // Get current mouse position relative to window
-            GdkDisplay* display = gdk_display_get_default();
-            if (!display) {
-                fprintf(stderr, "No default display available\n");
-                stopWindowMove();
-                return;
-            }
-            
-            GdkSeat* seat = gdk_display_get_default_seat(display);
-            if (!seat) {
-                fprintf(stderr, "No default seat available\n");
-                stopWindowMove();
-                return;
-            }
-            
-            GdkDevice* device = gdk_seat_get_pointer(seat);
-            if (!device) {
-                fprintf(stderr, "No pointer device available\n");
-                stopWindowMove();
-                return;
-            }
-            
-            gint rootX, rootY, winX, winY;
-            gdk_device_get_position(device, nullptr, &rootX, &rootY);
-            gdk_window_get_device_position(gdkWindow, device, &winX, &winY, nullptr);
-            
-            // Store the offset where the drag started within the window
-            g_dragStartX = winX;
-            g_dragStartY = winY;
-            
-            // Enable motion events on the window
-            gtk_widget_add_events(gtkWindow, GDK_POINTER_MOTION_MASK | GDK_BUTTON_RELEASE_MASK);
-            
-            // Connect motion and button release handlers
-            g_motionHandlerId = g_signal_connect(gtkWindow, "motion-notify-event", 
-                                               G_CALLBACK(onWindowDragMotion), nullptr);
-            g_buttonReleaseHandlerId = g_signal_connect(gtkWindow, "button-release-event", 
-                                                       G_CALLBACK(onWindowDragButtonRelease), nullptr);
-            
-            // Grab the pointer to ensure we get all mouse events
-            GdkGrabStatus status = gdk_seat_grab(seat, gdkWindow,
-                                                GDK_SEAT_CAPABILITY_POINTER,
-                                                FALSE, // owner_events
-                                                nullptr, // cursor
-                                                nullptr, // event
-                                                nullptr, // prepare_func
-                                                nullptr); // prepare_func_data
-            
-            if (status != GDK_GRAB_SUCCESS) {
-                fprintf(stderr, "Failed to grab pointer for window drag (status: %d)\n", status);
-                stopWindowMove();
-            } else {
-                printf("Window drag started successfully\n");
-                fflush(stdout);
-            }
-        }
-    });
+ELECTROBUN_EXPORT void startWindowMove(void *window) {
+  dispatch_sync_main_void([&]() {
+    if (isCEFAvailable()) {
+      // CEF is always forced to X11 mode (--ozone-platform=x11 / --use-x11),
+      // so _NET_WM_MOVERESIZE works even on Wayland via XWayland.
+      X11Window *x11win = static_cast<X11Window *>(window);
+      if (!x11win || !x11win->display || !x11win->window)
+        return;
+
+      Window root, child;
+      int rootX, rootY, winX, winY;
+      unsigned int mask;
+      XQueryPointer(x11win->display, x11win->window, &root, &child, &rootX,
+                    &rootY, &winX, &winY, &mask);
+
+      XEvent xev;
+      memset(&xev, 0, sizeof(xev));
+      xev.xclient.type = ClientMessage;
+      xev.xclient.window = x11win->window;
+      xev.xclient.message_type =
+          XInternAtom(x11win->display, "_NET_WM_MOVERESIZE", False);
+      xev.xclient.format = 32;
+      xev.xclient.data.l[0] = rootX;
+      xev.xclient.data.l[1] = rootY;
+      xev.xclient.data.l[2] = 8; // _NET_WM_MOVERESIZE_MOVE
+      xev.xclient.data.l[3] = Button1;
+      xev.xclient.data.l[4] = 1;
+
+      XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                 SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+      XFlush(x11win->display);
+    } else {
+      // GTK path: delegate to the compositor/WM on both X11 and Wayland.
+      // gtk_window_begin_move_drag works natively on both — no manual grab
+      // needed.
+      GtkWidget *gtkWindow = GTK_WIDGET(window);
+      if (!gtkWindow || !GTK_IS_WINDOW(gtkWindow)) {
+        fprintf(stderr, "startWindowMove: invalid GTK window\n");
+        return;
+      }
+
+      if (!gtk_widget_get_realized(gtkWindow)) {
+        fprintf(stderr, "startWindowMove: window not realized\n");
+        return;
+      }
+
+      GdkDisplay *display = gdk_display_get_default();
+      GdkSeat *seat = display ? gdk_display_get_default_seat(display) : nullptr;
+      GdkDevice *device = seat ? gdk_seat_get_pointer(seat) : nullptr;
+
+      if (!device) {
+        fprintf(stderr, "startWindowMove: no pointer device\n");
+        return;
+      }
+
+      gint rootX, rootY;
+      gdk_device_get_position(device, nullptr, &rootX, &rootY);
+
+      gtk_window_begin_move_drag(GTK_WINDOW(gtkWindow), GDK_BUTTON_PRIMARY,
+                                 rootX, rootY, gtk_get_current_event_time());
+
+      printf("Window drag started\n");
+      fflush(stdout);
+    }
+  });
 }
 
 ELECTROBUN_EXPORT void stopWindowMove() {
-    dispatch_sync_main_void([&]() {
-        printf("stopWindowMove called\n");
-        fflush(stdout);
-        
-        if (g_draggedWindow) {
-            printf("Cleaning up window drag state\n");
-            fflush(stdout);
-            
-            // Disconnect handlers safely
-            if (g_motionHandlerId > 0 && G_IS_OBJECT(g_draggedWindow)) {
-                g_signal_handler_disconnect(g_draggedWindow, g_motionHandlerId);
-                g_motionHandlerId = 0;
-            }
-            if (g_buttonReleaseHandlerId > 0 && G_IS_OBJECT(g_draggedWindow)) {
-                g_signal_handler_disconnect(g_draggedWindow, g_buttonReleaseHandlerId);
-                g_buttonReleaseHandlerId = 0;
-            }
-            
-            // Release pointer grab safely
-            GdkDisplay* display = gdk_display_get_default();
-            if (display) {
-                GdkSeat* seat = gdk_display_get_default_seat(display);
-                if (seat) {
-                    gdk_seat_ungrab(seat);
-                }
-            }
-            
-            // Clear state
-            g_draggedWindow = nullptr;
-            g_dragStartX = 0;
-            g_dragStartY = 0;
-            
-            printf("Window drag cleanup completed\n");
-            fflush(stdout);
-        }
-    });
+  // gtk_window_begin_move_drag is handled entirely by the WM/compositor —
+  // there's nothing to clean up on our side.
+  printf("stopWindowMove called\n");
+  fflush(stdout);
 }
 
 ELECTROBUN_EXPORT void addPreloadScriptToWebView(AbstractView* abstractView, const char* scriptContent, bool forMainFrameOnly) {
