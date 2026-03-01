@@ -2072,7 +2072,7 @@ async function buildPreload() {
 	const fullResult = await bunModule.build({
 		entrypoints: [fullPreloadEntry],
 		target: "browser",
-		format: "iife", // IIFE format for script injection (no export statements)
+		format: "esm",
 		minify: false,
 	});
 
@@ -2086,7 +2086,7 @@ async function buildPreload() {
 	const sandboxedResult = await bunModule.build({
 		entrypoints: [sandboxedPreloadEntry],
 		target: "browser",
-		format: "iife",
+		format: "esm",
 		minify: false,
 	});
 
@@ -2095,8 +2095,10 @@ async function buildPreload() {
 		throw new Error("Failed to build sandboxed preload script");
 	}
 
-	const fullPreloadJs = await fullResult.outputs[0].text();
-	const sandboxedPreloadJs = await sandboxedResult.outputs[0].text();
+	// Wrap in IIFE to prevent top-level variables from leaking into webview global scope
+	// (Bun removed iife format support in 1.3.10, so we build as esm and wrap manually)
+	const fullPreloadJs = `(function(){${await fullResult.outputs[0].text()}})();`;
+	const sandboxedPreloadJs = `(function(){${await sandboxedResult.outputs[0].text()}})();`;
 
 	const outputContent = `// Auto-generated file. Do not edit directly.
 // Run "bun build.ts" or "bun build:dev" from the package folder to regenerate.
