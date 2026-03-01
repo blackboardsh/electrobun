@@ -1409,6 +1409,14 @@ const defaultConfig = {
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
 			chromiumFlags: undefined as Record<string, string | true> | undefined,
+			flatpak: undefined as
+				| {
+						enabled?: boolean;
+						runtimeVersion?: string;
+						categories?: string[];
+						extraFinishArgs?: string[];
+				  }
+				| undefined,
 		},
 		bun: {
 			entrypoint: "src/bun/index.ts",
@@ -1477,6 +1485,361 @@ function escapeXml(str: string): string {
 // Helper functions
 function escapePathForTerminal(path: string): string {
 	return `"${path.replace(/"/g, '\\"')}"`;
+}
+
+// ---------------------------------------------------------------------------
+// Flatpak support helpers
+// ---------------------------------------------------------------------------
+
+function xmlEscape(s: string): string {
+	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+/**
+ * Generate a Flatpak manifest YAML string for the given app.
+ *
+ * The app bundle directory (appFileName/) is copied verbatim into /app/ so the
+ * launcher's existing relative-path logic keeps working unchanged.
+ */
+/**
+ * Scan a shared library's runtime dependencies with `ldd` and return the
+ * resolved host paths of any libraries that are NOT provided by the target
+ * Flatpak runtime.  These need to be bundled alongside the app.
+ *
+ * We filter by a prefix list of libs that are known to be present in both
+ * org.gnome.Platform and org.freedesktop.Platform (glibc, GTK3, GLib, WebKit,
+ * graphics stack, etc.).  Anything not on that list gets bundled.
+ */
+function collectExtraLibs(soPath: string): string[] {
+	// Library name prefixes that are provided by the Flatpak runtime (org.gnome.Platform).
+	// Anything matching these prefixes is already in the runtime — do NOT bundle it.
+	// We use readelf -d (direct DT_NEEDED only) + recursive walk so we never pull in
+	// WebKit's transitive dep tree, which would cause version conflicts with the runtime.
+	const runtimePrefixes = [
+		// glibc / libstdc++
+		"libc.so", "libm.so", "libdl.so", "libpthread", "librt.so", "libresolv",
+		"libstdc++", "libgcc_s", "ld-linux", "ld-musl",
+		// GLib / GIO / GObject
+		"libglib-2", "libgio-2", "libgobject-2", "libgmodule-2", "libgthread-2",
+		// GTK3 stack
+		"libgtk-3", "libgdk-3", "libgdk_pixbuf-2",
+		"libpango", "libpangocairo", "libpangoft2",
+		"libcairo", "libcairo-gobject",
+		"libatk-1", "libatk-bridge-2",
+		"libharfbuzz", "libfreetype", "libfontconfig", "libepoxy",
+		// WebKit
+		"libwebkit2gtk-4", "libwebkitgtk-6", "libjavascriptcoregtk",
+		// X11 / Wayland / GPU
+		"libX11", "libXext", "libXi", "libXrender", "libXrandr", "libXcomposite",
+		"libXcursor", "libXfixes", "libXdamage", "libXinerama", "libXtst", "libXau",
+		"libxcb", "libxkbcommon",
+		"libwayland-client", "libwayland-server", "libwayland-egl", "libwayland-cursor",
+		"libEGL", "libGL", "libGLESv", "libgbm", "libdrm",
+		// D-Bus
+		"libdbus-1", "libdbus-glib",
+		// Basic system libs
+		"libffi.", "libuuid.", "libz.", "liblzma.", "libzstd.",
+		"libpcre2", "libbz2.so", "libcap.so", "libselinux.so",
+		"libmount.so", "libblkid.so", "libelf.so", "libdw.so", "libunwind.so",
+		"libatomic.so",
+		// OpenSSL / TLS — runtime provides these; bundling host versions causes ABI conflicts
+		"libssl.so", "libcrypto.so",
+		"libgnutls.so", "libgcrypt.so", "libgpg-error.so",
+		"libp11-kit.so", "libtasn1.so", "libhogweed.so", "libnettle.so", "libgmp.so",
+		// Kerberos / GSSAPI
+		"libgssapi_krb5.so", "libkrb5.so", "libk5crypto.so", "libcom_err.so",
+		"libkrb5support.so", "libkeyutils.so",
+		// Network
+		"libsoup-3", "libsoup-2", "libnghttp2.so", "libpsl.so",
+		"libunistring.so", "libidn2.so",
+		// GStreamer (all variants)
+		"libgstreamer", "libgst",
+		// Audio
+		"libpulse", "libasound", "libsndfile.so", "libasyncns.so",
+		"libgsm.so", "libFLAC.so", "libvorbis", "libopus.so", "libogg.so",
+		"libmpg123.so", "libmp3lame.so",
+		// Image / video codecs (part of WebKit's runtime deps)
+		"libjpeg.so", "libpng", "libwebp", "libsharpyuv.so",
+		"libjxl", "libavif", "libyuv", "libdav1d", "librav1e",
+		"libSvtAv1Enc", "libaom", "libvmaf", "libcpuinfo", "libwoff2",
+		// Fonts / text rendering
+		"libfribidi.so", "libthai.so", "libdatrie.so", "libgraphite2.so",
+		"libpixman-1.so", "libflite",
+		// XML / data / SQLite
+		"libxml2.so", "libxslt.so", "libsqlite3.so", "libexpat.so", "liblcms2.so",
+		// GNOME platform libs
+		"libjson-glib", "libsecret-1", "libcloudproviders", "libtinysparql",
+		"libmanette", "libgudev", "libatspi.so", "liborc-0.4.so",
+		// Misc system
+		"libhidapi", "libevdev.so", "libseccomp.so", "libhyphen.so", "libenchant",
+		"libudev", "libsystemd",
+		// NSS (Mozilla crypto, not OpenSSL)
+		"libcups", "libnspr4", "libnss3", "libnssutil3", "libsmime3",
+		"libssl3", "libplc4", "libplds4",
+	];
+
+	// Build a lib-name → resolved-path map from ldconfig once.
+	const ldconfig = Bun.spawnSync(["ldconfig", "-p"], { stdio: ["ignore", "pipe", "ignore"] });
+	const libMap = new Map<string, string>();
+	if (ldconfig.exitCode === 0) {
+		for (const line of ldconfig.stdout.toString().split("\n")) {
+			// "    libfoo.so.1 (libc6,x86-64) => /usr/lib64/libfoo.so.1"
+			const m = line.match(/^\s+(\S+)\s+\(.*\)\s+=>\s+(\S+)/);
+			if (m) libMap.set(m[1], m[2]);
+		}
+	}
+
+	const visited = new Set<string>();
+	const result: string[] = [];
+
+	function walkDeps(libPath: string): void {
+		if (visited.has(libPath)) return;
+		visited.add(libPath);
+
+		// Use readelf -d to get direct DT_NEEDED entries (not transitive like ldd).
+		const readelf = Bun.spawnSync(["readelf", "-d", libPath], { stdio: ["ignore", "pipe", "ignore"] });
+		if (readelf.exitCode !== 0) return;
+
+		for (const line of readelf.stdout.toString().split("\n")) {
+			const m = line.match(/\(NEEDED\)\s+Shared library:\s+\[(.+)\]/);
+			if (!m) continue;
+			const libName = m[1];
+			if (runtimePrefixes.some((p) => libName.startsWith(p))) continue;
+
+			const resolvedPath = libMap.get(libName);
+			if (!resolvedPath || !existsSync(resolvedPath)) continue;
+			if (visited.has(resolvedPath)) continue;
+
+			result.push(resolvedPath);
+			walkDeps(resolvedPath); // recurse only into non-runtime deps
+		}
+	}
+
+	walkDeps(soPath);
+	return result;
+}
+
+function generateFlatpakManifest(
+	config: any,
+	appFileName: string,
+): string {
+	const appId: string = config.app.identifier;
+	const runtimeVersion: string = config.build.linux?.flatpak?.runtimeVersion ?? "48";
+	const extraFinishArgs: string[] = config.build.linux?.flatpak?.extraFinishArgs ?? [];
+
+	// Validate app ID — must be reverse-DNS format to avoid YAML injection
+	if (!/^[a-zA-Z][a-zA-Z0-9_-]*(\.[a-zA-Z][a-zA-Z0-9_-]*){2,}$/.test(appId)) {
+		throw new Error(`Invalid Flatpak app ID: "${appId}". Must be reverse-DNS format (e.g. com.example.App).`);
+	}
+	// Validate extraFinishArgs — each entry must be a single line
+	for (const arg of extraFinishArgs) {
+		if (/[\r\n]/.test(arg)) {
+			throw new Error(`extraFinishArgs entry contains a newline: "${arg}"`);
+		}
+	}
+
+	const extraLines = extraFinishArgs.map((a) => `  - ${a}`).join("\n");
+
+	return `app-id: ${appId}
+runtime: org.gnome.Platform
+runtime-version: '${runtimeVersion}'
+sdk: org.gnome.Sdk
+command: launcher
+
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --device=dri
+  - --share=network
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.portal.Desktop${extraLines ? "\n" + extraLines : ""}
+
+modules:
+  - name: ${appFileName}
+    buildsystem: simple
+    build-commands:
+      - cp -r ${appFileName} /app/${appFileName}
+      - mkdir -p /app/bin
+      - ln -sf /app/${appFileName}/bin/launcher /app/bin/launcher
+      - if [ -d bundled-libs ] && [ "$(ls -A bundled-libs)" ]; then mkdir -p /app/lib && cp bundled-libs/* /app/lib/; fi
+      - install -Dm644 ${appId}.desktop /app/share/applications/${appId}.desktop
+      - install -Dm644 ${appId}.metainfo.xml /app/share/metainfo/${appId}.metainfo.xml
+      - install -Dm644 icon.png /app/share/icons/hicolor/256x256/apps/${appId}.png
+    sources:
+      - type: dir
+        path: .
+`;
+}
+
+/**
+ * Generate a .desktop file for the Flatpak bundle.
+ */
+function generateFlatpakDesktopFile(config: any, appFileName: string): string {
+	const categories: string[] =
+		config.build.linux?.flatpak?.categories ?? ["Utility"];
+	const categoriesStr = categories.join(";") + ";";
+	return `[Desktop Entry]
+Name=${config.app.name}
+Exec=launcher
+Icon=${config.app.identifier}
+Type=Application
+Categories=${categoriesStr}
+StartupWMClass=${appFileName}
+`;
+}
+
+/**
+ * Generate a minimal AppStream metainfo XML file.
+ * Required for Flathub submission; harmless otherwise.
+ */
+function generateFlatpakAppdata(config: any): string {
+	const appId: string = config.app.identifier;
+	const name: string = xmlEscape(config.app.name ?? "");
+	const summary: string = xmlEscape(config.app.description || `${config.app.name} application`);
+	const homepage: string = xmlEscape(config.app.homepage || "");
+	const version: string = xmlEscape(config.app.version ?? "0.0.1");
+	const license: string = xmlEscape(config.app.license ?? "LicenseRef-proprietary");
+	const date: string = new Date().toISOString().split("T")[0];
+
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>${appId}</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>${license}</project_license>
+  <name>${name}</name>
+  <summary>${summary}</summary>
+  <description>
+    <p>${summary}</p>
+  </description>
+  <launchable type="desktop-id">${appId}.desktop</launchable>
+  <url type="homepage">${homepage}</url>
+  <releases>
+    <release version="${version}" date="${date}"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>
+`;
+}
+
+/**
+ * Build a .flatpak bundle from the already-assembled app directory.
+ *
+ * Requires `flatpak` and `flatpak-builder` to be installed on the build host.
+ * If they are not found the function prints a warning and returns null.
+ *
+ * Returns the path to the produced .flatpak file on success, null on skip.
+ */
+async function createFlatpakBundle(
+	buildFolder: string,
+	appBundlePath: string,
+	appFileName: string,
+	config: any,
+): Promise<string | null> {
+	// Check for required tools
+	const hasFlatpakBuilder = Bun.spawnSync(["which", "flatpak-builder"]).exitCode === 0;
+	const hasFlatpak = Bun.spawnSync(["which", "flatpak"]).exitCode === 0;
+	if (!hasFlatpakBuilder || !hasFlatpak) {
+		console.warn(
+			"WARNING: flatpak and/or flatpak-builder not found — skipping Flatpak bundle. " +
+			"Install them with: sudo apt install flatpak flatpak-builder  (or equivalent)",
+		);
+		return null;
+	}
+
+	const appId: string = config.app.identifier;
+	const stagingDir = join(buildFolder, "flatpak-staging");
+	const flatpakBuildDir = join(buildFolder, "flatpak-build");
+	const flatpakFile = join(buildFolder, `${appFileName}.flatpak`);
+
+	// Clean up any previous staging artefacts
+	if (existsSync(stagingDir)) {
+		rmSync(stagingDir, { recursive: true, force: true });
+	}
+	if (existsSync(flatpakBuildDir)) {
+		rmSync(flatpakBuildDir, { recursive: true, force: true });
+	}
+
+	mkdirSync(stagingDir, { recursive: true });
+	mkdirSync(flatpakBuildDir, { recursive: true });
+
+	// 1. Write manifest, .desktop and appdata into staging dir
+	writeFileSync(join(stagingDir, `${appId}.yml`), generateFlatpakManifest(config, appFileName));
+	writeFileSync(join(stagingDir, `${appId}.desktop`), generateFlatpakDesktopFile(config, appFileName));
+	writeFileSync(join(stagingDir, `${appId}.metainfo.xml`), generateFlatpakAppdata(config));
+
+	// 2. Copy the assembled app bundle into staging dir
+	cpSync(appBundlePath, join(stagingDir, appFileName), { recursive: true, dereference: true });
+
+	// 2b. Collect extra libs not provided by the Flatpak runtime (e.g. libayatana-appindicator3)
+	//     by scanning libNativeWrapper.so's runtime dependencies on the build host.
+	const nativeWrapperPath = join(stagingDir, appFileName, "bin", "libNativeWrapper.so");
+	if (existsSync(nativeWrapperPath)) {
+		const extraLibPaths = collectExtraLibs(nativeWrapperPath);
+		if (extraLibPaths.length > 0) {
+			const bundledLibsDir = join(stagingDir, "bundled-libs");
+			mkdirSync(bundledLibsDir, { recursive: true });
+			for (const libPath of extraLibPaths) {
+				const dest = join(bundledLibsDir, basename(libPath));
+				if (!existsSync(dest)) {
+					cpSync(libPath, dest, { dereference: true });
+				}
+			}
+			console.log(`Bundling ${extraLibPaths.length} extra lib(s) not in Flatpak runtime: ${extraLibPaths.map((p) => basename(p)).join(", ")}`);
+		}
+	}
+
+	// 3. Copy icon if available
+	const iconSourcePath = config.build.linux?.icon
+		? join(process.cwd(), config.build.linux.icon)
+		: null;
+	if (iconSourcePath && existsSync(iconSourcePath)) {
+		cpSync(iconSourcePath, join(stagingDir, "icon.png"), { dereference: true });
+	} else {
+		// Create a 1×1 transparent PNG placeholder so the build doesn't fail
+		const placeholder = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+			"base64",
+		);
+		writeFileSync(join(stagingDir, "icon.png"), placeholder);
+	}
+
+	// 4. Run flatpak-builder
+	console.log(`Running flatpak-builder for ${appId}…`);
+	const builderResult = Bun.spawnSync(
+		[
+			"flatpak-builder",
+			"--force-clean",
+			"--repo=" + join(flatpakBuildDir, "repo"),
+			join(flatpakBuildDir, "build"),
+			join(stagingDir, `${appId}.yml`),
+		],
+		{ cwd: stagingDir, stdio: ["ignore", "inherit", "inherit"] },
+	);
+	if (builderResult.exitCode !== 0) {
+		throw new Error(`flatpak-builder failed with exit code ${builderResult.exitCode}`);
+	}
+
+	// 5. Create the .flatpak bundle
+	console.log(`Creating ${appFileName}.flatpak bundle…`);
+	const bundleResult = Bun.spawnSync(
+		[
+			"flatpak",
+			"build-bundle",
+			join(flatpakBuildDir, "repo"),
+			flatpakFile,
+			appId,
+		],
+		{ cwd: stagingDir, stdio: ["ignore", "inherit", "inherit"] },
+	);
+	if (bundleResult.exitCode !== 0) {
+		throw new Error(`flatpak build-bundle failed with exit code ${bundleResult.exitCode}`);
+	}
+
+	const stats = statSync(flatpakFile);
+	console.log(
+		`✓ Flatpak bundle created: ${flatpakFile} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`,
+	);
+	return flatpakFile;
 }
 
 /**
@@ -3185,6 +3548,23 @@ Categories=Utility;Application;
 
 			// Tar the app bundle for all platforms
 			createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
+
+			// Build Flatpak bundle for Linux (before removing the app bundle folder)
+			if (targetOS === "linux" && config.build.linux?.flatpak?.enabled) {
+				try {
+					const flatpakPath = await createFlatpakBundle(
+						buildFolder,
+						appBundleFolderPath,
+						appFileName,
+						config,
+					);
+					if (flatpakPath) {
+						artifactsToUpload.push(flatpakPath);
+					}
+				} catch (err) {
+					console.error("Flatpak bundle creation failed:", err);
+				}
+			}
 
 			// Remove the app bundle folder after tarring (except on Linux where it might be needed for dev)
 			if (targetOS !== "linux" || buildEnvironment !== "dev") {

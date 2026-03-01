@@ -164,6 +164,11 @@ export default {
 				// "show-composited-layer-borders": true,
 				"user-agent": "BarkusAurelius/1.0 (Macintosh; powered by bunnies)",
 			},
+			flatpak: {
+				enabled: true,
+				runtimeVersion: "48",
+				categories: ["Utility"],
+			},
 		},
 		win: {
 			bundleCEF: true,

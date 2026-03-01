@@ -353,6 +353,24 @@ std::string getExecutableDir() {
     return "."; // fallback to current directory
 }
 
+// Return XDG directory, falling back to $HOME/<fallbackSuffix> if not set.
+// fallbackSuffix must be a path relative to $HOME (e.g. "/.cache").
+// Flatpak sets XDG_CACHE_HOME / XDG_DATA_HOME to sandbox-appropriate paths;
+// outside Flatpak these env vars are normally unset so the fallback is used.
+static std::string getXdgDir(const char* envVar, const char* fallbackSuffix) {
+    const char* val = getenv(envVar);
+    if (val && val[0]) return std::string(val);
+    const char* home = getenv("HOME");
+    return std::string(home ? home : "/tmp") + fallbackSuffix;
+}
+
+// Return $XDG_RUNTIME_DIR, falling back to /tmp if unset.
+// Unlike getXdgDir, XDG_RUNTIME_DIR has an absolute fallback, not one relative to $HOME.
+static std::string getXdgRuntimeDir() {
+    const char* val = getenv("XDG_RUNTIME_DIR");
+    return val && val[0] ? std::string(val) : "/tmp";
+}
+
 // CEF availability check - runtime check for CEF files in app bundle
 bool isCEFAvailable() {
     // Return cached result if we've already checked
@@ -1645,13 +1663,12 @@ public:
                             CefRefPtr<CefFileDialogCallback> callback) override {
         
         printf("CEF Linux: File dialog requested - mode: %d\n", static_cast<int>(mode));
-        
-        // Run the file dialog using GTK on the main thread
-        // Since this is Linux, we can use GTK dialogs directly
-        GtkWidget* dialog = nullptr;
+
+        // Use GtkFileChooserNative so GTK3 routes the dialog through
+        // org.freedesktop.portal.FileChooser when running inside a Flatpak sandbox.
         GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
         const char* buttonText = "_Open";
-        
+
         // Configure dialog based on mode
         switch (mode) {
             case FILE_DIALOG_OPEN:
@@ -1671,41 +1688,39 @@ public:
                 buttonText = "_Save";
                 break;
         }
-        
-        dialog = gtk_file_chooser_dialog_new(
+
+        GtkFileChooserNative* native = gtk_file_chooser_native_new(
             title.empty() ? "Select File" : title.ToString().c_str(),
             nullptr, // No parent window
             action,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            buttonText, GTK_RESPONSE_ACCEPT,
-            nullptr
+            buttonText, "_Cancel"
         );
-        
+
         // Set multiple selection for OPEN_MULTIPLE mode
         if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
-            gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), TRUE);
+            gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(native), TRUE);
         }
-        
+
         // Set default file path if provided
         if (!default_file_path.empty()) {
             std::string path = default_file_path.ToString();
             if (mode == FILE_DIALOG_SAVE) {
                 // For save dialogs, set the filename
-                gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), path.c_str());
+                gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(native), path.c_str());
             } else {
                 // For open dialogs, set the folder
-                gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), path.c_str());
+                gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(native), path.c_str());
             }
         }
-        
+
         // Set file filters
         if (!accept_filters.empty()) {
             for (const auto& filter : accept_filters) {
                 std::string filterStr = filter.ToString();
-                
+
                 GtkFileFilter* gtkFilter = gtk_file_filter_new();
                 gtk_file_filter_set_name(gtkFilter, filterStr.c_str());
-                
+
                 // Handle common patterns
                 if (filterStr == "*.*" || filterStr == "*") {
                     gtk_file_filter_add_pattern(gtkFilter, "*");
@@ -1716,39 +1731,39 @@ public:
                     std::string pattern = "*." + filterStr;
                     gtk_file_filter_add_pattern(gtkFilter, pattern.c_str());
                 }
-                
-                gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), gtkFilter);
+
+                gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(native), gtkFilter);
             }
-            
+
             // Always add an "All files" filter
             GtkFileFilter* allFilter = gtk_file_filter_new();
             gtk_file_filter_set_name(allFilter, "All files");
             gtk_file_filter_add_pattern(allFilter, "*");
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(native), allFilter);
         }
-        
-        // Show the dialog
-        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
-        
+
+        // Show the dialog (routes through portal when in Flatpak sandbox)
+        gint response = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
+
         std::vector<CefString> file_paths;
         if (response == GTK_RESPONSE_ACCEPT) {
             if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
-                GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
+                GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(native));
                 for (GSList* iter = filenames; iter != nullptr; iter = iter->next) {
                     file_paths.push_back((char*)iter->data);
                     g_free(iter->data);
                 }
                 g_slist_free(filenames);
             } else {
-                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(native));
                 if (filename) {
                     file_paths.push_back(filename);
                     g_free(filename);
                 }
             }
         }
-        
-        gtk_widget_destroy(dialog);
+
+        g_object_unref(native);
         
         // Call the callback with results
         callback->Continue(file_paths);
@@ -1997,10 +2012,9 @@ bool initializeCEF() {
     CefString(&settings.browser_subprocess_path) = execDir + "/bun Helper";
     
     // Set cache path with identifier/channel structure (consistent with CLI and updater)
-    // Use ~/.cache/identifier/channel/CEF
-    char* home = getenv("HOME");
-    if (home) {
-        std::string basePath = std::string(home) + "/.cache";
+    // Use $XDG_CACHE_HOME (or ~/.cache) / identifier / channel / CEF
+    {
+        std::string basePath = getXdgDir("XDG_CACHE_HOME", "/.cache");
         std::string cachePath = buildAppDataPath(basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF");
         std::cout << "[CEF] Using path: " << cachePath << std::endl;
         CefString(&settings.root_cache_path) = cachePath;
@@ -2970,31 +2984,30 @@ public:
         gboolean allowsMultipleSelection = webkit_file_chooser_request_get_select_multiple(request);
         const gchar* const* acceptedMimeTypes = webkit_file_chooser_request_get_mime_types(request);
         
-        // Create the file chooser dialog
-        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        // Use GtkFileChooserNative so GTK3 routes the dialog through
+        // org.freedesktop.portal.FileChooser when running inside a Flatpak sandbox.
+        GtkFileChooserNative* native = gtk_file_chooser_native_new(
             "Select File(s)",
             nullptr, // No parent window for now
             GTK_FILE_CHOOSER_ACTION_OPEN,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            "_Open", GTK_RESPONSE_ACCEPT,
-            nullptr
+            "_Open", "_Cancel"
         );
-        
+
         // Set multiple selection
-        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), allowsMultipleSelection);
-        
+        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(native), allowsMultipleSelection);
+
         // Set up MIME type filters if provided
         if (acceptedMimeTypes && acceptedMimeTypes[0] != nullptr) {
             GtkFileFilter* filter = gtk_file_filter_new();
             gtk_file_filter_set_name(filter, "Allowed file types");
-            
+
             for (int i = 0; acceptedMimeTypes[i] != nullptr; i++) {
                 const char* mimeType = acceptedMimeTypes[i];
-                
+
                 // Add MIME type to filter
                 if (strlen(mimeType) > 0) {
                     gtk_file_filter_add_mime_type(filter, mimeType);
-                    
+
                     // Also add common patterns for known MIME types
                     if (strcmp(mimeType, "image/*") == 0) {
                         gtk_file_filter_add_pattern(filter, "*.jpg");
@@ -3012,36 +3025,36 @@ public:
                     }
                 }
             }
-            
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+
+            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(native), filter);
         }
-        
+
         // Always add "All files" filter as fallback
         GtkFileFilter* allFilter = gtk_file_filter_new();
         gtk_file_filter_set_name(allFilter, "All files");
         gtk_file_filter_add_pattern(allFilter, "*");
-        gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
-        
-        // Run the dialog and handle the response
-        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
-        
+        gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(native), allFilter);
+
+        // Run the dialog and handle the response (routes through portal when in Flatpak)
+        gint response = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
+
         if (response == GTK_RESPONSE_ACCEPT) {
-            GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
-            
+            GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(native));
+
             // Convert GSList to array of strings
             guint length = g_slist_length(filenames);
             gchar** files = g_new(gchar*, length + 1);
-            
+
             GSList* iter = filenames;
             for (guint i = 0; i < length; i++) {
                 files[i] = (gchar*)iter->data;
                 iter = iter->next;
             }
             files[length] = nullptr;
-            
+
             // Select the files in the request
             webkit_file_chooser_request_select_files(request, (const gchar* const*)files);
-            
+
             // Clean up
             g_slist_free_full(filenames, g_free);
             g_free(files);
@@ -3049,8 +3062,8 @@ public:
             // User cancelled - WebKit will handle this automatically
             webkit_file_chooser_request_cancel(request);
         }
-        
-        gtk_widget_destroy(dialog);
+
+        g_object_unref(native);
         return TRUE; // We handled the request
     }
 
@@ -3320,8 +3333,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             std::string partitionName = identifier.substr(8);
 
             // Build cache path with identifier/channel structure (consistent with CLI and updater)
-            char* home = getenv("HOME");
-            std::string basePath = home ? std::string(home) + "/.cache" : "/tmp";
+            std::string basePath = getXdgDir("XDG_CACHE_HOME", "/.cache");
             std::string cachePath = buildPartitionPath(basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName);
 
             // Create directory
@@ -4425,9 +4437,18 @@ public:
         // Create unique indicator ID
         std::string indicatorId = "electrobun-tray-" + std::to_string(id);
         
+        // When running inside a Flatpak sandbox the host compositor cannot read
+        // absolute paths inside /app/, so fall back to the app's reverse-DNS
+        // theme icon name (exported via XDG_DATA_DIRS by the Flatpak manifest).
+        // Outside Flatpak the absolute path is used as before.
+        const char* flatpak_id = getenv("FLATPAK_ID");
+        const char* iconName = (flatpak_id && flatpak_id[0] && !imagePath.empty())
+            ? flatpak_id
+            : (!imagePath.empty() ? imagePath.c_str() : "application-default-icon");
+
         // Create app indicator
-        indicator = app_indicator_new(indicatorId.c_str(), 
-                                    !imagePath.empty() ? imagePath.c_str() : "application-default-icon",
+        indicator = app_indicator_new(indicatorId.c_str(),
+                                    iconName,
                                     APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
         
         if (indicator) {
@@ -4462,7 +4483,13 @@ public:
     void setImage(const char* newImage) {
         imagePath = newImage ? newImage : "";
         if (indicator && !imagePath.empty()) {
-            app_indicator_set_icon_full(indicator, imagePath.c_str(), "Electrobun Tray Icon");
+            // Mirror the constructor logic: use the theme icon name inside Flatpak
+            // so the host compositor can resolve it; use the absolute path otherwise.
+            const char* flatpak_id = getenv("FLATPAK_ID");
+            const char* iconName = (flatpak_id && flatpak_id[0])
+                ? flatpak_id
+                : imagePath.c_str();
+            app_indicator_set_icon_full(indicator, iconName, "Electrobun Tray Icon");
         }
     }
     
@@ -4978,15 +5005,22 @@ void initializeGTK() {
     {
         std::unique_lock<std::mutex> lock(g_gtkInitMutex);
         if (!g_gtkInitialized) {
-            // Force X11 backend on Wayland systems
-            setenv("GDK_BACKEND", "x11", 1);
-            
+            // CEF requires X11 (no native Wayland support). When CEF is
+            // bundled, force GDK_BACKEND=x11 so everything runs under
+            // XWayland. When CEF is absent, let GTK choose the best backend
+            // (Wayland-native on a Wayland session, X11 otherwise).
+            if (isCEFAvailable()) {
+                setenv("GDK_BACKEND", "x11", 1);
+            }
+
             // Disable setlocale before gtk_init to prevent CEF conflicts
             gtk_disable_setlocale();
             gtk_init(nullptr, nullptr);
-            
-            // Install X11 error handler for debugging
-            XSetErrorHandler(x11_error_handler);
+
+            // Install X11 error handler — only valid for X11 displays
+            if (GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
+                XSetErrorHandler(x11_error_handler);
+            }
             
             g_gtkInitialized = true;
             
@@ -5240,10 +5274,8 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
             std::string partitionName = partition.substr(8);
 
             // Build paths with identifier/channel structure (consistent with CLI and updater)
-            char* home = getenv("HOME");
-            std::string homeStr = home ? std::string(home) : "/tmp";
-            std::string dataPath = buildPartitionPath(homeStr + "/.local/share", g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
-            std::string cachePath = buildPartitionPath(homeStr + "/.cache", g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
+            std::string dataPath = buildPartitionPath(getXdgDir("XDG_DATA_HOME", "/.local/share"), g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
+            std::string cachePath = buildPartitionPath(getXdgDir("XDG_CACHE_HOME", "/.cache"), g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
 
             g_mkdir_with_parents(dataPath.c_str(), 0755);
             g_mkdir_with_parents(cachePath.c_str(), 0755);
@@ -5534,8 +5566,6 @@ void runGTKEventLoop() {
     // Initialize GTK on the main thread (this MUST be done here)
     initializeGTK();
     printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === GTK EVENT LOOP STARTED ===\n");
-
-    // Note: GDK_BACKEND=x11 forced for Wayland compatibility
 
     gtk_main();
     g_shutdownComplete.store(true);
@@ -6823,7 +6853,8 @@ void testFFI2(void (*completionHandler)()) {
     fflush(stdout);
     
     // Write to log file as well
-    FILE* logFile = fopen("/tmp/tray_debug.log", "a");
+    std::string logPath = getXdgRuntimeDir() + "/electrobun-tray.log";
+    FILE* logFile = fopen(logPath.c_str(), "a");
     if (logFile) {
         fprintf(logFile, "testFFI2 called from FFI! Callback pointer: %p\n", completionHandler);
         fflush(logFile);
@@ -6891,26 +6922,17 @@ void showItemInFolder(char* path) {
         parentDir = g_strdup(path);
     }
     
-    // Try to open with the default file manager
-    // Most Linux desktop environments support xdg-open
+    // Open the parent directory with the default file manager via GIO.
+    // g_app_info_launch_default_for_uri() is portal-aware: when running inside
+    // a Flatpak sandbox it routes through org.freedesktop.portal.OpenURI.
     gchar* uri = g_filename_to_uri(parentDir, nullptr, nullptr);
     if (uri) {
-        // Use xdg-open which works across different desktop environments
-        gchar* command = g_strdup_printf("xdg-open \"%s\"", uri);
-        int result = system(command);
-        
-        if (result != 0) {
-            // Fallback: try gio open
-            g_free(command);
-            command = g_strdup_printf("gio open \"%s\"", uri);
-            result = system(command);
-            
-            if (result != 0) {
-                fprintf(stderr, "Failed to open file manager for: %s\n", path);
-            }
+        GError* error = nullptr;
+        g_app_info_launch_default_for_uri(uri, nullptr, &error);
+        if (error) {
+            fprintf(stderr, "Failed to open file manager for %s: %s\n", path, error->message);
+            g_error_free(error);
         }
-        
-        g_free(command);
         g_free(uri);
     }
     
@@ -6932,26 +6954,26 @@ ELECTROBUN_EXPORT bool openExternal(const char* urlString) {
 
     GError* error = nullptr;
 
-    // Use g_app_info_launch_default_for_uri to open the URL with default app
+    // Use g_app_info_launch_default_for_uri to open the URL with default app.
+    // This is portal-aware and works inside a Flatpak sandbox.
     gboolean result = g_app_info_launch_default_for_uri(urlString, nullptr, &error);
 
-    if (error) {
-        fprintf(stderr, "GIO failed to open URL: %s - trying xdg-open\n", error->message);
-        g_error_free(error);
-
-        // Fallback to xdg-open
-        gchar* command = g_strdup_printf("xdg-open \"%s\"", urlString);
-        int sysResult = system(command);
-        g_free(command);
-
-        if (sysResult != 0) {
-            fprintf(stderr, "ERROR: Failed to open external URL: %s\n", urlString);
-            return false;
+    if (!result || error) {
+        if (error) {
+            fprintf(stderr, "GIO failed to open URL: %s\n", error->message);
+            g_error_free(error);
         }
-        return true;
+        // Outside Flatpak, fall back to xdg-open for minimal/unusual desktop setups
+        // where GIO may not have a handler registered but xdg-open still works.
+        const char* flatpak_id = getenv("FLATPAK_ID");
+        if (!flatpak_id || !flatpak_id[0]) {
+            std::string cmd = "xdg-open " + std::string(urlString) + " &";
+            return system(cmd.c_str()) == 0;
+        }
+        return false;
     }
 
-    return result == TRUE;
+    return true;
 }
 
 // Open a file or folder with the default application
@@ -6976,41 +6998,42 @@ ELECTROBUN_EXPORT bool openPath(const char* pathString) {
 
     GError* error = nullptr;
 
-    // Use g_app_info_launch_default_for_uri to open with default app
+    // Use g_app_info_launch_default_for_uri to open with default app.
+    // This is portal-aware and works inside a Flatpak sandbox.
     gboolean result = g_app_info_launch_default_for_uri(uri, nullptr, &error);
 
-    if (error) {
-        fprintf(stderr, "GIO failed to open path: %s - trying xdg-open\n", error->message);
-        g_error_free(error);
-
-        // Fallback to xdg-open
-        gchar* command = g_strdup_printf("xdg-open \"%s\"", uri);
-        int sysResult = system(command);
-        g_free(command);
-        g_free(uri);
-
-        if (sysResult != 0) {
-            fprintf(stderr, "ERROR: Failed to open path: %s\n", pathString);
-            return false;
+    if (!result || error) {
+        if (error) {
+            fprintf(stderr, "GIO failed to open path: %s\n", error->message);
+            g_error_free(error);
         }
-        return true;
+        g_free(uri);
+        // Outside Flatpak, fall back to xdg-open for minimal/unusual desktop setups.
+        const char* flatpak_id = getenv("FLATPAK_ID");
+        if (!flatpak_id || !flatpak_id[0]) {
+            std::string cmd = "xdg-open " + std::string(pathString) + " &";
+            return system(cmd.c_str()) == 0;
+        }
+        return false;
     }
 
     g_free(uri);
-    return result == TRUE;
+    return true;
 }
 
-// Show a native desktop notification using notify-send
+// Show a native desktop notification via the org.freedesktop.portal.Notification
+// D-Bus interface.  This works both inside and outside a Flatpak sandbox — the
+// portal is available on the session bus in all modern desktop environments —
+// and avoids the dependency on the notify-send binary.
+static std::atomic<uint32_t> g_notificationCounter{0};
 void showNotification(const char* title, const char* body, const char* subtitle, bool silent) {
     if (!title) {
         fprintf(stderr, "ERROR: NULL title passed to showNotification\n");
         return;
     }
 
-    std::string titleStr(title);
+    // Combine subtitle and body
     std::string bodyStr;
-
-    // Combine subtitle and body if both exist
     if (subtitle && strlen(subtitle) > 0) {
         bodyStr = std::string(subtitle);
         if (body && strlen(body) > 0) {
@@ -7020,41 +7043,52 @@ void showNotification(const char* title, const char* body, const char* subtitle,
         bodyStr = std::string(body);
     }
 
-    // Build the notify-send command
-    // Escape single quotes in strings for shell safety
-    auto escapeForShell = [](const std::string& str) -> std::string {
-        std::string result;
-        for (char c : str) {
-            if (c == '\'') {
-                result += "'\\''";
-            } else {
-                result += c;
-            }
+    // Copy strings for the thread (title / body must outlive this stack frame).
+    // Assign a unique per-notification ID so rapid calls don't overwrite each other.
+    std::string titleStr(title);
+    bool silentCopy = silent;
+    std::string notifId = "electrobun-notification-" + std::to_string(g_notificationCounter.fetch_add(1));
+
+    std::thread([titleStr, bodyStr, silentCopy, notifId]() {
+        GError* busError = nullptr;
+        GDBusConnection* bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &busError);
+        if (!bus) {
+            fprintf(stderr, "showNotification: cannot connect to session bus: %s\n",
+                    busError ? busError->message : "(unknown)");
+            if (busError) g_error_free(busError);
+            return;
         }
-        return result;
-    };
 
-    std::string command = "notify-send";
+        GVariantBuilder notif;
+        g_variant_builder_init(&notif, G_VARIANT_TYPE_VARDICT);
+        g_variant_builder_add(&notif, "{sv}", "title",
+                              g_variant_new_string(titleStr.c_str()));
+        if (!bodyStr.empty())
+            g_variant_builder_add(&notif, "{sv}", "body",
+                                  g_variant_new_string(bodyStr.c_str()));
+        if (silentCopy)
+            g_variant_builder_add(&notif, "{sv}", "priority",
+                                  g_variant_new_string("low"));
 
-    // Add urgency hint (low for silent notifications)
-    if (silent) {
-        command += " --urgency=low";
-    }
+        GError* callError = nullptr;
+        g_dbus_connection_call_sync(
+            bus,
+            "org.freedesktop.portal.Desktop",
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.Notification",
+            "AddNotification",
+            g_variant_new("(s@a{sv})", notifId.c_str(),
+                          g_variant_builder_end(&notif)),
+            nullptr,
+            G_DBUS_CALL_FLAGS_NONE,
+            -1, nullptr, &callError);
 
-    // Add title
-    command += " '" + escapeForShell(titleStr) + "'";
-
-    // Add body if present
-    if (!bodyStr.empty()) {
-        command += " '" + escapeForShell(bodyStr) + "'";
-    }
-
-    // Execute asynchronously to not block
-    std::thread([command]() {
-        int result = system(command.c_str());
-        if (result != 0) {
-            fprintf(stderr, "Warning: notify-send failed (is libnotify-bin installed?)\n");
+        if (callError) {
+            fprintf(stderr, "showNotification: D-Bus call failed: %s\n", callError->message);
+            g_error_free(callError);
         }
+
+        g_object_unref(bus);
     }).detach();
 }
 
@@ -7076,32 +7110,32 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
             buttonLabel = "_Open";
         }
         
-        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        // Use GtkFileChooserNative so GTK3 routes the dialog through
+        // org.freedesktop.portal.FileChooser when running inside a Flatpak sandbox.
+        GtkFileChooserNative* native = gtk_file_chooser_native_new(
             "Open File",
             nullptr, // No parent window for now
             action,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            buttonLabel, GTK_RESPONSE_ACCEPT,
-            nullptr
+            buttonLabel, "_Cancel"
         );
-        
+
         // Set starting folder if provided
         if (startingFolder && strlen(startingFolder) > 0) {
-            gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), startingFolder);
+            gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(native), startingFolder);
         }
-        
+
         // Allow multiple selection if requested
-        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), allowsMultipleSelection != 0);
-        
+        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(native), allowsMultipleSelection != 0);
+
         // Set up file filters if provided
         if (allowedFileTypes && strlen(allowedFileTypes) > 0) {
             // Parse the allowed file types string (expected format: "*.jpg,*.png" or "Images|*.jpg;*.png|Documents|*.pdf;*.doc")
             std::string typesStr(allowedFileTypes);
-            
+
             // Simple parsing - just handle comma-separated extensions for now
             GtkFileFilter* filter = gtk_file_filter_new();
             gtk_file_filter_set_name(filter, "Allowed files");
-            
+
             // Split by comma or semicolon
             size_t pos = 0;
             std::string delimiter = ",";
@@ -7110,7 +7144,7 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
                 // Trim whitespace
                 pattern.erase(0, pattern.find_first_not_of(" \t"));
                 pattern.erase(pattern.find_last_not_of(" \t") + 1);
-                
+
                 gtk_file_filter_add_pattern(filter, pattern.c_str());
                 typesStr.erase(0, pos + delimiter.length());
             }
@@ -7120,25 +7154,25 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
                 typesStr.erase(typesStr.find_last_not_of(" \t") + 1);
                 gtk_file_filter_add_pattern(filter, typesStr.c_str());
             }
-            
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
-            
+
+            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(native), filter);
+
             // Also add "All files" filter
             GtkFileFilter* allFilter = gtk_file_filter_new();
             gtk_file_filter_set_name(allFilter, "All files");
             gtk_file_filter_add_pattern(allFilter, "*");
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(native), allFilter);
         }
-        
-        // Run the dialog
+
+        // Run the dialog (routes through portal when in Flatpak)
         static std::string resultString; // Static to persist after function returns
         resultString.clear();
-        
-        if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+
+        if (gtk_native_dialog_run(GTK_NATIVE_DIALOG(native)) == GTK_RESPONSE_ACCEPT) {
             if (allowsMultipleSelection != 0) {
-                GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
+                GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(native));
                 GSList* iter = fileList;
-                
+
                 while (iter != nullptr) {
                     if (!resultString.empty()) {
                         resultString += ","; // Separate multiple files with comma (like Mac)
@@ -7149,15 +7183,15 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
                 }
                 g_slist_free(fileList);
             } else {
-                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(native));
                 if (filename) {
                     resultString = filename;
                     g_free(filename);
                 }
             }
         }
-        
-        gtk_widget_destroy(dialog);
+
+        g_object_unref(native);
         
         return resultString.empty() ? nullptr : resultString.c_str();
     });
@@ -8999,10 +9033,8 @@ static WebKitWebsiteDataManager* getDataManagerForPartition(const char* partitio
             std::string partitionName = partition.substr(8);
 
             // Build paths with identifier/channel structure (consistent with CLI and updater)
-            char* home = getenv("HOME");
-            std::string homeStr = home ? std::string(home) : "/tmp";
-            std::string dataPath = buildPartitionPath(homeStr + "/.local/share", g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
-            std::string cachePath = buildPartitionPath(homeStr + "/.cache", g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
+            std::string dataPath = buildPartitionPath(getXdgDir("XDG_DATA_HOME", "/.local/share"), g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
+            std::string cachePath = buildPartitionPath(getXdgDir("XDG_CACHE_HOME", "/.cache"), g_electrobunIdentifier, g_electrobunChannel, "WebKit", partitionName);
 
             g_mkdir_with_parents(dataPath.c_str(), 0755);
             g_mkdir_with_parents(cachePath.c_str(), 0755);
