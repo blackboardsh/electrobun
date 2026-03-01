@@ -846,6 +846,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) WindowMoveHandler moveHandler;
     @property (nonatomic, assign) WindowResizeHandler resizeHandler;
     @property (nonatomic, assign) WindowFocusHandler focusHandler;
+    @property (nonatomic, assign) WindowKeyHandler keyHandler;
     @property (nonatomic, assign) uint32_t windowId;
     @property (nonatomic, strong) NSWindow *window;
 @end
@@ -2778,6 +2779,46 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 @end
 
 // ----------------------- WGPUViewImpl -----------------------
+@interface WGPUInputView : NSView
+@end
+
+@implementation WGPUInputView
+    - (uint32_t)modifierMaskFromEvent:(NSEvent*)event {
+        uint32_t mods = 0;
+        if ([event modifierFlags] & NSEventModifierFlagShift) mods |= 1 << 0;
+        if ([event modifierFlags] & NSEventModifierFlagControl) mods |= 1 << 1;
+        if ([event modifierFlags] & NSEventModifierFlagOption) mods |= 1 << 2;
+        if ([event modifierFlags] & NSEventModifierFlagCommand) mods |= 1 << 3;
+        return mods;
+    }
+    - (BOOL)acceptsFirstResponder {
+        return YES;
+    }
+    - (BOOL)becomeFirstResponder {
+        return YES;
+    }
+    - (void)keyDown:(NSEvent*)event {
+        WindowDelegate *delegate = (WindowDelegate *)self.window.delegate;
+        if (delegate && delegate.keyHandler) {
+            delegate.keyHandler(delegate.windowId,
+                                (uint32_t)[event keyCode],
+                                [self modifierMaskFromEvent:event],
+                                1,
+                                [event isARepeat] ? 1 : 0);
+        }
+    }
+    - (void)keyUp:(NSEvent*)event {
+        WindowDelegate *delegate = (WindowDelegate *)self.window.delegate;
+        if (delegate && delegate.keyHandler) {
+            delegate.keyHandler(delegate.windowId,
+                                (uint32_t)[event keyCode],
+                                [self modifierMaskFromEvent:event],
+                                0,
+                                0);
+        }
+    }
+@end
+
 @implementation WGPUViewImpl
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
@@ -2790,7 +2831,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-                NSView *view = [[NSView alloc] initWithFrame:frame];
+                NSView *view = [[WGPUInputView alloc] initWithFrame:frame];
                 view.wantsLayer = YES;
                 view.layer.backgroundColor = [[NSColor clearColor] CGColor];
 
@@ -2827,6 +2868,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];
                 CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
                 view.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+                [window makeFirstResponder:view];
 
                 if (self.pendingStartTransparent) {
                     window.opaque = NO;
@@ -5873,6 +5915,16 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         if (self.focusHandler) {
             self.focusHandler(self.windowId);
         }
+
+        // Prefer WGPU input view as first responder so key events reach GPU windows.
+        NSWindow *window = [notification object];
+        ContainerView *containerView = [window contentView];
+        for (AbstractView *abstractView in containerView.abstractViews) {
+            if (abstractView.nsView && [abstractView.nsView isKindOfClass:[WGPUInputView class]]) {
+                [window makeFirstResponder:abstractView.nsView];
+                break;
+            }
+        }
     }
 @end
 
@@ -6512,7 +6564,8 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      WindowCloseHandler zigCloseHandler,
                                                      WindowMoveHandler zigMoveHandler,
                                                      WindowResizeHandler zigResizeHandler,
-                                                     WindowFocusHandler zigFocusHandler) {
+                                                     WindowFocusHandler zigFocusHandler,
+                                                     WindowKeyHandler zigKeyHandler) {
     
     NSScreen *primaryScreen = [NSScreen screens][0];
     NSRect screenFrame = [primaryScreen frame];
@@ -6534,6 +6587,7 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     delegate.resizeHandler = zigResizeHandler;
     delegate.moveHandler = zigMoveHandler;
     delegate.focusHandler = zigFocusHandler;
+    delegate.keyHandler = zigKeyHandler;
     delegate.windowId = windowId;
     delegate.window = window;
     [window setDelegate:delegate];
@@ -6565,7 +6619,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   WindowCloseHandler zigCloseHandler,
   WindowMoveHandler zigMoveHandler,
   WindowResizeHandler zigResizeHandler,
-  WindowFocusHandler zigFocusHandler
+  WindowFocusHandler zigFocusHandler,
+  WindowKeyHandler zigKeyHandler
   ) {
 
     // Validate frame values - use defaults if NaN or invalid
@@ -6592,7 +6647,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             zigCloseHandler,
             zigMoveHandler,
             zigResizeHandler,
-            zigFocusHandler
+            zigFocusHandler,
+            zigKeyHandler
         );
 
         // Handle transparent window background

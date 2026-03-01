@@ -101,6 +101,7 @@ export const native = (() => {
 					FFIType.function, // moveHandler
 					FFIType.function, // resizeHandler
 					FFIType.function, // focusHandler
+					FFIType.function, // keyHandler
 				],
 				returns: FFIType.ptr,
 			},
@@ -740,6 +741,7 @@ export const ffi = {
 				windowMoveCallback,
 				windowResizeCallback,
 				windowFocusCallback,
+				windowKeyCallback,
 			);
 
 			if (!windowPtr) {
@@ -1631,6 +1633,27 @@ const windowFocusCallback = new JSCallback(
 	},
 	{
 		args: ["u32"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+const windowKeyCallback = new JSCallback(
+	(id, keyCode, modifiers, isDown, isRepeat) => {
+		const handler = isDown
+			? electrobunEventEmitter.events.window.keyDown
+			: electrobunEventEmitter.events.window.keyUp;
+		const event = handler({
+			id,
+			keyCode,
+			modifiers,
+			isRepeat: !!isRepeat,
+		});
+		electrobunEventEmitter.emitEvent(event);
+		electrobunEventEmitter.emitEvent(event, id);
+	},
+	{
+		args: ["u32", "u32", "u32", "u32", "u32"],
 		returns: "void",
 		threadsafe: true,
 	},

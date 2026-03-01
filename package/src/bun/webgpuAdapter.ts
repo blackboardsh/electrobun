@@ -2,7 +2,7 @@ import { WGPUView } from "./core/WGPUView";
 import { GpuWindow } from "./core/GpuWindow";
 import WGPU from "./webGPU";
 import { WGPUBridge } from "./proc/native";
-import { ptr, CString, type Pointer } from "bun:ffi";
+import { ptr, CString, toArrayBuffer, type Pointer } from "bun:ffi";
 
 const WGPUNative = WGPU.native;
 const WGPUSType_SurfaceSourceMetalLayer = 0x00000004;
@@ -253,9 +253,9 @@ function makeTextureDescriptor(
 ) {
 	const buffer = new ArrayBuffer(80);
 	const view = new DataView(buffer);
-	writePtr(view, 0, 0);
-	writePtr(view, 8, 0);
-	writeU64(view, 16, 0n);
+	writePtr(view, 0, 0); // nextInChain
+	writePtr(view, 8, 0); // label.ptr
+	writeU64(view, 16, 0n); // label.length
 	writeU64(view, 24, usage);
 	writeU32(view, 32, WGPUTextureDimension_2D);
 	writeU32(view, 36, width);
@@ -264,7 +264,7 @@ function makeTextureDescriptor(
 	writeU32(view, 48, format);
 	writeU32(view, 52, mipLevelCount);
 	writeU32(view, 56, sampleCount);
-	writeU32(view, 60, 0);
+	writeU32(view, 60, 0); // padding for size_t alignment
 	writeU64(view, 64, BigInt(viewFormatCount));
 	writePtr(view, 72, viewFormatsPtr ?? 0);
 	return { buffer, ptr: ptr(buffer) };
@@ -640,6 +640,7 @@ function makeSurfaceTexture() {
 
 function makeRenderPassColorAttachment(
 	viewPtr: number,
+	resolveTargetPtr: number | null,
 	clear = { r: 0, g: 0, b: 0, a: 1 },
 	loadOp = WGPULoadOp_Clear,
 	storeOp = WGPUStoreOp_Store,
@@ -650,7 +651,7 @@ function makeRenderPassColorAttachment(
 	writePtr(view, 8, viewPtr);
 	writeU32(view, 16, WGPU_DEPTH_SLICE_UNDEFINED);
 	writeU32(view, 20, 0);
-	writePtr(view, 24, 0);
+	writePtr(view, 24, resolveTargetPtr ?? 0);
 	writeU32(view, 32, loadOp);
 	writeU32(view, 36, storeOp);
 	writeF64(view, 40, clear.r);
@@ -865,26 +866,94 @@ class GPUQueue {
 		dataLayout: { bytesPerRow: number; rowsPerImage?: number },
 		size: { width: number; height: number; depthOrArrayLayers?: number },
 	) {
+		let bytesPerPixel = bytesPerPixelForFormat(destination.texture.format);
+		let width =
+			Number.isFinite(size.width) && size.width > 0
+				? size.width
+				: Math.max(
+						1,
+						Math.floor(
+							(dataLayout.bytesPerRow ?? data.byteLength) / bytesPerPixel,
+						),
+				  );
+		let height =
+			Number.isFinite(size.height) && size.height > 0
+				? size.height
+				: Math.max(1, dataLayout.rowsPerImage ?? 1);
+		const layers = size.depthOrArrayLayers ?? 1;
+		const inferredBpp = Math.floor(
+			data.byteLength / Math.max(1, width * height * layers),
+		);
+		if (inferredBpp > bytesPerPixel) {
+			bytesPerPixel = inferredBpp;
+		}
+		const exactRGBABytes = width * height * layers * 4;
+		if (data.byteLength === exactRGBABytes) {
+			bytesPerPixel = 4;
+		}
+		let minBytesPerRow = Math.max(1, width * bytesPerPixel);
+		const minExpectedSize = minBytesPerRow * height * layers;
+		if (data.byteLength > minExpectedSize && height > 0) {
+			const widthFromData = Math.floor(
+				data.byteLength / Math.max(1, height * layers * bytesPerPixel),
+			);
+			if (widthFromData > width) {
+				width = widthFromData;
+				minBytesPerRow = Math.max(1, width * bytesPerPixel);
+			}
+		}
+		let bytesPerRow = dataLayout.bytesPerRow ?? minBytesPerRow;
+		if (bytesPerRow < minBytesPerRow) bytesPerRow = minBytesPerRow;
+		const derivedRowBytes = Math.ceil(
+			data.byteLength / Math.max(1, height * layers),
+		);
+		if (bytesPerRow < derivedRowBytes) {
+			bytesPerRow = derivedRowBytes;
+		}
+		let rowsPerImage = dataLayout.rowsPerImage ?? height;
+		if (rowsPerImage === 0) rowsPerImage = height;
+
+		let writeData = data;
+		const needsPadding = bytesPerRow % 256 !== 0;
+		if (needsPadding) {
+			const aligned = alignTo(bytesPerRow, 256);
+			const srcStride = Math.max(
+				minBytesPerRow,
+				dataLayout.bytesPerRow ?? minBytesPerRow,
+			);
+			writeData = repackTextureData(
+				data,
+				srcStride,
+				aligned,
+				minBytesPerRow,
+				height,
+				rowsPerImage,
+				layers,
+			);
+			bytesPerRow = aligned;
+		}
+
 		const texInfo = makeTexelCopyTextureInfo(
 			destination.texture.ptr,
 			destination.mipLevel ?? 0,
 			destination.origin ?? {},
 		);
 		const layout = makeTexelCopyBufferLayout(
-			dataLayout.bytesPerRow,
-			dataLayout.rowsPerImage ?? 0,
+			(dataLayout as { offset?: number }).offset ?? 0,
+			bytesPerRow,
+			rowsPerImage,
 		);
 		const extent = makeExtent3D(
-			size.width,
-			size.height,
-			size.depthOrArrayLayers ?? 1,
+			width,
+			height,
+			layers,
 		);
 		WGPU_KEEPALIVE.push(texInfo.buffer, layout.buffer, extent.buffer);
 		WGPUNative.symbols.wgpuQueueWriteTexture(
 			this.ptr,
 			texInfo.ptr as any,
-			ptr(data),
-			data.byteLength,
+			ptr(writeData),
+			writeData.byteLength,
 			layout.ptr as any,
 			extent.ptr as any,
 		);
@@ -906,9 +975,6 @@ class GPUDevice {
 	}
 	createBuffer(descriptor: { size: number; usage: number; mappedAtCreation?: boolean }) {
 		let usage = toBigInt(descriptor.usage ?? 0);
-		if (descriptor.mappedAtCreation && (usage & WGPUBufferUsage_CopyDst) === 0n) {
-			usage |= WGPUBufferUsage_CopyDst;
-		}
 		const desc = makeBufferDescriptor(
 			descriptor.size,
 			usage,
@@ -1312,7 +1378,7 @@ class GPUDevice {
 			this.ptr,
 			desc.ptr as any,
 		);
-		return new GPUCommandEncoder(encoderPtr);
+		return new GPUCommandEncoder(encoderPtr, this);
 	}
 	addEventListener(type: string, handler: (event: any) => void) {
 		if (type !== "uncapturederror") return;
@@ -1343,13 +1409,13 @@ class GPUBuffer {
 		if (!this._mapped) {
 			return new ArrayBuffer(0);
 		}
+		const size = Math.max(0, _size ?? this.size - _offset);
 		const mapped = WGPUNative.symbols.wgpuBufferGetMappedRange(
 			this.ptr,
-			0n,
-			BigInt(this.size),
+			BigInt(_offset),
+			BigInt(size),
 		);
-		const view = (ptr as any)(mapped);
-		return view.buffer;
+		return toArrayBuffer(mapped as any, 0, size);
 	}
 	mapAsync() {
 		this._mapped = true;
@@ -1422,12 +1488,15 @@ class GPUCommandBuffer {
 
 class GPUCommandEncoder {
 	ptr: number;
-	constructor(ptr: number) {
+	_device: GPUDevice;
+	constructor(ptr: number, device: GPUDevice) {
 		this.ptr = ptr;
+		this._device = device;
 	}
 	beginRenderPass(descriptor: {
 		colorAttachments: Array<{
 			view: GPUTextureView;
+			resolveTarget?: GPUTextureView | null;
 			clearValue?: { r: number; g: number; b: number; a: number };
 			loadOp?: string;
 			storeOp?: string;
@@ -1447,6 +1516,7 @@ class GPUCommandEncoder {
 		const colorAttachments = descriptor.colorAttachments.map((c) =>
 			makeRenderPassColorAttachment(
 				c.view.ptr,
+				c.resolveTarget ? c.resolveTarget.ptr : null,
 				c.clearValue ?? { r: 0, g: 0, b: 0, a: 1 },
 				mapLoadOp(c.loadOp),
 				mapStoreOp(c.storeOp),
@@ -1493,6 +1563,36 @@ class GPUCommandEncoder {
 			passDesc.ptr as any,
 		);
 		return new GPURenderPassEncoder(passPtr);
+	}
+	copyBufferToTexture(
+		source: {
+			buffer: GPUBuffer;
+			offset?: number;
+			bytesPerRow?: number;
+			rowsPerImage?: number;
+		},
+		destination: {
+			texture: GPUTexture;
+			mipLevel?: number;
+			origin?: { x?: number; y?: number; z?: number };
+		},
+		size: { width: number; height: number; depthOrArrayLayers?: number },
+	) {
+		const offset = source.offset ?? 0;
+		const mapped = source.buffer.getMappedRange(0, source.buffer.size);
+		const data =
+			offset > 0
+				? new Uint8Array(mapped, offset)
+				: new Uint8Array(mapped);
+		this._device.queue.writeTexture(
+			destination,
+			data,
+			{
+				bytesPerRow: source.bytesPerRow ?? 0,
+				rowsPerImage: source.rowsPerImage ?? 0,
+			},
+			size,
+		);
 	}
 	finish() {
 		const cmdPtr = WGPUNative.symbols.wgpuCommandEncoderFinish(this.ptr, 0);
@@ -1677,7 +1777,7 @@ class GPUCanvasContext {
 		}
 		const texPtr = Number(surfaceTexture.view.getBigUint64(8, true));
 		LAST_SURFACE_PTR = this.surfacePtr;
-		return new GPUTexture(texPtr);
+		return new GPUTexture(texPtr, this.format);
 	}
 	present() {
 		return WGPUBridge.surfacePresent(this.surfacePtr as any);
@@ -1942,6 +2042,7 @@ function mapCullMode(mode?: string | number | null) {
 }
 
 function mapCompareFunction(fn?: string | number | null) {
+	if (fn == null) return 0;
 	if (typeof fn === "number") return fn;
 	switch (fn) {
 		case "never":
@@ -2171,20 +2272,39 @@ function makeTexelCopyTextureInfo(
 	const view = new DataView(buffer);
 	writePtr(view, 0, texturePtr);
 	writeU32(view, 8, mipLevel);
-	writeU32(view, 12, 0);
-	writeU32(view, 16, origin?.x ?? 0);
-	writeU32(view, 20, origin?.y ?? 0);
-	writeU32(view, 24, origin?.z ?? 0);
-	writeU32(view, 28, WGPUTextureAspect_All);
+	writeU32(view, 12, origin?.x ?? 0);
+	writeU32(view, 16, origin?.y ?? 0);
+	writeU32(view, 20, origin?.z ?? 0);
+	writeU32(view, 24, 0);
+	writeU32(view, 28, 0);
 	return { buffer, ptr: ptr(buffer) };
 }
 
-function makeTexelCopyBufferLayout(bytesPerRow: number, rowsPerImage: number) {
+function makeTexelCopyBufferLayout(
+	offset: number | bigint,
+	bytesPerRow: number,
+	rowsPerImage: number,
+) {
 	const buffer = new ArrayBuffer(16);
 	const view = new DataView(buffer);
-	writeU64(view, 0, BigInt(bytesPerRow));
-	writeU32(view, 8, rowsPerImage);
-	writeU32(view, 12, 0);
+	writeU64(view, 0, BigInt(offset));
+	writeU32(view, 8, bytesPerRow);
+	writeU32(view, 12, rowsPerImage);
+	return { buffer, ptr: ptr(buffer) };
+}
+
+function makeImageCopyBuffer(
+	bufferPtr: number,
+	offset: number,
+	bytesPerRow: number,
+	rowsPerImage: number,
+) {
+	const buffer = new ArrayBuffer(24);
+	const view = new DataView(buffer);
+	writeU64(view, 0, BigInt(offset));
+	writeU32(view, 8, bytesPerRow);
+	writeU32(view, 12, rowsPerImage);
+	writePtr(view, 16, bufferPtr);
 	return { buffer, ptr: ptr(buffer) };
 }
 
@@ -2195,6 +2315,82 @@ function makeExtent3D(width: number, height: number, depth: number) {
 	writeU32(view, 4, height);
 	writeU32(view, 8, depth);
 	return { buffer, ptr: ptr(buffer) };
+}
+
+function alignTo(value: number, alignment: number) {
+	return Math.ceil(value / alignment) * alignment;
+}
+
+function bytesPerPixelForFormat(format?: number) {
+	switch (format) {
+		case WGPUTextureFormat_R8Unorm:
+		case WGPUTextureFormat_R8Snorm:
+		case WGPUTextureFormat_R8Uint:
+		case WGPUTextureFormat_R8Sint:
+			return 1;
+		case WGPUTextureFormat_RG8Unorm:
+		case WGPUTextureFormat_RG8Snorm:
+		case WGPUTextureFormat_RG8Uint:
+		case WGPUTextureFormat_RG8Sint:
+			return 2;
+		case WGPUTextureFormat_BGRA8Unorm:
+		case WGPUTextureFormat_BGRA8UnormSrgb:
+		case WGPUTextureFormat_RGBA8Unorm:
+		case WGPUTextureFormat_RGBA8UnormSrgb:
+		case WGPUTextureFormat_Depth24Plus:
+		case WGPUTextureFormat_Depth24PlusStencil8:
+		case WGPUTextureFormat_Depth32Float:
+			return 4;
+		case WGPUTextureFormat_Depth32FloatStencil8:
+			return 8;
+		case WGPUTextureFormat_RG32Float:
+		case WGPUTextureFormat_RG32Uint:
+		case WGPUTextureFormat_RG32Sint:
+		case WGPUTextureFormat_RGBA16Float:
+		case WGPUTextureFormat_RGBA16Uint:
+		case WGPUTextureFormat_RGBA16Sint:
+			return 8;
+		case WGPUTextureFormat_RGBA32Uint:
+		case WGPUTextureFormat_RGBA32Sint:
+			return 16;
+		default:
+			return 4;
+	}
+}
+
+function repackTextureData(
+	data: ArrayBufferView,
+	srcStride: number,
+	dstStride: number,
+	minRowBytes: number,
+	height: number,
+	rowsPerImage: number,
+	layers: number,
+) {
+	const src = new Uint8Array(
+		data.buffer,
+		data.byteOffset,
+		data.byteLength,
+	);
+	const totalRows = rowsPerImage * layers;
+	const dst = new Uint8Array(dstStride * totalRows);
+	let srcOffset = 0;
+	let dstOffset = 0;
+
+	for (let layer = 0; layer < layers; layer += 1) {
+		for (let row = 0; row < rowsPerImage; row += 1) {
+			if (row < height) {
+				dst.set(
+					src.subarray(srcOffset, srcOffset + minRowBytes),
+					dstOffset,
+				);
+			}
+			srcOffset += srcStride;
+			dstOffset += dstStride;
+		}
+	}
+
+	return dst;
 }
 
 const webgpu = {

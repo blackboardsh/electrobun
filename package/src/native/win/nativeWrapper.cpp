@@ -4417,6 +4417,7 @@ typedef struct {
     WindowMoveHandler moveHandler;
     WindowResizeHandler resizeHandler;
     WindowFocusHandler focusHandler;
+    WindowKeyHandler keyHandler;
 } WindowData;
 
 
@@ -7271,7 +7272,8 @@ ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
                                          WindowCloseHandler zigCloseHandler,
                                          WindowMoveHandler zigMoveHandler,
                                          WindowResizeHandler zigResizeHandler,
-                                         WindowFocusHandler zigFocusHandler) {
+                                         WindowFocusHandler zigFocusHandler,
+                                         WindowKeyHandler zigKeyHandler) {
     // Stub implementation
     return new NSWindow();
 }
@@ -7293,7 +7295,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
-    WindowFocusHandler zigFocusHandler) {
+    WindowFocusHandler zigFocusHandler,
+    WindowKeyHandler zigKeyHandler) {
 
     // Everything GUI-related needs to be dispatched to main thread
     HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
@@ -7318,6 +7321,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         data->moveHandler = zigMoveHandler;
         data->resizeHandler = zigResizeHandler;
         data->focusHandler = zigFocusHandler;
+        data->keyHandler = zigKeyHandler;
 
         // Map style mask to Windows style
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default

@@ -5841,7 +5841,7 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 // Mac-compatible function for Linux
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
-                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback) {
+                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback) {
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
         return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
