@@ -36,6 +36,7 @@
 #include <condition_variable>
 #include <fstream>
 #include <set>
+#include "dawn/webgpu.h"
 
 // Shared cross-platform utilities
 #include "../shared/glob_match.h"
@@ -6259,26 +6260,337 @@ ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView* abstractView) {
     return nullptr;
 }
 
-// WGPU main-thread shims (no-op on Linux for now)
+// ----------------------- WGPU Main-Thread Shims -----------------------
+
+typedef void* (*PFN_wgpuInstanceCreateSurface)(void* instance, const void* descriptor);
+typedef void (*PFN_wgpuSurfaceConfigure)(void* surface, const void* config);
+typedef void (*PFN_wgpuSurfaceGetCurrentTexture)(void* surface, void* surfaceTexture);
+typedef int32_t (*PFN_wgpuSurfacePresent)(void* surface);
+typedef WGPUFuture (*PFN_wgpuQueueOnSubmittedWorkDone)(WGPUQueue queue, WGPUQueueWorkDoneCallbackInfo callbackInfo);
+typedef WGPUFuture (*PFN_wgpuBufferMapAsync)(WGPUBuffer buffer, WGPUMapMode mode, size_t offset, size_t size, WGPUBufferMapCallbackInfo callbackInfo);
+typedef WGPUWaitStatus (*PFN_wgpuInstanceWaitAny)(WGPUInstance instance, size_t futureCount, WGPUFutureWaitInfo* futures, uint64_t timeoutNS);
+typedef void* (*PFN_wgpuBufferGetMappedRange)(WGPUBuffer buffer, size_t offset, size_t size);
+typedef void* (*PFN_wgpuBufferGetConstMappedRange)(WGPUBuffer buffer, size_t offset, size_t size);
+typedef void (*PFN_wgpuBufferUnmap)(WGPUBuffer buffer);
+
+static void* wgpuLibHandle = nullptr;
+static PFN_wgpuInstanceCreateSurface p_wgpuInstanceCreateSurface = nullptr;
+static PFN_wgpuSurfaceConfigure p_wgpuSurfaceConfigure = nullptr;
+static PFN_wgpuSurfaceGetCurrentTexture p_wgpuSurfaceGetCurrentTexture = nullptr;
+static PFN_wgpuSurfacePresent p_wgpuSurfacePresent = nullptr;
+static PFN_wgpuQueueOnSubmittedWorkDone p_wgpuQueueOnSubmittedWorkDone = nullptr;
+static PFN_wgpuBufferMapAsync p_wgpuBufferMapAsync = nullptr;
+static PFN_wgpuInstanceWaitAny p_wgpuInstanceWaitAny = nullptr;
+static PFN_wgpuBufferGetMappedRange p_wgpuBufferGetMappedRange = nullptr;
+static PFN_wgpuBufferGetConstMappedRange p_wgpuBufferGetConstMappedRange = nullptr;
+static PFN_wgpuBufferUnmap p_wgpuBufferUnmap = nullptr;
+
+static void* loadWgpuLibrary() {
+    if (wgpuLibHandle) return wgpuLibHandle;
+    std::string execDir = getExecutableDir();
+    std::vector<std::string> candidates = {
+        execDir + "/libwebgpu_dawn.so",
+        execDir + "/../Resources/libwebgpu_dawn.so",
+    };
+    for (const auto& path : candidates) {
+        wgpuLibHandle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (wgpuLibHandle) break;
+    }
+    if (!wgpuLibHandle) {
+        wgpuLibHandle = dlopen("libwebgpu_dawn.so", RTLD_NOW | RTLD_LOCAL);
+    }
+    if (!wgpuLibHandle) {
+        fprintf(stderr, "WGPU: failed to load libwebgpu_dawn.so: %s\n", dlerror());
+    }
+    return wgpuLibHandle;
+}
+
+static bool ensureWgpuSymbols() {
+    if (p_wgpuInstanceCreateSurface && p_wgpuSurfaceConfigure && p_wgpuSurfaceGetCurrentTexture && p_wgpuSurfacePresent
+        && p_wgpuQueueOnSubmittedWorkDone && p_wgpuBufferMapAsync && p_wgpuInstanceWaitAny
+        && p_wgpuBufferGetMappedRange && p_wgpuBufferUnmap) {
+        return true;
+    }
+    void* handle = loadWgpuLibrary();
+    if (!handle) return false;
+    p_wgpuInstanceCreateSurface = (PFN_wgpuInstanceCreateSurface)dlsym(handle, "wgpuInstanceCreateSurface");
+    p_wgpuSurfaceConfigure = (PFN_wgpuSurfaceConfigure)dlsym(handle, "wgpuSurfaceConfigure");
+    p_wgpuSurfaceGetCurrentTexture = (PFN_wgpuSurfaceGetCurrentTexture)dlsym(handle, "wgpuSurfaceGetCurrentTexture");
+    p_wgpuSurfacePresent = (PFN_wgpuSurfacePresent)dlsym(handle, "wgpuSurfacePresent");
+    p_wgpuQueueOnSubmittedWorkDone = (PFN_wgpuQueueOnSubmittedWorkDone)dlsym(handle, "wgpuQueueOnSubmittedWorkDone");
+    p_wgpuBufferMapAsync = (PFN_wgpuBufferMapAsync)dlsym(handle, "wgpuBufferMapAsync");
+    p_wgpuInstanceWaitAny = (PFN_wgpuInstanceWaitAny)dlsym(handle, "wgpuInstanceWaitAny");
+    p_wgpuBufferGetMappedRange = (PFN_wgpuBufferGetMappedRange)dlsym(handle, "wgpuBufferGetMappedRange");
+    p_wgpuBufferGetConstMappedRange = (PFN_wgpuBufferGetConstMappedRange)dlsym(handle, "wgpuBufferGetConstMappedRange");
+    p_wgpuBufferUnmap = (PFN_wgpuBufferUnmap)dlsym(handle, "wgpuBufferUnmap");
+    if (!p_wgpuInstanceCreateSurface || !p_wgpuSurfaceConfigure || !p_wgpuSurfaceGetCurrentTexture || !p_wgpuSurfacePresent
+        || !p_wgpuQueueOnSubmittedWorkDone || !p_wgpuBufferMapAsync || !p_wgpuInstanceWaitAny
+        || !p_wgpuBufferGetMappedRange || !p_wgpuBufferUnmap) {
+        fprintf(stderr, "WGPU: missing symbols (create=%p configure=%p getTexture=%p present=%p)\n",
+                p_wgpuInstanceCreateSurface, p_wgpuSurfaceConfigure, p_wgpuSurfaceGetCurrentTexture, p_wgpuSurfacePresent);
+        return false;
+    }
+    return true;
+}
+
+static void* runOnMainThreadSyncPtr(std::function<void*()> fn) {
+    return dispatch_sync_main([&]() -> void* { return fn(); });
+}
+
+static void runOnMainThreadSyncVoid(std::function<void()> fn) {
+    dispatch_sync_main_void([&]() { fn(); });
+}
+
 ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descriptor) {
-    (void)instance;
-    (void)descriptor;
-    return nullptr;
+    if (!ensureWgpuSymbols()) return nullptr;
+    return runOnMainThreadSyncPtr([&]() -> void* {
+        return p_wgpuInstanceCreateSurface(instance, descriptor);
+    });
 }
 
 ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(void* surface, void* config) {
-    (void)surface;
-    (void)config;
+    if (!ensureWgpuSymbols()) return;
+    runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceConfigure(surface, config); });
 }
 
 ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
-    (void)surface;
-    (void)surfaceTexture;
+    if (!ensureWgpuSymbols()) return;
+    runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture); });
 }
 
 ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
-    (void)surface;
+    if (!ensureWgpuSymbols()) return 0;
+    return (int32_t)(intptr_t)runOnMainThreadSyncPtr([&]() -> void* {
+        return (void*)(intptr_t)p_wgpuSurfacePresent(surface);
+    });
+}
+
+ELECTROBUN_EXPORT uint64_t wgpuQueueOnSubmittedWorkDoneShim(void* queue, void* callbackInfo) {
+    if (!ensureWgpuSymbols()) return 0;
+    if (!callbackInfo) return 0;
+    WGPUQueueWorkDoneCallbackInfo info = *(WGPUQueueWorkDoneCallbackInfo*)callbackInfo;
+    WGPUFuture future = p_wgpuQueueOnSubmittedWorkDone((WGPUQueue)queue, info);
+    return future.id;
+}
+
+ELECTROBUN_EXPORT uint64_t wgpuBufferMapAsyncShim(void* buffer, uint64_t mode, uint64_t offset, uint64_t size, void* callbackInfo) {
+    if (!ensureWgpuSymbols()) return 0;
+    if (!callbackInfo) return 0;
+    WGPUBufferMapCallbackInfo info = *(WGPUBufferMapCallbackInfo*)callbackInfo;
+    WGPUFuture future = p_wgpuBufferMapAsync((WGPUBuffer)buffer, (WGPUMapMode)mode, (size_t)offset, (size_t)size, info);
+    return future.id;
+}
+
+ELECTROBUN_EXPORT int32_t wgpuInstanceWaitAnyShim(void* instance, uint64_t futureId, uint64_t timeoutNS) {
+    if (!ensureWgpuSymbols()) return 0;
+    if (!instance || !futureId) return 0;
+    WGPUFutureWaitInfo info;
+    info.future.id = futureId;
+    info.completed = WGPU_FALSE;
+    WGPUWaitStatus status = p_wgpuInstanceWaitAny((WGPUInstance)instance, 1, &info, timeoutNS);
+    if (status == WGPUWaitStatus_Success && info.completed) return 1;
     return 0;
+}
+
+ELECTROBUN_EXPORT uint8_t* wgpuBufferReadSyncShim(
+    void* instance,
+    void* buffer,
+    uint64_t offset,
+    uint64_t size,
+    uint64_t timeoutNS,
+    uint64_t* outSize
+) {
+    if (!ensureWgpuSymbols()) return nullptr;
+    if (!instance || !buffer || size == 0) return nullptr;
+
+    WGPUBufferMapCallbackInfo mapInfo = {};
+    mapInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    mapInfo.callback = nullptr;
+    mapInfo.userdata1 = nullptr;
+    mapInfo.userdata2 = nullptr;
+
+    WGPUFuture mapFuture = p_wgpuBufferMapAsync(
+        (WGPUBuffer)buffer,
+        WGPUMapMode_Read,
+        (size_t)offset,
+        (size_t)size,
+        mapInfo
+    );
+
+    WGPUFutureWaitInfo waitInfo;
+    waitInfo.future = mapFuture;
+    waitInfo.completed = WGPU_FALSE;
+    WGPUWaitStatus status = p_wgpuInstanceWaitAny(
+        (WGPUInstance)instance,
+        1,
+        &waitInfo,
+        timeoutNS
+    );
+
+    if (status != WGPUWaitStatus_Success || !waitInfo.completed) {
+        return nullptr;
+    }
+
+    void* mapped = nullptr;
+    if (p_wgpuBufferGetConstMappedRange) {
+        mapped = p_wgpuBufferGetConstMappedRange((WGPUBuffer)buffer, (size_t)offset, (size_t)size);
+    }
+    if (!mapped) {
+        mapped = p_wgpuBufferGetMappedRange((WGPUBuffer)buffer, (size_t)offset, (size_t)size);
+    }
+    if (!mapped) return nullptr;
+
+    uint8_t* out = (uint8_t*)malloc((size_t)size);
+    if (!out) return nullptr;
+    memcpy(out, mapped, (size_t)size);
+    p_wgpuBufferUnmap((WGPUBuffer)buffer);
+
+    if (outSize) *outSize = size;
+    return out;
+}
+
+ELECTROBUN_EXPORT int32_t wgpuBufferReadSyncIntoShim(
+    void* instance,
+    void* buffer,
+    uint64_t offset,
+    uint64_t size,
+    uint64_t timeoutNS,
+    void* dst
+) {
+    if (!ensureWgpuSymbols()) return 0;
+    if (!instance || !buffer || !dst || size == 0) return 0;
+
+    WGPUBufferMapCallbackInfo mapInfo = {};
+    mapInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    mapInfo.callback = nullptr;
+    mapInfo.userdata1 = nullptr;
+    mapInfo.userdata2 = nullptr;
+
+    WGPUFuture mapFuture = p_wgpuBufferMapAsync(
+        (WGPUBuffer)buffer,
+        WGPUMapMode_Read,
+        (size_t)offset,
+        (size_t)size,
+        mapInfo
+    );
+
+    WGPUFutureWaitInfo waitInfo;
+    waitInfo.future = mapFuture;
+    waitInfo.completed = WGPU_FALSE;
+    WGPUWaitStatus status = p_wgpuInstanceWaitAny(
+        (WGPUInstance)instance,
+        1,
+        &waitInfo,
+        timeoutNS
+    );
+
+    if (status != WGPUWaitStatus_Success || !waitInfo.completed) {
+        return 0;
+    }
+
+    void* mapped = nullptr;
+    if (p_wgpuBufferGetConstMappedRange) {
+        mapped = p_wgpuBufferGetConstMappedRange((WGPUBuffer)buffer, (size_t)offset, (size_t)size);
+    }
+    if (!mapped) {
+        mapped = p_wgpuBufferGetMappedRange((WGPUBuffer)buffer, (size_t)offset, (size_t)size);
+    }
+    if (!mapped) return 0;
+    memcpy(dst, mapped, (size_t)size);
+    p_wgpuBufferUnmap((WGPUBuffer)buffer);
+    return 1;
+}
+
+struct WGPUReadbackJob {
+    std::atomic<int> done;
+    std::atomic<int> ok;
+    std::atomic<int> status;
+    uint8_t* dst;
+    size_t size;
+    WGPUBuffer buffer;
+    size_t offset;
+};
+
+static void wgpuReadbackCallback(
+    WGPUMapAsyncStatus status,
+    WGPUStringView /*message*/,
+    void* userdata1,
+    void* /*userdata2*/
+) {
+    WGPUReadbackJob* job = (WGPUReadbackJob*)userdata1;
+    if (!job) return;
+    if (status != WGPUMapAsyncStatus_Success) {
+        job->ok.store(0);
+        job->status.store(2);
+        job->done.store(1);
+        return;
+    }
+    void* mapped = nullptr;
+    if (p_wgpuBufferGetConstMappedRange) {
+        mapped = p_wgpuBufferGetConstMappedRange(job->buffer, job->offset, job->size);
+    }
+    if (!mapped) {
+        mapped = p_wgpuBufferGetMappedRange(job->buffer, job->offset, job->size);
+    }
+    if (mapped && job->dst) {
+        memcpy(job->dst, mapped, job->size);
+        job->ok.store(1);
+        job->status.store(1);
+    } else {
+        job->ok.store(0);
+        job->status.store(3);
+    }
+    p_wgpuBufferUnmap(job->buffer);
+    job->done.store(1);
+}
+
+ELECTROBUN_EXPORT void* wgpuBufferReadbackBeginShim(
+    void* buffer,
+    uint64_t offset,
+    uint64_t size,
+    void* dst
+) {
+    if (!ensureWgpuSymbols()) return nullptr;
+    if (!buffer || !dst || size == 0) return nullptr;
+
+    WGPUReadbackJob* job = (WGPUReadbackJob*)malloc(sizeof(WGPUReadbackJob));
+    if (!job) return nullptr;
+    job->done.store(0);
+    job->ok.store(0);
+    job->status.store(0);
+    job->dst = (uint8_t*)dst;
+    job->size = (size_t)size;
+    job->buffer = (WGPUBuffer)buffer;
+    job->offset = (size_t)offset;
+
+    WGPUBufferMapCallbackInfo mapInfo = {};
+    mapInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    mapInfo.callback = wgpuReadbackCallback;
+    mapInfo.userdata1 = job;
+    mapInfo.userdata2 = nullptr;
+
+    p_wgpuBufferMapAsync(
+        (WGPUBuffer)buffer,
+        WGPUMapMode_Read,
+        (size_t)offset,
+        (size_t)size,
+        mapInfo
+    );
+
+    return job;
+}
+
+ELECTROBUN_EXPORT int32_t wgpuBufferReadbackStatusShim(void* jobPtr) {
+    if (!jobPtr) return 2;
+    WGPUReadbackJob* job = (WGPUReadbackJob*)jobPtr;
+    if (job->done.load() == 0) return 0;
+    return job->status.load();
+}
+
+ELECTROBUN_EXPORT void wgpuBufferReadbackFreeShim(void* jobPtr) {
+    if (!jobPtr) return;
+    WGPUReadbackJob* job = (WGPUReadbackJob*)jobPtr;
+    free(job);
 }
 
 ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
