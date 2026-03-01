@@ -12,7 +12,7 @@ webgpu.install();
 const display = Screen.getPrimaryDisplay();
 const workArea = display.workArea;
 
-const SIZE = 16;
+const SIZE = 32;
 const INPUT_LEN = SIZE * SIZE;
 const CLASS_COUNT = 10;
 const BufferUsage = {
@@ -48,14 +48,23 @@ function build7SegTemplates() {
     }
   };
 
+  const margin = Math.round(SIZE * 0.18);
+  const thickness = 1;
+  const long = SIZE - margin * 2;
+  const midY = Math.floor(SIZE / 2);
+  const topY = margin - 1;
+  const bottomY = SIZE - margin;
+  const leftX = margin - 1;
+  const rightX = SIZE - margin;
+  const vHeight = Math.max(1, Math.floor((SIZE - margin * 2) / 2) - 1);
   const segments = [
-    { x: 3, y: 1, w: 10, h: 2 }, // top
-    { x: 2, y: 3, w: 2, h: 5 }, // upper left
-    { x: 12, y: 3, w: 2, h: 5 }, // upper right
-    { x: 3, y: 8, w: 10, h: 2 }, // middle
-    { x: 2, y: 10, w: 2, h: 5 }, // lower left
-    { x: 12, y: 10, w: 2, h: 5 }, // lower right
-    { x: 3, y: 14, w: 10, h: 2 }, // bottom
+    { x: margin, y: topY, w: long, h: thickness }, // top
+    { x: leftX, y: margin, w: thickness, h: vHeight }, // upper left
+    { x: rightX, y: margin, w: thickness, h: vHeight }, // upper right
+    { x: margin, y: midY, w: long, h: thickness }, // middle
+    { x: leftX, y: midY + 1, w: thickness, h: vHeight }, // lower left
+    { x: rightX, y: midY + 1, w: thickness, h: vHeight }, // lower right
+    { x: margin, y: bottomY, w: long, h: thickness }, // bottom
   ];
 
   const digitSegments = [
@@ -120,6 +129,56 @@ function cpuClassify(input: Float32Array) {
     }
   }
   return { prediction: bestIdx, scores };
+}
+
+function applyHeuristics(scores: number[], input: Float32Array) {
+  const size = SIZE;
+  const midX = Math.floor(size / 2);
+  let vCol = 0;
+  let vEnergy = 0;
+  let hMid = 0;
+  let hTop = 0;
+  let hBottom = 0;
+  let leftEnergy = 0;
+  let rightEnergy = 0;
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const v = input[y * size + x]!;
+      if (Math.abs(x - midX) <= 1) vCol += v;
+      if (Math.abs(y - Math.floor(size / 2)) <= 1) hMid += v;
+      if (y < 3) hTop += v;
+      if (y > size - 4) hBottom += v;
+      vEnergy += v;
+      if (x < size / 2) leftEnergy += v;
+      else rightEnergy += v;
+    }
+  }
+
+  const vColRatio = vCol / (vEnergy + 1e-6);
+  const leftRatio = leftEnergy / (vEnergy + 1e-6);
+  const rightRatio = rightEnergy / (vEnergy + 1e-6);
+  const topRatio = hTop / (vEnergy + 1e-6);
+  const bottomRatio = hBottom / (vEnergy + 1e-6);
+  const midRatio = hMid / (vEnergy + 1e-6);
+
+  if (vColRatio > 0.22 && leftRatio < 0.5 && rightRatio < 0.7) {
+    scores[1] = (scores[1] ?? 0) + 0.25;
+  }
+
+  if (midRatio > 0.22 && topRatio > 0.12 && bottomRatio > 0.12) {
+    scores[8] = (scores[8] ?? 0) + 0.2;
+  }
+
+  if (rightRatio > 0.62 && leftRatio < 0.4) {
+    scores[7] = (scores[7] ?? 0) + 0.15;
+  }
+
+  if (leftRatio > 0.58 && rightRatio > 0.38 && topRatio > 0.1) {
+    scores[2] = (scores[2] ?? 0) + 0.18;
+  }
+
+  return scores;
 }
 
 const GPU_ENABLED = true;
@@ -357,26 +416,28 @@ const rpc = BrowserView.defineRPC<MlpRPC>({
           }
           const inputNorm = Math.sqrt(inputEnergy) || 1;
 
-          let source = "cpu";
-          let scores = cpuClassify(input).scores;
-          await ensureGPU();
-          if (gpuReady) {
-            try {
-              const gpuScores = await gpuClassify(input);
-              if (gpuScores && gpuScores.length === CLASS_COUNT) {
-                scores = Array.from(
-                  gpuScores,
-                  (v, i) => v / (templateNorms[i]! * inputNorm),
-                );
-                source = "gpu";
-              } else {
-                throw new Error("gpu scores unavailable");
-              }
-            } catch (err) {
-              console.log("[wgpu-mlp] GPU classify failed", String(err));
-              source = "cpu";
+        let source = "cpu";
+        let scores = cpuClassify(input).scores;
+        await ensureGPU();
+        if (gpuReady) {
+          try {
+            const gpuScores = await gpuClassify(input);
+            if (gpuScores && gpuScores.length === CLASS_COUNT) {
+              scores = Array.from(
+                gpuScores,
+                (v, i) => v / (templateNorms[i]! * inputNorm),
+              );
+              source = "gpu";
+            } else {
+              throw new Error("gpu scores unavailable");
             }
+          } catch (err) {
+            console.log("[wgpu-mlp] GPU classify failed", String(err));
+            source = "cpu";
           }
+        }
+
+        scores = applyHeuristics(scores, input);
 
           let best = 0;
           let bestVal = -Infinity;

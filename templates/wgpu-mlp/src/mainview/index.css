@@ -54,6 +54,21 @@ header p {
   min-width: 160px;
 }
 
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+#preview {
+  border: 1px solid #293043;
+  background: #0f121a;
+  border-radius: 8px;
+  image-rendering: pixelated;
+}
+
 .controls button {
   background: #1e2434;
   border: 1px solid #2c354a;
