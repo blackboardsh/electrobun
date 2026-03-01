@@ -447,7 +447,7 @@ const rpc = BrowserView.defineRPC<MlpRPC>({
 const win = new BrowserWindow({
   title: "WGPU MLP Digit Demo",
   url: "views://mainview/index.html",
-  frame: { width: 980, height: 720, x: workArea.x + 80, y: workArea.y + 60 },
+  frame: { width: 1040, height: 780, x: workArea.x + 80, y: workArea.y + 60 },
   rpc,
 });
 
