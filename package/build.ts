@@ -1426,15 +1426,39 @@ async function vendorCEF() {
 			await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef_temp' -Force | Out-Null"`;
 			await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef' -Force | Out-Null"`;
 
-			// Extract tar.bz2 using Windows built-in tar
-			console.log("Extracting with tar (this may take a few minutes)...");
-			console.log(
-				"Note: Windows tar extraction of bz2 files can be slow, please be patient...",
-			);
+			async function ensure7zip() {
+				try {
+					await $`where 7z`.quiet();
+					return true;
+				} catch {
+					console.log("7-Zip not found, installing for faster extraction...");
+					try {
+						await $`winget install 7zip.7zip --silent --accept-source-agreements --accept-package-agreements`;
+						console.log("7-Zip installed");
+						return true;
+					} catch {
+						console.warn("Could not install 7-Zip, will use tar (slow)");
+						return false;
+					}
+				}
+			}
 
-			// Windows tar doesn't support many options, just use basic extraction
-			const relativeTempPath = relative("vendors/cef_temp", tempPath);
-			await $`cd vendors/cef_temp && tar -xjf "${relativeTempPath}"`;
+			const has7zip = await ensure7zip();
+
+			if (has7zip) {
+				console.log("Extracting with 7-Zip (2-step process)...");
+				// Step 1: Decompress .bz2 to .tar
+				await $`7z x "${tempPath}" -o"vendors/cef_temp" -y`;
+				// Step 2: Extract .tar contents
+				const tarFile = join("vendors/cef_temp", basename(tempPath, ".bz2"));
+				await $`7z x "${tarFile}" -o"vendors/cef_temp" -y`;
+				// Clean up intermediate .tar file
+				await $`powershell -command "Remove-Item '${tarFile}' -Force"`;
+			} else {
+				console.log("Extracting with tar (this will take 10-30 minutes)...");
+				const relativeTempPath = relative("vendors/cef_temp", tempPath);
+				await $`cd vendors/cef_temp && tar -xjf "${relativeTempPath}"`;
+			}
 
 			// Check what was extracted
 			const tempDir = "vendors/cef_temp";
