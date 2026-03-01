@@ -5882,7 +5882,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 nullptr);
                             
                             
-                            // Add preload scripts - TEST ADDITION
+                            // Add preload scripts
                             std::string combinedScript;
                             if (!view->electrobunScript.empty()) {
                                 combinedScript += view->electrobunScript;
@@ -5891,7 +5891,17 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 if (!combinedScript.empty()) {
                                     combinedScript += "\n";
                                 }
-                                combinedScript += view->customScript;
+                                // Resolve views:// URLs to file content (matching macOS behavior)
+                                if (view->customScript.substr(0, 8) == "views://") {
+                                    std::string fileContent = loadViewsFile(view->customScript.substr(8));
+                                    if (!fileContent.empty()) {
+                                        combinedScript += fileContent;
+                                    } else {
+                                        std::cout << "[WebView2] Could not read custom preload script from: " << view->customScript << std::endl;
+                                    }
+                                } else {
+                                    combinedScript += view->customScript;
+                                }
                             }
 
                             // Add Ctrl+Click detection and navigation rules handler
