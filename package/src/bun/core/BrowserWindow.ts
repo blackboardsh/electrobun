@@ -36,6 +36,8 @@ export type WindowOptionsType<T = undefined> = {
 	// Use for untrusted content (remote URLs) to prevent malicious sites from
 	// accessing internal APIs, creating OOPIFs, or communicating with Bun
 	sandbox: boolean;
+	/** Whether to show the window immediately on creation. Default: true */
+	show?: boolean;
 };
 
 const defaultOptions: WindowOptionsType = {
@@ -54,6 +56,7 @@ const defaultOptions: WindowOptionsType = {
 	transparent: false,
 	navigationRules: null,
 	sandbox: false,
+	show: true,
 };
 
 export const BrowserWindowMap: {
@@ -124,7 +127,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
 
-		this.init(options);
+		this.init({ ...options, show: options.show ?? defaultOptions.show });
 	}
 
 	init({
@@ -132,6 +135,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		styleMask,
 		titleBarStyle,
 		transparent,
+		show,
 	}: Partial<WindowOptionsType<T>>) {
 		this.ptr = ffi.request.createWindow({
 			id: this.id,
@@ -174,6 +178,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
+			show: show ?? true,
 		}) as Pointer;
 
 		BrowserWindowMap[this.id] = this;
