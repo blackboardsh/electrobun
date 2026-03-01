@@ -1,0 +1,108 @@
+:root {
+  color-scheme: dark;
+  font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;
+  background: #0b0d12;
+  color: #e6e8ee;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: #0b0d12;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+}
+
+header h1 {
+  margin: 0 0 6px 0;
+  font-size: 20px;
+}
+
+header p {
+  margin: 0;
+  color: #9aa3b2;
+  font-size: 13px;
+}
+
+.panel {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+#draw {
+  border: 1px solid #293043;
+  background: #0f121a;
+  border-radius: 12px;
+  cursor: crosshair;
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.6);
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 160px;
+}
+
+.controls button {
+  background: #1e2434;
+  border: 1px solid #2c354a;
+  color: #e6e8ee;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+.output {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.prediction {
+  padding: 16px;
+  border-radius: 12px;
+  background: #151a26;
+  border: 1px solid #283044;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.prediction strong {
+  font-size: 32px;
+}
+
+#scores {
+  margin: 0;
+  padding: 16px;
+  border-radius: 12px;
+  background: #151a26;
+  border: 1px solid #283044;
+  min-height: 120px;
+}
+
+footer {
+  font-size: 12px;
+  color: #7f8796;
+}

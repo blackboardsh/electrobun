@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WGPU MLP Digit Demo</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <h1>GPU MLP Digit Demo</h1>
+        <p>Draw a digit (0-9) in the box. Inference runs in Bun using WebGPU.</p>
+      </header>
+      <div class="panel">
+        <canvas id="draw" width="280" height="280"></canvas>
+        <div class="controls">
+          <button id="clear">Clear</button>
+          <label>
+            Brush
+            <input id="brush" type="range" min="6" max="28" value="16" />
+          </label>
+          <label>
+            Smoothing
+            <input id="smooth" type="range" min="0" max="1" step="0.1" value="0.4" />
+          </label>
+        </div>
+      </div>
+      <div class="output">
+        <div class="prediction">
+          <span>Prediction</span>
+          <strong id="pred">-</strong>
+        </div>
+        <pre id="scores"></pre>
+      </div>
+      <footer>
+        <span id="status">Idle</span>
+      </footer>
+    </div>
+    <script type="module" src="index.js"></script>
+  </body>
+</html>

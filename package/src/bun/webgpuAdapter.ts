@@ -2,7 +2,7 @@ import { WGPUView } from "./core/WGPUView";
 import { GpuWindow } from "./core/GpuWindow";
 import WGPU from "./webGPU";
 import { WGPUBridge } from "./proc/native";
-import { ptr, CString, toArrayBuffer, type Pointer } from "bun:ffi";
+import { ptr, CString, toArrayBuffer, type Pointer, JSCallback } from "bun:ffi";
 import { inflateSync } from "zlib";
 
 const WGPUNative = WGPU.native;
@@ -101,6 +101,8 @@ const WGPUFilterMode_Nearest = 0x00000001;
 const WGPUFilterMode_Linear = 0x00000002;
 const WGPUMipmapFilterMode_Nearest = 0x00000001;
 const WGPUMipmapFilterMode_Linear = 0x00000002;
+const WGPUBufferUsage_MapRead = 0x0000000000000001n;
+const WGPUBufferUsage_MapWrite = 0x0000000000000002n;
 const WGPUBufferUsage_CopySrc = 0x0000000000000004n;
 const WGPUBufferUsage_CopyDst = 0x0000000000000008n;
 const WGPUBufferUsage_Index = 0x0000000000000010n;
@@ -109,6 +111,10 @@ const WGPUBufferUsage_Uniform = 0x0000000000000040n;
 const WGPUBufferUsage_Storage = 0x0000000000000080n;
 const WGPUBufferUsage_Indirect = 0x0000000000000100n;
 const WGPUBufferUsage_QueryResolve = 0x0000000000000200n;
+const WGPUMapMode_Read = 0x0000000000000001n;
+const WGPUMapMode_Write = 0x0000000000000002n;
+const WGPUCallbackMode_AllowSpontaneous = 0x00000003;
+const WGPUBufferMapState_Mapped = 0x00000003;
 const WGPUColorWriteMask_All = 0x000000000000000F;
 const WGPUBlendOperation_Add = 0x00000001;
 const WGPUBlendFactor_One = 0x00000002;
@@ -138,6 +144,24 @@ const WGPU_DEPTH_SLICE_UNDEFINED = 0xffffffff;
 const WGPU_KEEPALIVE: any[] = [];
 let LAST_SURFACE_PTR: number | null = null;
 let LAST_SURFACE_HAS_TEXTURE = false;
+const MAP_ASYNC_RESOLVERS = new Map<number, (status: number) => void>();
+
+const bufferMapCallback = new JSCallback(
+	(status: number, _message: number, userdata1: number, _userdata2: number) => {
+		const key = Number(userdata1);
+		const resolve = MAP_ASYNC_RESOLVERS.get(key);
+		if (resolve) {
+			MAP_ASYNC_RESOLVERS.delete(key);
+			resolve(status);
+		}
+	},
+	{
+		args: ["u32", "ptr", "ptr", "ptr"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+WGPU_KEEPALIVE.push(bufferMapCallback);
 
 function toBigInt(value: unknown, fallback = 0n) {
 	if (typeof value === "bigint") return value;
@@ -521,6 +545,60 @@ function makeRenderPipelineDescriptor(
 	writePtr(view, 128, depthStencilPtr ?? 0);
 	new Uint8Array(buffer, 136, 24).set(new Uint8Array(multisampleBuffer, 0, 24));
 	writePtr(view, 160, fragmentStatePtr ?? 0);
+	return { buffer, ptr: ptr(buffer) };
+}
+
+function makeProgrammableStageDescriptor(
+	modulePtr: number,
+	entryPoint: { ptr: number; len: bigint },
+) {
+	const buffer = new ArrayBuffer(48);
+	const view = new DataView(buffer);
+	writePtr(view, 0, 0);
+	writePtr(view, 8, modulePtr);
+	writePtr(view, 16, entryPoint.ptr);
+	writeU64(view, 24, entryPoint.len);
+	writeU64(view, 32, 0n); // constantCount
+	writePtr(view, 40, 0); // constants
+	return { buffer, ptr: ptr(buffer) };
+}
+
+function makeComputePipelineDescriptor(
+	layoutPtr: number | null,
+	stageBuffer: ArrayBuffer,
+) {
+	const buffer = new ArrayBuffer(80);
+	const view = new DataView(buffer);
+	writePtr(view, 0, 0);
+	writePtr(view, 8, 0);
+	writeU64(view, 16, 0n);
+	writePtr(view, 24, layoutPtr ?? 0);
+	new Uint8Array(buffer, 32, 48).set(new Uint8Array(stageBuffer, 0, 48));
+	return { buffer, ptr: ptr(buffer) };
+}
+
+function makeComputePassDescriptor() {
+	const buffer = new ArrayBuffer(24);
+	const view = new DataView(buffer);
+	writePtr(view, 0, 0);
+	writePtr(view, 8, 0);
+	writePtr(view, 16, 0);
+	return { buffer, ptr: ptr(buffer) };
+}
+
+function makeBufferMapCallbackInfo(
+	callbackPtr: number,
+	userdata1: number,
+	userdata2: number,
+) {
+	const buffer = new ArrayBuffer(40);
+	const view = new DataView(buffer);
+	writePtr(view, 0, 0);
+	writeU32(view, 8, WGPUCallbackMode_AllowSpontaneous);
+	writeU32(view, 12, 0);
+	writePtr(view, 16, callbackPtr);
+	writePtr(view, 24, userdata1);
+	writePtr(view, 32, userdata2);
 	return { buffer, ptr: ptr(buffer) };
 }
 
@@ -1385,6 +1463,30 @@ class GPUDevice {
 		);
 		return new GPURenderPipeline(pipelinePtr);
 	}
+	createComputePipeline(descriptor: {
+		layout?: GPUPipelineLayout | "auto";
+		compute: { module: GPUShaderModule; entryPoint?: string };
+	}) {
+		const module = descriptor.compute.module as GPUShaderModule;
+		const entry = makeStringView(descriptor.compute.entryPoint ?? "main");
+		const stage = makeProgrammableStageDescriptor(
+			module.ptr,
+			{ ptr: entry.ptr as any, len: entry.len },
+		);
+		WGPU_KEEPALIVE.push(stage.buffer);
+		const pipelineDesc = makeComputePipelineDescriptor(
+			descriptor.layout && descriptor.layout !== "auto"
+				? (descriptor.layout as GPUPipelineLayout).ptr
+				: null,
+			stage.buffer,
+		);
+		WGPU_KEEPALIVE.push(pipelineDesc.buffer);
+		const pipelinePtr = WGPUNative.symbols.wgpuDeviceCreateComputePipeline(
+			this.ptr,
+			pipelineDesc.ptr as any,
+		);
+		return new GPUComputePipeline(pipelinePtr);
+	}
 	createCommandEncoder() {
 		const desc = makeCommandEncoderDescriptor();
 		WGPU_KEEPALIVE.push(desc.buffer);
@@ -1431,9 +1533,62 @@ class GPUBuffer {
 		);
 		return toArrayBuffer(mapped as any, 0, size);
 	}
-	mapAsync() {
-		this._mapped = true;
-		return Promise.resolve();
+	mapAsync(mode?: number, offset = 0, size?: number) {
+		const mapMode =
+			mode ??
+			((this.usage & WGPUBufferUsage_MapRead) !== 0n
+				? Number(WGPUMapMode_Read)
+				: Number(WGPUMapMode_Write));
+		const mapSize = size ?? this.size - offset;
+		const callbackPtr = (bufferMapCallback as any).ptr ?? bufferMapCallback;
+		const info = makeBufferMapCallbackInfo(
+			Number(callbackPtr),
+			this.ptr,
+			0,
+		);
+		WGPU_KEEPALIVE.push(info.buffer);
+		WGPUNative.symbols.wgpuBufferMapAsync(
+			this.ptr,
+			BigInt(mapMode),
+			BigInt(offset),
+			BigInt(mapSize),
+			info.ptr as any,
+		);
+		return new Promise<void>((resolve) => {
+			let done = false;
+			const resolveOnce = () => {
+				if (done) return;
+				done = true;
+				resolve();
+			};
+
+			MAP_ASYNC_RESOLVERS.set(this.ptr, () => {
+				this._mapped = true;
+				resolveOnce();
+			});
+
+			const start = Date.now();
+			const poll = () => {
+				if (done) return;
+				try {
+					WGPUNative.symbols.wgpuDeviceTick(this._device.ptr);
+				} catch {
+					// ignore
+				}
+				const state = WGPUNative.symbols.wgpuBufferGetMapState(this.ptr);
+				if (state === WGPUBufferMapState_Mapped) {
+					this._mapped = true;
+					resolveOnce();
+					return;
+				}
+				if (Date.now() - start > 2000) {
+					resolveOnce();
+					return;
+				}
+				setTimeout(poll, 5);
+			};
+			setTimeout(poll, 5);
+		});
 	}
 	unmap() {
 		WGPUNative.symbols.wgpuBufferUnmap(this.ptr);
@@ -1486,6 +1641,20 @@ class GPURenderPipeline {
 	}
 	getBindGroupLayout(index: number) {
 		const layoutPtr = WGPUNative.symbols.wgpuRenderPipelineGetBindGroupLayout(
+			this.ptr,
+			index,
+		);
+		return new GPUBindGroupLayout(layoutPtr);
+	}
+}
+
+class GPUComputePipeline {
+	ptr: number;
+	constructor(ptr: number) {
+		this.ptr = ptr;
+	}
+	getBindGroupLayout(index: number) {
+		const layoutPtr = WGPUNative.symbols.wgpuComputePipelineGetBindGroupLayout(
 			this.ptr,
 			index,
 		);
@@ -1578,6 +1747,15 @@ class GPUCommandEncoder {
 		);
 		return new GPURenderPassEncoder(passPtr);
 	}
+	beginComputePass() {
+		const desc = makeComputePassDescriptor();
+		WGPU_KEEPALIVE.push(desc.buffer);
+		const passPtr = WGPUNative.symbols.wgpuCommandEncoderBeginComputePass(
+			this.ptr,
+			desc.ptr as any,
+		);
+		return new GPUComputePassEncoder(passPtr);
+	}
 	copyBufferToTexture(
 		source: {
 			buffer: GPUBuffer;
@@ -1606,6 +1784,22 @@ class GPUCommandEncoder {
 				rowsPerImage: source.rowsPerImage ?? 0,
 			},
 			size,
+		);
+	}
+	copyBufferToBuffer(
+		source: GPUBuffer,
+		sourceOffset: number,
+		destination: GPUBuffer,
+		destinationOffset: number,
+		size: number,
+	) {
+		WGPUNative.symbols.wgpuCommandEncoderCopyBufferToBuffer(
+			this.ptr,
+			source.ptr,
+			BigInt(sourceOffset),
+			destination.ptr,
+			BigInt(destinationOffset),
+			BigInt(size),
 		);
 	}
 	finish() {
@@ -1705,6 +1899,50 @@ class GPURenderPassEncoder {
 	}
 	end() {
 		WGPUNative.symbols.wgpuRenderPassEncoderEnd(this.ptr);
+	}
+}
+
+class GPUComputePassEncoder {
+	ptr: number;
+	constructor(ptr: number) {
+		this.ptr = ptr;
+	}
+	setPipeline(pipeline: GPUComputePipeline) {
+		WGPUNative.symbols.wgpuComputePassEncoderSetPipeline(
+			this.ptr,
+			pipeline.ptr,
+		);
+	}
+	setBindGroup(index: number, bindGroup: GPUBindGroup, offsets?: number[]) {
+		let offsetsPtr = 0;
+		let count = 0n;
+		if (offsets && offsets.length) {
+			const arr = new BigUint64Array(offsets.length);
+			offsets.forEach((o, i) => {
+				arr[i] = BigInt(o);
+			});
+			WGPU_KEEPALIVE.push(arr);
+			offsetsPtr = ptr(arr) as any;
+			count = BigInt(offsets.length);
+		}
+		WGPUNative.symbols.wgpuComputePassEncoderSetBindGroup(
+			this.ptr,
+			index,
+			bindGroup.ptr,
+			count as any,
+			offsetsPtr as any,
+		);
+	}
+	dispatchWorkgroups(x: number, y = 1, z = 1) {
+		WGPUNative.symbols.wgpuComputePassEncoderDispatchWorkgroups(
+			this.ptr,
+			x,
+			y,
+			z,
+		);
+	}
+	end() {
+		WGPUNative.symbols.wgpuComputePassEncoderEnd(this.ptr);
 	}
 }
 
@@ -2593,6 +2831,7 @@ export {
 	GPUPipelineLayout,
 	GPUShaderModule,
 	GPURenderPipeline,
+	GPUComputePipeline,
 	GPUCommandEncoder,
 	GPUCommandBuffer,
 	GPURenderPassEncoder,
