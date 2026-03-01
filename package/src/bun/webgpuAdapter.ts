@@ -866,6 +866,7 @@ class GPUQueue {
 		dataLayout: { bytesPerRow: number; rowsPerImage?: number },
 		size: { width: number; height: number; depthOrArrayLayers?: number },
 	) {
+		if (!data || data.byteLength === 0) return;
 		let bytesPerPixel = bytesPerPixelForFormat(destination.texture.format);
 		let width =
 			Number.isFinite(size.width) && size.width > 0
@@ -875,12 +876,13 @@ class GPUQueue {
 						Math.floor(
 							(dataLayout.bytesPerRow ?? data.byteLength) / bytesPerPixel,
 						),
-				  );
+			);
 		let height =
 			Number.isFinite(size.height) && size.height > 0
 				? size.height
 				: Math.max(1, dataLayout.rowsPerImage ?? 1);
 		const layers = size.depthOrArrayLayers ?? 1;
+		if (width <= 0 || height <= 0 || layers <= 0) return;
 		const inferredBpp = Math.floor(
 			data.byteLength / Math.max(1, width * height * layers),
 		);
@@ -972,6 +974,15 @@ class GPUDevice {
 	constructor(ptr: number) {
 		this.ptr = ptr;
 		this.queue = new GPUQueue(WGPUNative.symbols.wgpuDeviceGetQueue(ptr));
+	}
+	destroy() {
+		if (!this.ptr) return;
+		try {
+			WGPUNative.symbols.wgpuDeviceDestroy(this.ptr);
+		} catch {}
+		try {
+			WGPUNative.symbols.wgpuDeviceRelease(this.ptr);
+		} catch {}
 	}
 	createBuffer(descriptor: { size: number; usage: number; mappedAtCreation?: boolean }) {
 		let usage = toBigInt(descriptor.usage ?? 0);
