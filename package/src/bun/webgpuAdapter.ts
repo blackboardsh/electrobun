@@ -136,6 +136,7 @@ const WGPU_DEPTH_SLICE_UNDEFINED = 0xffffffff;
 
 const WGPU_KEEPALIVE: any[] = [];
 let LAST_SURFACE_PTR: number | null = null;
+let LAST_SURFACE_HAS_TEXTURE = false;
 
 function toBigInt(value: unknown, fallback = 0n) {
 	if (typeof value === "bigint") return value;
@@ -847,7 +848,8 @@ class GPUQueue {
 			BigInt(commandBuffers.length) as any,
 			ptr(buffer),
 		);
-		if (LAST_SURFACE_PTR) {
+		if (LAST_SURFACE_PTR && LAST_SURFACE_HAS_TEXTURE) {
+			LAST_SURFACE_HAS_TEXTURE = false;
 			WGPUBridge.surfacePresent(LAST_SURFACE_PTR as any);
 		}
 	}
@@ -1734,6 +1736,7 @@ class GPUCanvasContext {
 	alphaMode: number = WGPUCompositeAlphaMode_Opaque;
 	width = 1;
 	height = 1;
+	private _hasCurrentTexture = false;
 	_fallbackSize?: { width: number; height: number };
 	constructor(surfacePtr: number) {
 		this.surfacePtr = surfacePtr;
@@ -1775,6 +1778,7 @@ class GPUCanvasContext {
 			toBigInt(options.usage ?? WGPUTextureUsage_RenderAttachment),
 		);
 		WGPUBridge.surfaceConfigure(this.surfacePtr as any, config.ptr as any);
+		this._hasCurrentTexture = false;
 	}
 	getCurrentTexture() {
 		const surfaceTexture = makeSurfaceTexture();
@@ -1788,12 +1792,19 @@ class GPUCanvasContext {
 		}
 		const texPtr = Number(surfaceTexture.view.getBigUint64(8, true));
 		LAST_SURFACE_PTR = this.surfacePtr;
+		this._hasCurrentTexture = true;
+		LAST_SURFACE_HAS_TEXTURE = true;
 		return new GPUTexture(texPtr, this.format);
 	}
 	present() {
+		if (!this._hasCurrentTexture) return;
+		this._hasCurrentTexture = false;
+		LAST_SURFACE_HAS_TEXTURE = false;
 		return WGPUBridge.surfacePresent(this.surfacePtr as any);
 	}
 	unconfigure() {
+		this._hasCurrentTexture = false;
+		LAST_SURFACE_HAS_TEXTURE = false;
 		return WGPUNative.symbols.wgpuSurfaceUnconfigure(this.surfacePtr as any);
 	}
 }
