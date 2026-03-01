@@ -36,10 +36,25 @@ header p {
 .panel {
   display: flex;
   gap: 20px;
-  align-items: center;
+  align-items: flex-start;
 }
 
-#draw {
+.canvas-stack {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.canvas-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+#train,
+#infer-canvas {
   border: 1px solid #293043;
   background: #0f121a;
   border-radius: 12px;
@@ -52,6 +67,42 @@ header p {
   flex-direction: column;
   gap: 12px;
   min-width: 160px;
+}
+
+.mode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+.digits {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.digits button,
+#save {
+  background: #1e2434;
+  border: 1px solid #2c354a;
+  color: #e6e8ee;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.save-wide {
+  width: 100%;
+}
+
+.digits button.active {
+  background: #f6b042;
+  border-color: #f5c06a;
+  color: #1a1205;
+  font-weight: 600;
 }
 
 .preview {
@@ -78,21 +129,6 @@ header p {
   cursor: pointer;
 }
 
-.controls label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  color: #9aa3b2;
-}
-
-.output {
-  display: grid;
-  grid-template-columns: 140px 1fr;
-  gap: 16px;
-  align-items: start;
-}
-
 .prediction {
   padding: 16px;
   border-radius: 12px;
@@ -114,10 +150,46 @@ header p {
   border-radius: 12px;
   background: #151a26;
   border: 1px solid #283044;
-  min-height: 120px;
+  min-height: 140px;
+  font-size: 12px;
+  white-space: pre;
+  overflow-x: auto;
 }
 
-footer {
+#status {
   font-size: 12px;
   color: #7f8796;
+}
+
+.notes {
+  margin-top: 8px;
+  padding: 16px;
+  border-radius: 12px;
+  background: #121722;
+  border: 1px solid #283044;
+  color: #9aa3b2;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.notes h2 {
+  margin: 0 0 6px 0;
+  font-size: 12px;
+  color: #e6e8ee;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.notes p {
+  margin: 0 0 12px 0;
+}
+
+.notes p:last-child {
+  margin-bottom: 0;
+}
+
+.output {
+  display: grid;
+  gap: 12px;
+  width: 100%;
 }

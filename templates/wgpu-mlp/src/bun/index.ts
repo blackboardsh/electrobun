@@ -95,8 +95,12 @@ function build7SegTemplates() {
 const templates = build7SegTemplates();
 const templateMatrix = new Float32Array(CLASS_COUNT * INPUT_LEN);
 const templateNorms = new Float32Array(CLASS_COUNT);
+const templateSums = new Float32Array(CLASS_COUNT * INPUT_LEN);
+const templateCounts = new Int32Array(CLASS_COUNT);
 for (let i = 0; i < CLASS_COUNT; i += 1) {
   templateMatrix.set(templates[i]!, i * INPUT_LEN);
+  templateSums.set(templates[i]!, i * INPUT_LEN);
+  templateCounts[i] = 1;
   let energy = 0;
   for (let j = 0; j < INPUT_LEN; j += 1) {
     const v = templates[i]![j]!;
@@ -131,54 +135,16 @@ function cpuClassify(input: Float32Array) {
   return { prediction: bestIdx, scores };
 }
 
-function applyHeuristics(scores: number[], input: Float32Array) {
-  const size = SIZE;
-  const midX = Math.floor(size / 2);
-  let vCol = 0;
-  let vEnergy = 0;
-  let hMid = 0;
-  let hTop = 0;
-  let hBottom = 0;
-  let leftEnergy = 0;
-  let rightEnergy = 0;
-
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const v = input[y * size + x]!;
-      if (Math.abs(x - midX) <= 1) vCol += v;
-      if (Math.abs(y - Math.floor(size / 2)) <= 1) hMid += v;
-      if (y < 3) hTop += v;
-      if (y > size - 4) hBottom += v;
-      vEnergy += v;
-      if (x < size / 2) leftEnergy += v;
-      else rightEnergy += v;
-    }
+function updateTemplate(digit: number) {
+  const count = templateCounts[digit] ?? 1;
+  const offset = digit * INPUT_LEN;
+  let energy = 0;
+  for (let i = 0; i < INPUT_LEN; i += 1) {
+    const v = templateSums[offset + i]! / count;
+    templateMatrix[offset + i] = v;
+    energy += v * v;
   }
-
-  const vColRatio = vCol / (vEnergy + 1e-6);
-  const leftRatio = leftEnergy / (vEnergy + 1e-6);
-  const rightRatio = rightEnergy / (vEnergy + 1e-6);
-  const topRatio = hTop / (vEnergy + 1e-6);
-  const bottomRatio = hBottom / (vEnergy + 1e-6);
-  const midRatio = hMid / (vEnergy + 1e-6);
-
-  if (vColRatio > 0.22 && leftRatio < 0.5 && rightRatio < 0.7) {
-    scores[1] = (scores[1] ?? 0) + 0.25;
-  }
-
-  if (midRatio > 0.22 && topRatio > 0.12 && bottomRatio > 0.12) {
-    scores[8] = (scores[8] ?? 0) + 0.2;
-  }
-
-  if (rightRatio > 0.62 && leftRatio < 0.4) {
-    scores[7] = (scores[7] ?? 0) + 0.15;
-  }
-
-  if (leftRatio > 0.58 && rightRatio > 0.38 && topRatio > 0.1) {
-    scores[2] = (scores[2] ?? 0) + 0.18;
-  }
-
-  return scores;
+  templateNorms[digit] = Math.sqrt(energy) || 1;
 }
 
 const GPU_ENABLED = true;
@@ -382,6 +348,10 @@ type MlpRPC = {
         params: { pixels: number[] };
         response: { accepted: boolean };
       };
+      addSample: {
+        params: { digit: number; pixels: number[] };
+        response: { ok: boolean; count: number };
+      };
     };
     messages: {
       classifyResult: {
@@ -437,9 +407,7 @@ const rpc = BrowserView.defineRPC<MlpRPC>({
           }
         }
 
-        scores = applyHeuristics(scores, input);
-
-          let best = 0;
+        let best = 0;
           let bestVal = -Infinity;
           for (let i = 0; i < scores.length; i += 1) {
             if (scores[i]! > bestVal) {
@@ -457,6 +425,21 @@ const rpc = BrowserView.defineRPC<MlpRPC>({
 
         return { accepted: true };
       },
+      addSample: async ({ digit, pixels }) => {
+        if (digit < 0 || digit >= CLASS_COUNT) {
+          return { ok: false, count: 0 };
+        }
+        const offset = digit * INPUT_LEN;
+        for (let i = 0; i < INPUT_LEN; i += 1) {
+          templateSums[offset + i] += pixels[i] ?? 0;
+        }
+        templateCounts[digit] += 1;
+        updateTemplate(digit);
+        if (gpuReady && templateBuffer) {
+          device.queue.writeBuffer(templateBuffer, 0, templateMatrix);
+        }
+        return { ok: true, count: templateCounts[digit] };
+      },
     },
     messages: {},
   },
@@ -464,7 +447,7 @@ const rpc = BrowserView.defineRPC<MlpRPC>({
 const win = new BrowserWindow({
   title: "WGPU MLP Digit Demo",
   url: "views://mainview/index.html",
-  frame: { width: 720, height: 640, x: workArea.x + 80, y: workArea.y + 60 },
+  frame: { width: 980, height: 720, x: workArea.x + 80, y: workArea.y + 60 },
   rpc,
 });
 

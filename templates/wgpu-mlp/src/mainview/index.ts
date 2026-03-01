@@ -7,6 +7,10 @@ type MlpRPC = {
         params: { pixels: number[] };
         response: { accepted: boolean };
       };
+      addSample: {
+        params: { digit: number; pixels: number[] };
+        response: { ok: boolean; count: number };
+      };
     };
     messages: {
       classifyResult: {
@@ -41,38 +45,53 @@ const rpc = Electroview.defineRPC<MlpRPC>({
 
 const electrobun = new Electrobun.Electroview({ rpc });
 
-const canvas = document.getElementById("draw") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d")!;
+const trainCanvas = document.getElementById("train") as HTMLCanvasElement;
+const trainCtx = trainCanvas.getContext("2d")!;
+const inferCanvas = document.getElementById("infer-canvas") as HTMLCanvasElement;
+const inferCtx = inferCanvas.getContext("2d")!;
 const preview = document.getElementById("preview") as HTMLCanvasElement;
 const previewCtx = preview.getContext("2d")!;
 const clearBtn = document.getElementById("clear") as HTMLButtonElement;
-const brush = document.getElementById("brush") as HTMLInputElement;
-const smooth = document.getElementById("smooth") as HTMLInputElement;
 const pred = document.getElementById("pred") as HTMLSpanElement;
 const scoresEl = document.getElementById("scores") as HTMLPreElement;
 const statusEl = document.getElementById("status") as HTMLSpanElement;
+const saveBtn = document.getElementById("save") as HTMLButtonElement;
+const digitButtons = Array.from(
+  document.querySelectorAll<HTMLButtonElement>("[data-digit]"),
+);
 
-ctx.fillStyle = "#0f121a";
-ctx.fillRect(0, 0, canvas.width, canvas.height);
-ctx.lineCap = "round";
-ctx.lineJoin = "round";
-ctx.strokeStyle = "#e6e8ee";
+let activeDigit = 0;
+const BRUSH_RADIUS = 18;
+const BRUSH_ALPHA = 0.9;
 
-let drawing = false;
-let last = { x: 0, y: 0 };
-let debounce: ReturnType<typeof setTimeout> | null = null;
+initCanvas(trainCtx, trainCanvas);
+initCanvas(inferCtx, inferCanvas);
 
-function clearCanvas() {
+function initCanvas(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
+  ctx.fillStyle = "#0f121a";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#e6e8ee";
+}
+
+function clearSingle(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
   ctx.fillStyle = "#0f121a";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function clearAll() {
+  clearSingle(trainCtx, trainCanvas);
+  clearSingle(inferCtx, inferCanvas);
+  previewCtx.clearRect(0, 0, preview.width, preview.height);
   pred.textContent = "-";
   scoresEl.textContent = "";
   statusEl.textContent = "Cleared";
 }
 
-function normalize() {
+function normalize(source: HTMLCanvasElement) {
   const size = 32;
   const off = document.createElement("canvas");
   off.width = size;
@@ -80,7 +99,7 @@ function normalize() {
   const offCtx = off.getContext("2d")!;
   offCtx.fillStyle = "#0f121a";
   offCtx.fillRect(0, 0, size, size);
-  offCtx.drawImage(canvas, 0, 0, size, size);
+  offCtx.drawImage(source, 0, 0, size, size);
   const image = offCtx.getImageData(0, 0, size, size).data;
   const sampleIndices = [
     0,
@@ -147,7 +166,6 @@ function normalize() {
     }
   }
   const boosted = edgeBoost(dst, size);
-  drawPreview(boosted, size);
   return boosted;
 }
 
@@ -198,53 +216,103 @@ function drawPreview(pixels: number[], size: number) {
   previewCtx.drawImage(off, 0, 0, preview.width, preview.height);
 }
 
-async function classify() {
-  const pixels = normalize();
+async function classify(pixels?: number[]) {
+  const input = pixels ?? normalize(inferCanvas);
+  if (!pixels) drawPreview(input, 32);
   statusEl.textContent = "Running inference...";
   try {
-    await electrobun.rpc!.request.classifyStart({ pixels });
+    await electrobun.rpc!.request.classifyStart({ pixels: input });
   } catch (err) {
     statusEl.textContent = `Error: ${String(err)}`;
   }
 }
 
-function schedule() {
-  if (debounce) clearTimeout(debounce);
-  debounce = setTimeout(() => {
-    classify();
-  }, 220);
+function updatePreview(source: HTMLCanvasElement) {
+  const pixels = normalize(source);
+  drawPreview(pixels, 32);
+  return pixels;
 }
 
-canvas.addEventListener("pointerdown", (evt) => {
-  drawing = true;
-  last = { x: evt.offsetX, y: evt.offsetY };
+function bindDrawing(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  onFinish: () => void,
+) {
+  let drawing = false;
+  let last = { x: 0, y: 0 };
+
+  canvas.addEventListener("pointerdown", (evt) => {
+    drawing = true;
+    last = { x: evt.offsetX, y: evt.offsetY };
+  });
+
+  canvas.addEventListener("pointermove", (evt) => {
+    if (!drawing) return;
+    const x = evt.offsetX;
+    const y = evt.offsetY;
+    ctx.lineWidth = BRUSH_RADIUS;
+    ctx.globalAlpha = BRUSH_ALPHA;
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    last = { x, y };
+  });
+
+  canvas.addEventListener("pointerup", () => {
+    drawing = false;
+    onFinish();
+  });
+
+  canvas.addEventListener("pointerleave", () => {
+    drawing = false;
+  });
+}
+
+bindDrawing(trainCanvas, trainCtx, () => {
+  updatePreview(trainCanvas);
 });
 
-canvas.addEventListener("pointermove", (evt) => {
-  if (!drawing) return;
-  const x = evt.offsetX;
-  const y = evt.offsetY;
-  const radius = Number(brush.value);
-  const smoothness = Number(smooth.value);
-  ctx.lineWidth = radius;
-  ctx.globalAlpha = 0.8 + 0.2 * smoothness;
-  ctx.beginPath();
-  ctx.moveTo(last.x, last.y);
-  ctx.lineTo(x, y);
-  ctx.stroke();
-  last = { x, y };
-  schedule();
+bindDrawing(inferCanvas, inferCtx, () => {
+  const pixels = updatePreview(inferCanvas);
+  classify(pixels);
 });
 
-canvas.addEventListener("pointerup", () => {
-  drawing = false;
-  schedule();
+clearBtn.addEventListener("click", clearAll);
+saveBtn.addEventListener("click", async () => {
+  const pixels = updatePreview(trainCanvas);
+  statusEl.textContent = `Saving sample for ${activeDigit}...`;
+  try {
+    const res = await electrobun.rpc!.request.addSample({
+      digit: activeDigit,
+      pixels,
+    });
+    if (res.ok) {
+      statusEl.textContent = `Saved sample for ${activeDigit} (total ${res.count})`;
+      clearAll();
+    } else {
+      statusEl.textContent = "Save failed";
+    }
+  } catch (err) {
+    statusEl.textContent = `Error: ${String(err)}`;
+  }
 });
 
-canvas.addEventListener("pointerleave", () => {
-  drawing = false;
+function setActiveDigit(digit: number) {
+  activeDigit = digit;
+  saveBtn.style.display = "inline-flex";
+  digitButtons.forEach((btn) => {
+    const d = Number(btn.dataset.digit);
+    if (d === digit) btn.classList.add("active");
+    else btn.classList.remove("active");
+  });
+}
+
+digitButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setActiveDigit(Number(btn.dataset.digit));
+  });
 });
 
-clearBtn.addEventListener("click", clearCanvas);
-
-clearCanvas();
+clearAll();
+setActiveDigit(0);

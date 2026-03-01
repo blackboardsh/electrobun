@@ -13,33 +13,59 @@
         <p>Draw a digit (0-9) in the box. Inference runs in Bun using WebGPU.</p>
       </header>
       <div class="panel">
-        <canvas id="draw" width="280" height="280"></canvas>
+        <div class="canvas-stack">
+          <div class="canvas-block">
+            <span>Training Canvas</span>
+            <canvas id="train" width="320" height="320"></canvas>
+            <div class="digits">
+              <button data-digit="0">0</button>
+              <button data-digit="1">1</button>
+              <button data-digit="2">2</button>
+              <button data-digit="3">3</button>
+              <button data-digit="4">4</button>
+              <button data-digit="5">5</button>
+              <button data-digit="6">6</button>
+              <button data-digit="7">7</button>
+              <button data-digit="8">8</button>
+              <button data-digit="9">9</button>
+            </div>
+            <button id="save" class="save-wide" style="display:none">Save Sample</button>
+          </div>
+          <div class="canvas-block">
+            <span>Inference Canvas</span>
+            <canvas id="infer-canvas" width="320" height="320"></canvas>
+            <div class="output">
+              <div class="prediction">
+                <span>Prediction</span>
+                <strong id="pred">-</strong>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="controls">
           <div class="preview">
             <span>Downsampled</span>
             <canvas id="preview" width="128" height="128"></canvas>
           </div>
           <button id="clear">Clear</button>
-          <label>
-            Brush
-            <input id="brush" type="range" min="6" max="28" value="16" />
-          </label>
-          <label>
-            Smoothing
-            <input id="smooth" type="range" min="0" max="1" step="0.1" value="0.4" />
-          </label>
+          <span id="status">Idle</span>
+          <pre id="scores"></pre>
         </div>
       </div>
-      <div class="output">
-        <div class="prediction">
-          <span>Prediction</span>
-          <strong id="pred">-</strong>
-        </div>
-        <pre id="scores"></pre>
-      </div>
-      <footer>
-        <span id="status">Idle</span>
-      </footer>
+      <section class="notes">
+        <h2>How This Works</h2>
+        <p>
+          The UI runs in a WebView. When you draw, the pixels are downsampled and
+          sent to Bun. Bun runs the MLP inference on the GPU via WebGPU (Dawn) and
+          sends the scores back to the UI.
+        </p>
+        <h2>Log Output</h2>
+        <p>
+          Each line is the score for a digit (0–9). The highest score becomes the
+          prediction. The log also shows whether the scores came from the GPU or
+          CPU fallback.
+        </p>
+      </section>
     </div>
     <script type="module" src="index.js"></script>
   </body>
