@@ -1,7 +1,6 @@
 import { GpuWindow, Screen, babylon, webgpu } from "electrobun/bun";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { inflateSync } from "zlib";
 
 function ensureAnimationFrame() {
 	if (!(globalThis as any).requestAnimationFrame) {
@@ -11,122 +10,7 @@ function ensureAnimationFrame() {
 	}
 }
 
-function createCanvasShim(win: GpuWindow) {
-	const size = win.getSize();
-	return {
-		width: size.width,
-		height: size.height,
-		clientWidth: size.width,
-		clientHeight: size.height,
-		style: {},
-		getContext: (type: string) => {
-			if (type !== "webgpu") return null;
-			const ctx = webgpu.createContext(win);
-			return ctx.context;
-		},
-		getBoundingClientRect: () => {
-			const current = win.getSize();
-			return {
-				left: 0,
-				top: 0,
-				width: current.width,
-				height: current.height,
-			};
-		},
-		addEventListener: () => {},
-		removeEventListener: () => {},
-		setAttribute: () => {},
-	};
-}
-
-function decodePngRGBA(data: Uint8Array) {
-	const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-	const readU32 = (offset: number) => view.getUint32(offset, false);
-
-	if (readU32(0) !== 0x89504e47) {
-		throw new Error("Invalid PNG header");
-	}
-
-	let offset = 8;
-	let width = 0;
-	let height = 0;
-	let bitDepth = 0;
-	let colorType = 0;
-	const idat: Uint8Array[] = [];
-
-	while (offset < data.length) {
-		const length = readU32(offset);
-		const type = String.fromCharCode(
-			data[offset + 4]!,
-			data[offset + 5]!,
-			data[offset + 6]!,
-			data[offset + 7]!,
-		);
-		const chunkStart = offset + 8;
-		const chunkEnd = chunkStart + length;
-
-		if (type === "IHDR") {
-			width = readU32(chunkStart);
-			height = readU32(chunkStart + 4);
-			bitDepth = data[chunkStart + 8]!;
-			colorType = data[chunkStart + 9]!;
-		} else if (type === "IDAT") {
-			idat.push(data.subarray(chunkStart, chunkEnd));
-		} else if (type === "IEND") {
-			break;
-		}
-
-		offset = chunkEnd + 4;
-	}
-
-	if (bitDepth !== 8 || colorType !== 6) {
-		throw new Error("PNG must be RGBA 8-bit");
-	}
-
-	const compressed = new Uint8Array(idat.reduce((sum, chunk) => sum + chunk.length, 0));
-	let cursor = 0;
-	for (const chunk of idat) {
-		compressed.set(chunk, cursor);
-		cursor += chunk.length;
-	}
-
-	const inflated = inflateSync(compressed);
-	const bpp = 4;
-	const stride = width * bpp;
-	const output = new Uint8Array(height * stride);
-	let inOffset = 0;
-	let outOffset = 0;
-
-	for (let y = 0; y < height; y += 1) {
-		const filter = inflated[inOffset]!;
-		inOffset += 1;
-		const row = inflated.subarray(inOffset, inOffset + stride);
-		inOffset += stride;
-
-		for (let x = 0; x < stride; x += 1) {
-			const left = x >= bpp ? output[outOffset + x - bpp]! : 0;
-			const up = y > 0 ? output[outOffset - stride + x]! : 0;
-			const upLeft = y > 0 && x >= bpp ? output[outOffset - stride + x - bpp]! : 0;
-			let val = row[x]!;
-			if (filter === 1) val = (val + left) & 0xff;
-			else if (filter === 2) val = (val + up) & 0xff;
-			else if (filter === 3) val = (val + Math.floor((left + up) / 2)) & 0xff;
-			else if (filter === 4) {
-				const p = left + up - upLeft;
-				const pa = Math.abs(p - left);
-				const pb = Math.abs(p - up);
-				const pc = Math.abs(p - upLeft);
-				const paeth = pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft;
-				val = (val + paeth) & 0xff;
-			}
-			output[outOffset + x] = val;
-		}
-		outOffset += stride;
-	}
-
-	return { width, height, data: output };
-}
-
+const { createCanvasShim, decodePngRGBA } = webgpu.utils;
 const display = Screen.getPrimaryDisplay();
 const workArea = display.workArea;
 

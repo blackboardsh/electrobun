@@ -3,6 +3,7 @@ import { GpuWindow } from "./core/GpuWindow";
 import WGPU from "./webGPU";
 import { WGPUBridge } from "./proc/native";
 import { ptr, CString, toArrayBuffer, type Pointer } from "bun:ffi";
+import { inflateSync } from "zlib";
 
 const WGPUNative = WGPU.native;
 const WGPUSType_SurfaceSourceMetalLayer = 0x00000004;
@@ -1848,6 +1849,141 @@ function createContext(view: WGPUView | GpuWindow) {
 	return { instance: Number(instance), surface: Number(surface), context: ctx };
 }
 
+function createCanvasShim(win: GpuWindow) {
+	const size = win.getSize();
+	return {
+		width: size.width,
+		height: size.height,
+		clientWidth: size.width,
+		clientHeight: size.height,
+		style: {},
+		getContext: (type: string) => {
+			if (type !== "webgpu") return null;
+			const ctx = createContext(win);
+			return ctx.context;
+		},
+		getBoundingClientRect: () => {
+			const current = win.getSize();
+			return {
+				left: 0,
+				top: 0,
+				width: current.width,
+				height: current.height,
+			};
+		},
+		addEventListener: () => {},
+		removeEventListener: () => {},
+		setAttribute: () => {},
+	};
+}
+
+function decodePngRGBA(data: Uint8Array) {
+	if (data.byteLength < 8) throw new Error("Invalid PNG header");
+	const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+	const readU32 = (offset: number) => view.getUint32(offset, false);
+	if (readU32(0) !== 0x89504e47) {
+		throw new Error("Invalid PNG header");
+	}
+	let offset = 8;
+	let width = 0;
+	let height = 0;
+	let bitDepth = 0;
+	let colorType = 0;
+	let compressed: Uint8Array | null = null;
+
+	while (offset < data.length) {
+		const length = readU32(offset);
+		const type = String.fromCharCode(
+			data[offset + 4]!,
+			data[offset + 5]!,
+			data[offset + 6]!,
+			data[offset + 7]!,
+		);
+		const chunkStart = offset + 8;
+		if (type === "IHDR") {
+			width = readU32(chunkStart);
+			height = readU32(chunkStart + 4);
+			bitDepth = data[chunkStart + 8]!;
+			colorType = data[chunkStart + 9]!;
+		} else if (type === "IDAT") {
+			const chunk = data.subarray(chunkStart, chunkStart + length);
+			if (!compressed) {
+				compressed = chunk;
+			} else {
+				const combined = new Uint8Array(compressed.length + chunk.length);
+				combined.set(compressed);
+				combined.set(chunk, compressed.length);
+				compressed = combined;
+			}
+		} else if (type === "IEND") {
+			break;
+		}
+		offset += 12 + length;
+	}
+
+	if (!compressed) throw new Error("No IDAT chunk found");
+	if (bitDepth !== 8) throw new Error("Only 8-bit PNG supported");
+	if (colorType !== 6) throw new Error("Only RGBA PNG supported");
+
+	const inflated = inflateSync(compressed);
+	const stride = width * 4;
+	const out = new Uint8Array(width * height * 4);
+	let inOffset = 0;
+	let outOffset = 0;
+	let prior = new Uint8Array(stride);
+
+	for (let y = 0; y < height; y += 1) {
+		const filter = inflated[inOffset]!;
+		inOffset += 1;
+		const row = inflated.subarray(inOffset, inOffset + stride);
+		inOffset += stride;
+		const recon = new Uint8Array(stride);
+
+		if (filter === 0) {
+			recon.set(row);
+		} else if (filter === 1) {
+			for (let i = 0; i < stride; i += 1) {
+				const left = i >= 4 ? recon[i - 4]! : 0;
+				recon[i] = (row[i]! + left) & 0xff;
+			}
+		} else if (filter === 2) {
+			for (let i = 0; i < stride; i += 1) {
+				recon[i] = (row[i]! + prior[i]!) & 0xff;
+			}
+		} else if (filter === 3) {
+			for (let i = 0; i < stride; i += 1) {
+				const left = i >= 4 ? recon[i - 4]! : 0;
+				const up = prior[i]!;
+				recon[i] = (row[i]! + Math.floor((left + up) / 2)) & 0xff;
+			}
+		} else if (filter === 4) {
+			const paeth = (a: number, b: number, c: number) => {
+				const p = a + b - c;
+				const pa = Math.abs(p - a);
+				const pb = Math.abs(p - b);
+				const pc = Math.abs(p - c);
+				if (pa <= pb && pa <= pc) return a;
+				if (pb <= pc) return b;
+				return c;
+			};
+			for (let i = 0; i < stride; i += 1) {
+				const left = i >= 4 ? recon[i - 4]! : 0;
+				const up = prior[i]!;
+				const upLeft = i >= 4 ? prior[i - 4]! : 0;
+				recon[i] = (row[i]! + paeth(left, up, upLeft)) & 0xff;
+			}
+		} else {
+			throw new Error(`Unsupported PNG filter ${filter}`);
+		}
+
+		out.set(recon, outOffset);
+		outOffset += stride;
+		prior = recon;
+	}
+
+	return { width, height, data: out };
+}
+
 function mapTextureFormat(format?: string | number | null) {
 	if (typeof format === "number") return format;
 	switch (format) {
@@ -2430,6 +2566,10 @@ const webgpu = {
 	},
 	createContext,
 	GPUCanvasContext,
+	utils: {
+		createCanvasShim,
+		decodePngRGBA,
+	},
 	install() {
 		const nav = (globalThis as any).navigator ?? {};
 		nav.gpu = webgpu.navigator;
@@ -2456,5 +2596,7 @@ export {
 	GPUCommandEncoder,
 	GPUCommandBuffer,
 	GPURenderPassEncoder,
+	createCanvasShim,
+	decodePngRGBA,
 };
 export default webgpu;
