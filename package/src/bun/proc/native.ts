@@ -2219,8 +2219,8 @@ const webviewEventHandler = (id: number, eventName: string, detail: string) => {
 	const mappedName = eventMap[eventName];
 	const handler = mappedName
 		? (electrobunEventEmitter.events.webview as Record<string, unknown>)[
-				mappedName
-			]
+		mappedName
+		]
 		: undefined;
 
 	if (!handler) {
@@ -2818,40 +2818,34 @@ export const internalRpcHandlers = {
 export type MenuItemConfig =
 	| { type: "divider" | "separator" }
 	| {
-			type: "normal";
-			label: string;
-			tooltip?: string;
-			action?: string;
-			data?: any;
-			submenu?: Array<MenuItemConfig>;
-			enabled?: boolean;
-			checked?: boolean;
-			hidden?: boolean;
-	  };
+		type: "normal";
+		label: string;
+		tooltip?: string;
+		action?: string;
+		data?: any;
+		submenu?: Array<MenuItemConfig>;
+		enabled?: boolean;
+		checked?: boolean;
+		hidden?: boolean;
+	};
 
-export type ApplicationMenuItemConfig =
-	| { type: "divider" | "separator" }
-	| {
-			type?: "normal";
-			label: string;
-			tooltip?: string;
-			action?: string;
-			data?: any;
-			submenu?: Array<ApplicationMenuItemConfig>;
-			enabled?: boolean;
-			checked?: boolean;
-			hidden?: boolean;
-			accelerator?: string;
-	  }
-	| {
-			type?: "normal";
-			label?: string;
-			tooltip?: string;
-			role?: string;
-			data?: any;
-			submenu?: Array<ApplicationMenuItemConfig>;
-			enabled?: boolean;
-			checked?: boolean;
-			hidden?: boolean;
-			accelerator?: string;
-	  };
+export type BaseMenuItemConfig = {
+	type?: "separator" | "divider" | "normal";
+	label?: string;
+	tooltip?: string;
+	action?: string;
+	data?: any;
+	enabled?: boolean;
+	checked?: boolean;
+	hidden?: boolean;
+	accelerator?: string;
+};
+
+export type ApplicationMenuItemConfig = BaseMenuItemConfig & {
+	role?: string;
+	submenu?: Array<ApplicationMenuItemConfig>;
+};
+
+export type ContextMenuItemConfig = BaseMenuItemConfig & {
+	submenu?: Array<ContextMenuItemConfig>;
+};
