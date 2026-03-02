@@ -7804,10 +7804,13 @@ extern "C" void removeTray(NSStatusItem *statusItem) {
 
 extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
     NSLog(@"Setting application menu from JSON in objc");
+    // Copy the string before dispatch_async since the JS-side buffer may be GC'd
+    char *jsonCopy = strdup(jsonString);
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        free(jsonCopy);
         if (error) {
             NSLog(@"Failed to parse JSON: %@", error);
             return;
@@ -7822,10 +7825,13 @@ extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler 
 }
 
 extern "C" void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
+    // Copy the string before dispatch_async since the JS-side buffer may be GC'd
+    char *jsonCopy = strdup(jsonString);
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        free(jsonCopy);
         if (error) {
             NSLog(@"Failed to parse JSON: %@", error);
             return;
