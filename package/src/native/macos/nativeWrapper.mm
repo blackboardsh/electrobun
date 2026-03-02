@@ -2791,6 +2791,37 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         if ([event modifierFlags] & NSEventModifierFlagCommand) mods |= 1 << 3;
         return mods;
     }
+    - (void)flagsChanged:(NSEvent*)event {
+        WindowDelegate *delegate = (WindowDelegate *)self.window.delegate;
+        if (!delegate || !delegate.keyHandler) return;
+        const NSUInteger flags = [event modifierFlags];
+        uint32_t isDown = 0;
+        switch ([event keyCode]) {
+            case 0x38: // left shift
+            case 0x3C: // right shift
+                isDown = (flags & NSEventModifierFlagShift) ? 1 : 0;
+                break;
+            case 0x3B: // left control
+            case 0x3E: // right control
+                isDown = (flags & NSEventModifierFlagControl) ? 1 : 0;
+                break;
+            case 0x3A: // left option
+            case 0x3D: // right option
+                isDown = (flags & NSEventModifierFlagOption) ? 1 : 0;
+                break;
+            case 0x37: // left command
+            case 0x36: // right command
+                isDown = (flags & NSEventModifierFlagCommand) ? 1 : 0;
+                break;
+            default:
+                return;
+        }
+        delegate.keyHandler(delegate.windowId,
+                            (uint32_t)[event keyCode],
+                            [self modifierMaskFromEvent:event],
+                            isDown,
+                            0);
+    }
     - (BOOL)acceptsFirstResponder {
         return YES;
     }
