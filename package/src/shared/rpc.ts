@@ -272,6 +272,7 @@ export function createRPC<
 					requestId,
 					setTimeout(() => {
 						requestTimeouts.delete(requestId);
+						requestListeners.delete(requestId);
 						reject(new Error("RPC request timed out."));
 					}, maxRequestTime),
 				);
@@ -411,8 +412,10 @@ export function createRPC<
 		if (message.type === "response") {
 			const timeout = requestTimeouts.get(message.id);
 			if (timeout != null) clearTimeout(timeout);
+			requestTimeouts.delete(message.id);
 			const { resolve, reject } =
 				requestListeners.get(message.id) ?? {};
+			requestListeners.delete(message.id);
 			if (!message.success) reject?.(new Error(message.error));
 			else resolve?.(message.payload);
 			return;
