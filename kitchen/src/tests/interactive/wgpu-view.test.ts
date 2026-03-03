@@ -18,6 +18,7 @@ const WGPU_KEEPALIVE: any[] = [];
 const WGPUNative = WGPU.native;
 
 const WGPUSType_SurfaceSourceMetalLayer = 0x00000004;
+const WGPUSType_SurfaceSourceWindowsHWND = 0x00000005;
 const WGPUCallbackMode_AllowSpontaneous = 0x00000003;
 const WGPUTextureFormat_BGRA8Unorm = 0x0000001b;
 const WGPUTextureFormat_BGRA8UnormSrgb = 0x0000001c;
@@ -74,6 +75,25 @@ function makeSurfaceSourceMetalLayer(layerPtr: number) {
 	writeU32(view, 12, 0);
 	writePtr(view, 16, layerPtr);
 	return { buffer, ptr: ptr(buffer) };
+}
+
+function makeSurfaceSourceWindowsHWND(hwnd: number, hinstance: number) {
+	const buffer = new ArrayBuffer(32);
+	const view = new DataView(buffer);
+	writePtr(view, 0, 0); // chain.next
+	writeU32(view, 8, WGPUSType_SurfaceSourceWindowsHWND); // chain.sType
+	writeU32(view, 12, 0); // padding
+	writePtr(view, 16, hinstance); // hinstance
+	writePtr(view, 24, hwnd); // hwnd
+	return { buffer, ptr: ptr(buffer) };
+}
+
+function makePlatformSurfaceSource(nativeHandle: number) {
+	if (process.platform === "win32") {
+		const hinstance = WGPUBridge.getHInstance();
+		return makeSurfaceSourceWindowsHWND(nativeHandle, Number(hinstance));
+	}
+	return makeSurfaceSourceMetalLayer(nativeHandle);
 }
 
 function makeSurfaceDescriptor(nextInChainPtr: number) {
@@ -753,11 +773,13 @@ export const wgpuViewTests = [
 		interactive: true,
 		timeout: 120000,
 		async run({ log, showInstructions }) {
-			await showInstructions([
-				"A GPU window will open",
-				"You should see a rotating cube",
-				"Close the window when done",
-			]);
+			if (!process.env["AUTO_RUN_WGPU"]) {
+				await showInstructions([
+					"A GPU window will open",
+					"You should see a rotating cube",
+					"Close the window when done",
+				]);
+			}
 
 			log("Opening WGPUView native cube window");
 
@@ -771,12 +793,8 @@ export const wgpuViewTests = [
 
 				win.setAlwaysOnTop(true);
 
-				if (process.platform !== "darwin") {
-					log("Native WGPU test only implemented on macOS for now");
-				} else {
-					WGPUBridge.runTest(win.wgpuViewId);
-					log("WGPU native test started");
-				}
+				WGPUBridge.runTest(win.wgpuViewId);
+				log("WGPU native test started");
 
 				win.on("close", () => resolve());
 			});
@@ -812,10 +830,6 @@ export const wgpuViewTests = [
 					log("WGPU native library not available");
 					return;
 				}
-				if (process.platform !== "darwin") {
-					log("Three.js playground only implemented on macOS for now");
-					return;
-				}
 
 				const layerPtr = win.wgpuView.getNativeHandle();
 				if (!layerPtr) {
@@ -825,11 +839,11 @@ export const wgpuViewTests = [
 
 				const start = async () => {
 					const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-					const metalLayerDesc = makeSurfaceSourceMetalLayer(
+					const surfaceSource = makePlatformSurfaceSource(
 						layerPtr as number,
 					);
 					const surfaceDesc = makeSurfaceDescriptor(
-						metalLayerDesc.ptr as number,
+						surfaceSource.ptr as number,
 					);
 					const surface = WGPUBridge.instanceCreateSurface(
 						instance as number,
@@ -860,7 +874,7 @@ export const wgpuViewTests = [
 					);
 					const pick = pickSurfaceFormatAlpha(
 						caps.view,
-						WGPUTextureFormat_BGRA8UnormSrgb,
+						WGPUTextureFormat_BGRA8Unorm,
 					);
 					const surfaceConfig = makeSurfaceConfiguration(
 						device,
@@ -1368,10 +1382,6 @@ fn fs_main(
 					log("WGPU native library not available");
 					return;
 				}
-				if (process.platform !== "darwin") {
-					log("Babylon.js playground only implemented on macOS for now");
-					return;
-				}
 
 				const start = async () => {
 					webgpu.install();
@@ -1497,8 +1507,6 @@ fn fs_main(
 
 				if (!WGPUNative.available) {
 					log("WGPU native library not available");
-				} else if (process.platform !== "darwin") {
-					log("WGPUView rendering test only implemented on macOS for now");
 				} else {
 					const layerPtr = win.wgpuView.getNativeHandle();
 					if (!layerPtr) {
@@ -1508,11 +1516,11 @@ fn fs_main(
 							log("WGPU: creating instance + surface");
 							await new Promise((resolve) => setTimeout(resolve, 100));
 							const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-							const metalLayerDesc = makeSurfaceSourceMetalLayer(
+							const surfaceSource = makePlatformSurfaceSource(
 								layerPtr as number,
 							);
 							const surfaceDesc = makeSurfaceDescriptor(
-								metalLayerDesc.ptr as number,
+								surfaceSource.ptr as number,
 							);
 							const surface = WGPUBridge.instanceCreateSurface(
 								instance as number,
@@ -1543,7 +1551,7 @@ fn fs_main(
 							);
 							const pick = pickSurfaceFormatAlpha(
 								caps.view,
-								WGPUTextureFormat_BGRA8UnormSrgb,
+								WGPUTextureFormat_BGRA8Unorm,
 							);
 							log(
 								`WGPU: surface format=${pick.format} alpha=${pick.alphaMode}`,

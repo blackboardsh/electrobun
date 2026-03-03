@@ -1789,11 +1789,22 @@ async function buildNative() {
 		const cefLib = `./vendors/cef/Release/libcef.lib`;
 		const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
 
+		const wgpuIncludeDir = join(
+			process.cwd(),
+			"vendors",
+			"wgpu",
+			`win-${ARCH}`,
+			"include",
+		);
+		const wgpuIncludeFlag = existsSync(wgpuIncludeDir)
+			? `/I"${wgpuIncludeDir}"`
+			: "";
+
 		// Compile the main wrapper with both WebView2 and CEF support (runtime detection)
 		// Use /MT to statically link the C runtime (matches libcpmt.lib that CEF uses)
 		await $`mkdir -p src/native/win/build`;
 		await runMsvcCommand(
-			`cl /c /EHsc /std:c++20 /DNOMINMAX /MT /I"${webview2Include}" /I"${cefInclude}" /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`,
+			`cl /c /EHsc /std:c++20 /DNOMINMAX /MT /I"${webview2Include}" /I"${cefInclude}" ${wgpuIncludeFlag} /D_USRDLL /D_WINDLL /Fosrc/native/win/build/nativeWrapper.obj src/native/win/nativeWrapper.cpp`,
 		);
 
 		// Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)

@@ -7,6 +7,7 @@ import { inflateSync } from "zlib";
 
 const WGPUNative = WGPU.native;
 const WGPUSType_SurfaceSourceMetalLayer = 0x00000004;
+const WGPUSType_SurfaceSourceWindowsHWND = 0x00000005;
 const WGPUTextureFormat_BGRA8Unorm = 0x0000001B;
 const WGPUTextureFormat_BGRA8UnormSrgb = 0x0000001C;
 const WGPUTextureFormat_RGBA8Unorm = 0x00000016;
@@ -234,6 +235,25 @@ function makeSurfaceSourceMetalLayer(layerPtr: number) {
 	writeU32(view, 12, 0);
 	writePtr(view, 16, layerPtr);
 	return { buffer, ptr: ptr(buffer) };
+}
+
+function makeSurfaceSourceWindowsHWND(hwnd: number, hinstance: number) {
+	const buffer = new ArrayBuffer(32);
+	const view = new DataView(buffer);
+	writePtr(view, 0, 0); // chain.next
+	writeU32(view, 8, WGPUSType_SurfaceSourceWindowsHWND); // chain.sType
+	writeU32(view, 12, 0); // padding
+	writePtr(view, 16, hinstance); // hinstance
+	writePtr(view, 24, hwnd); // hwnd
+	return { buffer, ptr: ptr(buffer) };
+}
+
+function makePlatformSurfaceSource(nativeHandle: number) {
+	if (process.platform === "win32") {
+		const hinstance = WGPUBridge.getHInstance();
+		return makeSurfaceSourceWindowsHWND(nativeHandle, Number(hinstance));
+	}
+	return makeSurfaceSourceMetalLayer(nativeHandle);
 }
 
 function makeSurfaceDescriptor(nextInChainPtr: number) {
@@ -2195,8 +2215,8 @@ function createContext(view: WGPUView | GpuWindow) {
 	const layerPtr = getLayerHandle(view);
 	if (!layerPtr) throw new Error("WGPUView native handle not available");
 	const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-	const metalLayerDesc = makeSurfaceSourceMetalLayer(layerPtr as number);
-	const surfaceDesc = makeSurfaceDescriptor(metalLayerDesc.ptr as number);
+	const surfaceSource = makePlatformSurfaceSource(layerPtr as number);
+	const surfaceDesc = makeSurfaceDescriptor(surfaceSource.ptr as number);
 	const surface = WGPUBridge.instanceCreateSurface(
 		instance as Pointer,
 		surfaceDesc.ptr as Pointer,

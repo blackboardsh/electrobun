@@ -424,6 +424,10 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.ptr, FFIType.ptr],
 				returns: FFIType.void,
 			},
+			getHInstance: {
+				args: [],
+				returns: FFIType.ptr,
+			},
 			// Tray
 			createTray: {
 				args: [
@@ -1628,6 +1632,10 @@ export const WGPUBridge = {
 			surfacePtr as any,
 			outAdapterDevicePtr as any,
 		),
+	getHInstance: (): Pointer | null => {
+		if (!native?.symbols?.getHInstance) return null;
+		return native.symbols.getHInstance() as Pointer;
+	},
 };
 
 // Worker management. Move to a different file

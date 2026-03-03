@@ -27,6 +27,7 @@
 #include <commctrl.h>
 #include <mutex>
 #include <atomic>
+#include <cstdarg>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/base.h>
 #include <shobjidl.h>  // For IFileOpenDialog
@@ -3922,6 +3923,10 @@ public:
         }
     }
 
+    void applyVisualMask() override {}
+    void removeMasks() override {}
+    void toggleMirrorMode(bool enable) override {}
+
     void findInPage(const char* searchText, bool forward, bool matchCase) override {}
     void stopFindInPage() override {}
     void openDevTools() override {}
@@ -6886,16 +6891,22 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
         return nullptr;
     }
 
-    auto container = GetOrCreateContainer(hwnd);
-    if (!container) {
-        ::log("ERROR: Failed to create container for WGPUView");
-        return nullptr;
-    }
-
     auto view = std::make_shared<WGPUView>(webviewId);
     view->fullSize = autoResize;
 
-    MainThreadDispatcher::dispatch_sync([view, container, x, y, width, height, startTransparent, startPassthrough]() {
+    // Create both container and WGPUView child on the main thread to avoid
+    // cross-thread child window deadlock (container on FFI thread + child on
+    // main thread would deadlock because CreateWindowExA sends messages to
+    // the parent's thread which is blocked on dispatch_sync).
+    ContainerView* container = nullptr;
+    MainThreadDispatcher::dispatch_sync([&container, view, hwnd, x, y, width, height, startTransparent, startPassthrough]() {
+        // Get or create container on main thread
+        container = GetOrCreateContainer(hwnd);
+        if (!container) {
+            ::log("ERROR: Failed to create container for WGPUView");
+            return;
+        }
+
         HWND containerHwnd = container->GetHwnd();
         if (!IsWindow(containerHwnd)) {
             ::log("ERROR: Container window handle invalid for WGPUView");
@@ -6932,6 +6943,11 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
             view->setPassthrough(true);
         }
     });
+
+    if (!container) {
+        ::log("ERROR: initWGPUView dispatch_sync completed but container is null");
+        return nullptr;
+    }
 
     container->AddAbstractView(view);
 
@@ -7010,6 +7026,10 @@ ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
     return abstractView->hwnd;
 }
 
+ELECTROBUN_EXPORT void* getHInstance() {
+    return GetModuleHandle(NULL);
+}
+
 // ----------------------- WGPU Main-Thread Shims -----------------------
 
 typedef void* (*PFN_wgpuInstanceCreateSurface)(void* instance, const void* descriptor);
@@ -7034,6 +7054,73 @@ static PFN_wgpuInstanceWaitAny p_wgpuInstanceWaitAny = nullptr;
 static PFN_wgpuBufferGetMappedRange p_wgpuBufferGetMappedRange = nullptr;
 static PFN_wgpuBufferGetConstMappedRange p_wgpuBufferGetConstMappedRange = nullptr;
 static PFN_wgpuBufferUnmap p_wgpuBufferUnmap = nullptr;
+
+// ----------------------- WGPU GPU Test (native cube) -----------------------
+
+// Helper for formatted WGPU test logging
+// Uses fprintf(stderr) + fflush for immediate visibility, plus the normal log() for file output
+static void wgpu_log(const char* fmt, ...) {
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    fprintf(stderr, "[WGPU] %s\n", buf);
+    fflush(stderr);
+    std::cout << "[WGPU] " << buf << std::endl;
+    std::cout.flush();
+}
+
+// Additional typedefs for the GPU test (matches macOS reference)
+typedef WGPUInstance (*PFN_wgpuCreateInstance)(WGPUInstanceDescriptor const* descriptor);
+typedef WGPUFuture (*PFN_wgpuInstanceRequestAdapter)(WGPUInstance instance, WGPURequestAdapterOptions const* options, WGPURequestAdapterCallbackInfo callbackInfo);
+typedef WGPUFuture (*PFN_wgpuAdapterRequestDevice)(WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
+typedef WGPUQueue (*PFN_wgpuDeviceGetQueue)(WGPUDevice device);
+typedef void (*PFN_wgpuSurfaceGetCapabilities2)(WGPUSurface surface, WGPUAdapter adapter, WGPUSurfaceCapabilities* capabilities);
+typedef void (*PFN_wgpuSurfaceCapabilitiesFreeMembers2)(WGPUSurfaceCapabilities capabilities);
+typedef WGPUShaderModule (*PFN_wgpuDeviceCreateShaderModule)(WGPUDevice device, WGPUShaderModuleDescriptor const* descriptor);
+typedef WGPURenderPipeline (*PFN_wgpuDeviceCreateRenderPipeline)(WGPUDevice device, WGPURenderPipelineDescriptor const* descriptor);
+typedef void (*PFN_wgpuDeviceSetLabel)(WGPUDevice device, WGPUStringView label);
+typedef WGPUBuffer (*PFN_wgpuDeviceCreateBuffer)(WGPUDevice device, WGPUBufferDescriptor const* descriptor);
+typedef void (*PFN_wgpuQueueWriteBuffer)(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset, void const* data, size_t size);
+typedef WGPUCommandEncoder (*PFN_wgpuDeviceCreateCommandEncoder)(WGPUDevice device, WGPUCommandEncoderDescriptor const* descriptor);
+typedef WGPURenderPassEncoder (*PFN_wgpuCommandEncoderBeginRenderPass)(WGPUCommandEncoder encoder, WGPURenderPassDescriptor const* descriptor);
+typedef void (*PFN_wgpuRenderPassEncoderSetPipeline)(WGPURenderPassEncoder pass, WGPURenderPipeline pipeline);
+typedef void (*PFN_wgpuRenderPassEncoderSetVertexBuffer)(WGPURenderPassEncoder pass, uint32_t slot, WGPUBuffer buffer, uint64_t offset, uint64_t size);
+typedef void (*PFN_wgpuRenderPassEncoderDraw)(WGPURenderPassEncoder pass, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance);
+typedef void (*PFN_wgpuRenderPassEncoderEnd)(WGPURenderPassEncoder pass);
+typedef WGPUCommandBuffer (*PFN_wgpuCommandEncoderFinish)(WGPUCommandEncoder encoder, WGPUCommandBufferDescriptor const* descriptor);
+typedef void (*PFN_wgpuQueueSubmit)(WGPUQueue queue, size_t commandCount, WGPUCommandBuffer const* commands);
+typedef WGPUTextureView (*PFN_wgpuTextureCreateView)(WGPUTexture texture, WGPUTextureViewDescriptor const* descriptor);
+typedef void (*PFN_wgpuTextureViewRelease)(WGPUTextureView view);
+typedef void (*PFN_wgpuTextureRelease)(WGPUTexture texture);
+typedef void (*PFN_wgpuCommandBufferRelease)(WGPUCommandBuffer buffer);
+typedef void (*PFN_wgpuCommandEncoderRelease)(WGPUCommandEncoder encoder);
+
+static PFN_wgpuCreateInstance p_wgpuCreateInstance = nullptr;
+static PFN_wgpuInstanceRequestAdapter p_wgpuInstanceRequestAdapter = nullptr;
+static PFN_wgpuAdapterRequestDevice p_wgpuAdapterRequestDevice = nullptr;
+static PFN_wgpuDeviceGetQueue p_wgpuDeviceGetQueue = nullptr;
+static PFN_wgpuSurfaceGetCapabilities2 p_wgpuSurfaceGetCapabilities = nullptr;
+static PFN_wgpuSurfaceCapabilitiesFreeMembers2 p_wgpuSurfaceCapabilitiesFreeMembers = nullptr;
+static PFN_wgpuDeviceCreateShaderModule p_wgpuDeviceCreateShaderModule = nullptr;
+static PFN_wgpuDeviceCreateRenderPipeline p_wgpuDeviceCreateRenderPipeline = nullptr;
+static PFN_wgpuDeviceSetLabel p_wgpuDeviceSetLabel = nullptr;
+static PFN_wgpuDeviceCreateBuffer p_wgpuDeviceCreateBuffer = nullptr;
+static PFN_wgpuQueueWriteBuffer p_wgpuQueueWriteBuffer = nullptr;
+static PFN_wgpuDeviceCreateCommandEncoder p_wgpuDeviceCreateCommandEncoder = nullptr;
+static PFN_wgpuCommandEncoderBeginRenderPass p_wgpuCommandEncoderBeginRenderPass = nullptr;
+static PFN_wgpuRenderPassEncoderSetPipeline p_wgpuRenderPassEncoderSetPipeline = nullptr;
+static PFN_wgpuRenderPassEncoderSetVertexBuffer p_wgpuRenderPassEncoderSetVertexBuffer = nullptr;
+static PFN_wgpuRenderPassEncoderDraw p_wgpuRenderPassEncoderDraw = nullptr;
+static PFN_wgpuRenderPassEncoderEnd p_wgpuRenderPassEncoderEnd = nullptr;
+static PFN_wgpuCommandEncoderFinish p_wgpuCommandEncoderFinish = nullptr;
+static PFN_wgpuQueueSubmit p_wgpuQueueSubmit = nullptr;
+static PFN_wgpuTextureCreateView p_wgpuTextureCreateView = nullptr;
+static PFN_wgpuTextureViewRelease p_wgpuTextureViewRelease = nullptr;
+static PFN_wgpuTextureRelease p_wgpuTextureRelease = nullptr;
+static PFN_wgpuCommandBufferRelease p_wgpuCommandBufferRelease = nullptr;
+static PFN_wgpuCommandEncoderRelease p_wgpuCommandEncoderRelease = nullptr;
 
 static std::wstring getExecutableDirW() {
     wchar_t buffer[MAX_PATH];
@@ -7093,6 +7180,405 @@ static bool ensureWgpuSymbols() {
         return false;
     }
     return true;
+}
+
+static bool ensureWgpuTestSymbols() {
+    if (!ensureWgpuSymbols()) return false;
+    HMODULE handle = loadWgpuLibrary();
+    if (!handle) return false;
+#define LOAD_TEST_SYM(name) \
+    p_##name = (decltype(p_##name))GetProcAddress(handle, #name); \
+    if (!p_##name) { \
+        wgpu_log("WGPU test: missing symbol " #name); \
+        return false; \
+    }
+    LOAD_TEST_SYM(wgpuCreateInstance);
+    LOAD_TEST_SYM(wgpuInstanceRequestAdapter);
+    LOAD_TEST_SYM(wgpuAdapterRequestDevice);
+    LOAD_TEST_SYM(wgpuDeviceGetQueue);
+    LOAD_TEST_SYM(wgpuSurfaceGetCapabilities);
+    LOAD_TEST_SYM(wgpuSurfaceCapabilitiesFreeMembers);
+    LOAD_TEST_SYM(wgpuDeviceCreateShaderModule);
+    LOAD_TEST_SYM(wgpuDeviceCreateRenderPipeline);
+    LOAD_TEST_SYM(wgpuDeviceSetLabel);
+    LOAD_TEST_SYM(wgpuDeviceCreateBuffer);
+    LOAD_TEST_SYM(wgpuQueueWriteBuffer);
+    LOAD_TEST_SYM(wgpuDeviceCreateCommandEncoder);
+    LOAD_TEST_SYM(wgpuCommandEncoderBeginRenderPass);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderSetPipeline);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderSetVertexBuffer);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderDraw);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderEnd);
+    LOAD_TEST_SYM(wgpuCommandEncoderFinish);
+    LOAD_TEST_SYM(wgpuQueueSubmit);
+    LOAD_TEST_SYM(wgpuTextureCreateView);
+    LOAD_TEST_SYM(wgpuTextureViewRelease);
+    LOAD_TEST_SYM(wgpuTextureRelease);
+    LOAD_TEST_SYM(wgpuCommandBufferRelease);
+    LOAD_TEST_SYM(wgpuCommandEncoderRelease);
+#undef LOAD_TEST_SYM
+    wgpu_log("WGPU test: all 24 test symbols loaded successfully");
+    return true;
+}
+
+// ---- GPU Test State and Rendering ----
+
+struct GPUTestState {
+    WGPUInstance instance = nullptr;
+    WGPUSurface surface = nullptr;
+    WGPUAdapter adapter = nullptr;
+    WGPUDevice device = nullptr;
+    WGPUQueue queue = nullptr;
+    WGPURenderPipeline pipeline = nullptr;
+    WGPUBuffer vertexBuffer = nullptr;
+    WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8UnormSrgb;
+    WGPUCompositeAlphaMode alphaMode = WGPUCompositeAlphaMode_Opaque;
+    HWND hwnd = NULL;
+    UINT_PTR timerId = 0;
+    float angle = 0.0f;
+    uint32_t lastWidth = 0;
+    uint32_t lastHeight = 0;
+    bool running = false;
+};
+
+static GPUTestState g_gpuTest;
+
+static const float kCubeVertices[] = {
+    // front
+    -0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+    -0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+    // back
+    -0.5f,-0.5f,-0.5f, -0.5f, 0.5f,-0.5f,  0.5f, 0.5f,-0.5f,
+    -0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f,-0.5f,-0.5f,
+    // left
+    -0.5f,-0.5f,-0.5f, -0.5f,-0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+    -0.5f,-0.5f,-0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,-0.5f,
+    // right
+     0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,
+     0.5f,-0.5f,-0.5f,  0.5f, 0.5f, 0.5f,  0.5f,-0.5f, 0.5f,
+    // top
+    -0.5f, 0.5f,-0.5f, -0.5f, 0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+    -0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,  0.5f, 0.5f,-0.5f,
+    // bottom
+    -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f,
+    -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
+};
+
+static void buildRotatedVertices(float angle, float* out, size_t count) {
+    const float sinY = sinf(angle);
+    const float cosY = cosf(angle);
+    const float sinX = sinf(angle * 0.7f);
+    const float cosX = cosf(angle * 0.7f);
+    for (size_t i = 0; i < count; i += 3) {
+        float x = kCubeVertices[i];
+        float y = kCubeVertices[i + 1];
+        float z = kCubeVertices[i + 2];
+        float x1 = x * cosY + z * sinY;
+        float z1 = -x * sinY + z * cosY;
+        float y1 = y * cosX - z1 * sinX;
+        float z2 = y * sinX + z1 * cosX;
+        float depth = z2 + 2.5f;
+        float proj = 1.2f / depth;
+        out[i] = x1 * proj;
+        out[i + 1] = y1 * proj;
+        out[i + 2] = 0.0f;
+    }
+}
+
+static void gpuTestConfigureSurface(GPUTestState* state) {
+    if (!state->surface || !state->device || !state->hwnd) return;
+
+    WGPUSurfaceCapabilities caps = {};
+    p_wgpuSurfaceGetCapabilities(state->surface, state->adapter, &caps);
+    if (caps.formatCount > 0 && caps.formats) {
+        state->surfaceFormat = caps.formats[0];
+        wgpu_log("WGPU test: surface format = %d (from %zu available)", (int)state->surfaceFormat, caps.formatCount);
+    }
+    if (caps.alphaModeCount > 0 && caps.alphaModes) {
+        state->alphaMode = caps.alphaModes[0];
+    }
+    p_wgpuSurfaceCapabilitiesFreeMembers(caps);
+
+    RECT rc;
+    GetClientRect(state->hwnd, &rc);
+    uint32_t w = (uint32_t)(rc.right - rc.left);
+    uint32_t h = (uint32_t)(rc.bottom - rc.top);
+    if (w == 0) w = 1;
+    if (h == 0) h = 1;
+    state->lastWidth = w;
+    state->lastHeight = h;
+
+    WGPUSurfaceConfiguration config = {};
+    config.device = state->device;
+    config.format = state->surfaceFormat;
+    config.usage = WGPUTextureUsage_RenderAttachment;
+    config.width = w;
+    config.height = h;
+    config.presentMode = WGPUPresentMode_Fifo;
+    config.alphaMode = state->alphaMode;
+    p_wgpuSurfaceConfigure(state->surface, &config);
+    wgpu_log("WGPU test: surface configured %ux%u", w, h);
+}
+
+static void gpuTestSetupPipeline(GPUTestState* state) {
+    if (!state->device) return;
+    const char* shaderSrc = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
+}
+)WGSL";
+
+    WGPUShaderSourceWGSL wgsl = {};
+    wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgsl.code.data = shaderSrc;
+    wgsl.code.length = WGPU_STRLEN;
+
+    WGPUShaderModuleDescriptor shaderDesc = {};
+    shaderDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgsl);
+
+    WGPUShaderModule shader = p_wgpuDeviceCreateShaderModule(state->device, &shaderDesc);
+    if (!shader) {
+        wgpu_log("WGPU test: FAILED to create shader module");
+        return;
+    }
+    wgpu_log("WGPU test: shader module created");
+
+    WGPUStringView vsEntry = { "vs_main", WGPU_STRLEN };
+    WGPUStringView fsEntry = { "fs_main", WGPU_STRLEN };
+
+    WGPUVertexAttribute attr = {};
+    attr.format = WGPUVertexFormat_Float32x3;
+    attr.offset = 0;
+    attr.shaderLocation = 0;
+
+    WGPUVertexBufferLayout vbuf = {};
+    vbuf.arrayStride = sizeof(float) * 3;
+    vbuf.attributeCount = 1;
+    vbuf.attributes = &attr;
+    vbuf.stepMode = WGPUVertexStepMode_Vertex;
+
+    WGPUVertexState vstate = {};
+    vstate.module = shader;
+    vstate.entryPoint = vsEntry;
+    vstate.bufferCount = 1;
+    vstate.buffers = &vbuf;
+
+    WGPUColorTargetState colorTarget = {};
+    colorTarget.format = state->surfaceFormat;
+    colorTarget.writeMask = WGPUColorWriteMask_All;
+
+    WGPUFragmentState fstate = {};
+    fstate.module = shader;
+    fstate.entryPoint = fsEntry;
+    fstate.targetCount = 1;
+    fstate.targets = &colorTarget;
+
+    WGPUPrimitiveState prim = {};
+    prim.topology = WGPUPrimitiveTopology_TriangleList;
+    prim.stripIndexFormat = WGPUIndexFormat_Undefined;
+    prim.frontFace = WGPUFrontFace_CCW;
+    prim.cullMode = WGPUCullMode_None;
+    prim.unclippedDepth = false;
+
+    WGPUMultisampleState ms = {};
+    ms.count = 1;
+    ms.mask = 0xFFFFFFFF;
+    ms.alphaToCoverageEnabled = false;
+
+    WGPURenderPipelineDescriptor rpDesc = {};
+    rpDesc.vertex = vstate;
+    rpDesc.primitive = prim;
+    rpDesc.multisample = ms;
+    rpDesc.fragment = &fstate;
+
+    state->pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
+    if (!state->pipeline) {
+        wgpu_log("WGPU test: FAILED to create render pipeline");
+        return;
+    }
+    wgpu_log("WGPU test: render pipeline created");
+
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
+    bufDesc.size = sizeof(kCubeVertices);
+    bufDesc.mappedAtCreation = false;
+    state->vertexBuffer = p_wgpuDeviceCreateBuffer(state->device, &bufDesc);
+    if (!state->vertexBuffer) {
+        wgpu_log("WGPU test: FAILED to create vertex buffer");
+        return;
+    }
+    wgpu_log("WGPU test: vertex buffer created (%zu bytes)", sizeof(kCubeVertices));
+
+    float initialVerts[sizeof(kCubeVertices) / sizeof(float)];
+    buildRotatedVertices(0.0f, initialVerts, sizeof(kCubeVertices) / sizeof(float));
+    p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, initialVerts, sizeof(initialVerts));
+    wgpu_log("WGPU test: pipeline setup complete");
+}
+
+static void gpuTestRenderFrame(GPUTestState* state) {
+    if (!state->device || !state->surface || !state->queue) return;
+    if (!state->hwnd || !IsWindow(state->hwnd)) return;
+    if (!state->pipeline) return;
+
+    RECT rc;
+    GetClientRect(state->hwnd, &rc);
+    uint32_t w = (uint32_t)(rc.right - rc.left);
+    uint32_t h = (uint32_t)(rc.bottom - rc.top);
+    if (w <= 1 || h <= 1) return;
+    if (w != state->lastWidth || h != state->lastHeight) {
+        wgpu_log("WGPU test: resize detected %ux%u -> %ux%u", state->lastWidth, state->lastHeight, w, h);
+        gpuTestConfigureSurface(state);
+    }
+
+    state->angle += 0.02f;
+    float verts[sizeof(kCubeVertices) / sizeof(float)];
+    buildRotatedVertices(state->angle, verts, sizeof(kCubeVertices) / sizeof(float));
+    p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
+
+    WGPUSurfaceTexture surfaceTexture = {};
+    p_wgpuSurfaceGetCurrentTexture(state->surface, &surfaceTexture);
+    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+        surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+        static int errorCount = 0;
+        if (errorCount++ < 5) {
+            wgpu_log("WGPU test: surface texture status = %d (not optimal/suboptimal)", (int)surfaceTexture.status);
+        }
+        return;
+    }
+    if (!surfaceTexture.texture) return;
+
+    WGPUTextureView view = p_wgpuTextureCreateView(surfaceTexture.texture, nullptr);
+
+    WGPURenderPassColorAttachment colorAtt = {};
+    colorAtt.view = view;
+    colorAtt.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    colorAtt.loadOp = WGPULoadOp_Clear;
+    colorAtt.storeOp = WGPUStoreOp_Store;
+    colorAtt.clearValue = {0.05, 0.05, 0.1, 1.0};
+
+    WGPURenderPassDescriptor passDesc = {};
+    passDesc.colorAttachmentCount = 1;
+    passDesc.colorAttachments = &colorAtt;
+
+    WGPUCommandEncoder encoder = p_wgpuDeviceCreateCommandEncoder(state->device, nullptr);
+    WGPURenderPassEncoder pass = p_wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    p_wgpuRenderPassEncoderSetPipeline(pass, state->pipeline);
+    p_wgpuRenderPassEncoderSetVertexBuffer(pass, 0, state->vertexBuffer, 0, sizeof(kCubeVertices));
+    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)(sizeof(kCubeVertices) / (sizeof(float) * 3)), 1, 0, 0);
+    p_wgpuRenderPassEncoderEnd(pass);
+
+    WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(encoder, nullptr);
+    p_wgpuQueueSubmit(state->queue, 1, &cmd);
+    p_wgpuSurfacePresent(state->surface);
+
+    p_wgpuTextureViewRelease(view);
+    p_wgpuTextureRelease(surfaceTexture.texture);
+    p_wgpuCommandBufferRelease(cmd);
+    p_wgpuCommandEncoderRelease(encoder);
+
+    static bool loggedFirstFrame = false;
+    if (!loggedFirstFrame) {
+        wgpu_log("WGPU test: first frame rendered successfully!");
+        loggedFirstFrame = true;
+    }
+}
+
+static void logWgpuStringView(const char* prefix, WGPUStringView sv) {
+    if (!sv.data) {
+        wgpu_log("%s (null)", prefix);
+        return;
+    }
+    size_t len = sv.length == WGPU_STRLEN ? strlen(sv.data) : (size_t)sv.length;
+    std::string msg(sv.data, sv.data + len);
+    wgpu_log("%s %s", prefix, msg.c_str());
+}
+
+static void gpuTestUncapturedErrorCallback(WGPUDevice const* device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2) {
+    (void)device;
+    (void)userdata1;
+    (void)userdata2;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "WGPU uncaptured error type=%d:", (int)type);
+    logWgpuStringView(buf, message);
+}
+
+static void CALLBACK gpuTestTimerProc(HWND hwnd, UINT msg, UINT_PTR id, DWORD time) {
+    (void)hwnd; (void)msg; (void)id; (void)time;
+    gpuTestRenderFrame(&g_gpuTest);
+}
+
+static void gpuTestRequestDeviceCallback(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2);
+
+static void gpuTestRequestAdapterCallback(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView message, void* userdata1, void* userdata2) {
+    if (status != WGPURequestAdapterStatus_Success) {
+        logWgpuStringView("WGPU test: adapter error:", message);
+    }
+    (void)userdata2;
+    GPUTestState* state = (GPUTestState*)userdata1;
+    if (!state || status != WGPURequestAdapterStatus_Success || !adapter) {
+        wgpu_log("WGPU test: adapter request FAILED (status=%d)", (int)status);
+        return;
+    }
+    wgpu_log("WGPU test: adapter acquired");
+    state->adapter = adapter;
+
+    WGPURequestDeviceCallbackInfo cbInfo = {};
+    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    cbInfo.callback = gpuTestRequestDeviceCallback;
+    cbInfo.userdata1 = state;
+    WGPUDeviceDescriptor deviceDesc = {};
+    deviceDesc.uncapturedErrorCallbackInfo.callback = gpuTestUncapturedErrorCallback;
+    deviceDesc.uncapturedErrorCallbackInfo.userdata1 = state;
+    p_wgpuAdapterRequestDevice(adapter, &deviceDesc, cbInfo);
+}
+
+static void gpuTestRequestDeviceCallback(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2) {
+    if (status != WGPURequestDeviceStatus_Success) {
+        logWgpuStringView("WGPU test: device error:", message);
+    }
+    (void)userdata2;
+    GPUTestState* state = (GPUTestState*)userdata1;
+    if (!state || status != WGPURequestDeviceStatus_Success || !device) {
+        wgpu_log("WGPU test: device request FAILED (status=%d)", (int)status);
+        return;
+    }
+    wgpu_log("WGPU test: device acquired");
+    state->device = device;
+
+    if (p_wgpuDeviceSetLabel) {
+        WGPUStringView label = { "Electrobun WGPU Device", WGPU_STRLEN };
+        p_wgpuDeviceSetLabel(device, label);
+    }
+    state->queue = p_wgpuDeviceGetQueue(device);
+    wgpu_log("WGPU test: queue acquired, configuring surface...");
+
+    gpuTestConfigureSurface(state);
+    gpuTestSetupPipeline(state);
+
+    // Start render loop using Windows timer (16ms ~ 60fps)
+    if (state->timerId) {
+        KillTimer(NULL, state->timerId);
+        state->timerId = 0;
+    }
+    state->timerId = SetTimer(NULL, 0, 16, gpuTestTimerProc);
+    if (state->timerId) {
+        state->running = true;
+        wgpu_log("WGPU test: render timer started (id=%llu, 16ms interval)", (unsigned long long)state->timerId);
+    } else {
+        wgpu_log("WGPU test: FAILED to create render timer, error=%lu", GetLastError());
+    }
 }
 
 static void* runOnMainThreadSyncPtr(std::function<void*()> fn) {
@@ -7356,17 +7842,142 @@ ELECTROBUN_EXPORT void wgpuBufferReadbackFreeShim(void* jobPtr) {
 }
 
 ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
-    (void)abstractView;
+    wgpu_log("WGPU test: wgpuRunGPUTest called, abstractView=%p", abstractView);
+    if (!abstractView) {
+        wgpu_log("WGPU test: abstractView is null, aborting");
+        return;
+    }
+    if (!ensureWgpuTestSymbols()) {
+        wgpu_log("WGPU test: failed to load test symbols, aborting");
+        return;
+    }
+
+    // Use dispatch_async like macOS - the adapter/device callbacks are async anyway
+    MainThreadDispatcher::dispatch_async([abstractView]() {
+        AbstractView* view = (AbstractView*)abstractView;
+        HWND hwnd = view->hwnd;
+        if (!hwnd || !IsWindow(hwnd)) {
+            wgpu_log("WGPU test: no valid HWND found on view (hwnd=%p)", hwnd);
+            return;
+        }
+        wgpu_log("WGPU test: got HWND=%p from WGPUView", hwnd);
+
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        wgpu_log("WGPU test: HWND client rect = %ldx%ld", rc.right - rc.left, rc.bottom - rc.top);
+
+        g_gpuTest.hwnd = hwnd;
+
+        // Create WGPU instance
+        if (!g_gpuTest.instance) {
+            g_gpuTest.instance = p_wgpuCreateInstance(nullptr);
+        }
+        if (!g_gpuTest.instance) {
+            wgpu_log("WGPU test: FAILED to create WGPU instance");
+            return;
+        }
+        wgpu_log("WGPU test: WGPU instance created = %p", g_gpuTest.instance);
+
+        // Create surface from Windows HWND
+        WGPUSurfaceSourceWindowsHWND hwndSource = {};
+        hwndSource.chain.sType = WGPUSType_SurfaceSourceWindowsHWND;
+        hwndSource.hinstance = (void*)GetModuleHandle(NULL);
+        hwndSource.hwnd = (void*)hwnd;
+        wgpu_log("WGPU test: creating surface with hinstance=%p hwnd=%p sType=0x%x",
+              hwndSource.hinstance, hwndSource.hwnd, (unsigned)hwndSource.chain.sType);
+
+        WGPUSurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&hwndSource);
+        g_gpuTest.surface = (WGPUSurface)p_wgpuInstanceCreateSurface(g_gpuTest.instance, &surfaceDesc);
+        if (!g_gpuTest.surface) {
+            wgpu_log("WGPU test: FAILED to create surface");
+            return;
+        }
+        wgpu_log("WGPU test: surface created = %p", g_gpuTest.surface);
+
+        // Request adapter
+        WGPURequestAdapterOptions opts = {};
+        opts.compatibleSurface = g_gpuTest.surface;
+        WGPURequestAdapterCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = gpuTestRequestAdapterCallback;
+        cbInfo.userdata1 = &g_gpuTest;
+        wgpu_log("WGPU test: requesting adapter...");
+        p_wgpuInstanceRequestAdapter(g_gpuTest.instance, &opts, cbInfo);
+    });
 }
 
 ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void* surfacePtr, void* outAdapterDevice) {
-    (void)instancePtr;
-    (void)surfacePtr;
-    if (outAdapterDevice) {
-        uint64_t* out = (uint64_t*)outAdapterDevice;
-        out[0] = 0;
-        out[1] = 0;
-    }
+    if (!ensureWgpuTestSymbols()) return;
+    MainThreadDispatcher::dispatch_sync([instancePtr, surfacePtr, outAdapterDevice]() {
+        WGPUInstance instance = (WGPUInstance)instancePtr;
+        WGPUSurface surface = (WGPUSurface)surfacePtr;
+
+        WGPUAdapter adapter = nullptr;
+        WGPUDevice device = nullptr;
+        HANDLE adapterEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+        HANDLE deviceEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+
+        // Request adapter
+        struct AdapterCtx { WGPUAdapter* adapter; HANDLE event; };
+        AdapterCtx adapterCtx = { &adapter, adapterEvent };
+
+        WGPURequestAdapterOptions opts = {};
+        opts.compatibleSurface = surface;
+        WGPURequestAdapterCallbackInfo adapterInfo = {};
+        adapterInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        adapterInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter cbAdapter, WGPUStringView message, void* userdata1, void* userdata2) {
+            (void)message; (void)userdata2;
+            AdapterCtx* ctx = (AdapterCtx*)userdata1;
+            if (status == WGPURequestAdapterStatus_Success) {
+                *(ctx->adapter) = cbAdapter;
+            }
+            SetEvent(ctx->event);
+        };
+        adapterInfo.userdata1 = &adapterCtx;
+        p_wgpuInstanceRequestAdapter(instance, &opts, adapterInfo);
+        WaitForSingleObject(adapterEvent, INFINITE);
+        CloseHandle(adapterEvent);
+
+        if (!adapter) {
+            wgpu_log("WGPU: adapter request failed in wgpuCreateAdapterDeviceMainThread");
+            if (outAdapterDevice) {
+                uint64_t* out = (uint64_t*)outAdapterDevice;
+                out[0] = 0;
+                out[1] = 0;
+            }
+            CloseHandle(deviceEvent);
+            return;
+        }
+
+        // Request device
+        struct DeviceCtx { WGPUDevice* device; HANDLE event; };
+        DeviceCtx deviceCtx = { &device, deviceEvent };
+
+        WGPURequestDeviceCallbackInfo deviceInfo = {};
+        deviceInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        deviceInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice cbDevice, WGPUStringView message, void* userdata1, void* userdata2) {
+            (void)message; (void)userdata2;
+            DeviceCtx* ctx = (DeviceCtx*)userdata1;
+            if (status == WGPURequestDeviceStatus_Success) {
+                *(ctx->device) = cbDevice;
+            }
+            SetEvent(ctx->event);
+        };
+        deviceInfo.userdata1 = &deviceCtx;
+        WGPUDeviceDescriptor deviceDesc = {};
+        deviceDesc.uncapturedErrorCallbackInfo.callback = gpuTestUncapturedErrorCallback;
+        deviceDesc.uncapturedErrorCallbackInfo.userdata1 = &deviceCtx;
+        p_wgpuAdapterRequestDevice(adapter, &deviceDesc, deviceInfo);
+        WaitForSingleObject(deviceEvent, INFINITE);
+        CloseHandle(deviceEvent);
+
+        if (outAdapterDevice) {
+            uint64_t* out = (uint64_t*)outAdapterDevice;
+            out[0] = (uint64_t)adapter;
+            out[1] = (uint64_t)device;
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView *abstractView, const char *htmlString) {

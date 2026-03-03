@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "fs";
-import { resolve, join } from "path";
+import { resolve, join, dirname } from "path";
+import { fileURLToPath } from "url";
 
-const root = resolve(process.cwd(), "package");
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const root = resolve(__dirname, "..");
 function resolveHeaderPath() {
 	const base = resolve(root, "vendors", "wgpu");
 	if (!existsSync(base)) return null;
