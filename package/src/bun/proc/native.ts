@@ -2816,6 +2816,19 @@ export const internalRpcHandlers = {
 			}
 			native.symbols.webviewToggleDevTools(webview.ptr);
 		},
+		webviewTagExecuteJavascript: (params: { id: number; js: string }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagExecuteJavascript: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.evaluateJavaScriptWithNoCompletion(
+				webview.ptr,
+				toCString(params.js),
+			);
+		},
 		webviewEvent: (params: unknown) => {
 			console.log("-----------------+webviewEvent", params);
 		},
