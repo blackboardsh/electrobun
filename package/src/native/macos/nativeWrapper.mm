@@ -2681,24 +2681,16 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     }
 
     - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {
-        WKContentWorld *isolatedWorld = [WKContentWorld pageWorld];
+        // Copy the string before dispatch_async since the JS-side buffer may be GC'd
         NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
-        [self.webView evaluateJavaScript:code
-                                inFrame:nil
-                        inContentWorld:isolatedWorld
-                    completionHandler:nil];
-
-        // DEBUG
-        // [self.webView evaluateJavaScript:code
-        //                   inFrame:nil
-        //           inContentWorld:isolatedWorld
-        //       completionHandler:^(id result, NSError *error) {
-        //     if (error) {
-        //         NSLog(@"JavaScript evaluation error: %@", error);
-        //     } else {
-        //         NSLog(@"JavaScript evaluation result: %@", result);
-        //     }
-        // }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!self.webView) return;
+            WKContentWorld *isolatedWorld = [WKContentWorld pageWorld];
+            [self.webView evaluateJavaScript:code
+                                    inFrame:nil
+                            inContentWorld:isolatedWorld
+                        completionHandler:nil];
+        });
     }
 
     - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
