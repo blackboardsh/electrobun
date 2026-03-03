@@ -2388,8 +2388,14 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
                 // add subview
                 [window.contentView addSubview:self.webView positioned:NSWindowAbove relativeTo:nil];
-                CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
-                self.webView.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+                // For fullSize webviews, use the content view's bounds (excludes title bar)
+                // instead of the passed frame which may include the window chrome dimensions.
+                NSRect webviewFrame = autoResize ? window.contentView.bounds : frame;
+                if (!autoResize) {
+                    CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
+                    webviewFrame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+                }
+                self.webView.frame = webviewFrame;
 
                 // Ensure the webview is properly layer-backed and visible
                 self.webView.wantsLayer = YES;
@@ -6190,13 +6196,13 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         NSWindow *window = [notification object];
         NSRect windowFrame = [window frame];
         ContainerView *containerView = [window contentView];
-        NSRect fullFrame = [window frame];
-        fullFrame.origin.x = 0;
-        fullFrame.origin.y = 0;                
-                
-        for (AbstractView *abstractView in containerView.abstractViews) {                              
-            if (abstractView.fullSize) {                
-                [abstractView resize:fullFrame withMasksJSON:""];                
+        // Use the content view's bounds (excludes title bar) instead of the
+        // window frame so fullSize webviews don't overflow the visible area.
+        NSRect fullFrame = containerView.bounds;
+
+        for (AbstractView *abstractView in containerView.abstractViews) {
+            if (abstractView.fullSize) {
+                [abstractView resize:fullFrame withMasksJSON:""];
             }
 
         }
