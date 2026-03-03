@@ -4,7 +4,6 @@ import { CString, ptr } from "bun:ffi";
 
 const WGPUNative = WGPU.native;
 
-const WGPUSType_SurfaceSourceMetalLayer = 0x00000004;
 const WGPUTextureFormat_BGRA8UnormSrgb = 0x0000001c;
 const WGPUTextureUsage_RenderAttachment = 0x0000000000000010n;
 const WGPUVertexStepMode_Vertex = 0x00000001;
@@ -28,25 +27,6 @@ function writeU32(view: DataView, offset: number, value: number | bigint) {
 
 function writeU64(view: DataView, offset: number, value: bigint) {
 	view.setBigUint64(offset, value, true);
-}
-
-function makeSurfaceSourceMetalLayer(layerPtr: number) {
-	const buffer = new ArrayBuffer(24);
-	const view = new DataView(buffer);
-	writePtr(view, 0, 0);
-	writeU32(view, 8, WGPUSType_SurfaceSourceMetalLayer);
-	writeU32(view, 12, 0);
-	writePtr(view, 16, layerPtr);
-	return { buffer, ptr: ptr(buffer) };
-}
-
-function makeSurfaceDescriptor(nextInChainPtr: number) {
-	const buffer = new ArrayBuffer(24);
-	const view = new DataView(buffer);
-	writePtr(view, 0, nextInChainPtr);
-	writePtr(view, 8, 0);
-	writeU64(view, 16, 0n);
-	return { buffer, ptr: ptr(buffer) };
 }
 
 function makeSurfaceConfiguration(
@@ -293,10 +273,6 @@ export const wgpuFfiTests = [
 				log("WGPU native library not available; skipping");
 				return;
 			}
-			if (process.platform !== "darwin") {
-				log("WGPU smoke test only implemented on macOS for now");
-				return;
-			}
 
 			const win = new GpuWindow({
 				title: "WGPU FFI Smoke",
@@ -305,16 +281,14 @@ export const wgpuFfiTests = [
 				transparent: false,
 			});
 
-			const layerPtr = win.wgpuView.getNativeHandle();
-			expect(!!layerPtr).toBeTruthy();
+			expect(!!win.wgpuView.ptr).toBeTruthy();
 
 			const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-			const metalLayerDesc = makeSurfaceSourceMetalLayer(layerPtr as number);
-			const surfaceDesc = makeSurfaceDescriptor(metalLayerDesc.ptr as number);
-			const surface = WGPUBridge.instanceCreateSurface(
+			const surface = WGPUBridge.createSurfaceForView(
 				instance as number,
-				surfaceDesc.ptr as number,
+				win.wgpuView.ptr as number,
 			);
+			expect(!!surface).toBeTruthy();
 
 			const adapterDevice = new BigUint64Array(2);
 			WGPUBridge.createAdapterDeviceMainThread(

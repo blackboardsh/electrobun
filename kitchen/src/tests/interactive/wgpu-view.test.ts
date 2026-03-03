@@ -776,7 +776,7 @@ export const wgpuViewTests = [
 
 			log("Opening Three.js playground window");
 
-			await new Promise<void>((resolve) => {
+			await new Promise<void>((resolve, reject) => {
 				const win = new GpuWindow({
 					title: "Three.js WGPU Playground",
 					frame: { width: 600, height: 450, x: 260, y: 180 },
@@ -788,6 +788,7 @@ export const wgpuViewTests = [
 
 				if (!WGPUNative.available) {
 					log("WGPU native library not available");
+					resolve();
 					return;
 				}
 
@@ -1313,11 +1314,15 @@ fn fs_main(
 					};
 
 					const interval = setInterval(renderFrame, 16);
-					win.on("close", () => clearInterval(interval));
+					win.on("close", () => {
+						clearInterval(interval);
+						resolve();
+					});
 				};
 
 				start().catch((err) => {
 					log(`Three.js render setup failed: ${String(err)}`);
+					reject(err);
 				});
 			});
 		},

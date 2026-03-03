@@ -10818,7 +10818,11 @@ extern "C" ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
 }
 
 extern "C" ELECTROBUN_EXPORT uint64_t getMouseButtons() {
-    return 0;
+    uint64_t buttons = 0;
+    if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) buttons |= 1ull << 0;
+    if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) buttons |= 1ull << 1;
+    if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) buttons |= 1ull << 2;
+    return buttons;
 }
 
 /*
