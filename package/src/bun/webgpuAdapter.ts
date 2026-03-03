@@ -145,6 +145,8 @@ const WGPU_DEPTH_SLICE_UNDEFINED = 0xffffffff;
 const WGPU_KEEPALIVE: any[] = [];
 let LAST_SURFACE_PTR: number | null = null;
 let LAST_SURFACE_HAS_TEXTURE = false;
+let LAST_CREATED_CONTEXT: GPUCanvasContext | null = null;
+const VIEW_CONTEXTS = new Map<number, { instance: number; surface: number; context: GPUCanvasContext }>();
 const MAP_ASYNC_RESOLVERS = new Map<number, (mapped: boolean) => void>();
 const WORK_DONE_RESOLVERS = new Map<number, (ok: boolean) => void>();
 
@@ -853,6 +855,7 @@ function pickSurfaceFormatAlpha(capsView: DataView, preferredFormat: number) {
 	const alphaCount = readU64(capsView, 48);
 	const alphaPtr = readPtr(capsView, 56);
 	let alphaMode = WGPUCompositeAlphaMode_Opaque;
+	const alphaModes: number[] = [];
 	if (alphaCount && alphaPtr) {
 		const alphas = new Uint32Array(
 			(ptr as any)(alphaPtr).buffer,
@@ -860,11 +863,12 @@ function pickSurfaceFormatAlpha(capsView: DataView, preferredFormat: number) {
 			alphaCount,
 		);
 		if (alphas.length) {
+			alphaModes.push(...alphas);
 			alphaMode = alphas[0]!;
 		}
 	}
 
-	return { format, alphaMode };
+	return { format, alphaMode, alphaModes };
 }
 
 class GPUTexture {
@@ -1109,6 +1113,9 @@ class GPUDevice {
 	_uncapturedErrorListeners: ((event: { error: Error }) => void)[] = [];
 	instancePtr: number | null = null;
 	constructor(ptr: number, instancePtr?: number) {
+		if (!ptr) {
+			throw new Error("Failed to create WGPU device");
+		}
 		this.ptr = ptr;
 		this.instancePtr = instancePtr ?? null;
 		this.queue = new GPUQueue(WGPUNative.symbols.wgpuDeviceGetQueue(ptr));
@@ -2081,22 +2088,29 @@ class GPUAdapter {
 			this.surfacePtr as any,
 			ptr(adapterDevice),
 		);
-		const device = Number(adapterDevice[1]);
+		const devicePtr = adapterDevice[1];
+		if (devicePtr === 0n) {
+			throw new Error("Failed to create WGPU device");
+		}
+		const device = Number(devicePtr);
 		return new GPUDevice(device, this.instancePtr);
 	}
 }
 
 class GPUCanvasContext {
 	surfacePtr: number;
+	instancePtr: number | null = null;
 	devicePtr: number | null = null;
 	format: number = WGPUTextureFormat_BGRA8UnormSrgb;
 	alphaMode: number = WGPUCompositeAlphaMode_Opaque;
+	supportedAlphaModes = new Set<number>([WGPUCompositeAlphaMode_Opaque]);
 	width = 1;
 	height = 1;
 	private _hasCurrentTexture = false;
 	_fallbackSize?: { width: number; height: number };
-	constructor(surfacePtr: number) {
+	constructor(surfacePtr: number, instancePtr?: number) {
 		this.surfacePtr = surfacePtr;
+		this.instancePtr = instancePtr ?? null;
 	}
 	configure(options: {
 		device: GPUDevice;
@@ -2117,10 +2131,23 @@ class GPUCanvasContext {
 					: options.format;
 		}
 		if (options.alphaMode) {
-			this.alphaMode =
+			const requestedAlphaMode =
 				typeof options.alphaMode === "string"
-					? mapAlphaMode(options.alphaMode) ?? this.alphaMode
+					? mapAlphaMode(options.alphaMode)
 					: options.alphaMode;
+			if (
+				typeof requestedAlphaMode === "number" &&
+				this.supportedAlphaModes.has(requestedAlphaMode)
+			) {
+				this.alphaMode = requestedAlphaMode;
+			} else if (
+				typeof requestedAlphaMode === "number" &&
+				!this.supportedAlphaModes.has(requestedAlphaMode)
+			) {
+				this.alphaMode =
+					this.supportedAlphaModes.values().next().value ??
+					WGPUCompositeAlphaMode_Opaque;
+			}
 		}
 		if (options.size) {
 			this.width = options.size.width;
@@ -2171,7 +2198,18 @@ function getViewPtr(view: WGPUView | GpuWindow): Pointer | null {
 	return view.ptr;
 }
 
+function getViewContextKey(view: WGPUView | GpuWindow) {
+	return view.id;
+}
+
 function createContext(view: WGPUView | GpuWindow) {
+	const key = getViewContextKey(view);
+	const existing = VIEW_CONTEXTS.get(key);
+	if (existing) {
+		LAST_CREATED_CONTEXT = existing.context;
+		return existing;
+	}
+
 	const viewPtr = getViewPtr(view);
 	if (!viewPtr) throw new Error("WGPUView pointer not available");
 	const instance = WGPUNative.symbols.wgpuCreateInstance(0);
@@ -2189,9 +2227,15 @@ function createContext(view: WGPUView | GpuWindow) {
 	);
 	const pick = pickSurfaceFormatAlpha(caps.view, WGPUTextureFormat_BGRA8UnormSrgb);
 
-	const ctx = new GPUCanvasContext(surface as unknown as number);
+	const ctx = new GPUCanvasContext(
+		surface as unknown as number,
+		Number(instance),
+	);
 	ctx.format = pick.format;
 	ctx.alphaMode = pick.alphaMode;
+	ctx.supportedAlphaModes = new Set(
+		pick.alphaModes.length ? pick.alphaModes : [pick.alphaMode],
+	);
 	try {
 		if (view instanceof GpuWindow) {
 			const size = view.getSize();
@@ -2201,11 +2245,19 @@ function createContext(view: WGPUView | GpuWindow) {
 		}
 	} catch {}
 
-	return { instance: Number(instance), surface: Number(surface), context: ctx };
+	const created = {
+		instance: Number(instance),
+		surface: Number(surface),
+		context: ctx,
+	};
+	VIEW_CONTEXTS.set(key, created);
+	LAST_CREATED_CONTEXT = ctx;
+	return created;
 }
 
 function createCanvasShim(win: GpuWindow) {
 	const size = win.getSize();
+	const ctx = createContext(win);
 	return {
 		width: size.width,
 		height: size.height,
@@ -2214,7 +2266,6 @@ function createCanvasShim(win: GpuWindow) {
 		style: {},
 		getContext: (type: string) => {
 			if (type !== "webgpu") return null;
-			const ctx = createContext(win);
 			return ctx.context;
 		},
 		getBoundingClientRect: () => {
@@ -2909,11 +2960,16 @@ function repackTextureData(
 const webgpu = {
 	navigator: {
 		async requestAdapter(options?: { compatibleSurface?: GPUCanvasContext }) {
-			const surfacePtr = options?.compatibleSurface
-				? options.compatibleSurface.surfacePtr
-				: 0;
+			const compatibleSurface =
+				options?.compatibleSurface ?? LAST_CREATED_CONTEXT ?? undefined;
+			if (compatibleSurface?.instancePtr) {
+				return new GPUAdapter(
+					compatibleSurface.instancePtr,
+					compatibleSurface.surfacePtr,
+				);
+			}
 			const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-			return new GPUAdapter(Number(instance), surfacePtr);
+			return new GPUAdapter(Number(instance), 0);
 		},
 		getPreferredCanvasFormat() {
 			return "bgra8unorm";

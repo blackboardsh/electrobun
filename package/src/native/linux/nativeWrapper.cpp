@@ -36,6 +36,7 @@
 #include <condition_variable>
 #include <fstream>
 #include <set>
+#include <cstdarg>
 #include "dawn/webgpu.h"
 
 // Shared cross-platform utilities
@@ -208,16 +209,18 @@ struct X11Window {
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
+    WindowKeyHandler keyCallback;
     std::vector<Window> childWindows;  // For managing webviews
     ContainerView* containerView = nullptr;  // Associated container for webview management
     bool transparent = false;  // Track if window is transparent
 
-    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr), transparent(false) {}
+    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr), keyCallback(nullptr), transparent(false) {}
 };
 
 // Forward declarations for icon management
 static void autoSetWindowIcon(void* window);
 static void setX11WindowIcon(X11Window* x11win, GdkPixbuf* pixbuf);
+extern "C" void stopWgpuTestForWindow(Window window);
 
 // Forward declaration for X11 menu function
 void applyApplicationMenuToX11Window(X11Window* x11win);
@@ -352,6 +355,35 @@ std::string getExecutableDir() {
         }
     }
     return "."; // fallback to current directory
+}
+
+static std::mutex g_x11ErrorTrapMutex;
+static int g_lastX11ErrorCode = 0;
+
+static int x11ErrorTrapHandler(Display* /*display*/, XErrorEvent* errorEvent) {
+    g_lastX11ErrorCode = errorEvent ? errorEvent->error_code : BadWindow;
+    return 0;
+}
+
+static bool x11GetWindowAttributesSafe(Display* display, Window window, XWindowAttributes* outAttrs) {
+    if (!display || !window || !outAttrs) return false;
+    std::lock_guard<std::mutex> lock(g_x11ErrorTrapMutex);
+    auto previousHandler = XSetErrorHandler(x11ErrorTrapHandler);
+    g_lastX11ErrorCode = 0;
+    Status status = XGetWindowAttributes(display, window, outAttrs);
+    XSync(display, False);
+    XSetErrorHandler(previousHandler);
+    return status != 0 && g_lastX11ErrorCode == 0;
+}
+
+static void x11DestroyWindowSafe(Display* display, Window window) {
+    if (!display || !window) return;
+    std::lock_guard<std::mutex> lock(g_x11ErrorTrapMutex);
+    auto previousHandler = XSetErrorHandler(x11ErrorTrapHandler);
+    g_lastX11ErrorCode = 0;
+    XDestroyWindow(display, window);
+    XSync(display, False);
+    XSetErrorHandler(previousHandler);
 }
 
 // CEF availability check - runtime check for CEF files in app bundle
@@ -3210,6 +3242,9 @@ public:
 class WGPUViewImpl : public AbstractView {
 public:
     GtkWidget* viewWidget = nullptr;
+    Display* xDisplay = nullptr;
+    Window parentXWindow = 0;
+    Window xWindow = 0;
 
     WGPUViewImpl(uint32_t webviewId)
         : AbstractView(webviewId) {}
@@ -3225,7 +3260,18 @@ public:
     void updateCustomPreloadScript(const char* jsString) override {}
 
     void resize(const GdkRectangle& frame, const char* masksJson) override {
-        if (viewWidget) {
+        if (xDisplay && xWindow) {
+            XMoveResizeWindow(
+                xDisplay,
+                xWindow,
+                frame.x,
+                frame.y,
+                std::max(1, frame.width),
+                std::max(1, frame.height)
+            );
+            XFlush(xDisplay);
+            visualBounds = frame;
+        } else if (viewWidget) {
             gtk_widget_set_size_request(viewWidget, frame.width, frame.height);
 
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(viewWidget), "wrapper");
@@ -3255,26 +3301,70 @@ public:
     void toggleMirrorMode(bool enable) override {
         if (mirrorModeEnabled == enable) return;
         mirrorModeEnabled = enable;
-        if (viewWidget) {
+        if (xDisplay && xWindow) {
+            setPassthrough(enable);
+        } else if (viewWidget) {
             gtk_widget_set_sensitive(viewWidget, enable ? FALSE : TRUE);
         }
     }
 
     void setHidden(bool hidden) override {
-        if (viewWidget) {
+        if (xDisplay && xWindow) {
+            if (hidden) {
+                XUnmapWindow(xDisplay, xWindow);
+            } else {
+                XMapRaised(xDisplay, xWindow);
+            }
+            XFlush(xDisplay);
+        } else if (viewWidget) {
             hidden ? gtk_widget_hide(viewWidget) : gtk_widget_show(viewWidget);
         }
     }
 
     void setTransparent(bool transparent) override {
-        if (viewWidget) {
+        if (xDisplay && xWindow) {
+            (void)transparent;
+        } else if (viewWidget) {
             gtk_widget_set_opacity(viewWidget, transparent ? 0.0 : 1.0);
         }
     }
 
     void setPassthrough(bool enable) override {
         AbstractView::setPassthrough(enable);
-        if (viewWidget) {
+        if (xDisplay && xWindow) {
+            if (enable) {
+                XShapeCombineRectangles(
+                    xDisplay,
+                    xWindow,
+                    ShapeInput,
+                    0,
+                    0,
+                    nullptr,
+                    0,
+                    ShapeSet,
+                    Unsorted
+                );
+            } else {
+                XRectangle rect = {
+                    0,
+                    0,
+                    static_cast<unsigned short>(std::max(1, visualBounds.width)),
+                    static_cast<unsigned short>(std::max(1, visualBounds.height)),
+                };
+                XShapeCombineRectangles(
+                    xDisplay,
+                    xWindow,
+                    ShapeInput,
+                    0,
+                    0,
+                    &rect,
+                    1,
+                    ShapeSet,
+                    Unsorted
+                );
+            }
+            XFlush(xDisplay);
+        } else if (viewWidget) {
             gtk_widget_set_sensitive(viewWidget, enable ? FALSE : TRUE);
         }
     }
@@ -3286,7 +3376,14 @@ public:
     void toggleDevTools() override {}
 
     void remove() override {
-        if (viewWidget) {
+        if (xDisplay && xWindow) {
+            stopWgpuTestForWindow(xWindow);
+            x11DestroyWindowSafe(xDisplay, xWindow);
+            xWindow = 0;
+            xDisplay = nullptr;
+            parentXWindow = 0;
+            widget = nullptr;
+        } else if (viewWidget) {
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(viewWidget), "wrapper");
             if (wrapper) {
                 gtk_widget_destroy(wrapper);
@@ -4547,7 +4644,32 @@ static guint g_buttonReleaseHandlerId = 0;
 // X11 window management
 static std::map<uint32_t, std::shared_ptr<X11Window>> g_x11_windows;
 static std::map<Window, uint32_t> g_x11_window_to_id;
+static std::map<Window, uint32_t> g_x11_child_window_to_parent_id;
 static std::mutex g_x11WindowsMutex;
+
+static uint32_t modifiersFromX11State(unsigned int state) {
+    uint32_t modifiers = 0;
+    if (state & ShiftMask) modifiers |= 1u << 0;
+    if (state & ControlMask) modifiers |= 1u << 1;
+    if (state & Mod1Mask) modifiers |= 1u << 2;
+    if (state & Mod4Mask) modifiers |= 1u << 3;
+    return modifiers;
+}
+
+static uint64_t mouseButtonsFromGdkModifiers(GdkModifierType modifiers) {
+    uint64_t buttons = 0;
+    if (modifiers & GDK_BUTTON1_MASK) buttons |= 1ull << 0;
+    if (modifiers & GDK_BUTTON3_MASK) buttons |= 1ull << 1;
+    if (modifiers & GDK_BUTTON2_MASK) buttons |= 1ull << 2;
+    return buttons;
+}
+
+static void focusX11Window(Display* display, Window window) {
+    if (!display || !window) return;
+    XRaiseWindow(display, window);
+    XSetInputFocus(display, window, RevertToParent, CurrentTime);
+    XFlush(display);
+}
 
 // X11 event processing for OSR windows
 void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> client) {
@@ -4692,6 +4814,16 @@ GtkWidget* getContainerViewOverlay(GtkWidget* window) {
     for (auto& [id, container] : g_containers) {
         if (container->window == window) {
             return container->overlay;
+        }
+    }
+    return nullptr;
+}
+
+static std::shared_ptr<ContainerView> getContainerViewForWindow(GtkWidget* window) {
+    std::lock_guard<std::mutex> lock(g_containersMutex);
+    for (auto& [id, container] : g_containers) {
+        if (container->window == window) {
+            return container;
         }
     }
     return nullptr;
@@ -5335,7 +5467,11 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
         for (auto& [webviewId, webview] : g_webviewMap) {
             if (webview) {
                 CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
-                if (cefView && cefView->parentXWindow == x11WindowHandle) {
+                WGPUViewImpl* wgpuView = dynamic_cast<WGPUViewImpl*>(webview.get());
+                bool belongsToWindow =
+                    (cefView && cefView->parentXWindow == x11WindowHandle) ||
+                    (wgpuView && wgpuView->parentXWindow == x11WindowHandle);
+                if (belongsToWindow) {
                     if (webview->fullSize) {
                         fullSizeWebviews.push_back({webviewId, webview});
                     } else {
@@ -5407,6 +5543,28 @@ gboolean process_x11_events(gpointer data) {
         while (XPending(x11win->display)) {
             XEvent event;
             XNextEvent(x11win->display, &event);
+
+            std::shared_ptr<X11Window> childParentWindow;
+            {
+                std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+                auto childIt = g_x11_child_window_to_parent_id.find(event.xany.window);
+                if (childIt != g_x11_child_window_to_parent_id.end()) {
+                    auto parentIt = g_x11_windows.find(childIt->second);
+                    if (parentIt != g_x11_windows.end()) {
+                        childParentWindow = parentIt->second;
+                    }
+                }
+            }
+
+            if (childParentWindow) {
+                if (event.type == ButtonPress || event.type == FocusIn) {
+                    focusX11Window(childParentWindow->display, childParentWindow->window);
+                    if (childParentWindow->focusCallback) {
+                        childParentWindow->focusCallback(childParentWindow->windowId);
+                    }
+                }
+                continue;
+            }
             
             // Validate window still exists in maps
             bool window_valid = false;
@@ -5479,6 +5637,19 @@ gboolean process_x11_events(gpointer data) {
                     // Window received focus
                     if (x11win->focusCallback) {
                         x11win->focusCallback(x11win->windowId);
+                    }
+                    break;
+
+                case KeyPress:
+                case KeyRelease:
+                    if (x11win->keyCallback) {
+                        x11win->keyCallback(
+                            x11win->windowId,
+                            static_cast<uint32_t>(event.xkey.keycode),
+                            modifiersFromX11State(event.xkey.state),
+                            event.type == KeyPress ? 1u : 0u,
+                            0u
+                        );
                     }
                     break;
             }
@@ -5555,7 +5726,7 @@ void runEventLoop() {
 void showWindow(void* window);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
     void* result = dispatch_sync_main([&]() -> void* {
@@ -5702,6 +5873,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->moveCallback = moveCallback;
             x11win->resizeCallback = resizeCallback;
             x11win->focusCallback = focusCallback;
+            x11win->keyCallback = keyCallback;
             x11win->transparent = transparent;
 
             // Store in global maps
@@ -5845,7 +6017,7 @@ ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowI
                                              WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback) {
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
-        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
+        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, keyCallback, titleBarStyle, transparent);
     } else {
         // Pass titleBarStyle and transparent to GTK window creation
         return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
@@ -6177,10 +6349,60 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
     view->pendingStartTransparent = startTransparent;
     view->pendingStartPassthrough = startPassthrough;
 
-    GtkWidget* windowWidget = static_cast<GtkWidget*>(window);
-
     dispatch_sync_main_void([&]() {
-        auto container = GetOrCreateContainer(windowWidget);
+        GdkRectangle frame = {(int)x, (int)y, (int)width, (int)height};
+        if (isCEFAvailable()) {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (!x11win || !x11win->display || !x11win->window) {
+                fprintf(stderr, "ERROR: Failed to create X11-backed WGPUView\n");
+                view->creationFailed = true;
+                return;
+            }
+
+            XSetWindowAttributes attrs = {};
+            attrs.border_pixel = 0;
+            attrs.background_pixel = 0;
+            attrs.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask | FocusChangeMask;
+            view->xDisplay = x11win->display;
+            view->parentXWindow = x11win->window;
+            view->xWindow = XCreateWindow(
+                x11win->display,
+                x11win->window,
+                (int)x,
+                (int)y,
+                std::max(1, (int)width),
+                std::max(1, (int)height),
+                0,
+                CopyFromParent,
+                InputOutput,
+                CopyFromParent,
+                CWBorderPixel | CWBackPixel | CWEventMask,
+                &attrs
+            );
+            if (!view->xWindow) {
+                fprintf(stderr, "ERROR: XCreateWindow failed for WGPUView\n");
+                view->creationFailed = true;
+                return;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+                g_x11_child_window_to_parent_id[view->xWindow] = x11win->windowId;
+            }
+
+            XMapRaised(x11win->display, view->xWindow);
+            view->resize(frame, "");
+
+            if (startPassthrough) {
+                view->setPassthrough(true);
+                view->pendingStartPassthrough = false;
+            }
+            XFlush(x11win->display);
+            return;
+        }
+
+        GtkWidget* windowWidget = static_cast<GtkWidget*>(window);
+        auto container = getContainerViewForWindow(windowWidget);
         if (!container) {
             fprintf(stderr, "ERROR: Failed to create container for WGPUView\n");
             view->creationFailed = true;
@@ -6192,10 +6414,12 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
 
         gtk_widget_set_size_request(view->viewWidget, (int)width, (int)height);
         container->addWebview(view, x, y);
-
-        GdkRectangle frame = {(int)x, (int)y, (int)width, (int)height};
         view->resize(frame, "");
     });
+
+    if (view->creationFailed) {
+        return nullptr;
+    }
 
     {
         std::lock_guard<std::mutex> lock(g_webviewMapMutex);
@@ -6246,6 +6470,11 @@ ELECTROBUN_EXPORT void wgpuViewSetHidden(AbstractView* abstractView, bool hidden
 ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView* abstractView) {
     if (!abstractView) return;
     uint32_t viewId = abstractView->webviewId;
+    WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+    if (view && view->xWindow) {
+        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+        g_x11_child_window_to_parent_id.erase(view->xWindow);
+    }
     dispatch_sync_main_void([&]() {
         abstractView->remove();
     });
@@ -6256,7 +6485,18 @@ ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView* abstractView) {
 }
 
 ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView* abstractView) {
-    (void)abstractView;
+    if (!abstractView) return nullptr;
+    WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+    if (!view) return nullptr;
+    if (view->xWindow) {
+        return reinterpret_cast<void*>(static_cast<uintptr_t>(view->xWindow));
+    }
+    if (view->viewWidget) {
+        GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
+        if (gdkWindow) {
+            return reinterpret_cast<void*>(static_cast<uintptr_t>(GDK_WINDOW_XID(gdkWindow)));
+        }
+    }
     return nullptr;
 }
 
@@ -6333,6 +6573,450 @@ static bool ensureWgpuSymbols() {
     return true;
 }
 
+static void wgpu_log(const char* fmt, ...) {
+    char buffer[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    fprintf(stderr, "[WGPU] %s\n", buffer);
+    fflush(stderr);
+}
+
+typedef WGPUInstance (*PFN_wgpuCreateInstance)(WGPUInstanceDescriptor const* descriptor);
+typedef WGPUFuture (*PFN_wgpuInstanceRequestAdapter)(WGPUInstance instance, WGPURequestAdapterOptions const* options, WGPURequestAdapterCallbackInfo callbackInfo);
+typedef WGPUFuture (*PFN_wgpuAdapterRequestDevice)(WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
+typedef WGPUQueue (*PFN_wgpuDeviceGetQueue)(WGPUDevice device);
+typedef void (*PFN_wgpuSurfaceGetCapabilities2)(WGPUSurface surface, WGPUAdapter adapter, WGPUSurfaceCapabilities* capabilities);
+typedef void (*PFN_wgpuSurfaceCapabilitiesFreeMembers2)(WGPUSurfaceCapabilities capabilities);
+typedef WGPUShaderModule (*PFN_wgpuDeviceCreateShaderModule)(WGPUDevice device, WGPUShaderModuleDescriptor const* descriptor);
+typedef WGPURenderPipeline (*PFN_wgpuDeviceCreateRenderPipeline)(WGPUDevice device, WGPURenderPipelineDescriptor const* descriptor);
+typedef void (*PFN_wgpuDeviceSetLabel)(WGPUDevice device, WGPUStringView label);
+typedef WGPUBuffer (*PFN_wgpuDeviceCreateBuffer)(WGPUDevice device, WGPUBufferDescriptor const* descriptor);
+typedef void (*PFN_wgpuQueueWriteBuffer)(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset, void const* data, size_t size);
+typedef WGPUCommandEncoder (*PFN_wgpuDeviceCreateCommandEncoder)(WGPUDevice device, WGPUCommandEncoderDescriptor const* descriptor);
+typedef WGPURenderPassEncoder (*PFN_wgpuCommandEncoderBeginRenderPass)(WGPUCommandEncoder encoder, WGPURenderPassDescriptor const* descriptor);
+typedef void (*PFN_wgpuRenderPassEncoderSetPipeline)(WGPURenderPassEncoder pass, WGPURenderPipeline pipeline);
+typedef void (*PFN_wgpuRenderPassEncoderSetVertexBuffer)(WGPURenderPassEncoder pass, uint32_t slot, WGPUBuffer buffer, uint64_t offset, uint64_t size);
+typedef void (*PFN_wgpuRenderPassEncoderDraw)(WGPURenderPassEncoder pass, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance);
+typedef void (*PFN_wgpuRenderPassEncoderEnd)(WGPURenderPassEncoder pass);
+typedef WGPUCommandBuffer (*PFN_wgpuCommandEncoderFinish)(WGPUCommandEncoder encoder, WGPUCommandBufferDescriptor const* descriptor);
+typedef void (*PFN_wgpuQueueSubmit)(WGPUQueue queue, size_t commandCount, WGPUCommandBuffer const* commands);
+typedef WGPUTextureView (*PFN_wgpuTextureCreateView)(WGPUTexture texture, WGPUTextureViewDescriptor const* descriptor);
+typedef void (*PFN_wgpuTextureViewRelease)(WGPUTextureView view);
+typedef void (*PFN_wgpuTextureRelease)(WGPUTexture texture);
+typedef void (*PFN_wgpuCommandBufferRelease)(WGPUCommandBuffer buffer);
+typedef void (*PFN_wgpuCommandEncoderRelease)(WGPUCommandEncoder encoder);
+
+static PFN_wgpuCreateInstance p_wgpuCreateInstance = nullptr;
+static PFN_wgpuInstanceRequestAdapter p_wgpuInstanceRequestAdapter = nullptr;
+static PFN_wgpuAdapterRequestDevice p_wgpuAdapterRequestDevice = nullptr;
+static PFN_wgpuDeviceGetQueue p_wgpuDeviceGetQueue = nullptr;
+static PFN_wgpuSurfaceGetCapabilities2 p_wgpuSurfaceGetCapabilities = nullptr;
+static PFN_wgpuSurfaceCapabilitiesFreeMembers2 p_wgpuSurfaceCapabilitiesFreeMembers = nullptr;
+static PFN_wgpuDeviceCreateShaderModule p_wgpuDeviceCreateShaderModule = nullptr;
+static PFN_wgpuDeviceCreateRenderPipeline p_wgpuDeviceCreateRenderPipeline = nullptr;
+static PFN_wgpuDeviceSetLabel p_wgpuDeviceSetLabel = nullptr;
+static PFN_wgpuDeviceCreateBuffer p_wgpuDeviceCreateBuffer = nullptr;
+static PFN_wgpuQueueWriteBuffer p_wgpuQueueWriteBuffer = nullptr;
+static PFN_wgpuDeviceCreateCommandEncoder p_wgpuDeviceCreateCommandEncoder = nullptr;
+static PFN_wgpuCommandEncoderBeginRenderPass p_wgpuCommandEncoderBeginRenderPass = nullptr;
+static PFN_wgpuRenderPassEncoderSetPipeline p_wgpuRenderPassEncoderSetPipeline = nullptr;
+static PFN_wgpuRenderPassEncoderSetVertexBuffer p_wgpuRenderPassEncoderSetVertexBuffer = nullptr;
+static PFN_wgpuRenderPassEncoderDraw p_wgpuRenderPassEncoderDraw = nullptr;
+static PFN_wgpuRenderPassEncoderEnd p_wgpuRenderPassEncoderEnd = nullptr;
+static PFN_wgpuCommandEncoderFinish p_wgpuCommandEncoderFinish = nullptr;
+static PFN_wgpuQueueSubmit p_wgpuQueueSubmit = nullptr;
+static PFN_wgpuTextureCreateView p_wgpuTextureCreateView = nullptr;
+static PFN_wgpuTextureViewRelease p_wgpuTextureViewRelease = nullptr;
+static PFN_wgpuTextureRelease p_wgpuTextureRelease = nullptr;
+static PFN_wgpuCommandBufferRelease p_wgpuCommandBufferRelease = nullptr;
+static PFN_wgpuCommandEncoderRelease p_wgpuCommandEncoderRelease = nullptr;
+
+static bool ensureWgpuTestSymbols() {
+    if (!ensureWgpuSymbols()) return false;
+    void* handle = loadWgpuLibrary();
+    if (!handle) return false;
+#define LOAD_TEST_SYM(name) \
+    p_##name = (decltype(p_##name))dlsym(handle, #name); \
+    if (!p_##name) { \
+        wgpu_log("missing symbol: " #name); \
+        return false; \
+    }
+    LOAD_TEST_SYM(wgpuCreateInstance);
+    LOAD_TEST_SYM(wgpuInstanceRequestAdapter);
+    LOAD_TEST_SYM(wgpuAdapterRequestDevice);
+    LOAD_TEST_SYM(wgpuDeviceGetQueue);
+    LOAD_TEST_SYM(wgpuSurfaceGetCapabilities);
+    LOAD_TEST_SYM(wgpuSurfaceCapabilitiesFreeMembers);
+    LOAD_TEST_SYM(wgpuDeviceCreateShaderModule);
+    LOAD_TEST_SYM(wgpuDeviceCreateRenderPipeline);
+    LOAD_TEST_SYM(wgpuDeviceSetLabel);
+    LOAD_TEST_SYM(wgpuDeviceCreateBuffer);
+    LOAD_TEST_SYM(wgpuQueueWriteBuffer);
+    LOAD_TEST_SYM(wgpuDeviceCreateCommandEncoder);
+    LOAD_TEST_SYM(wgpuCommandEncoderBeginRenderPass);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderSetPipeline);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderSetVertexBuffer);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderDraw);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderEnd);
+    LOAD_TEST_SYM(wgpuCommandEncoderFinish);
+    LOAD_TEST_SYM(wgpuQueueSubmit);
+    LOAD_TEST_SYM(wgpuTextureCreateView);
+    LOAD_TEST_SYM(wgpuTextureViewRelease);
+    LOAD_TEST_SYM(wgpuTextureRelease);
+    LOAD_TEST_SYM(wgpuCommandBufferRelease);
+    LOAD_TEST_SYM(wgpuCommandEncoderRelease);
+#undef LOAD_TEST_SYM
+    return true;
+}
+
+struct GPUTestState {
+    WGPUInstance instance = nullptr;
+    WGPUSurface surface = nullptr;
+    WGPUAdapter adapter = nullptr;
+    WGPUDevice device = nullptr;
+    WGPUQueue queue = nullptr;
+    WGPURenderPipeline pipeline = nullptr;
+    WGPUBuffer vertexBuffer = nullptr;
+    WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
+    WGPUCompositeAlphaMode alphaMode = WGPUCompositeAlphaMode_Opaque;
+    Display* display = nullptr;
+    Window window = 0;
+    guint timerId = 0;
+    float angle = 0.0f;
+    uint32_t lastWidth = 0;
+    uint32_t lastHeight = 0;
+    bool running = false;
+    WGPUViewImpl* view = nullptr;
+};
+
+static GPUTestState g_gpuTest;
+
+static const float kCubeVertices[] = {
+    -0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+    -0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+    -0.5f,-0.5f,-0.5f, -0.5f, 0.5f,-0.5f,  0.5f, 0.5f,-0.5f,
+    -0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f,-0.5f,-0.5f,
+    -0.5f,-0.5f,-0.5f, -0.5f,-0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+    -0.5f,-0.5f,-0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,-0.5f,
+     0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,
+     0.5f,-0.5f,-0.5f,  0.5f, 0.5f, 0.5f,  0.5f,-0.5f, 0.5f,
+    -0.5f, 0.5f,-0.5f, -0.5f, 0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+    -0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,  0.5f, 0.5f,-0.5f,
+    -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f,
+    -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
+};
+
+static void buildRotatedVertices(float angle, float* out, size_t count) {
+    const float sinY = sinf(angle);
+    const float cosY = cosf(angle);
+    const float sinX = sinf(angle * 0.7f);
+    const float cosX = cosf(angle * 0.7f);
+    for (size_t i = 0; i < count; i += 3) {
+        float x = kCubeVertices[i];
+        float y = kCubeVertices[i + 1];
+        float z = kCubeVertices[i + 2];
+        float x1 = x * cosY + z * sinY;
+        float z1 = -x * sinY + z * cosY;
+        float y1 = y * cosX - z1 * sinX;
+        float z2 = y * sinX + z1 * cosX;
+        float depth = z2 + 2.5f;
+        float proj = 1.2f / depth;
+        out[i] = x1 * proj;
+        out[i + 1] = y1 * proj;
+        out[i + 2] = 0.0f;
+    }
+}
+
+static bool gpuTestGetWindowSize(Display* display, Window window, uint32_t* outWidth, uint32_t* outHeight) {
+    XWindowAttributes attrs;
+    if (!x11GetWindowAttributesSafe(display, window, &attrs)) {
+        return false;
+    }
+    if (outWidth) *outWidth = (uint32_t)std::max(1, attrs.width);
+    if (outHeight) *outHeight = (uint32_t)std::max(1, attrs.height);
+    return true;
+}
+
+void stopWgpuTestForWindow(Window window) {
+    if (window && g_gpuTest.window != window) return;
+    if (g_gpuTest.timerId) {
+        g_source_remove(g_gpuTest.timerId);
+        g_gpuTest.timerId = 0;
+    }
+    g_gpuTest.running = false;
+    if (!window || g_gpuTest.window == window) {
+        g_gpuTest.window = 0;
+        g_gpuTest.display = nullptr;
+        g_gpuTest.view = nullptr;
+    }
+}
+
+static void gpuTestConfigureSurface(GPUTestState* state) {
+    if (!state || !state->surface || !state->device || !state->display || !state->window) return;
+
+    WGPUSurfaceCapabilities caps = {};
+    p_wgpuSurfaceGetCapabilities(state->surface, state->adapter, &caps);
+    if (caps.formatCount > 0 && caps.formats) {
+        state->surfaceFormat = caps.formats[0];
+    }
+    if (caps.alphaModeCount > 0 && caps.alphaModes) {
+        state->alphaMode = caps.alphaModes[0];
+    }
+    p_wgpuSurfaceCapabilitiesFreeMembers(caps);
+
+    uint32_t width = 1;
+    uint32_t height = 1;
+    if (!gpuTestGetWindowSize(state->display, state->window, &width, &height)) {
+        stopWgpuTestForWindow(state->window);
+        return;
+    }
+    state->lastWidth = width;
+    state->lastHeight = height;
+
+    WGPUSurfaceConfiguration config = {};
+    config.device = state->device;
+    config.format = state->surfaceFormat;
+    config.usage = WGPUTextureUsage_RenderAttachment;
+    config.width = width;
+    config.height = height;
+    config.presentMode = WGPUPresentMode_Fifo;
+    config.alphaMode = state->alphaMode;
+    p_wgpuSurfaceConfigure(state->surface, &config);
+}
+
+static void gpuTestSetupPipeline(GPUTestState* state) {
+    if (!state || !state->device) return;
+
+    const char* shaderSrc = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
+}
+)WGSL";
+
+    WGPUShaderSourceWGSL wgsl = {};
+    wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgsl.code.data = shaderSrc;
+    wgsl.code.length = WGPU_STRLEN;
+
+    WGPUShaderModuleDescriptor shaderDesc = {};
+    shaderDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgsl);
+    WGPUShaderModule shader = p_wgpuDeviceCreateShaderModule(state->device, &shaderDesc);
+    if (!shader) {
+        wgpu_log("failed to create shader module");
+        return;
+    }
+
+    WGPUStringView vsEntry = {"vs_main", WGPU_STRLEN};
+    WGPUStringView fsEntry = {"fs_main", WGPU_STRLEN};
+
+    WGPUVertexAttribute attr = {};
+    attr.format = WGPUVertexFormat_Float32x3;
+    attr.offset = 0;
+    attr.shaderLocation = 0;
+
+    WGPUVertexBufferLayout vbuf = {};
+    vbuf.arrayStride = sizeof(float) * 3;
+    vbuf.attributeCount = 1;
+    vbuf.attributes = &attr;
+    vbuf.stepMode = WGPUVertexStepMode_Vertex;
+
+    WGPUVertexState vstate = {};
+    vstate.module = shader;
+    vstate.entryPoint = vsEntry;
+    vstate.bufferCount = 1;
+    vstate.buffers = &vbuf;
+
+    WGPUColorTargetState colorTarget = {};
+    colorTarget.format = state->surfaceFormat;
+    colorTarget.writeMask = WGPUColorWriteMask_All;
+
+    WGPUFragmentState fstate = {};
+    fstate.module = shader;
+    fstate.entryPoint = fsEntry;
+    fstate.targetCount = 1;
+    fstate.targets = &colorTarget;
+
+    WGPUPrimitiveState prim = {};
+    prim.topology = WGPUPrimitiveTopology_TriangleList;
+    prim.stripIndexFormat = WGPUIndexFormat_Undefined;
+    prim.frontFace = WGPUFrontFace_CCW;
+    prim.cullMode = WGPUCullMode_None;
+
+    WGPUMultisampleState ms = {};
+    ms.count = 1;
+    ms.mask = 0xFFFFFFFF;
+    ms.alphaToCoverageEnabled = false;
+
+    WGPURenderPipelineDescriptor rpDesc = {};
+    rpDesc.vertex = vstate;
+    rpDesc.primitive = prim;
+    rpDesc.multisample = ms;
+    rpDesc.fragment = &fstate;
+
+    state->pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
+    if (!state->pipeline) {
+        wgpu_log("failed to create render pipeline");
+        return;
+    }
+
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
+    bufDesc.size = sizeof(kCubeVertices);
+    bufDesc.mappedAtCreation = false;
+    state->vertexBuffer = p_wgpuDeviceCreateBuffer(state->device, &bufDesc);
+    if (!state->vertexBuffer) {
+        wgpu_log("failed to create vertex buffer");
+        return;
+    }
+
+    float initialVerts[sizeof(kCubeVertices) / sizeof(float)];
+    buildRotatedVertices(0.0f, initialVerts, sizeof(kCubeVertices) / sizeof(float));
+    p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, initialVerts, sizeof(initialVerts));
+}
+
+static void gpuTestRenderFrame(GPUTestState* state) {
+    if (!state || !state->device || !state->surface || !state->queue || !state->pipeline) return;
+
+    uint32_t width = 1;
+    uint32_t height = 1;
+    if (!gpuTestGetWindowSize(state->display, state->window, &width, &height)) {
+        stopWgpuTestForWindow(state->window);
+        return;
+    }
+    if (width != state->lastWidth || height != state->lastHeight) {
+        gpuTestConfigureSurface(state);
+    }
+
+    state->angle += 0.02f;
+    float verts[sizeof(kCubeVertices) / sizeof(float)];
+    buildRotatedVertices(state->angle, verts, sizeof(kCubeVertices) / sizeof(float));
+    p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
+
+    WGPUSurfaceTexture surfaceTexture = {};
+    p_wgpuSurfaceGetCurrentTexture(state->surface, &surfaceTexture);
+    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+        surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+        return;
+    }
+    if (!surfaceTexture.texture) return;
+
+    WGPUTextureView view = p_wgpuTextureCreateView(surfaceTexture.texture, nullptr);
+
+    WGPURenderPassColorAttachment colorAtt = {};
+    colorAtt.view = view;
+    colorAtt.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    colorAtt.loadOp = WGPULoadOp_Clear;
+    colorAtt.storeOp = WGPUStoreOp_Store;
+    colorAtt.clearValue = {0.05, 0.05, 0.1, 1.0};
+
+    WGPURenderPassDescriptor passDesc = {};
+    passDesc.colorAttachmentCount = 1;
+    passDesc.colorAttachments = &colorAtt;
+
+    WGPUCommandEncoder encoder = p_wgpuDeviceCreateCommandEncoder(state->device, nullptr);
+    WGPURenderPassEncoder pass = p_wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    p_wgpuRenderPassEncoderSetPipeline(pass, state->pipeline);
+    p_wgpuRenderPassEncoderSetVertexBuffer(pass, 0, state->vertexBuffer, 0, sizeof(kCubeVertices));
+    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)(sizeof(kCubeVertices) / (sizeof(float) * 3)), 1, 0, 0);
+    p_wgpuRenderPassEncoderEnd(pass);
+
+    WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(encoder, nullptr);
+    p_wgpuQueueSubmit(state->queue, 1, &cmd);
+    p_wgpuSurfacePresent(state->surface);
+
+    p_wgpuTextureViewRelease(view);
+    p_wgpuTextureRelease(surfaceTexture.texture);
+    p_wgpuCommandBufferRelease(cmd);
+    p_wgpuCommandEncoderRelease(encoder);
+}
+
+static void logWgpuStringView(const char* prefix, WGPUStringView sv) {
+    if (!sv.data) {
+        wgpu_log("%s (null)", prefix);
+        return;
+    }
+    size_t len = sv.length == WGPU_STRLEN ? strlen(sv.data) : (size_t)sv.length;
+    std::string msg(sv.data, sv.data + len);
+    wgpu_log("%s %s", prefix, msg.c_str());
+}
+
+static void gpuTestUncapturedErrorCallback(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStringView message, void* /*userdata1*/, void* /*userdata2*/) {
+    char prefix[64];
+    snprintf(prefix, sizeof(prefix), "uncaptured error type=%d:", (int)type);
+    logWgpuStringView(prefix, message);
+}
+
+static gboolean gpuTestTimerProc(gpointer data) {
+    GPUTestState* state = static_cast<GPUTestState*>(data);
+    if (!state || !state->running) return G_SOURCE_REMOVE;
+    gpuTestRenderFrame(state);
+    return state->running ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
+}
+
+static void gpuTestRequestDeviceCallback(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2);
+
+static void gpuTestRequestAdapterCallback(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView message, void* userdata1, void* userdata2) {
+    (void)userdata2;
+    GPUTestState* state = (GPUTestState*)userdata1;
+    if (status != WGPURequestAdapterStatus_Success) {
+        logWgpuStringView("adapter error:", message);
+    }
+    if (!state || status != WGPURequestAdapterStatus_Success || !adapter) {
+        return;
+    }
+    state->adapter = adapter;
+
+    WGPURequestDeviceCallbackInfo cbInfo = {};
+    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    cbInfo.callback = gpuTestRequestDeviceCallback;
+    cbInfo.userdata1 = state;
+    WGPUDeviceDescriptor deviceDesc = {};
+    deviceDesc.uncapturedErrorCallbackInfo.callback = gpuTestUncapturedErrorCallback;
+    deviceDesc.uncapturedErrorCallbackInfo.userdata1 = state;
+    p_wgpuAdapterRequestDevice(adapter, &deviceDesc, cbInfo);
+}
+
+static void gpuTestRequestDeviceCallback(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2) {
+    (void)userdata2;
+    GPUTestState* state = (GPUTestState*)userdata1;
+    if (status != WGPURequestDeviceStatus_Success) {
+        logWgpuStringView("device error:", message);
+    }
+    if (!state || status != WGPURequestDeviceStatus_Success || !device) {
+        return;
+    }
+    state->device = device;
+    if (p_wgpuDeviceSetLabel) {
+        WGPUStringView label = {"Electrobun WGPU Device", WGPU_STRLEN};
+        p_wgpuDeviceSetLabel(device, label);
+    }
+    state->queue = p_wgpuDeviceGetQueue(device);
+
+    gpuTestConfigureSurface(state);
+    gpuTestSetupPipeline(state);
+    if (state->timerId) {
+        g_source_remove(state->timerId);
+        state->timerId = 0;
+    }
+    state->running = true;
+    state->timerId = g_timeout_add(16, gpuTestTimerProc, state);
+    gpuTestRenderFrame(state);
+}
+
 static void* runOnMainThreadSyncPtr(std::function<void*()> fn) {
     return dispatch_sync_main([&]() -> void* { return fn(); });
 }
@@ -6345,6 +7029,40 @@ ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void
     if (!ensureWgpuSymbols()) return nullptr;
     return runOnMainThreadSyncPtr([&]() -> void* {
         return p_wgpuInstanceCreateSurface(instance, descriptor);
+    });
+}
+
+ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractView* abstractView) {
+    if (!wgpuInstance || !abstractView) return nullptr;
+    if (!ensureWgpuSymbols()) return nullptr;
+
+    return runOnMainThreadSyncPtr([&]() -> void* {
+        WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+        if (!view) return nullptr;
+
+        Display* display = nullptr;
+        Window window = 0;
+
+        if (view->xDisplay && view->xWindow) {
+            display = view->xDisplay;
+            window = view->xWindow;
+        } else if (view->viewWidget) {
+            GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
+            if (!gdkWindow) return nullptr;
+            display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
+            window = GDK_WINDOW_XID(gdkWindow);
+        }
+
+        if (!display || !window) return nullptr;
+
+        WGPUSurfaceSourceXlibWindow xlibSource = {};
+        xlibSource.chain.sType = WGPUSType_SurfaceSourceXlibWindow;
+        xlibSource.display = display;
+        xlibSource.window = static_cast<uint64_t>(window);
+
+        WGPUSurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&xlibSource);
+        return p_wgpuInstanceCreateSurface(wgpuInstance, &surfaceDesc);
     });
 }
 
@@ -6594,17 +7312,161 @@ ELECTROBUN_EXPORT void wgpuBufferReadbackFreeShim(void* jobPtr) {
 }
 
 ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
-    (void)abstractView;
+    if (!abstractView) return;
+    if (!ensureWgpuTestSymbols()) return;
+
+    runOnMainThreadSyncVoid([&]() {
+        WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>((AbstractView*)abstractView);
+        if (!view) {
+            wgpu_log("run test called with non-WGPU view");
+            return;
+        }
+
+        Display* display = nullptr;
+        Window window = 0;
+        if (view->xDisplay && view->xWindow) {
+            display = view->xDisplay;
+            window = view->xWindow;
+        } else if (view->viewWidget) {
+            GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
+            if (gdkWindow) {
+                display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
+                window = GDK_WINDOW_XID(gdkWindow);
+            }
+        }
+
+        if (!display || !window) {
+            wgpu_log("failed to resolve native window for test");
+            return;
+        }
+
+        stopWgpuTestForWindow(0);
+        g_gpuTest = GPUTestState{};
+        g_gpuTest.display = display;
+        g_gpuTest.window = window;
+        g_gpuTest.view = view;
+
+        if (!g_gpuTest.instance) {
+            g_gpuTest.instance = p_wgpuCreateInstance(nullptr);
+        }
+        if (!g_gpuTest.instance) {
+            wgpu_log("failed to create WGPU instance");
+            return;
+        }
+
+        WGPUSurfaceSourceXlibWindow xlibSource = {};
+        xlibSource.chain.sType = WGPUSType_SurfaceSourceXlibWindow;
+        xlibSource.display = display;
+        xlibSource.window = static_cast<uint64_t>(window);
+
+        WGPUSurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&xlibSource);
+        g_gpuTest.surface = (WGPUSurface)p_wgpuInstanceCreateSurface(g_gpuTest.instance, &surfaceDesc);
+        if (!g_gpuTest.surface) {
+            wgpu_log("failed to create surface");
+            return;
+        }
+
+        WGPURequestAdapterOptions opts = {};
+        opts.compatibleSurface = g_gpuTest.surface;
+        WGPURequestAdapterCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = gpuTestRequestAdapterCallback;
+        cbInfo.userdata1 = &g_gpuTest;
+        p_wgpuInstanceRequestAdapter(g_gpuTest.instance, &opts, cbInfo);
+    });
 }
 
 ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void* surfacePtr, void* outAdapterDevice) {
-    (void)instancePtr;
-    (void)surfacePtr;
-    if (outAdapterDevice) {
-        uint64_t* out = (uint64_t*)outAdapterDevice;
-        out[0] = 0;
-        out[1] = 0;
-    }
+    if (!ensureWgpuTestSymbols()) return;
+    runOnMainThreadSyncVoid([&]() {
+        WGPUInstance instance = (WGPUInstance)instancePtr;
+        WGPUSurface surface = (WGPUSurface)surfacePtr;
+        if (!instance || !surface) return;
+
+        struct AdapterRequestCtx {
+            std::mutex* mutex;
+            std::condition_variable* cv;
+            bool* done;
+            WGPUAdapter* adapter;
+        };
+        struct DeviceRequestCtx {
+            std::mutex* mutex;
+            std::condition_variable* cv;
+            bool* done;
+            WGPUDevice* device;
+        };
+
+        WGPUAdapter adapter = nullptr;
+        WGPUDevice device = nullptr;
+
+        std::mutex adapterMutex;
+        std::condition_variable adapterCv;
+        bool adapterDone = false;
+
+        WGPURequestAdapterOptions opts = {};
+        opts.compatibleSurface = surface;
+        WGPURequestAdapterCallbackInfo adapterInfo = {};
+        adapterInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        adapterInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter cbAdapter, WGPUStringView /*message*/, void* userdata1, void* /*userdata2*/) {
+            AdapterRequestCtx* ctx = (AdapterRequestCtx*)userdata1;
+            {
+                std::lock_guard<std::mutex> lock(*ctx->mutex);
+                if (status == WGPURequestAdapterStatus_Success) {
+                    *ctx->adapter = cbAdapter;
+                }
+                *ctx->done = true;
+            }
+            ctx->cv->notify_one();
+        };
+        AdapterRequestCtx adapterCtx = {&adapterMutex, &adapterCv, &adapterDone, &adapter};
+        adapterInfo.userdata1 = &adapterCtx;
+        p_wgpuInstanceRequestAdapter(instance, &opts, adapterInfo);
+
+        {
+            std::unique_lock<std::mutex> lock(adapterMutex);
+            adapterCv.wait(lock, [&]() { return adapterDone; });
+        }
+        if (!adapter) {
+            return;
+        }
+
+        std::mutex deviceMutex;
+        std::condition_variable deviceCv;
+        bool deviceDone = false;
+
+        WGPURequestDeviceCallbackInfo deviceInfo = {};
+        deviceInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        deviceInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice cbDevice, WGPUStringView /*message*/, void* userdata1, void* /*userdata2*/) {
+            DeviceRequestCtx* ctx = (DeviceRequestCtx*)userdata1;
+            {
+                std::lock_guard<std::mutex> lock(*ctx->mutex);
+                if (status == WGPURequestDeviceStatus_Success) {
+                    *ctx->device = cbDevice;
+                }
+                *ctx->done = true;
+            }
+            ctx->cv->notify_one();
+        };
+        DeviceRequestCtx deviceCtx = {&deviceMutex, &deviceCv, &deviceDone, &device};
+        deviceInfo.userdata1 = &deviceCtx;
+
+        WGPUDeviceDescriptor deviceDesc = {};
+        deviceDesc.uncapturedErrorCallbackInfo.callback = gpuTestUncapturedErrorCallback;
+        deviceDesc.uncapturedErrorCallbackInfo.userdata1 = &deviceCtx;
+        p_wgpuAdapterRequestDevice(adapter, &deviceDesc, deviceInfo);
+
+        {
+            std::unique_lock<std::mutex> lock(deviceMutex);
+            deviceCv.wait(lock, [&]() { return deviceDone; });
+        }
+
+        if (outAdapterDevice) {
+            uint64_t* out = (uint64_t*)outAdapterDevice;
+            out[0] = (uint64_t)adapter;
+            out[1] = (uint64_t)device;
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView* abstractView, const char* htmlString) {
@@ -8157,6 +9019,13 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                 // Remove from global maps first to prevent any access during callback
                 {
                     std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+                    for (auto it = g_x11_child_window_to_parent_id.begin(); it != g_x11_child_window_to_parent_id.end();) {
+                        if (it->second == windowId) {
+                            it = g_x11_child_window_to_parent_id.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
                     g_x11_window_to_id.erase(x11_window);
                     g_x11_windows.erase(windowId);
                 }
@@ -9253,31 +10122,58 @@ ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
 
 // Get current cursor position as JSON: {"x": 123, "y": 456}
 ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
-    GdkDisplay* display = gdk_display_get_default();
-    if (!display) {
-        return strdup("{\"x\":0,\"y\":0}");
-    }
+    return dispatch_sync_main([&]() -> const char* {
+        GdkDisplay* display = gdk_display_get_default();
+        if (!display) {
+            return strdup("{\"x\":0,\"y\":0}");
+        }
 
-    GdkSeat* seat = gdk_display_get_default_seat(display);
-    if (!seat) {
-        return strdup("{\"x\":0,\"y\":0}");
-    }
+        GdkSeat* seat = gdk_display_get_default_seat(display);
+        if (!seat) {
+            return strdup("{\"x\":0,\"y\":0}");
+        }
 
-    GdkDevice* pointer = gdk_seat_get_pointer(seat);
-    if (!pointer) {
-        return strdup("{\"x\":0,\"y\":0}");
-    }
+        GdkDevice* pointer = gdk_seat_get_pointer(seat);
+        if (!pointer) {
+            return strdup("{\"x\":0,\"y\":0}");
+        }
 
-    int x, y;
-    gdk_device_get_position(pointer, NULL, &x, &y);
+        int x = 0;
+        int y = 0;
+        gdk_device_get_position(pointer, NULL, &x, &y);
 
-    std::ostringstream result;
-    result << "{\"x\":" << x << ",\"y\":" << y << "}";
-    return strdup(result.str().c_str());
+        std::ostringstream result;
+        result << "{\"x\":" << x << ",\"y\":" << y << "}";
+        return strdup(result.str().c_str());
+    });
 }
 
 ELECTROBUN_EXPORT uint64_t getMouseButtons() {
-    return 0;
+    return dispatch_sync_main([&]() -> uint64_t {
+        GdkDisplay* display = gdk_display_get_default();
+        if (!display) {
+            return 0;
+        }
+
+        GdkSeat* seat = gdk_display_get_default_seat(display);
+        if (!seat) {
+            return 0;
+        }
+
+        GdkDevice* pointer = gdk_seat_get_pointer(seat);
+        if (!pointer) {
+            return 0;
+        }
+
+        GdkWindow* root = gdk_get_default_root_window();
+        if (!root) {
+            return 0;
+        }
+
+        GdkModifierType modifiers = (GdkModifierType)0;
+        gdk_device_get_state(pointer, root, NULL, &modifiers);
+        return mouseButtonsFromGdkModifiers(modifiers);
+    });
 }
 
 /*

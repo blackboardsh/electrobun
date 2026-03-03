@@ -146,6 +146,17 @@ export class TestExecutor {
 
       // Show instructions and wait for user to click "Start"
       showInstructions: async (instructions: string[]): Promise<void> => {
+        if (
+          process.env["AUTO_RUN_TEST_NAME"] ||
+          process.env["AUTO_RUN_WGPU"] ||
+          process.env["AUTO_ACCEPT_INTERACTIVE"]
+        ) {
+          instructions.forEach((instruction) => {
+            const timestamp = new Date().toISOString().split('T')[1]!.split('.')[0]!;
+            console.log(`  [${timestamp}] ${instruction}`);
+          });
+          return;
+        }
         this.emit({ type: 'interactive-ready', testId, instructions });
         this.currentTestId = testId;
 

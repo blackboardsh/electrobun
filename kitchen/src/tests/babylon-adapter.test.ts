@@ -11,6 +11,7 @@ function sleep(ms: number) {
 
 function createCanvasShim(win: GpuWindow) {
   const size = win.getSize();
+  const gpuContext = webgpu.createContext(win);
   return {
     width: size.width,
     height: size.height,
@@ -19,8 +20,7 @@ function createCanvasShim(win: GpuWindow) {
     style: {},
     getContext: (type: string) => {
       if (type !== "webgpu") return null;
-      const ctx = webgpu.createContext(win);
-      return ctx.context;
+      return gpuContext.context;
     },
     getBoundingClientRect: () => {
       const current = win.getSize();

@@ -342,3 +342,33 @@ if (autoRun) {
 		}, 500);
 	}, 3000);
 }
+
+const autoRunTestName = process.env["AUTO_RUN_TEST_NAME"];
+if (autoRunTestName) {
+	console.log(`Auto-running test "${autoRunTestName}" in 2 seconds...\n`);
+	setTimeout(async () => {
+		const test = executor
+			.getTests()
+			.find((candidate) => candidate.name === autoRunTestName);
+		if (!test) {
+			console.error(`Failed to find test "${autoRunTestName}"`);
+			return;
+		}
+		await executor.runTest(test);
+	}, 2000);
+}
+
+const autoRunWgpu = !!process.env["AUTO_RUN_WGPU"];
+if (autoRunWgpu && !autoRunTestName) {
+	console.log("Auto-running WGPU native cube playground in 2 seconds...\n");
+	setTimeout(async () => {
+		const test = executor
+			.getTests()
+			.find((candidate) => candidate.name === "WGPUView native cube");
+		if (!test) {
+			console.error('Failed to find "WGPUView native cube" test');
+			return;
+		}
+		await executor.runTest(test);
+	}, 2000);
+}

@@ -1129,8 +1129,18 @@ fn fs_main(
 					const modelViewProj = new three.Matrix4();
 					const normalMatrix = new three.Matrix3();
 					const rotSpeed = new three.Vector2(0.0014, 0.001);
+					const autoRunThree =
+						process.env["AUTO_RUN_TEST_NAME"] ===
+						"Three.js WGPU playground";
+					let renderedFirstFrame = false;
+					let autoClosedAfterDrag = false;
 
 					const renderFrame = () => {
+						if (!renderedFirstFrame) {
+							renderedFirstFrame = true;
+							log("Three.js first frame rendered");
+						}
+
 						const frame = win.getFrame();
 						const cursorPos = Screen.getCursorScreenPoint();
 						const mx = (cursorPos.x - frame.x) / frame.width;
@@ -1154,9 +1164,16 @@ fn fs_main(
 							drag.lastX = cursorPos.x;
 							drag.lastY = cursorPos.y;
 						} else if (drag.active) {
+							log(
+								`Three.js fling applied dx=${dragVel.x.toFixed(1)} dy=${dragVel.y.toFixed(1)}`,
+							);
 							vel.set(dragVel.x * 0.0006, -dragVel.y * 0.0006);
 							drag.active = false;
 							dragVel.set(0, 0);
+							if (autoRunThree && !autoClosedAfterDrag) {
+								autoClosedAfterDrag = true;
+								setTimeout(() => win.close(), 500);
+							}
 						}
 
 						pos.x += vel.x;
@@ -1320,7 +1337,7 @@ fn fs_main(
 
 			log("Opening Babylon.js playground window");
 
-			await new Promise<void>((resolve) => {
+			await new Promise<void>((resolve, reject) => {
 				const win = new GpuWindow({
 					title: "Babylon.js WGPU Playground",
 					frame: { width: 600, height: 450, x: 280, y: 200 },
@@ -1337,6 +1354,7 @@ fn fs_main(
 
 				const start = async () => {
 					webgpu.install();
+					const gpuContext = webgpu.createContext(win);
 					const size = win.getSize();
 					const canvas = {
 						width: size.width,
@@ -1346,8 +1364,7 @@ fn fs_main(
 						style: {},
 						getContext: (type: string) => {
 							if (type !== "webgpu") return null;
-							const ctx = webgpu.createContext(win);
-							return ctx.context;
+							return gpuContext.context;
 						},
 						getBoundingClientRect: () => ({
 							left: 0,
@@ -1402,10 +1419,21 @@ fn fs_main(
 					material.specularColor = new babylon.Color3(0.4, 0.4, 0.5);
 					box.material = material;
 
+					let renderedFirstFrame = false;
 					engine.runRenderLoop(() => {
 						box.rotation.y += 0.012;
 						box.rotation.x += 0.007;
 						scene.render();
+						if (!renderedFirstFrame) {
+							renderedFirstFrame = true;
+							log("Babylon first frame rendered");
+							if (
+								process.env["AUTO_RUN_TEST_NAME"] ===
+								"Babylon.js WGPU playground"
+							) {
+								setTimeout(() => win.close(), 1500);
+							}
+						}
 					});
 
 					win.on("resize", () => {
@@ -1421,11 +1449,16 @@ fn fs_main(
 						engine.stopRenderLoop();
 						scene.dispose();
 						engine.dispose();
+						resolve();
 					});
 				};
 
 				start().catch((err) => {
 					log(`Babylon.js render setup failed: ${String(err)}`);
+					try {
+						win.close();
+					} catch {}
+					reject(err);
 				});
 			});
 		},

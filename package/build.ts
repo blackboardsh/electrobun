@@ -1834,6 +1834,13 @@ async function buildNative() {
 		try {
 			// Always include CEF headers for Linux builds
 			const cefInclude = join(process.cwd(), "vendors", "cef");
+			const wgpuIncludeDir = join(
+				process.cwd(),
+				"vendors",
+				"wgpu",
+				`${OS}-${ARCH}`,
+				"include",
+			);
 			const cefLib = join(
 				process.cwd(),
 				"vendors",
@@ -1913,6 +1920,7 @@ async function buildNative() {
 				"-fPIC",
 				...pkgConfigCflags.split(/\s+/).filter((f) => f),
 				`-I${cefInclude}`,
+				...(existsSync(wgpuIncludeDir) ? [`-I${wgpuIncludeDir}`] : []),
 				...(hasAppIndicator ? [] : ["-DNO_APPINDICATOR"]),
 				"-o",
 				"src/native/linux/build/nativeWrapper.o",
