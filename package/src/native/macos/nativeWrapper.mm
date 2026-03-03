@@ -3088,6 +3088,25 @@ extern "C" void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descr
     });
 }
 
+extern "C" void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractView* abstractView) {
+    if (!wgpuInstance || !abstractView) return nullptr;
+    if (!ensureWgpuSymbols()) return nullptr;
+
+    return (void*)runOnMainThreadSyncPtr(^{
+        if (!abstractView.nsView) return (void*)nullptr;
+        CALayer *layer = abstractView.nsView.layer;
+        if (![layer isKindOfClass:[CAMetalLayer class]]) return (void*)nullptr;
+
+        WGPUSurfaceSourceMetalLayer metalSource = {};
+        metalSource.chain.sType = WGPUSType_SurfaceSourceMetalLayer;
+        metalSource.layer = (__bridge void*)layer;
+
+        WGPUSurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&metalSource);
+        return (void*)p_wgpuInstanceCreateSurface(wgpuInstance, &surfaceDesc);
+    });
+}
+
 extern "C" void wgpuSurfaceConfigureMainThread(void* surface, void* config) {
     if (!ensureWgpuSymbols()) return;
     runOnMainThreadSyncVoid(^{

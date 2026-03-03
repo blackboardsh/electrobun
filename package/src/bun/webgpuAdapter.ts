@@ -6,8 +6,6 @@ import { ptr, CString, toArrayBuffer, type Pointer, JSCallback } from "bun:ffi";
 import { inflateSync } from "zlib";
 
 const WGPUNative = WGPU.native;
-const WGPUSType_SurfaceSourceMetalLayer = 0x00000004;
-const WGPUSType_SurfaceSourceWindowsHWND = 0x00000005;
 const WGPUTextureFormat_BGRA8Unorm = 0x0000001B;
 const WGPUTextureFormat_BGRA8UnormSrgb = 0x0000001C;
 const WGPUTextureFormat_RGBA8Unorm = 0x00000016;
@@ -225,44 +223,6 @@ function makeStringView(str?: string | null) {
 	const cstr = new CString(str);
 	WGPU_KEEPALIVE.push(cstr);
 	return { ptr: cstr.ptr, len: WGPU_STRLEN, cstr };
-}
-
-function makeSurfaceSourceMetalLayer(layerPtr: number) {
-	const buffer = new ArrayBuffer(24);
-	const view = new DataView(buffer);
-	writePtr(view, 0, 0);
-	writeU32(view, 8, WGPUSType_SurfaceSourceMetalLayer);
-	writeU32(view, 12, 0);
-	writePtr(view, 16, layerPtr);
-	return { buffer, ptr: ptr(buffer) };
-}
-
-function makeSurfaceSourceWindowsHWND(hwnd: number, hinstance: number) {
-	const buffer = new ArrayBuffer(32);
-	const view = new DataView(buffer);
-	writePtr(view, 0, 0); // chain.next
-	writeU32(view, 8, WGPUSType_SurfaceSourceWindowsHWND); // chain.sType
-	writeU32(view, 12, 0); // padding
-	writePtr(view, 16, hinstance); // hinstance
-	writePtr(view, 24, hwnd); // hwnd
-	return { buffer, ptr: ptr(buffer) };
-}
-
-function makePlatformSurfaceSource(nativeHandle: number) {
-	if (process.platform === "win32") {
-		const hinstance = WGPUBridge.getHInstance();
-		return makeSurfaceSourceWindowsHWND(nativeHandle, Number(hinstance));
-	}
-	return makeSurfaceSourceMetalLayer(nativeHandle);
-}
-
-function makeSurfaceDescriptor(nextInChainPtr: number) {
-	const buffer = new ArrayBuffer(24);
-	const view = new DataView(buffer);
-	writePtr(view, 0, nextInChainPtr);
-	writePtr(view, 8, 0);
-	writeU64(view, 16, 0n);
-	return { buffer, ptr: ptr(buffer) };
 }
 
 function makeSurfaceConfiguration(
@@ -2206,21 +2166,20 @@ class GPUCanvasContext {
 	}
 }
 
-function getLayerHandle(view: WGPUView | GpuWindow) {
-	if (view instanceof GpuWindow) return view.wgpuView.getNativeHandle();
-	return view.getNativeHandle();
+function getViewPtr(view: WGPUView | GpuWindow): Pointer | null {
+	if (view instanceof GpuWindow) return view.wgpuView.ptr;
+	return view.ptr;
 }
 
 function createContext(view: WGPUView | GpuWindow) {
-	const layerPtr = getLayerHandle(view);
-	if (!layerPtr) throw new Error("WGPUView native handle not available");
+	const viewPtr = getViewPtr(view);
+	if (!viewPtr) throw new Error("WGPUView pointer not available");
 	const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-	const surfaceSource = makePlatformSurfaceSource(layerPtr as number);
-	const surfaceDesc = makeSurfaceDescriptor(surfaceSource.ptr as number);
-	const surface = WGPUBridge.instanceCreateSurface(
+	const surface = WGPUBridge.createSurfaceForView(
 		instance as Pointer,
-		surfaceDesc.ptr as Pointer,
+		viewPtr,
 	);
+	if (!surface) throw new Error("Failed to create WGPU surface");
 
 	const caps = makeSurfaceCapabilities();
 	WGPUNative.symbols.wgpuSurfaceGetCapabilities(

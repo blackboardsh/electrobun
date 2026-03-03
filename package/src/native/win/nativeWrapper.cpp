@@ -7026,10 +7026,6 @@ ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
     return abstractView->hwnd;
 }
 
-ELECTROBUN_EXPORT void* getHInstance() {
-    return GetModuleHandle(NULL);
-}
-
 // ----------------------- WGPU Main-Thread Shims -----------------------
 
 typedef void* (*PFN_wgpuInstanceCreateSurface)(void* instance, const void* descriptor);
@@ -7593,6 +7589,23 @@ ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void
     if (!ensureWgpuSymbols()) return nullptr;
     return runOnMainThreadSyncPtr([&]() -> void* {
         return p_wgpuInstanceCreateSurface(instance, descriptor);
+    });
+}
+
+ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractView* abstractView) {
+    if (!wgpuInstance || !abstractView || !abstractView->hwnd) return nullptr;
+    if (!ensureWgpuSymbols()) return nullptr;
+
+    HWND hwnd = abstractView->hwnd;
+    return runOnMainThreadSyncPtr([&]() -> void* {
+        WGPUSurfaceSourceWindowsHWND hwndSource = {};
+        hwndSource.chain.sType = WGPUSType_SurfaceSourceWindowsHWND;
+        hwndSource.hinstance = (void*)GetModuleHandle(NULL);
+        hwndSource.hwnd = (void*)hwnd;
+
+        WGPUSurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&hwndSource);
+        return p_wgpuInstanceCreateSurface(wgpuInstance, &surfaceDesc);
     });
 }
 

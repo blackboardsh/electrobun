@@ -424,8 +424,8 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.ptr, FFIType.ptr],
 				returns: FFIType.void,
 			},
-			getHInstance: {
-				args: [],
+			wgpuCreateSurfaceForView: {
+				args: [FFIType.ptr, FFIType.ptr],
 				returns: FFIType.ptr,
 			},
 			// Tray
@@ -1632,9 +1632,9 @@ export const WGPUBridge = {
 			surfacePtr as any,
 			outAdapterDevicePtr as any,
 		),
-	getHInstance: (): Pointer | null => {
-		if (!native?.symbols?.getHInstance) return null;
-		return native.symbols.getHInstance() as Pointer;
+	createSurfaceForView: (instancePtr: Pointer, viewPtr: Pointer): Pointer | null => {
+		if (!native?.symbols?.wgpuCreateSurfaceForView) return null;
+		return native.symbols.wgpuCreateSurfaceForView(instancePtr as any, viewPtr as any) as Pointer;
 	},
 };
 

@@ -17,8 +17,6 @@ const WGPU_KEEPALIVE: any[] = [];
 
 const WGPUNative = WGPU.native;
 
-const WGPUSType_SurfaceSourceMetalLayer = 0x00000004;
-const WGPUSType_SurfaceSourceWindowsHWND = 0x00000005;
 const WGPUCallbackMode_AllowSpontaneous = 0x00000003;
 const WGPUTextureFormat_BGRA8Unorm = 0x0000001b;
 const WGPUTextureFormat_BGRA8UnormSrgb = 0x0000001c;
@@ -65,44 +63,6 @@ function writeU32(view: DataView, offset: number, value: number) {
 
 function writeU64(view: DataView, offset: number, value: bigint) {
 	view.setBigUint64(offset, value, true);
-}
-
-function makeSurfaceSourceMetalLayer(layerPtr: number) {
-	const buffer = new ArrayBuffer(24);
-	const view = new DataView(buffer);
-	writePtr(view, 0, 0);
-	writeU32(view, 8, WGPUSType_SurfaceSourceMetalLayer);
-	writeU32(view, 12, 0);
-	writePtr(view, 16, layerPtr);
-	return { buffer, ptr: ptr(buffer) };
-}
-
-function makeSurfaceSourceWindowsHWND(hwnd: number, hinstance: number) {
-	const buffer = new ArrayBuffer(32);
-	const view = new DataView(buffer);
-	writePtr(view, 0, 0); // chain.next
-	writeU32(view, 8, WGPUSType_SurfaceSourceWindowsHWND); // chain.sType
-	writeU32(view, 12, 0); // padding
-	writePtr(view, 16, hinstance); // hinstance
-	writePtr(view, 24, hwnd); // hwnd
-	return { buffer, ptr: ptr(buffer) };
-}
-
-function makePlatformSurfaceSource(nativeHandle: number) {
-	if (process.platform === "win32") {
-		const hinstance = WGPUBridge.getHInstance();
-		return makeSurfaceSourceWindowsHWND(nativeHandle, Number(hinstance));
-	}
-	return makeSurfaceSourceMetalLayer(nativeHandle);
-}
-
-function makeSurfaceDescriptor(nextInChainPtr: number) {
-	const buffer = new ArrayBuffer(24);
-	const view = new DataView(buffer);
-	writePtr(view, 0, nextInChainPtr);
-	writePtr(view, 8, 0);
-	writeU64(view, 16, 0n);
-	return { buffer, ptr: ptr(buffer) };
 }
 
 function makeRequestAdapterOptions(surfacePtr: number) {
@@ -831,24 +791,16 @@ export const wgpuViewTests = [
 					return;
 				}
 
-				const layerPtr = win.wgpuView.getNativeHandle();
-				if (!layerPtr) {
-					log("Failed to get WGPUView native handle");
-					return;
-				}
-
 				const start = async () => {
 					const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-					const surfaceSource = makePlatformSurfaceSource(
-						layerPtr as number,
-					);
-					const surfaceDesc = makeSurfaceDescriptor(
-						surfaceSource.ptr as number,
-					);
-					const surface = WGPUBridge.instanceCreateSurface(
+					const surface = WGPUBridge.createSurfaceForView(
 						instance as number,
-						surfaceDesc.ptr as number,
+						win.wgpuView.ptr as number,
 					);
+					if (!surface) {
+						log("Failed to create WGPU surface");
+						return;
+					}
 
 					const adapterDevice = new BigUint64Array(2);
 					WGPUBridge.createAdapterDeviceMainThread(
@@ -1508,24 +1460,18 @@ fn fs_main(
 				if (!WGPUNative.available) {
 					log("WGPU native library not available");
 				} else {
-					const layerPtr = win.wgpuView.getNativeHandle();
-					if (!layerPtr) {
-						log("Failed to get WGPUView native handle");
-					} else {
 						const startRendering = async () => {
 							log("WGPU: creating instance + surface");
 							await new Promise((resolve) => setTimeout(resolve, 100));
 							const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-							const surfaceSource = makePlatformSurfaceSource(
-								layerPtr as number,
-							);
-							const surfaceDesc = makeSurfaceDescriptor(
-								surfaceSource.ptr as number,
-							);
-							const surface = WGPUBridge.instanceCreateSurface(
+							const surface = WGPUBridge.createSurfaceForView(
 								instance as number,
-								surfaceDesc.ptr as number,
+								win.wgpuView.ptr as number,
 							);
+							if (!surface) {
+								log("Failed to create WGPU surface");
+								return;
+							}
 
 							const adapterDevice = new BigUint64Array(2);
 							WGPUBridge.createAdapterDeviceMainThread(
@@ -1901,7 +1847,6 @@ fn fs_main(
 						startRendering().catch((err) => {
 							log(`WGPU render setup failed: ${String(err)}`);
 						});
-					}
 				}
 
 				setTimeout(() => {
