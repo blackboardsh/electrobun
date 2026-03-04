@@ -7,6 +7,7 @@ import { quit } from "./Utils";
 import { type RPCWithTransport } from "../../shared/rpc.js";
 import { getNextWindowId } from "./windowIds";
 import { GpuWindowMap } from "./GpuWindow";
+import { WGPUView } from "./WGPUView";
 
 const buildConfig = await BuildConfig.get();
 
@@ -69,6 +70,24 @@ electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
 	for (const view of BrowserView.getAll()) {
 		if (view.windowId === windowId) {
 			view.remove();
+		}
+	}
+
+	// Clean up all WGPU views associated with this window
+	const wgpuViews = WGPUView.getAll().filter(v => v.windowId === windowId);
+	for (const view of wgpuViews) {
+		try {
+			// If ptr is null, the view was already cleaned up by the renderer or native cleanup
+			if (view.ptr === null) {
+				// Already cleaned up, skip
+			} else {
+				// Programmatic close path - remove the view
+				view.remove();
+			}
+		} catch (e) {
+			console.error(`Error cleaning up WGPU view ${view.id}:`, e);
+			// If remove() failed, at least mark it as cleaned up
+			view.ptr = null as any;
 		}
 	}
 

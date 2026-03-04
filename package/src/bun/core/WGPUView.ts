@@ -107,8 +107,20 @@ export class WGPUView {
 	}
 
 	remove() {
-		ffi.request.wgpuViewRemove({ id: this.id });
+		// Check if already removed
+		if (this.ptr === null) {
+			return;
+		}
+		
+		try {
+			ffi.request.wgpuViewRemove({ id: this.id });
+		} catch (e) {
+			console.error(`Error removing WGPU view ${this.id}:`, e);
+		}
+		
 		delete WGPUViewMap[this.id];
+		// Clear the pointer to prevent any accidental access
+		this.ptr = null as any;
 	}
 
 	getNativeHandle() {

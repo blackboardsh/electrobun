@@ -29,6 +29,8 @@ export const wgpuTagTests = [
           handlers: {
             requests: {
               closeWindow: () => {
+                // Stop renderer before closing window
+                renderer.stopAll();
                 winRef?.close();
                 return { success: true };
               },
@@ -58,7 +60,7 @@ export const wgpuTagTests = [
         winRef = new BrowserWindow({
           title: "WGPU Tag Playground",
           url: "views://playgrounds/wgpu-tag/index.html",
-          renderer: "cef",
+          renderer: "native", // Use native instead of CEF since bundling is off
           frame: { width: 860, height: 720, x: 120, y: 60 },
           rpc,
         });
@@ -67,6 +69,7 @@ export const wgpuTagTests = [
         const win = winRef;
 
         win.on("close", () => {
+          // Also stop renderer here in case window is closed via X button
           renderer.stopAll();
           log("Playground closed - test complete");
           resolve();

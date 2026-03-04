@@ -6,7 +6,6 @@ type Rect = { x: number; y: number; width: number; height: number };
 type ViewState = {
 	viewId: number;
 	window: BrowserWindow<any>;
-	view: WGPUView;
 	rect: Rect;
 	lastWidth: number;
 	lastHeight: number;
@@ -24,6 +23,7 @@ type ViewState = {
 	timerId: ReturnType<typeof setInterval> | null;
 	useAlt: boolean;
 	keepAlive: unknown[];
+	stopped: boolean;
 };
 
 const WGPUNative = WGPU.native;
@@ -638,6 +638,7 @@ function createPipeline(
 
 export class WgpuTagRenderer {
 	private states = new Map<number, ViewState>();
+	private cleanupInProgress = new Set<number>();
 
 	updateRect(viewId: number, rect: Rect) {
 		const state = this.states.get(viewId);
@@ -742,7 +743,6 @@ export class WgpuTagRenderer {
 		const state: ViewState = {
 			viewId,
 			window: win,
-			view,
 			rect,
 			lastWidth: width,
 			lastHeight: height,
@@ -760,6 +760,7 @@ export class WgpuTagRenderer {
 			timerId: null,
 			useAlt: false,
 			keepAlive,
+			stopped: false,
 		};
 
 		state.timerId = setInterval(() => this.renderFrame(state), 16);
@@ -774,11 +775,40 @@ export class WgpuTagRenderer {
 
 	stop(viewId: number) {
 		const state = this.states.get(viewId);
-		if (!state) return;
+		if (!state || this.cleanupInProgress.has(viewId)) {
+			return;
+		}
+		
+		// Prevent double cleanup
+		this.cleanupInProgress.add(viewId);
+		
+		// Mark as stopped to prevent render loop from continuing
+		state.stopped = true;
+		
 		if (state.timerId) {
 			clearInterval(state.timerId);
+			state.timerId = null;
 		}
+		
+		// Remove from states immediately to prevent any further access
 		this.states.delete(viewId);
+		
+		// Mark the associated WGPU view as stopped to prevent double cleanup
+		const wgpuView = WGPUView.getById(viewId);
+		if (wgpuView) {
+			wgpuView.ptr = null as any;
+		}
+		
+		// Don't manually release WGPU resources - let the native view cleanup handle them
+		// Manually calling wgpuDeviceRelease/wgpuSurfaceRelease after view destruction causes crashes
+		
+		{
+			// Clear all references
+			state.window = null as any;
+			state.keepAlive = [];
+			state.encoderDesc = null as any;
+			this.cleanupInProgress.delete(viewId);
+		}
 	}
 
 	stopAll() {
@@ -788,6 +818,9 @@ export class WgpuTagRenderer {
 	}
 
 	private renderFrame(state: ViewState) {
+		// Check if renderer has been stopped
+		if (state.stopped) return;
+		
 		const rect = state.rect;
 		const width = Math.max(1, Math.floor(rect.width));
 		const height = Math.max(1, Math.floor(rect.height));
@@ -840,6 +873,9 @@ export class WgpuTagRenderer {
 			packed.byteLength,
 		);
 
+		// Check again before using native resources
+		if (state.stopped) return;
+		
 		WGPUNative.symbols.wgpuInstanceProcessEvents(state.instance);
 
 		const surfaceTexture = makeSurfaceTexture();
