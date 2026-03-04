@@ -23,6 +23,7 @@ export class ElectrobunWgpuTag extends HTMLElement {
 	resizeObserver: ResizeObserver | null = null;
 	positionCheckLoop: ReturnType<typeof setInterval> | null = null;
 	private _resizeHandler: (() => void) | null = null;
+	private _burstUntil = 0;
 	transparent = false;
 	passthroughEnabled = false;
 	hidden = false;
@@ -43,7 +44,7 @@ export class ElectrobunWgpuTag extends HTMLElement {
 			delete wgpuTagRegistry[this.wgpuViewId];
 		}
 		if (this.resizeObserver) this.resizeObserver.disconnect();
-		if (this.positionCheckLoop) clearInterval(this.positionCheckLoop);
+		if (this.positionCheckLoop) clearTimeout(this.positionCheckLoop);
 		if (this._resizeHandler) {
 			window.removeEventListener("resize", this._resizeHandler);
 			this._resizeHandler = null;
@@ -120,7 +121,13 @@ export class ElectrobunWgpuTag extends HTMLElement {
 		this.resizeObserver = new ResizeObserver(() => this.syncDimensions());
 		this.resizeObserver.observe(this);
 
-		this.positionCheckLoop = setInterval(() => this.syncDimensions(), 100);
+		const loop = () => {
+			this.syncDimensions();
+			const now = performance.now();
+			const interval = now < this._burstUntil ? 10 : 100;
+			this.positionCheckLoop = setTimeout(loop, interval);
+		};
+		this.positionCheckLoop = setTimeout(loop, 100);
 
 		// Ensure we re-sync on window resize even if the element rect doesn't change.
 		this._resizeHandler = () => this.syncDimensions(true);
@@ -152,6 +159,7 @@ export class ElectrobunWgpuTag extends HTMLElement {
 			return;
 		}
 
+		this._burstUntil = performance.now() + 50;
 		this.lastRect = newRect;
 
 		// Calculate mask rectangles
