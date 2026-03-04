@@ -842,11 +842,7 @@ function pickSurfaceFormatAlpha(capsView: DataView, preferredFormat: number) {
 	const formatPtr = readPtr(capsView, 24);
 	let format = preferredFormat;
 	if (formatCount && formatPtr) {
-		const formats = new Uint32Array(
-			(ptr as any)(formatPtr).buffer,
-			(ptr as any)(formatPtr).byteOffset,
-			formatCount,
-		);
+		const formats = new Uint32Array(toArrayBuffer(formatPtr, 0, formatCount * 4));
 		if (formats.length) {
 			format = formats[0]!;
 		}
@@ -857,11 +853,7 @@ function pickSurfaceFormatAlpha(capsView: DataView, preferredFormat: number) {
 	let alphaMode = WGPUCompositeAlphaMode_Opaque;
 	const alphaModes: number[] = [];
 	if (alphaCount && alphaPtr) {
-		const alphas = new Uint32Array(
-			(ptr as any)(alphaPtr).buffer,
-			(ptr as any)(alphaPtr).byteOffset,
-			alphaCount,
-		);
+		const alphas = new Uint32Array(toArrayBuffer(alphaPtr, 0, alphaCount * 4));
 		if (alphas.length) {
 			alphaModes.push(...alphas);
 			alphaMode = alphas[0]!;

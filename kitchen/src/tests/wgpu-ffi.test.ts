@@ -1,6 +1,6 @@
 import { defineTest, expect } from "../test-framework/types";
 import { GpuWindow, WGPU, WGPUBridge } from "electrobun/bun";
-import { CString, ptr } from "bun:ffi";
+import { CString, ptr, toArrayBuffer } from "bun:ffi";
 
 const WGPUNative = WGPU.native;
 
@@ -83,11 +83,7 @@ function pickSurfaceFormatAlpha(
 	const formatPtr = readPtr(capsView, 24);
 	let format = preferredFormat;
 	if (formatCount && formatPtr) {
-		const formats = new Uint32Array(
-			(ptr as any)(formatPtr).buffer,
-			(ptr as any)(formatPtr).byteOffset,
-			formatCount,
-		);
+		const formats = new Uint32Array(toArrayBuffer(formatPtr, 0, formatCount * 4));
 		if (formats.length) {
 			format = formats[0]!;
 		}
@@ -97,11 +93,7 @@ function pickSurfaceFormatAlpha(
 	const alphaPtr = readPtr(capsView, 56);
 	let alphaMode = WGPUCompositeAlphaMode_Opaque;
 	if (alphaCount && alphaPtr) {
-		const alphas = new Uint32Array(
-			(ptr as any)(alphaPtr).buffer,
-			(ptr as any)(alphaPtr).byteOffset,
-			alphaCount,
-		);
+		const alphas = new Uint32Array(toArrayBuffer(alphaPtr, 0, alphaCount * 4));
 		if (alphas.length) {
 			alphaMode = alphas[0]!;
 		}
