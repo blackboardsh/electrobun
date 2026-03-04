@@ -527,10 +527,29 @@ static std::atomic<bool> g_eventLoopStopping{false};
 static DWORD g_mainThreadId = 0;
 
 // Simple CEF App class for minimal implementation
+// Hidden window message for CEF external message pump scheduling
+#define WM_CEF_SCHEDULE_WORK (WM_USER + 100)
+static HWND g_cefPumpWindow = NULL;
+
 class ElectrobunCefApp : public CefApp, public CefBrowserProcessHandler {
 public:
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
         return this;
+    }
+
+    void OnScheduleMessagePumpWork(int64_t delay_ms) override {
+        // Called by CEF when it needs CefDoMessageLoopWork to be called.
+        // With external_message_pump=true, CEF does NOT internally pump Windows messages,
+        // preventing it from stealing WebView2 messages.
+        if (g_cefPumpWindow) {
+            if (delay_ms <= 0) {
+                // Immediate work needed
+                ::PostMessage(g_cefPumpWindow, WM_CEF_SCHEDULE_WORK, 0, 0);
+            } else {
+                // Schedule work after delay
+                SetTimer(g_cefPumpWindow, 1, (UINT)delay_ms, nullptr);
+            }
+        }
     }
 
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
@@ -2437,10 +2456,13 @@ public:
     HRESULT STDMETHODCALLTYPE Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr) override {
         if (dispIdMember == 1 && (wFlags & DISPATCH_METHOD)) { // postMessage method
             if (pDispParams->cArgs == 1 && pDispParams->rgvarg[0].vt == VT_BSTR) {
+                printf("[Bridge:%s] Received message for webview %u\n", m_bridgeName.c_str(), m_webviewId);
                 return PostMessage(pDispParams->rgvarg[0].bstrVal);
             }
+            printf("[Bridge:%s] Bad param count for webview %u\n", m_bridgeName.c_str(), m_webviewId);
             return DISP_E_BADPARAMCOUNT;
         }
+        printf("[Bridge:%s] Unknown method DISPID=%ld for webview %u\n", m_bridgeName.c_str(), (long)dispIdMember, m_webviewId);
         return DISP_E_MEMBERNOTFOUND;
     }
 
@@ -3221,16 +3243,8 @@ public:
             std::string jsStringCopy = jsString;
             MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
                 std::wstring js = std::wstring(jsStringCopy.begin(), jsStringCopy.end());
-                HRESULT hr = webview->ExecuteScript(js.c_str(), nullptr);
-                if (FAILED(hr)) {
-                    char logMsg[256];
-                    sprintf_s(logMsg, "WebView2: ExecuteScript failed with HRESULT: 0x%08lX", hr);
-                    ::log(logMsg);
-                } else {
-                }
+                webview->ExecuteScript(js.c_str(), nullptr);
             });
-        } else {
-            ::log("WebView2: webview is NULL, cannot execute JavaScript");
         }
     }
     
@@ -5739,7 +5753,8 @@ ELECTROBUN_EXPORT bool initCEF() {
     // CEF settings
     CefSettings settings;
     settings.no_sandbox = true;
-    settings.multi_threaded_message_loop = false; // Use single-threaded message loop
+    settings.multi_threaded_message_loop = false;
+    settings.external_message_pump = true; // We pump CEF via OnScheduleMessagePumpWork
     settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
 
     // Remote DevTools port with scan for availability
@@ -6175,18 +6190,14 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
                             if (!combinedScript.empty()) {
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
-
                                 webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
 
-                                webview->add_NavigationStarting(
-                                    Callback<ICoreWebView2NavigationStartingEventHandler>(
-                                        [combinedScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
-                                            std::wstring wScript(combinedScript.begin(), combinedScript.end());
-                                            sender->ExecuteScript(wScript.c_str(), nullptr);
-                                            return S_OK;
-                                        }).Get(),
-                                    nullptr);
-                                
+                                // NOTE: Do NOT re-run the preload via NavigationStarting + ExecuteScript.
+                                // AddScriptToExecuteOnDocumentCreated already handles this correctly.
+                                // Re-running the preload after NavigationCompleted (when queued ExecuteScript
+                                // fires) would replace handlers and reset pendingRequests, breaking
+                                // any in-flight internal bridge requests.
+
                                 // Add permission request handler
                                 webview->add_PermissionRequested(
                                     Callback<ICoreWebView2PermissionRequestedEventHandler>(
@@ -6806,10 +6817,8 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
                     waited += 10;
                 }
             } else {
-                // Fallback: direct shutdown
-                if (g_cef_initialized) {
-                    CefQuitMessageLoop();
-                }
+                // Fallback: direct shutdown - post WM_QUIT to exit the message loop
+                PostQuitMessage(0);
             }
             return TRUE;
         default:
@@ -6861,18 +6870,53 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
     // Initialize CEF if available
     if (isCEFAvailable()) {
         if (initCEF()) {
-            CefRunMessageLoop(); // Use CEF's message loop like macOS
-            
-            // Clean up after CEF shutdown
+            // With external_message_pump=true, CefDoMessageLoopWork does NOT
+            // internally pump Windows messages. This prevents CEF from stealing
+            // WebView2 messages while still processing CEF work on a timer.
+            //
+            // OnScheduleMessagePumpWork posts WM_CEF_SCHEDULE_WORK for immediate
+            // work and uses SetTimer for delayed work. We also keep a baseline
+            // timer to ensure CEF always gets serviced.
+            WNDCLASSA cefPumpWc = {0};
+            cefPumpWc.lpfnWndProc = [](HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) -> LRESULT {
+                if (msg == WM_CEF_SCHEDULE_WORK || msg == WM_TIMER) {
+                    CefDoMessageLoopWork();
+                    return 0;
+                }
+                return DefWindowProc(hwnd, msg, wParam, lParam);
+            };
+            cefPumpWc.hInstance = GetModuleHandle(NULL);
+            cefPumpWc.lpszClassName = "CefPumpWindowClass";
+            RegisterClassA(&cefPumpWc);
+            g_cefPumpWindow = CreateWindowA("CefPumpWindowClass", "", 0, 0, 0, 0, 0,
+                                           HWND_MESSAGE, NULL, GetModuleHandle(NULL), NULL);
+
+            // Baseline timer ensures CEF always gets serviced even if
+            // OnScheduleMessagePumpWork misses a beat
+            SetTimer(g_cefPumpWindow, 2, 16, nullptr);
+
+            // Kick off initial CEF work
+            CefDoMessageLoopWork();
+
+            // Standard Windows message loop
+            MSG msg;
+            while (GetMessage(&msg, NULL, 0, 0)) {
+                if (g_hAccelTable && TranslateAccelerator(msg.hwnd, g_hAccelTable, &msg)) {
+                    continue;
+                }
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+            // Clean up after shutdown
             std::cout << "[CEF] CEF message loop ended, performing cleanup..." << std::endl;
             TerminateCEFHelperProcesses();
-            
+
             // Close job object
             if (g_job_object) {
                 CloseHandle(g_job_object);
                 g_job_object = nullptr;
             }
-            
+
             CefShutdown();
             g_shutdownComplete.store(true);
         } else {
@@ -6912,11 +6956,9 @@ ELECTROBUN_EXPORT void stopEventLoop() {
     std::cout << "[stopEventLoop] Initiating clean event loop exit" << std::endl;
 
     if (isCEFAvailable() && g_cef_initialized) {
-        // CefQuitMessageLoop must be called on the main thread.
-        // Dispatch via the hidden message window that CefRunMessageLoop processes.
-        MainThreadDispatcher::dispatch_async([]() {
-            CefQuitMessageLoop();
-        });
+        // We use a standard Windows message loop (not CefRunMessageLoop),
+        // so PostQuitMessage is the correct way to exit.
+        PostQuitMessage(0);
     } else {
         // Post WM_QUIT to the main thread's message queue
         if (g_mainThreadId != 0) {
@@ -7739,11 +7781,16 @@ ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void
 }
 
 ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractView* abstractView) {
-    if (!wgpuInstance || !abstractView || !abstractView->hwnd) return nullptr;
+    if (!wgpuInstance || !abstractView || !abstractView->hwnd) {
+        printf("[WGPU] createSurfaceForView: null check failed (inst=%p view=%p hwnd=%p)\n",
+               wgpuInstance, abstractView, abstractView ? abstractView->hwnd : nullptr);
+        return nullptr;
+    }
     if (!ensureWgpuSymbols()) return nullptr;
 
     HWND hwnd = abstractView->hwnd;
-    return runOnMainThreadSyncPtr([&]() -> void* {
+    printf("[WGPU] createSurfaceForView: creating surface for HWND=%p\n", hwnd);
+    void* result = runOnMainThreadSyncPtr([&]() -> void* {
         WGPUSurfaceSourceWindowsHWND hwndSource = {};
         hwndSource.chain.sType = WGPUSType_SurfaceSourceWindowsHWND;
         hwndSource.hinstance = (void*)GetModuleHandle(NULL);
@@ -7753,6 +7800,8 @@ ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractVie
         surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&hwndSource);
         return p_wgpuInstanceCreateSurface(wgpuInstance, &surfaceDesc);
     });
+    printf("[WGPU] createSurfaceForView: surface=%p\n", result);
+    return result;
 }
 
 ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(void* surface, void* config) {
@@ -7762,11 +7811,21 @@ ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(void* surface, void* confi
 
 ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
     if (!ensureWgpuSymbols()) return;
+    static int callCount = 0;
     runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture); });
+    if (callCount < 3) {
+        // Log status field (offset 16 in WGPUSurfaceTexture struct: texture(8) + suboptimal(4) + pad(4) + status(4))
+        uint32_t status = *((uint32_t*)((uint8_t*)surfaceTexture + 16));
+        void* texture = *((void**)surfaceTexture);
+        printf("[WGPU] getCurrentTexture[%d]: texture=%p status=%u\n", callCount, texture, status);
+        callCount++;
+    }
 }
 
 ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
     if (!ensureWgpuSymbols()) return 0;
+    static bool logged = false;
+    if (!logged) { printf("[WGPU] surfacePresentMainThread: first present call, surface=%p\n", surface); logged = true; }
     return (int32_t)(intptr_t)runOnMainThreadSyncPtr([&]() -> void* {
         return (void*)(intptr_t)p_wgpuSurfacePresent(surface);
     });
@@ -8067,7 +8126,8 @@ ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
 }
 
 ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void* surfacePtr, void* outAdapterDevice) {
-    if (!ensureWgpuTestSymbols()) return;
+    printf("[WGPU] createAdapterDeviceMainThread: instance=%p surface=%p\n", instancePtr, surfacePtr);
+    if (!ensureWgpuTestSymbols()) { printf("[WGPU] createAdapterDeviceMainThread: ensureWgpuTestSymbols FAILED\n"); return; }
     MainThreadDispatcher::dispatch_sync([instancePtr, surfacePtr, outAdapterDevice]() {
         WGPUInstance instance = (WGPUInstance)instancePtr;
         WGPUSurface surface = (WGPUSurface)surfacePtr;
@@ -8131,6 +8191,7 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
         WaitForSingleObject(deviceEvent, INFINITE);
         CloseHandle(deviceEvent);
 
+        printf("[WGPU] createAdapterDeviceMainThread: adapter=%p device=%p\n", adapter, device);
         if (outAdapterDevice) {
             uint64_t* out = (uint64_t*)outAdapterDevice;
             out[0] = (uint64_t)adapter;
@@ -8209,7 +8270,7 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
         ::log("ERROR: Invalid parameters passed to evaluateJavaScriptWithNoCompletion");
         return;
     }
-    
+
     abstractView->evaluateJavaScriptWithNoCompletion(script);
     
 }

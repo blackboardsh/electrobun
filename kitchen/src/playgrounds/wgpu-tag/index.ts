@@ -74,15 +74,19 @@ document.addEventListener("DOMContentLoaded", () => {
     wgpu.on("ready", async (e: any) => {
       if (statusEl) statusEl.textContent = `Status: ready (id ${e.detail.id})`;
       const rect = wgpu.getBoundingClientRect();
-      await (electrobun.rpc as any)?.request.wgpuTagReady({
-        id: e.detail.id,
-        rect: {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-        },
-      });
+      try {
+        await (electrobun.rpc as any)?.request.wgpuTagReady({
+          id: e.detail.id,
+          rect: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          },
+        });
+      } catch (err) {
+        console.error("[wgpuTag:view] wgpuTagReady FAILED:", err);
+      }
       sendRect();
     });
   }

@@ -648,7 +648,7 @@ export class WgpuTagRenderer {
 	}
 
 	start(viewId: number, win: BrowserWindow<any>, rect: Rect) {
-		if (this.states.has(viewId)) return;
+		if (this.states.has(viewId)) { return; }
 		if (!WGPUNative.available) {
 			throw new Error("WGPU native library not available");
 		}
@@ -820,11 +820,13 @@ export class WgpuTagRenderer {
 	private renderFrame(state: ViewState) {
 		// Check if renderer has been stopped
 		if (state.stopped) return;
-		
+
 		const rect = state.rect;
 		const width = Math.max(1, Math.floor(rect.width));
 		const height = Math.max(1, Math.floor(rect.height));
-		if (width <= 1 || height <= 1) return;
+		if (width <= 1 || height <= 1) {
+			return;
+		}
 
 		if (width !== state.lastWidth || height !== state.lastHeight) {
 			const surfaceConfig = makeSurfaceConfiguration(
@@ -884,9 +886,13 @@ export class WgpuTagRenderer {
 			surfaceTexture.ptr as number,
 		);
 		const status = surfaceTexture.view.getUint32(16, true);
-		if (status !== 1 && status !== 2) return;
+		if (status !== 1 && status !== 2) {
+			return;
+		}
 		const texPtr = Number(surfaceTexture.view.getBigUint64(8, true));
-		if (!texPtr) return;
+		if (!texPtr) {
+			return;
+		}
 
 		const textureView = WGPUNative.symbols.wgpuTextureCreateView(texPtr, 0);
 		if (!textureView) return;
