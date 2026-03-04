@@ -16,6 +16,8 @@
 #include <future>
 #include <memory>
 #include <windows.h>
+#include <atomic>
+#include "../shared/pending_resize_queue.h"
 #include "dawn/webgpu.h"
 #include <wrl.h>
 #include <WebView2.h>
@@ -2724,6 +2726,14 @@ public:
     RECT visualBounds = {};
     bool creationFailed = false;
 
+    // Pending resize state (cross-thread)
+    std::mutex pendingResizeMutex;
+    std::atomic<uint64_t> pendingResizeGeneration{0};
+    uint64_t appliedResizeGeneration = 0;
+    bool hasPendingResize = false;
+    RECT pendingResizeFrame = {};
+    std::string pendingResizeMasks;
+
     // Navigation rules for URL filtering
     std::vector<std::string> navigationRules;
 
@@ -2889,7 +2899,52 @@ public:
     virtual void openDevTools() = 0;
     virtual void closeDevTools() = 0;
     virtual void toggleDevTools() = 0;
+
+    void storePendingResize(const RECT& frame, const char* masksJson) {
+        std::lock_guard<std::mutex> lock(pendingResizeMutex);
+        pendingResizeFrame = frame;
+        pendingResizeMasks = masksJson ? masksJson : "";
+        hasPendingResize = true;
+        pendingResizeGeneration++;
+    }
+
+    bool consumePendingResize(RECT& outFrame, std::string& outMasks) {
+        std::lock_guard<std::mutex> lock(pendingResizeMutex);
+        if (!hasPendingResize) return false;
+        uint64_t gen = pendingResizeGeneration.load();
+        if (gen == appliedResizeGeneration) return false;
+        outFrame = pendingResizeFrame;
+        outMasks = pendingResizeMasks;
+        appliedResizeGeneration = gen;
+        hasPendingResize = false;
+        return true;
+    }
 };
+
+// Pending resize queue (cross-thread)
+static PendingResizeQueue g_pendingResizeQueue;
+static std::atomic<bool> g_pendingResizeScheduled{false};
+
+static void drainPendingResizes() {
+    g_pendingResizeScheduled.store(false);
+    auto items = g_pendingResizeQueue.drain();
+    for (void* item : items) {
+        AbstractView* view = static_cast<AbstractView*>(item);
+        if (!view) continue;
+        RECT frame = {};
+        std::string masks;
+        if (view->consumePendingResize(frame, masks)) {
+            view->resize(frame, masks.c_str());
+        }
+    }
+}
+
+static void schedulePendingResizeDrain() {
+    if (g_pendingResizeScheduled.exchange(true)) return;
+    MainThreadDispatcher::dispatch_async([]() {
+        drainPendingResizes();
+    });
+}
 
 // Helper function to check navigation rules
 // This is defined here (after AbstractView) so it can call methods on AbstractView
@@ -7062,9 +7117,9 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
 ELECTROBUN_EXPORT void wgpuViewSetFrame(AbstractView *abstractView, double x, double y, double width, double height) {
     if (!abstractView) return;
     RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-    MainThreadDispatcher::dispatch_sync([abstractView, bounds]() {
-        abstractView->resize(bounds, "");
-    });
+    abstractView->storePendingResize(bounds, "");
+    g_pendingResizeQueue.enqueue(abstractView);
+    schedulePendingResizeDrain();
 }
 
 ELECTROBUN_EXPORT void wgpuViewSetTransparent(AbstractView *abstractView, BOOL transparent) {
@@ -8786,7 +8841,9 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
     
     
     RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-    abstractView->resize(bounds, masksJson);
+    abstractView->storePendingResize(bounds, masksJson);
+    g_pendingResizeQueue.enqueue(abstractView);
+    schedulePendingResizeDrain();
 }
 
 // Internal function to stop window movement (without export linkage)

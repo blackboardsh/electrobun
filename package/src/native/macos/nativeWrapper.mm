@@ -29,6 +29,9 @@ static bool wgpuDebugEnabled() {
 #include <netinet/in.h>
 #include <unistd.h>
 #include <signal.h>
+#include <atomic>
+#include <mutex>
+#include "../shared/pending_resize_queue.h"
 
 // CEF includes
 #include "include/base/cef_ref_counted.h"
@@ -742,6 +745,19 @@ void releaseObjCObject(id objcObject) {
     - (void)toggleDevTools;
 @end
 
+@interface AbstractView () {
+@public
+    std::mutex pendingResizeMutex;
+    std::atomic<uint64_t> pendingResizeGeneration;
+    uint64_t appliedResizeGeneration;
+    BOOL hasPendingResize;
+    NSRect pendingResizeFrame;
+    NSArray *pendingResizeMasks;
+}
+- (void)storePendingResize:(NSRect)frame parsedMasks:(NSArray *)parsedMasks;
+- (void)applyPendingResizeIfNeeded;
+@end
+
 // Global map to track all AbstractView instances by their webviewId
 static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = nil;
 
@@ -1083,6 +1099,11 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         self = [super init];
         if (self) {
             self.isRemoved = NO;
+            pendingResizeGeneration = 0;
+            appliedResizeGeneration = 0;
+            hasPendingResize = NO;
+            pendingResizeFrame = NSZeroRect;
+            pendingResizeMasks = nil;
         }
         return self;
     }
@@ -1217,6 +1238,18 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
         [CATransaction commit];
 
+        if (self.nsView && [self.nsView.layer isKindOfClass:[CAMetalLayer class]]) {
+            CAMetalLayer *layer = (CAMetalLayer *)self.nsView.layer;
+            CGFloat scale = self.nsView.window.backingScaleFactor;
+            layer.contentsScale = scale;
+            CGSize size = self.nsView.bounds.size;
+            layer.drawableSize = CGSizeMake(size.width * scale, size.height * scale);
+            if (wgpuDebugEnabled()) {
+                NSLog(@"WGPUView resize: bounds=%.1fx%.1f scale=%.2f drawable=%.1fx%.1f",
+                      size.width, size.height, scale, layer.drawableSize.width, layer.drawableSize.height);
+            }
+        }
+
         NSPoint currentMousePosition = [self.nsView.window mouseLocationOutsideOfEventStream];
         ContainerView *containerView = (ContainerView *)self.nsView.superview;
         [containerView updateActiveWebviewForMousePosition:currentMousePosition];
@@ -1286,7 +1319,73 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     - (void)toggleDevTools {
         [self doesNotRecognizeSelector:_cmd];
     }
+
+    - (void)storePendingResize:(NSRect)frame parsedMasks:(NSArray *)parsedMasks {
+        std::lock_guard<std::mutex> lock(pendingResizeMutex);
+        pendingResizeFrame = frame;
+        pendingResizeMasks = parsedMasks;
+        hasPendingResize = YES;
+        pendingResizeGeneration++;
+    }
+
+    - (void)applyPendingResizeIfNeeded {
+        NSRect frame = NSZeroRect;
+        NSArray *masks = nil;
+        uint64_t gen = 0;
+        {
+            std::lock_guard<std::mutex> lock(pendingResizeMutex);
+            if (!hasPendingResize) {
+                return;
+            }
+            gen = pendingResizeGeneration.load();
+            if (gen == appliedResizeGeneration) {
+                return;
+            }
+            frame = pendingResizeFrame;
+            masks = pendingResizeMasks;
+            appliedResizeGeneration = gen;
+            hasPendingResize = NO;
+        }
+        [self resizeWithFrame:frame parsedMasks:masks];
+    }
 @end
+
+// Pending resize queue (cross-thread)
+static PendingResizeQueue g_pendingResizeQueue;
+static std::atomic<bool> g_pendingResizeScheduled{false};
+static CFRunLoopSourceRef g_pendingResizeSource = nullptr;
+
+static void drainPendingResizes() {
+    g_pendingResizeScheduled.store(false);
+    auto items = g_pendingResizeQueue.drain();
+    for (void* item : items) {
+        AbstractView *view = (__bridge AbstractView *)item;
+        if (!view || view.isRemoved) continue;
+        [view applyPendingResizeIfNeeded];
+    }
+}
+
+static void pendingResizeSourcePerform(void *info) {
+    (void)info;
+    drainPendingResizes();
+}
+
+static void ensurePendingResizeSource() {
+    if (g_pendingResizeSource) return;
+    CFRunLoopSourceContext ctx = {};
+    ctx.perform = pendingResizeSourcePerform;
+    g_pendingResizeSource = CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &ctx);
+    CFRunLoopAddSource(CFRunLoopGetMain(), g_pendingResizeSource, kCFRunLoopCommonModes);
+}
+
+static void schedulePendingResizeDrain() {
+    if (g_pendingResizeScheduled.exchange(true)) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ensurePendingResizeSource();
+        CFRunLoopSourceSignal(g_pendingResizeSource);
+        CFRunLoopWakeUp(CFRunLoopGetMain());
+    });
+}
 
 
 @implementation ContainerView
@@ -6582,20 +6681,9 @@ extern "C" void wgpuViewSetFrame(AbstractView *abstractView, double x, double y,
         return;
     }
     NSRect frame = NSMakeRect(x, y, width, height);
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [abstractView resizeWithFrame:frame parsedMasks:nil];
-        if (abstractView.nsView && [abstractView.nsView.layer isKindOfClass:[CAMetalLayer class]]) {
-            CAMetalLayer *layer = (CAMetalLayer *)abstractView.nsView.layer;
-            CGFloat scale = abstractView.nsView.window.backingScaleFactor;
-            layer.contentsScale = scale;
-            CGSize size = abstractView.nsView.bounds.size;
-            layer.drawableSize = CGSizeMake(size.width * scale, size.height * scale);
-            if (wgpuDebugEnabled()) {
-                NSLog(@"wgpuViewSetFrame: bounds=%.1fx%.1f scale=%.2f drawable=%.1fx%.1f",
-                      size.width, size.height, scale, layer.drawableSize.width, layer.drawableSize.height);
-            }
-        }
-    });
+    [abstractView storePendingResize:frame parsedMasks:nil];
+    g_pendingResizeQueue.enqueue((__bridge void *)abstractView);
+    schedulePendingResizeDrain();
 }
 
 extern "C" void wgpuViewSetTransparent(AbstractView *abstractView, BOOL transparent) {    
@@ -7150,23 +7238,20 @@ extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, do
     // Pre-parse masks JSON off the main thread (NSJSONSerialization is thread-safe)
     NSArray *parsedMasks = nil;
     if (masksJson && strlen(masksJson) > 0) {
-        NSString *jsonString = [NSString stringWithUTF8String:masksJson];
-        NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
-        if (jsonData) {
-            NSError *error = nil;
-            parsedMasks = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-            if (error) parsedMasks = nil;
+        @autoreleasepool {
+            NSString *jsonString = [NSString stringWithUTF8String:masksJson];
+            NSData *jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
+            if (jsonData) {
+                NSError *error = nil;
+                parsedMasks = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+                if (error) parsedMasks = nil;
+            }
         }
     }
 
-    // Coalesce rapid resize calls — only the latest one matters
-    uint32_t generation = ++abstractView.resizeGeneration;
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // Skip if a newer resize was already queued
-        if (generation != abstractView.resizeGeneration) return;
-        [abstractView resizeWithFrame:frame parsedMasks:parsedMasks];
-    });
+    [abstractView storePendingResize:frame parsedMasks:parsedMasks];
+    g_pendingResizeQueue.enqueue((__bridge void *)abstractView);
+    schedulePendingResizeDrain();
 }
 
 extern "C" void stopWindowMove() {

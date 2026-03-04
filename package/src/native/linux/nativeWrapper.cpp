@@ -29,6 +29,8 @@
 #include <functional>
 #include <execinfo.h>
 #include <cmath>
+#include <atomic>
+#include "../shared/pending_resize_queue.h"
 #include <gio/gio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -2089,6 +2091,14 @@ public:
     GdkRectangle visualBounds = {};
     bool creationFailed = false;
 
+    // Pending resize state (cross-thread)
+    std::mutex pendingResizeMutex;
+    std::atomic<uint64_t> pendingResizeGeneration{0};
+    uint64_t appliedResizeGeneration = 0;
+    bool hasPendingResize = false;
+    GdkRectangle pendingResizeFrame = {};
+    std::string pendingResizeMasks;
+
     // Navigation rules for URL filtering
     std::vector<std::string> navigationRules;
 
@@ -2184,7 +2194,53 @@ public:
     virtual void openDevTools() = 0;
     virtual void closeDevTools() = 0;
     virtual void toggleDevTools() = 0;
+
+    void storePendingResize(const GdkRectangle& frame, const char* masksJson) {
+        std::lock_guard<std::mutex> lock(pendingResizeMutex);
+        pendingResizeFrame = frame;
+        pendingResizeMasks = masksJson ? masksJson : "";
+        hasPendingResize = true;
+        pendingResizeGeneration++;
+    }
+
+    bool consumePendingResize(GdkRectangle& outFrame, std::string& outMasks) {
+        std::lock_guard<std::mutex> lock(pendingResizeMutex);
+        if (!hasPendingResize) return false;
+        uint64_t gen = pendingResizeGeneration.load();
+        if (gen == appliedResizeGeneration) return false;
+        outFrame = pendingResizeFrame;
+        outMasks = pendingResizeMasks;
+        appliedResizeGeneration = gen;
+        hasPendingResize = false;
+        return true;
+    }
 };
+
+// Pending resize queue (cross-thread)
+static PendingResizeQueue g_pendingResizeQueue;
+static std::atomic<bool> g_pendingResizeScheduled{false};
+
+static void drainPendingResizes() {
+    g_pendingResizeScheduled.store(false);
+    auto items = g_pendingResizeQueue.drain();
+    for (void* item : items) {
+        AbstractView* view = static_cast<AbstractView*>(item);
+        if (!view) continue;
+        GdkRectangle frame = {};
+        std::string masks;
+        if (view->consumePendingResize(frame, masks)) {
+            view->resize(frame, masks.c_str());
+        }
+    }
+}
+
+static void schedulePendingResizeDrain() {
+    if (g_pendingResizeScheduled.exchange(true)) return;
+    g_idle_add([](gpointer) -> gboolean {
+        drainPendingResizes();
+        return G_SOURCE_REMOVE;
+    }, nullptr);
+}
 
 // Helper function implementation - calls AbstractView's navigation rules method
 bool checkNavigationRules(std::shared_ptr<AbstractView> view, const std::string& url) {
@@ -6512,9 +6568,9 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView* abstractView, const char* 
 ELECTROBUN_EXPORT void wgpuViewSetFrame(AbstractView* abstractView, double x, double y, double width, double height) {
     if (!abstractView) return;
     GdkRectangle frame = {(int)x, (int)y, (int)width, (int)height};
-    dispatch_sync_main_void([&]() {
-        abstractView->resize(frame, "");
-    });
+    abstractView->storePendingResize(frame, "");
+    g_pendingResizeQueue.enqueue(abstractView);
+    schedulePendingResizeDrain();
 }
 
 ELECTROBUN_EXPORT void wgpuViewSetTransparent(AbstractView* abstractView, bool transparent) {
@@ -7694,46 +7750,18 @@ void updateActiveWebviewForMousePosition(uint32_t windowId, int mouseX, int mous
 }
 
 ELECTROBUN_EXPORT void resizeWebview(AbstractView* abstractView, double x, double y, double width, double height, const char* masksJson) {
-    printf("DEBUG: resizeWebview called for view=%p\n", abstractView);
-    
     if (!abstractView) {
-        printf("DEBUG: resizeWebview - null abstractView\n");
         return;
     }
     
     if (abstractView->isRemoved) {
-        printf("DEBUG: resizeWebview - webview is marked as removed, skipping\n");
         return;
     }
-    
-    printf("DEBUG: resizeWebview - proceeding with resize\n");
-    
-    std::string masksStr(masksJson ? masksJson : "");  // Copy the string to ensure it survives
-    
-    // Use async dispatch to avoid potential deadlocks
-    struct ResizeData {
-        AbstractView* view;
-        double x, y, width, height;
-        std::string masks;
-    };
-    
-    ResizeData* data = new ResizeData{abstractView, x, y, width, height, masksStr};
-    
-    g_idle_add([](gpointer userData) -> gboolean {
-        ResizeData* resizeData = static_cast<ResizeData*>(userData);
-        
-        printf("DEBUG: resizeWebview async callback for view=%p\n", resizeData->view);
-        
-        if (resizeData->view && !resizeData->view->isRemoved) {
-            GdkRectangle frame = { (int)resizeData->x, (int)resizeData->y, (int)resizeData->width, (int)resizeData->height };
-            resizeData->view->resize(frame, resizeData->masks.c_str());
-        } else {
-            printf("DEBUG: resizeWebview async callback - webview removed, skipping\n");
-        }
-        
-        delete resizeData;
-        return G_SOURCE_REMOVE;
-    }, data);
+
+    GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
+    abstractView->storePendingResize(frame, masksJson);
+    g_pendingResizeQueue.enqueue(abstractView);
+    schedulePendingResizeDrain();
 }
 
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView* abstractView, const char* js) {
