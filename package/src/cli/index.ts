@@ -2694,6 +2694,23 @@ Categories=Utility;Application;
 			const libDest = join(appBundleMacOSPath, basename(libSource));
 			cpSync(libSource, libDest, { dereference: true });
 			console.log(`Copied WGPU library to bundle: ${libDest}`);
+
+			// On Windows, Dawn needs d3dcompiler_47.dll for D3D shader compilation.
+			// ARM64 Windows doesn't have an x64 version in system directories,
+			// so bundle it alongside the WGPU library.
+			if (targetOS === "win") {
+				const d3dCandidates = [
+					join(effectiveWGPUDir, "bin", "d3dcompiler_47.dll"),
+					join(ELECTROBUN_DEP_PATH, "dist", "d3dcompiler_47.dll"),
+					join(targetPaths.CEF_DIR, "d3dcompiler_47.dll"),
+				];
+				const d3dSource = d3dCandidates.find((p) => existsSync(p));
+				if (d3dSource) {
+					const d3dDest = join(appBundleMacOSPath, "d3dcompiler_47.dll");
+					cpSync(d3dSource, d3dDest, { dereference: true });
+					console.log(`Copied d3dcompiler_47.dll to bundle: ${d3dDest}`);
+				}
+			}
 		}
 
 		// copy native bindings

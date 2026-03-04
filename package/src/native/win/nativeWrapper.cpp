@@ -4461,10 +4461,13 @@ public:
     }
     
     ~ContainerView() {
-        // Remove all child views from global maps and the pending resize queue
-        // before destroying HWNDs, so no dangling pointers remain.
+        // Explicitly remove each view before destroying HWNDs.
+        // This lets CEFView::remove() defer CloseBrowser via dispatch_async
+        // instead of ~CEFView() calling CloseBrowser(true) synchronously
+        // on an already-destroyed HWND (which would crash).
         for (auto& view : m_abstractViews) {
             g_pendingResizeQueue.remove(view.get());
+            view->remove();
             {
                 std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
                 g_abstractViews.erase(view->webviewId);

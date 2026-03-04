@@ -566,6 +566,21 @@ async function copyToDist() {
 		}
 		await $`cp ${wgpuLib} dist/${basename(wgpuLib)}`;
 		console.log("✓ Copied WGPU shared library to dist");
+
+		// On Windows, Dawn needs d3dcompiler_47.dll for D3D shader compilation.
+		// ARM64 Windows doesn't have an x64 version in system directories,
+		// so we must bundle it alongside the WGPU library.
+		if (OS === "win") {
+			const d3dCompilerCandidates = [
+				join(wgpuSourceDir, "bin", "d3dcompiler_47.dll"),
+				join(process.cwd(), "vendors", "cef", "Release", "d3dcompiler_47.dll"),
+			];
+			const d3dCompiler = d3dCompilerCandidates.find((p) => existsSync(p));
+			if (d3dCompiler) {
+				await $`cp ${d3dCompiler} dist/d3dcompiler_47.dll`;
+				console.log("✓ Copied d3dcompiler_47.dll to dist");
+			}
+		}
 	}
 
 	if (OS === "win") {
