@@ -2801,7 +2801,8 @@ Categories=Utility;Application;
 		});
 
 		if (!buildResult.success) {
-			console.error("failed to build", bunSource, buildResult.logs);
+			console.error("failed to build", bunSource);
+			printBuildLogs(buildResult.logs);
 			throw new Error("Build failed: bun build failed");
 		}
 
@@ -2843,7 +2844,8 @@ Categories=Utility;Application;
 			});
 
 			if (!buildResult.success) {
-				console.error("failed to build", viewSource, buildResult.logs);
+				console.error("failed to build", viewSource);
+				printBuildLogs(buildResult.logs);
 				continue;
 			}
 		}
@@ -4123,6 +4125,35 @@ Categories=Utility;Application;
 	}
 
 	// Helper functions
+
+	function formatBuildLogEntry(entry: any): string {
+		if (!entry || typeof entry !== "object") return String(entry);
+		const level = entry.level || "error";
+		let message = entry.message || entry.text || String(entry);
+		if (entry.location) {
+			const loc = entry.location;
+			const file = loc.file || loc.path || "unknown";
+			const line = loc.line ?? loc.lineText ?? loc.lineNumber ?? "?";
+			const col = loc.column ?? loc.col ?? loc.columnNumber ?? "?";
+			message += ` (${file}:${line}:${col})`;
+		}
+		return `[bun.build:${level}] ${message}`;
+	}
+
+	function printBuildLogs(logs: any[] | undefined | null) {
+		if (!logs || logs.length === 0) {
+			console.error("[bun.build] No logs returned from Bun.build");
+			return;
+		}
+		for (const entry of logs) {
+			console.error(formatBuildLogEntry(entry));
+			if (entry?.notes?.length) {
+				for (const note of entry.notes) {
+					console.error(`  note: ${note.text ?? String(note)}`);
+				}
+			}
+		}
+	}
 
 	async function getConfig() {
 		let loadedConfig: Partial<typeof defaultConfig> & Record<string, unknown> =

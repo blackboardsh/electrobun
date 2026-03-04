@@ -36,6 +36,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	lastRect: Rect = { x: 0, y: 0, width: 0, height: 0 };
 	resizeObserver: ResizeObserver | null = null;
 	positionCheckLoop: ReturnType<typeof setInterval> | null = null;
+	private _resizeHandler: (() => void) | null = null;
 	transparent = false;
 	passthroughEnabled = false;
 	hidden = false;
@@ -59,6 +60,10 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		}
 		if (this.resizeObserver) this.resizeObserver.disconnect();
 		if (this.positionCheckLoop) clearInterval(this.positionCheckLoop);
+		if (this._resizeHandler) {
+			window.removeEventListener("resize", this._resizeHandler);
+			this._resizeHandler = null;
+		}
 	}
 
 	async initWebview() {
@@ -144,6 +149,10 @@ export class ElectrobunWebviewTag extends HTMLElement {
 
 		// Position check loop (for scroll, transforms, etc.)
 		this.positionCheckLoop = setInterval(() => this.syncDimensions(), 100);
+
+		// Ensure we re-sync on window resize even if the element rect doesn't change.
+		this._resizeHandler = () => this.syncDimensions(true);
+		window.addEventListener("resize", this._resizeHandler);
 	}
 
 	syncDimensions(force = false) {

@@ -3899,7 +3899,21 @@ public:
                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
         visualBounds = frame;
-        maskJSON = masksJson ? masksJson : "";
+        bool maskChanged = false;
+        if (masksJson && strlen(masksJson) > 0 && strcmp(masksJson, "[]") != 0) {
+            std::string newMaskJSON = masksJson;
+            if (newMaskJSON != maskJSON) {
+                maskJSON = newMaskJSON;
+                maskChanged = true;
+            }
+        } else if (!maskJSON.empty()) {
+            maskJSON = "";
+            maskChanged = true;
+        }
+
+        if (maskChanged) {
+            applyVisualMask();
+        }
     }
 
     void setTransparent(bool transparent) override {
@@ -3923,8 +3937,73 @@ public:
         }
     }
 
-    void applyVisualMask() override {}
-    void removeMasks() override {}
+    void applyVisualMask() override {
+        if (!hwnd) return;
+
+        if (maskJSON.empty()) {
+            RECT windowRect;
+            GetClientRect(hwnd, &windowRect);
+            HRGN fullRegion = CreateRectRgn(0, 0, windowRect.right, windowRect.bottom);
+            SetWindowRgn(hwnd, fullRegion, TRUE);
+            return;
+        }
+
+        try {
+            int width = visualBounds.right - visualBounds.left;
+            int height = visualBounds.bottom - visualBounds.top;
+            if (width <= 0 || height <= 0) return;
+
+            HRGN baseRegion = CreateRectRgn(0, 0, width, height);
+
+            size_t pos = 0;
+            while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+                try {
+                    size_t xStart = maskJSON.find(":", pos) + 1;
+                    size_t xEnd = maskJSON.find(",", xStart);
+                    int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+
+                    size_t yPos = maskJSON.find("\"y\":", pos);
+                    size_t yStart = maskJSON.find(":", yPos) + 1;
+                    size_t yEnd = maskJSON.find(",", yStart);
+                    int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+
+                    size_t wPos = maskJSON.find("\"width\":", pos);
+                    size_t wStart = maskJSON.find(":", wPos) + 1;
+                    size_t wEnd = maskJSON.find(",", wStart);
+                    if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                    int maskWidth = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+
+                    size_t hPos = maskJSON.find("\"height\":", pos);
+                    size_t hStart = maskJSON.find(":", hPos) + 1;
+                    size_t hEnd = maskJSON.find("}", hStart);
+                    int maskHeight = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+
+                    HRGN holeRegion = CreateRectRgn(x, y, x + maskWidth, y + maskHeight);
+                    if (holeRegion) {
+                        CombineRgn(baseRegion, baseRegion, holeRegion, RGN_DIFF);
+                        DeleteObject(holeRegion);
+                    }
+
+                    pos = hEnd;
+                } catch (...) {
+                    pos++;
+                }
+            }
+
+            SetWindowRgn(hwnd, baseRegion, TRUE);
+        } catch (...) {
+            // Ignore mask parse errors
+        }
+    }
+
+    void removeMasks() override {
+        if (!hwnd) return;
+        RECT windowRect;
+        GetClientRect(hwnd, &windowRect);
+        HRGN fullRegion = CreateRectRgn(0, 0, windowRect.right, windowRect.bottom);
+        SetWindowRgn(hwnd, fullRegion, TRUE);
+        maskJSON.clear();
+    }
     void toggleMirrorMode(bool enable) override {}
 
     void findInPage(const char* searchText, bool forward, bool matchCase) override {}

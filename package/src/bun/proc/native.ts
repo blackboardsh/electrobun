@@ -2529,6 +2529,13 @@ type WebviewTagInitParams = {
 	passthrough: boolean;
 };
 
+type WgpuTagInitParams = {
+	windowId: number;
+	frame: { x: number; y: number; width: number; height: number };
+	transparent: boolean;
+	passthrough: boolean;
+};
+
 export const internalRpcHandlers = {
 	request: {
 		// todo: this shouldn't be getting method, just params.
@@ -2566,6 +2573,24 @@ export const internalRpcHandlers = {
 			});
 
 			return webviewForTag.id;
+		},
+		wgpuTagInit: (params: WgpuTagInitParams) => {
+			const {
+				windowId,
+				frame,
+				transparent,
+				passthrough,
+			} = params;
+
+			const viewForTag = new WGPUView({
+				windowId,
+				frame,
+				autoResize: false,
+				startTransparent: transparent,
+				startPassthrough: passthrough,
+			});
+
+			return viewForTag.id;
 		},
 		webviewTagCanGoBack: (params: { id: number }) => {
 			const { id } = params;
@@ -2613,6 +2638,29 @@ export const internalRpcHandlers = {
 				width,
 				height,
 				toCString(params.masks),
+			);
+		},
+		wgpuTagResize: (params: {
+			id: number;
+			frame: { x: number; y: number; width: number; height: number };
+			masks: string;
+		}) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagResize: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			const { x, y, width, height } = params.frame;
+			native.symbols.resizeWebview(
+				view.ptr,
+				x,
+				y,
+				width,
+				height,
+				toCString(params.masks ?? "[]"),
 			);
 		},
 		webviewTagUpdateSrc: (params: { id: number; url: string }) => {
@@ -2716,6 +2764,19 @@ export const internalRpcHandlers = {
 			}
 			native.symbols.webviewSetTransparent(webview.ptr, params.transparent);
 		},
+		wgpuTagSetTransparent: (params: {
+			id: number;
+			transparent: boolean;
+		}) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagSetTransparent: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.wgpuViewSetTransparent(view.ptr, params.transparent);
+		},
 		webviewTagSetPassthrough: (params: {
 			id: number;
 			enablePassthrough: boolean;
@@ -2732,6 +2793,16 @@ export const internalRpcHandlers = {
 				params.enablePassthrough,
 			);
 		},
+		wgpuTagSetPassthrough: (params: { id: number; passthrough: boolean }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagSetPassthrough: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.wgpuViewSetPassthrough(view.ptr, params.passthrough);
+		},
 		webviewTagSetHidden: (params: { id: number; hidden: boolean }) => {
 			const webview = BrowserView.getById(params.id);
 			if (!webview || !webview.ptr) {
@@ -2741,6 +2812,40 @@ export const internalRpcHandlers = {
 				return;
 			}
 			native.symbols.webviewSetHidden(webview.ptr, params.hidden);
+		},
+		wgpuTagSetHidden: (params: { id: number; hidden: boolean }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagSetHidden: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.wgpuViewSetHidden(view.ptr, params.hidden);
+		},
+		wgpuTagRemove: (params: { id: number }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagRemove: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			view.remove();
+		},
+		wgpuTagRunTest: (params: { id: number }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagRunTest: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			if (!native?.symbols?.wgpuRunGPUTest) {
+				console.error("wgpuTagRunTest: wgpuRunGPUTest not available");
+				return;
+			}
+			native.symbols.wgpuRunGPUTest(view.ptr);
 		},
 		webviewTagSetNavigationRules: (params: { id: number; rules: string[] }) => {
 			const webview = BrowserView.getById(params.id);

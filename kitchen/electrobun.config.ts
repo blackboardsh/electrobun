@@ -76,6 +76,9 @@ export default {
 			"playgrounds/webview-cleanup": {
 				entrypoint: "src/playgrounds/webview-cleanup/index.ts",
 			},
+			"playgrounds/wgpu-tag": {
+				entrypoint: "src/playgrounds/wgpu-tag/index.ts",
+			},
 		},
 		copy: {
 			"src/test-runner/index.html": "views/test-runner/index.html",
@@ -142,6 +145,8 @@ export default {
 				"views/playgrounds/webview-cleanup/index.css",
 			"src/playgrounds/webview-cleanup/assets/bunny.png":
 				"views/playgrounds/webview-cleanup/assets/bunny.png",
+			"src/playgrounds/wgpu-tag/index.html":
+				"views/playgrounds/wgpu-tag/index.html",
 		},
 		mac: {
 			codesign: true,

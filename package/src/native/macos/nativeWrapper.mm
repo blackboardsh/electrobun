@@ -1114,6 +1114,12 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
 
     - (void)setPassthrough:(BOOL)enable {    
         self.isMousePassthroughEnabled = enable;
+        // Re-evaluate active view immediately so passthrough takes effect without mouse movement
+        if (self.nsView && self.nsView.window && [self.nsView.superview isKindOfClass:[ContainerView class]]) {
+            ContainerView *containerView = (ContainerView *)self.nsView.superview;
+            NSPoint currentMousePosition = [self.nsView.window mouseLocationOutsideOfEventStream];
+            [containerView updateActiveWebviewForMousePosition:currentMousePosition];
+        }
     }
 
     - (void)setTransparent:(BOOL)transparent {
@@ -2947,22 +2953,9 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         if (!self.nsView) return;
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.nsView setWantsLayer:YES];
+            self.nsView.layer.opacity = transparent ? 0 : 1;
             self.nsView.layer.backgroundColor = [[NSColor clearColor] CGColor];
             self.nsView.layer.opaque = !transparent ? YES : NO;
-            NSWindow *window = self.nsView.window;
-            if (window) {
-                window.opaque = !transparent ? YES : NO;
-                window.backgroundColor = transparent ? [NSColor clearColor] : [NSColor windowBackgroundColor];
-                if (transparent) {
-                    window.hasShadow = NO;
-                }
-                NSView *contentView = window.contentView;
-                if (contentView) {
-                    contentView.wantsLayer = YES;
-                    contentView.layer.backgroundColor = [[NSColor clearColor] CGColor];
-                    contentView.layer.opaque = !transparent ? YES : NO;
-                }
-            }
             if ([self.nsView.layer isKindOfClass:[CAMetalLayer class]]) {
                 CAMetalLayer *metalLayer = (CAMetalLayer *)self.nsView.layer;
                 metalLayer.opaque = !transparent ? YES : NO;

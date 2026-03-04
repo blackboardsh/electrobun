@@ -3293,10 +3293,81 @@ public:
             visualBounds = frame;
         }
         maskJSON = masksJson ? masksJson : "";
+
+        if (masksJson && strlen(masksJson) > 0 && strcmp(masksJson, "[]") != 0) {
+            applyVisualMask();
+        } else {
+            removeMasks();
+        }
     }
 
-    void applyVisualMask() override {}
-    void removeMasks() override {}
+    void applyVisualMask() override {
+        if (maskJSON.empty()) {
+            return;
+        }
+
+        Display* display = nullptr;
+        Window window = 0;
+        if (xDisplay && xWindow) {
+            display = xDisplay;
+            window = xWindow;
+        } else if (viewWidget) {
+            GdkWindow* gdkWindow = gtk_widget_get_window(viewWidget);
+            if (gdkWindow) {
+                display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
+                window = GDK_WINDOW_XID(gdkWindow);
+            }
+        }
+        if (!display || !window) {
+            return;
+        }
+
+        std::vector<MaskRect> masks = parseMaskJson(maskJSON);
+        if (masks.empty()) {
+            return;
+        }
+
+        XRectangle baseRect = {
+            0,
+            0,
+            static_cast<unsigned short>(std::max(1, visualBounds.width)),
+            static_cast<unsigned short>(std::max(1, visualBounds.height)),
+        };
+        XShapeCombineRectangles(display, window, ShapeBounding, 0, 0, &baseRect, 1, ShapeSet, YXBanded);
+
+        for (const auto& mask : masks) {
+            XRectangle rect = {
+                static_cast<short>(mask.x),
+                static_cast<short>(mask.y),
+                static_cast<unsigned short>(mask.width),
+                static_cast<unsigned short>(mask.height),
+            };
+            XShapeCombineRectangles(display, window, ShapeBounding, 0, 0, &rect, 1, ShapeSubtract, YXBanded);
+        }
+        XFlush(display);
+    }
+
+    void removeMasks() override {
+        Display* display = nullptr;
+        Window window = 0;
+        if (xDisplay && xWindow) {
+            display = xDisplay;
+            window = xWindow;
+        } else if (viewWidget) {
+            GdkWindow* gdkWindow = gtk_widget_get_window(viewWidget);
+            if (gdkWindow) {
+                display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
+                window = GDK_WINDOW_XID(gdkWindow);
+            }
+        }
+        if (!display || !window) {
+            return;
+        }
+
+        XShapeCombineMask(display, window, ShapeBounding, 0, 0, None, ShapeSet);
+        XFlush(display);
+        maskJSON.clear();
+    }
 
     void toggleMirrorMode(bool enable) override {
         if (mirrorModeEnabled == enable) return;
