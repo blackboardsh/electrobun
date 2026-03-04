@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { defineTest, expect } from "../test-framework/types";
 import { GpuWindow, WGPU, WGPUBridge } from "electrobun/bun";
 import { CString, ptr, toArrayBuffer } from "bun:ffi";

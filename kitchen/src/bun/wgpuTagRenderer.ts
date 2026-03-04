@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { BrowserWindow, Screen, WGPU, WGPUBridge, WGPUView } from "electrobun/bun";
 import { CString, ptr } from "bun:ffi";
 

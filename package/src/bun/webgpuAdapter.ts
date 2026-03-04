@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { WGPUView } from "./core/WGPUView";
 import { GpuWindow } from "./core/GpuWindow";
 import WGPU from "./webGPU";

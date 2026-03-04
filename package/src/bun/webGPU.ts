@@ -291,8 +291,8 @@ const WGPU_LIB_NAMES: Record<string, string[]> = {
 };
 
 function findWgpuLibraryPath(): string | null {
-	const debug = process.env.ELECTROBUN_WGPU_DEBUG === "1";
-	const envPath = process.env.ELECTROBUN_WGPU_PATH;
+	const debug = process.env["ELECTROBUN_WGPU_DEBUG"] === "1";
+	const envPath = process.env["ELECTROBUN_WGPU_PATH"];
 	if (envPath && existsSync(envPath)) {
 		if (debug) console.log("[WGPU] using ELECTROBUN_WGPU_PATH:", envPath);
 		return envPath;
@@ -353,7 +353,8 @@ export const native = (() => {
 			close: lib.close,
 		};
 	} catch (err) {
-		console.warn("[WGPU] dlopen failed:", libPath, err?.message ?? err);
+		const message = err instanceof Error ? err.message : String(err);
+		console.warn("[WGPU] dlopen failed:", libPath, message);
 		return {
 			available: false,
 			path: libPath,

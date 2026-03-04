@@ -1520,7 +1520,7 @@ export const WGPUBridge = {
 		native.symbols.wgpuInstanceCreateSurfaceMainThread(
 			instancePtr as any,
 			descriptorPtr as any,
-		),
+		) as Pointer,
 	surfaceConfigure: (surfacePtr: Pointer, configPtr: Pointer) =>
 		native.symbols.wgpuSurfaceConfigureMainThread(
 			surfacePtr as any,
@@ -1577,7 +1577,7 @@ export const WGPUBridge = {
 			size as any,
 			timeoutNs as any,
 			outSizePtr as any,
-		),
+		) as Pointer,
 	bufferReadSyncInto: (
 		instancePtr: Pointer,
 		bufferPtr: Pointer,
@@ -1605,7 +1605,7 @@ export const WGPUBridge = {
 			offset as any,
 			size as any,
 			dstPtr as any,
-		),
+		) as Pointer,
 	bufferReadbackStatus: (jobPtr: Pointer): number =>
 		native.symbols.wgpuBufferReadbackStatusShim(jobPtr as any),
 	bufferReadbackFree: (jobPtr: Pointer) =>

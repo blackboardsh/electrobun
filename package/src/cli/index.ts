@@ -1122,7 +1122,11 @@ async function ensureWGPUDependencies(
 		};
 
 		if (extractedItems.length === 1) {
-			const single = join(tempExtractDir, extractedItems[0]);
+			const firstItem = extractedItems[0];
+			if (!firstItem) {
+				throw new Error(`No extracted items found in ${tempExtractDir}`);
+			}
+			const single = join(tempExtractDir, firstItem);
 			const stat = require("fs").statSync(single);
 			if (stat.isDirectory()) {
 				moveAll(single);
@@ -1380,6 +1384,7 @@ const defaultConfig = {
 		cefVersion: undefined as string | undefined, // Override CEF version: "CEF_VERSION+chromium-CHROMIUM_VERSION"
 		wgpuVersion: undefined as string | undefined, // Override Dawn (WebGPU) version: "0.2.3" or "v0.2.3-beta.0"
 		bunVersion: undefined as string | undefined, // Override Bun runtime version: "1.4.2"
+		locales: undefined as string[] | "*" | undefined, // ICU locales subset (Linux/Windows)
 		mac: {
 			codesign: false,
 			notarize: false,

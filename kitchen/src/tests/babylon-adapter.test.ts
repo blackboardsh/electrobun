@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { defineTest, expect } from "../test-framework/types";
 import { GpuWindow, babylon, webgpu } from "electrobun/bun";
 

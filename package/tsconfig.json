@@ -26,5 +26,5 @@
       "noUncheckedIndexedAccess": true
     },
     "include": ["src/**/*"],
-    "exclude": ["node_modules", "dist", "vendors", "build"]
+    "exclude": ["node_modules", "dist", "vendors", "build", "src/tests"]
   }

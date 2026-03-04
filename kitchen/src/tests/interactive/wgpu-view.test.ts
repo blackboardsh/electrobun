@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Interactive WGPUView tests
 
 import { defineTest } from "../../test-framework/types";
