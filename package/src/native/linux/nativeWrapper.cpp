@@ -9014,6 +9014,11 @@ void cleanupWebviewsForWindow(uint32_t windowId) {
     
     if (container) {
         // Clean up all webviews in this container
+        for (auto& webview : container->abstractViews) {
+            if (webview) {
+                g_pendingResizeQueue.remove(webview.get());
+            }
+        }
         std::lock_guard<std::mutex> lock(g_webviewMapMutex);
         for (auto& webview : container->abstractViews) {
             if (webview) {

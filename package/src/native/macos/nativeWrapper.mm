@@ -1471,9 +1471,16 @@ static void schedulePendingResizeDrain() {
         for (NSInteger i = 0; i < self.abstractViews.count; i++) {
             AbstractView * candidate = self.abstractViews[i];
             if (candidate.webviewId == webviewId) {
+                g_pendingResizeQueue.remove((__bridge void *)candidate);
                 [self.abstractViews removeObjectAtIndex:i];
                 break;
             }
+        }
+    }
+
+    - (void)dealloc {
+        for (AbstractView *view in self.abstractViews) {
+            g_pendingResizeQueue.remove((__bridge void *)view);
         }
     }
 @end

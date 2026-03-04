@@ -4461,6 +4461,15 @@ public:
     }
     
     ~ContainerView() {
+        // Remove all child views from global maps and the pending resize queue
+        // before destroying HWNDs, so no dangling pointers remain.
+        for (auto& view : m_abstractViews) {
+            g_pendingResizeQueue.remove(view.get());
+            {
+                std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+                g_abstractViews.erase(view->webviewId);
+            }
+        }
         if (m_hwnd) {
             DestroyWindow(m_hwnd);
         }

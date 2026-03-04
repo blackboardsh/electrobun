@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <mutex>
 #include <unordered_set>
 #include <vector>
@@ -22,6 +23,14 @@ public:
 		out.swap(queue_);
 		set_.clear();
 		return out;
+	}
+
+	void remove(void* view) {
+		if (!view) return;
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (set_.erase(view)) {
+			queue_.erase(std::remove(queue_.begin(), queue_.end(), view), queue_.end());
+		}
 	}
 
 	bool empty() const {
