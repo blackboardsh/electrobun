@@ -3,13 +3,7 @@
 
 import "./globals.d.ts";
 import { send, request } from "./internalRpc";
-
-interface Rect {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-}
+import { OverlaySyncController, type Rect } from "./overlaySync";
 
 type WgpuTagEventType = "ready";
 
@@ -19,11 +13,7 @@ export const wgpuTagRegistry: Record<number, ElectrobunWgpuTag> = {};
 export class ElectrobunWgpuTag extends HTMLElement {
 	wgpuViewId: number | null = null;
 	maskSelectors: Set<string> = new Set();
-	lastRect: Rect = { x: 0, y: 0, width: 0, height: 0 };
-	resizeObserver: ResizeObserver | null = null;
-	positionCheckLoop: ReturnType<typeof setInterval> | null = null;
-	private _resizeHandler: (() => void) | null = null;
-	private _burstUntil = 0;
+	private _sync: OverlaySyncController | null = null;
 	transparent = false;
 	passthroughEnabled = false;
 	hidden = false;
@@ -43,17 +33,12 @@ export class ElectrobunWgpuTag extends HTMLElement {
 			send("wgpuTagRemove", { id: this.wgpuViewId });
 			delete wgpuTagRegistry[this.wgpuViewId];
 		}
-		if (this.resizeObserver) this.resizeObserver.disconnect();
-		if (this.positionCheckLoop) clearTimeout(this.positionCheckLoop);
-		if (this._resizeHandler) {
-			window.removeEventListener("resize", this._resizeHandler);
-			this._resizeHandler = null;
-		}
+		if (this._sync) this._sync.stop();
 	}
 
 	async initWgpuView() {
 		const rect = this.getBoundingClientRect();
-		this.lastRect = {
+		const initialRect = {
 			x: rect.x,
 			y: rect.y,
 			width: rect.width,
@@ -93,7 +78,7 @@ export class ElectrobunWgpuTag extends HTMLElement {
 			this.id = `electrobun-wgpu-${wgpuViewId}`;
 			wgpuTagRegistry[wgpuViewId] = this;
 
-			this.setupObservers();
+			this.setupObservers(initialRect);
 			// Force immediate sync after initialization
 			this.syncDimensions(true);
 
@@ -117,74 +102,51 @@ export class ElectrobunWgpuTag extends HTMLElement {
 		}
 	}
 
-	setupObservers() {
-		this.resizeObserver = new ResizeObserver(() => this.syncDimensions());
-		this.resizeObserver.observe(this);
-
-		const loop = () => {
-			this.syncDimensions();
-			const now = performance.now();
-			const interval = now < this._burstUntil ? 10 : 100;
-			this.positionCheckLoop = setTimeout(loop, interval);
+	setupObservers(initialRect: Rect) {
+		const getMasks = () => {
+			const rect = this.getBoundingClientRect();
+			const masks: Rect[] = [];
+			this.maskSelectors.forEach((selector) => {
+				try {
+					document.querySelectorAll(selector).forEach((el) => {
+						const mr = el.getBoundingClientRect();
+						masks.push({
+							x: mr.x - rect.x,
+							y: mr.y - rect.y,
+							width: mr.width,
+							height: mr.height,
+						});
+					});
+				} catch (_e) {
+					// Invalid selector, ignore
+				}
+			});
+			return masks;
 		};
-		this.positionCheckLoop = setTimeout(loop, 100);
 
-		// Ensure we re-sync on window resize even if the element rect doesn't change.
-		this._resizeHandler = () => this.syncDimensions(true);
-		window.addEventListener("resize", this._resizeHandler);
+		this._sync = new OverlaySyncController(this, {
+			onSync: (rect, masksJson) => {
+				if (this.wgpuViewId === null) return;
+				send("wgpuTagResize", {
+					id: this.wgpuViewId,
+					frame: rect,
+					masks: masksJson,
+				});
+			},
+			getMasks,
+			burstIntervalMs: 10,
+			baseIntervalMs: 100,
+			burstDurationMs: 50,
+		});
+		this._sync.setLastRect(initialRect);
+		this._sync.start();
 	}
 
 	syncDimensions(force = false) {
-		if (this.wgpuViewId === null) return;
-
-		const rect = this.getBoundingClientRect();
-		const newRect: Rect = {
-			x: rect.x,
-			y: rect.y,
-			width: rect.width,
-			height: rect.height,
-		};
-
-		if (newRect.width === 0 && newRect.height === 0) {
-			return;
+		if (!this._sync) return;
+		if (force) {
+			this._sync.forceSync();
 		}
-
-		if (
-			!force &&
-			newRect.x === this.lastRect.x &&
-			newRect.y === this.lastRect.y &&
-			newRect.width === this.lastRect.width &&
-			newRect.height === this.lastRect.height
-		) {
-			return;
-		}
-
-		this._burstUntil = performance.now() + 50;
-		this.lastRect = newRect;
-
-		// Calculate mask rectangles
-		const masks: Rect[] = [];
-		this.maskSelectors.forEach((selector) => {
-			try {
-				document.querySelectorAll(selector).forEach((el) => {
-					const mr = el.getBoundingClientRect();
-					masks.push({
-						x: mr.x - rect.x,
-						y: mr.y - rect.y,
-						width: mr.width,
-						height: mr.height,
-					});
-				});
-			} catch (_e) {
-				// Invalid selector, ignore
-			}
-		});
-
-		send("wgpuTagResize", {
-			id: this.wgpuViewId,
-			frame: newRect,
-			masks: JSON.stringify(masks),
-		});
 	}
 
 	// Visibility methods
