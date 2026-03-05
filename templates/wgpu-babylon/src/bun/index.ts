@@ -496,8 +496,8 @@ const inputState = {
 // Platform-specific keycodes
 enum KeyCode {
 	// macOS
-	MACOS_LEFT_ARROW = 124,
-	MACOS_RIGHT_ARROW = 123,
+	MACOS_LEFT_ARROW = 123,
+	MACOS_RIGHT_ARROW = 124,
 	MACOS_SPACE = 49,
 	
 	// Windows
