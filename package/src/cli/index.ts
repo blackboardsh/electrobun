@@ -2705,6 +2705,7 @@ Categories=Utility;Application;
 			if (targetOS === "win") {
 				const d3dCandidates = [
 					join(effectiveWGPUDir, "bin", "d3dcompiler_47.dll"),
+					join(ELECTROBUN_DEP_PATH, `dist-win-${currentTarget.arch}`, "d3dcompiler_47.dll"),
 					join(ELECTROBUN_DEP_PATH, "dist", "d3dcompiler_47.dll"),
 					join(targetPaths.CEF_DIR, "d3dcompiler_47.dll"),
 				];
