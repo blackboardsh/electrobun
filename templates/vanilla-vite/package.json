@@ -11,7 +11,7 @@
 		"build:canary": "vite build && electrobun build --env=canary"
 	},
 	"dependencies": {
-		"electrobun": "latest"
+		"electrobun": "file:../../package"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
