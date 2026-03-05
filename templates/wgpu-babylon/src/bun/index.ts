@@ -499,15 +499,17 @@ function showCountdownMessage(value: number) {
 
 win.on("keyDown", (event: any) => {
 	const { keyCode, isRepeat } = event.data ?? {};
-	if (keyCode === 123) inputState.right = true;
-	if (keyCode === 124) inputState.left = true;
-	if (keyCode === 49 && !isRepeat) inputState.jumpQueued = true;
+	// macOS: 123=left arrow, 124=right arrow, 49=space
+	// Windows: 37=left arrow, 39=right arrow, 32=space
+	if (keyCode === 123 || keyCode === 37) inputState.right = true;
+	if (keyCode === 124 || keyCode === 39) inputState.left = true;
+	if ((keyCode === 49 || keyCode === 32) && !isRepeat) inputState.jumpQueued = true;
 });
 
 win.on("keyUp", (event: any) => {
 	const { keyCode } = event.data ?? {};
-	if (keyCode === 123) inputState.right = false;
-	if (keyCode === 124) inputState.left = false;
+	if (keyCode === 123 || keyCode === 37) inputState.right = false;
+	if (keyCode === 124 || keyCode === 39) inputState.left = false;
 });
 
 const playerHalf = {

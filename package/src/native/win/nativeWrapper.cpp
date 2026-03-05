@@ -4819,6 +4819,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         cefView->HandleWindowMessage(msg, wParam, lParam);
                     }
                 }
+
+                // Dispatch keyboard events to keyHandler callback
+                if (data && data->keyHandler &&
+                    (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP)) {
+                    uint32_t keyCode = (uint32_t)wParam;
+                    uint32_t modifiers = 0;
+                    if (GetKeyState(VK_SHIFT) & 0x8000) modifiers |= 1 << 0;
+                    if (GetKeyState(VK_CONTROL) & 0x8000) modifiers |= 1 << 1;
+                    if (GetKeyState(VK_MENU) & 0x8000) modifiers |= 1 << 2;
+                    uint32_t isDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) ? 1 : 0;
+                    uint32_t isRepeat = (lParam & (1 << 30)) ? 1 : 0;
+                    data->keyHandler(data->windowId, keyCode, modifiers, isDown, isRepeat);
+                }
             }
             break;
 

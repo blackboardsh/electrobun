@@ -581,11 +581,12 @@ function makeComputePipelineDescriptor(
 }
 
 function makeComputePassDescriptor() {
-	const buffer = new ArrayBuffer(24);
+	const buffer = new ArrayBuffer(32);
 	const view = new DataView(buffer);
 	writePtr(view, 0, 0);
 	writePtr(view, 8, 0);
-	writePtr(view, 16, 0);
+	writeU64(view, 16, 0n);
+	writePtr(view, 24, 0);
 	return { buffer, ptr: ptr(buffer) };
 }
 
@@ -1696,6 +1697,14 @@ class GPUBuffer {
 		return new Promise<number>((resolve) => {
 			const start = Date.now();
 			const poll = () => {
+				try {
+					if (this._device.instancePtr) {
+						WGPUNative.symbols.wgpuInstanceProcessEvents(
+							this._device.instancePtr,
+						);
+					}
+					WGPUNative.symbols.wgpuDeviceTick(this._device.ptr);
+				} catch {}
 				const status = WGPUBridge.bufferReadbackStatus(jobPtr as any);
 				if (status === 1) {
 					WGPUBridge.bufferReadbackFree(jobPtr as any);
