@@ -4431,8 +4431,9 @@ public:
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
+    WindowKeyHandler keyCallback;
 
-    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr) {
+    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), keyCallback(nullptr) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
@@ -4440,8 +4441,8 @@ public:
         gtk_widget_show(overlay);
     }
     
-    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback)
-        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback) {
+    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback)
+        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), keyCallback(keyCallback) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
@@ -6026,7 +6027,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 }
 
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
    
@@ -6085,7 +6086,7 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         }
         
         // Create container with callbacks
-        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback);
+        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback, keyCallback);
 
         {
             std::lock_guard<std::mutex> lock(g_containersMutex);
@@ -6124,8 +6125,41 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
       
         
         // Connect mouse motion event for debugging
-        gtk_widget_add_events(window, GDK_POINTER_MOTION_MASK);
+        gtk_widget_add_events(window, GDK_POINTER_MOTION_MASK | GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE_MASK);
         g_signal_connect(window, "motion-notify-event", G_CALLBACK(onMouseMove), container.get());
+        
+        // Connect keyboard events
+        g_signal_connect(window, "key-press-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventKey* event, gpointer user_data) -> gboolean {
+            ContainerView* container = static_cast<ContainerView*>(user_data);
+            if (container && container->keyCallback) {
+                // Convert GDK modifiers to our format
+                uint32_t modifiers = 0;
+                if (event->state & GDK_SHIFT_MASK) modifiers |= (1 << 0);
+                if (event->state & GDK_CONTROL_MASK) modifiers |= (1 << 1);
+                if (event->state & GDK_MOD1_MASK) modifiers |= (1 << 2); // Alt
+                if (event->state & GDK_SUPER_MASK) modifiers |= (1 << 3); // Super/Windows key
+                
+                // GDK uses hardware keycodes which should match X11 keycodes
+                container->keyCallback(container->windowId, event->hardware_keycode, modifiers, 1u, 0u);
+            }
+            return FALSE; // Allow event to propagate
+        }), container.get());
+        
+        g_signal_connect(window, "key-release-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventKey* event, gpointer user_data) -> gboolean {
+            ContainerView* container = static_cast<ContainerView*>(user_data);
+            if (container && container->keyCallback) {
+                // Convert GDK modifiers to our format
+                uint32_t modifiers = 0;
+                if (event->state & GDK_SHIFT_MASK) modifiers |= (1 << 0);
+                if (event->state & GDK_CONTROL_MASK) modifiers |= (1 << 1);
+                if (event->state & GDK_MOD1_MASK) modifiers |= (1 << 2); // Alt
+                if (event->state & GDK_SUPER_MASK) modifiers |= (1 << 3); // Super/Windows key
+                
+                // GDK uses hardware keycodes which should match X11 keycodes
+                container->keyCallback(container->windowId, event->hardware_keycode, modifiers, 0u, 0u);
+            }
+            return FALSE; // Allow event to propagate
+        }), container.get());
    
         
         return (void*)window;
@@ -6147,7 +6181,7 @@ ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowI
         return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, keyCallback, titleBarStyle, transparent);
     } else {
         // Pass titleBarStyle and transparent to GTK window creation
-        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
+        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, keyCallback, titleBarStyle, transparent);
     }
 
 }
@@ -7509,7 +7543,7 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
     runOnMainThreadSyncVoid([&]() {
         WGPUInstance instance = (WGPUInstance)instancePtr;
         WGPUSurface surface = (WGPUSurface)surfacePtr;
-        if (!instance || !surface) return;
+        if (!instance) return;
 
         struct AdapterRequestCtx {
             std::mutex* mutex;
@@ -7532,7 +7566,11 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
         bool adapterDone = false;
 
         WGPURequestAdapterOptions opts = {};
-        opts.compatibleSurface = surface;
+        // Only set compatibleSurface if we have a valid surface (for rendering)
+        // For compute-only operations, surface can be null
+        if (surface) {
+            opts.compatibleSurface = surface;
+        }
         WGPURequestAdapterCallbackInfo adapterInfo = {};
         adapterInfo.mode = WGPUCallbackMode_AllowSpontaneous;
         adapterInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter cbAdapter, WGPUStringView /*message*/, void* userdata1, void* /*userdata2*/) {

@@ -493,23 +493,69 @@ const inputState = {
 	jumpQueued: false,
 };
 
+// Platform-specific keycodes
+enum KeyCode {
+	// macOS
+	MACOS_LEFT_ARROW = 124,
+	MACOS_RIGHT_ARROW = 123,
+	MACOS_SPACE = 49,
+	
+	// Windows
+	WINDOWS_LEFT_ARROW = 37,
+	WINDOWS_RIGHT_ARROW = 39,
+	WINDOWS_SPACE = 32,
+	
+	// Linux X11
+	LINUX_LEFT_ARROW = 113,
+	LINUX_RIGHT_ARROW = 114,
+	LINUX_SPACE = 65,
+}
+
 function showCountdownMessage(value: number) {
 	setMessage(`SLEEP ${value}`, 1100);
 }
 
 win.on("keyDown", (event: any) => {
 	const { keyCode, isRepeat } = event.data ?? {};
-	// macOS: 123=left arrow, 124=right arrow, 49=space
-	// Windows: 37=left arrow, 39=right arrow, 32=space
-	if (keyCode === 123 || keyCode === 37) inputState.right = true;
-	if (keyCode === 124 || keyCode === 39) inputState.left = true;
-	if ((keyCode === 49 || keyCode === 32) && !isRepeat) inputState.jumpQueued = true;
+	
+	// Left arrow key - bunny moves left (scene moves right)
+	if (keyCode === KeyCode.MACOS_LEFT_ARROW || 
+	    keyCode === KeyCode.WINDOWS_LEFT_ARROW || 
+	    keyCode === KeyCode.LINUX_LEFT_ARROW) {
+		inputState.right = true;
+	}
+	
+	// Right arrow key - bunny moves right (scene moves left)
+	if (keyCode === KeyCode.MACOS_RIGHT_ARROW || 
+	    keyCode === KeyCode.WINDOWS_RIGHT_ARROW || 
+	    keyCode === KeyCode.LINUX_RIGHT_ARROW) {
+		inputState.left = true;
+	}
+	
+	// Jump
+	if ((keyCode === KeyCode.MACOS_SPACE || 
+	     keyCode === KeyCode.WINDOWS_SPACE || 
+	     keyCode === KeyCode.LINUX_SPACE) && !isRepeat) {
+		inputState.jumpQueued = true;
+	}
 });
 
 win.on("keyUp", (event: any) => {
 	const { keyCode } = event.data ?? {};
-	if (keyCode === 123 || keyCode === 37) inputState.right = false;
-	if (keyCode === 124 || keyCode === 39) inputState.left = false;
+	
+	// Left arrow key
+	if (keyCode === KeyCode.MACOS_LEFT_ARROW || 
+	    keyCode === KeyCode.WINDOWS_LEFT_ARROW || 
+	    keyCode === KeyCode.LINUX_LEFT_ARROW) {
+		inputState.right = false;
+	}
+	
+	// Right arrow key
+	if (keyCode === KeyCode.MACOS_RIGHT_ARROW || 
+	    keyCode === KeyCode.WINDOWS_RIGHT_ARROW || 
+	    keyCode === KeyCode.LINUX_RIGHT_ARROW) {
+		inputState.left = false;
+	}
 });
 
 const playerHalf = {
