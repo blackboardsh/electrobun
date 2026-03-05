@@ -18,7 +18,6 @@ import {
 } from "fs";
 import { execSync } from "child_process";
 import * as readline from "readline";
-import archiver from "archiver";
 import { OS, ARCH } from "../shared/platform";
 import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
 import { BUN_VERSION } from "../shared/bun-version";
@@ -4406,39 +4405,43 @@ Categories=Utility;Application;
 			throw new Error(`Archive file not found: ${archivePath}`);
 		}
 
-		// Create zip archive
-		const output = createWriteStream(zipPath);
-		const archive = archiver("zip", {
-			zlib: { level: 9 }, // Maximum compression
-		});
+		// Create staging directory to control zip layout
+		const stagingDir = join(
+			buildFolder,
+			`.installer-zip-${exeStem.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+		);
+		const stagingInstallerDir = join(stagingDir, ".installer");
 
-		return new Promise((resolve, reject) => {
-			output.on("close", () => {
-				console.log(
-					`Created Windows installer package: ${zipPath} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`,
-				);
-				resolve(zipPath);
-			});
+		if (existsSync(stagingDir)) {
+			rmSync(stagingDir, { recursive: true, force: true });
+		}
+		mkdirSync(stagingInstallerDir, { recursive: true });
 
-			archive.on("error", (err) => {
-				reject(err);
-			});
+		// Add Setup.exe at the root level for easy access
+		copyFileSync(exePath, join(stagingDir, basename(exePath)));
+		// Put metadata and archive in a subdirectory to discourage manual extraction
+		copyFileSync(metadataPath, join(stagingInstallerDir, basename(metadataPath)));
+		copyFileSync(archivePath, join(stagingInstallerDir, basename(archivePath)));
 
-			archive.pipe(output);
+		try {
+			// Create zip archive (Windows only)
+			execSync(
+				`powershell -command "Compress-Archive -Path '${stagingDir}\\\\*' -DestinationPath '${zipPath}' -Force"`,
+				{ stdio: "inherit" },
+			);
 
-			// Add Setup.exe at the root level for easy access
-			archive.file(exePath, { name: basename(exePath) });
-
-			// Put metadata and archive in a subdirectory to discourage manual extraction
-			archive.file(metadataPath, {
-				name: `.installer/${basename(metadataPath)}`,
-			});
-			archive.file(archivePath, {
-				name: `.installer/${basename(archivePath)}`,
-			});
-
-			archive.finalize();
-		});
+			const zipSizeMb = existsSync(zipPath)
+				? (statSync(zipPath).size / 1024 / 1024).toFixed(2)
+				: "0.00";
+			console.log(
+				`Created Windows installer package: ${zipPath} (${zipSizeMb} MB)`,
+			);
+			return zipPath;
+		} finally {
+			if (existsSync(stagingDir)) {
+				rmSync(stagingDir, { recursive: true, force: true });
+			}
+		}
 	}
 
 	function codesignAppBundle(
