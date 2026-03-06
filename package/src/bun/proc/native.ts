@@ -457,6 +457,10 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
+			getTrayBounds: {
+				args: [FFIType.ptr],
+				returns: FFIType.cstring,
+			},
 			setApplicationMenu: {
 				args: [FFIType.cstring, FFIType.function],
 				returns: FFIType.void,
@@ -607,6 +611,18 @@ export const native = (() => {
 				args: [FFIType.function], // handler callback
 				returns: FFIType.void,
 			},
+			setAppReopenHandler: {
+				args: [FFIType.function],
+				returns: FFIType.void,
+			},
+			setDockIconVisible: {
+				args: [FFIType.bool],
+				returns: FFIType.void,
+			},
+			isDockIconVisible: {
+				args: [],
+				returns: FFIType.bool,
+			},
 
 			// Window style utilities
 			getWindowStyle: {
@@ -722,6 +738,7 @@ export const ffi = {
 			};
 			titleBarStyle: string;
 			transparent: boolean;
+			hidden?: boolean;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -744,6 +761,7 @@ export const ffi = {
 				},
 				titleBarStyle,
 				transparent,
+				hidden = false,
 			} = params;
 
 			const styleMask = native.symbols.getWindowStyle(
@@ -785,7 +803,9 @@ export const ffi = {
 			}
 
 			native.symbols.setWindowTitle(windowPtr, toCString(title));
-			native.symbols.showWindow(windowPtr);
+			if (!hidden) {
+				native.symbols.showWindow(windowPtr);
+			}
 
 			return windowPtr;
 		},
@@ -1349,6 +1369,23 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			native.symbols.removeTray(tray.ptr);
 			// The Tray class will handle removing from TrayMap
 		},
+		getTrayBounds: (params: { id: number }): Rectangle => {
+			const tray = Tray.getById(params.id);
+			if (!tray?.ptr) {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
+
+			const jsonStr = native.symbols.getTrayBounds(tray.ptr);
+			if (!jsonStr) {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
+
+			try {
+				return JSON.parse(jsonStr.toString());
+			} catch {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
+		},
 		setApplicationMenu: (params: { menuConfig: string }): void => {
 			const { menuConfig } = params;
 
@@ -1393,6 +1430,12 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 				toCString(subtitle),
 				silent,
 			);
+		},
+		setDockIconVisible: (params: { visible: boolean }): void => {
+			native.symbols.setDockIconVisible(params.visible);
+		},
+		isDockIconVisible: (): boolean => {
+			return native.symbols.isDockIconVisible();
 		},
 		openFileDialog: (params: {
 			startingFolder: string;
@@ -1828,6 +1871,27 @@ const urlOpenCallback = new JSCallback(
 // Register the URL open handler with native code (macOS only)
 if (process.platform === "darwin") {
 	native.symbols.setURLOpenHandler(urlOpenCallback);
+}
+
+const appReopenCallback = new JSCallback(
+	() => {
+		if (process.platform === "darwin") {
+			native.symbols.setDockIconVisible(true);
+		}
+
+		const handler = electrobunEventEmitter.events.app.reopen;
+		const event = handler({});
+		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: [],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+if (process.platform === "darwin") {
+	native.symbols.setAppReopenHandler(appReopenCallback);
 }
 
 // Quit requested callback - invoked by native code when system quit is requested

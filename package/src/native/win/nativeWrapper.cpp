@@ -10030,6 +10030,11 @@ ELECTROBUN_EXPORT void removeTray(NSStatusItem *statusItem) {
     });
 }
 
+ELECTROBUN_EXPORT const char* getTrayBounds(NSStatusItem *statusItem) {
+    (void)statusItem;
+    return _strdup("{\"x\":0,\"y\":0,\"width\":0,\"height\":0}");
+}
+
 ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
     if (!jsonString) {
         ::log("ERROR: NULL JSON string passed to setApplicationMenu");
@@ -11458,8 +11463,26 @@ extern "C" ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionI
 
 // URL scheme handler - macOS only, stub for Windows
 extern "C" ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*)) {
+    (void)callback;
     // Not supported on Windows - stub to prevent dlopen failure
     // Windows URL protocol handling is done via registry
+}
+
+// App reopen handler - macOS only, stub for Windows
+extern "C" ELECTROBUN_EXPORT void setAppReopenHandler(void (*callback)()) {
+    (void)callback;
+    // Not supported on Windows - stub to prevent dlopen failure
+}
+
+// Dock icon visibility - macOS only, stubs for Windows
+extern "C" ELECTROBUN_EXPORT void setDockIconVisible(bool visible) {
+    (void)visible;
+    // Not supported on Windows - stub to prevent dlopen failure
+}
+
+extern "C" ELECTROBUN_EXPORT bool isDockIconVisible() {
+    // Not supported on Windows
+    return true;
 }
 
 // Window icon - Linux only, no-op for Windows

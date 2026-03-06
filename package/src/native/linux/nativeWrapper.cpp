@@ -8755,6 +8755,11 @@ ELECTROBUN_EXPORT void removeTray(void* statusItem) {
         }
     });
 }
+
+ELECTROBUN_EXPORT const char* getTrayBounds(void* statusItem) {
+    (void)statusItem;
+    return strdup("{\"x\":0,\"y\":0,\"width\":0,\"height\":0}");
+}
 #else // NO_APPINDICATOR
 // Stub implementations when AppIndicator is not available
 ELECTROBUN_EXPORT void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, uint32_t width, uint32_t height, void* clickHandler) {
@@ -8766,6 +8771,7 @@ ELECTROBUN_EXPORT void setTrayImage(void* statusItem, const char* image) {}
 ELECTROBUN_EXPORT void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {}
 ELECTROBUN_EXPORT void setTrayMenu(void* statusItem, const char* menuConfig) {}
 ELECTROBUN_EXPORT void removeTray(void* statusItem) {}
+ELECTROBUN_EXPORT const char* getTrayBounds(void* statusItem) { return strdup("{\"x\":0,\"y\":0,\"width\":0,\"height\":0}"); }
 #endif // NO_APPINDICATOR
 
 ELECTROBUN_EXPORT void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
@@ -10802,8 +10808,24 @@ ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionIdentifier, 
 }
 
 ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*)) {
+    (void)callback;
     // Not supported on Linux - stub to prevent dlopen failure
     // Linux URL protocol handling is done via desktop file associations
+}
+
+ELECTROBUN_EXPORT void setAppReopenHandler(void (*callback)()) {
+    (void)callback;
+    // Not supported on Linux - stub to prevent dlopen failure
+}
+
+ELECTROBUN_EXPORT void setDockIconVisible(bool visible) {
+    (void)visible;
+    // Not supported on Linux - stub to prevent dlopen failure
+}
+
+ELECTROBUN_EXPORT bool isDockIconVisible() {
+    // Not supported on Linux
+    return true;
 }
 
 // Graceful shutdown function to coordinate cleanup

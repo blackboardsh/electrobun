@@ -506,6 +506,7 @@ typedef struct {
 typedef SnapshotCallback zigSnapshotCallback;
 typedef StatusItemHandler ZigStatusItemHandler;
 static URLOpenHandler g_urlOpenHandler = nullptr;
+static AppReopenHandler g_appReopenHandler = nullptr;
 static QuitRequestedHandler g_quitRequestedHandler = nullptr;
 static std::atomic<bool> g_shutdownComplete{false};
 static std::atomic<bool> g_eventLoopStopping{false};
@@ -6273,6 +6274,18 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             }
         }
     }
+
+    - (BOOL)applicationShouldHandleReopen:(NSApplication *)application hasVisibleWindows:(BOOL)hasVisibleWindows {
+        (void)hasVisibleWindows;
+
+        [application activateIgnoringOtherApps:YES];
+
+        if (g_appReopenHandler) {
+            g_appReopenHandler();
+        }
+
+        return YES;
+    }
 @end
 
 @implementation WindowDelegate
@@ -7713,6 +7726,45 @@ extern "C" void setURLOpenHandler(URLOpenHandler handler) {
     g_urlOpenHandler = handler;
 }
 
+extern "C" void setAppReopenHandler(AppReopenHandler handler) {
+    g_appReopenHandler = handler;
+}
+
+extern "C" void setDockIconVisible(bool visible) {
+    void (^applyVisibility)(void) = ^{
+        NSApplication *app = [NSApplication sharedApplication];
+        if (visible) {
+            [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+            [app activateIgnoringOtherApps:YES];
+        } else {
+            [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        }
+    };
+
+    if ([NSThread isMainThread]) {
+        applyVisibility();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), applyVisibility);
+    }
+}
+
+extern "C" bool isDockIconVisible() {
+    __block bool isVisible = true;
+
+    void (^readVisibility)(void) = ^{
+        NSApplication *app = [NSApplication sharedApplication];
+        isVisible = [app activationPolicy] == NSApplicationActivationPolicyRegular;
+    };
+
+    if ([NSThread isMainThread]) {
+        readVisibility();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), readVisibility);
+    }
+
+    return isVisible;
+}
+
 extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,
                                     uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
     
@@ -7800,6 +7852,38 @@ extern "C" void removeTray(NSStatusItem *statusItem) {
             [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
         });
     }
+}
+
+extern "C" const char* getTrayBounds(NSStatusItem *statusItem) {
+    if (!statusItem) {
+        return strdup("{\"x\":0,\"y\":0,\"width\":0,\"height\":0}");
+    }
+
+    __block NSString *json = nil;
+
+    void (^readBounds)(void) = ^{
+        NSStatusBarButton *button = statusItem.button;
+        if (!button || !button.window) {
+            json = @"{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
+            return;
+        }
+
+        NSRect frameInWindow = button.frame;
+        NSRect frameOnScreen = [button.window convertRectToScreen:frameInWindow];
+        json = [NSString stringWithFormat:@"{\"x\":%.0f,\"y\":%.0f,\"width\":%.0f,\"height\":%.0f}",
+            frameOnScreen.origin.x,
+            frameOnScreen.origin.y,
+            frameOnScreen.size.width,
+            frameOnScreen.size.height];
+    };
+
+    if ([NSThread isMainThread]) {
+        readBounds();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), readBounds);
+    }
+
+    return strdup([json UTF8String]);
 }
 
 extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
