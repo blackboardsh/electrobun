@@ -279,6 +279,22 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		native.symbols.webviewToggleDevTools(this.ptr);
 	}
 
+	/**
+	 * Set the page zoom level (WebKit only, similar to browser zoom).
+	 * @param zoomLevel - The zoom level (1.0 = 100%, 1.5 = 150%, etc.)
+	 */
+	setPageZoom(zoomLevel: number) {
+		native.symbols.webviewSetPageZoom(this.ptr, zoomLevel);
+	}
+
+	/**
+	 * Get the current page zoom level.
+	 * @returns The current zoom level (1.0 = 100%)
+	 */
+	getPageZoom(): number {
+		return native.symbols.webviewGetPageZoom(this.ptr) as number;
+	}
+
 	// todo (yoav): move this to a class that also has off, append, prepend, etc.
 	// name should only allow browserView events
 	// Note: normalize event names to willNavigate instead of ['will-navigate'] to save

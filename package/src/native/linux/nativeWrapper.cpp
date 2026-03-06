@@ -7893,6 +7893,16 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView* abstractView) {
     }
 }
 
+ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView* abstractView, double zoomLevel) {
+    // pageZoom is WebKit-specific, not available on Linux CEF
+    // TODO: implement CEF zoom if needed
+}
+
+ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView* abstractView) {
+    // pageZoom is WebKit-specific, not available on Linux CEF
+    return 1.0;
+}
+
 ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView* abstractView, const char* scriptIdentifier, const char* scriptContent, bool forMainFrameOnly) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {

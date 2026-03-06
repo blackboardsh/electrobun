@@ -6941,6 +6941,37 @@ extern "C" void webviewToggleDevTools(AbstractView *abstractView) {
     });
 }
 
+extern "C" void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
+            WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
+            if (wkImpl.webView) {
+                wkImpl.webView.pageZoom = zoomLevel;
+                [wkImpl.webView setNeedsDisplay:YES];
+                [wkImpl.webView setNeedsLayout:YES];
+            }
+        }
+    });
+}
+
+extern "C" double webviewGetPageZoom(AbstractView *abstractView) {
+    __block double zoomLevel = 1.0;
+    if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
+        WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
+        if (wkImpl.webView) {
+            if ([NSThread isMainThread]) {
+                zoomLevel = wkImpl.webView.pageZoom;
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    zoomLevel = wkImpl.webView.pageZoom;
+                });
+            }
+        }
+    }
+    return zoomLevel;
+}
+
+
 extern "C" NSRect createNSRectWrapper(double x, double y, double width, double height) {
     return NSMakeRect(x, y, width, height);
 }
@@ -7795,7 +7826,6 @@ extern "C" void removeTray(NSStatusItem *statusItem) {
 }
 
 extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
-    NSLog(@"Setting application menu from JSON in objc");
     // Copy the string before dispatch_async since the JS-side buffer may be GC'd
     char *jsonCopy = strdup(jsonString);
     dispatch_async(dispatch_get_main_queue(), ^{

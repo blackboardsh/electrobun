@@ -8436,6 +8436,16 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
     }
 }
 
+ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
+    // pageZoom is WebKit-specific, not available on Windows
+    // TODO: implement WebView2 zoom if needed
+}
+
+ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
+    // pageZoom is WebKit-specific, not available on Windows
+    return 1.0;
+}
+
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {
     // Stub implementation
     NSRect rect = {x, y, width, height};
