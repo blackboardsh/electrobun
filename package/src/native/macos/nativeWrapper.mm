@@ -4087,7 +4087,7 @@ private:
 
 ElectrobunHandler* ElectrobunHandler::g_instance = nullptr;
 
-std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
+electrobun::ChromiumFlagConfig g_userChromiumFlags;
 
 class ElectrobunApp : public CefApp,
                      public CefBrowserProcessHandler,
@@ -4098,21 +4098,16 @@ public:
     }
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
         command_line->AppendSwitchWithValue("custom-scheme", "views");
-        // Note: This stops CEF (Chromium) trying to access Chromium's storage for system-level things
-        // like credential management. Using a mock keychain just means it doesn't use keychain
-        // for credential storage. Other security features like cookies, https, etc. are unaffected.
-        command_line->AppendSwitch("use-mock-keychain");
 
-        // Enable fullscreen support for videos
-        command_line->AppendSwitch("enable-features=PictureInPicture");
-        command_line->AppendSwitch("enable-fullscreen");
-
-        // Allow DevTools frontend (served over https) to connect to local ws://127.0.0.1:9222
-        command_line->AppendSwitchWithValue("remote-allow-origins", "*");
-        command_line->AppendSwitch("allow-insecure-localhost");
-
-        // Note: CEF transparency is handled via OSR (off-screen rendering) mode
-        // which is enabled when transparent:true is set in the window options
+        // macOS default flags — can be overridden via chromiumFlags in config
+        static const std::vector<electrobun::DefaultFlag> defaults = {
+            {"use-mock-keychain", ""},
+            {"enable-features=PictureInPicture", ""},
+            {"enable-fullscreen", ""},
+            {"remote-allow-origins", "*"},
+            {"allow-insecure-localhost", ""},
+        };
+        electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 
         // Apply user-defined chromium flags from build.json
         electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);

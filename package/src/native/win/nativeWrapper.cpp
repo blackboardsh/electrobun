@@ -517,7 +517,7 @@ static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
 // CEF global variables
 static bool g_cef_initialized = false;
 static CefRefPtr<CefApp> g_cef_app;
-static std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
+static electrobun::ChromiumFlagConfig g_userChromiumFlags;
 static HANDLE g_job_object = nullptr;  // Job object to track all child processes
 
 // Quit/shutdown coordination
@@ -553,13 +553,14 @@ public:
     }
 
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
-        // Disable features for minimal implementation
-        command_line->AppendSwitch("disable-web-security");
-        command_line->AppendSwitch("disable-features=VizDisplayCompositor");
-
-        // Allow DevTools frontend (served over http) to connect to local ws://127.0.0.1
-        command_line->AppendSwitchWithValue("remote-allow-origins", "*");
-        command_line->AppendSwitch("allow-insecure-localhost");
+        // Windows default flags — can be overridden via chromiumFlags in config
+        static const std::vector<electrobun::DefaultFlag> defaults = {
+            {"disable-web-security", ""},
+            {"disable-features=VizDisplayCompositor", ""},
+            {"remote-allow-origins", "*"},
+            {"allow-insecure-localhost", ""},
+        };
+        electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 
         // Apply user-defined chromium flags from build.json
         electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);

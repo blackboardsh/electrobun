@@ -341,7 +341,7 @@ static std::mutex g_webviewMapMutex;
 static std::map<int, std::string> g_preloadScripts;
 
 CefRefPtr<class ElectrobunApp> g_app;
-std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
+electrobun::ChromiumFlagConfig g_userChromiumFlags;
 
 
 // Get the directory of the current executable
@@ -740,26 +740,30 @@ public:
     
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
         command_line->AppendSwitchWithValue("custom-scheme", "views");
-        command_line->AppendSwitch("use-mock-keychain");
-        // Linux-specific settings - disable GPU acceleration for VM compatibility
-        command_line->AppendSwitch("disable-gpu");
-        command_line->AppendSwitch("disable-gpu-compositing");
-        command_line->AppendSwitch("disable-gpu-sandbox");
-        command_line->AppendSwitch("enable-software-rasterizer");
-        command_line->AppendSwitch("force-software-rasterizer");
-        command_line->AppendSwitch("disable-accelerated-2d-canvas");
-        command_line->AppendSwitch("disable-accelerated-video-decode");
-        command_line->AppendSwitch("disable-accelerated-video-encode");
-        command_line->AppendSwitch("disable-gpu-memory-buffer-video-frames");
-        // Additional VM/headless flags
-        command_line->AppendSwitch("disable-dev-shm-usage");
-        command_line->AppendSwitch("disable-extensions");
-        command_line->AppendSwitch("disable-plugins");
-        command_line->AppendSwitch("disable-web-security");
-        command_line->AppendSwitch("no-sandbox");
-        // Force X11 backend for window embedding compatibility
-        command_line->AppendSwitchWithValue("ozone-platform", "x11");
-        command_line->AppendSwitch("use-x11");
+
+        // Linux default flags — can be overridden via chromiumFlags in config
+        // GPU acceleration disabled by default for VM compatibility;
+        // skip with e.g. chromiumFlags: { "disable-gpu": false }
+        static const std::vector<electrobun::DefaultFlag> defaults = {
+            {"use-mock-keychain", ""},
+            {"disable-gpu", ""},
+            {"disable-gpu-compositing", ""},
+            {"disable-gpu-sandbox", ""},
+            {"enable-software-rasterizer", ""},
+            {"force-software-rasterizer", ""},
+            {"disable-accelerated-2d-canvas", ""},
+            {"disable-accelerated-video-decode", ""},
+            {"disable-accelerated-video-encode", ""},
+            {"disable-gpu-memory-buffer-video-frames", ""},
+            {"disable-dev-shm-usage", ""},
+            {"disable-extensions", ""},
+            {"disable-plugins", ""},
+            {"disable-web-security", ""},
+            {"no-sandbox", ""},
+            {"ozone-platform", "x11"},
+            {"use-x11", ""},
+        };
+        electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 
         // Apply user-defined chromium flags from build.json
         electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);
