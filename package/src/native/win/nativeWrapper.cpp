@@ -8464,7 +8464,7 @@ ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
                                          WindowMoveHandler zigMoveHandler,
                                          WindowResizeHandler zigResizeHandler,
                                          WindowFocusHandler zigFocusHandler,
-                                         WindowBlurHandler zigBlurHandler) {
+                                         WindowBlurHandler zigBlurHandler,
                                          WindowKeyHandler zigKeyHandler) {
     // Stub implementation
     return new NSWindow();
@@ -8488,7 +8488,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler,
-    WindowBlurHandler zigBlurHandler) {
+    WindowBlurHandler zigBlurHandler,
     WindowKeyHandler zigKeyHandler) {
 
     // Everything GUI-related needs to be dispatched to main thread
