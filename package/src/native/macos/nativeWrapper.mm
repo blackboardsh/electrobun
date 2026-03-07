@@ -7011,7 +7011,7 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      WindowMoveHandler zigMoveHandler,
                                                      WindowResizeHandler zigResizeHandler,
                                                      WindowFocusHandler zigFocusHandler,
-                                                     WindowBlurHandler zigBlurHandler) {
+                                                     WindowBlurHandler zigBlurHandler,
                                                      WindowKeyHandler zigKeyHandler) {
     
     NSScreen *primaryScreen = [NSScreen screens][0];
