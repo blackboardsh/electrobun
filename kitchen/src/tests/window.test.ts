@@ -24,6 +24,30 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "Window hidden option",
+    category: "BrowserWindow",
+    description: "Test creating a window in hidden mode and showing it later",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Hidden Window Test",
+        width: 400,
+        height: 300,
+        renderer: "cef",
+        hidden: true,
+      });
+
+      expect(win.id).toBeGreaterThan(0);
+      expect(win.webviewId).toBeGreaterThan(0);
+      log("Hidden window created");
+
+      win.window.show();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      log("Hidden window shown successfully");
+    },
+  }),
+
+  defineTest({
     name: "Window setTitle",
     category: "BrowserWindow",
     description: "Test setting window title",

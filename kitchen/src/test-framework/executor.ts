@@ -111,6 +111,7 @@ export class TestExecutor {
           html: options.html || undefined,
           preload: options.preload || undefined,
           renderer: options.renderer || 'cef', // Default to CEF, allow override
+          hidden: options.hidden || false,
           frame: {
             width: options.width || 800,
             height: options.height || 600,
