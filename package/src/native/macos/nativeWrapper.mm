@@ -6292,7 +6292,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             self.closeHandler(self.windowId);
         }
     }
-    - (void)windowDidResize:(NSNotification *)notification {
+   - (void)windowDidResize:(NSNotification *)notification {
         NSWindow *window = [notification object];
         NSRect windowFrame = [window frame];
         ContainerView *containerView = [window contentView];
@@ -6304,15 +6304,16 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             if (abstractView.fullSize) {
                 [abstractView resize:fullFrame withMasksJSON:""];
             }
-
         }
+
         if (self.resizeHandler) {
             NSScreen *primaryScreen = [NSScreen screens][0];
             NSRect screenFrame = [primaryScreen frame];
-            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;                        
+            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
+            NSRect contentRect = [window contentRectForFrameRect:windowFrame];
             self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
-                            windowFrame.size.width, windowFrame.size.height);
-        }                
+                               contentRect.size.width, contentRect.size.height);
+        }
     }
     - (void)windowDidMove:(NSNotification *)notification {
         if (self.moveHandler) {
