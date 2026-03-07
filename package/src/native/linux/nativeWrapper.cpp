@@ -135,6 +135,7 @@ typedef void (*WindowCloseCallback)(uint32_t windowId);
 typedef void (*WindowMoveCallback)(uint32_t windowId, double x, double y);
 typedef void (*WindowResizeCallback)(uint32_t windowId, double x, double y, double width, double height);
 typedef void (*WindowFocusCallback)(uint32_t windowId);
+typedef void (*WindowBlurCallback)(uint32_t windowId);
 
 // Forward declaration for WebKit scheme handler
 static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data);
@@ -211,6 +212,7 @@ struct X11Window {
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
+    WindowBlurCallback blurCallback;
     WindowKeyHandler keyCallback;
     std::vector<Window> childWindows;  // For managing webviews
     ContainerView* containerView = nullptr;  // Associated container for webview management
@@ -4075,7 +4077,16 @@ public:
             browser = nullptr;
             widget = nullptr;
         }
-        
+
+        // Clear the browser_close_callback before scheduling CloseBrowser.
+        // OnBeforeClose fires after CloseBrowser and invokes this callback, but by
+        // that time the CEFWebViewImpl may already be destroyed (last shared_ptr
+        // released). Clearing it here is safe because we already set browser=nullptr
+        // above, so the callback would be a no-op anyway.
+        if (client) {
+            client->SetBrowserCloseCallback(nullptr);
+        }
+
         // Close browser asynchronously outside the lock
         if (browser_to_close) {
             // Schedule browser close on idle
@@ -4435,9 +4446,12 @@ public:
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
+    WindowBlurCallback blurCallback;
     WindowKeyHandler keyCallback;
+  
+    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr) {
 
-    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), keyCallback(nullptr) {
+
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
@@ -4445,8 +4459,8 @@ public:
         gtk_widget_show(overlay);
     }
     
-    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback)
-        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), keyCallback(keyCallback) {
+    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback)
+        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), blurCallback(blurCallback), keyCallback(keyCallback) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
@@ -5772,6 +5786,12 @@ gboolean process_x11_events(gpointer data) {
                     }
                     break;
 
+                case FocusOut:
+                    // Window received focus
+                    if (x11win->blurCallback) {
+                        x11win->blurCallback(x11win->windowId);
+                   }
+                   break;
                 case KeyPress:
                 case KeyRelease:
                     if (x11win->keyCallback) {
@@ -5858,7 +5878,7 @@ void runEventLoop() {
 void showWindow(void* window);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
     void* result = dispatch_sync_main([&]() -> void* {
@@ -6005,6 +6025,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->moveCallback = moveCallback;
             x11win->resizeCallback = resizeCallback;
             x11win->focusCallback = focusCallback;
+            x11win->blurCallback = blurCallback;
             x11win->keyCallback = keyCallback;
             x11win->transparent = transparent;
 
@@ -6031,7 +6052,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 }
 
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
    
@@ -6090,8 +6111,8 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         }
         
         // Create container with callbacks
-        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback, keyCallback);
-
+        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback);
+      
         {
             std::lock_guard<std::mutex> lock(g_containersMutex);
             g_containers[windowId] = container;
@@ -6117,6 +6138,14 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
             ContainerView* container = static_cast<ContainerView*>(user_data);
             if (container && container->focusCallback) {
                 container->focusCallback(container->windowId);
+            }
+            return FALSE; // Allow event to propagate
+        }), container.get());
+
+        g_signal_connect(window, "focus-out-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventFocus* event, gpointer user_data) -> gboolean {
+            ContainerView* container = static_cast<ContainerView*>(user_data);
+            if (container && container->blurCallback) {
+                container->blurCallback(container->windowId);
             }
             return FALSE; // Allow event to propagate
         }), container.get());
@@ -6179,13 +6208,13 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 // Mac-compatible function for Linux
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
-                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback) {
+                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback) {
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
-        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, keyCallback, titleBarStyle, transparent);
+        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
     } else {
         // Pass titleBarStyle and transparent to GTK window creation
-        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, keyCallback, titleBarStyle, transparent);
+        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
     }
 
 }

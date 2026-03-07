@@ -101,6 +101,7 @@ export const native = (() => {
 					FFIType.function, // moveHandler
 					FFIType.function, // resizeHandler
 					FFIType.function, // focusHandler
+					FFIType.function, // blurHandler
 					FFIType.function, // keyHandler
 				],
 				returns: FFIType.ptr,
@@ -803,6 +804,7 @@ export const ffi = {
 				windowMoveCallback,
 				windowResizeCallback,
 				windowFocusCallback,
+				windowBlurCallback,
 				windowKeyCallback,
 			);
 
@@ -1806,6 +1808,25 @@ const windowFocusCallback = new JSCallback(
 	},
 );
 
+const windowBlurCallback = new JSCallback(
+	(id) => {
+		const handler = electrobunEventEmitter.events.window.blur;
+		const event = handler({
+			id,
+		});
+		
+		// global event
+        electrobunEventEmitter.emitEvent(event);
+        electrobunEventEmitter.emitEvent(event, id);
+  },
+  {
+		args: ["u32"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+// global event
 const windowKeyCallback = new JSCallback(
 	(id, keyCode, modifiers, isDown, isRepeat) => {
 		const handler = isDown

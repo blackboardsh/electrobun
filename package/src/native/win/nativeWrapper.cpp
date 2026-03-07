@@ -4584,6 +4584,7 @@ typedef struct {
     WindowMoveHandler moveHandler;
     WindowResizeHandler resizeHandler;
     WindowFocusHandler focusHandler;
+    WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
 } WindowData;
 
@@ -4879,7 +4880,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_ACTIVATE:
             // Window activation - WA_ACTIVE or WA_CLICKACTIVE means window is being activated
-            if (LOWORD(wParam) != WA_INACTIVE) {
+            if (LOWORD(wParam) == WA_INACTIVE) {
+                if (data && data->blurHandler) {
+                    data->blurHandler(data->windowId);
+                }
+            } else {
                 if (data && data->focusHandler) {
                     data->focusHandler(data->windowId);
                 }
@@ -8459,6 +8464,7 @@ ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
                                          WindowMoveHandler zigMoveHandler,
                                          WindowResizeHandler zigResizeHandler,
                                          WindowFocusHandler zigFocusHandler,
+                                         WindowBlurHandler zigBlurHandler,
                                          WindowKeyHandler zigKeyHandler) {
     // Stub implementation
     return new NSWindow();
@@ -8482,6 +8488,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler,
+    WindowBlurHandler zigBlurHandler,
     WindowKeyHandler zigKeyHandler) {
 
     // Everything GUI-related needs to be dispatched to main thread
@@ -8507,6 +8514,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         data->moveHandler = zigMoveHandler;
         data->resizeHandler = zigResizeHandler;
         data->focusHandler = zigFocusHandler;
+        data->blurHandler = zigBlurHandler;
         data->keyHandler = zigKeyHandler;
 
         // Map style mask to Windows style
