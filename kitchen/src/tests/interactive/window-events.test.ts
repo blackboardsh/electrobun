@@ -103,86 +103,147 @@ export const windowEventTests = [
       });
     },
   }),
-
   defineTest({
-    name: "Window blur and focus events",
-    category: "Window Events (Interactive)",
-    description: "Test both blur and focus events are detected with live updates",
-    interactive: true,
-    timeout: 120000,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A test window will open",
-        "1. Focus another window to detect blur event",
-        "2. Focus the test window to detect focus event",
-        "Test passes when both events are detected",
-      ]);
+  name: "Window blur and focus events",
+  category: "Window Events (Interactive)",
+  description: "Test both blur and focus events are detected with live updates",
+  interactive: true,
+  timeout: 120000,
+  async run({ log, showInstructions }) {
+    await showInstructions([
+      "A test window will open",
+      "1. Focus another window to detect blur event",
+      "2. Focus the test window to detect focus event",
+      "Test passes when both events are detected",
+    ]);
 
-      log("Opening test window for blur and focus event detection");
+    log("Opening test window for blur and focus event detection");
 
-      await new Promise<void>((resolve, reject) => {
-        let blurDetected = false;
-        let focusDetected = false;
-        let winRef: BrowserWindow<any> | null = null;
+    await new Promise<void>((resolve, reject) => {
+      let blurDetected = false;
+      let focusDetected = false;
+      let winRef: BrowserWindow<any> | null = null;
 
-        const rpc = BrowserView.defineRPC<any>({
-          maxRequestTime: 120000,
-          handlers: {
-            requests: {
-              closeWindow: () => {
-                winRef?.close();
-                return { success: true };
-              },
+      const rpc = BrowserView.defineRPC<any>({
+        maxRequestTime: 120000,
+        handlers: {
+          requests: {
+            closeWindow: () => {
+              winRef?.close();
+              return { success: true };
             },
-            messages: {},
           },
-        });
-
-        winRef = new BrowserWindow({
-          title: "Blur & Focus Test",
-          url: "views://playgrounds/window-events-blur-focus/index.html",
-          renderer: "cef",
-          frame: { width: 350, height: 400, x: 200, y: 200 },
-          rpc,
-        });
-
-        winRef.setAlwaysOnTop(true);
-        const win = winRef;
-
-        win.on("blur", () => {
-          if (!blurDetected) {
-            blurDetected = true;
-            log(`Blur event detected`);
-            win.webview.rpc?.send.updateStatus({ blurDetected, focusDetected });
-
-            win.on("focus", () => {
-              if (win.webview.rpc && !focusDetected) {
-                focusDetected = true;
-                log(`Focus event detected`);
-                win.webview.rpc?.send.updateStatus({ blurDetected, focusDetected });
-
-                log("Both events detected - closing in 2 seconds");
-                setTimeout(() => {
-                  win.close();
-                }, 2000);
-              }
-            });
-          }
-        });
-
-        win.on("close", () => {
-          if (blurDetected && focusDetected) {
-            log("Blur and focus event test passed");
-            resolve();
-          } else {
-            const missing: string[] = [];
-            if (!blurDetected) missing.push("blur");
-            if (!focusDetected) missing.push("focus");
-            log(`Window closed without detecting: ${missing.join(", ")}`);
-            reject(new Error(`Missing events: ${missing.join(", ")}`));
-          }
-        });
+          messages: {},
+        },
       });
-    },
-  }),
+
+      winRef = new BrowserWindow({
+        title: "Blur & Focus Test",
+        url: "views://playgrounds/window-events-blur-focus/index.html",
+        renderer: "cef",
+        frame: { width: 350, height: 400, x: 200, y: 200 },
+        rpc,
+      });
+
+      winRef.setAlwaysOnTop(true);
+      const win = winRef;
+
+      win.on("blur", () => {
+        if (!blurDetected) {
+          blurDetected = true;
+          log(`Blur event detected`);
+          win.webview.rpc?.send.updateStatus({ blurDetected, focusDetected });
+
+          win.on("focus", () => {
+            if (win.webview.rpc && !focusDetected) {
+              focusDetected = true;
+              log(`Focus event detected`);
+              win.webview.rpc?.send.updateStatus({ blurDetected, focusDetected });
+
+              log("Both events detected - closing in 2 seconds");
+              setTimeout(() => {
+                win.close();
+              }, 2000);
+            }
+          });
+        }
+      });
+
+      win.on("close", () => {
+        if (blurDetected && focusDetected) {
+          log("Blur and focus event test passed");
+          resolve();
+        } else {
+          const missing: string[] = [];
+          if (!blurDetected) missing.push("blur");
+          if (!focusDetected) missing.push("focus");
+          log(`Window closed without detecting: ${missing.join(", ")}`);
+          reject(new Error(`Missing events: ${missing.join(", ")}`));
+        }
+      });
+    });
+  },
+}),
+defineTest({
+  name: "Window visibleOnAllWorkspaces (macOS)",
+  category: "Window Events (Interactive)",
+  description: "Test window appears on all macOS Spaces",
+  interactive: true,
+  timeout: 120000,
+  async run({ createWindow, log, showInstructions, waitForUserVerification }) {
+    if (process.platform !== "darwin") {
+      log("Skipping test - only available on macOS");
+      return;
+    }
+
+    await showInstructions([
+      "A test window will open",
+      "Use Mission Control (Ctrl+Up or swipe up) to switch to another Space/Desktop",
+      "Verify the test window appears on ALL Spaces, not just the current one",
+      "Then return to this Space",
+    ]);
+
+    log("Creating test window for visibleOnAllWorkspaces");
+    const win = await createWindow({
+      url: "views://test-harness/index.html",
+      title: "Visible On All Workspaces Test",
+      renderer: "cef",
+      width: 400,
+      height: 300,
+    });
+
+    log("Checking initial visibleOnAllWorkspaces state");
+    if (win.window.isVisibleOnAllWorkspaces()) {
+      throw new Error("Window should not be visible on all workspaces initially");
+    }
+
+    log("Setting window visible on all workspaces");
+    win.window.setAlwaysOnTop(true);
+    win.window.setVisibleOnAllWorkspaces(true);
+
+    log("Verifying state is set to true");
+    if (!win.window.isVisibleOnAllWorkspaces()) {
+      throw new Error("Window should be visible on all workspaces after setting");
+    }
+
+    log("Window is now visible on all workspaces - verify in Mission Control");
+    const result = await waitForUserVerification();
+
+    if (result.action === "pass") {
+      log("Test passed - window successfully visible on all workspaces");
+    } else if (result.action === "fail") {
+      throw new Error("User reported window not visible on all workspaces");
+    } else if (result.action === "retest") {
+      log("Re-test requested");
+      return;
+    }
+
+    log("Setting window back to single workspace");
+    win.window.setVisibleOnAllWorkspaces(false);
+    if (win.window.isVisibleOnAllWorkspaces()) {
+      throw new Error("Window should not be visible on all workspaces after unsetting");
+    }
+    log("Test completed successfully");
+  },
+}),
 ];
