@@ -299,6 +299,12 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			send("webviewTagToggleDevTools", { id: this.webviewId });
 	}
 
+	// JavaScript execution
+	executeJavascript(js: string) {
+		if (this.webviewId === null) return;
+		send("webviewTagExecuteJavascript", { id: this.webviewId, js });
+	}
+
 	// Event handling
 	on(event: WebviewEventType, listener: (event: CustomEvent) => void) {
 		if (!this._eventListeners[event]) this._eventListeners[event] = [];
