@@ -204,17 +204,19 @@ export interface ElectrobunConfig {
 			/**
 			 * Custom Chromium command-line flags to pass to CEF during initialization.
 			 * Keys are flag names without the "--" prefix.
-			 * Use `true` for switch-only flags, or a string for flags that take a value.
+			 * - `true` — add a switch-only flag
+			 * - `"value"` — add a flag with a value
+			 * - `false` — remove a default flag set by Electrobun
 			 *
 			 * @example
 			 * ```typescript
 			 * chromiumFlags: {
-			 *   "disable-gpu": true,                // --disable-gpu
+			 *   "disable-gpu": false,               // remove Electrobun's default --disable-gpu
 			 *   "remote-debugging-port": "9333",    // --remote-debugging-port=9333
 			 * }
 			 * ```
 			 */
-			chromiumFlags?: Record<string, string | true>;
+			chromiumFlags?: Record<string, string | boolean>;
 
 			/**
 			 * macOS entitlements for code signing
@@ -253,17 +255,19 @@ export interface ElectrobunConfig {
 			/**
 			 * Custom Chromium command-line flags to pass to CEF during initialization.
 			 * Keys are flag names without the "--" prefix.
-			 * Use `true` for switch-only flags, or a string for flags that take a value.
+			 * - `true` — add a switch-only flag
+			 * - `"value"` — add a flag with a value
+			 * - `false` — remove a default flag set by Electrobun
 			 *
 			 * @example
 			 * ```typescript
 			 * chromiumFlags: {
-			 *   "disable-gpu": true,                // --disable-gpu
+			 *   "disable-gpu": false,               // remove Electrobun's default --disable-gpu
 			 *   "remote-debugging-port": "9333",    // --remote-debugging-port=9333
 			 * }
 			 * ```
 			 */
-			chromiumFlags?: Record<string, string | true>;
+			chromiumFlags?: Record<string, string | boolean>;
 
 			/**
 			 * Path to application icon (.ico format)
@@ -300,17 +304,19 @@ export interface ElectrobunConfig {
 			/**
 			 * Custom Chromium command-line flags to pass to CEF during initialization.
 			 * Keys are flag names without the "--" prefix.
-			 * Use `true` for switch-only flags, or a string for flags that take a value.
+			 * - `true` — add a switch-only flag
+			 * - `"value"` — add a flag with a value
+			 * - `false` — remove a default flag set by Electrobun
 			 *
 			 * @example
 			 * ```typescript
 			 * chromiumFlags: {
-			 *   "disable-gpu": true,                // --disable-gpu
+			 *   "disable-gpu": false,               // remove Electrobun's default --disable-gpu
 			 *   "remote-debugging-port": "9333",    // --remote-debugging-port=9333
 			 * }
 			 * ```
 			 */
-			chromiumFlags?: Record<string, string | true>;
+			chromiumFlags?: Record<string, string | boolean>;
 
 			/**
 			 * Path to application icon (PNG format recommended)
