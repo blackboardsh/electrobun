@@ -7097,7 +7097,7 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             zigMoveHandler,
             zigResizeHandler,
             zigFocusHandler,
-            zigBlurHandler
+            zigBlurHandler,
             zigKeyHandler
         );
 
