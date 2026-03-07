@@ -1814,6 +1814,10 @@ const windowBlurCallback = new JSCallback(
 		const event = handler({
 			id,
 		});
+		
+		// global event
+        electrobunEventEmitter.emitEvent(event);
+        electrobunEventEmitter.emitEvent(event, id);
   },
   {
 		args: ["u32"],
