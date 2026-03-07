@@ -1,4 +1,8 @@
-// TODO: have a context specific menu that excludes role
+// Context menus intentionally share ApplicationMenuItemConfig for now:
+// - macOS supports role-based context menu items.
+// - Windows has partial role behavior.
+// - Linux showContextMenu is currently unsupported.
+// Keep role typed here to avoid removing working macOS capability.
 import { ffi, type ApplicationMenuItemConfig } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { roleLabelMap } from "./menuRoles";
