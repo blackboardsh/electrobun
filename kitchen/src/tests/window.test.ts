@@ -48,6 +48,66 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "Window page zoom API",
+    category: "BrowserWindow",
+    description: "Test BrowserWindow setPageZoom/getPageZoom behavior",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Page Zoom Test",
+        width: 420,
+        height: 320,
+        renderer: "native",
+      });
+
+      const targetZoom = 1.25;
+      win.window.setPageZoom(targetZoom);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const zoom = win.window.getPageZoom();
+      expect(typeof zoom).toBe("number");
+
+      if (process.platform === "darwin") {
+        expect(Math.abs(zoom - targetZoom)).toBeLessThan(0.02);
+      } else {
+        expect(zoom).toBe(1.0);
+      }
+
+      log(`Window zoom reported: ${zoom}`);
+    },
+  }),
+
+  defineTest({
+    name: "BrowserView page zoom API",
+    category: "BrowserWindow",
+    description: "Test BrowserView setPageZoom/getPageZoom behavior",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "View Zoom Test",
+        width: 420,
+        height: 320,
+        renderer: "native",
+      });
+
+      const targetZoom = 1.1;
+      win.webview.setPageZoom(targetZoom);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const zoom = win.webview.getPageZoom();
+      expect(typeof zoom).toBe("number");
+
+      if (process.platform === "darwin") {
+        expect(Math.abs(zoom - targetZoom)).toBeLessThan(0.02);
+      } else {
+        expect(zoom).toBe(1.0);
+      }
+
+      log(`Webview zoom reported: ${zoom}`);
+    },
+  }),
+
+  defineTest({
     name: "Window setTitle",
     category: "BrowserWindow",
     description: "Test setting window title",
