@@ -4130,7 +4130,7 @@ public:
         gtk_widget_show(overlay);
     }
     
-    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowFocusCallback blurCallback)
+    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback)
         : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), blurCallback(blurCallback) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
