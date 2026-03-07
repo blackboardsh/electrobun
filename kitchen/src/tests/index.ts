@@ -34,6 +34,7 @@ import { webviewSettingsTests } from "./interactive/webview-settings.test";
 import { webviewCleanupTests } from "./interactive/webview-cleanup.test";
 import { wgpuViewTests } from "./interactive/wgpu-view.test";
 import { wgpuTagTests } from "./interactive/wgpu-tag.test";
+import { fullsizeFrameReproTests } from "./interactive/fullsize-frame-repro.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -69,6 +70,7 @@ export const allTests: TestDefinition[] = [
   ...webviewCleanupTests,
   ...wgpuViewTests,
   ...wgpuTagTests,
+  ...fullsizeFrameReproTests,
 ];
 
 // Export by category for selective running
@@ -106,4 +108,5 @@ export {
   webviewCleanupTests,
   wgpuViewTests,
   wgpuTagTests,
+  fullsizeFrameReproTests,
 };
