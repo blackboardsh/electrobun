@@ -10,7 +10,7 @@
 		"build:canary": "vite build && electrobun build --env=canary"
 	},
 	"dependencies": {
-		"electrobun": "latest",
+		"electrobun": "file:../../package",
 		"react": "^18.3.1",
 		"react-dom": "^18.3.1"
 	},

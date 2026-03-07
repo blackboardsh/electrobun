@@ -2,6 +2,7 @@ import { join } from "path";
 import electrobunEventEmitter from "../events/eventEmitter";
 import ElectrobunEvent from "../events/event";
 import { BrowserView } from "../core/BrowserView";
+import { WGPUView } from "../core/WGPUView";
 import { Tray } from "../core/Tray";
 import {
 	preloadScript,
@@ -70,6 +71,13 @@ import {
 	type Pointer,
 } from "bun:ffi";
 import { BrowserWindow } from "../core/BrowserWindow";
+import { GpuWindow } from "../core/GpuWindow";
+
+function getWindowPtr(winId: number) {
+	return (
+		BrowserWindow.getById(winId)?.ptr ?? GpuWindow.getById(winId)?.ptr ?? null
+	);
+}
 
 export const native = (() => {
 	try {
@@ -94,6 +102,7 @@ export const native = (() => {
 					FFIType.function, // resizeHandler
 					FFIType.function, // focusHandler
 					FFIType.function, // blurHandler
+					FFIType.function, // keyHandler
 				],
 				returns: FFIType.ptr,
 			},
@@ -194,6 +203,20 @@ export const native = (() => {
 					FFIType.cstring, // customPreloadScript
 					FFIType.bool, // transparent
 					FFIType.bool, // sandbox - when true, bunBridge and internalBridge are not set up
+				],
+				returns: FFIType.ptr,
+			},
+			initWGPUView: {
+				args: [
+					FFIType.u32, // viewId
+					FFIType.ptr, // windowPtr
+					FFIType.f64,
+					FFIType.f64, // x, y
+					FFIType.f64,
+					FFIType.f64, // width, height
+					FFIType.bool, // autoResize
+					FFIType.bool, // startTransparent
+					FFIType.bool, // startPassthrough
 				],
 				returns: FFIType.ptr,
 			},
@@ -316,6 +339,104 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
+			webviewSetPageZoom: {
+				args: [FFIType.ptr, FFIType.f64],
+				returns: FFIType.void,
+			},
+			webviewGetPageZoom: {
+				args: [FFIType.ptr],
+				returns: FFIType.f64,
+			},
+			wgpuViewSetFrame: {
+				args: [
+					FFIType.ptr,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+				],
+				returns: FFIType.void,
+			},
+			wgpuViewSetTransparent: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			wgpuViewSetPassthrough: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			wgpuViewSetHidden: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			wgpuViewRemove: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuViewGetNativeHandle: {
+				args: [FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			wgpuInstanceCreateSurfaceMainThread: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			wgpuSurfaceConfigureMainThread: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuSurfaceGetCurrentTextureMainThread: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuSurfacePresentMainThread: {
+				args: [FFIType.ptr],
+				returns: FFIType.i32,
+			},
+			wgpuQueueOnSubmittedWorkDoneShim: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.u64,
+			},
+			wgpuBufferMapAsyncShim: {
+				args: [FFIType.ptr, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.ptr],
+				returns: FFIType.u64,
+			},
+			wgpuInstanceWaitAnyShim: {
+				args: [FFIType.ptr, FFIType.u64, FFIType.u64],
+				returns: FFIType.i32,
+			},
+			wgpuBufferReadSyncShim: {
+				args: [FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			wgpuBufferReadSyncIntoShim: {
+				args: [FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.ptr],
+				returns: FFIType.i32,
+			},
+			wgpuBufferReadbackBeginShim: {
+				args: [FFIType.ptr, FFIType.u64, FFIType.u64, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			wgpuBufferReadbackStatusShim: {
+				args: [FFIType.ptr],
+				returns: FFIType.i32,
+			},
+			wgpuBufferReadbackFreeShim: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuRunGPUTest: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuCreateAdapterDeviceMainThread: {
+				args: [FFIType.ptr, FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
+			wgpuCreateSurfaceForView: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
 			// Tray
 			createTray: {
 				args: [
@@ -344,6 +465,10 @@ export const native = (() => {
 			removeTray: {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
+			},
+			getTrayBounds: {
+				args: [FFIType.ptr],
+				returns: FFIType.cstring,
 			},
 			setApplicationMenu: {
 				args: [FFIType.cstring, FFIType.function],
@@ -413,6 +538,10 @@ export const native = (() => {
 			getCursorScreenPoint: {
 				args: [],
 				returns: FFIType.cstring,
+			},
+			getMouseButtons: {
+				args: [],
+				returns: FFIType.u64,
 			},
 
 			openFileDialog: {
@@ -490,6 +619,18 @@ export const native = (() => {
 			setURLOpenHandler: {
 				args: [FFIType.function], // handler callback
 				returns: FFIType.void,
+			},
+			setAppReopenHandler: {
+				args: [FFIType.function],
+				returns: FFIType.void,
+			},
+			setDockIconVisible: {
+				args: [FFIType.bool],
+				returns: FFIType.void,
+			},
+			isDockIconVisible: {
+				args: [],
+				returns: FFIType.bool,
 			},
 
 			// Window style utilities
@@ -606,6 +747,7 @@ export const ffi = {
 			};
 			titleBarStyle: string;
 			transparent: boolean;
+			hidden?: boolean;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -628,6 +770,7 @@ export const ffi = {
 				},
 				titleBarStyle,
 				transparent,
+				hidden = false,
 			} = params;
 
 			const styleMask = native.symbols.getWindowStyle(
@@ -662,6 +805,7 @@ export const ffi = {
 				windowResizeCallback,
 				windowFocusCallback,
 				windowBlurCallback,
+				windowKeyCallback,
 			);
 
 			if (!windowPtr) {
@@ -669,13 +813,15 @@ export const ffi = {
 			}
 
 			native.symbols.setWindowTitle(windowPtr, toCString(title));
-			native.symbols.showWindow(windowPtr);
+			if (!hidden) {
+				native.symbols.showWindow(windowPtr);
+			}
 
 			return windowPtr;
 		},
 		setTitle: (params: { winId: number; title: string }) => {
 			const { winId, title } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't add webview to window. window no longer exists`;
@@ -686,7 +832,7 @@ export const ffi = {
 
 		closeWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't close window. Window no longer exists`;
@@ -698,7 +844,7 @@ export const ffi = {
 
 		focusWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't focus window. Window no longer exists`;
@@ -709,7 +855,7 @@ export const ffi = {
 
 		minimizeWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't minimize window. Window no longer exists`;
@@ -720,7 +866,7 @@ export const ffi = {
 
 		restoreWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't restore window. Window no longer exists`;
@@ -731,7 +877,7 @@ export const ffi = {
 
 		isWindowMinimized: (params: { winId: number }): boolean => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return false;
@@ -742,7 +888,7 @@ export const ffi = {
 
 		maximizeWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't maximize window. Window no longer exists`;
@@ -753,7 +899,7 @@ export const ffi = {
 
 		unmaximizeWindow: (params: { winId: number }) => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't unmaximize window. Window no longer exists`;
@@ -764,7 +910,7 @@ export const ffi = {
 
 		isWindowMaximized: (params: { winId: number }): boolean => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return false;
@@ -775,7 +921,7 @@ export const ffi = {
 
 		setWindowFullScreen: (params: { winId: number; fullScreen: boolean }) => {
 			const { winId, fullScreen } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set fullscreen. Window no longer exists`;
@@ -786,7 +932,7 @@ export const ffi = {
 
 		isWindowFullScreen: (params: { winId: number }): boolean => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return false;
@@ -797,7 +943,7 @@ export const ffi = {
 
 		setWindowAlwaysOnTop: (params: { winId: number; alwaysOnTop: boolean }) => {
 			const { winId, alwaysOnTop } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set always on top. Window no longer exists`;
@@ -808,7 +954,7 @@ export const ffi = {
 
 		isWindowAlwaysOnTop: (params: { winId: number }): boolean => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return false;
@@ -819,7 +965,7 @@ export const ffi = {
 
 		setWindowPosition: (params: { winId: number; x: number; y: number }) => {
 			const { winId, x, y } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set window position. Window no longer exists`;
@@ -834,7 +980,7 @@ export const ffi = {
 			height: number;
 		}) => {
 			const { winId, width, height } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set window size. Window no longer exists`;
@@ -851,7 +997,7 @@ export const ffi = {
 			height: number;
 		}) => {
 			const { winId, x, y, width, height } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set window frame. Window no longer exists`;
@@ -864,7 +1010,7 @@ export const ffi = {
 			winId: number;
 		}): { x: number; y: number; width: number; height: number } => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return { x: 0, y: 0, width: 0, height: 0 };
@@ -1017,6 +1163,139 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			return webviewPtr;
 		},
 
+		createWGPUView: (params: {
+			id: number;
+			windowId: number;
+			frame: {
+				x: number;
+				y: number;
+				width: number;
+				height: number;
+			};
+			autoResize: boolean;
+			startTransparent: boolean;
+			startPassthrough: boolean;
+		}): FFIType.ptr => {
+			const {
+				id,
+				windowId,
+				frame: { x, y, width, height },
+				autoResize,
+				startTransparent,
+				startPassthrough,
+			} = params;
+
+			const windowPtr = getWindowPtr(windowId);
+			if (!windowPtr) {
+				throw `Can't add WGPUView to window. window no longer exists`;
+			}
+
+			const viewPtr = native.symbols.initWGPUView(
+				id,
+				windowPtr,
+				x,
+				y,
+				width,
+				height,
+				autoResize,
+				startTransparent,
+				startPassthrough,
+			);
+
+			if (!viewPtr) {
+				throw "Failed to create WGPUView";
+			}
+
+			return viewPtr;
+		},
+
+		wgpuViewSetFrame: (params: {
+			id: number;
+			x: number;
+			y: number;
+			width: number;
+			height: number;
+		}) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewSetFrame: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewSetFrame(
+				view.ptr,
+				params.x,
+				params.y,
+				params.width,
+				params.height,
+			);
+		},
+
+		wgpuViewSetTransparent: (params: { id: number; transparent: boolean }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewSetTransparent: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewSetTransparent(view.ptr, params.transparent);
+		},
+
+		wgpuViewSetPassthrough: (params: {
+			id: number;
+			passthrough: boolean;
+		}) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewSetPassthrough: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewSetPassthrough(view.ptr, params.passthrough);
+		},
+
+		wgpuViewSetHidden: (params: { id: number; hidden: boolean }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewSetHidden: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewSetHidden(view.ptr, params.hidden);
+		},
+
+		wgpuViewRemove: (params: { id: number }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewRemove: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			native.symbols.wgpuViewRemove(view.ptr);
+		},
+		wgpuViewGetNativeHandle: (params: { id: number }): Pointer | null => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuViewGetNativeHandle: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return null;
+			}
+
+			const handle = native.symbols.wgpuViewGetNativeHandle(view.ptr);
+			return handle || null;
+		},
+
 		evaluateJavascriptWithNoCompletion: (params: {
 			id: number;
 			js: string;
@@ -1100,6 +1379,23 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			native.symbols.removeTray(tray.ptr);
 			// The Tray class will handle removing from TrayMap
 		},
+		getTrayBounds: (params: { id: number }): Rectangle => {
+			const tray = Tray.getById(params.id);
+			if (!tray?.ptr) {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
+
+			const jsonStr = native.symbols.getTrayBounds(tray.ptr);
+			if (!jsonStr) {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
+
+			try {
+				return JSON.parse(jsonStr.toString());
+			} catch {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
+		},
 		setApplicationMenu: (params: { menuConfig: string }): void => {
 			const { menuConfig } = params;
 
@@ -1144,6 +1440,12 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 				toCString(subtitle),
 				silent,
 			);
+		},
+		setDockIconVisible: (params: { visible: boolean }): void => {
+			native.symbols.setDockIconVisible(params.visible);
+		},
+		isDockIconVisible: (): boolean => {
+			return native.symbols.isDockIconVisible();
 		},
 		openFileDialog: (params: {
 			startingFolder: string;
@@ -1262,6 +1564,130 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 		clearMenuData,
 		serializeMenuAction,
 		deserializeMenuAction,
+	},
+};
+
+export const WGPUBridge = {
+	available: !!native?.symbols?.wgpuInstanceCreateSurfaceMainThread,
+	instanceCreateSurface: (instancePtr: Pointer, descriptorPtr: Pointer): Pointer =>
+		native.symbols.wgpuInstanceCreateSurfaceMainThread(
+			instancePtr as any,
+			descriptorPtr as any,
+		) as Pointer,
+	surfaceConfigure: (surfacePtr: Pointer, configPtr: Pointer) =>
+		native.symbols.wgpuSurfaceConfigureMainThread(
+			surfacePtr as any,
+			configPtr as any,
+		),
+	surfaceGetCurrentTexture: (surfacePtr: Pointer, surfaceTexturePtr: Pointer) =>
+		native.symbols.wgpuSurfaceGetCurrentTextureMainThread(
+			surfacePtr as any,
+			surfaceTexturePtr as any,
+		),
+	surfacePresent: (surfacePtr: Pointer): number =>
+		native.symbols.wgpuSurfacePresentMainThread(surfacePtr as any),
+	queueOnSubmittedWorkDone: (queuePtr: Pointer, callbackInfoPtr: Pointer): bigint =>
+		native.symbols.wgpuQueueOnSubmittedWorkDoneShim(
+			queuePtr as any,
+			callbackInfoPtr as any,
+		),
+	bufferMapAsync: (
+		bufferPtr: Pointer,
+		mode: bigint,
+		offset: bigint,
+		size: bigint,
+		callbackInfoPtr: Pointer,
+	): bigint =>
+		native.symbols.wgpuBufferMapAsyncShim(
+			bufferPtr as any,
+			mode as any,
+			offset as any,
+			size as any,
+			callbackInfoPtr as any,
+		),
+	instanceWaitAny: (
+		instancePtr: Pointer,
+		futureId: bigint,
+		timeoutNs: bigint,
+	): number =>
+		native.symbols.wgpuInstanceWaitAnyShim(
+			instancePtr as any,
+			futureId as any,
+			timeoutNs as any,
+		),
+	bufferReadSync: (
+		instancePtr: Pointer,
+		bufferPtr: Pointer,
+		offset: bigint,
+		size: bigint,
+		timeoutNs: bigint,
+		outSizePtr: Pointer,
+	): Pointer =>
+		native.symbols.wgpuBufferReadSyncShim(
+			instancePtr as any,
+			bufferPtr as any,
+			offset as any,
+			size as any,
+			timeoutNs as any,
+			outSizePtr as any,
+		) as Pointer,
+	bufferReadSyncInto: (
+		instancePtr: Pointer,
+		bufferPtr: Pointer,
+		offset: bigint,
+		size: bigint,
+		timeoutNs: bigint,
+		dstPtr: Pointer,
+	): number =>
+		native.symbols.wgpuBufferReadSyncIntoShim(
+			instancePtr as any,
+			bufferPtr as any,
+			offset as any,
+			size as any,
+			timeoutNs as any,
+			dstPtr as any,
+		),
+	bufferReadbackBegin: (
+		bufferPtr: Pointer,
+		offset: bigint,
+		size: bigint,
+		dstPtr: Pointer,
+	): Pointer =>
+		native.symbols.wgpuBufferReadbackBeginShim(
+			bufferPtr as any,
+			offset as any,
+			size as any,
+			dstPtr as any,
+		) as Pointer,
+	bufferReadbackStatus: (jobPtr: Pointer): number =>
+		native.symbols.wgpuBufferReadbackStatusShim(jobPtr as any),
+	bufferReadbackFree: (jobPtr: Pointer) =>
+		native.symbols.wgpuBufferReadbackFreeShim(jobPtr as any),
+	runTest: (viewId: number) => {
+		const view = WGPUView.getById(viewId);
+		if (!view?.ptr) {
+			console.error(`wgpuRunGPUTest: WGPUView not found for id ${viewId}`);
+			return;
+		}
+		if (!native?.symbols?.wgpuRunGPUTest) {
+			console.error("wgpuRunGPUTest not available");
+			return;
+		}
+		native.symbols.wgpuRunGPUTest(view.ptr);
+	},
+	createAdapterDeviceMainThread: (
+		instancePtr: Pointer,
+		surfacePtr: Pointer,
+		outAdapterDevicePtr: Pointer,
+	) =>
+		native.symbols.wgpuCreateAdapterDeviceMainThread(
+			instancePtr as any,
+			surfacePtr as any,
+			outAdapterDevicePtr as any,
+		),
+	createSurfaceForView: (instancePtr: Pointer, viewPtr: Pointer): Pointer | null => {
+		if (!native?.symbols?.wgpuCreateSurfaceForView) return null;
+		return native.symbols.wgpuCreateSurfaceForView(instancePtr as any, viewPtr as any) as Pointer;
 	},
 };
 
@@ -1388,13 +1814,31 @@ const windowBlurCallback = new JSCallback(
 		const event = handler({
 			id,
 		});
+  },
+  {
+		args: ["u32"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
 
-		// global event
+// global event
+const windowKeyCallback = new JSCallback(
+	(id, keyCode, modifiers, isDown, isRepeat) => {
+		const handler = isDown
+			? electrobunEventEmitter.events.window.keyDown
+			: electrobunEventEmitter.events.window.keyUp;
+		const event = handler({
+			id,
+			keyCode,
+			modifiers,
+			isRepeat: !!isRepeat,
+		});
 		electrobunEventEmitter.emitEvent(event);
 		electrobunEventEmitter.emitEvent(event, id);
 	},
 	{
-		args: ["u32"],
+		args: ["u32", "u32", "u32", "u32", "u32"],
 		returns: "void",
 		threadsafe: true,
 	},
@@ -1452,6 +1896,27 @@ const urlOpenCallback = new JSCallback(
 // Register the URL open handler with native code (macOS only)
 if (process.platform === "darwin") {
 	native.symbols.setURLOpenHandler(urlOpenCallback);
+}
+
+const appReopenCallback = new JSCallback(
+	() => {
+		if (process.platform === "darwin") {
+			native.symbols.setDockIconVisible(true);
+		}
+
+		const handler = electrobunEventEmitter.events.app.reopen;
+		const event = handler({});
+		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: [],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+if (process.platform === "darwin") {
+	native.symbols.setAppReopenHandler(appReopenCallback);
 }
 
 // Quit requested callback - invoked by native code when system quit is requested
@@ -1628,6 +2093,17 @@ export const Screen = {
 			return JSON.parse(jsonStr.toString());
 		} catch {
 			return { x: 0, y: 0 };
+		}
+	},
+
+	/**
+	 * Get current mouse button bitmask (bit 0 = left, bit 1 = right, bit 2 = middle)
+	 */
+	getMouseButtons: (): bigint => {
+		try {
+			return native.symbols.getMouseButtons();
+		} catch {
+			return 0n;
 		}
 	},
 };
@@ -2142,6 +2618,13 @@ type WebviewTagInitParams = {
 	passthrough: boolean;
 };
 
+type WgpuTagInitParams = {
+	windowId: number;
+	frame: { x: number; y: number; width: number; height: number };
+	transparent: boolean;
+	passthrough: boolean;
+};
+
 export const internalRpcHandlers = {
 	request: {
 		// todo: this shouldn't be getting method, just params.
@@ -2179,6 +2662,24 @@ export const internalRpcHandlers = {
 			});
 
 			return webviewForTag.id;
+		},
+		wgpuTagInit: (params: WgpuTagInitParams) => {
+			const {
+				windowId,
+				frame,
+				transparent,
+				passthrough,
+			} = params;
+
+			const viewForTag = new WGPUView({
+				windowId,
+				frame,
+				autoResize: false,
+				startTransparent: transparent,
+				startPassthrough: passthrough,
+			});
+
+			return viewForTag.id;
 		},
 		webviewTagCanGoBack: (params: { id: number }) => {
 			const { id } = params;
@@ -2226,6 +2727,29 @@ export const internalRpcHandlers = {
 				width,
 				height,
 				toCString(params.masks),
+			);
+		},
+		wgpuTagResize: (params: {
+			id: number;
+			frame: { x: number; y: number; width: number; height: number };
+			masks: string;
+		}) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagResize: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+
+			const { x, y, width, height } = params.frame;
+			native.symbols.resizeWebview(
+				view.ptr,
+				x,
+				y,
+				width,
+				height,
+				toCString(params.masks ?? "[]"),
 			);
 		},
 		webviewTagUpdateSrc: (params: { id: number; url: string }) => {
@@ -2309,9 +2833,9 @@ export const internalRpcHandlers = {
 			native.symbols.webviewRemove(webview.ptr);
 		},
 		startWindowMove: (params: { id: number }) => {
-			const window = BrowserWindow.getById(params.id);
-			if (!window) return;
-			native.symbols.startWindowMove(window.ptr);
+			const windowPtr = getWindowPtr(params.id);
+			if (!windowPtr) return;
+			native.symbols.startWindowMove(windowPtr);
 		},
 		stopWindowMove: (_params: unknown) => {
 			native.symbols.stopWindowMove();
@@ -2329,6 +2853,19 @@ export const internalRpcHandlers = {
 			}
 			native.symbols.webviewSetTransparent(webview.ptr, params.transparent);
 		},
+		wgpuTagSetTransparent: (params: {
+			id: number;
+			transparent: boolean;
+		}) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagSetTransparent: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.wgpuViewSetTransparent(view.ptr, params.transparent);
+		},
 		webviewTagSetPassthrough: (params: {
 			id: number;
 			enablePassthrough: boolean;
@@ -2345,6 +2882,16 @@ export const internalRpcHandlers = {
 				params.enablePassthrough,
 			);
 		},
+		wgpuTagSetPassthrough: (params: { id: number; passthrough: boolean }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagSetPassthrough: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.wgpuViewSetPassthrough(view.ptr, params.passthrough);
+		},
 		webviewTagSetHidden: (params: { id: number; hidden: boolean }) => {
 			const webview = BrowserView.getById(params.id);
 			if (!webview || !webview.ptr) {
@@ -2354,6 +2901,40 @@ export const internalRpcHandlers = {
 				return;
 			}
 			native.symbols.webviewSetHidden(webview.ptr, params.hidden);
+		},
+		wgpuTagSetHidden: (params: { id: number; hidden: boolean }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagSetHidden: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.wgpuViewSetHidden(view.ptr, params.hidden);
+		},
+		wgpuTagRemove: (params: { id: number }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagRemove: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			view.remove();
+		},
+		wgpuTagRunTest: (params: { id: number }) => {
+			const view = WGPUView.getById(params.id);
+			if (!view?.ptr) {
+				console.error(
+					`wgpuTagRunTest: WGPUView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			if (!native?.symbols?.wgpuRunGPUTest) {
+				console.error("wgpuTagRunTest: wgpuRunGPUTest not available");
+				return;
+			}
+			native.symbols.wgpuRunGPUTest(view.ptr);
 		},
 		webviewTagSetNavigationRules: (params: { id: number; rules: string[] }) => {
 			const webview = BrowserView.getById(params.id);
@@ -2428,6 +3009,19 @@ export const internalRpcHandlers = {
 				return;
 			}
 			native.symbols.webviewToggleDevTools(webview.ptr);
+		},
+		webviewTagExecuteJavascript: (params: { id: number; js: string }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagExecuteJavascript: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.evaluateJavaScriptWithNoCompletion(
+				webview.ptr,
+				toCString(params.js),
+			);
 		},
 		webviewEvent: (params: unknown) => {
 			console.log("-----------------+webviewEvent", params);

@@ -58,6 +58,7 @@ export interface WindowOptions {
   title?: string;
   titleBarStyle?: TitleBarStyle;
   renderer?: 'cef' | 'native';
+  hidden?: boolean;
   sandbox?: boolean; // When true, disables RPC and only allows event emission
 }
 

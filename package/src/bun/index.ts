@@ -1,6 +1,8 @@
 import electobunEventEmmitter from "./events/eventEmitter";
 import { BrowserWindow, type WindowOptionsType } from "./core/BrowserWindow";
 import { BrowserView, type BrowserViewOptions } from "./core/BrowserView";
+import { GpuWindow, type GpuWindowOptionsType } from "./core/GpuWindow";
+import { WGPUView, type WGPUViewOptions } from "./core/WGPUView";
 import { Tray, type TrayOptions } from "./core/Tray";
 import * as ApplicationMenu from "./core/ApplicationMenu";
 import * as ContextMenu from "./core/ContextMenu";
@@ -25,8 +27,12 @@ import {
 import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
 import * as Socket from "./core/Socket";
+import WGPU from "./webGPU";
+import webgpu from "./webgpuAdapter";
+import * as three from "three";
+import * as babylon from "@babylonjs/core";
 import type { ElectrobunConfig } from "./ElectrobunConfig";
-import { GlobalShortcut, Screen, Session } from "./proc/native";
+import { GlobalShortcut, Screen, Session, WGPUBridge } from "./proc/native";
 import type {
 	Display,
 	Rectangle,
@@ -48,6 +54,8 @@ export {
 	type BuildConfigType,
 	type WindowOptionsType,
 	type BrowserViewOptions,
+	type GpuWindowOptionsType,
+	type WGPUViewOptions,
 	type TrayOptions,
 	type MessageBoxOptions,
 	type MessageBoxResponse,
@@ -67,6 +75,8 @@ export {
 	defineElectrobunRPC,
 	BrowserWindow,
 	BrowserView,
+	GpuWindow,
+	WGPUView,
 	Tray,
 	Updater,
 	Utils,
@@ -74,9 +84,14 @@ export {
 	ContextMenu,
 	PATHS,
 	Socket,
+	WGPU,
+	webgpu,
+	three,
+	babylon,
 	GlobalShortcut,
 	Screen,
 	Session,
+	WGPUBridge,
 	BuildConfig,
 };
 
@@ -84,6 +99,8 @@ export {
 const Electrobun = {
 	BrowserWindow,
 	BrowserView,
+	GpuWindow,
+	WGPUView,
 	Tray,
 	Updater,
 	Utils,
@@ -92,10 +109,15 @@ const Electrobun = {
 	GlobalShortcut,
 	Screen,
 	Session,
+	WGPUBridge,
 	BuildConfig,
 	events: electobunEventEmmitter,
 	PATHS,
 	Socket,
+	WGPU,
+	webgpu,
+	three,
+	babylon,
 };
 
 // Electrobun

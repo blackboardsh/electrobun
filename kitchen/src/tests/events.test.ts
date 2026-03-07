@@ -217,6 +217,24 @@ export const eventsTests = [
   }),
 
   defineTest({
+    name: "reopen event subscription",
+    category: "Events",
+    description: "Test that app reopen event can be subscribed/unsubscribed",
+    async run({ log }) {
+      let eventCount = 0;
+      const handler = () => {
+        eventCount += 1;
+      };
+
+      Electrobun.events.on("reopen", handler);
+      Electrobun.events.off("reopen", handler);
+
+      expect(eventCount).toBe(0);
+      log("Reopen event subscription APIs are available");
+    },
+  }),
+
+  defineTest({
     name: "before-quit event can cancel quit",
     category: "Events",
     description: "Test that before-quit event fires and can cancel application quit",

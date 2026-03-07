@@ -4,7 +4,7 @@ export default {
 	app: {
 		name: "Electrobun Kitchen Sink",
 		identifier: "sh.blackboard.electrobun-kitchen",
-		version: "1.14.5-beta.0",
+		version: "1.15.1",
 		urlSchemes: ["electrobun-playground"],
 	},
 	runtime: {
@@ -79,6 +79,9 @@ export default {
 			"playgrounds/webview-cleanup": {
 				entrypoint: "src/playgrounds/webview-cleanup/index.ts",
 			},
+			"playgrounds/wgpu-tag": {
+				entrypoint: "src/playgrounds/wgpu-tag/index.ts",
+			},
 		},
 		copy: {
 			"src/test-runner/index.html": "views/test-runner/index.html",
@@ -147,11 +150,14 @@ export default {
 				"views/playgrounds/webview-cleanup/index.css",
 			"src/playgrounds/webview-cleanup/assets/bunny.png":
 				"views/playgrounds/webview-cleanup/assets/bunny.png",
+			"src/playgrounds/wgpu-tag/index.html":
+				"views/playgrounds/wgpu-tag/index.html",
 		},
 		mac: {
 			codesign: true,
 			notarize: true,
 			bundleCEF: true,
+			bundleWGPU: true,
 			entitlements: {},
 			chromiumFlags: {
 				// "show-paint-rects": true,
@@ -161,6 +167,7 @@ export default {
 		},
 		linux: {
 			bundleCEF: true,
+			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {
 				// "show-paint-rects": true,
@@ -170,6 +177,7 @@ export default {
 		},
 		win: {
 			bundleCEF: true,
+			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {
 				// "show-paint-rects": true,

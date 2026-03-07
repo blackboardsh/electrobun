@@ -1,6 +1,6 @@
 {
 	"name": "electrobun",
-	"version": "1.14.5-beta.0",
+	"version": "1.15.1",
 	"description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
 	"license": "MIT",
 	"author": "Blackboard Technologies Inc.",
@@ -49,13 +49,14 @@
 		"bump-cef": "bun scripts/update-cef-version.ts"
 	},
 	"devDependencies": {
-		"@types/archiver": "^6.0.3",
 		"typescript": "^5.9.3"
 	},
 	"dependencies": {
+		"@babylonjs/core": "^7.45.0",
 		"@types/bun": "^1.3.8",
-		"archiver": "^7.0.1",
 		"png-to-ico": "^2.1.8",
-		"rcedit": "^4.0.1"
+		"proxy-agent": "^6.5.0",
+		"rcedit": "^4.0.1",
+		"three": "^0.165.0"
 	}
 }
