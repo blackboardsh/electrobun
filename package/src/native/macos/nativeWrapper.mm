@@ -2682,24 +2682,16 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     }
 
     - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {
-        WKContentWorld *isolatedWorld = [WKContentWorld pageWorld];
+        // Copy the string before dispatch_async since the JS-side buffer may be GC'd
         NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
-        [self.webView evaluateJavaScript:code
-                                inFrame:nil
-                        inContentWorld:isolatedWorld
-                    completionHandler:nil];
-
-        // DEBUG
-        // [self.webView evaluateJavaScript:code
-        //                   inFrame:nil
-        //           inContentWorld:isolatedWorld
-        //       completionHandler:^(id result, NSError *error) {
-        //     if (error) {
-        //         NSLog(@"JavaScript evaluation error: %@", error);
-        //     } else {
-        //         NSLog(@"JavaScript evaluation result: %@", result);
-        //     }
-        // }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!self.webView) return;
+            WKContentWorld *isolatedWorld = [WKContentWorld pageWorld];
+            [self.webView evaluateJavaScript:code
+                                    inFrame:nil
+                            inContentWorld:isolatedWorld
+                        completionHandler:nil];
+        });
     }
 
     - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
@@ -6957,6 +6949,37 @@ extern "C" void webviewToggleDevTools(AbstractView *abstractView) {
     });
 }
 
+extern "C" void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
+            WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
+            if (wkImpl.webView) {
+                wkImpl.webView.pageZoom = zoomLevel;
+                [wkImpl.webView setNeedsDisplay:YES];
+                [wkImpl.webView setNeedsLayout:YES];
+            }
+        }
+    });
+}
+
+extern "C" double webviewGetPageZoom(AbstractView *abstractView) {
+    __block double zoomLevel = 1.0;
+    if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
+        WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
+        if (wkImpl.webView) {
+            if ([NSThread isMainThread]) {
+                zoomLevel = wkImpl.webView.pageZoom;
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    zoomLevel = wkImpl.webView.pageZoom;
+                });
+            }
+        }
+    }
+    return zoomLevel;
+}
+
+
 extern "C" NSRect createNSRectWrapper(double x, double y, double width, double height) {
     return NSMakeRect(x, y, width, height);
 }
@@ -7882,11 +7905,13 @@ extern "C" const char* getTrayBounds(NSStatusItem *statusItem) {
 }
 
 extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
-    NSLog(@"Setting application menu from JSON in objc");
+    // Copy the string before dispatch_async since the JS-side buffer may be GC'd
+    char *jsonCopy = strdup(jsonString);
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        free(jsonCopy);
         if (error) {
             NSLog(@"Failed to parse JSON: %@", error);
             return;
@@ -7901,10 +7926,13 @@ extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler 
 }
 
 extern "C" void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
+    // Copy the string before dispatch_async since the JS-side buffer may be GC'd
+    char *jsonCopy = strdup(jsonString);
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        free(jsonCopy);
         if (error) {
             NSLog(@"Failed to parse JSON: %@", error);
             return;

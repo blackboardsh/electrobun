@@ -338,6 +338,14 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
+			webviewSetPageZoom: {
+				args: [FFIType.ptr, FFIType.f64],
+				returns: FFIType.void,
+			},
+			webviewGetPageZoom: {
+				args: [FFIType.ptr],
+				returns: FFIType.f64,
+			},
 			wgpuViewSetFrame: {
 				args: [
 					FFIType.ptr,

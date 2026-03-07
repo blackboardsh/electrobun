@@ -336,6 +336,22 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		return { width: frame.width, height: frame.height };
 	}
 
+	/**
+	 * Set the page zoom level for the window's webview (WebKit only).
+	 * @param zoomLevel - The zoom level (1.0 = 100%, 1.5 = 150%, etc.)
+	 */
+	setPageZoom(zoomLevel: number) {
+		this.webview?.setPageZoom(zoomLevel);
+	}
+
+	/**
+	 * Get the current page zoom level for the window's webview.
+	 * @returns The current zoom level (1.0 = 100%)
+	 */
+	getPageZoom(): number {
+		return this.webview?.getPageZoom() ?? 1.0;
+	}
+
 	// todo (yoav): move this to a class that also has off, append, prepend, etc.
 	// name should only allow browserWindow events
 	on(name: string, handler: (event: unknown) => void) {
