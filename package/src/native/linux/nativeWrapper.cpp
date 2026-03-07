@@ -5790,6 +5790,7 @@ gboolean process_x11_events(gpointer data) {
                     // Window received focus
                     if (x11win->blurCallback) {
                         x11win->blurCallback(x11win->windowId);
+                   }
                 case KeyPress:
                 case KeyRelease:
                     if (x11win->keyCallback) {
