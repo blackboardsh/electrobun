@@ -219,9 +219,17 @@ pub fn main() !void {
             std.debug.print("Setting LD_PRELOAD: {s}\n", .{ld_preload});
         }
 
+        // Set ICU_DATA for external ICU data file (Linux)
+        try env_map.put("ICU_DATA", exe_dir);
+
+        child_process.env_map = &env_map;
+    } else if (builtin.os.tag == .windows) {
+        // On Windows, get environment and set ICU_DATA for external ICU data
+        var env_map = try std.process.getEnvMap(arena_alloc);
+        try env_map.put("ICU_DATA", exe_dir);
         child_process.env_map = &env_map;
     } else {
-        // On Windows and macOS, get environment and inherit it
+        // On macOS, get environment and inherit it (uses system ICU)
         var env_map = try std.process.getEnvMap(arena_alloc);
         child_process.env_map = &env_map;
     }

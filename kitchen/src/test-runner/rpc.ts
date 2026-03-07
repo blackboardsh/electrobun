@@ -27,6 +27,10 @@ export interface UpdateInfo {
   error?: string;
 }
 
+export interface TestRunnerPreferences {
+  searchQuery: string;
+}
+
 export type TestRunnerRPC = {
   bun: RPCSchema<{
     requests: {
@@ -68,6 +72,14 @@ export type TestRunnerRPC = {
       };
       clearUpdateStatusHistory: {
         params: {};
+        response: void;
+      };
+      getTestRunnerPreferences: {
+        params: {};
+        response: TestRunnerPreferences;
+      };
+      setTestRunnerPreferences: {
+        params: TestRunnerPreferences;
         response: void;
       };
     };

@@ -16,6 +16,7 @@ export default {
 		),
 	openUrl: (data: OpenUrlData) =>
 		new ElectrobunEvent<OpenUrlData, void>("open-url", data),
+	reopen: (data: {}) => new ElectrobunEvent<{}, void>("reopen", data),
 	beforeQuit: (data: {}) =>
 		new ElectrobunEvent<{}, { allow: boolean }>("before-quit", data),
 };

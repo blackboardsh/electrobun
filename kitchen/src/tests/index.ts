@@ -3,6 +3,10 @@
 import type { TestDefinition } from "../test-framework/types";
 
 // Automated tests
+import { wgpuFfiTests } from "./wgpu-ffi.test";
+import { wgpuAdapterTests } from "./wgpu-adapter.test";
+import { babylonAdapterTests } from "./babylon-adapter.test";
+import { wgpuAdapterExtendedTests } from "./wgpu-adapter-extended.test";
 import { rpcTests } from "./rpc.test";
 import { windowTests } from "./window.test";
 import { navigationTests } from "./navigation.test";
@@ -13,6 +17,7 @@ import { eventsTests } from "./events.test";
 import { preloadTests } from "./preload.test";
 import { updaterTests } from "./updater.test";
 import { sandboxTests } from "./sandbox.test";
+import { trayApiTests } from "./tray-api.test";
 
 // Interactive tests
 import { dialogTests } from "./interactive/dialogs.test";
@@ -27,6 +32,9 @@ import { multiwindowCefTests } from "./interactive/multiwindow-cef.test";
 import { quitTests } from "./interactive/quit-test.test";
 import { webviewSettingsTests } from "./interactive/webview-settings.test";
 import { webviewCleanupTests } from "./interactive/webview-cleanup.test";
+import { wgpuViewTests } from "./interactive/wgpu-view.test";
+import { wgpuTagTests } from "./interactive/wgpu-tag.test";
+import { fullsizeFrameReproTests } from "./interactive/fullsize-frame-repro.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -41,6 +49,11 @@ export const allTests: TestDefinition[] = [
   ...preloadTests,
   ...updaterTests,
   ...sandboxTests,
+  ...trayApiTests,
+  ...wgpuFfiTests,
+  ...wgpuAdapterTests,
+  ...babylonAdapterTests,
+  ...wgpuAdapterExtendedTests,
 
   // Interactive tests (run sequentially, require user)
   ...dialogTests,
@@ -55,6 +68,9 @@ export const allTests: TestDefinition[] = [
   ...quitTests,
   ...webviewSettingsTests,
   ...webviewCleanupTests,
+  ...wgpuViewTests,
+  ...wgpuTagTests,
+  ...fullsizeFrameReproTests,
 ];
 
 // Export by category for selective running
@@ -73,6 +89,11 @@ export {
   preloadTests,
   updaterTests,
   sandboxTests,
+  trayApiTests,
+  wgpuFfiTests,
+  wgpuAdapterTests,
+  babylonAdapterTests,
+  wgpuAdapterExtendedTests,
   dialogTests,
   trayTests,
   shortcutTests,
@@ -85,4 +106,7 @@ export {
   quitTests,
   webviewSettingsTests,
   webviewCleanupTests,
+  wgpuViewTests,
+  wgpuTagTests,
+  fullsizeFrameReproTests,
 };

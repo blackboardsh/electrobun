@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FullSize Frame Repro</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+        }
+
+        .viewport {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(180deg, #111827 0%, #1e293b 100%);
+            overflow: hidden;
+        }
+
+        .header {
+            padding: 14px 16px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+            background: rgba(15, 23, 42, 0.7);
+        }
+
+        .header h1 {
+            font-size: 15px;
+            margin-bottom: 6px;
+        }
+
+        .header p {
+            font-size: 13px;
+            color: #cbd5e1;
+            line-height: 1.4;
+        }
+
+        .center {
+            flex: 1;
+            padding: 16px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .card {
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 8px;
+            padding: 12px;
+            background: rgba(30, 41, 59, 0.6);
+            margin-bottom: 12px;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .top-sentinel {
+            height: 36px;
+            background: #2563eb;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            border-bottom: 2px solid #60a5fa;
+            flex-shrink: 0;
+        }
+
+        .sentinel {
+            height: 42px;
+            background: #16a34a;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            border-top: 2px solid #4ade80;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="viewport">
+        <div class="top-sentinel">TOP SENTINEL MUST STAY BELOW TITLEBAR</div>
+        <div class="header">
+            <h1>FullSize WebView Frame Repro</h1>
+            <p>Resize window height. The green bar below should stay fully visible at the bottom.</p>
+        </div>
+        <div class="center">
+            <div class="card">This uses a strict <code>100vh</code> viewport layout.</div>
+            <div class="card">If the fullSize webview height incorrectly includes titlebar area, bottom content can be clipped.</div>
+            <div class="card">Expected: blue top sentinel remains below titlebar and green bottom sentinel remains fully visible.</div>
+            <div class="card">Failure signal: content shifts upward into titlebar and/or bottom sentinel disappears while resizing.</div>
+        </div>
+        <div class="sentinel">BOTTOM SENTINEL MUST BE FULLY VISIBLE</div>
+    </div>
+</body>
+</html>

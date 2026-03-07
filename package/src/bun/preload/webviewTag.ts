@@ -3,13 +3,7 @@
 
 import "./globals.d.ts";
 import { send, request } from "./internalRpc";
-
-interface Rect {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-}
+import { OverlaySyncController, type Rect } from "./overlaySync";
 
 type WebviewEventType =
 	| "will-navigate"
@@ -33,9 +27,7 @@ export const webviewRegistry: Record<number, ElectrobunWebviewTag> = {};
 export class ElectrobunWebviewTag extends HTMLElement {
 	webviewId: number | null = null;
 	maskSelectors: Set<string> = new Set();
-	lastRect: Rect = { x: 0, y: 0, width: 0, height: 0 };
-	resizeObserver: ResizeObserver | null = null;
-	positionCheckLoop: ReturnType<typeof setInterval> | null = null;
+	private _sync: OverlaySyncController | null = null;
 	transparent = false;
 	passthroughEnabled = false;
 	hidden = false;
@@ -57,13 +49,12 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			send("webviewTagRemove", { id: this.webviewId });
 			delete webviewRegistry[this.webviewId];
 		}
-		if (this.resizeObserver) this.resizeObserver.disconnect();
-		if (this.positionCheckLoop) clearInterval(this.positionCheckLoop);
+		if (this._sync) this._sync.stop();
 	}
 
 	async initWebview() {
 		const rect = this.getBoundingClientRect();
-		this.lastRect = {
+		const initialRect = {
 			x: rect.x,
 			y: rect.y,
 			width: rect.width,
@@ -118,86 +109,70 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			this.id = `electrobun-webview-${webviewId}`;
 			webviewRegistry[webviewId] = this;
 
-			this.setupObservers();
-		// Force immediate sync after initialization
-		this.syncDimensions(true);
-		
-		// When adding a new webview, force all existing webviews to re-sync their positions
-		// This handles layout changes caused by the new webview
-		// Use requestAnimationFrame to ensure DOM layout is complete
-		requestAnimationFrame(() => {
-			Object.values(webviewRegistry).forEach(webview => {
-				if (webview !== this && webview.webviewId !== null) {
-					webview.syncDimensions(true);
-				}
+			this.setupObservers(initialRect);
+			// Force immediate sync after initialization
+			this.syncDimensions(true);
+
+			// When adding a new webview, force all existing webviews to re-sync their positions
+			// This handles layout changes caused by the new webview
+			// Use requestAnimationFrame to ensure DOM layout is complete
+			requestAnimationFrame(() => {
+				Object.values(webviewRegistry).forEach((webview) => {
+					if (webview !== this && webview.webviewId !== null) {
+						webview.syncDimensions(true);
+					}
+				});
 			});
-		});
 		} catch (err) {
 			console.error("Failed to init webview:", err);
 		}
 	}
 
-	setupObservers() {
-		// ResizeObserver for size changes
-		this.resizeObserver = new ResizeObserver(() => this.syncDimensions());
-		this.resizeObserver.observe(this);
+	setupObservers(initialRect: Rect) {
+		const getMasks = () => {
+			const rect = this.getBoundingClientRect();
+			const masks: Rect[] = [];
+			this.maskSelectors.forEach((selector) => {
+				try {
+					document.querySelectorAll(selector).forEach((el) => {
+						const mr = el.getBoundingClientRect();
+						masks.push({
+							x: mr.x - rect.x,
+							y: mr.y - rect.y,
+							width: mr.width,
+							height: mr.height,
+						});
+					});
+				} catch (_e) {
+					// Invalid selector, ignore
+				}
+			});
+			return masks;
+		};
 
-		// Position check loop (for scroll, transforms, etc.)
-		this.positionCheckLoop = setInterval(() => this.syncDimensions(), 100);
+		this._sync = new OverlaySyncController(this, {
+			onSync: (rect, masksJson) => {
+				if (this.webviewId === null) return;
+				send("webviewTagResize", {
+					id: this.webviewId,
+					frame: rect,
+					masks: masksJson,
+				});
+			},
+			getMasks,
+			burstIntervalMs: 10,
+			baseIntervalMs: 100,
+			burstDurationMs: 50,
+		});
+		this._sync.setLastRect(initialRect);
+		this._sync.start();
 	}
 
 	syncDimensions(force = false) {
-		if (this.webviewId === null) return;
-
-		const rect = this.getBoundingClientRect();
-		const newRect: Rect = {
-			x: rect.x,
-			y: rect.y,
-			width: rect.width,
-			height: rect.height,
-		};
-
-		// Skip sync when element is hidden (e.g. display:none parent returns 0x0).
-		// This prevents resizing webviews to 0x0 which triggers mobile breakpoints.
-		if (newRect.width === 0 && newRect.height === 0) {
-			return;
+		if (!this._sync) return;
+		if (force) {
+			this._sync.forceSync();
 		}
-
-		if (
-			!force &&
-			newRect.x === this.lastRect.x &&
-			newRect.y === this.lastRect.y &&
-			newRect.width === this.lastRect.width &&
-			newRect.height === this.lastRect.height
-		) {
-			return;
-		}
-
-		this.lastRect = newRect;
-
-		// Calculate mask rectangles
-		const masks: Rect[] = [];
-		this.maskSelectors.forEach((selector) => {
-			try {
-				document.querySelectorAll(selector).forEach((el) => {
-					const mr = el.getBoundingClientRect();
-					masks.push({
-						x: mr.x - rect.x,
-						y: mr.y - rect.y,
-						width: mr.width,
-						height: mr.height,
-					});
-				});
-			} catch (_e) {
-				// Invalid selector, ignore
-			}
-		});
-
-		send("webviewTagResize", {
-			id: this.webviewId,
-			frame: newRect,
-			masks: JSON.stringify(masks),
-		});
 	}
 
 	// Navigation methods
@@ -322,6 +297,12 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	toggleDevTools() {
 		if (this.webviewId !== null)
 			send("webviewTagToggleDevTools", { id: this.webviewId });
+	}
+
+	// JavaScript execution
+	executeJavascript(js: string) {
+		if (this.webviewId === null) return;
+		send("webviewTagExecuteJavascript", { id: this.webviewId, js });
 	}
 
 	// Event handling

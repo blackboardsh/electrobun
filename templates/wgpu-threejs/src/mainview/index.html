@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Three Physics Controls</title>
+		<link rel="stylesheet" href="views://mainview/index.css" />
+	</head>
+	<body>
+		<div class="panel">
+			<h1>Physics Playground</h1>
+			<p class="hint">Move your mouse through the pile to fling cubes.</p>
+
+			<label class="control">
+				<span>Drop rate</span>
+				<input id="dropRate" type="range" min="100" max="1200" step="50" value="300" />
+				<span class="value" id="dropRateValue">300ms</span>
+			</label>
+
+			<label class="control">
+				<span>Cube size</span>
+				<input id="cubeSize" type="range" min="0.3" max="1.2" step="0.05" value="0.4" />
+				<span class="value" id="cubeSizeValue">0.40</span>
+			</label>
+		</div>
+		<script type="module" src="views://mainview/index.js"></script>
+	</body>
+</html>

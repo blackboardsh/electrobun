@@ -274,7 +274,7 @@ header {
 .controls {
   display: flex;
   gap: 10px;
-  margin-bottom: 20px;
+  margin-bottom: 10px;
 }
 
 .btn {
@@ -325,6 +325,42 @@ header {
 
 .btn-danger:hover:not(:disabled) {
   background: #dc2626;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #2d3a5f;
+  border-radius: 8px;
+  background: #101a33;
+  color: #e5e7eb;
+  font-size: 0.9rem;
+}
+
+.search-input::placeholder {
+  color: #6b7280;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.search-meta {
+  flex-shrink: 0;
+  color: #9ca3af;
+  font-size: 0.8rem;
+  min-width: 140px;
+  text-align: right;
 }
 
 .test-list {
@@ -576,4 +612,12 @@ header {
 .run-btn:disabled {
   opacity: 0.5 !important;
   cursor: not-allowed;
+}
+
+.empty-search-state {
+  padding: 20px;
+  border: 1px dashed #334155;
+  border-radius: 8px;
+  color: #94a3b8;
+  background: #0f172a;
 }

@@ -56,6 +56,7 @@ let tests: TestInfo[] = [];
 let testResults: Map<string, TestResult> = new Map();
 let currentInteractiveTestId: string | null = null;
 let statusHistoryVisible = false;
+let searchQuery = '';
 
 // DOM elements - will be initialized in init()
 let testList: HTMLElement;
@@ -77,6 +78,8 @@ let historyToggle: HTMLButtonElement;
 let historyPanel: HTMLElement;
 let historyList: HTMLElement;
 let historyClear: HTMLButtonElement;
+let searchInput: HTMLInputElement;
+let searchMeta: HTMLElement;
 
 // Modal mode
 type ModalMode = 'legacy' | 'ready' | 'verify';
@@ -105,6 +108,8 @@ async function init() {
   historyPanel = document.getElementById('update-history-panel')!;
   historyList = document.getElementById('update-history-list')!;
   historyClear = document.getElementById('update-history-clear')! as HTMLButtonElement;
+  searchInput = document.getElementById('test-search')! as HTMLInputElement;
+  searchMeta = document.getElementById('search-meta')!;
 
   if (!testList || !btnRunAll) {
     console.error('DOM elements not found, retrying in 100ms...');
@@ -119,6 +124,9 @@ async function init() {
   btnPass.addEventListener('click', () => submitVerification('pass'));
   btnFail.addEventListener('click', () => submitVerification('fail'));
   btnRetest.addEventListener('click', () => submitVerification('retest'));
+  searchInput.addEventListener('input', onSearchInput);
+
+  await loadPersistedSearchQuery();
 
   // Update button handler
   const updateBtn = document.getElementById('update-btn');
@@ -179,15 +187,23 @@ async function loadTests(retries = 10): Promise<void> {
 }
 
 function renderTests() {
+  const visibleTests = getVisibleTests();
+
   // Group by category
   const byCategory = new Map<string, TestInfo[]>();
-  for (const test of tests) {
+  for (const test of visibleTests) {
     const existing = byCategory.get(test.category) || [];
     existing.push(test);
     byCategory.set(test.category, existing);
   }
 
   testList.innerHTML = '';
+
+  if (visibleTests.length === 0) {
+    testList.innerHTML = `<div class="empty-search-state">No tests match "<strong>${escapeHtml(searchQuery)}</strong>".</div>`;
+    updateSearchMeta(0);
+    return;
+  }
 
   for (const [category, categoryTests] of byCategory) {
     const categoryEl = document.createElement('div');
@@ -204,6 +220,7 @@ function renderTests() {
     testList.appendChild(categoryEl);
   }
 
+  updateSearchMeta(visibleTests.length);
 }
 
 async function runSingleTest(testId: string) {
@@ -303,6 +320,83 @@ function updateSummary() {
   passedCount.textContent = String(passed);
   failedCount.textContent = String(failed);
   pendingCount.textContent = String(pending);
+}
+
+function onSearchInput() {
+  searchQuery = searchInput.value.trim();
+  void persistSearchQuery(searchQuery);
+  renderTests();
+}
+
+function updateSearchMeta(visibleCount: number) {
+  if (!searchMeta) return;
+
+  if (!searchQuery) {
+    searchMeta.textContent = `${tests.length} tests`;
+    return;
+  }
+
+  searchMeta.textContent = `Showing ${visibleCount} of ${tests.length}`;
+}
+
+function getVisibleTests(): TestInfo[] {
+  if (!searchQuery) return tests;
+
+  return tests.filter((test) => fuzzyMatches(test, searchQuery));
+}
+
+function fuzzyMatches(test: TestInfo, rawQuery: string): boolean {
+  const queryTokens = rawQuery
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  if (queryTokens.length === 0) return true;
+
+  const haystacks = [
+    test.name.toLowerCase(),
+    test.category.toLowerCase(),
+    (test.description || '').toLowerCase(),
+  ];
+
+  return queryTokens.every((token) =>
+    haystacks.some((value) => {
+      if (value.includes(token)) return true;
+      return isSubsequence(token, value);
+    }),
+  );
+}
+
+function isSubsequence(needle: string, haystack: string): boolean {
+  if (!needle) return true;
+  let needleIndex = 0;
+  for (let i = 0; i < haystack.length; i += 1) {
+    if (haystack[i] === needle[needleIndex]) {
+      needleIndex += 1;
+      if (needleIndex === needle.length) return true;
+    }
+  }
+  return false;
+}
+
+async function persistSearchQuery(query: string) {
+  try {
+    await electrobun.rpc?.request.setTestRunnerPreferences({ searchQuery: query });
+  } catch (err) {
+    console.warn('Failed to persist search query', err);
+  }
+}
+
+async function loadPersistedSearchQuery(): Promise<void> {
+  try {
+    const response = await electrobun.rpc?.request.getTestRunnerPreferences({});
+    const query = response?.searchQuery || '';
+    searchQuery = query;
+    searchInput.value = query;
+  } catch (err) {
+    console.warn('Failed to load persisted search query', err);
+  }
 }
 
 function setButtonsEnabled(enabled: boolean) {

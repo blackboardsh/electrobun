@@ -7,7 +7,7 @@
 		"dev": "electrobun dev --watch"
 	},
 	"dependencies": {
-		"electrobun": "latest"
+		"electrobun": "file:../../package"
 	},
 	"devDependencies": {
 		"@types/bun": "latest"

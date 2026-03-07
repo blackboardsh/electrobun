@@ -44,6 +44,8 @@ export interface TestContext {
   waitForUserAction: (instructions: string[]) => Promise<{ passed: boolean; notes?: string }>;
 }
 
+export type TitleBarStyle = 'default' | 'hiddenInset' | 'hidden';
+
 export interface WindowOptions {
   url?: string;
   html?: string;
@@ -54,8 +56,9 @@ export interface WindowOptions {
   x?: number;
   y?: number;
   title?: string;
-  titleBarStyle?: 'default' | 'hiddenInset';
+  titleBarStyle?: TitleBarStyle;
   renderer?: 'cef' | 'native';
+  hidden?: boolean;
   sandbox?: boolean; // When true, disables RPC and only allows event emission
 }
 

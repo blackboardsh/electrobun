@@ -17,6 +17,7 @@ import { initEncryption } from "./encryption";
 import { handleResponse } from "./internalRpc";
 import { initDragRegions } from "./dragRegions";
 import { initWebviewTag } from "./webviewTag";
+import { initWgpuTag } from "./wgpuTag";
 import {
 	emitWebviewEvent,
 	initLifecycleEvents,
@@ -63,3 +64,4 @@ initSPANavigationInterception();
 initOverscrollPrevention();
 initDragRegions();
 initWebviewTag();
+initWgpuTag();
