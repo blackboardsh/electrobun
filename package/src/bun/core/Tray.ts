@@ -1,4 +1,4 @@
-import { ffi, type MenuItemConfig } from "../proc/native";
+import { ffi, type MenuItemConfig, type Rectangle } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { VIEWS_FOLDER } from "./Paths";
 import { join } from "path";
@@ -23,6 +23,13 @@ export type TrayOptions = {
 export class Tray {
 	id: number = nextTrayId++;
 	ptr: Pointer | null = null;
+	visible = true;
+	title = "";
+	image = "";
+	template = true;
+	width = 16;
+	height = 16;
+	menu: Array<MenuItemConfig> | null = null;
 
 	constructor({
 		title = "",
@@ -31,24 +38,43 @@ export class Tray {
 		width = 16,
 		height = 16,
 	}: TrayOptions = {}) {
+		this.title = title;
+		this.image = image;
+		this.template = template;
+		this.width = width;
+		this.height = height;
+
+		this.createNativeTray();
+
+		TrayMap[this.id] = this;
+	}
+
+	private createNativeTray() {
 		try {
 			this.ptr = ffi.request.createTray({
 				id: this.id,
-				title,
-				image: this.resolveImagePath(image),
-				template,
-				width,
-				height,
+				title: this.title,
+				image: this.resolveImagePath(this.image),
+				template: this.template,
+				width: this.width,
+				height: this.height,
 			}) as Pointer;
+			this.visible = true;
 		} catch (error) {
 			console.warn("Tray creation failed:", error);
 			console.warn(
 				"System tray functionality may not be available on this platform",
 			);
 			this.ptr = null;
+			this.visible = false;
 		}
 
-		TrayMap[this.id] = this;
+		if (this.ptr && this.menu) {
+			ffi.request.setTrayMenu({
+				id: this.id,
+				menuConfig: JSON.stringify(menuConfigWithDefaults(this.menu)),
+			});
+		}
 	}
 
 	resolveImagePath(imgPath: string) {
@@ -61,11 +87,13 @@ export class Tray {
 	}
 
 	setTitle(title: string) {
+		this.title = title;
 		if (!this.ptr) return;
 		ffi.request.setTrayTitle({ id: this.id, title });
 	}
 
 	setImage(imgPath: string) {
+		this.image = imgPath;
 		if (!this.ptr) return;
 		ffi.request.setTrayImage({
 			id: this.id,
@@ -74,6 +102,7 @@ export class Tray {
 	}
 
 	setMenu(menu: Array<MenuItemConfig>) {
+		this.menu = menu;
 		if (!this.ptr) return;
 		const menuWithDefaults = menuConfigWithDefaults(menu);
 		ffi.request.setTrayMenu({
@@ -87,11 +116,34 @@ export class Tray {
 		electrobunEventEmitter.on(specificName, handler);
 	}
 
+	setVisible(visible: boolean) {
+		if (visible === this.visible) {
+			return;
+		}
+
+		if (!visible) {
+			if (this.ptr) {
+				ffi.request.removeTray({ id: this.id });
+				this.ptr = null;
+			}
+			this.visible = false;
+			return;
+		}
+
+		this.createNativeTray();
+	}
+
+	getBounds(): Rectangle {
+		return ffi.request.getTrayBounds({ id: this.id });
+	}
+
 	remove() {
 		console.log("Tray.remove() called for id:", this.id);
 		if (this.ptr) {
 			ffi.request.removeTray({ id: this.id });
+			this.ptr = null;
 		}
+		this.visible = false;
 		delete TrayMap[this.id];
 		console.log("Tray removed from TrayMap");
 	}

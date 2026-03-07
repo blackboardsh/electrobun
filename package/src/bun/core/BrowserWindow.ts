@@ -32,6 +32,7 @@ export type WindowOptionsType<T = undefined> = {
 	titleBarStyle: "hidden" | "hiddenInset" | "default";
 	// transparent: when true, window background is transparent (see-through)
 	transparent: boolean;
+	hidden?: boolean;
 	navigationRules: string | null;
 	// Sandbox mode: when true, disables RPC and only allows event emission
 	// Use for untrusted content (remote URLs) to prevent malicious sites from
@@ -53,6 +54,7 @@ const defaultOptions: WindowOptionsType = {
 	renderer: buildConfig.defaultRenderer,
 	titleBarStyle: "default",
 	transparent: false,
+	hidden: false,
 	navigationRules: null,
 	sandbox: false,
 };
@@ -113,6 +115,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	preload: string | null = null;
 	renderer: "native" | "cef" = "native";
 	transparent: boolean = false;
+	hidden: boolean = false;
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
@@ -140,6 +143,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.preload = options.preload || null;
 		this.renderer = options.renderer || defaultOptions.renderer;
 		this.transparent = options.transparent ?? false;
+		this.hidden = options.hidden ?? false;
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
 
@@ -151,6 +155,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		styleMask,
 		titleBarStyle,
 		transparent,
+		hidden,
 	}: Partial<WindowOptionsType<T>>) {
 		this.ptr = ffi.request.createWindow({
 			id: this.id,
@@ -193,6 +198,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
+			hidden: hidden ?? false,
 		}) as Pointer;
 
 		BrowserWindowMap[this.id] = this;

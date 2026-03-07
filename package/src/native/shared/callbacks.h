@@ -36,6 +36,10 @@ typedef void (*SnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char
 // URL open handler for deep linking
 typedef void (*URLOpenHandler)(const char* url);
 
+// App reopen handler - called when the user re-opens an already running app
+// (for example via Finder, Launchpad, or `open -a` on macOS)
+typedef void (*AppReopenHandler)();
+
 // Quit request handler - called by native code when quit is requested externally
 // (e.g., dock icon quit, system shutdown, console close)
 typedef void (*QuitRequestedHandler)();
