@@ -5791,6 +5791,7 @@ gboolean process_x11_events(gpointer data) {
                     if (x11win->blurCallback) {
                         x11win->blurCallback(x11win->windowId);
                    }
+                   break;
                 case KeyPress:
                 case KeyRelease:
                     if (x11win->keyCallback) {
