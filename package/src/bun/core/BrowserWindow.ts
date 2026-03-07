@@ -5,10 +5,11 @@ import { type Pointer } from "bun:ffi";
 import { BuildConfig } from "./BuildConfig";
 import { quit } from "./Utils";
 import { type RPCWithTransport } from "../../shared/rpc.js";
+import { getNextWindowId } from "./windowIds";
+import { GpuWindowMap } from "./GpuWindow";
+import { WGPUView } from "./WGPUView";
 
 const buildConfig = await BuildConfig.get();
-
-let nextWindowId = 1;
 
 export type WindowOptionsType<T = undefined> = {
 	title: string;
@@ -31,6 +32,7 @@ export type WindowOptionsType<T = undefined> = {
 	titleBarStyle: "hidden" | "hiddenInset" | "default";
 	// transparent: when true, window background is transparent (see-through)
 	transparent: boolean;
+	hidden?: boolean;
 	navigationRules: string | null;
 	// Sandbox mode: when true, disables RPC and only allows event emission
 	// Use for untrusted content (remote URLs) to prevent malicious sites from
@@ -52,6 +54,7 @@ const defaultOptions: WindowOptionsType = {
 	renderer: buildConfig.defaultRenderer,
 	titleBarStyle: "default",
 	transparent: false,
+	hidden: false,
 	navigationRules: null,
 	sandbox: false,
 };
@@ -72,16 +75,38 @@ electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
 		}
 	}
 
+	// Clean up all WGPU views associated with this window
+	const wgpuViews = WGPUView.getAll().filter(v => v.windowId === windowId);
+	for (const view of wgpuViews) {
+		try {
+			// If ptr is null, the view was already cleaned up by the renderer or native cleanup
+			if (view.ptr === null) {
+				// Already cleaned up, skip
+			} else {
+				// Programmatic close path - remove the view
+				view.remove();
+			}
+		} catch (e) {
+			console.error(`Error cleaning up WGPU view ${view.id}:`, e);
+			// If remove() failed, at least mark it as cleaned up
+			view.ptr = null as any;
+		}
+	}
+
 	const exitOnLastWindowClosed =
 		buildConfig.runtime?.exitOnLastWindowClosed ?? true;
 
-	if (exitOnLastWindowClosed && Object.keys(BrowserWindowMap).length === 0) {
+	if (
+		exitOnLastWindowClosed &&
+		Object.keys(BrowserWindowMap).length === 0 &&
+		Object.keys(GpuWindowMap).length === 0
+	) {
 		quit();
 	}
 });
 
 export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
-	id: number = nextWindowId++;
+	id: number = getNextWindowId();
 	ptr!: Pointer;
 	title: string = "Electrobun";
 	state: "creating" | "created" = "creating";
@@ -90,6 +115,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	preload: string | null = null;
 	renderer: "native" | "cef" = "native";
 	transparent: boolean = false;
+	hidden: boolean = false;
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
@@ -117,6 +143,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.preload = options.preload || null;
 		this.renderer = options.renderer || defaultOptions.renderer;
 		this.transparent = options.transparent ?? false;
+		this.hidden = options.hidden ?? false;
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
 
@@ -128,6 +155,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		styleMask,
 		titleBarStyle,
 		transparent,
+		hidden,
 	}: Partial<WindowOptionsType<T>>) {
 		this.ptr = ffi.request.createWindow({
 			id: this.id,
@@ -170,6 +198,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
+			hidden: hidden ?? false,
 		}) as Pointer;
 
 		BrowserWindowMap[this.id] = this;
@@ -313,6 +342,22 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	getSize(): { width: number; height: number } {
 		const frame = this.getFrame();
 		return { width: frame.width, height: frame.height };
+	}
+
+	/**
+	 * Set the page zoom level for the window's webview (WebKit only).
+	 * @param zoomLevel - The zoom level (1.0 = 100%, 1.5 = 150%, etc.)
+	 */
+	setPageZoom(zoomLevel: number) {
+		this.webview?.setPageZoom(zoomLevel);
+	}
+
+	/**
+	 * Get the current page zoom level for the window's webview.
+	 * @returns The current zoom level (1.0 = 100%)
+	 */
+	getPageZoom(): number {
+		return this.webview?.getPageZoom() ?? 1.0;
 	}
 
 	// todo (yoav): move this to a class that also has off, append, prepend, etc.

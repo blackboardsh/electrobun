@@ -16,6 +16,9 @@
 #include <future>
 #include <memory>
 #include <windows.h>
+#include <atomic>
+#include "../shared/pending_resize_queue.h"
+#include "dawn/webgpu.h"
 #include <wrl.h>
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
@@ -26,6 +29,7 @@
 #include <commctrl.h>
 #include <mutex>
 #include <atomic>
+#include <cstdarg>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/base.h>
 #include <shobjidl.h>  // For IFileOpenDialog
@@ -513,7 +517,7 @@ static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
 // CEF global variables
 static bool g_cef_initialized = false;
 static CefRefPtr<CefApp> g_cef_app;
-static std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
+static electrobun::ChromiumFlagConfig g_userChromiumFlags;
 static HANDLE g_job_object = nullptr;  // Job object to track all child processes
 
 // Quit/shutdown coordination
@@ -523,20 +527,40 @@ static std::atomic<bool> g_eventLoopStopping{false};
 static DWORD g_mainThreadId = 0;
 
 // Simple CEF App class for minimal implementation
+// Hidden window message for CEF external message pump scheduling
+#define WM_CEF_SCHEDULE_WORK (WM_USER + 100)
+static HWND g_cefPumpWindow = NULL;
+
 class ElectrobunCefApp : public CefApp, public CefBrowserProcessHandler {
 public:
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
         return this;
     }
 
-    void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
-        // Disable features for minimal implementation
-        command_line->AppendSwitch("disable-web-security");
-        command_line->AppendSwitch("disable-features=VizDisplayCompositor");
+    void OnScheduleMessagePumpWork(int64_t delay_ms) override {
+        // Called by CEF when it needs CefDoMessageLoopWork to be called.
+        // With external_message_pump=true, CEF does NOT internally pump Windows messages,
+        // preventing it from stealing WebView2 messages.
+        if (g_cefPumpWindow) {
+            if (delay_ms <= 0) {
+                // Immediate work needed
+                ::PostMessage(g_cefPumpWindow, WM_CEF_SCHEDULE_WORK, 0, 0);
+            } else {
+                // Schedule work after delay
+                SetTimer(g_cefPumpWindow, 1, (UINT)delay_ms, nullptr);
+            }
+        }
+    }
 
-        // Allow DevTools frontend (served over http) to connect to local ws://127.0.0.1
-        command_line->AppendSwitchWithValue("remote-allow-origins", "*");
-        command_line->AppendSwitch("allow-insecure-localhost");
+    void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
+        // Windows default flags — can be overridden via chromiumFlags in config
+        static const std::vector<electrobun::DefaultFlag> defaults = {
+            {"disable-web-security", ""},
+            {"disable-features=VizDisplayCompositor", ""},
+            {"remote-allow-origins", "*"},
+            {"allow-insecure-localhost", ""},
+        };
+        electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 
         // Apply user-defined chromium flags from build.json
         electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);
@@ -2433,10 +2457,13 @@ public:
     HRESULT STDMETHODCALLTYPE Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr) override {
         if (dispIdMember == 1 && (wFlags & DISPATCH_METHOD)) { // postMessage method
             if (pDispParams->cArgs == 1 && pDispParams->rgvarg[0].vt == VT_BSTR) {
+                printf("[Bridge:%s] Received message for webview %u\n", m_bridgeName.c_str(), m_webviewId);
                 return PostMessage(pDispParams->rgvarg[0].bstrVal);
             }
+            printf("[Bridge:%s] Bad param count for webview %u\n", m_bridgeName.c_str(), m_webviewId);
             return DISP_E_BADPARAMCOUNT;
         }
+        printf("[Bridge:%s] Unknown method DISPID=%ld for webview %u\n", m_bridgeName.c_str(), (long)dispIdMember, m_webviewId);
         return DISP_E_MEMBERNOTFOUND;
     }
 
@@ -2722,6 +2749,14 @@ public:
     RECT visualBounds = {};
     bool creationFailed = false;
 
+    // Pending resize state (cross-thread)
+    std::mutex pendingResizeMutex;
+    std::atomic<uint64_t> pendingResizeGeneration{0};
+    uint64_t appliedResizeGeneration = 0;
+    bool hasPendingResize = false;
+    RECT pendingResizeFrame = {};
+    std::string pendingResizeMasks;
+
     // Navigation rules for URL filtering
     std::vector<std::string> navigationRules;
 
@@ -2887,7 +2922,52 @@ public:
     virtual void openDevTools() = 0;
     virtual void closeDevTools() = 0;
     virtual void toggleDevTools() = 0;
+
+    void storePendingResize(const RECT& frame, const char* masksJson) {
+        std::lock_guard<std::mutex> lock(pendingResizeMutex);
+        pendingResizeFrame = frame;
+        pendingResizeMasks = masksJson ? masksJson : "";
+        hasPendingResize = true;
+        pendingResizeGeneration++;
+    }
+
+    bool consumePendingResize(RECT& outFrame, std::string& outMasks) {
+        std::lock_guard<std::mutex> lock(pendingResizeMutex);
+        if (!hasPendingResize) return false;
+        uint64_t gen = pendingResizeGeneration.load();
+        if (gen == appliedResizeGeneration) return false;
+        outFrame = pendingResizeFrame;
+        outMasks = pendingResizeMasks;
+        appliedResizeGeneration = gen;
+        hasPendingResize = false;
+        return true;
+    }
 };
+
+// Pending resize queue (cross-thread)
+static PendingResizeQueue g_pendingResizeQueue;
+static std::atomic<bool> g_pendingResizeScheduled{false};
+
+static void drainPendingResizes() {
+    g_pendingResizeScheduled.store(false);
+    auto items = g_pendingResizeQueue.drain();
+    for (void* item : items) {
+        AbstractView* view = static_cast<AbstractView*>(item);
+        if (!view) continue;
+        RECT frame = {};
+        std::string masks;
+        if (view->consumePendingResize(frame, masks)) {
+            view->resize(frame, masks.c_str());
+        }
+    }
+}
+
+static void schedulePendingResizeDrain() {
+    if (g_pendingResizeScheduled.exchange(true)) return;
+    MainThreadDispatcher::dispatch_async([]() {
+        drainPendingResizes();
+    });
+}
 
 // Helper function to check navigation rules
 // This is defined here (after AbstractView) so it can call methods on AbstractView
@@ -3164,16 +3244,8 @@ public:
             std::string jsStringCopy = jsString;
             MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
                 std::wstring js = std::wstring(jsStringCopy.begin(), jsStringCopy.end());
-                HRESULT hr = webview->ExecuteScript(js.c_str(), nullptr);
-                if (FAILED(hr)) {
-                    char logMsg[256];
-                    sprintf_s(logMsg, "WebView2: ExecuteScript failed with HRESULT: 0x%08lX", hr);
-                    ::log(logMsg);
-                } else {
-                }
+                webview->ExecuteScript(js.c_str(), nullptr);
             });
-        } else {
-            ::log("WebView2: webview is NULL, cannot execute JavaScript");
         }
     }
     
@@ -3870,6 +3942,154 @@ public:
     }
 };
 
+// WGPUView class - simple native child window surface
+class WGPUView : public AbstractView {
+public:
+    WGPUView(uint32_t webviewId) {
+        this->webviewId = webviewId;
+    }
+
+    void loadURL(const char* urlString) override {}
+    void loadHTML(const char* htmlString) override {}
+    void goBack() override {}
+    void goForward() override {}
+    void reload() override {}
+    bool canGoBack() override { return false; }
+    bool canGoForward() override { return false; }
+    void evaluateJavaScriptWithNoCompletion(const char* jsString) override {}
+    void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) override {}
+    void addPreloadScriptToWebView(const char* jsString) override {}
+    void updateCustomPreloadScript(const char* jsString) override {}
+
+    void resize(const RECT& frame, const char* masksJson) override {
+        if (hwnd) {
+            int width = frame.right - frame.left;
+            int height = frame.bottom - frame.top;
+            SetWindowPos(hwnd, HWND_TOP, frame.left, frame.top, width, height,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+        visualBounds = frame;
+        bool maskChanged = false;
+        if (masksJson && strlen(masksJson) > 0 && strcmp(masksJson, "[]") != 0) {
+            std::string newMaskJSON = masksJson;
+            if (newMaskJSON != maskJSON) {
+                maskJSON = newMaskJSON;
+                maskChanged = true;
+            }
+        } else if (!maskJSON.empty()) {
+            maskJSON = "";
+            maskChanged = true;
+        }
+
+        if (maskChanged) {
+            applyVisualMask();
+        }
+    }
+
+    void setTransparent(bool transparent) override {
+        if (!hwnd) return;
+        LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+        SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+        BYTE alpha = transparent ? 0 : 255;
+        SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
+    }
+
+    void setPassthrough(bool enable) override {
+        AbstractView::setPassthrough(enable);
+        if (hwnd) {
+            EnableWindow(hwnd, enable ? FALSE : TRUE);
+        }
+    }
+
+    void setHidden(bool hidden) override {
+        if (hwnd) {
+            ShowWindow(hwnd, hidden ? SW_HIDE : SW_SHOW);
+        }
+    }
+
+    void applyVisualMask() override {
+        if (!hwnd) return;
+
+        if (maskJSON.empty()) {
+            RECT windowRect;
+            GetClientRect(hwnd, &windowRect);
+            HRGN fullRegion = CreateRectRgn(0, 0, windowRect.right, windowRect.bottom);
+            SetWindowRgn(hwnd, fullRegion, TRUE);
+            return;
+        }
+
+        try {
+            int width = visualBounds.right - visualBounds.left;
+            int height = visualBounds.bottom - visualBounds.top;
+            if (width <= 0 || height <= 0) return;
+
+            HRGN baseRegion = CreateRectRgn(0, 0, width, height);
+
+            size_t pos = 0;
+            while ((pos = maskJSON.find("\"x\":", pos)) != std::string::npos) {
+                try {
+                    size_t xStart = maskJSON.find(":", pos) + 1;
+                    size_t xEnd = maskJSON.find(",", xStart);
+                    int x = std::stoi(maskJSON.substr(xStart, xEnd - xStart));
+
+                    size_t yPos = maskJSON.find("\"y\":", pos);
+                    size_t yStart = maskJSON.find(":", yPos) + 1;
+                    size_t yEnd = maskJSON.find(",", yStart);
+                    int y = std::stoi(maskJSON.substr(yStart, yEnd - yStart));
+
+                    size_t wPos = maskJSON.find("\"width\":", pos);
+                    size_t wStart = maskJSON.find(":", wPos) + 1;
+                    size_t wEnd = maskJSON.find(",", wStart);
+                    if (wEnd == std::string::npos) wEnd = maskJSON.find("}", wStart);
+                    int maskWidth = std::stoi(maskJSON.substr(wStart, wEnd - wStart));
+
+                    size_t hPos = maskJSON.find("\"height\":", pos);
+                    size_t hStart = maskJSON.find(":", hPos) + 1;
+                    size_t hEnd = maskJSON.find("}", hStart);
+                    int maskHeight = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
+
+                    HRGN holeRegion = CreateRectRgn(x, y, x + maskWidth, y + maskHeight);
+                    if (holeRegion) {
+                        CombineRgn(baseRegion, baseRegion, holeRegion, RGN_DIFF);
+                        DeleteObject(holeRegion);
+                    }
+
+                    pos = hEnd;
+                } catch (...) {
+                    pos++;
+                }
+            }
+
+            SetWindowRgn(hwnd, baseRegion, TRUE);
+        } catch (...) {
+            // Ignore mask parse errors
+        }
+    }
+
+    void removeMasks() override {
+        if (!hwnd) return;
+        RECT windowRect;
+        GetClientRect(hwnd, &windowRect);
+        HRGN fullRegion = CreateRectRgn(0, 0, windowRect.right, windowRect.bottom);
+        SetWindowRgn(hwnd, fullRegion, TRUE);
+        maskJSON.clear();
+    }
+    void toggleMirrorMode(bool enable) override {}
+
+    void findInPage(const char* searchText, bool forward, bool matchCase) override {}
+    void stopFindInPage() override {}
+    void openDevTools() override {}
+    void closeDevTools() override {}
+    void toggleDevTools() override {}
+
+    void remove() override {
+        if (hwnd) {
+            DestroyWindow(hwnd);
+            hwnd = NULL;
+        }
+    }
+};
+
 // Helper function to set browser on CEFView (defined after CEFView class)
 void SetBrowserOnCEFView(HWND parentWindow, CefRefPtr<CefBrowser> browser) {
     auto viewIt = g_cefViews.find(parentWindow);
@@ -4248,11 +4468,26 @@ public:
                 BringWebView2ChildWindowToFront(view.get());
             } else if (cefView) {
                 BringCEFChildWindowToFront(view.get());
+            } else if (view->hwnd) {
+                SetWindowPos(view->hwnd, HWND_TOP, 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
             }
         }
     }
     
     ~ContainerView() {
+        // Explicitly remove each view before destroying HWNDs.
+        // This lets CEFView::remove() defer CloseBrowser via dispatch_async
+        // instead of ~CEFView() calling CloseBrowser(true) synchronously
+        // on an already-destroyed HWND (which would crash).
+        for (auto& view : m_abstractViews) {
+            g_pendingResizeQueue.remove(view.get());
+            view->remove();
+            {
+                std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+                g_abstractViews.erase(view->webviewId);
+            }
+        }
         if (m_hwnd) {
             DestroyWindow(m_hwnd);
         }
@@ -4349,6 +4584,8 @@ typedef struct {
     WindowMoveHandler moveHandler;
     WindowResizeHandler resizeHandler;
     WindowFocusHandler focusHandler;
+    WindowBlurHandler blurHandler;
+    WindowKeyHandler keyHandler;
 } WindowData;
 
 
@@ -4584,6 +4821,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         cefView->HandleWindowMessage(msg, wParam, lParam);
                     }
                 }
+
+                // Dispatch keyboard events to keyHandler callback
+                if (data && data->keyHandler &&
+                    (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP)) {
+                    uint32_t keyCode = (uint32_t)wParam;
+                    uint32_t modifiers = 0;
+                    if (GetKeyState(VK_SHIFT) & 0x8000) modifiers |= 1 << 0;
+                    if (GetKeyState(VK_CONTROL) & 0x8000) modifiers |= 1 << 1;
+                    if (GetKeyState(VK_MENU) & 0x8000) modifiers |= 1 << 2;
+                    uint32_t isDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) ? 1 : 0;
+                    uint32_t isRepeat = (lParam & (1 << 30)) ? 1 : 0;
+                    data->keyHandler(data->windowId, keyCode, modifiers, isDown, isRepeat);
+                }
             }
             break;
 
@@ -4630,7 +4880,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_ACTIVATE:
             // Window activation - WA_ACTIVE or WA_CLICKACTIVE means window is being activated
-            if (LOWORD(wParam) != WA_INACTIVE) {
+            if (LOWORD(wParam) == WA_INACTIVE) {
+                if (data && data->blurHandler) {
+                    data->blurHandler(data->windowId);
+                }
+            } else {
                 if (data && data->focusHandler) {
                     data->focusHandler(data->windowId);
                 }
@@ -5518,7 +5772,8 @@ ELECTROBUN_EXPORT bool initCEF() {
     // CEF settings
     CefSettings settings;
     settings.no_sandbox = true;
-    settings.multi_threaded_message_loop = false; // Use single-threaded message loop
+    settings.multi_threaded_message_loop = false;
+    settings.external_message_pump = true; // We pump CEF via OnScheduleMessagePumpWork
     settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
 
     // Remote DevTools port with scan for availability
@@ -5813,7 +6068,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 nullptr);
                             
                             
-                            // Add preload scripts - TEST ADDITION
+                            // Add preload scripts
                             std::string combinedScript;
                             if (!view->electrobunScript.empty()) {
                                 combinedScript += view->electrobunScript;
@@ -5822,7 +6077,17 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 if (!combinedScript.empty()) {
                                     combinedScript += "\n";
                                 }
-                                combinedScript += view->customScript;
+                                // Resolve views:// URLs to file content (matching macOS behavior)
+                                if (view->customScript.substr(0, 8) == "views://") {
+                                    std::string fileContent = loadViewsFile(view->customScript.substr(8));
+                                    if (!fileContent.empty()) {
+                                        combinedScript += fileContent;
+                                    } else {
+                                        std::cout << "[WebView2] Could not read custom preload script from: " << view->customScript << std::endl;
+                                    }
+                                } else {
+                                    combinedScript += view->customScript;
+                                }
                             }
 
                             // Add Ctrl+Click detection and navigation rules handler
@@ -5954,18 +6219,14 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
                             if (!combinedScript.empty()) {
                                 std::wstring wScript(combinedScript.begin(), combinedScript.end());
-
                                 webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
 
-                                webview->add_NavigationStarting(
-                                    Callback<ICoreWebView2NavigationStartingEventHandler>(
-                                        [combinedScript](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
-                                            std::wstring wScript(combinedScript.begin(), combinedScript.end());
-                                            sender->ExecuteScript(wScript.c_str(), nullptr);
-                                            return S_OK;
-                                        }).Get(),
-                                    nullptr);
-                                
+                                // NOTE: Do NOT re-run the preload via NavigationStarting + ExecuteScript.
+                                // AddScriptToExecuteOnDocumentCreated already handles this correctly.
+                                // Re-running the preload after NavigationCompleted (when queued ExecuteScript
+                                // fires) would replace handlers and reset pendingRequests, breaking
+                                // any in-flight internal bridge requests.
+
                                 // Add permission request handler
                                 webview->add_PermissionRequested(
                                     Callback<ICoreWebView2PermissionRequestedEventHandler>(
@@ -6585,10 +6846,8 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
                     waited += 10;
                 }
             } else {
-                // Fallback: direct shutdown
-                if (g_cef_initialized) {
-                    CefQuitMessageLoop();
-                }
+                // Fallback: direct shutdown - post WM_QUIT to exit the message loop
+                PostQuitMessage(0);
             }
             return TRUE;
         default:
@@ -6640,18 +6899,53 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
     // Initialize CEF if available
     if (isCEFAvailable()) {
         if (initCEF()) {
-            CefRunMessageLoop(); // Use CEF's message loop like macOS
-            
-            // Clean up after CEF shutdown
+            // With external_message_pump=true, CefDoMessageLoopWork does NOT
+            // internally pump Windows messages. This prevents CEF from stealing
+            // WebView2 messages while still processing CEF work on a timer.
+            //
+            // OnScheduleMessagePumpWork posts WM_CEF_SCHEDULE_WORK for immediate
+            // work and uses SetTimer for delayed work. We also keep a baseline
+            // timer to ensure CEF always gets serviced.
+            WNDCLASSA cefPumpWc = {0};
+            cefPumpWc.lpfnWndProc = [](HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) -> LRESULT {
+                if (msg == WM_CEF_SCHEDULE_WORK || msg == WM_TIMER) {
+                    CefDoMessageLoopWork();
+                    return 0;
+                }
+                return DefWindowProc(hwnd, msg, wParam, lParam);
+            };
+            cefPumpWc.hInstance = GetModuleHandle(NULL);
+            cefPumpWc.lpszClassName = "CefPumpWindowClass";
+            RegisterClassA(&cefPumpWc);
+            g_cefPumpWindow = CreateWindowA("CefPumpWindowClass", "", 0, 0, 0, 0, 0,
+                                           HWND_MESSAGE, NULL, GetModuleHandle(NULL), NULL);
+
+            // Baseline timer ensures CEF always gets serviced even if
+            // OnScheduleMessagePumpWork misses a beat
+            SetTimer(g_cefPumpWindow, 2, 16, nullptr);
+
+            // Kick off initial CEF work
+            CefDoMessageLoopWork();
+
+            // Standard Windows message loop
+            MSG msg;
+            while (GetMessage(&msg, NULL, 0, 0)) {
+                if (g_hAccelTable && TranslateAccelerator(msg.hwnd, g_hAccelTable, &msg)) {
+                    continue;
+                }
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+            // Clean up after shutdown
             std::cout << "[CEF] CEF message loop ended, performing cleanup..." << std::endl;
             TerminateCEFHelperProcesses();
-            
+
             // Close job object
             if (g_job_object) {
                 CloseHandle(g_job_object);
                 g_job_object = nullptr;
             }
-            
+
             CefShutdown();
             g_shutdownComplete.store(true);
         } else {
@@ -6691,11 +6985,9 @@ ELECTROBUN_EXPORT void stopEventLoop() {
     std::cout << "[stopEventLoop] Initiating clean event loop exit" << std::endl;
 
     if (isCEFAvailable() && g_cef_initialized) {
-        // CefQuitMessageLoop must be called on the main thread.
-        // Dispatch via the hidden message window that CefRunMessageLoop processes.
-        MainThreadDispatcher::dispatch_async([]() {
-            CefQuitMessageLoop();
-        });
+        // We use a standard Windows message loop (not CefRunMessageLoop),
+        // so PostQuitMessage is the correct way to exit.
+        PostQuitMessage(0);
     } else {
         // Post WM_QUIT to the main thread's message queue
         if (g_mainThreadId != 0) {
@@ -6802,6 +7094,88 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
 
 }
 
+ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
+                         NSWindow *window,  // Actually HWND on Windows
+                         double x, double y,
+                         double width, double height,
+                         bool autoResize,
+                         bool startTransparent,
+                         bool startPassthrough) {
+
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: initWGPUView called with invalid window handle");
+        return nullptr;
+    }
+
+    auto view = std::make_shared<WGPUView>(webviewId);
+    view->fullSize = autoResize;
+
+    // Create both container and WGPUView child on the main thread to avoid
+    // cross-thread child window deadlock (container on FFI thread + child on
+    // main thread would deadlock because CreateWindowExA sends messages to
+    // the parent's thread which is blocked on dispatch_sync).
+    ContainerView* container = nullptr;
+    MainThreadDispatcher::dispatch_sync([&container, view, hwnd, x, y, width, height, startTransparent, startPassthrough]() {
+        // Get or create container on main thread
+        container = GetOrCreateContainer(hwnd);
+        if (!container) {
+            ::log("ERROR: Failed to create container for WGPUView");
+            return;
+        }
+
+        HWND containerHwnd = container->GetHwnd();
+        if (!IsWindow(containerHwnd)) {
+            ::log("ERROR: Container window handle invalid for WGPUView");
+            return;
+        }
+
+        view->hwnd = CreateWindowExA(
+            0,
+            "STATIC",
+            "",
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+            (int)x,
+            (int)y,
+            (int)width,
+            (int)height,
+            containerHwnd,
+            NULL,
+            GetModuleHandle(NULL),
+            NULL
+        );
+
+        if (!view->hwnd) {
+            ::log("ERROR: Failed to create WGPUView child window");
+            return;
+        }
+
+        RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+        view->visualBounds = bounds;
+
+        if (startTransparent) {
+            view->setTransparent(true);
+        }
+        if (startPassthrough) {
+            view->setPassthrough(true);
+        }
+    });
+
+    if (!container) {
+        ::log("ERROR: initWGPUView dispatch_sync completed but container is null");
+        return nullptr;
+    }
+
+    container->AddAbstractView(view);
+
+    {
+        std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+        g_abstractViews[webviewId] = view.get();
+    }
+
+    return view.get();
+}
+
 ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply* addScriptMessageHandlerWithReply(WKWebView *webView,
                                                               uint32_t webviewId,
                                                               const char *name,
@@ -6821,6 +7195,1038 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
     // Use virtual method which handles threading and implementation details
     
     abstractView->loadURL(urlString);
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetFrame(AbstractView *abstractView, double x, double y, double width, double height) {
+    if (!abstractView) return;
+    RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+    abstractView->storePendingResize(bounds, "");
+    g_pendingResizeQueue.enqueue(abstractView);
+    schedulePendingResizeDrain();
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetTransparent(AbstractView *abstractView, BOOL transparent) {
+    if (!abstractView) return;
+    MainThreadDispatcher::dispatch_sync([abstractView, transparent]() {
+        abstractView->setTransparent(transparent);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
+    if (!abstractView) return;
+    MainThreadDispatcher::dispatch_sync([abstractView, enablePassthrough]() {
+        abstractView->setPassthrough(enablePassthrough);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetHidden(AbstractView *abstractView, BOOL hidden) {
+    if (!abstractView) return;
+    MainThreadDispatcher::dispatch_sync([abstractView, hidden]() {
+        abstractView->setHidden(hidden);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView *abstractView) {
+    if (!abstractView) return;
+    uint32_t viewId = abstractView->webviewId;
+    MainThreadDispatcher::dispatch_sync([abstractView]() {
+        abstractView->remove();
+    });
+    {
+        std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+        g_abstractViews.erase(viewId);
+    }
+}
+
+ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
+    if (!abstractView) return nullptr;
+    return abstractView->hwnd;
+}
+
+// ----------------------- WGPU Main-Thread Shims -----------------------
+
+typedef void* (*PFN_wgpuInstanceCreateSurface)(void* instance, const void* descriptor);
+typedef void (*PFN_wgpuSurfaceConfigure)(void* surface, const void* config);
+typedef void (*PFN_wgpuSurfaceGetCurrentTexture)(void* surface, void* surfaceTexture);
+typedef int32_t (*PFN_wgpuSurfacePresent)(void* surface);
+typedef WGPUFuture (*PFN_wgpuQueueOnSubmittedWorkDone)(WGPUQueue queue, WGPUQueueWorkDoneCallbackInfo callbackInfo);
+typedef WGPUFuture (*PFN_wgpuBufferMapAsync)(WGPUBuffer buffer, WGPUMapMode mode, size_t offset, size_t size, WGPUBufferMapCallbackInfo callbackInfo);
+typedef WGPUWaitStatus (*PFN_wgpuInstanceWaitAny)(WGPUInstance instance, size_t futureCount, WGPUFutureWaitInfo* futures, uint64_t timeoutNS);
+typedef void* (*PFN_wgpuBufferGetMappedRange)(WGPUBuffer buffer, size_t offset, size_t size);
+typedef void* (*PFN_wgpuBufferGetConstMappedRange)(WGPUBuffer buffer, size_t offset, size_t size);
+typedef void (*PFN_wgpuBufferUnmap)(WGPUBuffer buffer);
+
+static HMODULE wgpuLibHandle = nullptr;
+static PFN_wgpuInstanceCreateSurface p_wgpuInstanceCreateSurface = nullptr;
+static PFN_wgpuSurfaceConfigure p_wgpuSurfaceConfigure = nullptr;
+static PFN_wgpuSurfaceGetCurrentTexture p_wgpuSurfaceGetCurrentTexture = nullptr;
+static PFN_wgpuSurfacePresent p_wgpuSurfacePresent = nullptr;
+static PFN_wgpuQueueOnSubmittedWorkDone p_wgpuQueueOnSubmittedWorkDone = nullptr;
+static PFN_wgpuBufferMapAsync p_wgpuBufferMapAsync = nullptr;
+static PFN_wgpuInstanceWaitAny p_wgpuInstanceWaitAny = nullptr;
+static PFN_wgpuBufferGetMappedRange p_wgpuBufferGetMappedRange = nullptr;
+static PFN_wgpuBufferGetConstMappedRange p_wgpuBufferGetConstMappedRange = nullptr;
+static PFN_wgpuBufferUnmap p_wgpuBufferUnmap = nullptr;
+
+// ----------------------- WGPU GPU Test (native cube) -----------------------
+
+// Helper for formatted WGPU test logging
+// Uses fprintf(stderr) + fflush for immediate visibility, plus the normal log() for file output
+static void wgpu_log(const char* fmt, ...) {
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    fprintf(stderr, "[WGPU] %s\n", buf);
+    fflush(stderr);
+    std::cout << "[WGPU] " << buf << std::endl;
+    std::cout.flush();
+}
+
+// Additional typedefs for the GPU test (matches macOS reference)
+typedef WGPUInstance (*PFN_wgpuCreateInstance)(WGPUInstanceDescriptor const* descriptor);
+typedef WGPUFuture (*PFN_wgpuInstanceRequestAdapter)(WGPUInstance instance, WGPURequestAdapterOptions const* options, WGPURequestAdapterCallbackInfo callbackInfo);
+typedef WGPUFuture (*PFN_wgpuAdapterRequestDevice)(WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
+typedef WGPUQueue (*PFN_wgpuDeviceGetQueue)(WGPUDevice device);
+typedef void (*PFN_wgpuSurfaceGetCapabilities2)(WGPUSurface surface, WGPUAdapter adapter, WGPUSurfaceCapabilities* capabilities);
+typedef void (*PFN_wgpuSurfaceCapabilitiesFreeMembers2)(WGPUSurfaceCapabilities capabilities);
+typedef WGPUShaderModule (*PFN_wgpuDeviceCreateShaderModule)(WGPUDevice device, WGPUShaderModuleDescriptor const* descriptor);
+typedef WGPURenderPipeline (*PFN_wgpuDeviceCreateRenderPipeline)(WGPUDevice device, WGPURenderPipelineDescriptor const* descriptor);
+typedef void (*PFN_wgpuDeviceSetLabel)(WGPUDevice device, WGPUStringView label);
+typedef WGPUBuffer (*PFN_wgpuDeviceCreateBuffer)(WGPUDevice device, WGPUBufferDescriptor const* descriptor);
+typedef void (*PFN_wgpuQueueWriteBuffer)(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset, void const* data, size_t size);
+typedef WGPUCommandEncoder (*PFN_wgpuDeviceCreateCommandEncoder)(WGPUDevice device, WGPUCommandEncoderDescriptor const* descriptor);
+typedef WGPURenderPassEncoder (*PFN_wgpuCommandEncoderBeginRenderPass)(WGPUCommandEncoder encoder, WGPURenderPassDescriptor const* descriptor);
+typedef void (*PFN_wgpuRenderPassEncoderSetPipeline)(WGPURenderPassEncoder pass, WGPURenderPipeline pipeline);
+typedef void (*PFN_wgpuRenderPassEncoderSetVertexBuffer)(WGPURenderPassEncoder pass, uint32_t slot, WGPUBuffer buffer, uint64_t offset, uint64_t size);
+typedef void (*PFN_wgpuRenderPassEncoderDraw)(WGPURenderPassEncoder pass, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance);
+typedef void (*PFN_wgpuRenderPassEncoderEnd)(WGPURenderPassEncoder pass);
+typedef WGPUCommandBuffer (*PFN_wgpuCommandEncoderFinish)(WGPUCommandEncoder encoder, WGPUCommandBufferDescriptor const* descriptor);
+typedef void (*PFN_wgpuQueueSubmit)(WGPUQueue queue, size_t commandCount, WGPUCommandBuffer const* commands);
+typedef WGPUTextureView (*PFN_wgpuTextureCreateView)(WGPUTexture texture, WGPUTextureViewDescriptor const* descriptor);
+typedef void (*PFN_wgpuTextureViewRelease)(WGPUTextureView view);
+typedef void (*PFN_wgpuTextureRelease)(WGPUTexture texture);
+typedef void (*PFN_wgpuCommandBufferRelease)(WGPUCommandBuffer buffer);
+typedef void (*PFN_wgpuCommandEncoderRelease)(WGPUCommandEncoder encoder);
+
+static PFN_wgpuCreateInstance p_wgpuCreateInstance = nullptr;
+static PFN_wgpuInstanceRequestAdapter p_wgpuInstanceRequestAdapter = nullptr;
+static PFN_wgpuAdapterRequestDevice p_wgpuAdapterRequestDevice = nullptr;
+static PFN_wgpuDeviceGetQueue p_wgpuDeviceGetQueue = nullptr;
+static PFN_wgpuSurfaceGetCapabilities2 p_wgpuSurfaceGetCapabilities = nullptr;
+static PFN_wgpuSurfaceCapabilitiesFreeMembers2 p_wgpuSurfaceCapabilitiesFreeMembers = nullptr;
+static PFN_wgpuDeviceCreateShaderModule p_wgpuDeviceCreateShaderModule = nullptr;
+static PFN_wgpuDeviceCreateRenderPipeline p_wgpuDeviceCreateRenderPipeline = nullptr;
+static PFN_wgpuDeviceSetLabel p_wgpuDeviceSetLabel = nullptr;
+static PFN_wgpuDeviceCreateBuffer p_wgpuDeviceCreateBuffer = nullptr;
+static PFN_wgpuQueueWriteBuffer p_wgpuQueueWriteBuffer = nullptr;
+static PFN_wgpuDeviceCreateCommandEncoder p_wgpuDeviceCreateCommandEncoder = nullptr;
+static PFN_wgpuCommandEncoderBeginRenderPass p_wgpuCommandEncoderBeginRenderPass = nullptr;
+static PFN_wgpuRenderPassEncoderSetPipeline p_wgpuRenderPassEncoderSetPipeline = nullptr;
+static PFN_wgpuRenderPassEncoderSetVertexBuffer p_wgpuRenderPassEncoderSetVertexBuffer = nullptr;
+static PFN_wgpuRenderPassEncoderDraw p_wgpuRenderPassEncoderDraw = nullptr;
+static PFN_wgpuRenderPassEncoderEnd p_wgpuRenderPassEncoderEnd = nullptr;
+static PFN_wgpuCommandEncoderFinish p_wgpuCommandEncoderFinish = nullptr;
+static PFN_wgpuQueueSubmit p_wgpuQueueSubmit = nullptr;
+static PFN_wgpuTextureCreateView p_wgpuTextureCreateView = nullptr;
+static PFN_wgpuTextureViewRelease p_wgpuTextureViewRelease = nullptr;
+static PFN_wgpuTextureRelease p_wgpuTextureRelease = nullptr;
+static PFN_wgpuCommandBufferRelease p_wgpuCommandBufferRelease = nullptr;
+static PFN_wgpuCommandEncoderRelease p_wgpuCommandEncoderRelease = nullptr;
+
+static std::wstring getExecutableDirW() {
+    wchar_t buffer[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    if (len == 0 || len == MAX_PATH) return L".";
+    std::wstring path(buffer, len);
+    size_t pos = path.find_last_of(L"\\/");
+    if (pos == std::wstring::npos) return L".";
+    return path.substr(0, pos);
+}
+
+static HMODULE loadWgpuLibrary() {
+    if (wgpuLibHandle) return wgpuLibHandle;
+    std::wstring execDir = getExecutableDirW();
+    std::vector<std::wstring> candidates = {
+        execDir + L"\\webgpu_dawn.dll",
+        execDir + L"\\libwebgpu_dawn.dll",
+        execDir + L"\\..\\Resources\\webgpu_dawn.dll",
+        execDir + L"\\..\\Resources\\libwebgpu_dawn.dll",
+    };
+    for (const auto& path : candidates) {
+        wgpuLibHandle = LoadLibraryW(path.c_str());
+        if (wgpuLibHandle) break;
+    }
+    if (!wgpuLibHandle) {
+        wgpuLibHandle = LoadLibraryW(L"webgpu_dawn.dll");
+        if (!wgpuLibHandle) wgpuLibHandle = LoadLibraryW(L"libwebgpu_dawn.dll");
+    }
+    if (!wgpuLibHandle) {
+        ::log("WGPU: failed to load webgpu_dawn.dll");
+    }
+    return wgpuLibHandle;
+}
+
+static bool ensureWgpuSymbols() {
+    if (p_wgpuInstanceCreateSurface && p_wgpuSurfaceConfigure && p_wgpuSurfaceGetCurrentTexture && p_wgpuSurfacePresent
+        && p_wgpuQueueOnSubmittedWorkDone && p_wgpuBufferMapAsync && p_wgpuInstanceWaitAny
+        && p_wgpuBufferGetMappedRange && p_wgpuBufferUnmap) {
+        return true;
+    }
+    HMODULE handle = loadWgpuLibrary();
+    if (!handle) return false;
+    p_wgpuInstanceCreateSurface = (PFN_wgpuInstanceCreateSurface)GetProcAddress(handle, "wgpuInstanceCreateSurface");
+    p_wgpuSurfaceConfigure = (PFN_wgpuSurfaceConfigure)GetProcAddress(handle, "wgpuSurfaceConfigure");
+    p_wgpuSurfaceGetCurrentTexture = (PFN_wgpuSurfaceGetCurrentTexture)GetProcAddress(handle, "wgpuSurfaceGetCurrentTexture");
+    p_wgpuSurfacePresent = (PFN_wgpuSurfacePresent)GetProcAddress(handle, "wgpuSurfacePresent");
+    p_wgpuQueueOnSubmittedWorkDone = (PFN_wgpuQueueOnSubmittedWorkDone)GetProcAddress(handle, "wgpuQueueOnSubmittedWorkDone");
+    p_wgpuBufferMapAsync = (PFN_wgpuBufferMapAsync)GetProcAddress(handle, "wgpuBufferMapAsync");
+    p_wgpuInstanceWaitAny = (PFN_wgpuInstanceWaitAny)GetProcAddress(handle, "wgpuInstanceWaitAny");
+    p_wgpuBufferGetMappedRange = (PFN_wgpuBufferGetMappedRange)GetProcAddress(handle, "wgpuBufferGetMappedRange");
+    p_wgpuBufferGetConstMappedRange = (PFN_wgpuBufferGetConstMappedRange)GetProcAddress(handle, "wgpuBufferGetConstMappedRange");
+    p_wgpuBufferUnmap = (PFN_wgpuBufferUnmap)GetProcAddress(handle, "wgpuBufferUnmap");
+    if (!p_wgpuInstanceCreateSurface || !p_wgpuSurfaceConfigure || !p_wgpuSurfaceGetCurrentTexture || !p_wgpuSurfacePresent
+        || !p_wgpuQueueOnSubmittedWorkDone || !p_wgpuBufferMapAsync || !p_wgpuInstanceWaitAny
+        || !p_wgpuBufferGetMappedRange || !p_wgpuBufferUnmap) {
+        ::log("WGPU: missing symbols");
+        return false;
+    }
+    return true;
+}
+
+static bool ensureWgpuTestSymbols() {
+    if (!ensureWgpuSymbols()) return false;
+    HMODULE handle = loadWgpuLibrary();
+    if (!handle) return false;
+#define LOAD_TEST_SYM(name) \
+    p_##name = (decltype(p_##name))GetProcAddress(handle, #name); \
+    if (!p_##name) { \
+        wgpu_log("WGPU test: missing symbol " #name); \
+        return false; \
+    }
+    LOAD_TEST_SYM(wgpuCreateInstance);
+    LOAD_TEST_SYM(wgpuInstanceRequestAdapter);
+    LOAD_TEST_SYM(wgpuAdapterRequestDevice);
+    LOAD_TEST_SYM(wgpuDeviceGetQueue);
+    LOAD_TEST_SYM(wgpuSurfaceGetCapabilities);
+    LOAD_TEST_SYM(wgpuSurfaceCapabilitiesFreeMembers);
+    LOAD_TEST_SYM(wgpuDeviceCreateShaderModule);
+    LOAD_TEST_SYM(wgpuDeviceCreateRenderPipeline);
+    LOAD_TEST_SYM(wgpuDeviceSetLabel);
+    LOAD_TEST_SYM(wgpuDeviceCreateBuffer);
+    LOAD_TEST_SYM(wgpuQueueWriteBuffer);
+    LOAD_TEST_SYM(wgpuDeviceCreateCommandEncoder);
+    LOAD_TEST_SYM(wgpuCommandEncoderBeginRenderPass);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderSetPipeline);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderSetVertexBuffer);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderDraw);
+    LOAD_TEST_SYM(wgpuRenderPassEncoderEnd);
+    LOAD_TEST_SYM(wgpuCommandEncoderFinish);
+    LOAD_TEST_SYM(wgpuQueueSubmit);
+    LOAD_TEST_SYM(wgpuTextureCreateView);
+    LOAD_TEST_SYM(wgpuTextureViewRelease);
+    LOAD_TEST_SYM(wgpuTextureRelease);
+    LOAD_TEST_SYM(wgpuCommandBufferRelease);
+    LOAD_TEST_SYM(wgpuCommandEncoderRelease);
+#undef LOAD_TEST_SYM
+    wgpu_log("WGPU test: all 24 test symbols loaded successfully");
+    return true;
+}
+
+// ---- GPU Test State and Rendering ----
+
+struct GPUTestState {
+    WGPUInstance instance = nullptr;
+    WGPUSurface surface = nullptr;
+    WGPUAdapter adapter = nullptr;
+    WGPUDevice device = nullptr;
+    WGPUQueue queue = nullptr;
+    WGPURenderPipeline pipeline = nullptr;
+    WGPUBuffer vertexBuffer = nullptr;
+    WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8UnormSrgb;
+    WGPUCompositeAlphaMode alphaMode = WGPUCompositeAlphaMode_Opaque;
+    HWND hwnd = NULL;
+    UINT_PTR timerId = 0;
+    float angle = 0.0f;
+    uint32_t lastWidth = 0;
+    uint32_t lastHeight = 0;
+    bool running = false;
+};
+
+static GPUTestState g_gpuTest;
+
+static const float kCubeVertices[] = {
+    // front
+    -0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+    -0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+    // back
+    -0.5f,-0.5f,-0.5f, -0.5f, 0.5f,-0.5f,  0.5f, 0.5f,-0.5f,
+    -0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f,-0.5f,-0.5f,
+    // left
+    -0.5f,-0.5f,-0.5f, -0.5f,-0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+    -0.5f,-0.5f,-0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,-0.5f,
+    // right
+     0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,
+     0.5f,-0.5f,-0.5f,  0.5f, 0.5f, 0.5f,  0.5f,-0.5f, 0.5f,
+    // top
+    -0.5f, 0.5f,-0.5f, -0.5f, 0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+    -0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,  0.5f, 0.5f,-0.5f,
+    // bottom
+    -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f,
+    -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
+};
+
+static void buildRotatedVertices(float angle, float* out, size_t count) {
+    const float sinY = sinf(angle);
+    const float cosY = cosf(angle);
+    const float sinX = sinf(angle * 0.7f);
+    const float cosX = cosf(angle * 0.7f);
+    for (size_t i = 0; i < count; i += 3) {
+        float x = kCubeVertices[i];
+        float y = kCubeVertices[i + 1];
+        float z = kCubeVertices[i + 2];
+        float x1 = x * cosY + z * sinY;
+        float z1 = -x * sinY + z * cosY;
+        float y1 = y * cosX - z1 * sinX;
+        float z2 = y * sinX + z1 * cosX;
+        float depth = z2 + 2.5f;
+        float proj = 1.2f / depth;
+        out[i] = x1 * proj;
+        out[i + 1] = y1 * proj;
+        out[i + 2] = 0.0f;
+    }
+}
+
+static void gpuTestConfigureSurface(GPUTestState* state) {
+    if (!state->surface || !state->device || !state->hwnd) return;
+
+    WGPUSurfaceCapabilities caps = {};
+    p_wgpuSurfaceGetCapabilities(state->surface, state->adapter, &caps);
+    if (caps.formatCount > 0 && caps.formats) {
+        state->surfaceFormat = caps.formats[0];
+        wgpu_log("WGPU test: surface format = %d (from %zu available)", (int)state->surfaceFormat, caps.formatCount);
+    }
+    if (caps.alphaModeCount > 0 && caps.alphaModes) {
+        state->alphaMode = caps.alphaModes[0];
+    }
+    p_wgpuSurfaceCapabilitiesFreeMembers(caps);
+
+    RECT rc;
+    GetClientRect(state->hwnd, &rc);
+    uint32_t w = (uint32_t)(rc.right - rc.left);
+    uint32_t h = (uint32_t)(rc.bottom - rc.top);
+    if (w == 0) w = 1;
+    if (h == 0) h = 1;
+    state->lastWidth = w;
+    state->lastHeight = h;
+
+    WGPUSurfaceConfiguration config = {};
+    config.device = state->device;
+    config.format = state->surfaceFormat;
+    config.usage = WGPUTextureUsage_RenderAttachment;
+    config.width = w;
+    config.height = h;
+    config.presentMode = WGPUPresentMode_Fifo;
+    config.alphaMode = state->alphaMode;
+    p_wgpuSurfaceConfigure(state->surface, &config);
+    wgpu_log("WGPU test: surface configured %ux%u", w, h);
+}
+
+static void gpuTestSetupPipeline(GPUTestState* state) {
+    if (!state->device) return;
+    const char* shaderSrc = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
+}
+)WGSL";
+
+    WGPUShaderSourceWGSL wgsl = {};
+    wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgsl.code.data = shaderSrc;
+    wgsl.code.length = WGPU_STRLEN;
+
+    WGPUShaderModuleDescriptor shaderDesc = {};
+    shaderDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgsl);
+
+    WGPUShaderModule shader = p_wgpuDeviceCreateShaderModule(state->device, &shaderDesc);
+    if (!shader) {
+        wgpu_log("WGPU test: FAILED to create shader module");
+        return;
+    }
+    wgpu_log("WGPU test: shader module created");
+
+    WGPUStringView vsEntry = { "vs_main", WGPU_STRLEN };
+    WGPUStringView fsEntry = { "fs_main", WGPU_STRLEN };
+
+    WGPUVertexAttribute attr = {};
+    attr.format = WGPUVertexFormat_Float32x3;
+    attr.offset = 0;
+    attr.shaderLocation = 0;
+
+    WGPUVertexBufferLayout vbuf = {};
+    vbuf.arrayStride = sizeof(float) * 3;
+    vbuf.attributeCount = 1;
+    vbuf.attributes = &attr;
+    vbuf.stepMode = WGPUVertexStepMode_Vertex;
+
+    WGPUVertexState vstate = {};
+    vstate.module = shader;
+    vstate.entryPoint = vsEntry;
+    vstate.bufferCount = 1;
+    vstate.buffers = &vbuf;
+
+    WGPUColorTargetState colorTarget = {};
+    colorTarget.format = state->surfaceFormat;
+    colorTarget.writeMask = WGPUColorWriteMask_All;
+
+    WGPUFragmentState fstate = {};
+    fstate.module = shader;
+    fstate.entryPoint = fsEntry;
+    fstate.targetCount = 1;
+    fstate.targets = &colorTarget;
+
+    WGPUPrimitiveState prim = {};
+    prim.topology = WGPUPrimitiveTopology_TriangleList;
+    prim.stripIndexFormat = WGPUIndexFormat_Undefined;
+    prim.frontFace = WGPUFrontFace_CCW;
+    prim.cullMode = WGPUCullMode_None;
+    prim.unclippedDepth = false;
+
+    WGPUMultisampleState ms = {};
+    ms.count = 1;
+    ms.mask = 0xFFFFFFFF;
+    ms.alphaToCoverageEnabled = false;
+
+    WGPURenderPipelineDescriptor rpDesc = {};
+    rpDesc.vertex = vstate;
+    rpDesc.primitive = prim;
+    rpDesc.multisample = ms;
+    rpDesc.fragment = &fstate;
+
+    state->pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
+    if (!state->pipeline) {
+        wgpu_log("WGPU test: FAILED to create render pipeline");
+        return;
+    }
+    wgpu_log("WGPU test: render pipeline created");
+
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
+    bufDesc.size = sizeof(kCubeVertices);
+    bufDesc.mappedAtCreation = false;
+    state->vertexBuffer = p_wgpuDeviceCreateBuffer(state->device, &bufDesc);
+    if (!state->vertexBuffer) {
+        wgpu_log("WGPU test: FAILED to create vertex buffer");
+        return;
+    }
+    wgpu_log("WGPU test: vertex buffer created (%zu bytes)", sizeof(kCubeVertices));
+
+    float initialVerts[sizeof(kCubeVertices) / sizeof(float)];
+    buildRotatedVertices(0.0f, initialVerts, sizeof(kCubeVertices) / sizeof(float));
+    p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, initialVerts, sizeof(initialVerts));
+    wgpu_log("WGPU test: pipeline setup complete");
+}
+
+static void gpuTestRenderFrame(GPUTestState* state) {
+    if (!state->device || !state->surface || !state->queue) return;
+    if (!state->hwnd || !IsWindow(state->hwnd)) return;
+    if (!state->pipeline) return;
+
+    RECT rc;
+    GetClientRect(state->hwnd, &rc);
+    uint32_t w = (uint32_t)(rc.right - rc.left);
+    uint32_t h = (uint32_t)(rc.bottom - rc.top);
+    if (w <= 1 || h <= 1) return;
+    if (w != state->lastWidth || h != state->lastHeight) {
+        wgpu_log("WGPU test: resize detected %ux%u -> %ux%u", state->lastWidth, state->lastHeight, w, h);
+        gpuTestConfigureSurface(state);
+    }
+
+    state->angle += 0.02f;
+    float verts[sizeof(kCubeVertices) / sizeof(float)];
+    buildRotatedVertices(state->angle, verts, sizeof(kCubeVertices) / sizeof(float));
+    p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
+
+    WGPUSurfaceTexture surfaceTexture = {};
+    p_wgpuSurfaceGetCurrentTexture(state->surface, &surfaceTexture);
+    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+        surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+        static int errorCount = 0;
+        if (errorCount++ < 5) {
+            wgpu_log("WGPU test: surface texture status = %d (not optimal/suboptimal)", (int)surfaceTexture.status);
+        }
+        return;
+    }
+    if (!surfaceTexture.texture) return;
+
+    WGPUTextureView view = p_wgpuTextureCreateView(surfaceTexture.texture, nullptr);
+
+    WGPURenderPassColorAttachment colorAtt = {};
+    colorAtt.view = view;
+    colorAtt.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    colorAtt.loadOp = WGPULoadOp_Clear;
+    colorAtt.storeOp = WGPUStoreOp_Store;
+    colorAtt.clearValue = {0.05, 0.05, 0.1, 1.0};
+
+    WGPURenderPassDescriptor passDesc = {};
+    passDesc.colorAttachmentCount = 1;
+    passDesc.colorAttachments = &colorAtt;
+
+    WGPUCommandEncoder encoder = p_wgpuDeviceCreateCommandEncoder(state->device, nullptr);
+    WGPURenderPassEncoder pass = p_wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    p_wgpuRenderPassEncoderSetPipeline(pass, state->pipeline);
+    p_wgpuRenderPassEncoderSetVertexBuffer(pass, 0, state->vertexBuffer, 0, sizeof(kCubeVertices));
+    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)(sizeof(kCubeVertices) / (sizeof(float) * 3)), 1, 0, 0);
+    p_wgpuRenderPassEncoderEnd(pass);
+
+    WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(encoder, nullptr);
+    p_wgpuQueueSubmit(state->queue, 1, &cmd);
+    p_wgpuSurfacePresent(state->surface);
+
+    p_wgpuTextureViewRelease(view);
+    p_wgpuTextureRelease(surfaceTexture.texture);
+    p_wgpuCommandBufferRelease(cmd);
+    p_wgpuCommandEncoderRelease(encoder);
+
+    static bool loggedFirstFrame = false;
+    if (!loggedFirstFrame) {
+        wgpu_log("WGPU test: first frame rendered successfully!");
+        loggedFirstFrame = true;
+    }
+}
+
+static void logWgpuStringView(const char* prefix, WGPUStringView sv) {
+    if (!sv.data) {
+        wgpu_log("%s (null)", prefix);
+        return;
+    }
+    size_t len = sv.length == WGPU_STRLEN ? strlen(sv.data) : (size_t)sv.length;
+    std::string msg(sv.data, sv.data + len);
+    wgpu_log("%s %s", prefix, msg.c_str());
+}
+
+static void gpuTestUncapturedErrorCallback(WGPUDevice const* device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2) {
+    (void)device;
+    (void)userdata1;
+    (void)userdata2;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "WGPU uncaptured error type=%d:", (int)type);
+    logWgpuStringView(buf, message);
+}
+
+static void CALLBACK gpuTestTimerProc(HWND hwnd, UINT msg, UINT_PTR id, DWORD time) {
+    (void)hwnd; (void)msg; (void)id; (void)time;
+    gpuTestRenderFrame(&g_gpuTest);
+}
+
+static void gpuTestRequestDeviceCallback(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2);
+
+static void gpuTestRequestAdapterCallback(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView message, void* userdata1, void* userdata2) {
+    if (status != WGPURequestAdapterStatus_Success) {
+        logWgpuStringView("WGPU test: adapter error:", message);
+    }
+    (void)userdata2;
+    GPUTestState* state = (GPUTestState*)userdata1;
+    if (!state || status != WGPURequestAdapterStatus_Success || !adapter) {
+        wgpu_log("WGPU test: adapter request FAILED (status=%d)", (int)status);
+        return;
+    }
+    wgpu_log("WGPU test: adapter acquired");
+    state->adapter = adapter;
+
+    WGPURequestDeviceCallbackInfo cbInfo = {};
+    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    cbInfo.callback = gpuTestRequestDeviceCallback;
+    cbInfo.userdata1 = state;
+    WGPUDeviceDescriptor deviceDesc = {};
+    deviceDesc.uncapturedErrorCallbackInfo.callback = gpuTestUncapturedErrorCallback;
+    deviceDesc.uncapturedErrorCallbackInfo.userdata1 = state;
+    p_wgpuAdapterRequestDevice(adapter, &deviceDesc, cbInfo);
+}
+
+static void gpuTestRequestDeviceCallback(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2) {
+    if (status != WGPURequestDeviceStatus_Success) {
+        logWgpuStringView("WGPU test: device error:", message);
+    }
+    (void)userdata2;
+    GPUTestState* state = (GPUTestState*)userdata1;
+    if (!state || status != WGPURequestDeviceStatus_Success || !device) {
+        wgpu_log("WGPU test: device request FAILED (status=%d)", (int)status);
+        return;
+    }
+    wgpu_log("WGPU test: device acquired");
+    state->device = device;
+
+    if (p_wgpuDeviceSetLabel) {
+        WGPUStringView label = { "Electrobun WGPU Device", WGPU_STRLEN };
+        p_wgpuDeviceSetLabel(device, label);
+    }
+    state->queue = p_wgpuDeviceGetQueue(device);
+    wgpu_log("WGPU test: queue acquired, configuring surface...");
+
+    gpuTestConfigureSurface(state);
+    gpuTestSetupPipeline(state);
+
+    // Start render loop using Windows timer (16ms ~ 60fps)
+    if (state->timerId) {
+        KillTimer(NULL, state->timerId);
+        state->timerId = 0;
+    }
+    state->timerId = SetTimer(NULL, 0, 16, gpuTestTimerProc);
+    if (state->timerId) {
+        state->running = true;
+        wgpu_log("WGPU test: render timer started (id=%llu, 16ms interval)", (unsigned long long)state->timerId);
+    } else {
+        wgpu_log("WGPU test: FAILED to create render timer, error=%lu", GetLastError());
+    }
+}
+
+static void* runOnMainThreadSyncPtr(std::function<void*()> fn) {
+    return MainThreadDispatcher::dispatch_sync([&]() -> void* { return fn(); });
+}
+
+static void runOnMainThreadSyncVoid(std::function<void()> fn) {
+    MainThreadDispatcher::dispatch_sync([&]() { fn(); });
+}
+
+ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descriptor) {
+    if (!ensureWgpuSymbols()) return nullptr;
+    return runOnMainThreadSyncPtr([&]() -> void* {
+        return p_wgpuInstanceCreateSurface(instance, descriptor);
+    });
+}
+
+ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractView* abstractView) {
+    if (!wgpuInstance || !abstractView || !abstractView->hwnd) {
+        printf("[WGPU] createSurfaceForView: null check failed (inst=%p view=%p hwnd=%p)\n",
+               wgpuInstance, abstractView, abstractView ? abstractView->hwnd : nullptr);
+        return nullptr;
+    }
+    if (!ensureWgpuSymbols()) return nullptr;
+
+    HWND hwnd = abstractView->hwnd;
+    printf("[WGPU] createSurfaceForView: creating surface for HWND=%p\n", hwnd);
+    void* result = runOnMainThreadSyncPtr([&]() -> void* {
+        WGPUSurfaceSourceWindowsHWND hwndSource = {};
+        hwndSource.chain.sType = WGPUSType_SurfaceSourceWindowsHWND;
+        hwndSource.hinstance = (void*)GetModuleHandle(NULL);
+        hwndSource.hwnd = (void*)hwnd;
+
+        WGPUSurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&hwndSource);
+        return p_wgpuInstanceCreateSurface(wgpuInstance, &surfaceDesc);
+    });
+    printf("[WGPU] createSurfaceForView: surface=%p\n", result);
+    return result;
+}
+
+ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(void* surface, void* config) {
+    if (!ensureWgpuSymbols()) return;
+    runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceConfigure(surface, config); });
+}
+
+ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
+    if (!ensureWgpuSymbols()) return;
+    static int callCount = 0;
+    runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture); });
+    if (callCount < 3) {
+        // Log status field (offset 16 in WGPUSurfaceTexture struct: texture(8) + suboptimal(4) + pad(4) + status(4))
+        uint32_t status = *((uint32_t*)((uint8_t*)surfaceTexture + 16));
+        void* texture = *((void**)surfaceTexture);
+        printf("[WGPU] getCurrentTexture[%d]: texture=%p status=%u\n", callCount, texture, status);
+        callCount++;
+    }
+}
+
+ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
+    if (!ensureWgpuSymbols()) return 0;
+    static bool logged = false;
+    if (!logged) { printf("[WGPU] surfacePresentMainThread: first present call, surface=%p\n", surface); logged = true; }
+    return (int32_t)(intptr_t)runOnMainThreadSyncPtr([&]() -> void* {
+        return (void*)(intptr_t)p_wgpuSurfacePresent(surface);
+    });
+}
+
+ELECTROBUN_EXPORT uint64_t wgpuQueueOnSubmittedWorkDoneShim(void* queue, void* callbackInfo) {
+    if (!ensureWgpuSymbols()) return 0;
+    if (!callbackInfo) return 0;
+    WGPUQueueWorkDoneCallbackInfo info = *(WGPUQueueWorkDoneCallbackInfo*)callbackInfo;
+    WGPUFuture future = p_wgpuQueueOnSubmittedWorkDone((WGPUQueue)queue, info);
+    return future.id;
+}
+
+ELECTROBUN_EXPORT uint64_t wgpuBufferMapAsyncShim(void* buffer, uint64_t mode, uint64_t offset, uint64_t size, void* callbackInfo) {
+    if (!ensureWgpuSymbols()) return 0;
+    if (!callbackInfo) return 0;
+    WGPUBufferMapCallbackInfo info = *(WGPUBufferMapCallbackInfo*)callbackInfo;
+    WGPUFuture future = p_wgpuBufferMapAsync((WGPUBuffer)buffer, (WGPUMapMode)mode, (size_t)offset, (size_t)size, info);
+    return future.id;
+}
+
+ELECTROBUN_EXPORT int32_t wgpuInstanceWaitAnyShim(void* instance, uint64_t futureId, uint64_t timeoutNS) {
+    if (!ensureWgpuSymbols()) return 0;
+    if (!instance || !futureId) return 0;
+    WGPUFutureWaitInfo info;
+    info.future.id = futureId;
+    info.completed = WGPU_FALSE;
+    WGPUWaitStatus status = p_wgpuInstanceWaitAny((WGPUInstance)instance, 1, &info, timeoutNS);
+    if (status == WGPUWaitStatus_Success && info.completed) return 1;
+    return 0;
+}
+
+ELECTROBUN_EXPORT uint8_t* wgpuBufferReadSyncShim(
+    void* instance,
+    void* buffer,
+    uint64_t offset,
+    uint64_t size,
+    uint64_t timeoutNS,
+    uint64_t* outSize
+) {
+    if (!ensureWgpuSymbols()) return nullptr;
+    if (!instance || !buffer || size == 0) return nullptr;
+
+    WGPUBufferMapCallbackInfo mapInfo = {};
+    mapInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    mapInfo.callback = nullptr;
+    mapInfo.userdata1 = nullptr;
+    mapInfo.userdata2 = nullptr;
+
+    WGPUFuture mapFuture = p_wgpuBufferMapAsync(
+        (WGPUBuffer)buffer,
+        WGPUMapMode_Read,
+        (size_t)offset,
+        (size_t)size,
+        mapInfo
+    );
+
+    WGPUFutureWaitInfo waitInfo;
+    waitInfo.future = mapFuture;
+    waitInfo.completed = WGPU_FALSE;
+    WGPUWaitStatus status = p_wgpuInstanceWaitAny(
+        (WGPUInstance)instance,
+        1,
+        &waitInfo,
+        timeoutNS
+    );
+
+    if (status != WGPUWaitStatus_Success || !waitInfo.completed) {
+        return nullptr;
+    }
+
+    void* mapped = nullptr;
+    if (p_wgpuBufferGetConstMappedRange) {
+        mapped = p_wgpuBufferGetConstMappedRange((WGPUBuffer)buffer, (size_t)offset, (size_t)size);
+    }
+    if (!mapped) {
+        mapped = p_wgpuBufferGetMappedRange((WGPUBuffer)buffer, (size_t)offset, (size_t)size);
+    }
+    if (!mapped) return nullptr;
+
+    uint8_t* out = (uint8_t*)malloc((size_t)size);
+    if (!out) return nullptr;
+    memcpy(out, mapped, (size_t)size);
+    p_wgpuBufferUnmap((WGPUBuffer)buffer);
+
+    if (outSize) *outSize = size;
+    return out;
+}
+
+ELECTROBUN_EXPORT int32_t wgpuBufferReadSyncIntoShim(
+    void* instance,
+    void* buffer,
+    uint64_t offset,
+    uint64_t size,
+    uint64_t timeoutNS,
+    void* dst
+) {
+    if (!ensureWgpuSymbols()) return 0;
+    if (!instance || !buffer || !dst || size == 0) return 0;
+
+    WGPUBufferMapCallbackInfo mapInfo = {};
+    mapInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    mapInfo.callback = nullptr;
+    mapInfo.userdata1 = nullptr;
+    mapInfo.userdata2 = nullptr;
+
+    WGPUFuture mapFuture = p_wgpuBufferMapAsync(
+        (WGPUBuffer)buffer,
+        WGPUMapMode_Read,
+        (size_t)offset,
+        (size_t)size,
+        mapInfo
+    );
+
+    WGPUFutureWaitInfo waitInfo;
+    waitInfo.future = mapFuture;
+    waitInfo.completed = WGPU_FALSE;
+    WGPUWaitStatus status = p_wgpuInstanceWaitAny(
+        (WGPUInstance)instance,
+        1,
+        &waitInfo,
+        timeoutNS
+    );
+
+    if (status != WGPUWaitStatus_Success || !waitInfo.completed) {
+        return 0;
+    }
+
+    void* mapped = nullptr;
+    if (p_wgpuBufferGetConstMappedRange) {
+        mapped = p_wgpuBufferGetConstMappedRange((WGPUBuffer)buffer, (size_t)offset, (size_t)size);
+    }
+    if (!mapped) {
+        mapped = p_wgpuBufferGetMappedRange((WGPUBuffer)buffer, (size_t)offset, (size_t)size);
+    }
+    if (!mapped) return 0;
+    memcpy(dst, mapped, (size_t)size);
+    p_wgpuBufferUnmap((WGPUBuffer)buffer);
+    return 1;
+}
+
+struct WGPUReadbackJob {
+    std::atomic<int> done;
+    std::atomic<int> ok;
+    std::atomic<int> status;
+    uint8_t* dst;
+    size_t size;
+    WGPUBuffer buffer;
+    size_t offset;
+};
+
+static void wgpuReadbackCallback(
+    WGPUMapAsyncStatus status,
+    WGPUStringView /*message*/,
+    void* userdata1,
+    void* /*userdata2*/
+) {
+    WGPUReadbackJob* job = (WGPUReadbackJob*)userdata1;
+    if (!job) return;
+    if (status != WGPUMapAsyncStatus_Success) {
+        job->ok.store(0);
+        job->status.store(2);
+        job->done.store(1);
+        return;
+    }
+    void* mapped = nullptr;
+    if (p_wgpuBufferGetConstMappedRange) {
+        mapped = p_wgpuBufferGetConstMappedRange(job->buffer, job->offset, job->size);
+    }
+    if (!mapped) {
+        mapped = p_wgpuBufferGetMappedRange(job->buffer, job->offset, job->size);
+    }
+    if (mapped && job->dst) {
+        memcpy(job->dst, mapped, job->size);
+        job->ok.store(1);
+        job->status.store(1);
+    } else {
+        job->ok.store(0);
+        job->status.store(3);
+    }
+    p_wgpuBufferUnmap(job->buffer);
+    job->done.store(1);
+}
+
+ELECTROBUN_EXPORT void* wgpuBufferReadbackBeginShim(
+    void* buffer,
+    uint64_t offset,
+    uint64_t size,
+    void* dst
+) {
+    if (!ensureWgpuSymbols()) return nullptr;
+    if (!buffer || !dst || size == 0) return nullptr;
+
+    WGPUReadbackJob* job = (WGPUReadbackJob*)malloc(sizeof(WGPUReadbackJob));
+    if (!job) return nullptr;
+    job->done.store(0);
+    job->ok.store(0);
+    job->status.store(0);
+    job->dst = (uint8_t*)dst;
+    job->size = (size_t)size;
+    job->buffer = (WGPUBuffer)buffer;
+    job->offset = (size_t)offset;
+
+    WGPUBufferMapCallbackInfo mapInfo = {};
+    mapInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    mapInfo.callback = wgpuReadbackCallback;
+    mapInfo.userdata1 = job;
+    mapInfo.userdata2 = nullptr;
+
+    p_wgpuBufferMapAsync(
+        (WGPUBuffer)buffer,
+        WGPUMapMode_Read,
+        (size_t)offset,
+        (size_t)size,
+        mapInfo
+    );
+
+    return job;
+}
+
+ELECTROBUN_EXPORT int32_t wgpuBufferReadbackStatusShim(void* jobPtr) {
+    if (!jobPtr) return 2;
+    WGPUReadbackJob* job = (WGPUReadbackJob*)jobPtr;
+    if (job->done.load() == 0) return 0;
+    return job->status.load();
+}
+
+ELECTROBUN_EXPORT void wgpuBufferReadbackFreeShim(void* jobPtr) {
+    if (!jobPtr) return;
+    WGPUReadbackJob* job = (WGPUReadbackJob*)jobPtr;
+    free(job);
+}
+
+ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
+    wgpu_log("WGPU test: wgpuRunGPUTest called, abstractView=%p", abstractView);
+    if (!abstractView) {
+        wgpu_log("WGPU test: abstractView is null, aborting");
+        return;
+    }
+    if (!ensureWgpuTestSymbols()) {
+        wgpu_log("WGPU test: failed to load test symbols, aborting");
+        return;
+    }
+
+    // Use dispatch_async like macOS - the adapter/device callbacks are async anyway
+    MainThreadDispatcher::dispatch_async([abstractView]() {
+        AbstractView* view = (AbstractView*)abstractView;
+        HWND hwnd = view->hwnd;
+        if (!hwnd || !IsWindow(hwnd)) {
+            wgpu_log("WGPU test: no valid HWND found on view (hwnd=%p)", hwnd);
+            return;
+        }
+        wgpu_log("WGPU test: got HWND=%p from WGPUView", hwnd);
+
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        wgpu_log("WGPU test: HWND client rect = %ldx%ld", rc.right - rc.left, rc.bottom - rc.top);
+
+        g_gpuTest.hwnd = hwnd;
+
+        // Create WGPU instance
+        if (!g_gpuTest.instance) {
+            g_gpuTest.instance = p_wgpuCreateInstance(nullptr);
+        }
+        if (!g_gpuTest.instance) {
+            wgpu_log("WGPU test: FAILED to create WGPU instance");
+            return;
+        }
+        wgpu_log("WGPU test: WGPU instance created = %p", g_gpuTest.instance);
+
+        // Create surface from Windows HWND
+        WGPUSurfaceSourceWindowsHWND hwndSource = {};
+        hwndSource.chain.sType = WGPUSType_SurfaceSourceWindowsHWND;
+        hwndSource.hinstance = (void*)GetModuleHandle(NULL);
+        hwndSource.hwnd = (void*)hwnd;
+        wgpu_log("WGPU test: creating surface with hinstance=%p hwnd=%p sType=0x%x",
+              hwndSource.hinstance, hwndSource.hwnd, (unsigned)hwndSource.chain.sType);
+
+        WGPUSurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&hwndSource);
+        g_gpuTest.surface = (WGPUSurface)p_wgpuInstanceCreateSurface(g_gpuTest.instance, &surfaceDesc);
+        if (!g_gpuTest.surface) {
+            wgpu_log("WGPU test: FAILED to create surface");
+            return;
+        }
+        wgpu_log("WGPU test: surface created = %p", g_gpuTest.surface);
+
+        // Request adapter
+        WGPURequestAdapterOptions opts = {};
+        opts.compatibleSurface = g_gpuTest.surface;
+        WGPURequestAdapterCallbackInfo cbInfo = {};
+        cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        cbInfo.callback = gpuTestRequestAdapterCallback;
+        cbInfo.userdata1 = &g_gpuTest;
+        wgpu_log("WGPU test: requesting adapter...");
+        p_wgpuInstanceRequestAdapter(g_gpuTest.instance, &opts, cbInfo);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void* surfacePtr, void* outAdapterDevice) {
+    printf("[WGPU] createAdapterDeviceMainThread: instance=%p surface=%p\n", instancePtr, surfacePtr);
+    if (!ensureWgpuTestSymbols()) { printf("[WGPU] createAdapterDeviceMainThread: ensureWgpuTestSymbols FAILED\n"); return; }
+    MainThreadDispatcher::dispatch_sync([instancePtr, surfacePtr, outAdapterDevice]() {
+        WGPUInstance instance = (WGPUInstance)instancePtr;
+        WGPUSurface surface = (WGPUSurface)surfacePtr;
+
+        WGPUAdapter adapter = nullptr;
+        WGPUDevice device = nullptr;
+        HANDLE adapterEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+        HANDLE deviceEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+
+        // Request adapter
+        struct AdapterCtx { WGPUAdapter* adapter; HANDLE event; };
+        AdapterCtx adapterCtx = { &adapter, adapterEvent };
+
+        WGPURequestAdapterOptions opts = {};
+        opts.compatibleSurface = surface;
+        WGPURequestAdapterCallbackInfo adapterInfo = {};
+        adapterInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        adapterInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter cbAdapter, WGPUStringView message, void* userdata1, void* userdata2) {
+            (void)message; (void)userdata2;
+            AdapterCtx* ctx = (AdapterCtx*)userdata1;
+            if (status == WGPURequestAdapterStatus_Success) {
+                *(ctx->adapter) = cbAdapter;
+            }
+            SetEvent(ctx->event);
+        };
+        adapterInfo.userdata1 = &adapterCtx;
+        p_wgpuInstanceRequestAdapter(instance, &opts, adapterInfo);
+        WaitForSingleObject(adapterEvent, INFINITE);
+        CloseHandle(adapterEvent);
+
+        if (!adapter) {
+            wgpu_log("WGPU: adapter request failed in wgpuCreateAdapterDeviceMainThread");
+            if (outAdapterDevice) {
+                uint64_t* out = (uint64_t*)outAdapterDevice;
+                out[0] = 0;
+                out[1] = 0;
+            }
+            CloseHandle(deviceEvent);
+            return;
+        }
+
+        // Request device
+        struct DeviceCtx { WGPUDevice* device; HANDLE event; };
+        DeviceCtx deviceCtx = { &device, deviceEvent };
+
+        WGPURequestDeviceCallbackInfo deviceInfo = {};
+        deviceInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        deviceInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice cbDevice, WGPUStringView message, void* userdata1, void* userdata2) {
+            (void)message; (void)userdata2;
+            DeviceCtx* ctx = (DeviceCtx*)userdata1;
+            if (status == WGPURequestDeviceStatus_Success) {
+                *(ctx->device) = cbDevice;
+            }
+            SetEvent(ctx->event);
+        };
+        deviceInfo.userdata1 = &deviceCtx;
+        WGPUDeviceDescriptor deviceDesc = {};
+        deviceDesc.uncapturedErrorCallbackInfo.callback = gpuTestUncapturedErrorCallback;
+        deviceDesc.uncapturedErrorCallbackInfo.userdata1 = &deviceCtx;
+        p_wgpuAdapterRequestDevice(adapter, &deviceDesc, deviceInfo);
+        WaitForSingleObject(deviceEvent, INFINITE);
+        CloseHandle(deviceEvent);
+
+        printf("[WGPU] createAdapterDeviceMainThread: adapter=%p device=%p\n", adapter, device);
+        if (outAdapterDevice) {
+            uint64_t* out = (uint64_t*)outAdapterDevice;
+            out[0] = (uint64_t)adapter;
+            out[1] = (uint64_t)device;
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView *abstractView, const char *htmlString) {
@@ -6893,7 +8299,7 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
         ::log("ERROR: Invalid parameters passed to evaluateJavaScriptWithNoCompletion");
         return;
     }
-    
+
     abstractView->evaluateJavaScriptWithNoCompletion(script);
     
 }
@@ -7046,6 +8452,16 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
     }
 }
 
+ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
+    // pageZoom is WebKit-specific, not available on Windows
+    // TODO: implement WebView2 zoom if needed
+}
+
+ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
+    // pageZoom is WebKit-specific, not available on Windows
+    return 1.0;
+}
+
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {
     // Stub implementation
     NSRect rect = {x, y, width, height};
@@ -7057,7 +8473,9 @@ ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
                                          WindowCloseHandler zigCloseHandler,
                                          WindowMoveHandler zigMoveHandler,
                                          WindowResizeHandler zigResizeHandler,
-                                         WindowFocusHandler zigFocusHandler) {
+                                         WindowFocusHandler zigFocusHandler,
+                                         WindowBlurHandler zigBlurHandler,
+                                         WindowKeyHandler zigKeyHandler) {
     // Stub implementation
     return new NSWindow();
 }
@@ -7079,7 +8497,9 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
-    WindowFocusHandler zigFocusHandler) {
+    WindowFocusHandler zigFocusHandler,
+    WindowBlurHandler zigBlurHandler,
+    WindowKeyHandler zigKeyHandler) {
 
     // Everything GUI-related needs to be dispatched to main thread
     HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
@@ -7104,6 +8524,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         data->moveHandler = zigMoveHandler;
         data->resizeHandler = zigResizeHandler;
         data->focusHandler = zigFocusHandler;
+        data->blurHandler = zigBlurHandler;
+        data->keyHandler = zigKeyHandler;
 
         // Map style mask to Windows style
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
@@ -7543,7 +8965,9 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
     
     
     RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-    abstractView->resize(bounds, masksJson);
+    abstractView->storePendingResize(bounds, masksJson);
+    g_pendingResizeQueue.enqueue(abstractView);
+    schedulePendingResizeDrain();
 }
 
 // Internal function to stop window movement (without export linkage)
@@ -8657,6 +10081,11 @@ ELECTROBUN_EXPORT void removeTray(NSStatusItem *statusItem) {
     });
 }
 
+ELECTROBUN_EXPORT const char* getTrayBounds(NSStatusItem *statusItem) {
+    (void)statusItem;
+    return _strdup("{\"x\":0,\"y\":0,\"width\":0,\"height\":0}");
+}
+
 ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
     if (!jsonString) {
         ::log("ERROR: NULL JSON string passed to setApplicationMenu");
@@ -9653,6 +11082,14 @@ extern "C" ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
     return _strdup("{\"x\":0,\"y\":0}");
 }
 
+extern "C" ELECTROBUN_EXPORT uint64_t getMouseButtons() {
+    uint64_t buttons = 0;
+    if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) buttons |= 1ull << 0;
+    if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) buttons |= 1ull << 1;
+    if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) buttons |= 1ull << 2;
+    return buttons;
+}
+
 /*
  * =============================================================================
  * COOKIE MANAGEMENT API
@@ -10077,8 +11514,26 @@ extern "C" ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionI
 
 // URL scheme handler - macOS only, stub for Windows
 extern "C" ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*)) {
+    (void)callback;
     // Not supported on Windows - stub to prevent dlopen failure
     // Windows URL protocol handling is done via registry
+}
+
+// App reopen handler - macOS only, stub for Windows
+extern "C" ELECTROBUN_EXPORT void setAppReopenHandler(void (*callback)()) {
+    (void)callback;
+    // Not supported on Windows - stub to prevent dlopen failure
+}
+
+// Dock icon visibility - macOS only, stubs for Windows
+extern "C" ELECTROBUN_EXPORT void setDockIconVisible(bool visible) {
+    (void)visible;
+    // Not supported on Windows - stub to prevent dlopen failure
+}
+
+extern "C" ELECTROBUN_EXPORT bool isDockIconVisible() {
+    // Not supported on Windows
+    return true;
 }
 
 // Window icon - Linux only, no-op for Windows

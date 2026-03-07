@@ -4,6 +4,10 @@ const { execSync, spawn } = require('child_process');
 const { existsSync, mkdirSync, unlinkSync, chmodSync, copyFileSync, createWriteStream } = require('fs');
 const { join, dirname } = require('path');
 const https = require('https');
+const ProxyAgent = require('proxy-agent').ProxyAgent;
+
+// Create an HTTPS agent that respects environment proxy settings
+const agent = new ProxyAgent();
 
 // Detect platform and architecture
 function getPlatform() {
@@ -38,7 +42,7 @@ async function downloadFile(url, filePath) {
     mkdirSync(dirname(filePath), { recursive: true });
     const file = createWriteStream(filePath);
 
-    https.get(url, (response) => {
+    https.get(url, {agent}, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
         // Follow redirect
         return downloadFile(response.headers.location, filePath).then(resolve).catch(reject);

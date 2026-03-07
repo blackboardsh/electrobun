@@ -6,6 +6,9 @@ export default {
 		identifier: "trayapp.electrobun.dev",
 		version: "0.0.1",
 	},
+	runtime: {
+		exitOnLastWindowClosed: false,
+	},
 	build: {
 		bun: {
 			entrypoint: "src/bun/index.ts",

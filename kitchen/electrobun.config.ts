@@ -4,7 +4,7 @@ export default {
 	app: {
 		name: "Electrobun Kitchen Sink",
 		identifier: "sh.blackboard.electrobun-kitchen",
-		version: "1.14.4",
+		version: "1.15.1",
 		urlSchemes: ["electrobun-playground"],
 	},
 	runtime: {
@@ -55,8 +55,11 @@ export default {
 			"playgrounds/webviewtag": {
 				entrypoint: "src/playgrounds/webviewtag/index.ts",
 			},
-			"playgrounds/window-events": {
-				entrypoint: "src/playgrounds/window-events/index.ts",
+			"playgrounds/window-events-move-resize": {
+				entrypoint: "src/playgrounds/window-events-move-resize/index.ts",
+			},
+			"playgrounds/window-events-blur-focus": {
+				entrypoint: "src/playgrounds/window-events-blur-focus/index.ts",
 			},
 			"playgrounds/custom-titlebar": {
 				entrypoint: "src/playgrounds/custom-titlebar/index.ts",
@@ -75,6 +78,9 @@ export default {
 			},
 			"playgrounds/webview-cleanup": {
 				entrypoint: "src/playgrounds/webview-cleanup/index.ts",
+			},
+			"playgrounds/wgpu-tag": {
+				entrypoint: "src/playgrounds/wgpu-tag/index.ts",
 			},
 		},
 		copy: {
@@ -120,8 +126,10 @@ export default {
 				"views/playgrounds/webviewtag/electrobun.png",
 			"assets/electrobun-logo-32-template.png":
 				"views/assets/electrobun-logo-32-template.png",
-			"src/playgrounds/window-events/index.html":
-				"views/playgrounds/window-events/index.html",
+			"src/playgrounds/window-events-move-resize/index.html":
+				"views/playgrounds/window-events-move-resize/index.html",
+			"src/playgrounds/window-events-blur-focus/index.html":
+				"views/playgrounds/window-events-blur-focus/index.html",
 			"src/playgrounds/custom-titlebar/index.html":
 				"views/playgrounds/custom-titlebar/index.html",
 			"src/playgrounds/transparent-window/index.html":
@@ -142,11 +150,14 @@ export default {
 				"views/playgrounds/webview-cleanup/index.css",
 			"src/playgrounds/webview-cleanup/assets/bunny.png":
 				"views/playgrounds/webview-cleanup/assets/bunny.png",
+			"src/playgrounds/wgpu-tag/index.html":
+				"views/playgrounds/wgpu-tag/index.html",
 		},
 		mac: {
 			codesign: true,
 			notarize: true,
 			bundleCEF: true,
+			bundleWGPU: true,
 			entitlements: {},
 			chromiumFlags: {
 				// "show-paint-rects": true,
@@ -156,6 +167,7 @@ export default {
 		},
 		linux: {
 			bundleCEF: true,
+			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {
 				// "show-paint-rects": true,
@@ -165,6 +177,7 @@ export default {
 		},
 		win: {
 			bundleCEF: true,
+			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {
 				// "show-paint-rects": true,

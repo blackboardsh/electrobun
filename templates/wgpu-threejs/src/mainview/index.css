@@ -1,0 +1,51 @@
+:root {
+	color-scheme: light;
+	font-family: "Space Grotesk", "SF Pro Text", system-ui, sans-serif;
+	background: transparent;
+}
+
+body {
+	margin: 0;
+	padding: 0;
+	background: transparent;
+	color: #0b0d0f;
+}
+
+.panel {
+	width: 280px;
+	padding: 18px 18px 16px;
+	background: rgba(250, 250, 252, 0.96);
+	border-radius: 16px;
+	box-shadow: 0 12px 35px rgba(15, 20, 30, 0.18);
+	border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+h1 {
+	margin: 0 0 6px;
+	font-size: 18px;
+	font-weight: 600;
+}
+
+.hint {
+	margin: 0 0 14px;
+	font-size: 12px;
+	opacity: 0.7;
+	line-height: 1.4;
+}
+
+.control {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	font-size: 12px;
+	margin-bottom: 12px;
+}
+
+.control span.value {
+	font-size: 11px;
+	opacity: 0.7;
+}
+
+input[type="range"] {
+	width: 100%;
+}

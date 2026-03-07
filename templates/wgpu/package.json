@@ -1,0 +1,18 @@
+{
+	"name": "electrobun-wgpu",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "A minimal WebGPU shader demo",
+	"scripts": {
+		"start": "electrobun dev",
+		"dev": "electrobun dev --watch",
+		"build:canary": "electrobun build --env=canary"
+	},
+	"dependencies": {
+		"electrobun": "file:../../package"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	}
+}

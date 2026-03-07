@@ -300,6 +300,9 @@ jobs:
           find dist/ -type f | sort
         working-directory: package
 
+      - name: Copy README for npm
+        run: cp README.md package/README.md
+
       - name: Publish to npm
         run: |
           if [[ "${{ github.event.inputs.tag || github.ref_name }}" == *"beta"* ]]; then

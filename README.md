@@ -29,6 +29,7 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 ## Apps Built with Electrobun
 - [Audio TTS](https://github.com/blackboardsh/audio-tts) - desktop text-to-speech app using Qwen3-TTS for voice design, cloning, and generation
 - [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
+- [DOOM](https://github.com/blackboardsh/electrobun-doom) - DOOM implemented in 2 ways: bun -> (c doom -> bundled wgpu) and (full ts port bun -> bundled wgpu)
 
 ### Video Demos
 
@@ -36,9 +37,11 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 
 [![Co(lab) Demo](https://img.youtube.com/vi/WWTCqGmE86w/maxresdefault.jpg)](https://www.youtube.com/watch?v=WWTCqGmE86w)
 
+[![DOOM Demo](https://github.com/user-attachments/assets/6cc5f04a-6d97-4010-b65f-3f282d32590c)](https://x.com/YoavCodes/status/2028499038148903239?s=20)
+
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left&cache=1)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left&cache=2)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
 
 ## Contributing
 Ways to get involved:

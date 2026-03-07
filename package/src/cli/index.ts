@@ -18,7 +18,6 @@ import {
 } from "fs";
 import { execSync } from "child_process";
 import * as readline from "readline";
-import archiver from "archiver";
 import { OS, ARCH } from "../shared/platform";
 import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
 import { BUN_VERSION } from "../shared/bun-version";
@@ -376,6 +375,105 @@ function getEffectiveCEFDir(
 		);
 	}
 	return getPlatformPaths(platformOS, platformArch).CEF_DIR;
+}
+
+/**
+ * Returns the effective WGPU directory path. WGPU files are stored in
+ * node_modules/.electrobun-cache/ to survive dist rebuilds and bun install.
+ */
+function getEffectiveWGPUDir(
+	platformOS: "macos" | "win" | "linux",
+	platformArch: "arm64" | "x64",
+): string {
+	return join(
+		projectRoot,
+		"node_modules",
+		".electrobun-cache",
+		"wgpu",
+		`${platformOS}-${platformArch}`,
+	);
+}
+
+/**
+ * Trims an ICU .dat file to only include the specified locales.
+ * Uses icupkg (from ICU tools) to list and remove unwanted locale data.
+ */
+async function trimICUData(
+	source: string,
+	dest: string,
+	locales: string[],
+): Promise<void> {
+	// Copy the full .dat file first
+	cpSync(source, dest);
+
+	// Try to find icupkg in PATH or common locations
+	let icupkgPath = "icupkg";
+	try {
+		execSync(`${icupkgPath} --help`, { stdio: "ignore" });
+	} catch {
+		// icupkg not available, skip trimming
+		throw new Error(
+			"icupkg not found in PATH. Install ICU tools to enable locale trimming.",
+		);
+	}
+
+	// List all items in the .dat file
+	const listOutput = execSync(`${icupkgPath} -l "${dest}"`, {
+		encoding: "utf-8",
+	});
+	const allItems = listOutput.split("\n").filter((line) => line.trim());
+
+	// Locale-specific directories in ICU data
+	const localeDirs = [
+		"brkitr/",
+		"coll/",
+		"curr/",
+		"lang/",
+		"locales/",
+		"rbnf/",
+		"region/",
+		"unit/",
+		"zone/",
+	];
+
+	const toRemove = allItems.filter((item) => {
+		// Only consider items in locale-specific directories
+		const isLocaleItem = localeDirs.some((dir) => item.startsWith(dir));
+		if (!isLocaleItem) return false;
+
+		// Extract the basename (after the last /)
+		const basename = item.split("/").pop() || "";
+		// Remove file extension for matching
+		const name = basename.replace(/\.res$/, "");
+
+		// Keep items matching requested locales (exact match or with region suffix)
+		return !locales.some(
+			(l) =>
+				name === l ||
+				name === "root" ||
+				name.startsWith(`${l}_`) ||
+				name.startsWith(`${l}-`),
+		);
+	});
+
+	if (toRemove.length > 0) {
+		// Write removal list to temp file
+		const { tmpdir } = await import("os");
+		const removeListPath = join(tmpdir(), "icu-remove.txt");
+		writeFileSync(removeListPath, toRemove.join("\n"));
+
+		try {
+			execSync(`${icupkgPath} -r "@${removeListPath}" "${dest}"`, {
+				stdio: "inherit",
+			});
+		} finally {
+			try {
+				unlinkSync(removeListPath);
+			} catch {
+				// ignore cleanup errors
+			}
+		}
+	}
 }
 
 /**
@@ -901,6 +999,167 @@ async function ensureCEFDependencies(
 	}
 }
 
+async function ensureWGPUDependencies(
+	targetOS?: "macos" | "win" | "linux",
+	targetArch?: "arm64" | "x64",
+	wgpuVersion?: string,
+): Promise<string> {
+	const platformOS = targetOS || OS;
+	const platformArch = targetArch || ARCH;
+	const wgpuDir = getEffectiveWGPUDir(platformOS, platformArch);
+	const versionFile = join(wgpuDir, ".wgpu-version");
+
+	const normalizedVersion =
+		wgpuVersion && wgpuVersion.length > 0
+			? wgpuVersion.startsWith("v")
+				? wgpuVersion
+				: `v${wgpuVersion}`
+			: "latest";
+
+	if (existsSync(wgpuDir) && existsSync(versionFile)) {
+		const cachedVersion = readFileSync(versionFile, "utf8").trim();
+		if (cachedVersion === normalizedVersion) {
+			console.log(
+				`WGPU ${normalizedVersion} already cached for ${platformOS}-${platformArch} at ${wgpuDir}`,
+			);
+			return wgpuDir;
+		}
+		console.log(
+			`Cached WGPU version "${cachedVersion}" does not match requested "${normalizedVersion}", re-downloading...`,
+		);
+		rmSync(wgpuDir, { recursive: true, force: true });
+	} else if (existsSync(wgpuDir)) {
+		rmSync(wgpuDir, { recursive: true, force: true });
+	}
+
+	const platformName =
+		platformOS === "macos" ? "darwin" : platformOS === "win" ? "win32" : "linux";
+	const archName = platformArch;
+	const baseUrl =
+		normalizedVersion === "latest"
+			? "https://github.com/blackboardsh/electrobun-dawn/releases/latest/download"
+			: `https://github.com/blackboardsh/electrobun-dawn/releases/download/${normalizedVersion}`;
+	const tarballUrl = `${baseUrl}/electrobun-dawn-${platformName}-${archName}.tar.gz`;
+
+	async function downloadWithRetry(
+		url: string,
+		filePath: string,
+		maxRetries = 3,
+	): Promise<void> {
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			try {
+				console.log(
+					`Downloading WGPU (attempt ${attempt}/${maxRetries}) from: ${url}`,
+				);
+				const response = await fetch(url);
+				if (!response.ok) {
+					throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+				}
+
+				const fileStream = createWriteStream(filePath);
+				if (response.body) {
+					const reader = response.body.getReader();
+					while (true) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						fileStream.write(Buffer.from(value));
+					}
+				}
+
+				await new Promise((resolve, reject) => {
+					fileStream.end((err: Error | null | undefined) => {
+						if (err) reject(err);
+						else resolve(null);
+					});
+				});
+				return;
+			} catch (error) {
+				if (attempt === maxRetries) throw error;
+				console.log(`Download failed, retrying... (${attempt}/${maxRetries})`);
+			}
+		}
+	}
+
+	try {
+		console.log(
+			`WGPU dependencies not found for ${platformOS}-${platformArch}, downloading...`,
+		);
+		const tempFile = join(
+			ELECTROBUN_DEP_PATH,
+			`wgpu-${platformOS}-${platformArch}-${Date.now()}.tar.gz`,
+		);
+		await downloadWithRetry(tarballUrl, tempFile);
+
+		if (!existsSync(tempFile)) {
+			throw new Error(`Downloaded file not found: ${tempFile}`);
+		}
+		const fileSize = require("fs").statSync(tempFile).size;
+		if (fileSize === 0) {
+			throw new Error(`Downloaded file is empty: ${tempFile}`);
+		}
+
+		const tempExtractDir = join(
+			ELECTROBUN_DEP_PATH,
+			`wgpu-extract-${platformOS}-${platformArch}-${Date.now()}`,
+		);
+		mkdirSync(tempExtractDir, { recursive: true });
+
+		const tarBytes = await Bun.file(tempFile).arrayBuffer();
+		const archive = new Bun.Archive(tarBytes);
+		await archive.extract(tempExtractDir);
+
+		mkdirSync(wgpuDir, { recursive: true });
+		const extractedItems = readdirSync(tempExtractDir);
+
+		const moveAll = (fromDir: string) => {
+			for (const item of readdirSync(fromDir)) {
+				const src = join(fromDir, item);
+				const dest = join(wgpuDir, item);
+				if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
+				renameSync(src, dest);
+			}
+		};
+
+		if (extractedItems.length === 1) {
+			const firstItem = extractedItems[0];
+			if (!firstItem) {
+				throw new Error(`No extracted items found in ${tempExtractDir}`);
+			}
+			const single = join(tempExtractDir, firstItem);
+			const stat = require("fs").statSync(single);
+			if (stat.isDirectory()) {
+				moveAll(single);
+			} else {
+				moveAll(tempExtractDir);
+			}
+		} else {
+			moveAll(tempExtractDir);
+		}
+
+		writeFileSync(versionFile, normalizedVersion);
+
+		rmSync(tempExtractDir, { recursive: true, force: true });
+		unlinkSync(tempFile);
+
+		console.log(
+			`✓ WGPU dependencies for ${platformOS}-${platformArch} downloaded and cached successfully`,
+		);
+		return wgpuDir;
+	} catch (error: any) {
+		if (existsSync(wgpuDir)) {
+			try {
+				rmSync(wgpuDir, { recursive: true, force: true });
+			} catch {}
+		}
+		console.error(
+			`Failed to download WGPU dependencies for ${platformOS}-${platformArch}:`,
+			error.message,
+		);
+		console.error("Please ensure you have an internet connection and the release exists.");
+		process.exit(1);
+	}
+}
+
 /**
  * Downloads CEF runtime files from Spotify CDN for a custom version override.
  * Extracts the minimal distribution and restructures runtime files to the
@@ -1122,11 +1381,14 @@ const defaultConfig = {
 		useAsar: false,
 		asarUnpack: undefined as string[] | undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
 		cefVersion: undefined as string | undefined, // Override CEF version: "CEF_VERSION+chromium-CHROMIUM_VERSION"
+		wgpuVersion: undefined as string | undefined, // Override Dawn (WebGPU) version: "0.2.3" or "v0.2.3-beta.0"
 		bunVersion: undefined as string | undefined, // Override Bun runtime version: "1.4.2"
+		locales: undefined as string[] | "*" | undefined, // ICU locales subset (Linux/Windows)
 		mac: {
 			codesign: false,
 			notarize: false,
 			bundleCEF: false,
+			bundleWGPU: false,
 			entitlements: {
 				// This entitlement is required for Electrobun apps with a hardened runtime (required for notarization) to run on macos
 				"com.apple.security.cs.allow-jit": true,
@@ -1136,19 +1398,21 @@ const defaultConfig = {
 			} as Record<string, boolean | string>,
 			icons: "icon.iconset",
 			defaultRenderer: undefined as "native" | "cef" | undefined,
-			chromiumFlags: undefined as Record<string, string | true> | undefined,
+			chromiumFlags: undefined as Record<string, string | boolean> | undefined,
 		},
 		win: {
 			bundleCEF: false,
+			bundleWGPU: false,
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
-			chromiumFlags: undefined as Record<string, string | true> | undefined,
+			chromiumFlags: undefined as Record<string, string | boolean> | undefined,
 		},
 		linux: {
 			bundleCEF: false,
+			bundleWGPU: false,
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
-			chromiumFlags: undefined as Record<string, string | true> | undefined,
+			chromiumFlags: undefined as Record<string, string | boolean> | undefined,
 		},
 		bun: {
 			entrypoint: "src/bun/index.ts",
@@ -1962,6 +2226,34 @@ Categories=Utility;Application;
 			dereference: true,
 		});
 
+		// Copy ICU data file if it exists (Linux/Windows external ICU builds)
+		// ICU version varies per platform WebKit build, so detect the filename dynamically
+		const bunDir = dirname(bunBinarySourcePath);
+		const icuDataFileName = readdirSync(bunDir).find((f) => /^icudt\d+l\.dat$/.test(f));
+		const icuDataSource = icuDataFileName ? join(bunDir, icuDataFileName) : "";
+		if (icuDataFileName && existsSync(icuDataSource) && targetOS !== "macos") {
+			const icuDataDest = join(appBundleMacOSPath, icuDataFileName);
+
+			const locales = config.build?.locales;
+			if (locales && locales !== "*" && Array.isArray(locales) && locales.length > 0) {
+				// Trim ICU data to specified locales using icupkg
+				try {
+					await trimICUData(icuDataSource, icuDataDest, locales);
+					const originalSize = statSync(icuDataSource).size;
+					const trimmedSize = statSync(icuDataDest).size;
+					console.log(
+						`Trimmed ICU data: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(trimmedSize / 1024 / 1024).toFixed(1)}MB (locales: ${locales.join(", ")})`,
+					);
+				} catch (error) {
+					console.warn(`Warning: Failed to trim ICU data, copying full file: ${error}`);
+					cpSync(icuDataSource, icuDataDest);
+				}
+			} else {
+				cpSync(icuDataSource, icuDataDest);
+				console.log(`Copied ICU data file: ${icuDataFileName}`);
+			}
+		}
+
 		// Embed icon into bun.exe on Windows
 		if (targetOS === "win" && config.build.win?.icon) {
 			const iconSourcePath =
@@ -2366,6 +2658,66 @@ Categories=Utility;Application;
 			}
 		}
 
+		// Download WGPU (Dawn) binaries if needed when bundleWGPU is enabled
+		if (
+			(targetOS === "macos" && config.build.mac?.bundleWGPU) ||
+			(targetOS === "win" && config.build.win?.bundleWGPU) ||
+			(targetOS === "linux" && config.build.linux?.bundleWGPU)
+		) {
+			const effectiveWGPUDir = await ensureWGPUDependencies(
+				currentTarget.os,
+				currentTarget.arch,
+				config.build.wgpuVersion,
+			);
+
+			const libCandidates =
+				targetOS === "macos"
+					? [
+							join(effectiveWGPUDir, "lib", "libwebgpu_dawn.dylib"),
+							join(effectiveWGPUDir, "lib", "libwebgpu_dawn_shared.dylib"),
+						]
+					: targetOS === "win"
+						? [
+								join(effectiveWGPUDir, "bin", "webgpu_dawn.dll"),
+								join(effectiveWGPUDir, "bin", "libwebgpu_dawn.dll"),
+								join(effectiveWGPUDir, "lib", "webgpu_dawn.dll"),
+								join(effectiveWGPUDir, "lib", "libwebgpu_dawn.dll"),
+							]
+						: [
+								join(effectiveWGPUDir, "lib", "libwebgpu_dawn.so"),
+								join(effectiveWGPUDir, "lib", "libwebgpu_dawn_shared.so"),
+							];
+
+			const libSource = libCandidates.find((p) => existsSync(p));
+			if (!libSource) {
+				throw new Error(
+					`WGPU shared library not found in ${effectiveWGPUDir}. Checked: ${libCandidates.join(", ")}`,
+				);
+			}
+
+			const libDest = join(appBundleMacOSPath, basename(libSource));
+			cpSync(libSource, libDest, { dereference: true });
+			console.log(`Copied WGPU library to bundle: ${libDest}`);
+
+			// On Windows, Dawn needs d3dcompiler_47.dll for D3D shader compilation.
+			// ARM64 Windows doesn't have an x64 version in system directories,
+			// so bundle it alongside the WGPU library.
+			if (targetOS === "win") {
+				const d3dCandidates = [
+					join(effectiveWGPUDir, "bin", "d3dcompiler_47.dll"),
+					join(ELECTROBUN_DEP_PATH, `dist-win-${currentTarget.arch}`, "d3dcompiler_47.dll"),
+					join(ELECTROBUN_DEP_PATH, "dist", "d3dcompiler_47.dll"),
+					join(targetPaths.CEF_DIR, "d3dcompiler_47.dll"),
+				];
+				const d3dSource = d3dCandidates.find((p) => existsSync(p));
+				if (d3dSource) {
+					const d3dDest = join(appBundleMacOSPath, "d3dcompiler_47.dll");
+					cpSync(d3dSource, d3dDest, { dereference: true });
+					console.log(`Copied d3dcompiler_47.dll to bundle: ${d3dDest}`);
+				}
+			}
+		}
+
 		// copy native bindings
 		const bsPatchSource = targetPaths.BSPATCH;
 		const bsPatchDestination =
@@ -2471,7 +2823,8 @@ Categories=Utility;Application;
 		});
 
 		if (!buildResult.success) {
-			console.error("failed to build", bunSource, buildResult.logs);
+			console.error("failed to build", bunSource);
+			printBuildLogs(buildResult.logs);
 			throw new Error("Build failed: bun build failed");
 		}
 
@@ -2513,7 +2866,8 @@ Categories=Utility;Application;
 			});
 
 			if (!buildResult.success) {
-				console.error("failed to build", viewSource, buildResult.logs);
+				console.error("failed to build", viewSource);
+				printBuildLogs(buildResult.logs);
 				continue;
 			}
 		}
@@ -3640,6 +3994,8 @@ Categories=Utility;Application;
 		let lastChangedFile = "";
 		let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 		let shuttingDown = false;
+		let isBuilding = false;
+		let rebuildPending = false;
 		let watchers: ReturnType<typeof watch>[] = [];
 
 		function startWatchers() {
@@ -3674,8 +4030,24 @@ Categories=Utility;Application;
 		async function triggerRebuild() {
 			if (shuttingDown) return;
 
+			// Guard against concurrent builds — if already building, mark
+			// that another rebuild is needed and let the current one finish.
+			if (isBuilding) {
+				rebuildPending = true;
+				return;
+			}
+			isBuilding = true;
+			rebuildPending = false;
+
 			// Stop watching during build so build output doesn't trigger more events
 			stopWatchers();
+
+			// Cancel any lingering debounce timer that may have been queued
+			// before stopWatchers took effect.
+			if (debounceTimer) {
+				clearTimeout(debounceTimer);
+				debounceTimer = null;
+			}
 
 			const changedDisplay = lastChangedFile
 				? lastChangedFile.replace(projectRoot + "/", "")
@@ -3712,9 +4084,16 @@ Categories=Utility;Application;
 				console.log("[electrobun dev --watch] Waiting for file changes...");
 			}
 
+			isBuilding = false;
+
 			// Resume watching after build + hooks are done
 			if (!shuttingDown) {
 				startWatchers();
+			}
+
+			// If a file change came in while we were building, rebuild again.
+			if (rebuildPending && !shuttingDown) {
+				triggerRebuild();
 			}
 		}
 
@@ -3768,6 +4147,35 @@ Categories=Utility;Application;
 	}
 
 	// Helper functions
+
+	function formatBuildLogEntry(entry: any): string {
+		if (!entry || typeof entry !== "object") return String(entry);
+		const level = entry.level || "error";
+		let message = entry.message || entry.text || String(entry);
+		if (entry.location) {
+			const loc = entry.location;
+			const file = loc.file || loc.path || "unknown";
+			const line = loc.line ?? loc.lineText ?? loc.lineNumber ?? "?";
+			const col = loc.column ?? loc.col ?? loc.columnNumber ?? "?";
+			message += ` (${file}:${line}:${col})`;
+		}
+		return `[bun.build:${level}] ${message}`;
+	}
+
+	function printBuildLogs(logs: any[] | undefined | null) {
+		if (!logs || logs.length === 0) {
+			console.error("[bun.build] No logs returned from Bun.build");
+			return;
+		}
+		for (const entry of logs) {
+			console.error(formatBuildLogEntry(entry));
+			if (entry?.notes?.length) {
+				for (const note of entry.notes) {
+					console.error(`  note: ${note.text ?? String(note)}`);
+				}
+			}
+		}
+	}
 
 	async function getConfig() {
 		let loadedConfig: Partial<typeof defaultConfig> & Record<string, unknown> =
@@ -3998,39 +4406,43 @@ Categories=Utility;Application;
 			throw new Error(`Archive file not found: ${archivePath}`);
 		}
 
-		// Create zip archive
-		const output = createWriteStream(zipPath);
-		const archive = archiver("zip", {
-			zlib: { level: 9 }, // Maximum compression
-		});
+		// Create staging directory to control zip layout
+		const stagingDir = join(
+			buildFolder,
+			`.installer-zip-${exeStem.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+		);
+		const stagingInstallerDir = join(stagingDir, ".installer");
 
-		return new Promise((resolve, reject) => {
-			output.on("close", () => {
-				console.log(
-					`Created Windows installer package: ${zipPath} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`,
-				);
-				resolve(zipPath);
-			});
+		if (existsSync(stagingDir)) {
+			rmSync(stagingDir, { recursive: true, force: true });
+		}
+		mkdirSync(stagingInstallerDir, { recursive: true });
 
-			archive.on("error", (err) => {
-				reject(err);
-			});
+		// Add Setup.exe at the root level for easy access
+		copyFileSync(exePath, join(stagingDir, basename(exePath)));
+		// Put metadata and archive in a subdirectory to discourage manual extraction
+		copyFileSync(metadataPath, join(stagingInstallerDir, basename(metadataPath)));
+		copyFileSync(archivePath, join(stagingInstallerDir, basename(archivePath)));
 
-			archive.pipe(output);
+		try {
+			// Create zip archive (Windows only)
+			execSync(
+				`powershell -command "Compress-Archive -Path '${stagingDir}\\\\*' -DestinationPath '${zipPath}' -Force"`,
+				{ stdio: "inherit" },
+			);
 
-			// Add Setup.exe at the root level for easy access
-			archive.file(exePath, { name: basename(exePath) });
-
-			// Put metadata and archive in a subdirectory to discourage manual extraction
-			archive.file(metadataPath, {
-				name: `.installer/${basename(metadataPath)}`,
-			});
-			archive.file(archivePath, {
-				name: `.installer/${basename(archivePath)}`,
-			});
-
-			archive.finalize();
-		});
+			const zipSizeMb = existsSync(zipPath)
+				? (statSync(zipPath).size / 1024 / 1024).toFixed(2)
+				: "0.00";
+			console.log(
+				`Created Windows installer package: ${zipPath} (${zipSizeMb} MB)`,
+			);
+			return zipPath;
+		} finally {
+			if (existsSync(stagingDir)) {
+				rmSync(stagingDir, { recursive: true, force: true });
+			}
+		}
 	}
 
 	function codesignAppBundle(
