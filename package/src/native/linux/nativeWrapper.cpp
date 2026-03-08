@@ -2624,7 +2624,9 @@ public:
     void resize(const GdkRectangle& frame, const char* masksJson) override {
         if (webview) {
             // Resizing webview
-            
+
+            // Reset min size constraint before setting new size (fix: allow shrinking)
+            gtk_widget_set_size_request(webview, -1, -1);
             // Set webview size
             gtk_widget_set_size_request(webview, frame.width, frame.height);
             
@@ -2641,7 +2643,8 @@ public:
                 int clampedY = MAX(0, frame.y);
                 int offsetX = frame.x - clampedX;  // Will be negative if frame.x < 0
                 int offsetY = frame.y - clampedY;  // Will be negative if frame.y < 0
-                
+
+                gtk_widget_set_size_request(wrapper, -1, -1);
                 gtk_widget_set_size_request(wrapper, frame.width, frame.height);
                 gtk_widget_set_margin_start(wrapper, clampedX);
                 gtk_widget_set_margin_top(wrapper, clampedY);
@@ -3368,6 +3371,7 @@ public:
             XFlush(xDisplay);
             visualBounds = frame;
         } else if (viewWidget) {
+            gtk_widget_set_size_request(viewWidget, -1, -1);
             gtk_widget_set_size_request(viewWidget, frame.width, frame.height);
 
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(viewWidget), "wrapper");
@@ -3377,6 +3381,7 @@ public:
                 int offsetX = frame.x - clampedX;
                 int offsetY = frame.y - clampedY;
 
+                gtk_widget_set_size_request(wrapper, -1, -1);
                 gtk_widget_set_size_request(wrapper, frame.width, frame.height);
                 gtk_widget_set_margin_start(wrapper, clampedX);
                 gtk_widget_set_margin_top(wrapper, clampedY);
@@ -4622,6 +4627,7 @@ public:
         
         // Ensure the overlay spans the entire window for proper layering
         if (overlay) {
+            gtk_widget_set_size_request(overlay, -1, -1);
             gtk_widget_set_size_request(overlay, width, height);
         }
     }
