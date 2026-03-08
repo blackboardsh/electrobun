@@ -34,7 +34,7 @@ const ProgressIndicator = struct {
         // Try to start a progress dialog
         self.startProgressDialog(metadata) catch {
             // Fallback to console output
-            std.debug.print("Installing {s}...\n", .{metadata.name});
+            std.debug.print("\nInstalling {s}...\n", .{metadata.name});
         };
 
         return self;
