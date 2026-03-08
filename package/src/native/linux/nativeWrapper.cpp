@@ -5582,6 +5582,18 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
                 "base-cache-directory", cachePath.c_str(),
                 NULL
             );
+
+            // Enable persistent cookie storage (SQLite-backed)
+            WebKitCookieManager* cookieManager = webkit_website_data_manager_get_cookie_manager(dataManager);
+            if (cookieManager) {
+                std::string cookiePath = dataPath + "/cookies.sqlite";
+                webkit_cookie_manager_set_persistent_storage(
+                    cookieManager,
+                    cookiePath.c_str(),
+                    WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE
+                );
+            }
+
             context = webkit_web_context_new_with_website_data_manager(dataManager);
             g_object_unref(dataManager);
         } else {
@@ -10391,6 +10403,17 @@ static WebKitWebsiteDataManager* getDataManagerForPartition(const char* partitio
                 "base-cache-directory", cachePath.c_str(),
                 NULL
             );
+
+            // Enable persistent cookie storage (SQLite-backed)
+            WebKitCookieManager* cookieManager = webkit_website_data_manager_get_cookie_manager(dataManager);
+            if (cookieManager) {
+                std::string cookiePath = dataPath + "/cookies.sqlite";
+                webkit_cookie_manager_set_persistent_storage(
+                    cookieManager,
+                    cookiePath.c_str(),
+                    WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE
+                );
+            }
         } else {
             dataManager = webkit_website_data_manager_new_ephemeral();
         }
