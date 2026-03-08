@@ -2648,7 +2648,7 @@ public:
                 gtk_widget_set_size_request(wrapper, frame.width, frame.height);
                 gtk_widget_set_margin_start(wrapper, clampedX);
                 gtk_widget_set_margin_top(wrapper, clampedY);
-                
+
                 // Position webview within wrapper with offset to handle negative positions
                 // Note: /2 division appears necessary for GTK coordinate system
                 gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX / 2, offsetY / 2);
@@ -4540,25 +4540,25 @@ public:
                     view->setPassthrough(true);
                     view->pendingStartPassthrough = false;
                 }
-            } else {
-                // For OOPIFs, wrap in a fixed container to enforce size constraints
-                GtkWidget* wrapper = gtk_fixed_new();
-                gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
-                
-                // Make wrapper receive no events (pass through to widgets below)
-                gtk_widget_set_events(wrapper, 0);
-                gtk_widget_set_can_focus(wrapper, FALSE);
-                
-                // Add webview to wrapper at 0,0
-                printf("DEBUG: Adding subsequent webview (ID: %u) to wrapper\n", view->webviewId);
+            } else if (view->fullSize) {
+                // Full-size subsequent webview: add directly as overlay (same as first webview)
+                printf("DEBUG: Adding subsequent full-size webview (ID: %u) to overlay\n", view->webviewId);
                 fflush(stdout);
-                gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
-                
+
+                // Set it to expand and fill the overlay
+                g_object_set(view->widget,
+                            "expand", TRUE,
+                            "hexpand", TRUE,
+                            "vexpand", TRUE,
+                            NULL);
+
+                gtk_overlay_add_overlay(GTK_OVERLAY(overlay), view->widget);
+
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
-                printf("DEBUG: Subsequent webview (ID: %u) realized successfully\n", view->webviewId);
+                printf("DEBUG: Subsequent full-size webview (ID: %u) realized successfully\n", view->webviewId);
                 fflush(stdout);
-                
+
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
                     view->setTransparent(true);
@@ -4568,19 +4568,47 @@ public:
                     view->setPassthrough(true);
                     view->pendingStartPassthrough = false;
                 }
-                
+            } else {
+                // For OOPIFs, wrap in a fixed container to enforce size constraints
+                GtkWidget* wrapper = gtk_fixed_new();
+                gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
+
+                // Make wrapper receive no events (pass through to widgets below)
+                gtk_widget_set_events(wrapper, 0);
+                gtk_widget_set_can_focus(wrapper, FALSE);
+
+                // Add webview to wrapper at 0,0
+                printf("DEBUG: Adding subsequent webview (ID: %u) to wrapper\n", view->webviewId);
+                fflush(stdout);
+                gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
+
+                // Now that widget is anchored, realize it for rendering
+                gtk_widget_realize(view->widget);
+                printf("DEBUG: Subsequent webview (ID: %u) realized successfully\n", view->webviewId);
+                fflush(stdout);
+
+                // Apply pending transparency/passthrough flags now that widget is realized
+                if (view->pendingStartTransparent) {
+                    view->setTransparent(true);
+                    view->pendingStartTransparent = false;
+                }
+                if (view->pendingStartPassthrough) {
+                    view->setPassthrough(true);
+                    view->pendingStartPassthrough = false;
+                }
+
                 // Add wrapper as overlay layer
                 gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
-                
+
                 // Make the wrapper pass-through for events outside the webview
                 gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
-                
+
                 // Position wrapper using margins (will be updated in resize)
                 gtk_widget_set_margin_start(wrapper, (int)x);
                 gtk_widget_set_margin_top(wrapper, (int)y);
-                
+
                 gtk_widget_show(wrapper);
-                
+
                 // Store wrapper reference
                 g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
             }
