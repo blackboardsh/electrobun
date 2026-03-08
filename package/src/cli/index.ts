@@ -4621,7 +4621,7 @@ Categories=Utility;Application;
 		if (existsSync(resourcesPath)) {
 			console.log("Signing native modules in Resources/app/bun...");
 			try {
-				const nodeFiles = execSync(`find "${resourcesPath}" -name "*.node" -type f`, {
+				const nodeFiles = execSync(`find ${escapePathForTerminal(resourcesPath)} -name "*.node" -type f`, {
 					encoding: "utf8",
 				}).trim().split("\n").filter(Boolean);
 
