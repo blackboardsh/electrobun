@@ -68,6 +68,34 @@ inline std::string buildPartitionPath(
     return base;
 }
 
+/**
+ * Build a CEF partition-specific path as a direct child of the renderer root.
+ *
+ * CEF requires persistent profile directories to live directly under
+ * root_cache_path rather than under a nested Partitions/ directory.
+ *
+ * @param basePath The base application support/data path
+ * @param identifier The app identifier
+ * @param channel The release channel
+ * @param renderer The renderer type (typically "CEF")
+ * @param partitionName The partition name
+ * @param pathSeparator The path separator to use
+ * @return The full path: basePath/identifier/channel/renderer/partitionName
+ */
+inline std::string buildCEFPartitionPath(
+    const std::string& basePath,
+    const std::string& identifier,
+    const std::string& channel,
+    const std::string& renderer,
+    const std::string& partitionName,
+    char pathSeparator = '/'
+) {
+    std::string base = buildAppDataPath(basePath, identifier, channel, renderer, pathSeparator);
+    base += pathSeparator;
+    base += partitionName;
+    return base;
+}
+
 } // namespace electrobun
 
 #endif // ELECTROBUN_APP_PATHS_H

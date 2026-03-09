@@ -3587,7 +3587,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             // Build cache path with identifier/channel structure (consistent with CLI and updater)
             char* home = getenv("HOME");
             std::string basePath = home ? std::string(home) + "/.cache" : "/tmp";
-            std::string cachePath = buildPartitionPath(basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName);
+            std::string cachePath = buildCEFPartitionPath(basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName);
 
             // Create directory
             g_mkdir_with_parents(cachePath.c_str(), 0755);
