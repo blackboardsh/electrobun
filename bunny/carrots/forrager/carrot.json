@@ -1,0 +1,18 @@
+{
+  "id": "forrager",
+  "name": "Forrager",
+  "version": "0.0.1",
+  "description": "A background Carrot that runs from the tray and keeps a tiny hidden controller webview alive.",
+  "mode": "background",
+  "permissions": ["bun", "tray", "notifications", "storage"],
+  "view": {
+    "url": "views://carrot-forrager/index.html",
+    "title": "Forrager Background Controller",
+    "width": 320,
+    "height": 220,
+    "hidden": true
+  },
+  "worker": {
+    "relativePath": "worker.js"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "charlie",
+  "name": "Charlie",
+  "version": "0.0.1",
+  "description": "A visible Carrot with a tiny counter, notifications, and its own Bun worker.",
+  "mode": "window",
+  "permissions": ["bun", "windows", "notifications", "storage"],
+  "view": {
+    "url": "views://carrot-charlie/index.html",
+    "title": "Charlie Carrot",
+    "width": 440,
+    "height": 520
+  },
+  "worker": {
+    "relativePath": "worker.js"
+  }
+}

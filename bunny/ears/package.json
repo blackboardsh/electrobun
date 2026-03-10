@@ -1,0 +1,16 @@
+{
+  "name": "bunny-ears",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "sync:wgpu": "bun scripts/sync-wgpu.ts",
+    "start": "bun run sync:wgpu && electrobun dev",
+    "dev": "bun run sync:wgpu && electrobun dev --watch",
+    "build:canary": "bun run sync:wgpu && electrobun build --env=canary",
+    "rebuild:electrobun": "sh -lc 'cd ../../package && bun build:dev'"
+  },
+  "dependencies": {
+    "electrobun": "file:../../package"
+  }
+}

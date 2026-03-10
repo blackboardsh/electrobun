@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bunny Ears</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">Hosted Runtime Prototype</p>
+          <h1>Bunny Ears</h1>
+          <p class="lede">
+            A tray-first Electrobun runtime managing tiny Carrots with per-Carrot workers.
+          </p>
+        </div>
+        <div class="hero-badge">
+          <span class="badge-label">Runtime</span>
+          <strong id="carrot-count">0 Carrots</strong>
+          <span class="badge-meta">Bundled system webview, bundled WGPU, no CEF</span>
+        </div>
+      </section>
+
+      <section class="carrot-grid" id="carrot-grid"></section>
+    </main>
+    <script type="module" src="index.js"></script>
+  </body>
+</html>

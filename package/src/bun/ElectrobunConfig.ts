@@ -178,6 +178,13 @@ export interface ElectrobunConfig {
 			codesign?: boolean;
 
 			/**
+			 * Create a DMG artifact for macOS builds.
+			 * Disable this for local prototype builds that only need the app bundle and update archive.
+			 * @default true
+			 */
+			createDmg?: boolean;
+
+			/**
 			 * Enable notarization for macOS builds (requires codesign)
 			 * @default false
 			 */
