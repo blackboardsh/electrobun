@@ -96,12 +96,9 @@ BOOL useCEF = false;
 std::string g_electrobunChannel = "";
 std::string g_electrobunIdentifier = "";
 
-static BOOL isMovingWindow = NO;
+// Window drag state
 static NSWindow *targetWindow = nil;
-static CGFloat offsetX = 0.0;
-static CGFloat offsetY = 0.0;
-static id mouseDraggedMonitor = nil;
-static id mouseUpMonitor = nil;
+static id mouseDownDragMonitor = nil;
 
 static int g_remoteDebugPort = 9222;
 
@@ -7318,50 +7315,81 @@ extern "C" void resizeWebview(AbstractView *abstractView, double x, double y, do
 }
 
 extern "C" void stopWindowMove() {
-    isMovingWindow = NO;
+    if (mouseDownDragMonitor) {
+        [NSEvent removeMonitor:mouseDownDragMonitor];
+        mouseDownDragMonitor = nil;
+    }
     targetWindow = nil;
-    offsetX = 0.0;
-    offsetY = 0.0;
-    if (mouseDraggedMonitor) {
-        [NSEvent removeMonitor:mouseDraggedMonitor];
-        mouseDraggedMonitor = nil;
-    }
-    if (mouseUpMonitor) {
-        [NSEvent removeMonitor:mouseUpMonitor];
-        mouseUpMonitor = nil;
-    }
 }
 
 extern "C" void startWindowMove(NSWindow *window) {
+    // Clean up any previous monitor
+    stopWindowMove();
+
     targetWindow = window;
     if (!targetWindow) {
         NSLog(@"No window found for the given WebView.");
         return;
     }
-    isMovingWindow = YES;
-    NSPoint initialLocation = [NSEvent mouseLocation];
 
-    mouseDraggedMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskMouseMoved)
+    // The preload script calls startWindowMove asynchronously on mousedown in a
+    // drag region. By the time we get here the original LeftMouseDown NSEvent has
+    // already been dispatched, so we can't use it directly. Instead we install a
+    // monitor for the next LeftMouseDragged event (which fires as soon as the user
+    // starts moving the mouse while holding the button). From that event we
+    // synthesize a LeftMouseDown and pass it to performWindowDragWithEvent:, which
+    // delegates the drag to the macOS Window Server.
+    //
+    // Why performWindowDragWithEvent: matters: the Window Server handles tiling,
+    // snapping, Spaces transitions, and the proportional-restore-on-untile
+    // behavior that users expect. The previous manual setFrameOrigin approach
+    // bypassed all of that.
+    mouseDownDragMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp)
                                                                 handler:^NSEvent *(NSEvent *event) {
-        if (isMovingWindow) {
-            NSPoint currentLocation = [NSEvent mouseLocation];
-            if (offsetX == 0.0 && offsetY == 0.0) {
-                NSPoint windowOrigin = targetWindow.frame.origin;
-                offsetX = initialLocation.x - windowOrigin.x;
-                offsetY = initialLocation.y - windowOrigin.y;
-            }
-            CGFloat newX = currentLocation.x - offsetX;
-            CGFloat newY = currentLocation.y - offsetY;
-            [targetWindow setFrameOrigin:NSMakePoint(newX, newY)];
-        }
-        return event;
-    }];
-    mouseUpMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseUp
-                                                           handler:^NSEvent *(NSEvent *event) {
-        if (isMovingWindow) {
+        if (!targetWindow) {
             stopWindowMove();
+            return event;
         }
-        return event;
+        if ([event window] != targetWindow) return event;
+
+        // Mouse released before any drag — not a drag, clean up
+        if ([event type] == NSEventTypeLeftMouseUp) {
+            stopWindowMove();
+            return event;
+        }
+
+        // Synthesize a LeftMouseDown event at the current cursor position.
+        // performWindowDragWithEvent: requires a LeftMouseDown but will work with
+        // a synthesized one as long as the mouse button is physically held down
+        // (same technique used by Tauri/tao for edge-case event types).
+        NSPoint mouseLocation = [NSEvent mouseLocation];
+        NSRect windowFrame = [targetWindow frame];
+        NSPoint locationInWindow = NSMakePoint(
+            mouseLocation.x - windowFrame.origin.x,
+            mouseLocation.y - windowFrame.origin.y
+        );
+
+        NSEvent *syntheticDown = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                                    location:locationInWindow
+                                               modifierFlags:[event modifierFlags]
+                                                   timestamp:[event timestamp]
+                                                windowNumber:[targetWindow windowNumber]
+                                                     context:nil
+                                                 eventNumber:0
+                                                  clickCount:1
+                                                    pressure:1.0];
+
+        NSWindow *dragTarget = targetWindow;
+
+        // Clean up monitor before calling performWindowDragWithEvent: since it
+        // runs a nested event loop and will block until the drag finishes.
+        [NSEvent removeMonitor:mouseDownDragMonitor];
+        mouseDownDragMonitor = nil;
+        targetWindow = nil;
+
+        [dragTarget performWindowDragWithEvent:syntheticDown];
+
+        return nil;
     }];
 }
 
