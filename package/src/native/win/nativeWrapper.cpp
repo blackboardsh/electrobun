@@ -8925,6 +8925,10 @@ ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
     SetWindowPos(hwnd, NULL, (int)x, (int)y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+ELECTROBUN_EXPORT void setWindowButtonPosition(NSWindow *window, double x, double y) {
+    // Not applicable on Windows - no-op
+}
+
 ELECTROBUN_EXPORT void setWindowSize(NSWindow *window, double width, double height) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     if (!IsWindow(hwnd)) return;

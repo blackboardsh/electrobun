@@ -7247,6 +7247,34 @@ extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
     });
 }
 
+extern "C" void setWindowButtonPosition(NSWindow *window, double x, double y) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!window) return;
+
+        NSButton *closeBtn = [window standardWindowButton:NSWindowCloseButton];
+        NSButton *minimizeBtn = [window standardWindowButton:NSWindowMiniaturizeButton];
+        NSButton *zoomBtn = [window standardWindowButton:NSWindowZoomButton];
+
+        if (!closeBtn || !minimizeBtn || !zoomBtn) return;
+
+        NSView *titlebarView = [closeBtn superview];
+        if (!titlebarView) return;
+
+        CGFloat titlebarHeight = titlebarView.frame.size.height;
+
+        CGFloat buttonSpacing = 20.0;
+
+        // Button height for vertical centering
+        CGFloat buttonHeight = closeBtn.frame.size.height;
+
+        CGFloat adjustedY = titlebarHeight - y - buttonHeight;
+
+        [closeBtn setFrameOrigin:NSMakePoint(x, adjustedY)];
+        [minimizeBtn setFrameOrigin:NSMakePoint(x + buttonSpacing, adjustedY)];
+        [zoomBtn setFrameOrigin:NSMakePoint(x + 2 * buttonSpacing, adjustedY)];
+    });
+}
+
 extern "C" void setWindowSize(NSWindow *window, double width, double height) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!window) return;
