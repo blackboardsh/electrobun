@@ -218,18 +218,33 @@ setTimeout(() => {
 ${fileData.toString("utf8")}
 `;
 
-		writeFileSync(appEntrypointPath, wrappedFileData);
-		console.log(`[LAUNCHER] Wrote app entrypoint to: ${appEntrypointPath}`);
-
-		// Free the buffer
-		asarLib.symbols.asar_free_buffer(fileDataPtr, BigInt(fileSize));
-
-		// Close the archive
-		asarLib.symbols.asar_close(asarArchive);
+		try {
+			writeFileSync(appEntrypointPath, wrappedFileData);
+			console.log(`[LAUNCHER] Wrote app entrypoint to: ${appEntrypointPath}`);
+		} catch (error) {
+			console.error(
+				`[LAUNCHER] Failed to write temp entrypoint: ${(error as Error).message}`,
+			);
+			throw new Error(
+				`Failed to write app entrypoint to ${appEntrypointPath}: ${(error as Error).message}`,
+			);
+		} finally {
+			asarLib.symbols.asar_free_buffer(fileDataPtr, BigInt(fileSize));
+			asarLib.symbols.asar_close(asarArchive);
+		}
 	} else {
 		// Fallback to flat file system (for non-ASAR builds)
 		console.log(`[LAUNCHER] Loading app code from flat files`);
 		appEntrypointPath = join(appFolderPath, "bun", "index.js");
+
+		if (!existsSync(appEntrypointPath)) {
+			console.error(
+				`[LAUNCHER] ERROR: App entrypoint not found: ${appEntrypointPath}`,
+			);
+			throw new Error(
+				`App entrypoint not found: ${appEntrypointPath}. Ensure the app was built correctly.`,
+			);
+		}
 	}
 
 	// Register signal handlers on the main thread to prevent default termination.
@@ -238,10 +253,7 @@ ${fileData.toString("utf8")}
 	process.on("SIGINT", () => {});
 	process.on("SIGTERM", () => {});
 
-	new Worker(appEntrypointPath, {
-		// consider adding a preload with error handling
-		// preload: [''];
-	});
+	new Worker(appEntrypointPath);
 
 	// Pass identifier, name, and channel as C strings using Buffer encoding
 	// Bun FFI requires explicit encoding for cstring parameters
