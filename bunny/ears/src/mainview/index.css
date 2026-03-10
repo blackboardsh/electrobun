@@ -73,6 +73,9 @@ body {
 
 .hero-actions {
   margin-top: 22px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .hero-badge {
@@ -271,6 +274,7 @@ body {
   display: flex;
   gap: 10px;
   margin-top: 18px;
+  flex-wrap: wrap;
 }
 
 button {
@@ -304,6 +308,97 @@ button.secondary {
   color: var(--ink);
 }
 
+button.danger {
+  background: rgba(173, 38, 28, 0.1);
+  color: #8a2318;
+}
+
+.consent-backdrop {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(37, 21, 13, 0.36);
+  backdrop-filter: blur(10px);
+  z-index: 40;
+}
+
+.consent-backdrop[data-open="true"] {
+  display: flex;
+}
+
+.consent-card {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 56px);
+  overflow: auto;
+  background: rgba(255, 250, 242, 0.98);
+  border: 1px solid rgba(216, 77, 0, 0.14);
+  border-radius: 26px;
+  padding: 26px;
+  box-shadow: 0 32px 88px rgba(68, 29, 2, 0.28);
+}
+
+.consent-card h2 {
+  margin: 0;
+  font-size: 30px;
+}
+
+.consent-message {
+  margin: 14px 0 20px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.consent-meta {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(37, 21, 13, 0.08);
+}
+
+.consent-section {
+  margin-top: 18px;
+}
+
+.consent-label {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.consent-chip {
+  background: rgba(37, 21, 13, 0.08);
+  color: var(--ink);
+}
+
+.consent-chip.host-chip {
+  background: rgba(59, 138, 73, 0.12);
+  color: #226438;
+}
+
+.consent-chip.bun-chip {
+  background: rgba(255, 122, 47, 0.12);
+  color: var(--accent-deep);
+}
+
+.consent-chip.tag-chip {
+  background: rgba(216, 77, 0, 0.16);
+  color: var(--accent-deep);
+}
+
+.consent-actions {
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
 @media (max-width: 820px) {
   .app-shell {
     padding: 18px;
@@ -315,5 +410,9 @@ button.secondary {
 
   .button-row {
     flex-wrap: wrap;
+  }
+
+  .consent-card {
+    padding: 20px;
   }
 }

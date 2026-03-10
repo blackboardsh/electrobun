@@ -29,6 +29,22 @@ export type CarrotPermissionTag =
   | `bun:${BunPermission}`
   | `isolation:${CarrotIsolation}`;
 
+export type CarrotPermissionConsentRequest = {
+  requestId: string;
+  carrotId: string;
+  carrotName: string;
+  version: string;
+  sourceKind: "prototype" | "local" | "artifact";
+  sourceLabel: string;
+  message: string;
+  confirmLabel: string;
+  requestedPermissions: CarrotPermissionTag[];
+  changedPermissions: CarrotPermissionTag[];
+  hostPermissions: HostPermission[];
+  bunPermissions: BunPermission[];
+  isolation: CarrotIsolation;
+};
+
 export type CarrotMode = "window" | "background";
 
 export type CarrotManifest = {
@@ -62,7 +78,11 @@ export type CarrotInstallSource =
     }
   | {
       kind: "artifact";
-      baseUrl: string;
+      location: string;
+      updateLocation?: string | null;
+      tarballLocation?: string | null;
+      currentHash?: string | null;
+      baseUrl?: string | null;
     };
 
 export type CarrotInstallStatus = "installed" | "broken";

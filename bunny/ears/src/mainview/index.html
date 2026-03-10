@@ -16,7 +16,8 @@
             A tray-first Electrobun runtime managing tiny Carrots with per-Carrot workers.
           </p>
           <div class="hero-actions">
-            <button class="primary" id="install-carrot">Install Carrot from Disk</button>
+            <button class="primary" id="install-carrot-source">Install Carrot Source</button>
+            <button class="secondary" id="install-carrot-artifact">Install Artifact</button>
           </div>
         </div>
         <div class="hero-badge">
@@ -29,6 +30,40 @@
 
       <section class="carrot-grid" id="carrot-grid"></section>
     </main>
+
+    <div class="consent-backdrop" id="consent-backdrop" data-open="false" aria-hidden="true">
+      <section class="consent-card" aria-label="Carrot permission review">
+        <p class="eyebrow">Permission Review</p>
+        <h2 id="consent-title">Carrot wants these permissions</h2>
+        <p class="consent-message" id="consent-message"></p>
+
+        <div class="consent-meta">
+          <div class="meta-row"><span>Version</span><strong id="consent-version"></strong></div>
+          <div class="meta-row"><span>Source</span><strong class="path-text" id="consent-source"></strong></div>
+          <div class="meta-row"><span>Isolation</span><strong id="consent-isolation"></strong></div>
+        </div>
+
+        <div class="consent-section" id="consent-changed-section" hidden>
+          <span class="consent-label">New In This Request</span>
+          <div class="permission-wrap" id="consent-changed-list"></div>
+        </div>
+
+        <div class="consent-section">
+          <span class="consent-label">Host Permissions</span>
+          <div class="permission-wrap" id="consent-host-list"></div>
+        </div>
+
+        <div class="consent-section">
+          <span class="consent-label">Bun Permissions</span>
+          <div class="permission-wrap" id="consent-bun-list"></div>
+        </div>
+
+        <div class="button-row consent-actions">
+          <button class="secondary" id="consent-cancel">Cancel</button>
+          <button class="primary" id="consent-approve">Approve</button>
+        </div>
+      </section>
+    </div>
     <script type="module" src="index.js"></script>
   </body>
 </html>

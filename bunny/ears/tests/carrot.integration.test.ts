@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type {
@@ -13,10 +13,14 @@ import {
   flattenCarrotPermissions,
   normalizeCarrotPermissions,
 } from "../src/carrot-runtime/types";
+import { prepareArtifactPayloadFromPath } from "../src/bun/carrotArtifacts";
+import { buildCarrotPermissionConsentRequest } from "../src/bun/carrotConsent";
+import type { PreparedCarrotInstall } from "../src/bun/carrotStore";
 import { toBunWorkerPermissions } from "../src/bun/workerPermissions";
 
 const EARS_ROOT = resolve(import.meta.dir, "..");
 const CARROTS_ROOT = resolve(EARS_ROOT, "..", "carrots");
+const PACKAGE_ROOT = resolve(EARS_ROOT, "..", "..", "package");
 
 process.env.BUNNY_EARS_SDK_VIEW_MODULE = join(
   EARS_ROOT,
@@ -24,6 +28,7 @@ process.env.BUNNY_EARS_SDK_VIEW_MODULE = join(
   "carrot-runtime",
   "view.ts",
 );
+process.env.BUNNY_EARS_ZSTD_BIN = join(PACKAGE_ROOT, "dist-macos-arm64", "zig-zstd");
 
 const { buildCarrotSource } = await import("../src/bun/carrotBuilder");
 
@@ -221,6 +226,115 @@ async function startCarrot(
 }
 
 describe("Bunny Ears carrots", () => {
+  test("permission consent requests enumerate requested host and Bun permissions", () => {
+    const prepared: PreparedCarrotInstall = {
+      manifest: {
+        id: "consent-test",
+        name: "Consent Test",
+        version: "0.1.0",
+        description: "Checks consent rendering",
+        mode: "window",
+        permissions: normalizeCarrotPermissions({
+          host: {
+            windows: true,
+            notifications: true,
+          },
+          bun: {
+            read: true,
+            write: true,
+            env: true,
+          },
+          isolation: "shared-worker",
+        }),
+        view: {
+          relativePath: "views/index.html",
+          title: "Consent Test",
+          width: 640,
+          height: 480,
+        },
+        worker: {
+          relativePath: "worker.js",
+        },
+      },
+      previousInstall: null,
+      source: {
+        kind: "local",
+        path: "/tmp/consent-test",
+      },
+      devMode: true,
+      lastBuildAt: Date.now(),
+      currentHash: null,
+      install: () => {
+        throw new Error("not used");
+      },
+      cleanup: () => {},
+    };
+
+    const plan = buildCarrotPermissionConsentRequest(prepared, "request-1");
+    expect(plan.request).not.toBeNull();
+    expect(plan.request?.hostPermissions).toEqual(["windows", "notifications"]);
+    expect(plan.request?.bunPermissions).toEqual(["read", "write", "env"]);
+    expect(plan.request?.requestedPermissions).toContain("host:windows");
+    expect(plan.request?.requestedPermissions).toContain("bun:read");
+    expect(plan.request?.requestedPermissions).toContain("isolation:shared-worker");
+  });
+
+  test("permission consent is skipped when permissions match the current install", () => {
+    const grantedPermissions = normalizeCarrotPermissions({
+      host: { tray: true },
+      bun: { read: true },
+      isolation: "shared-worker",
+    });
+    const prepared: PreparedCarrotInstall = {
+      manifest: {
+        id: "consent-match",
+        name: "Consent Match",
+        version: "0.1.0",
+        description: "Skips redundant prompts",
+        mode: "background",
+        permissions: grantedPermissions,
+        view: {
+          relativePath: "views/index.html",
+          title: "Consent Match",
+          width: 320,
+          height: 240,
+        },
+        worker: {
+          relativePath: "worker.js",
+        },
+      },
+      previousInstall: {
+        id: "consent-match",
+        name: "Consent Match",
+        version: "0.0.9",
+        currentHash: null,
+        installedAt: Date.now(),
+        updatedAt: Date.now(),
+        permissionsGranted: grantedPermissions,
+        status: "installed",
+        source: {
+          kind: "local",
+          path: "/tmp/consent-match",
+        },
+      },
+      source: {
+        kind: "local",
+        path: "/tmp/consent-match",
+      },
+      devMode: true,
+      lastBuildAt: Date.now(),
+      currentHash: null,
+      install: () => {
+        throw new Error("not used");
+      },
+      cleanup: () => {},
+    };
+
+    const plan = buildCarrotPermissionConsentRequest(prepared, "request-2");
+    expect(plan.request).toBeNull();
+    expect(plan.grantedPermissions).toEqual(grantedPermissions);
+  });
+
   test("Charlie builds from source and respects restricted Bun permissions", async () => {
     const carrot = await startCarrot("charlie");
 
@@ -290,5 +404,69 @@ describe("Bunny Ears carrots", () => {
     };
     expect(status.label).toBe("Forrager: Focus");
     expect(status.body).toBe("Forrager switched to focus mode.");
+  });
+
+  test("Charlie can be prepared from a local update.json artifact", async () => {
+    const built = await buildCarrot("charlie");
+    const artifactRoot = makeTempDir("bunny-ears-charlie-artifact-");
+    const payloadDir = join(artifactRoot, "charlie-artifact");
+    mkdirSync(payloadDir, { recursive: true });
+    cpSync(built.outDir, payloadDir, { recursive: true, force: true });
+
+    const tarPath = join(artifactRoot, "charlie.tar");
+    const tarballPath = join(artifactRoot, "charlie-artifact.tar.zst");
+    const tarResult = Bun.spawnSync(["tar", "-cf", tarPath, "-C", artifactRoot, "charlie-artifact"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(tarResult.exitCode).toBe(0);
+
+    const zstdResult = Bun.spawnSync(
+      [
+        process.env.BUNNY_EARS_ZSTD_BIN!,
+        "compress",
+        "-i",
+        tarPath,
+        "-o",
+        tarballPath,
+        "--no-timing",
+      ],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(zstdResult.exitCode).toBe(0);
+
+    const updatePath = join(artifactRoot, "update.json");
+    writeFileSync(
+      updatePath,
+      JSON.stringify(
+        {
+          version: built.manifest.version,
+          hash: "charlie-local-hash",
+          tarball: "charlie-artifact.tar.zst",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const prepared = await prepareArtifactPayloadFromPath(updatePath, artifactRoot);
+    cleanups.add(() => prepared.cleanup());
+
+    expect(prepared.source.kind).toBe("artifact");
+    if (prepared.source.kind !== "artifact") {
+      throw new Error("Expected artifact source");
+    }
+    expect(prepared.source.updateLocation).toBe(updatePath);
+    expect(prepared.currentHash).toBe("charlie-local-hash");
+
+    const preparedManifest = JSON.parse(
+      await Bun.file(join(prepared.payloadDir, "carrot.json")).text(),
+    ) as CarrotManifest;
+    expect(preparedManifest.id).toBe("charlie");
+    expect(existsSync(join(prepared.payloadDir, "worker.js"))).toBe(true);
+    expect(existsSync(join(prepared.payloadDir, "views", "index.html"))).toBe(true);
   });
 });

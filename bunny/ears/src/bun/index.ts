@@ -5,9 +5,11 @@ import {
   Utils,
   type RPCSchema,
 } from "electrobun/bun";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  CarrotPermissionConsentRequest,
+  CarrotPermissionGrant,
   CarrotPermissionTag,
   CarrotViewRPC,
   CarrotWorkerMessage,
@@ -18,13 +20,20 @@ import {
 } from "../carrot-runtime/types";
 import {
   getInstalledCarrotsRoot,
-  installDevCarrotFromSource,
+  getInstalledCarrot,
   loadInstalledCarrots,
+  prepareArtifactCarrotInstall,
+  prepareDevCarrotInstallFromSource,
   pruneLegacyPrototypeCarrots,
-  rebuildInstalledDevCarrot,
   refreshTrackedDevCarrots,
+  uninstallInstalledCarrot,
   type InstalledCarrot,
+  type PreparedCarrotInstall,
 } from "./carrotStore";
+import {
+  buildCarrotPermissionConsentRequest,
+  requestCarrotUninstallConsent,
+} from "./carrotConsent";
 import { toBunWorkerPermissions } from "./workerPermissions";
 
 function bootLog(message: string, details?: unknown) {
@@ -47,7 +56,8 @@ type CarrotInfo = {
   status: CarrotStatus;
   installStatus: "installed" | "broken";
   devMode: boolean;
-  sourcePath: string | null;
+  sourceKind: "prototype" | "local" | "artifact";
+  sourceLabel: string | null;
   lastBuildError: string | null;
   logTail: string[];
 };
@@ -55,6 +65,7 @@ type CarrotInfo = {
 type DashboardState = {
   installRoot: string;
   carrots: CarrotInfo[];
+  pendingConsent: CarrotPermissionConsentRequest | null;
 };
 
 type DashboardRPC = {
@@ -64,13 +75,29 @@ type DashboardRPC = {
         params: {};
         response: DashboardState;
       };
-      installCarrotFromDisk: {
+      installCarrotSourceFromDisk: {
         params: {};
         response: { ok: boolean; id?: string; error?: string; reason?: string };
       };
-      rebuildCarrot: {
+      installCarrotArtifactFromDisk: {
+        params: {};
+        response: { ok: boolean; id?: string; error?: string; reason?: string };
+      };
+      reinstallCarrot: {
         params: { id: string };
-        response: { ok: boolean; error?: string };
+        response: { ok: boolean; id?: string; error?: string; reason?: string };
+      };
+      respondToConsent: {
+        params: { requestId: string; approved: boolean };
+        response: { ok: boolean; id?: string; error?: string; reason?: string };
+      };
+      uninstallCarrot: {
+        params: { id: string };
+        response: { ok: boolean; error?: string; reason?: string };
+      };
+      revealCarrot: {
+        params: { id: string };
+        response: { ok: boolean };
       };
       launchCarrot: {
         params: { id: string };
@@ -128,6 +155,13 @@ class CarrotInstance {
   }
 
   get summary(): CarrotInfo {
+    const sourceLabel =
+      this.carrot.install.source.kind === "local"
+        ? this.carrot.install.source.path
+        : this.carrot.install.source.kind === "artifact"
+          ? this.carrot.install.source.location
+          : this.carrot.install.source.prototypeId;
+
     return {
       id: this.carrot.manifest.id,
       name: this.carrot.manifest.name,
@@ -138,10 +172,8 @@ class CarrotInstance {
       status: this.status,
       installStatus: this.carrot.install.status,
       devMode: this.carrot.install.devMode === true,
-      sourcePath:
-        this.carrot.install.source.kind === "local"
-          ? this.carrot.install.source.path
-          : null,
+      sourceKind: this.carrot.install.source.kind,
+      sourceLabel,
       lastBuildError: this.carrot.install.lastBuildError ?? null,
       logTail: this.logs.slice(-4),
     };
@@ -456,6 +488,13 @@ class BunnyEarsRuntime {
   tray: Tray;
   managerWindow: BrowserWindow | null = null;
   carrots = new Map<string, CarrotInstance>();
+  pendingConsent: {
+    request: CarrotPermissionConsentRequest;
+    prepared: PreparedCarrotInstall;
+    grantedPermissions: CarrotPermissionGrant;
+    options: { preserveRunningState?: boolean };
+  } | null = null;
+  nextConsentRequestId = 1;
 
   constructor() {
     for (const carrot of loadInstalledCarrots()) {
@@ -500,6 +539,7 @@ class BunnyEarsRuntime {
     return {
       installRoot: getInstalledCarrotsRoot(),
       carrots: this.summaries(),
+      pendingConsent: this.pendingConsent?.request ?? null,
     };
   }
 
@@ -518,7 +558,8 @@ class BunnyEarsRuntime {
 
     return [
       { type: "normal" as const, label: "Open Bunny Ears", action: "open-manager" },
-      { type: "normal" as const, label: "Install Carrot from Disk", action: "install-from-disk" },
+      { type: "normal" as const, label: "Install Carrot Source", action: "install-source" },
+      { type: "normal" as const, label: "Install Carrot Artifact", action: "install-artifact" },
       ...carrotItems,
       { type: "divider" as const },
       { type: "normal" as const, label: "Quit Bunny Ears", action: "quit" },
@@ -530,8 +571,12 @@ class BunnyEarsRuntime {
       this.openManagerWindow();
       return;
     }
-    if (action === "install-from-disk") {
-      await this.installCarrotFromDisk();
+    if (action === "install-source") {
+      await this.installCarrotSourceFromDisk();
+      return;
+    }
+    if (action === "install-artifact") {
+      await this.installCarrotArtifactFromDisk();
       return;
     }
     if (action === "quit") {
@@ -553,7 +598,102 @@ class BunnyEarsRuntime {
     }
   }
 
-  private async installCarrotFromDisk() {
+  private async installPreparedCarrot(
+    prepared: PreparedCarrotInstall,
+    grantedPermissions: CarrotPermissionGrant,
+    options: { preserveRunningState?: boolean } = {},
+  ) {
+    try {
+      const installed = prepared.install(grantedPermissions);
+      await this.upsertInstalledCarrot(installed, {
+        openWindow: installed.manifest.mode === "window",
+        preserveRunningState: options.preserveRunningState,
+      });
+      return { ok: true, id: installed.manifest.id };
+    } finally {
+      prepared.cleanup();
+    }
+  }
+
+  private async queuePreparedInstall(
+    prepared: PreparedCarrotInstall,
+    options: { preserveRunningState?: boolean } = {},
+  ) {
+    if (this.pendingConsent) {
+      prepared.cleanup();
+      this.openManagerWindow();
+      return {
+        ok: false,
+        error: "Another Carrot install is already waiting for permission approval.",
+      };
+    }
+
+    const requestId = `consent-${Date.now()}-${this.nextConsentRequestId++}`;
+    const consentPlan = buildCarrotPermissionConsentRequest(prepared, requestId);
+
+    if (!consentPlan.request) {
+      return await this.installPreparedCarrot(prepared, consentPlan.grantedPermissions, options);
+    }
+
+    this.pendingConsent = {
+      request: consentPlan.request,
+      prepared,
+      grantedPermissions: consentPlan.grantedPermissions,
+      options,
+    };
+    this.openManagerWindow();
+    this.notifyDashboardChanged();
+
+    return {
+      ok: false,
+      id: prepared.manifest.id,
+      reason: "awaiting-consent",
+    };
+  }
+
+  private clearPendingConsent() {
+    const pending = this.pendingConsent;
+    if (!pending) {
+      return;
+    }
+
+    this.pendingConsent = null;
+    pending.prepared.cleanup();
+  }
+
+  private async respondToConsent(requestId: string, approved: boolean) {
+    const pending = this.pendingConsent;
+    if (!pending || pending.request.requestId !== requestId) {
+      return { ok: false, error: "Consent request not found." };
+    }
+
+    this.pendingConsent = null;
+    this.notifyDashboardChanged();
+
+    if (!approved) {
+      pending.prepared.cleanup();
+      return { ok: false, reason: "canceled" };
+    }
+
+    try {
+      return await this.installPreparedCarrot(
+        pending.prepared,
+        pending.grantedPermissions,
+        pending.options,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await Utils.showMessageBox({
+        type: "error",
+        title: "Carrot install failed",
+        message,
+      });
+      this.refreshInstalledCarrot(pending.request.carrotId);
+      return { ok: false, error: message };
+    }
+  }
+
+  private async installCarrotSourceFromDisk() {
     const selectedPaths = await Utils.openFileDialog({
       startingFolder: Utils.paths.documents,
       canChooseFiles: false,
@@ -567,35 +707,131 @@ class BunnyEarsRuntime {
     }
 
     try {
-      const installed = await installDevCarrotFromSource(selectedPath);
-      await this.upsertInstalledCarrot(installed, { openWindow: installed.manifest.mode === "window" });
-      return { ok: true, id: installed.manifest.id };
+      const prepared = await prepareDevCarrotInstallFromSource(selectedPath);
+      return await this.queuePreparedInstall(prepared);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await Utils.showMessageBox({
         type: "error",
-        title: "Carrot install failed",
+        title: "Carrot source install failed",
         message,
       });
       return { ok: false, error: message };
     }
   }
 
-  private async rebuildCarrot(id: string) {
+  private async installCarrotArtifactFromDisk() {
+    const selectedPaths = await Utils.openFileDialog({
+      startingFolder: Utils.paths.documents,
+      canChooseFiles: true,
+      canChooseDirectory: true,
+      allowsMultipleSelection: false,
+    });
+
+    const selectedPath = selectedPaths[0];
+    if (!selectedPath) {
+      return { ok: false, reason: "canceled" };
+    }
+
     try {
-      const installed = await rebuildInstalledDevCarrot(id);
-      await this.upsertInstalledCarrot(installed, { preserveRunningState: true });
-      return { ok: true };
+      const prepared = await prepareArtifactCarrotInstall(selectedPath);
+      return await this.queuePreparedInstall(prepared);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await Utils.showMessageBox({
         type: "error",
-        title: "Carrot rebuild failed",
+        title: "Carrot artifact install failed",
+        message,
+      });
+      return { ok: false, error: message };
+    }
+  }
+
+  private async reinstallCarrot(id: string) {
+    try {
+      const installed = this.carrots.get(id)?.carrot ?? getInstalledCarrot(id);
+      if (!installed) {
+        return { ok: false, error: "Carrot not found" };
+      }
+
+      let prepared: PreparedCarrotInstall;
+      if (installed.install.source.kind === "local") {
+        prepared = await prepareDevCarrotInstallFromSource(installed.install.source.path);
+      } else if (installed.install.source.kind === "artifact") {
+        const artifactLocation =
+          installed.install.source.updateLocation ??
+          installed.install.source.tarballLocation ??
+          installed.install.source.location;
+        prepared = await prepareArtifactCarrotInstall(artifactLocation);
+      } else {
+        return { ok: false, error: "Prototype carrots cannot be reinstalled" };
+      }
+
+      return await this.queuePreparedInstall(prepared, {
+        preserveRunningState: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await Utils.showMessageBox({
+        type: "error",
+        title: "Carrot reinstall failed",
         message,
       });
       this.refreshInstalledCarrot(id);
       return { ok: false, error: message };
     }
+  }
+
+  private async uninstallCarrot(id: string) {
+    const carrot = this.carrots.get(id);
+    if (!carrot) {
+      return { ok: false, reason: "missing" };
+    }
+
+    const confirmed = await requestCarrotUninstallConsent(carrot.carrot.manifest.name);
+    if (!confirmed) {
+      return { ok: false, reason: "canceled" };
+    }
+
+    await carrot.stop();
+    uninstallInstalledCarrot(id);
+    this.carrots.delete(id);
+    this.notifyDashboardChanged();
+    return { ok: true };
+  }
+
+  private async revealCarrot(id: string) {
+    const carrot = this.carrots.get(id);
+    if (!carrot) {
+      return { ok: false };
+    }
+
+    const source = carrot.carrot.install.source;
+    let targetPath: string | null = null;
+
+    if (source.kind === "local") {
+      targetPath = source.path;
+    } else if (source.kind === "artifact") {
+      if (/^https?:\/\//i.test(source.location)) {
+        Utils.openExternal(source.location);
+        return { ok: true };
+      }
+      targetPath = source.location;
+    } else {
+      targetPath = carrot.carrot.rootDir;
+    }
+
+    if (!targetPath) {
+      return { ok: false };
+    }
+
+    if (existsSync(targetPath) && statSync(targetPath).isDirectory()) {
+      Utils.openPath(targetPath);
+    } else {
+      Utils.showItemInFolder(targetPath);
+    }
+
+    return { ok: true };
   }
 
   private refreshInstalledCarrot(id: string) {
@@ -659,12 +895,17 @@ class BunnyEarsRuntime {
     bootLog("creating manager window");
 
     const rpc = BrowserView.defineRPC<DashboardRPC>({
-      maxRequestTime: 10000,
+      maxRequestTime: 300000,
       handlers: {
         requests: {
           getDashboard: async () => this.dashboardState(),
-          installCarrotFromDisk: async () => this.installCarrotFromDisk(),
-          rebuildCarrot: async ({ id }) => this.rebuildCarrot(id),
+          installCarrotSourceFromDisk: async () => this.installCarrotSourceFromDisk(),
+          installCarrotArtifactFromDisk: async () => this.installCarrotArtifactFromDisk(),
+          reinstallCarrot: async ({ id }) => this.reinstallCarrot(id),
+          respondToConsent: async ({ requestId, approved }) =>
+            this.respondToConsent(requestId, approved),
+          uninstallCarrot: async ({ id }) => this.uninstallCarrot(id),
+          revealCarrot: async ({ id }) => this.revealCarrot(id),
           launchCarrot: async ({ id }) => {
             const carrot = this.carrots.get(id);
             if (!carrot) return { ok: false };
@@ -712,6 +953,7 @@ class BunnyEarsRuntime {
       (win.webview.rpc as any)?.send?.dashboardChanged(this.dashboardState());
     });
     win.on("close", () => {
+      this.clearPendingConsent();
       if (this.managerWindow === win) {
         this.managerWindow = null;
       }

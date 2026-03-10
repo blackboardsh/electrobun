@@ -8,23 +8,23 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { prepareArtifactPayloadFromPath } from "./carrotArtifacts";
 import { buildCarrotSource } from "./carrotBuilder";
 import type {
   CarrotInstallRecord,
+  CarrotInstallSource,
   CarrotManifest,
   CarrotPermissionGrant,
   CarrotRegistry,
-  CarrotInstallSource,
 } from "../carrot-runtime/types";
-import {
-  mergeCarrotPermissions,
-  normalizeCarrotPermissions,
-} from "../carrot-runtime/types";
+import { normalizeCarrotPermissions } from "../carrot-runtime/types";
 
-const INSTALLED_CARROTS_ROOT = join(Utils.paths.userData, "carrots");
+const INSTALLED_CARROTS_ROOT =
+  process.env.BUNNY_EARS_CARROT_ROOT || join(Utils.paths.userData, "carrots");
 const REGISTRY_PATH = join(INSTALLED_CARROTS_ROOT, "registry.json");
 const REGISTRY_VERSION = 1;
 
@@ -39,6 +39,17 @@ export type InstalledCarrot = {
   workerPath: string;
   viewPath: string;
   viewUrl: string;
+};
+
+export type PreparedCarrotInstall = {
+  manifest: CarrotManifest;
+  previousInstall: CarrotInstallRecord | null;
+  source: CarrotInstallSource;
+  devMode: boolean;
+  lastBuildAt: number | null;
+  currentHash: string | null;
+  install: (permissionsGranted?: CarrotPermissionGrant) => InstalledCarrot;
+  cleanup: () => void;
 };
 
 type CarrotPaths = {
@@ -78,6 +89,36 @@ function getCarrotPaths(id: string): CarrotPaths {
   };
 }
 
+function normalizeInstallSource(
+  source: CarrotInstallSource,
+  fallbackHash: string | null,
+): CarrotInstallSource {
+  if (source.kind !== "artifact") {
+    return source;
+  }
+
+  const legacySource = source as CarrotInstallSource & { baseUrl?: string; location?: string };
+  if (!legacySource.location) {
+    return {
+      kind: "artifact",
+      location: legacySource.baseUrl ?? "",
+      updateLocation: null,
+      tarballLocation: null,
+      currentHash: fallbackHash,
+      baseUrl: legacySource.baseUrl ?? null,
+    };
+  }
+
+  return {
+    kind: "artifact",
+    location: source.location,
+    updateLocation: source.updateLocation ?? null,
+    tarballLocation: source.tarballLocation ?? null,
+    currentHash: source.currentHash ?? fallbackHash,
+    baseUrl: source.baseUrl ?? null,
+  };
+}
+
 function readManifestAt(manifestPath: string): CarrotManifest {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CarrotManifest & {
     permissions?: CarrotManifest["permissions"] | string[];
@@ -91,6 +132,7 @@ function readManifestAt(manifestPath: string): CarrotManifest {
 function normalizeInstallRecord(record: CarrotInstallRecord): CarrotInstallRecord {
   return {
     ...record,
+    source: normalizeInstallSource(record.source, record.currentHash),
     permissionsGranted: normalizeCarrotPermissions(record.permissionsGranted as any),
     devMode: record.devMode ?? false,
     lastBuildAt: record.lastBuildAt ?? null,
@@ -201,6 +243,11 @@ function loadInstalledCarrot(record: CarrotInstallRecord): InstalledCarrot | nul
   };
 }
 
+export function getInstalledCarrot(id: string) {
+  const record = readInstalledRecord(id);
+  return record ? loadInstalledCarrot(record) : null;
+}
+
 function readInstalledRecord(id: string) {
   return readInstallRecordAt(getCarrotPaths(id).installPath);
 }
@@ -297,9 +344,8 @@ function installPreparedCarrot(
     currentHash: options.currentHash ?? previousInstall?.currentHash ?? null,
     installedAt: previousInstall?.installedAt ?? Date.now(),
     updatedAt: Date.now(),
-    permissionsGranted: mergeCarrotPermissions(
-      manifest.permissions,
-      options.permissionsGranted ?? previousInstall?.permissionsGranted,
+    permissionsGranted: normalizeCarrotPermissions(
+      options.permissionsGranted ?? manifest.permissions,
     ),
     devMode: options.devMode ?? previousInstall?.devMode ?? false,
     lastBuildAt: options.lastBuildAt ?? previousInstall?.lastBuildAt ?? null,
@@ -322,6 +368,52 @@ function installPreparedCarrot(
   }
 }
 
+function normalizeBuildError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function looksLikeSourceDirectory(path: string) {
+  return (
+    existsSync(join(path, "web")) ||
+    existsSync(join(path, "build.ts")) ||
+    existsSync(join(path, "worker.ts"))
+  );
+}
+
+function createPreparedInstall(
+  preparedDir: string,
+  options: {
+    source: CarrotInstallSource;
+    previousInstall?: CarrotInstallRecord | null;
+    currentHash?: string | null;
+    devMode?: boolean;
+    lastBuildAt?: number | null;
+    cleanup?: () => void;
+  },
+): PreparedCarrotInstall {
+  const { manifest } = assertPreparedCarrotPayload(preparedDir);
+  const previousInstall = options.previousInstall ?? readInstalledRecord(manifest.id);
+
+  return {
+    manifest,
+    previousInstall: previousInstall ?? null,
+    source: options.source,
+    devMode: options.devMode ?? false,
+    lastBuildAt: options.lastBuildAt ?? null,
+    currentHash: options.currentHash ?? previousInstall?.currentHash ?? null,
+    install: (permissionsGranted) =>
+      installPreparedCarrot(preparedDir, {
+        source: options.source,
+        currentHash: options.currentHash ?? previousInstall?.currentHash ?? null,
+        previousInstall: previousInstall ?? undefined,
+        permissionsGranted,
+        devMode: options.devMode ?? false,
+        lastBuildAt: options.lastBuildAt ?? null,
+      }),
+    cleanup: options.cleanup ?? (() => {}),
+  };
+}
+
 async function buildSourceIntoTemp(sourceDir: string) {
   ensureStoreRoot();
   const tempPayloadDir = mkdtempSync(join(INSTALLED_CARROTS_ROOT, ".build-"));
@@ -335,31 +427,106 @@ async function buildSourceIntoTemp(sourceDir: string) {
   }
 }
 
-function normalizeBuildError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+export async function prepareDevCarrotInstallFromSource(
+  sourceDir: string,
+): Promise<PreparedCarrotInstall> {
+  const normalizedSourceDir = resolve(sourceDir);
+  if (!existsSync(normalizedSourceDir) || !statSync(normalizedSourceDir).isDirectory()) {
+    throw new Error(`Carrot source folder not found: ${normalizedSourceDir}`);
+  }
+
+  if (!looksLikeSourceDirectory(normalizedSourceDir)) {
+    throw new Error(
+      `Selected folder does not look like a Carrot source tree: ${normalizedSourceDir}`,
+    );
+  }
+
+  const { tempPayloadDir } = await buildSourceIntoTemp(normalizedSourceDir);
+  return createPreparedInstall(tempPayloadDir, {
+    source: {
+      kind: "local",
+      path: normalizedSourceDir,
+    },
+    devMode: true,
+    lastBuildAt: Date.now(),
+    cleanup: () => rmSync(tempPayloadDir, { recursive: true, force: true }),
+  });
+}
+
+export async function prepareArtifactCarrotInstall(
+  selection: string,
+): Promise<PreparedCarrotInstall> {
+  const normalizedSelection = /^https?:\/\//i.test(selection)
+    ? selection
+    : resolve(selection);
+
+  if (existsSync(normalizedSelection) && statSync(normalizedSelection).isDirectory()) {
+    if (looksLikeSourceDirectory(normalizedSelection)) {
+      throw new Error(
+        `Selected folder is a Carrot source tree. Use “Install Carrot Source” for ${normalizedSelection}`,
+      );
+    }
+  }
+
+  ensureStoreRoot();
+  const prepared = await prepareArtifactPayloadFromPath(
+    normalizedSelection,
+    INSTALLED_CARROTS_ROOT,
+  );
+
+  return createPreparedInstall(prepared.payloadDir, {
+    source: prepared.source,
+    currentHash: prepared.currentHash,
+    devMode: false,
+    lastBuildAt: null,
+    cleanup: prepared.cleanup,
+  });
 }
 
 export async function installDevCarrotFromSource(
   sourceDir: string,
   permissionsGranted?: CarrotPermissionGrant,
 ) {
-  const normalizedSourceDir = resolve(sourceDir);
-  const { manifest, tempPayloadDir } = await buildSourceIntoTemp(normalizedSourceDir);
-
+  const prepared = await prepareDevCarrotInstallFromSource(sourceDir);
   try {
-    const previousInstall = readInstalledRecord(manifest.id) ?? undefined;
-    return installPreparedCarrot(tempPayloadDir, {
-      source: {
-        kind: "local",
-        path: normalizedSourceDir,
-      },
-      devMode: true,
-      lastBuildAt: Date.now(),
-      permissionsGranted,
-      previousInstall,
-    });
+    return prepared.install(permissionsGranted);
   } finally {
-    rmSync(tempPayloadDir, { recursive: true, force: true });
+    prepared.cleanup();
+  }
+}
+
+async function prepareReinstall(record: CarrotInstallRecord) {
+  switch (record.source.kind) {
+    case "local":
+      return prepareDevCarrotInstallFromSource(record.source.path);
+    case "artifact": {
+      if (record.source.updateLocation) {
+        return prepareArtifactCarrotInstall(record.source.updateLocation);
+      }
+      if (record.source.tarballLocation) {
+        return prepareArtifactCarrotInstall(record.source.tarballLocation);
+      }
+      return prepareArtifactCarrotInstall(record.source.location);
+    }
+    case "prototype":
+      throw new Error(`Prototype carrots cannot be reinstalled: ${record.id}`);
+  }
+}
+
+export async function reinstallInstalledCarrot(
+  id: string,
+  permissionsGranted?: CarrotPermissionGrant,
+) {
+  const record = readInstalledRecord(id);
+  if (!record) {
+    throw new Error(`Carrot is not installed: ${id}`);
+  }
+
+  const prepared = await prepareReinstall(record);
+  try {
+    return prepared.install(permissionsGranted ?? record.permissionsGranted);
+  } finally {
+    prepared.cleanup();
   }
 }
 
@@ -370,10 +537,7 @@ export async function rebuildInstalledDevCarrot(id: string) {
   }
 
   try {
-    return await installDevCarrotFromSource(
-      existing.source.path,
-      existing.permissionsGranted,
-    );
+    return await reinstallInstalledCarrot(id, existing.permissionsGranted);
   } catch (error) {
     updateInstallRecord(id, (record) => ({
       ...record,
@@ -407,6 +571,17 @@ export async function refreshTrackedDevCarrots() {
   }
 
   return errors;
+}
+
+export function uninstallInstalledCarrot(id: string) {
+  const record = readInstalledRecord(id);
+  if (!record) {
+    return null;
+  }
+
+  rmSync(getCarrotPaths(id).rootDir, { recursive: true, force: true });
+  loadAllInstallRecords();
+  return record;
 }
 
 export function pruneLegacyPrototypeCarrots() {
