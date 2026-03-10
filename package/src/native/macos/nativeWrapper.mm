@@ -6354,6 +6354,26 @@ static void applyWindowButtonPosition(NSWindow *window, double x, double y) {
             }
         }
     }
+
+    - (void)windowWillExitFullScreen:(NSNotification *)notification {
+        if (self.hasCustomButtonPosition) {
+            NSWindow *window = [notification object];
+            [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
+        }
+    }
+
+    - (void)windowDidExitFullScreen:(NSNotification *)notification {
+        if (self.hasCustomButtonPosition) {
+            NSWindow *window = [notification object];
+            applyWindowButtonPosition(window, self.buttonPositionX, self.buttonPositionY);
+            [[window standardWindowButton:NSWindowCloseButton] setHidden:NO];
+            [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
+            [[window standardWindowButton:NSWindowZoomButton] setHidden:NO];
+        }
+    }
+
     - (void)windowDidMove:(NSNotification *)notification {
         if (self.moveHandler) {
             NSWindow *window = [notification object];
