@@ -6,6 +6,12 @@ let state = {
   count: 0,
   lastUpdatedAt: null,
 };
+let probes = {
+  read: "Not run",
+  env: "Not run",
+  run: "Not run",
+  ffi: "Not run",
+};
 
 function post(message) {
   self.postMessage(message);
@@ -38,11 +44,57 @@ function snapshot() {
     count: state.count,
     lastUpdatedAt: state.lastUpdatedAt,
     permissions: Array.from(permissions),
+    probes,
   };
 }
 
+async function runProbe(name) {
+  try {
+    switch (name) {
+      case "read": {
+        probes.read = existsSync(statePath)
+          ? "allowed: node:fs can read Bunny Ears state path"
+          : "allowed: node:fs checked Bunny Ears state path";
+        break;
+      }
+      case "env": {
+        const envKeys = Object.keys(process.env);
+        const home = process.env.HOME || process.env.USERPROFILE;
+        probes.env = home
+          ? `allowed: ${home}`
+          : envKeys.length === 0
+            ? "blocked: process.env is unavailable"
+            : "allowed: missing";
+        break;
+      }
+      case "run": {
+        const cmd =
+          process.platform === "win32"
+            ? ["cmd.exe", "/c", "echo", "charlie"]
+            : ["/bin/echo", "charlie"];
+        const result = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" });
+        probes.run = `allowed: ${result.stdout.toString().trim() || "spawned"}`;
+        break;
+      }
+      case "ffi": {
+        await import("bun:ffi");
+        probes.ffi = "allowed: bun:ffi imported";
+        break;
+      }
+      default:
+        break;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    probes[name] = `blocked: ${message}`;
+  }
+
+  emitView("state", snapshot());
+  return snapshot();
+}
+
 async function notifyMilestone() {
-  if (!permissions.has("notifications")) return;
+  if (!permissions.has("host:notifications")) return;
   post({
     type: "action",
     action: "notify",
@@ -104,8 +156,25 @@ self.onmessage = async (event) => {
         post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
         break;
       }
+      case "probeFs":
+      case "probeEnv":
+      case "probeSpawn":
+      case "probeFFI": {
+        const name =
+          message.method === "probeFs"
+            ? "read"
+            : message.method === "probeEnv"
+              ? "env"
+              : message.method === "probeSpawn"
+                ? "run"
+                : "ffi";
+        const result = await runProbe(name);
+        log(`probe ${name}: ${result.probes[name]}`);
+        post({ type: "response", requestId: message.requestId, success: true, payload: result });
+        break;
+      }
       case "notify": {
-        if (permissions.has("notifications")) {
+        if (permissions.has("host:notifications")) {
           post({
             type: "action",
             action: "notify",

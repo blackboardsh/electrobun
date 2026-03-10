@@ -22,6 +22,7 @@ export type WindowOptionsType<T = undefined> = {
 	url: string | null;
 	html: string | null;
 	preload: string | null;
+	viewsRoot: string | null;
 	renderer: "native" | "cef";
 	rpc?: T;
 	styleMask?: {};
@@ -51,6 +52,7 @@ const defaultOptions: WindowOptionsType = {
 	url: "https://electrobun.dev",
 	html: null,
 	preload: null,
+	viewsRoot: null,
 	renderer: buildConfig.defaultRenderer,
 	titleBarStyle: "default",
 	transparent: false,
@@ -113,6 +115,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	url: string | null = null;
 	html: string | null = null;
 	preload: string | null = null;
+	viewsRoot: string | null = null;
 	renderer: "native" | "cef" = "native";
 	transparent: boolean = false;
 	hidden: boolean = false;
@@ -141,6 +144,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.url = options.url || null;
 		this.html = options.html || null;
 		this.preload = options.preload || null;
+		this.viewsRoot = options.viewsRoot || null;
 		this.renderer = options.renderer || defaultOptions.renderer;
 		this.transparent = options.transparent ?? false;
 		this.hidden = options.hidden ?? false;
@@ -212,6 +216,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			url: this.url,
 			html: this.html,
 			preload: this.preload,
+			viewsRoot: this.viewsRoot,
 			// frame: this.frame,
 			renderer: this.renderer,
 			frame: {

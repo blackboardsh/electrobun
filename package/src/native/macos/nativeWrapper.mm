@@ -611,18 +611,27 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
     }
 }
 
+static NSString* normalizeViewsRelativePath(NSString *urlString) {
+    if (!urlString || ![urlString hasPrefix:@"views://"]) {
+        return nil;
+    }
+
+    NSString *relativePath = [urlString substringFromIndex:8];
+    while ([relativePath hasPrefix:@"/"]) {
+        relativePath = [relativePath substringFromIndex:1];
+    }
+
+    return relativePath;
+}
+
 NSData* readViewsFile(const char* viewsUrl) {
     if (!viewsUrl) return nil;
 
     NSString *urlString = [NSString stringWithUTF8String:viewsUrl];
-
-    // Check if it's a views:// URL
-    if (![urlString hasPrefix:@"views://"]) {
+    NSString *relativePath = normalizeViewsRelativePath(urlString);
+    if (!relativePath) {
         return nil;
     }
-
-    // Remove the "views://" prefix
-    NSString *relativePath = [urlString substringFromIndex:8]; // "views://" is 8 chars
 
     // Get the current working directory and Resources path
     NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];
@@ -674,6 +683,35 @@ NSData* readViewsFile(const char* viewsUrl) {
 
     // Read the file
     return [NSData dataWithContentsOfFile:filePath];
+}
+
+NSData* readViewsFileWithRoot(const char* viewsUrl, NSString *viewsRoot) {
+    if (!viewsRoot || viewsRoot.length == 0) {
+        return readViewsFile(viewsUrl);
+    }
+
+    if (!viewsUrl) return nil;
+
+    NSString *urlString = [NSString stringWithUTF8String:viewsUrl];
+    NSString *relativePath = normalizeViewsRelativePath(urlString);
+    if (!relativePath) {
+        return nil;
+    }
+
+    NSString *normalizedRoot = [viewsRoot stringByStandardizingPath];
+    NSString *candidatePath =
+        [[viewsRoot stringByAppendingPathComponent:relativePath] stringByStandardizingPath];
+
+    if (![candidatePath isEqualToString:normalizedRoot] &&
+        ![candidatePath hasPrefix:[normalizedRoot stringByAppendingString:@"/"]]) {
+        NSLog(@"ERROR readViewsFileWithRoot: path escapes root %@ -> %@", normalizedRoot, candidatePath);
+        return nil;
+    }
+
+    NSLog(@"DEBUG readViewsFileWithRoot: Attempting rooted read: %@", candidatePath);
+    NSLog(@"DEBUG readViewsFileWithRoot: file exists=%@", [[NSFileManager defaultManager] fileExistsAtPath:candidatePath] ? @"YES" : @"NO");
+
+    return [NSData dataWithContentsOfFile:candidatePath];
 }
 
 
@@ -792,6 +830,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 
 @interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>    
     @property (nonatomic, assign) uint32_t webviewId;
+    @property (nonatomic, copy) NSString *viewsRoot;
 @end
 
 @interface MyNavigationDelegate : NSObject <WKNavigationDelegate, WKDownloadDelegate>
@@ -834,6 +873,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
                 internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript
+                viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
                 sandbox:(bool)sandbox;
 @end
@@ -1887,11 +1927,10 @@ static void schedulePendingResizeDrain() {
         
         if ([urlString hasPrefix:@"views://"]) {
             NSLog(@"DEBUG WKWebView: Processing views:// URL: %@", urlString);
-            // Remove the "views://" prefix.
-            NSString *relativePath = [urlString substringFromIndex:7];
+            NSString *relativePath = normalizeViewsRelativePath(urlString);
             NSLog(@"DEBUG WKWebView: relativePath = '%@'", relativePath);
 
-            if ([relativePath isEqualToString:@"/internal/index.html"]) {
+            if ([relativePath isEqualToString:@"internal/index.html"]) {
                 // For internal content, call the native HTML resolver.
                 NSLog(@"DEBUG: Handling views://internal/index.html for webview %u", self.webviewId);
                 // Use stored HTML content instead of JSCallback
@@ -1917,7 +1956,7 @@ static void schedulePendingResizeDrain() {
                 }
             } else {
                 NSLog(@"DEBUG WKWebView: Attempting to read views file: %@", urlString);
-                data = readViewsFile(urlString.UTF8String);
+                data = readViewsFileWithRoot(urlString.UTF8String, self.viewsRoot);
                 
                 if (data) {
                     NSLog(@"DEBUG WKWebView: Successfully read views file, length: %lu", (unsigned long)data.length);
@@ -2407,6 +2446,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript
+                viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
                 sandbox:(bool)sandbox
     {
@@ -2414,6 +2454,10 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         if (self) {
             self.webviewId = webviewId;
             self.isSandboxed = sandbox;
+            NSString *viewsRootString =
+                (viewsRoot && strlen(viewsRoot) > 0)
+                    ? [NSString stringWithUTF8String:viewsRoot]
+                    : nil;
 
             // TODO: rewrite this so we can return a reference to the AbstractRenderer and then call
             // init from zig after the handle is added to the webviewMap then we don't need this async stuff
@@ -2432,6 +2476,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
                 // TODO: Consider storing views handler globally and not on each AbstractView                
                 assetSchemeHandler.webviewId = webviewId;
+                assetSchemeHandler.viewsRoot = viewsRootString;
                 [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
                 
                 // create WKWebView
@@ -2545,7 +2590,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 // Note: For custom preload scripts we support either inline js or a views:// style
                 // url to a js file in the bundled views folder.
                 if (strncmp(customPreloadScript, "views://", 8) == 0) {                    
-                    NSData *scriptData = readViewsFile(customPreloadScript);
+                    NSData *scriptData = readViewsFileWithRoot(customPreloadScript, viewsRootString);
                     if (scriptData) {                        
                         NSString *scriptString = [[NSString alloc] initWithData:scriptData encoding:NSUTF8StringEncoding];                        
                         const char *scriptCString = [scriptString UTF8String];
@@ -2593,8 +2638,16 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 NSLog(@"ERROR: WKWebView loadURL invalid URL for webview ID: %u", self.webviewId);
                 return;
             }
-            NSURLRequest *request = [NSURLRequest requestWithURL:url];
-            [self.webView loadRequest:request];
+            if (url.isFileURL) {
+                NSURL *readAccessURL = [url URLByDeletingLastPathComponent];
+                if (!readAccessURL) {
+                    readAccessURL = url;
+                }
+                [self.webView loadFileURL:url allowingReadAccessToURL:readAccessURL];
+            } else {
+                NSURLRequest *request = [NSURLRequest requestWithURL:url];
+                [self.webView loadRequest:request];
+            }
         });
     }
 
@@ -5451,6 +5504,7 @@ void RemoteDevToolsClosed(void* ctx, int target_id) {
                 internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
                 electrobunPreloadScript:(const char *)electrobunPreloadScript
                 customPreloadScript:(const char *)customPreloadScript
+                viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
                 sandbox:(bool)sandbox;
 
@@ -5826,6 +5880,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             internalBridgeHandler:(HandlePostMessage)internalBridgeHandler
             electrobunPreloadScript:(const char *)electrobunPreloadScript
             customPreloadScript:(const char *)customPreloadScript
+            viewsRoot:(const char *)viewsRoot
             transparent:(bool)transparent
             sandbox:(bool)sandbox
     {
@@ -6541,6 +6596,7 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                         HandlePostMessage internalBridgeHandler,
                         const char *electrobunPreloadScript,
                         const char *customPreloadScript,
+                        const char *viewsRoot,
                         bool transparent,
                         bool sandbox ) {
 
@@ -6587,6 +6643,7 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                                         internalBridgeHandler:internalBridgeHandler
                                         electrobunPreloadScript:strdup(electrobunPreloadScript)
                                         customPreloadScript:strdup(customPreloadScript)
+                                        viewsRoot:strdup(viewsRoot)
                                         transparent:transparent
                                         sandbox:sandbox];
 

@@ -5,19 +5,35 @@ import {
   Utils,
   type RPCSchema,
 } from "electrobun/bun";
-import { join, resolve } from "node:path";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-} from "node:fs";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type {
-  CarrotManifest,
-  CarrotPermission,
+  CarrotPermissionTag,
   CarrotViewRPC,
   CarrotWorkerMessage,
 } from "../carrot-runtime/types";
+import {
+  flattenCarrotPermissions,
+  hasHostPermission,
+} from "../carrot-runtime/types";
+import {
+  getInstalledCarrotsRoot,
+  installDevCarrotFromSource,
+  loadInstalledCarrots,
+  pruneLegacyPrototypeCarrots,
+  rebuildInstalledDevCarrot,
+  refreshTrackedDevCarrots,
+  type InstalledCarrot,
+} from "./carrotStore";
+import { toBunWorkerPermissions } from "./workerPermissions";
+
+function bootLog(message: string, details?: unknown) {
+  if (details === undefined) {
+    console.log(`[bunny-ears:boot] ${message}`);
+    return;
+  }
+  console.log(`[bunny-ears:boot] ${message}`, details);
+}
 
 type CarrotStatus = "stopped" | "starting" | "running";
 
@@ -27,9 +43,18 @@ type CarrotInfo = {
   description: string;
   version: string;
   mode: "window" | "background";
-  permissions: CarrotPermission[];
+  permissions: CarrotPermissionTag[];
   status: CarrotStatus;
+  installStatus: "installed" | "broken";
+  devMode: boolean;
+  sourcePath: string | null;
+  lastBuildError: string | null;
   logTail: string[];
+};
+
+type DashboardState = {
+  installRoot: string;
+  carrots: CarrotInfo[];
 };
 
 type DashboardRPC = {
@@ -37,7 +62,15 @@ type DashboardRPC = {
     requests: {
       getDashboard: {
         params: {};
-        response: { carrots: CarrotInfo[] };
+        response: DashboardState;
+      };
+      installCarrotFromDisk: {
+        params: {};
+        response: { ok: boolean; id?: string; error?: string; reason?: string };
+      };
+      rebuildCarrot: {
+        params: { id: string };
+        response: { ok: boolean; error?: string };
       };
       launchCarrot: {
         params: { id: string };
@@ -57,39 +90,13 @@ type DashboardRPC = {
   webview: RPCSchema<{
     requests: {};
     messages: {
-      dashboardChanged: { carrots: CarrotInfo[] };
+      dashboardChanged: DashboardState;
     };
   }>;
 };
 
-const APP_ROOT = resolve("../Resources/app");
-const CARROTS_ROOT = join(APP_ROOT, "carrots");
-const DATA_ROOT = join(Utils.paths.userData, "bunny-ears");
-const CARROT_DATA_ROOT = join(DATA_ROOT, "carrots");
-
-mkdirSync(CARROT_DATA_ROOT, { recursive: true });
-
-function readManifest(id: string): CarrotManifest {
-  return JSON.parse(
-    readFileSync(join(CARROTS_ROOT, id, "carrot.json"), "utf8"),
-  ) as CarrotManifest;
-}
-
-function loadManifests(): CarrotManifest[] {
-  if (!existsSync(CARROTS_ROOT)) {
-    return [];
-  }
-
-  return readdirSync(CARROTS_ROOT, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => readManifest(entry.name))
-    .sort((left, right) => left.name.localeCompare(right.name));
-}
-
-const manifests = loadManifests();
-
 class CarrotInstance {
-  manifest: CarrotManifest;
+  carrot: InstalledCarrot;
   status: CarrotStatus = "stopped";
   logs: string[] = [];
   tray: Tray | null = null;
@@ -104,12 +111,12 @@ class CarrotInstance {
     }
   >();
 
-  constructor(manifest: CarrotManifest) {
-    this.manifest = manifest;
+  constructor(carrot: InstalledCarrot) {
+    this.carrot = carrot;
   }
 
   get stateDir() {
-    return join(CARROT_DATA_ROOT, this.manifest.id);
+    return this.carrot.stateDir;
   }
 
   get statePath() {
@@ -122,20 +129,27 @@ class CarrotInstance {
 
   get summary(): CarrotInfo {
     return {
-      id: this.manifest.id,
-      name: this.manifest.name,
-      description: this.manifest.description,
-      version: this.manifest.version,
-      mode: this.manifest.mode,
-      permissions: this.manifest.permissions,
+      id: this.carrot.manifest.id,
+      name: this.carrot.manifest.name,
+      description: this.carrot.manifest.description,
+      version: this.carrot.manifest.version,
+      mode: this.carrot.manifest.mode,
+      permissions: flattenCarrotPermissions(this.carrot.install.permissionsGranted),
       status: this.status,
+      installStatus: this.carrot.install.status,
+      devMode: this.carrot.install.devMode === true,
+      sourcePath:
+        this.carrot.install.source.kind === "local"
+          ? this.carrot.install.source.path
+          : null,
+      lastBuildError: this.carrot.install.lastBuildError ?? null,
       logTail: this.logs.slice(-4),
     };
   }
 
   async start() {
     if (this.status === "running" || this.status === "starting") {
-      if (this.manifest.mode === "window") {
+      if (this.carrot.manifest.mode === "window") {
         this.controllerWindow?.focus();
       }
       return;
@@ -143,35 +157,68 @@ class CarrotInstance {
 
     mkdirSync(this.stateDir, { recursive: true });
     this.status = "starting";
+    bootLog("carrot starting", {
+      id: this.carrot.manifest.id,
+      mode: this.carrot.manifest.mode,
+      workerPath: this.carrot.workerPath,
+      permissions: flattenCarrotPermissions(this.carrot.install.permissionsGranted),
+    });
     runtime.notifyDashboardChanged();
 
-    const workerPath = join(CARROTS_ROOT, this.manifest.id, this.manifest.worker.relativePath);
-    if (!existsSync(workerPath)) {
-      throw new Error(`Missing worker script for ${this.manifest.id}: ${workerPath}`);
+    if (
+      this.carrot.manifest.mode === "window" &&
+      !hasHostPermission(this.carrot.install.permissionsGranted, "windows")
+    ) {
+      throw new Error(`${this.carrot.manifest.name} is missing the host.windows permission`);
     }
 
-    this.worker = new Worker(workerPath, { type: "module" });
+    bootLog("creating carrot worker", { id: this.carrot.manifest.id });
+    this.worker = new Worker(this.carrot.workerPath, {
+      type: "module",
+      permissions: toBunWorkerPermissions(this.carrot.install.permissionsGranted),
+    });
     this.worker.onmessage = (event: MessageEvent<CarrotWorkerMessage>) => {
       void this.handleWorkerMessage(event.data);
     };
     this.worker.onerror = (event: ErrorEvent) => {
       this.pushLog(`worker error: ${event.message}`);
+      bootLog("carrot worker error", {
+        id: this.carrot.manifest.id,
+        message: event.message,
+      });
       void this.stop();
     };
 
-    this.createControllerWindow();
+    const shouldCreateControllerWindow =
+      this.carrot.manifest.mode === "window" ||
+      this.carrot.manifest.view.hidden !== true;
 
+    if (shouldCreateControllerWindow) {
+      bootLog("creating carrot controller window", {
+        id: this.carrot.manifest.id,
+        url: this.carrot.viewUrl,
+      });
+      this.createControllerWindow();
+    } else {
+      bootLog("skipping hidden background controller window", {
+        id: this.carrot.manifest.id,
+      });
+    }
+
+    bootLog("posting carrot init", { id: this.carrot.manifest.id });
     this.worker.postMessage({
       type: "init",
-      manifest: this.manifest,
+      manifest: this.carrot.manifest,
       context: {
         statePath: this.statePath,
         logsPath: this.logsPath,
-        permissions: this.manifest.permissions,
+        permissions: flattenCarrotPermissions(this.carrot.install.permissionsGranted),
+        grantedPermissions: this.carrot.install.permissionsGranted,
       },
     } satisfies CarrotWorkerMessage);
 
     this.status = "running";
+    bootLog("carrot running", { id: this.carrot.manifest.id });
     runtime.notifyDashboardChanged();
   }
 
@@ -186,7 +233,7 @@ class CarrotInstance {
     }
 
     for (const [, pending] of this.pending) {
-      pending.reject(new Error(`${this.manifest.name} stopped`));
+      pending.reject(new Error(`${this.carrot.manifest.name} stopped`));
     }
     this.pending.clear();
 
@@ -210,7 +257,7 @@ class CarrotInstance {
   }
 
   async openWindow() {
-    if (this.manifest.mode !== "window") {
+    if (this.carrot.manifest.mode !== "window") {
       return;
     }
 
@@ -224,7 +271,7 @@ class CarrotInstance {
 
   async invoke(method: string, params?: unknown) {
     if (!this.worker) {
-      throw new Error(`${this.manifest.name} is not running`);
+      throw new Error(`${this.carrot.manifest.name} is not running`);
     }
 
     const requestId = this.requestId++;
@@ -264,47 +311,53 @@ class CarrotInstance {
       maxRequestTime: 10000,
       handlers: {
         requests: {
-          invoke: async ({ method, params }) => {
-            return this.invoke(method, params);
-          },
+          invoke: async ({ method, params }) => this.invoke(method, params),
         },
         messages: {},
       },
     });
 
-    const hidden = this.manifest.mode === "background" || this.manifest.view.hidden === true;
+    const hidden =
+      this.carrot.manifest.mode === "background" ||
+      this.carrot.manifest.view.hidden === true;
 
     const win = new BrowserWindow({
-      title: this.manifest.view.title,
-      url: this.manifest.view.url,
+      title: this.carrot.manifest.view.title,
+      url: this.carrot.viewUrl,
+      viewsRoot: this.carrot.currentDir,
       rpc,
       hidden,
       frame: {
-        width: this.manifest.view.width,
-        height: this.manifest.view.height,
+        width: this.carrot.manifest.view.width,
+        height: this.carrot.manifest.view.height,
         x: 120,
         y: 120,
       },
     });
 
     this.controllerWindow = win;
+    bootLog("controller window created", {
+      id: this.carrot.manifest.id,
+      hidden,
+      url: this.carrot.viewUrl,
+    });
 
     win.webview.on("dom-ready", () => {
+      bootLog("controller dom-ready", { id: this.carrot.manifest.id });
       (win.webview.rpc as any)?.send?.carrotBoot({
-        id: this.manifest.id,
-        name: this.manifest.name,
-        permissions: this.manifest.permissions,
-        mode: this.manifest.mode,
+        id: this.carrot.manifest.id,
+        name: this.carrot.manifest.name,
+        permissions: flattenCarrotPermissions(this.carrot.install.permissionsGranted),
+        grantedPermissions: this.carrot.install.permissionsGranted,
+        mode: this.carrot.manifest.mode,
       });
     });
 
     win.on("close", () => {
       if (this.controllerWindow === win) {
         this.controllerWindow = null;
-        if (this.status === "running") {
-          if (this.manifest.mode === "window") {
-            void this.stop();
-          }
+        if (this.status === "running" && this.carrot.manifest.mode === "window") {
+          void this.stop();
         }
       }
     });
@@ -339,7 +392,7 @@ class CarrotInstance {
   private async handleHostAction(action: string, payload: unknown) {
     switch (action) {
       case "notify": {
-        if (!this.manifest.permissions.includes("notifications")) {
+        if (!hasHostPermission(this.carrot.install.permissionsGranted, "notifications")) {
           this.pushLog("notification denied by permissions");
           return;
         }
@@ -349,13 +402,13 @@ class CarrotInstance {
         break;
       }
       case "set-tray": {
-        if (!this.manifest.permissions.includes("tray")) {
+        if (!hasHostPermission(this.carrot.install.permissionsGranted, "tray")) {
           this.pushLog("tray denied by permissions");
           return;
         }
         const trayPayload = payload as { title?: string };
         if (!this.tray) {
-          this.tray = new Tray({ title: trayPayload.title || this.manifest.name });
+          this.tray = new Tray({ title: trayPayload.title || this.carrot.manifest.name });
           this.tray.on("tray-clicked", (event: any) => {
             const actionName = event.data?.action || "click";
             this.sendEvent("tray", { action: actionName, raw: event.data });
@@ -367,7 +420,7 @@ class CarrotInstance {
         break;
       }
       case "set-tray-menu": {
-        if (!this.manifest.permissions.includes("tray") || !this.tray) {
+        if (!hasHostPermission(this.carrot.install.permissionsGranted, "tray") || !this.tray) {
           return;
         }
         this.tray.setMenu(payload as any);
@@ -376,6 +429,11 @@ class CarrotInstance {
       case "remove-tray": {
         this.tray?.remove();
         this.tray = null;
+        break;
+      }
+      case "stop-carrot": {
+        this.pushLog("stop requested by carrot");
+        await this.stop();
         break;
       }
       case "emit-view": {
@@ -400,8 +458,8 @@ class BunnyEarsRuntime {
   carrots = new Map<string, CarrotInstance>();
 
   constructor() {
-    for (const manifest of manifests) {
-      this.carrots.set(manifest.id, new CarrotInstance(manifest));
+    for (const carrot of loadInstalledCarrots()) {
+      this.carrots.set(carrot.manifest.id, new CarrotInstance(carrot));
     }
 
     this.tray = new Tray({ title: "Bunny Ears" });
@@ -414,24 +472,40 @@ class BunnyEarsRuntime {
   }
 
   async boot() {
+    bootLog("runtime boot begin", {
+      installRoot: getInstalledCarrotsRoot(),
+      carrotIds: Array.from(this.carrots.keys()),
+    });
     this.openManagerWindow();
     for (const carrot of this.carrots.values()) {
-      if (carrot.manifest.mode === "background") {
+      if (carrot.carrot.manifest.mode === "background") {
+        bootLog("booting background carrot", {
+          id: carrot.carrot.manifest.id,
+        });
         await carrot.start();
         carrot.sendEvent("boot");
+        bootLog("background carrot boot event sent", {
+          id: carrot.carrot.manifest.id,
+        });
       }
     }
+    bootLog("runtime boot complete");
   }
 
   summaries() {
     return Array.from(this.carrots.values()).map((carrot) => carrot.summary);
   }
 
+  dashboardState(): DashboardState {
+    return {
+      installRoot: getInstalledCarrotsRoot(),
+      carrots: this.summaries(),
+    };
+  }
+
   notifyDashboardChanged() {
     this.tray.setMenu(this.buildTrayMenu());
-    (this.managerWindow?.webview.rpc as any)?.send?.dashboardChanged({
-      carrots: this.summaries(),
-    });
+    (this.managerWindow?.webview.rpc as any)?.send?.dashboardChanged(this.dashboardState());
   }
 
   private buildTrayMenu() {
@@ -444,6 +518,7 @@ class BunnyEarsRuntime {
 
     return [
       { type: "normal" as const, label: "Open Bunny Ears", action: "open-manager" },
+      { type: "normal" as const, label: "Install Carrot from Disk", action: "install-from-disk" },
       ...carrotItems,
       { type: "divider" as const },
       { type: "normal" as const, label: "Quit Bunny Ears", action: "quit" },
@@ -455,6 +530,10 @@ class BunnyEarsRuntime {
       this.openManagerWindow();
       return;
     }
+    if (action === "install-from-disk") {
+      await this.installCarrotFromDisk();
+      return;
+    }
     if (action === "quit") {
       process.exit(0);
       return;
@@ -464,7 +543,7 @@ class BunnyEarsRuntime {
     if (!carrot) return;
     if (verb === "start") {
       await carrot.start();
-      if (carrot.manifest.mode === "background") {
+      if (carrot.carrot.manifest.mode === "background") {
         carrot.sendEvent("boot");
       }
       return;
@@ -474,22 +553,126 @@ class BunnyEarsRuntime {
     }
   }
 
+  private async installCarrotFromDisk() {
+    const selectedPaths = await Utils.openFileDialog({
+      startingFolder: Utils.paths.documents,
+      canChooseFiles: false,
+      canChooseDirectory: true,
+      allowsMultipleSelection: false,
+    });
+
+    const selectedPath = selectedPaths[0];
+    if (!selectedPath) {
+      return { ok: false, reason: "canceled" };
+    }
+
+    try {
+      const installed = await installDevCarrotFromSource(selectedPath);
+      await this.upsertInstalledCarrot(installed, { openWindow: installed.manifest.mode === "window" });
+      return { ok: true, id: installed.manifest.id };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await Utils.showMessageBox({
+        type: "error",
+        title: "Carrot install failed",
+        message,
+      });
+      return { ok: false, error: message };
+    }
+  }
+
+  private async rebuildCarrot(id: string) {
+    try {
+      const installed = await rebuildInstalledDevCarrot(id);
+      await this.upsertInstalledCarrot(installed, { preserveRunningState: true });
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await Utils.showMessageBox({
+        type: "error",
+        title: "Carrot rebuild failed",
+        message,
+      });
+      this.refreshInstalledCarrot(id);
+      return { ok: false, error: message };
+    }
+  }
+
+  private refreshInstalledCarrot(id: string) {
+    const installed = loadInstalledCarrots().find((carrot) => carrot.manifest.id === id);
+    if (!installed) {
+      return;
+    }
+
+    const existing = this.carrots.get(id);
+    if (existing) {
+      existing.carrot = installed;
+    } else {
+      this.carrots.set(id, new CarrotInstance(installed));
+    }
+    this.notifyDashboardChanged();
+  }
+
+  private async upsertInstalledCarrot(
+    installed: InstalledCarrot,
+    options: { openWindow?: boolean; preserveRunningState?: boolean } = {},
+  ) {
+    const existing = this.carrots.get(installed.manifest.id);
+    const wasRunning = existing?.status === "running";
+    const existingLogs = existing?.logs ?? [];
+
+    if (existing) {
+      await existing.stop();
+    }
+
+    const instance = new CarrotInstance(installed);
+    instance.logs = existingLogs;
+    this.carrots.set(installed.manifest.id, instance);
+    this.notifyDashboardChanged();
+
+    const shouldStart =
+      installed.manifest.mode === "background" ||
+      options.openWindow === true ||
+      (options.preserveRunningState === true && wasRunning);
+
+    if (!shouldStart) {
+      return;
+    }
+
+    await instance.start();
+    if (installed.manifest.mode === "background") {
+      instance.sendEvent("boot");
+      return;
+    }
+    if (options.openWindow === true || wasRunning) {
+      await instance.openWindow();
+    }
+  }
+
   private openManagerWindow() {
     if (this.managerWindow) {
+      bootLog("manager window focus existing");
       this.managerWindow.focus();
       return;
     }
+
+    bootLog("creating manager window");
 
     const rpc = BrowserView.defineRPC<DashboardRPC>({
       maxRequestTime: 10000,
       handlers: {
         requests: {
-          getDashboard: async () => ({ carrots: this.summaries() }),
+          getDashboard: async () => this.dashboardState(),
+          installCarrotFromDisk: async () => this.installCarrotFromDisk(),
+          rebuildCarrot: async ({ id }) => this.rebuildCarrot(id),
           launchCarrot: async ({ id }) => {
             const carrot = this.carrots.get(id);
             if (!carrot) return { ok: false };
+            if (carrot.status === "running") {
+              await carrot.stop();
+            }
             await carrot.start();
-            if (carrot.manifest.mode === "background") {
+            if (carrot.carrot.manifest.mode === "background") {
               carrot.sendEvent("boot");
             }
             return { ok: true };
@@ -525,7 +708,8 @@ class BunnyEarsRuntime {
 
     this.managerWindow = win;
     win.webview.on("dom-ready", () => {
-      (win.webview.rpc as any)?.send?.dashboardChanged({ carrots: this.summaries() });
+      bootLog("manager dom-ready");
+      (win.webview.rpc as any)?.send?.dashboardChanged(this.dashboardState());
     });
     win.on("close", () => {
       if (this.managerWindow === win) {
@@ -533,6 +717,12 @@ class BunnyEarsRuntime {
       }
     });
   }
+}
+
+pruneLegacyPrototypeCarrots();
+const refreshErrors = await refreshTrackedDevCarrots();
+if (refreshErrors.length > 0) {
+  console.error("[bunny-ears] dev carrot refresh failures", refreshErrors);
 }
 
 const runtime = new BunnyEarsRuntime();

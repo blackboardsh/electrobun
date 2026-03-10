@@ -17,6 +17,6 @@
     "moduleResolution": "bundler",
     "skipLibCheck": true
   },
-  "include": ["src", "../carrots"],
+  "include": ["src", "tests"],
   "exclude": ["node_modules", "dist", "build", "../../package/dist"]
 }

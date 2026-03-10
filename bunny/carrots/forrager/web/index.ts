@@ -1,4 +1,4 @@
-import { createCarrotClient } from "../../../ears/src/carrot-runtime/view";
+import { createCarrotClient } from "bunny-ears/view";
 
 const client = createCarrotClient();
 const label = document.getElementById("label") as HTMLHeadingElement;

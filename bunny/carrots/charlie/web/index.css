@@ -30,7 +30,8 @@ body {
 }
 
 .count-card,
-.detail-card {
+.detail-card,
+.probe-card {
   border-radius: 24px;
   border: 1px solid rgba(38, 23, 15, 0.1);
   background: var(--panel);
@@ -62,6 +63,27 @@ body {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
+}
+
+.probe-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.probe-results {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.probe-results strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 button {

@@ -4,9 +4,20 @@
   "version": "0.0.1",
   "description": "A background Carrot that runs from the tray and keeps a tiny hidden controller webview alive.",
   "mode": "background",
-  "permissions": ["bun", "tray", "notifications", "storage"],
+  "permissions": {
+    "host": {
+      "tray": true,
+      "notifications": true,
+      "storage": true
+    },
+    "bun": {
+      "read": true,
+      "write": true
+    },
+    "isolation": "shared-worker"
+  },
   "view": {
-    "url": "views://carrot-forrager/index.html",
+    "relativePath": "views/index.html",
     "title": "Forrager Background Controller",
     "width": 320,
     "height": 220,

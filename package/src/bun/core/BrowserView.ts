@@ -22,6 +22,7 @@ export type BrowserViewOptions<T = undefined> = {
 	url: string | null;
 	html: string | null;
 	preload: string | null;
+	viewsRoot: string | null;
 	renderer: "native" | "cef";
 	partition: string | null;
 	frame: {
@@ -54,6 +55,7 @@ const defaultOptions: Partial<BrowserViewOptions> = {
 	url: null,
 	html: null,
 	preload: null,
+	viewsRoot: null,
 	renderer: buildConfig.defaultRenderer,
 	frame: {
 		x: 0,
@@ -75,6 +77,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	url: string | null = null;
 	html: string | null = null;
 	preload: string | null = null;
+	viewsRoot: string | null = null;
 	partition: string | null = null;
 	autoResize: boolean = true;
 	frame: {
@@ -106,6 +109,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.url = options.url || defaultOptions.url || null;
 		this.html = options.html || defaultOptions.html || null;
 		this.preload = options.preload || defaultOptions.preload || null;
+		this.viewsRoot = options.viewsRoot || defaultOptions.viewsRoot || null;
 		this.frame = {
 			x: options.frame?.x ?? defaultOptions.frame!.x,
 			y: options.frame?.y ?? defaultOptions.frame!.y,
@@ -166,6 +170,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			url: this.html ? null : this.url,
 			html: this.html,
 			preload: this.preload,
+			viewsRoot: this.viewsRoot,
 			frame: {
 				width: this.frame.width,
 				height: this.frame.height,

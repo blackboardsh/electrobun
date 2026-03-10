@@ -44,7 +44,7 @@ function syncUI() {
 }
 
 function syncTray() {
-  if (!permissions.has("tray")) return;
+  if (!permissions.has("host:tray")) return;
   post({ type: "action", action: "set-tray", payload: { title: currentPhase().label } });
   post({
     type: "action",
@@ -67,7 +67,7 @@ async function cycle() {
 }
 
 function notifyPing() {
-  if (!permissions.has("notifications")) return;
+  if (!permissions.has("host:notifications")) return;
   const phase = currentPhase();
   post({
     type: "action",
@@ -104,7 +104,7 @@ self.onmessage = async (event) => {
       } else if (action === "ping") {
         notifyPing();
       } else if (action === "stop") {
-        post({ type: "action", action: "remove-tray" });
+        post({ type: "action", action: "stop-carrot" });
       } else {
         await cycle();
       }

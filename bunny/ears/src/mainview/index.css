@@ -71,6 +71,10 @@ body {
   line-height: 1.5;
 }
 
+.hero-actions {
+  margin-top: 22px;
+}
+
 .hero-badge {
   display: flex;
   flex-direction: column;
@@ -105,6 +109,19 @@ body {
   line-height: 1.45;
 }
 
+.install-root {
+  display: block;
+  margin-top: 18px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(37, 21, 13, 0.06);
+  color: #6d5647;
+  font-family: "SF Mono", "Menlo", "Monaco", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
 .carrot-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -118,6 +135,13 @@ body {
   border-radius: 24px;
   padding: 22px;
   box-shadow: 0 18px 40px rgba(68, 29, 2, 0.08);
+}
+
+.empty-card {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .card-head {
@@ -179,6 +203,12 @@ body {
   color: var(--muted);
 }
 
+.path-text {
+  max-width: 100%;
+  text-align: right;
+  word-break: break-all;
+}
+
 .permission-wrap {
   display: flex;
   flex-wrap: wrap;
@@ -193,6 +223,27 @@ body {
   color: var(--accent-deep);
   font-size: 12px;
   font-weight: 700;
+}
+
+.permission-chip.dev-chip {
+  background: rgba(59, 138, 73, 0.14);
+  color: var(--leaf);
+}
+
+.permission-chip.broken-chip {
+  background: rgba(173, 38, 28, 0.12);
+  color: #ad261c;
+}
+
+.build-error {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(173, 38, 28, 0.08);
+  border: 1px solid rgba(173, 38, 28, 0.16);
+  color: #7f2c1d;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .log-list {

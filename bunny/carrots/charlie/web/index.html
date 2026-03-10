@@ -18,6 +18,33 @@
         <button id="notify" class="secondary">Notify</button>
         <button id="reset" class="secondary">Reset</button>
       </div>
+      <div class="probe-card">
+        <p class="eyebrow">Permission Probes</p>
+        <div class="probe-buttons">
+          <button id="probe-fs" class="secondary">Test Read</button>
+          <button id="probe-env" class="secondary">Test Env</button>
+          <button id="probe-spawn" class="secondary">Test Run</button>
+          <button id="probe-ffi" class="secondary">Test FFI</button>
+        </div>
+        <div class="probe-results">
+          <div>
+            <span class="label">Read</span>
+            <strong id="probe-fs-result">Not run</strong>
+          </div>
+          <div>
+            <span class="label">Env</span>
+            <strong id="probe-env-result">Not run</strong>
+          </div>
+          <div>
+            <span class="label">Run</span>
+            <strong id="probe-spawn-result">Not run</strong>
+          </div>
+          <div>
+            <span class="label">FFI</span>
+            <strong id="probe-ffi-result">Not run</strong>
+          </div>
+        </div>
+      </div>
       <div class="detail-card">
         <div>
           <span class="label">Last updated</span>
