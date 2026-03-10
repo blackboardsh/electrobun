@@ -7257,17 +7257,34 @@ extern "C" void setWindowButtonPosition(NSWindow *window, double x, double y) {
 
         if (!closeBtn || !minimizeBtn || !zoomBtn) return;
 
+        // View hierarchy: NSTitlebarContainerView > NSTitlebarView > buttons
         NSView *titlebarView = [closeBtn superview];
         if (!titlebarView) return;
 
-        CGFloat titlebarHeight = titlebarView.frame.size.height;
+        NSView *titlebarContainerView = [titlebarView superview];
+        if (!titlebarContainerView) return;
 
         CGFloat buttonSpacing = 20.0;
-
-        // Button height for vertical centering
         CGFloat buttonHeight = closeBtn.frame.size.height;
 
-        CGFloat adjustedY = titlebarHeight - y - buttonHeight;
+        // Calculate required container height to fit buttons at the requested y position
+        CGFloat requiredHeight = y + buttonHeight;
+
+        // Resize the titlebar container to encompass the new button positions
+        // Position it at the top of the window (macOS y-axis is bottom-up)
+        NSRect containerFrame = titlebarContainerView.frame;
+        containerFrame.size.height = requiredHeight;
+        containerFrame.origin.y = NSHeight(window.frame) - requiredHeight;
+        [titlebarContainerView setFrame:containerFrame];
+
+        // Resize the titlebar view to match
+        NSRect titlebarFrame = titlebarView.frame;
+        titlebarFrame.size.height = requiredHeight;
+        titlebarFrame.origin.y = 0;
+        [titlebarView setFrame:titlebarFrame];
+
+        // Position buttons (convert from top-down y to macOS bottom-up within the resized view)
+        CGFloat adjustedY = requiredHeight - y - buttonHeight;
 
         [closeBtn setFrameOrigin:NSMakePoint(x, adjustedY)];
         [minimizeBtn setFrameOrigin:NSMakePoint(x + buttonSpacing, adjustedY)];
