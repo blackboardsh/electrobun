@@ -60,6 +60,8 @@ export type CarrotManifest = {
     title: string;
     width: number;
     height: number;
+    titleBarStyle?: "hidden" | "hiddenInset" | "default";
+    transparent?: boolean;
   };
   worker: {
     relativePath: string;

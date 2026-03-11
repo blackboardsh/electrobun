@@ -1,0 +1,28 @@
+{
+  "id": "bunny-dash",
+  "name": "Bunny Dash",
+  "version": "0.0.1",
+  "description": "A Colab-shaped Bunny Dash shell for managing local and remote Bunny Ears instances.",
+  "mode": "window",
+  "permissions": {
+    "host": {
+      "windows": true,
+      "storage": true
+    },
+    "bun": {
+      "read": true,
+      "write": true
+    },
+    "isolation": "shared-worker"
+  },
+  "view": {
+    "relativePath": "views/index.html",
+    "title": "Bunny Dash",
+    "width": 1480,
+    "height": 920,
+    "titleBarStyle": "hidden"
+  },
+  "worker": {
+    "relativePath": "worker.js"
+  }
+}

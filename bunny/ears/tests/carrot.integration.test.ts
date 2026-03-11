@@ -20,6 +20,7 @@ import { toBunWorkerPermissions } from "../src/bun/workerPermissions";
 
 const EARS_ROOT = resolve(import.meta.dir, "..");
 const CARROTS_ROOT = resolve(EARS_ROOT, "..", "carrots");
+const DASH_ROOT = resolve(EARS_ROOT, "..", "dash");
 const PACKAGE_ROOT = resolve(EARS_ROOT, "..", "..", "package");
 
 process.env.BUNNY_EARS_SDK_VIEW_MODULE = join(
@@ -71,7 +72,11 @@ function actionTitle(message: HostActionMessage) {
 
 async function buildCarrot(id: string) {
   const sourceDir = join(CARROTS_ROOT, id);
-  const outDir = makeTempDir(`bunny-ears-${id}-build-`);
+  return buildCarrotAt(sourceDir, `bunny-ears-${id}-build-`);
+}
+
+async function buildCarrotAt(sourceDir: string, tempPrefix: string) {
+  const outDir = makeTempDir(tempPrefix);
   const manifest = await buildCarrotSource(sourceDir, outDir);
   const cleanup = () => rmSync(outDir, { recursive: true, force: true });
   cleanups.add(cleanup);
@@ -88,7 +93,15 @@ async function startCarrot(
   permissionsOverride?: CarrotPermissionGrant,
 ): Promise<RunningCarrot> {
   const built = await buildCarrot(id);
-  const runtimeDir = makeTempDir(`bunny-ears-${id}-runtime-`);
+  return startBuiltCarrot(built, permissionsOverride);
+}
+
+async function startBuiltCarrot(
+  built: Awaited<ReturnType<typeof buildCarrotAt>>,
+  permissionsOverride?: CarrotPermissionGrant,
+): Promise<RunningCarrot> {
+  const runtimeLabel = built.manifest.id || "carrot";
+  const runtimeDir = makeTempDir(`bunny-ears-${runtimeLabel}-runtime-`);
   const statePath = join(runtimeDir, "state.json");
   const logsPath = join(runtimeDir, "logs.txt");
   const grantedPermissions = normalizeCarrotPermissions(
@@ -139,7 +152,7 @@ async function startCarrot(
         if (waiterIndex !== -1) {
           waiters.splice(waiterIndex, 1);
         }
-        reject(new Error(`Timed out waiting for carrot message from ${id}`));
+        reject(new Error(`Timed out waiting for carrot message from ${runtimeLabel}`));
       }, timeoutMs);
 
       waiters.push({ predicate, resolve, reject, timer });
@@ -152,7 +165,7 @@ async function startCarrot(
   };
 
   worker.onerror = (event: ErrorEvent) => {
-    const error = new Error(event.message || `${id} worker failed`);
+    const error = new Error(event.message || `${runtimeLabel} worker failed`);
     while (waiters.length > 0) {
       const waiter = waiters.shift();
       if (!waiter) {
@@ -210,7 +223,7 @@ async function startCarrot(
       const response = message as WorkerResponseMessage;
 
       if (!response.success) {
-        throw new Error(response.error || `${id} request failed: ${method}`);
+        throw new Error(response.error || `${runtimeLabel} request failed: ${method}`);
       }
 
       return response.payload;
@@ -362,6 +375,54 @@ describe("Bunny Ears carrots", () => {
       count: number;
     };
     expect(incrementResult.count).toBe(1);
+    expect(existsSync(carrot.statePath)).toBe(true);
+  });
+
+  test("Bunny Dash builds from source and exposes a Colab-shaped shell snapshot", async () => {
+    const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-build-");
+    expect(built.manifest.id).toBe("bunny-dash");
+    expect(existsSync(join(built.outDir, "views", "index.js"))).toBe(true);
+    expect(existsSync(join(built.outDir, "views", "index.css"))).toBe(true);
+    expect(existsSync(join(built.outDir, "worker.js"))).toBe(true);
+    const html = await Bun.file(join(built.outDir, "views", "index.html")).text();
+    expect(html).toContain('href="index.css"');
+
+    const carrot = await startBuiltCarrot(built);
+
+    const initial = (await carrot.request("getSnapshot")) as {
+      shellTitle: string;
+      cloudLabel: string;
+      commandHint: string;
+      topActions: Array<{ id: string; label: string }>;
+      state: {
+        activeMainTabId: string;
+        activeSideTabId: string;
+        activeTreeNodeId: string;
+        commandPaletteOpen: boolean;
+        sidebarCollapsed: boolean;
+      };
+      tree: Array<{ id: string; label: string }>;
+    };
+    expect(initial.shellTitle).toBe("Bunny Dash");
+    expect(initial.cloudLabel).toBe("Bunny Cloud");
+    expect(initial.topActions.map((action) => action.label)).toEqual([
+      "Command Palette",
+      "Pop Out Bunny",
+      "Bunny Cloud",
+    ]);
+    expect(initial.state.activeMainTabId).toBe("shell");
+    expect(initial.commandHint.length).toBeGreaterThan(0);
+
+    const palette = (await carrot.request("togglePalette")) as typeof initial;
+    expect(palette.state.commandPaletteOpen).toBe(true);
+
+    const cloud = (await carrot.request("openCloudPanel")) as typeof initial;
+    expect(cloud.state.activeMainTabId).toBe("cloud");
+    expect(cloud.state.activeSideTabId).toBe("cloud-side");
+    expect(cloud.state.activeTreeNodeId).toBe("cloud");
+
+    const sidebar = (await carrot.request("toggleSidebar")) as typeof initial;
+    expect(sidebar.state.sidebarCollapsed).toBe(true);
     expect(existsSync(carrot.statePath)).toBe(true);
   });
 

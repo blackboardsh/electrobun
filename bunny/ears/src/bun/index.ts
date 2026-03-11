@@ -358,6 +358,8 @@ class CarrotInstance {
       url: this.carrot.viewUrl,
       viewsRoot: this.carrot.currentDir,
       rpc,
+      titleBarStyle: this.carrot.manifest.view.titleBarStyle ?? "default",
+      transparent: this.carrot.manifest.view.transparent ?? false,
       hidden,
       frame: {
         width: this.carrot.manifest.view.width,
