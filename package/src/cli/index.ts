@@ -4131,14 +4131,19 @@ Categories=Utility;Application;
 		});
 
 		// Initial build + launch (watchers start after build completes)
+		// First launch should activate normally; reloads respect launchWithoutActivating
+		const savedLaunchWithoutActivating = config.dev.launchWithoutActivating;
+		config.dev.launchWithoutActivating = false;
 		try {
 			await runBuild(config, "dev");
+			config.dev.launchWithoutActivating = savedLaunchWithoutActivating;
 			appHandle = await runApp(config, {
 				onExit: () => {
 					appHandle = null;
 				},
 			});
 		} catch (error) {
+			config.dev.launchWithoutActivating = savedLaunchWithoutActivating;
 			console.error("[electrobun dev --watch] Initial build failed:", error);
 			console.log("[electrobun dev --watch] Waiting for file changes...");
 		}
