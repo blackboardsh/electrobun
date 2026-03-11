@@ -199,7 +199,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
 			hidden: hidden ?? false,
-			showWithoutActivating: buildConfig?.dev?.launchWithoutActivating ?? false,
+			showWithoutActivating: buildConfig?.dev?.reloadWithoutActivating ?? false,
 		}) as Pointer;
 
 		BrowserWindowMap[this.id] = this;

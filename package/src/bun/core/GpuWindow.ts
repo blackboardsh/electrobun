@@ -125,7 +125,7 @@ export class GpuWindow {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
-			showWithoutActivating: buildConfig?.dev?.launchWithoutActivating ?? false,
+			showWithoutActivating: buildConfig?.dev?.reloadWithoutActivating ?? false,
 		}) as Pointer;
 
 		GpuWindowMap[this.id] = this;

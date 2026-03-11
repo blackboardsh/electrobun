@@ -8,7 +8,7 @@ export type BuildConfigType = {
 		[key: string]: unknown;
 	};
 	dev?: {
-		launchWithoutActivating?: boolean;
+		reloadWithoutActivating?: boolean;
 	};
 };
 

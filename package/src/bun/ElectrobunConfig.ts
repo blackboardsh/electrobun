@@ -328,11 +328,12 @@ export interface ElectrobunConfig {
 	 */
 	dev?: {
 		/**
-		 * Show windows without stealing focus from the currently active app.
-		 * Useful during development so live-reload doesn't yank you out of your editor.
+		 * When live-reloading (`electrobun dev --watch`), show windows without
+		 * stealing focus from the currently active app. The initial launch still
+		 * activates normally.
 		 * @default false
 		 */
-		launchWithoutActivating?: boolean;
+		reloadWithoutActivating?: boolean;
 	};
 
 	/**

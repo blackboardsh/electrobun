@@ -1425,7 +1425,7 @@ const defaultConfig = {
 		watchIgnore: undefined as string[] | undefined,
 	},
 	dev: {
-		launchWithoutActivating: false,
+		reloadWithoutActivating: false,
 	},
 	runtime: {} as Record<string, unknown>,
 	scripts: {
@@ -4131,19 +4131,19 @@ Categories=Utility;Application;
 		});
 
 		// Initial build + launch (watchers start after build completes)
-		// First launch should activate normally; reloads respect launchWithoutActivating
-		const savedLaunchWithoutActivating = config.dev.launchWithoutActivating;
-		config.dev.launchWithoutActivating = false;
+		// First launch should activate normally; reloads respect reloadWithoutActivating
+		const savedLaunchWithoutActivating = config.dev.reloadWithoutActivating;
+		config.dev.reloadWithoutActivating = false;
 		try {
 			await runBuild(config, "dev");
-			config.dev.launchWithoutActivating = savedLaunchWithoutActivating;
+			config.dev.reloadWithoutActivating = savedLaunchWithoutActivating;
 			appHandle = await runApp(config, {
 				onExit: () => {
 					appHandle = null;
 				},
 			});
 		} catch (error) {
-			config.dev.launchWithoutActivating = savedLaunchWithoutActivating;
+			config.dev.reloadWithoutActivating = savedLaunchWithoutActivating;
 			console.error("[electrobun dev --watch] Initial build failed:", error);
 			console.log("[electrobun dev --watch] Waiting for file changes...");
 		}
