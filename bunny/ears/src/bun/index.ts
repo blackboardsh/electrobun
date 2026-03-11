@@ -460,6 +460,10 @@ class CarrotInstance {
         this.tray.setMenu(payload as any);
         break;
       }
+      case "focus-window": {
+        await this.openWindow();
+        break;
+      }
       case "remove-tray": {
         this.tray?.remove();
         this.tray = null;

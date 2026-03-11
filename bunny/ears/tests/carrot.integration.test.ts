@@ -388,15 +388,22 @@ describe("Bunny Ears carrots", () => {
     expect(html).toContain('href="index.css"');
 
     const carrot = await startBuiltCarrot(built);
+    const initialTray = await carrot.nextAction("set-tray");
+    expect(initialTray.payload).toEqual({ title: "Dash: Marketing Day" });
+    const initialTrayMenu = await carrot.nextAction("set-tray-menu");
+    expect(Array.isArray(initialTrayMenu.payload)).toBe(true);
 
     const initial = (await carrot.request("getSnapshot")) as {
       shellTitle: string;
       cloudLabel: string;
       commandHint: string;
+      currentLayout: { id: string; name: string };
+      currentWorkspace: { id: string; name: string };
+      currentWindow: { id: string; title: string; currentMainTabId: string; currentSideTabId: string };
+      layoutWindows: Array<{ id: string; title: string; workspaceName: string }>;
+      workspaces: Array<{ id: string; name: string }>;
       topActions: Array<{ id: string; label: string }>;
       state: {
-        activeMainTabId: string;
-        activeSideTabId: string;
         activeTreeNodeId: string;
         commandPaletteOpen: boolean;
         sidebarCollapsed: boolean;
@@ -405,21 +412,41 @@ describe("Bunny Ears carrots", () => {
     };
     expect(initial.shellTitle).toBe("Bunny Dash");
     expect(initial.cloudLabel).toBe("Bunny Cloud");
+    expect(initial.currentLayout.name).toBe("Marketing Day");
+    expect(initial.currentWorkspace.name).toBe("Marketing");
+    expect(initial.layoutWindows.length).toBeGreaterThan(1);
+    expect(initial.workspaces.length).toBeGreaterThan(1);
     expect(initial.topActions.map((action) => action.label)).toEqual([
       "Command Palette",
+      "Resume Last State",
       "Pop Out Bunny",
       "Bunny Cloud",
     ]);
-    expect(initial.state.activeMainTabId).toBe("shell");
+    expect(initial.currentWindow.currentMainTabId).toBe("projects");
     expect(initial.commandHint.length).toBeGreaterThan(0);
 
     const palette = (await carrot.request("togglePalette")) as typeof initial;
     expect(palette.state.commandPaletteOpen).toBe(true);
 
     const cloud = (await carrot.request("openCloudPanel")) as typeof initial;
-    expect(cloud.state.activeMainTabId).toBe("cloud");
-    expect(cloud.state.activeSideTabId).toBe("cloud-side");
-    expect(cloud.state.activeTreeNodeId).toBe("cloud");
+    expect(cloud.currentWindow.currentMainTabId).toBe("cloud");
+    expect(cloud.currentWindow.currentSideTabId).toBe("cloud");
+    expect(cloud.state.activeTreeNodeId).toBe(`layout-overview:${cloud.currentLayout.id}`);
+
+    const switchedWorkspace = (await carrot.request("switchWorkspace", {
+      workspaceId: "platform",
+    })) as typeof initial;
+    expect(switchedWorkspace.currentWorkspace.id).toBe("platform");
+
+    carrot.postEvent("tray", { action: "layout:fleet-ops" });
+    const trayAfterLayoutSwitch = await carrot.nextAction(
+      "set-tray",
+      (message) => actionTitle(message) === "Dash: Fleet Ops",
+    );
+    expect(trayAfterLayoutSwitch.payload).toEqual({ title: "Dash: Fleet Ops" });
+    const switchedLayout = (await carrot.request("getSnapshot")) as typeof initial;
+    expect(switchedLayout.currentLayout.id).toBe("fleet-ops");
+    expect(switchedLayout.currentWindow.title).toBe("Fleet Console");
 
     const sidebar = (await carrot.request("toggleSidebar")) as typeof initial;
     expect(sidebar.state.sidebarCollapsed).toBe(true);

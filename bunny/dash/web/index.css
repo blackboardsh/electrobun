@@ -98,6 +98,7 @@ pre {
 }
 
 .topbar-square,
+.topbar-action,
 .topbar-bunny,
 .topbar-cloud {
   display: flex;
@@ -105,15 +106,20 @@ pre {
   justify-content: center;
   border-radius: 4px;
   -webkit-user-select: none;
+  height: 24px;
+  margin-top: 1px;
 }
 
 .topbar-square {
   width: 24px;
-  height: 24px;
   background: #333;
   color: #888;
   border: 1px solid #1f1f1f;
-  margin-top: 1px;
+}
+
+.topbar-square.wide {
+  width: 52px;
+  font-size: 11px;
 }
 
 .topbar-square:hover {
@@ -121,30 +127,33 @@ pre {
   color: #ddd;
 }
 
+.topbar-action,
 .topbar-bunny,
 .topbar-cloud {
-  font-size: 12px;
-  height: 24px;
   padding: 0 8px;
+  font-size: 12px;
   font-weight: 600;
-  margin-top: 1px;
+  border: 1px solid #1f1f1f;
+}
+
+.topbar-action {
+  background: #2f2f2f;
+  color: #ddd;
 }
 
 .topbar-bunny {
   background: #2f2f2f;
   color: #f4d5a2;
-  border: 1px solid #1f1f1f;
 }
 
 .topbar-cloud {
   background: #2d4a3e;
   color: #4ade80;
-  border: 1px solid #1f1f1f;
 }
 
 .dash-workspace {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 300px 1fr;
   min-height: 0;
 }
 
@@ -154,14 +163,18 @@ pre {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: auto;
 }
 
-.dash-sidebar-header {
-  padding: 10px 12px;
+.sidebar-section {
   border-bottom: 1px solid #111;
 }
 
-.dash-sidebar-title {
+.sidebar-section-header {
+  padding: 10px 12px 8px;
+}
+
+.sidebar-section-title {
   color: #d0d0d0;
   font-size: 11px;
   font-weight: 700;
@@ -169,16 +182,67 @@ pre {
   text-transform: uppercase;
 }
 
-.dash-sidebar-subtitle {
+.sidebar-section-subtitle {
   margin-top: 4px;
   color: #6f6f6f;
   font-size: 11px;
+  line-height: 1.35;
+}
+
+.sidebar-section-body {
+  padding: 0 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar-action-button,
+.sidebar-list-item {
+  width: 100%;
+  min-height: 32px;
+  background: #1f1f1f;
+  color: #d3d3d3;
+  border: 1px solid #111;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.sidebar-action-button {
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sidebar-action-button.secondary {
+  color: #a6a6a6;
+}
+
+.sidebar-list-item {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-list-item strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sidebar-list-item span {
+  color: #7f7f7f;
+  font-size: 11px;
+}
+
+.sidebar-list-item:hover,
+.sidebar-action-button:hover,
+.sidebar-list-item.active {
+  background: #2a2d2e;
 }
 
 .dash-tree-scroll {
-  flex: 1;
+  max-height: 320px;
   overflow: auto;
-  padding: 8px 0;
 }
 
 .dash-tree {
@@ -214,7 +278,7 @@ pre {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
 }
 
 .dash-stats-row {
@@ -243,6 +307,89 @@ pre {
   margin-top: 4px;
   font-size: 14px;
   color: #fff;
+}
+
+.dash-window-strip {
+  display: grid;
+  grid-template-columns: 240px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px;
+  border-bottom: 1px solid #111;
+  background: #212122;
+}
+
+.window-strip-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.window-strip-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.window-strip-description {
+  font-size: 11px;
+  color: #8b8b8b;
+  line-height: 1.35;
+}
+
+.window-strip-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.window-strip-tab {
+  min-width: 140px;
+  padding: 8px 10px;
+  background: #252526;
+  color: #d0d0d0;
+  border: 1px solid #111;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.window-strip-tab strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.window-strip-tab span {
+  font-size: 11px;
+  color: #7f7f7f;
+}
+
+.window-strip-tab.active,
+.window-strip-tab:hover {
+  background: #2a2d2e;
+}
+
+.window-strip-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.window-strip-button {
+  height: 30px;
+  padding: 0 10px;
+  background: #2f2f2f;
+  color: #ddd;
+  border: 1px solid #111;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.window-strip-button.secondary {
+  color: #a6a6a6;
 }
 
 .dash-pane-row {

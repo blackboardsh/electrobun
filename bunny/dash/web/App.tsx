@@ -25,6 +25,47 @@ type Snapshot = {
   cloudStatus: string;
   commandHint: string;
   topActions: Array<{ id: string; label: string }>;
+  currentLayout: {
+    id: string;
+    name: string;
+    description: string;
+  };
+  currentWorkspace: {
+    id: string;
+    name: string;
+    subtitle: string;
+  };
+  currentWindow: {
+    id: string;
+    title: string;
+    currentMainTabId: string;
+    currentSideTabId: string;
+  };
+  layouts: Array<{
+    id: string;
+    name: string;
+    description: string;
+    windowCount: number;
+    isActive: boolean;
+  }>;
+  workspaces: Array<{
+    id: string;
+    name: string;
+    subtitle: string;
+    projectCount: number;
+    isCurrent: boolean;
+  }>;
+  layoutWindows: Array<{
+    id: string;
+    title: string;
+    workspaceId: string;
+    workspaceName: string;
+    isActive: boolean;
+  }>;
+  sessionSummary: {
+    updatedAt: number;
+    label: string;
+  };
   tree: TreeNode[];
   mainTabs: Tab[];
   sideTabs: Tab[];
@@ -33,11 +74,18 @@ type Snapshot = {
     sidebarCollapsed: boolean;
     commandPaletteOpen: boolean;
     bunnyPopoverOpen: boolean;
-    activeTreeNodeId: string;
-    activeMainTabId: string;
-    activeSideTabId: string;
     commandQuery: string;
+    currentLayoutId: string;
+    currentWindowId: string;
+    activeTreeNodeId: string;
   };
+};
+
+type CommandResult = {
+  id: string;
+  title: string;
+  meta: string;
+  action: "selectNode" | "applyLayout" | "switchWorkspace" | "selectLayoutWindow" | "resumeLastState";
 };
 
 const client = createCarrotClient();
@@ -50,6 +98,29 @@ const initialSnapshot: Snapshot = {
   cloudStatus: "Developer preview foundation from colab-cloud.",
   commandHint: "cmd+p",
   topActions: [],
+  currentLayout: {
+    id: "marketing-day",
+    name: "Marketing Day",
+    description: "",
+  },
+  currentWorkspace: {
+    id: "marketing",
+    name: "Marketing",
+    subtitle: "",
+  },
+  currentWindow: {
+    id: "campaign-planning",
+    title: "Campaign Planning",
+    currentMainTabId: "projects",
+    currentSideTabId: "windows",
+  },
+  layouts: [],
+  workspaces: [],
+  layoutWindows: [],
+  sessionSummary: {
+    updatedAt: Date.now(),
+    label: "",
+  },
   tree: [],
   mainTabs: [],
   sideTabs: [],
@@ -58,10 +129,10 @@ const initialSnapshot: Snapshot = {
     sidebarCollapsed: false,
     commandPaletteOpen: false,
     bunnyPopoverOpen: false,
-    activeTreeNodeId: "shell",
-    activeMainTabId: "shell",
-    activeSideTabId: "fleet-side",
     commandQuery: "",
+    currentLayoutId: "marketing-day",
+    currentWindowId: "campaign-planning",
+    activeTreeNodeId: "project:campaign-site",
   },
 };
 
@@ -70,25 +141,67 @@ export function App() {
   const [ready, setReady] = createSignal(false);
 
   const mainTab = createMemo(() => {
-    return snapshot.mainTabs.find((tab) => tab.id === snapshot.state.activeMainTabId) ?? snapshot.mainTabs[0];
+    return (
+      snapshot.mainTabs.find((tab) => tab.id === snapshot.currentWindow.currentMainTabId) ??
+      snapshot.mainTabs[0]
+    );
   });
+
   const sideTab = createMemo(() => {
-    return snapshot.sideTabs.find((tab) => tab.id === snapshot.state.activeSideTabId) ?? snapshot.sideTabs[0];
+    return (
+      snapshot.sideTabs.find((tab) => tab.id === snapshot.currentWindow.currentSideTabId) ??
+      snapshot.sideTabs[0]
+    );
   });
-  const commandResults = createMemo(() => {
+
+  const commandResults = createMemo<CommandResult[]>(() => {
     const query = snapshot.state.commandQuery.trim().toLowerCase();
-    const candidates = [
-      ...snapshot.mainTabs.map((tab) => ({ id: tab.id, title: tab.title, meta: tab.kind })),
-      ...flattenTree(snapshot.tree).map((node) => ({ id: node.id, title: node.label, meta: node.kind })),
+    const candidates: CommandResult[] = [
+      ...snapshot.layouts.map((layout) => ({
+        id: layout.id,
+        title: layout.name,
+        meta: `layout · ${layout.windowCount} windows`,
+        action: "applyLayout" as const,
+      })),
+      ...snapshot.workspaces.map((workspace) => ({
+        id: workspace.id,
+        title: workspace.name,
+        meta: `workspace · ${workspace.projectCount} projects`,
+        action: "switchWorkspace" as const,
+      })),
+      ...snapshot.layoutWindows.map((window) => ({
+        id: window.id,
+        title: window.title,
+        meta: `window · ${window.workspaceName}`,
+        action: "selectLayoutWindow" as const,
+      })),
+      ...snapshot.mainTabs.map((tab) => ({
+        id: tab.id,
+        title: tab.title,
+        meta: `tab · ${tab.kind}`,
+        action: "selectNode" as const,
+      })),
+      ...flattenTree(snapshot.tree).map((node) => ({
+        id: node.id,
+        title: node.label,
+        meta: `tree · ${node.kind}`,
+        action: "selectNode" as const,
+      })),
+      {
+        id: "resume-last-state",
+        title: "Resume Last State",
+        meta: snapshot.sessionSummary.label,
+        action: "resumeLastState",
+      },
     ];
 
     if (!query) {
-      return candidates.slice(0, 10);
+      return candidates.slice(0, 12);
     }
 
     return candidates
       .filter((item) => `${item.title} ${item.meta}`.toLowerCase().includes(query))
-      .slice(0, 10);
+      .slice(0, 12);
   });
 
   async function refresh() {
@@ -101,6 +214,31 @@ export function App() {
 
   async function invoke(method: string, params?: unknown) {
     await client.invoke(method, params);
+  }
+
+  async function handleCommandResult(result: CommandResult) {
+    switch (result.action) {
+      case "applyLayout":
+        await invoke("applyLayout", { layoutId: result.id });
+        break;
+      case "switchWorkspace":
+        await invoke("switchWorkspace", { workspaceId: result.id });
+        break;
+      case "selectLayoutWindow":
+        await invoke("selectLayoutWindow", { windowId: result.id });
+        break;
+      case "resumeLastState":
+        await invoke("resumeLastState");
+        break;
+      case "selectNode":
+      default:
+        await invoke("selectNode", { nodeId: result.id });
+        break;
+    }
+
+    if (snapshot.state.commandPaletteOpen) {
+      await invoke("togglePalette");
+    }
   }
 
   async function handleKeyDown(event: KeyboardEvent) {
@@ -150,6 +288,7 @@ export function App() {
           snapshot={snapshot}
           onToggleSidebar={() => invoke("toggleSidebar")}
           onOpenPalette={() => invoke("togglePalette")}
+          onResumeLastState={() => invoke("resumeLastState")}
           onToggleBunny={() => invoke("toggleBunnyPopover")}
           onOpenCloud={() => invoke("openCloudPanel")}
         />
@@ -157,15 +296,49 @@ export function App() {
         <section class="dash-workspace">
           <Show when={!snapshot.state.sidebarCollapsed}>
             <aside class="dash-sidebar">
-              <div class="dash-sidebar-header">
-                <div>
-                  <div class="dash-sidebar-title">Explorer</div>
-                  <div class="dash-sidebar-subtitle">Bunny Dash local workspace</div>
+              <SidebarSection title="Layouts" subtitle="Personal saved window state">
+                <button class="sidebar-action-button" onClick={() => invoke("resumeLastState")}>
+                  Resume Last State
+                </button>
+                <button class="sidebar-action-button secondary" onClick={() => invoke("updateCurrentLayout")}>
+                  Update Current Layout
+                </button>
+                <For each={snapshot.layouts}>
+                  {(layout) => (
+                    <button
+                      class={`sidebar-list-item${layout.isActive ? " active" : ""}`}
+                      onClick={() => invoke("applyLayout", { layoutId: layout.id })}
+                    >
+                      <strong>{layout.name}</strong>
+                      <span>{layout.windowCount} windows</span>
+                    </button>
+                  )}
+                </For>
+              </SidebarSection>
+
+              <SidebarSection title="Workspaces" subtitle="Shared project scope">
+                <For each={snapshot.workspaces}>
+                  {(workspace) => (
+                    <button
+                      class={`sidebar-list-item${workspace.isCurrent ? " active" : ""}`}
+                      onClick={() => invoke("switchWorkspace", { workspaceId: workspace.id })}
+                    >
+                      <strong>{workspace.name}</strong>
+                      <span>{workspace.projectCount} projects</span>
+                    </button>
+                  )}
+                </For>
+              </SidebarSection>
+
+              <SidebarSection title="Explorer" subtitle={snapshot.currentWorkspace.subtitle}>
+                <div class="dash-tree-scroll">
+                  <Tree
+                    nodes={snapshot.tree}
+                    activeNodeId={snapshot.state.activeTreeNodeId}
+                    onSelect={(nodeId) => invoke("selectNode", { nodeId })}
+                  />
                 </div>
-              </div>
-              <div class="dash-tree-scroll">
-                <Tree nodes={snapshot.tree} activeNodeId={snapshot.state.activeTreeNodeId} onSelect={(nodeId) => invoke("selectNode", { nodeId })} />
-              </div>
+              </SidebarSection>
             </aside>
           </Show>
 
@@ -181,21 +354,47 @@ export function App() {
               </For>
             </div>
 
+            <div class="dash-window-strip">
+              <div class="window-strip-meta">
+                <span class="window-strip-label">{snapshot.currentLayout.name}</span>
+                <span class="window-strip-description">{snapshot.currentLayout.description}</span>
+              </div>
+              <div class="window-strip-tabs">
+                <For each={snapshot.layoutWindows}>
+                  {(window) => (
+                    <button
+                      class={`window-strip-tab${window.isActive ? " active" : ""}`}
+                      onClick={() => invoke("selectLayoutWindow", { windowId: window.id })}
+                    >
+                      <strong>{window.title}</strong>
+                      <span>{window.workspaceName}</span>
+                    </button>
+                  )}
+                </For>
+              </div>
+              <div class="window-strip-actions">
+                <button class="window-strip-button" onClick={() => invoke("resumeLastState")}>
+                  Resume Last State
+                </button>
+                <button class="window-strip-button secondary" onClick={() => invoke("updateCurrentLayout")}>
+                  Update Layout
+                </button>
+              </div>
+            </div>
+
             <div class="dash-pane-row">
               <Pane
                 title={mainTab()?.title ?? "Bunny Dash"}
                 body={mainTab()?.body ?? ""}
-                paneId="main"
                 tabs={snapshot.mainTabs}
-                activeTabId={snapshot.state.activeMainTabId}
+                activeTabId={snapshot.currentWindow.currentMainTabId}
                 onSelect={(tabId) => invoke("focusMainTab", { tabId })}
               />
               <Pane
                 title={sideTab()?.title ?? snapshot.cloudLabel}
                 body={sideTab()?.body ?? snapshot.cloudStatus}
-                paneId="side"
                 tabs={snapshot.sideTabs}
-                activeTabId={snapshot.state.activeSideTabId}
+                activeTabId={snapshot.currentWindow.currentSideTabId}
                 onSelect={(tabId) => invoke("focusSideTab", { tabId })}
               />
             </div>
@@ -205,28 +404,25 @@ export function App() {
         <StatusBar snapshot={snapshot} />
 
         <Show when={snapshot.state.commandPaletteOpen}>
-          <div class="command-overlay electrobun-webkit-app-region-no-drag" onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              void invoke("togglePalette");
-            }
-          }}>
+          <div
+            class="command-overlay electrobun-webkit-app-region-no-drag"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                void invoke("togglePalette");
+              }
+            }}
+          >
             <div class="command-panel">
               <input
                 class="command-input"
                 value={snapshot.state.commandQuery}
                 onInput={(event) => void invoke("setCommandQuery", { query: event.currentTarget.value })}
-                placeholder="Jump to file, tab, or instance"
+                placeholder="Layout, workspace, tab, window, or project"
               />
               <div class="command-results">
                 <For each={commandResults()}>
                   {(result) => (
-                    <button
-                      class="command-result"
-                      onClick={async () => {
-                        await invoke("selectNode", { nodeId: result.id });
-                        await invoke("togglePalette");
-                      }}
-                    >
+                    <button class="command-result" onClick={() => void handleCommandResult(result)}>
                       <span>{result.title}</span>
                       <small>{result.meta}</small>
                     </button>
@@ -238,16 +434,19 @@ export function App() {
         </Show>
 
         <Show when={snapshot.state.bunnyPopoverOpen}>
-          <div class="bunny-popover electrobun-webkit-app-region-no-drag" onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              void invoke("toggleBunnyPopover");
-            }
-          }}>
+          <div
+            class="bunny-popover electrobun-webkit-app-region-no-drag"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                void invoke("toggleBunnyPopover");
+              }
+            }}
+          >
             <div class="bunny-popover-card">
               <div class="bunny-popover-title">Pop Out Bunny</div>
               <p>
-                Privileged local Bunny Dash mode will eventually attach local surfaces,
-                open remote sessions, and expose deeper machine integrations than the browser client.
+                Long term this becomes the privileged local bridge for attaching local surfaces,
+                opening remote sessions, and exposing deeper machine integrations than the browser client.
               </p>
             </div>
           </div>
@@ -261,6 +460,7 @@ function TopBar(props: {
   snapshot: Snapshot;
   onToggleSidebar: () => void;
   onOpenPalette: () => void;
+  onResumeLastState: () => void;
   onToggleBunny: () => void;
   onOpenCloud: () => void;
 }) {
@@ -270,17 +470,22 @@ function TopBar(props: {
         <button class="topbar-square" onClick={props.onToggleSidebar} title="Toggle sidebar">
           ≡
         </button>
-        <button class="topbar-square" onClick={props.onOpenPalette} title="Command palette">
+        <button class="topbar-square wide" onClick={props.onOpenPalette} title="Command palette">
           {props.snapshot.commandHint}
         </button>
       </div>
 
       <div class="dash-topbar-center">
         <div class="dash-brand">{props.snapshot.shellTitle}</div>
-        <div class="dash-subbrand">{props.snapshot.subtitle}</div>
+        <div class="dash-subbrand">
+          {props.snapshot.currentLayout.name} · {props.snapshot.currentWorkspace.name}
+        </div>
       </div>
 
       <div class="dash-topbar-right electrobun-webkit-app-region-no-drag">
+        <button class="topbar-action" onClick={props.onResumeLastState}>
+          Resume
+        </button>
         <button class="topbar-bunny" onClick={props.onToggleBunny}>
           Pop Out Bunny
         </button>
@@ -292,18 +497,32 @@ function TopBar(props: {
   );
 }
 
+function SidebarSection(props: { title: string; subtitle: string; children: any }) {
+  return (
+    <section class="sidebar-section">
+      <div class="sidebar-section-header">
+        <div class="sidebar-section-title">{props.title}</div>
+        <div class="sidebar-section-subtitle">{props.subtitle}</div>
+      </div>
+      <div class="sidebar-section-body">{props.children}</div>
+    </section>
+  );
+}
+
 function StatusBar(props: { snapshot: Snapshot }) {
   return (
     <div class="dash-statusbar electrobun-webkit-app-region-no-drag">
       <div class="status-left">
-        <span>win: 1</span>
+        <span>{props.snapshot.currentLayout.name}</span>
         <span>|</span>
-        <span>tabs: {props.snapshot.mainTabs.length + props.snapshot.sideTabs.length}</span>
+        <span>{props.snapshot.currentWorkspace.name}</span>
+        <span>|</span>
+        <span>{props.snapshot.currentWindow.title}</span>
       </div>
       <div class="status-right">
-        <span>Bunny Cloud: online</span>
+        <span>{props.snapshot.sessionSummary.label}</span>
         <span>|</span>
-        <span>Bun worker permissions: {props.snapshot.permissions.length}</span>
+        <span>{props.snapshot.permissions.length} grants</span>
         <span>|</span>
         <span>Bunny Dash dev preview</span>
       </div>
@@ -319,9 +538,7 @@ function Tree(props: {
   return (
     <div class="dash-tree">
       <For each={props.nodes}>
-        {(node) => (
-          <TreeNodeView node={node} depth={0} activeNodeId={props.activeNodeId} onSelect={props.onSelect} />
-        )}
+        {(node) => <TreeNodeView node={node} depth={0} activeNodeId={props.activeNodeId} onSelect={props.onSelect} />}
       </For>
     </div>
   );
@@ -346,12 +563,7 @@ function TreeNodeView(props: {
       <Show when={props.node.children?.length}>
         <For each={props.node.children}>
           {(child) => (
-            <TreeNodeView
-              node={child}
-              depth={props.depth + 1}
-              activeNodeId={props.activeNodeId}
-              onSelect={props.onSelect}
-            />
+            <TreeNodeView node={child} depth={props.depth + 1} activeNodeId={props.activeNodeId} onSelect={props.onSelect} />
           )}
         </For>
       </Show>
@@ -362,7 +574,6 @@ function TreeNodeView(props: {
 function Pane(props: {
   title: string;
   body: string;
-  paneId: string;
   tabs: Tab[];
   activeTabId: string;
   onSelect: (tabId: string) => void;
@@ -373,10 +584,7 @@ function Pane(props: {
         <div class="dash-pane-tab-container">
           <For each={props.tabs}>
             {(tab) => (
-              <button
-                class={`dash-pane-tab${tab.id === props.activeTabId ? " active" : ""}`}
-                onClick={() => props.onSelect(tab.id)}
-              >
+              <button class={`dash-pane-tab${tab.id === props.activeTabId ? " active" : ""}`} onClick={() => props.onSelect(tab.id)}>
                 <span class="dash-pane-tab-icon">{tab.icon}</span>
                 <span class="dash-pane-tab-title">{tab.title}</span>
               </button>

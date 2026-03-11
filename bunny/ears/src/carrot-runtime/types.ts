@@ -140,6 +140,7 @@ export type HostActionMessage = {
     | "set-tray"
     | "set-tray-menu"
     | "remove-tray"
+    | "focus-window"
     | "stop-carrot"
     | "emit-view"
     | "log";
