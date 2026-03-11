@@ -7,6 +7,9 @@ export type BuildConfigType = {
 		exitOnLastWindowClosed?: boolean;
 		[key: string]: unknown;
 	};
+	dev?: {
+		launchWithoutActivating?: boolean;
+	};
 };
 
 let buildConfig: BuildConfigType | null = null;

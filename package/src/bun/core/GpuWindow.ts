@@ -1,9 +1,11 @@
 import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { type Pointer } from "bun:ffi";
+import { BuildConfig } from "./BuildConfig";
 import { WGPUView } from "./WGPUView";
 import { getNextWindowId } from "./windowIds";
 
+const buildConfig = await BuildConfig.get();
 
 export type GpuWindowOptionsType = {
 	title: string;
@@ -123,6 +125,7 @@ export class GpuWindow {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
+			showWithoutActivating: buildConfig?.dev?.launchWithoutActivating ?? false,
 		}) as Pointer;
 
 		GpuWindowMap[this.id] = this;
@@ -166,6 +169,10 @@ export class GpuWindow {
 
 	show() {
 		return ffi.request.focusWindow({ winId: this.id });
+	}
+
+	showWithoutActivating() {
+		return ffi.request.showWindowWithoutActivating({ winId: this.id });
 	}
 
 	minimize() {

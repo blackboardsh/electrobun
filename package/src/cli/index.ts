@@ -1424,6 +1424,9 @@ const defaultConfig = {
 		watch: undefined as string[] | undefined,
 		watchIgnore: undefined as string[] | undefined,
 	},
+	dev: {
+		launchWithoutActivating: false,
+	},
 	runtime: {} as Record<string, unknown>,
 	scripts: {
 		preBuild: "",
@@ -3130,6 +3133,7 @@ Categories=Utility;Application;
 			defaultRenderer: platformConfig?.defaultRenderer ?? "native",
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
 			runtime: config.runtime ?? {},
+			...(buildEnvironment === "dev" ? { dev: config.dev ?? {} } : {}),
 			...(bundlesCEF
 				? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING }
 				: {}),
@@ -4234,6 +4238,10 @@ Categories=Utility;Application;
 					...defaultConfig.build.bun,
 					...(loadedConfig?.build?.bun || {}),
 				},
+			},
+			dev: {
+				...defaultConfig.dev,
+				...(loadedConfig?.dev || {}),
 			},
 			runtime: {
 				...defaultConfig.runtime,

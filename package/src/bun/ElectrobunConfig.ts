@@ -323,6 +323,19 @@ export interface ElectrobunConfig {
 	};
 
 	/**
+	 * Dev mode configuration.
+	 * Controls behaviour when running with `electrobun dev`.
+	 */
+	dev?: {
+		/**
+		 * Show windows without stealing focus from the currently active app.
+		 * Useful during development so live-reload doesn't yank you out of your editor.
+		 * @default false
+		 */
+		launchWithoutActivating?: boolean;
+	};
+
+	/**
 	 * Runtime behaviour configuration.
 	 * These values are copied into build.json and available to the Bun process at runtime.
 	 * You can add arbitrary keys here and access them via BuildConfig.
