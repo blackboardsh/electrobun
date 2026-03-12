@@ -32,6 +32,7 @@ export type WindowOptionsType<T = undefined> = {
 	titleBarStyle: "hidden" | "hiddenInset" | "default";
 	// transparent: when true, window background is transparent (see-through)
 	transparent: boolean;
+	hidden?: boolean;
 	navigationRules: string | null;
 	// Sandbox mode: when true, disables RPC and only allows event emission
 	// Use for untrusted content (remote URLs) to prevent malicious sites from
@@ -53,6 +54,7 @@ const defaultOptions: WindowOptionsType = {
 	renderer: buildConfig.defaultRenderer,
 	titleBarStyle: "default",
 	transparent: false,
+	hidden: false,
 	navigationRules: null,
 	sandbox: false,
 };
@@ -113,6 +115,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	preload: string | null = null;
 	renderer: "native" | "cef" = "native";
 	transparent: boolean = false;
+	hidden: boolean = false;
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
@@ -140,6 +143,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.preload = options.preload || null;
 		this.renderer = options.renderer || defaultOptions.renderer;
 		this.transparent = options.transparent ?? false;
+		this.hidden = options.hidden ?? false;
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
 
@@ -151,6 +155,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		styleMask,
 		titleBarStyle,
 		transparent,
+		hidden,
 	}: Partial<WindowOptionsType<T>>) {
 		this.ptr = ffi.request.createWindow({
 			id: this.id,
@@ -193,6 +198,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
+			hidden: hidden ?? false,
 		}) as Pointer;
 
 		BrowserWindowMap[this.id] = this;
@@ -295,6 +301,14 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	isAlwaysOnTop(): boolean {
 		return ffi.request.isWindowAlwaysOnTop({ winId: this.id });
 	}
+	
+	setVisibleOnAllWorkspaces(visibleOnAllWorkspaces: boolean) {
+		return ffi.request.setWindowVisibleOnAllWorkspaces({ winId: this.id, visibleOnAllWorkspaces });
+	}
+	
+	isVisibleOnAllWorkspaces(): boolean {
+		return ffi.request.isWindowVisibleOnAllWorkspaces({ winId: this.id });
+	}
 
 	setPosition(x: number, y: number) {
 		this.frame.x = x;
@@ -328,6 +342,22 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	getSize(): { width: number; height: number } {
 		const frame = this.getFrame();
 		return { width: frame.width, height: frame.height };
+	}
+
+	/**
+	 * Set the page zoom level for the window's webview (WebKit only).
+	 * @param zoomLevel - The zoom level (1.0 = 100%, 1.5 = 150%, etc.)
+	 */
+	setPageZoom(zoomLevel: number) {
+		this.webview?.setPageZoom(zoomLevel);
+	}
+
+	/**
+	 * Get the current page zoom level for the window's webview.
+	 * @returns The current zoom level (1.0 = 100%)
+	 */
+	getPageZoom(): number {
+		return this.webview?.getPageZoom() ?? 1.0;
 	}
 
 	// todo (yoav): move this to a class that also has off, append, prepend, etc.

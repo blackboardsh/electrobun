@@ -60,6 +60,7 @@ const win = new BrowserWindow({
 });
 
 win.setAlwaysOnTop(true);
+win.setVisibleOnAllWorkspaces(true);
 
 function sendCursor() {
 	const cursor = Screen.getCursorScreenPoint();

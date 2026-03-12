@@ -5,12 +5,11 @@ import {
 	readFileSync,
 	writeFileSync,
 	cpSync,
-	rmdirSync,
+	rmSync,
 	mkdirSync,
 	createWriteStream,
 	unlinkSync,
 	readdirSync,
-	rmSync,
 	symlinkSync,
 	statSync,
 	copyFileSync,
@@ -18,10 +17,10 @@ import {
 } from "fs";
 import { execSync } from "child_process";
 import * as readline from "readline";
-import archiver from "archiver";
 import { OS, ARCH } from "../shared/platform";
 import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
 import { BUN_VERSION } from "../shared/bun-version";
+import { ELECTROBUN_VERSION } from "../shared/electrobun-version";
 import {
 	getAppFileName,
 	getBundleFileName,
@@ -75,7 +74,21 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
 );
 const commandArg = process.argv[indexOfElectrobun + 1] || "build";
 
-const ELECTROBUN_DEP_PATH = join(projectRoot, "node_modules", "electrobun");
+// Walk up from projectRoot to find electrobun in node_modules (supports hoisted monorepo layouts)
+function resolveElectrobunDir(): string {
+	let dir = projectRoot;
+	while (dir !== dirname(dir)) {
+		const candidate = join(dir, "node_modules", "electrobun");
+		if (existsSync(join(candidate, "package.json"))) {
+			return candidate;
+		}
+		dir = dirname(dir);
+	}
+	return join(projectRoot, "node_modules", "electrobun");
+}
+
+const ELECTROBUN_DEP_PATH = resolveElectrobunDir();
+const ELECTROBUN_CACHE_PATH = join(dirname(ELECTROBUN_DEP_PATH), ".electrobun-cache");
 
 // When debugging electrobun with the example app use the builds (dev or release) right from the source folder
 // For developers using electrobun cli via npm use the release versions in /dist
@@ -183,18 +196,7 @@ async function ensureCoreDependencies(
 	);
 	console.log(`Downloading core binaries for ${platformOS}-${platformArch}...`);
 
-	// Get the current Electrobun version from package.json
-	const packageJsonPath = join(ELECTROBUN_DEP_PATH, "package.json");
-	let version = "latest";
-
-	if (existsSync(packageJsonPath)) {
-		try {
-			const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-			version = `v${packageJson.version}`;
-		} catch (error) {
-			console.warn("Could not read package version, using latest");
-		}
-	}
+	const version = `v${ELECTROBUN_VERSION}`;
 
 	const platformName =
 		platformOS === "macos" ? "darwin" : platformOS === "win" ? "win" : "linux";
@@ -367,13 +369,7 @@ function getEffectiveCEFDir(
 	cefVersion?: string,
 ): string {
 	if (cefVersion) {
-		return join(
-			projectRoot,
-			"node_modules",
-			".electrobun-cache",
-			"cef-override",
-			`${platformOS}-${platformArch}`,
-		);
+		return join(ELECTROBUN_CACHE_PATH, "cef-override", `${platformOS}-${platformArch}`);
 	}
 	return getPlatformPaths(platformOS, platformArch).CEF_DIR;
 }
@@ -492,13 +488,7 @@ async function ensureBunBinary(
 	}
 
 	const binExt = targetOS === "win" ? ".exe" : "";
-	const overrideDir = join(
-		projectRoot,
-		"node_modules",
-		".electrobun-cache",
-		"bun-override",
-		`${targetOS}-${targetArch}`,
-	);
+	const overrideDir = join(ELECTROBUN_CACHE_PATH, "bun-override", `${targetOS}-${targetArch}`);
 	const overrideBinary = join(overrideDir, `bun${binExt}`);
 	const versionFile = join(overrideDir, ".bun-version");
 
@@ -558,13 +548,7 @@ async function downloadCustomBun(
 	}
 
 	const binExt = platformOS === "win" ? ".exe" : "";
-	const overrideDir = join(
-		projectRoot,
-		"node_modules",
-		".electrobun-cache",
-		"bun-override",
-		`${platformOS}-${platformArch}`,
-	);
+	const overrideDir = join(ELECTROBUN_CACHE_PATH, "bun-override", `${platformOS}-${platformArch}`);
 	const overrideBinary = join(overrideDir, `bun${binExt}`);
 	const bunUrl = `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/${bunUrlSegment}`;
 
@@ -629,7 +613,7 @@ async function downloadCustomBun(
 				{ stdio: "inherit" },
 			);
 		} else {
-			execSync(`unzip -o "${tempZipPath}" -d "${overrideDir}"`, {
+			execSync(`unzip -o ${escapePathForTerminal(tempZipPath)} -d ${escapePathForTerminal(overrideDir)}`, {
 				stdio: "inherit",
 			});
 		}
@@ -646,7 +630,7 @@ async function downloadCustomBun(
 
 		// Set execute permissions on non-Windows
 		if (platformOS !== "win") {
-			execSync(`chmod +x "${overrideBinary}"`);
+			execSync(`chmod +x ${escapePathForTerminal(overrideBinary)}`);
 		}
 
 		// Write version stamp
@@ -736,18 +720,7 @@ async function ensureCEFDependencies(
 		`CEF dependencies not found for ${platformOS}-${platformArch}, downloading...`,
 	);
 
-	// Get the current Electrobun version from package.json
-	const packageJsonPath = join(ELECTROBUN_DEP_PATH, "package.json");
-	let version = "latest";
-
-	if (existsSync(packageJsonPath)) {
-		try {
-			const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-			version = `v${packageJson.version}`;
-		} catch (error) {
-			console.warn("Could not read package version, using latest");
-		}
-	}
+	const version = `v${ELECTROBUN_VERSION}`;
 
 	const platformName =
 		platformOS === "macos" ? "darwin" : platformOS === "win" ? "win" : "linux";
@@ -1399,21 +1372,21 @@ const defaultConfig = {
 			} as Record<string, boolean | string>,
 			icons: "icon.iconset",
 			defaultRenderer: undefined as "native" | "cef" | undefined,
-			chromiumFlags: undefined as Record<string, string | true> | undefined,
+			chromiumFlags: undefined as Record<string, string | boolean> | undefined,
 		},
 		win: {
 			bundleCEF: false,
 			bundleWGPU: false,
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
-			chromiumFlags: undefined as Record<string, string | true> | undefined,
+			chromiumFlags: undefined as Record<string, string | boolean> | undefined,
 		},
 		linux: {
 			bundleCEF: false,
 			bundleWGPU: false,
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
-			chromiumFlags: undefined as Record<string, string | true> | undefined,
+			chromiumFlags: undefined as Record<string, string | boolean> | undefined,
 		},
 		bun: {
 			entrypoint: "src/bun/index.ts",
@@ -1481,7 +1454,11 @@ function escapeXml(str: string): string {
 
 // Helper functions
 function escapePathForTerminal(path: string): string {
-	return `"${path.replace(/"/g, '\\"')}"`;
+	if (OS === "win") {
+		return `"${path.replace(/"/g, '""')}"`;
+	} else {
+		return `'${path.replace(/'/g, "'\\''")}'`;
+	}
 }
 
 /**
@@ -2022,7 +1999,7 @@ Categories=Utility;Application;
 
 		// refresh build folder
 		if (existsSync(buildFolder)) {
-			rmdirSync(buildFolder, { recursive: true });
+			rmSync(buildFolder, { recursive: true });
 		}
 		mkdirSync(buildFolder, { recursive: true });
 		// bundle bun to build/bun
@@ -2630,7 +2607,7 @@ Categories=Utility;Application;
 								// Fallback to copying the file
 								cpSync(cefFilePath, mainDirPath, { dereference: true });
 								console.log(
-									`Fallback: Copied CEF library to main directory: ${soFile}`,
+									`Fallback: Copying CEF library to main directory: ${soFile}`,
 								);
 							}
 						}
@@ -2706,6 +2683,7 @@ Categories=Utility;Application;
 			if (targetOS === "win") {
 				const d3dCandidates = [
 					join(effectiveWGPUDir, "bin", "d3dcompiler_47.dll"),
+					join(ELECTROBUN_DEP_PATH, `dist-win-${currentTarget.arch}`, "d3dcompiler_47.dll"),
 					join(ELECTROBUN_DEP_PATH, "dist", "d3dcompiler_47.dll"),
 					join(targetPaths.CEF_DIR, "d3dcompiler_47.dll"),
 				];
@@ -3053,7 +3031,7 @@ Categories=Utility;Application;
 				console.log("✓ Created app.asar");
 
 				// Remove the entire app folder since it's now packed in ASAR
-				rmdirSync(appDirPath, { recursive: true });
+				rmSync(appDirPath, { recursive: true });
 				console.log("✓ Removed app/ folder (now in ASAR)");
 			}
 		}
@@ -3212,7 +3190,7 @@ Categories=Utility;Application;
 
 			// Remove the app bundle folder after tarring (except on Linux where it might be needed for dev)
 			if (targetOS !== "linux" || buildEnvironment !== "dev") {
-				rmdirSync(appBundleFolderPath, { recursive: true });
+				rmSync(appBundleFolderPath, { recursive: true });
 			}
 
 			// generate bsdiff
@@ -3639,7 +3617,7 @@ Categories=Utility;Application;
 			console.log("creating artifacts folder...");
 			if (existsSync(artifactFolder)) {
 				console.info("deleting artifact folder: ", artifactFolder);
-				rmdirSync(artifactFolder, { recursive: true });
+				rmSync(artifactFolder, { recursive: true });
 			}
 
 			mkdirSync(artifactFolder, { recursive: true });
@@ -4406,39 +4384,43 @@ Categories=Utility;Application;
 			throw new Error(`Archive file not found: ${archivePath}`);
 		}
 
-		// Create zip archive
-		const output = createWriteStream(zipPath);
-		const archive = archiver("zip", {
-			zlib: { level: 9 }, // Maximum compression
-		});
+		// Create staging directory to control zip layout
+		const stagingDir = join(
+			buildFolder,
+			`.installer-zip-${exeStem.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+		);
+		const stagingInstallerDir = join(stagingDir, ".installer");
 
-		return new Promise((resolve, reject) => {
-			output.on("close", () => {
-				console.log(
-					`Created Windows installer package: ${zipPath} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`,
-				);
-				resolve(zipPath);
-			});
+		if (existsSync(stagingDir)) {
+			rmSync(stagingDir, { recursive: true, force: true });
+		}
+		mkdirSync(stagingInstallerDir, { recursive: true });
 
-			archive.on("error", (err) => {
-				reject(err);
-			});
+		// Add Setup.exe at the root level for easy access
+		copyFileSync(exePath, join(stagingDir, basename(exePath)));
+		// Put metadata and archive in a subdirectory to discourage manual extraction
+		copyFileSync(metadataPath, join(stagingInstallerDir, basename(metadataPath)));
+		copyFileSync(archivePath, join(stagingInstallerDir, basename(archivePath)));
 
-			archive.pipe(output);
+		try {
+			// Create zip archive (Windows only)
+			execSync(
+				`powershell -command "Compress-Archive -Path '${stagingDir}\\\\*' -DestinationPath '${zipPath}' -Force"`,
+				{ stdio: "inherit" },
+			);
 
-			// Add Setup.exe at the root level for easy access
-			archive.file(exePath, { name: basename(exePath) });
-
-			// Put metadata and archive in a subdirectory to discourage manual extraction
-			archive.file(metadataPath, {
-				name: `.installer/${basename(metadataPath)}`,
-			});
-			archive.file(archivePath, {
-				name: `.installer/${basename(archivePath)}`,
-			});
-
-			archive.finalize();
-		});
+			const zipSizeMb = existsSync(zipPath)
+				? (statSync(zipPath).size / 1024 / 1024).toFixed(2)
+				: "0.00";
+			console.log(
+				`Created Windows installer package: ${zipPath} (${zipSizeMb} MB)`,
+			);
+			return zipPath;
+		} finally {
+			if (existsSync(stagingDir)) {
+				rmSync(stagingDir, { recursive: true, force: true });
+			}
+		}
 	}
 
 	function codesignAppBundle(
@@ -4581,7 +4563,7 @@ Categories=Utility;Application;
 					} else if (entry.isFile()) {
 						// Check if it's an executable or library
 						try {
-							const fileInfo = execSync(`file -b "${fullPath}"`, {
+							const fileInfo = execSync(`file -b ${escapePathForTerminal(fullPath)}`, {
 								encoding: "utf8",
 							}).trim();
 							if (
@@ -4631,6 +4613,28 @@ Categories=Utility;Application;
 					(err as Error).message,
 				);
 				// Continue signing other files even if one fails
+			}
+		}
+
+		// Sign .node native modules in Resources/app/bun
+		const resourcesPath = join(contentsPath, "Resources", "app", "bun");
+		if (existsSync(resourcesPath)) {
+			console.log("Signing native modules in Resources/app/bun...");
+			try {
+				const nodeFiles = execSync(`find ${escapePathForTerminal(resourcesPath)} -name "*.node" -type f`, {
+					encoding: "utf8",
+				}).trim().split("\n").filter(Boolean);
+
+				for (const nodeFile of nodeFiles) {
+					if (nodeFile) {
+						console.log(`Signing native module: ${nodeFile.replace(resourcesPath + "/", "")}`);
+						execSync(
+							`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${escapePathForTerminal(nodeFile)}`,
+						);
+					}
+				}
+			} catch (err) {
+				console.error("Error signing native modules:", err);
 			}
 		}
 
@@ -4696,43 +4700,58 @@ Categories=Utility;Application;
 		// }
 
 		const ELECTROBUN_APPLEID = process.env["ELECTROBUN_APPLEID"];
-
-		if (!ELECTROBUN_APPLEID) {
-			console.error("Env var ELECTROBUN_APPLEID is required to notarize");
-			process.exit(1);
-		}
-
 		const ELECTROBUN_APPLEIDPASS = process.env["ELECTROBUN_APPLEIDPASS"];
-
-		if (!ELECTROBUN_APPLEIDPASS) {
-			console.error("Env var ELECTROBUN_APPLEIDPASS is required to notarize");
-			process.exit(1);
-		}
-
 		const ELECTROBUN_TEAMID = process.env["ELECTROBUN_TEAMID"];
 
-		if (!ELECTROBUN_TEAMID) {
-			console.error("Env var ELECTROBUN_TEAMID is required to notarize");
+		const ELECTROBUN_APPLEAPIISSUER = process.env["ELECTROBUN_APPLEAPIISSUER"];
+		const ELECTROBUN_APPLEAPIKEY = process.env["ELECTROBUN_APPLEAPIKEY"];
+		const ELECTROBUN_APPLEAPIKEYPATH = process.env["ELECTROBUN_APPLEAPIKEYPATH"];
+
+		const useApiKey = ELECTROBUN_APPLEAPIISSUER && ELECTROBUN_APPLEAPIKEY && ELECTROBUN_APPLEAPIKEYPATH;
+		const useAppleId = ELECTROBUN_APPLEID && ELECTROBUN_APPLEIDPASS && ELECTROBUN_TEAMID;
+
+		if (!useApiKey && !useAppleId) {
+			console.error("Provide either App Store Connect API key credentials (ELECTROBUN_APPLEAPIISSUER, ELECTROBUN_APPLEAPIKEY, ELECTROBUN_APPLEAPIKEYPATH) or Apple ID credentials (ELECTROBUN_APPLEID, ELECTROBUN_APPLEIDPASS, ELECTROBUN_TEAMID) to notarize");
 			process.exit(1);
 		}
 
-		// notarize
-		// todo (yoav): follow up on options here like --s3-acceleration and --webhook
-		// todo (yoav): don't use execSync since it's blocking and we'll only see the output at the end
-		const statusInfo = execSync(
-			`xcrun notarytool submit --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" --wait ${escapePathForTerminal(
-				fileToNotarize,
-			)}`,
-		).toString();
+		let statusInfo: string;
+		if (useApiKey) {
+			if (!existsSync(ELECTROBUN_APPLEAPIKEYPATH)) {
+				console.error(`ELECTROBUN_APPLEAPIKEYPATH does not exist: ${ELECTROBUN_APPLEAPIKEYPATH}`);
+				process.exit(1);
+			}
+			statusInfo = execSync(
+				`xcrun notarytool submit --key "${ELECTROBUN_APPLEAPIKEYPATH}" --key-id "${ELECTROBUN_APPLEAPIKEY}" --issuer "${ELECTROBUN_APPLEAPIISSUER}" --wait ${escapePathForTerminal(
+					fileToNotarize,
+				)}`,
+			).toString();
+		} else {
+			// notarize
+			// todo (yoav): follow up on options here like --s3-acceleration and --webhook
+			// todo (yoav): don't use execSync since it's blocking and we'll only see the output at the end
+			statusInfo = execSync(
+				`xcrun notarytool submit --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" --wait ${escapePathForTerminal(
+					fileToNotarize,
+				)}`,
+			).toString();
+		}
 		const uuid = statusInfo.match(/id: ([^\n]+)/)?.[1];
 		console.log("statusInfo", statusInfo);
 		console.log("uuid", uuid);
 
 		if (statusInfo.match("Current status: Invalid")) {
 			console.error("notarization failed", statusInfo);
-			const log = execSync(
-				`xcrun notarytool log --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" ${uuid}`,
-			).toString();
+			let log: string;
+			if (useApiKey) {
+				log = execSync(
+					`xcrun notarytool log --key "${ELECTROBUN_APPLEAPIKEYPATH}" --key-id "${ELECTROBUN_APPLEAPIKEY}" --issuer "${ELECTROBUN_APPLEAPIISSUER}" ${uuid}`,
+				).toString();
+			} else {
+				log = execSync(
+					`xcrun notarytool log --apple-id "${ELECTROBUN_APPLEID}" --password "${ELECTROBUN_APPLEIDPASS}" --team-id "${ELECTROBUN_TEAMID}" ${uuid}`,
+				).toString();
+			}
 			console.log("log", log);
 			process.exit(1);
 		}

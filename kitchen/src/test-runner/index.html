@@ -67,6 +67,18 @@
             <button id="btn-run-interactive" class="btn btn-secondary">Run Interactive Tests</button>
         </div>
 
+        <div class="search-row">
+            <input
+                id="test-search"
+                class="search-input"
+                type="search"
+                placeholder="Search tests (fuzzy by name, category, description)"
+                autocomplete="off"
+                spellcheck="false"
+            >
+            <span id="search-meta" class="search-meta"></span>
+        </div>
+
         <div class="test-list" id="test-list">
             <!-- Tests will be populated here -->
         </div>

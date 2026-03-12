@@ -53,6 +53,14 @@ export const openPath = (path: string): boolean => {
 	return ffi.request.openPath({ path });
 };
 
+export const setDockIconVisible = (visible: boolean): void => {
+	ffi.request.setDockIconVisible({ visible });
+};
+
+export const isDockIconVisible = (): boolean => {
+	return ffi.request.isDockIconVisible();
+};
+
 export type NotificationOptions = {
 	/**
 	 * The title of the notification (required)

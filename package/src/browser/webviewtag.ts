@@ -73,6 +73,9 @@ interface WebviewTagElement extends HTMLElement {
 	openDevTools(): void;
 	closeDevTools(): void;
 	toggleDevTools(): void;
+
+	// JavaScript execution
+	executeJavascript(js: string): void;
 }
 
 // Augment global types so querySelector('electrobun-webview') returns WebviewTagElement

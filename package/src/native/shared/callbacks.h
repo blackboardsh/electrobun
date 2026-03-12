@@ -24,6 +24,7 @@ typedef void (*WindowCloseHandler)(uint32_t windowId);
 typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
 typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
 typedef void (*WindowFocusHandler)(uint32_t windowId);
+typedef void (*WindowBlurHandler)(uint32_t windowId);
 typedef void (*WindowKeyHandler)(uint32_t windowId, uint32_t keyCode, uint32_t modifiers, uint32_t isDown, uint32_t isRepeat);
 
 // Tray and menu callbacks
@@ -35,6 +36,10 @@ typedef void (*SnapshotCallback)(uint32_t hostId, uint32_t webviewId, const char
 
 // URL open handler for deep linking
 typedef void (*URLOpenHandler)(const char* url);
+
+// App reopen handler - called when the user re-opens an already running app
+// (for example via Finder, Launchpad, or `open -a` on macOS)
+typedef void (*AppReopenHandler)();
 
 // Quit request handler - called by native code when quit is requested externally
 // (e.g., dock icon quit, system shutdown, console close)

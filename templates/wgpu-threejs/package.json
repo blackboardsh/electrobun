@@ -9,7 +9,7 @@
 		"build:canary": "electrobun build --env=canary"
 	},
 	"dependencies": {
-		"electrobun": "latest",
+		"electrobun": "file:../../package",
 		"cannon-es": "^0.20.0"
 	},
 	"devDependencies": {

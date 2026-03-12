@@ -506,6 +506,7 @@ typedef struct {
 typedef SnapshotCallback zigSnapshotCallback;
 typedef StatusItemHandler ZigStatusItemHandler;
 static URLOpenHandler g_urlOpenHandler = nullptr;
+static AppReopenHandler g_appReopenHandler = nullptr;
 static QuitRequestedHandler g_quitRequestedHandler = nullptr;
 static std::atomic<bool> g_shutdownComplete{false};
 static std::atomic<bool> g_eventLoopStopping{false};
@@ -862,6 +863,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) WindowMoveHandler moveHandler;
     @property (nonatomic, assign) WindowResizeHandler resizeHandler;
     @property (nonatomic, assign) WindowFocusHandler focusHandler;
+    @property (nonatomic, assign) WindowBlurHandler blurHandler;
     @property (nonatomic, assign) WindowKeyHandler keyHandler;
     @property (nonatomic, assign) uint32_t windowId;
     @property (nonatomic, strong) NSWindow *window;
@@ -2500,8 +2502,14 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
                 // add subview
                 [window.contentView addSubview:self.webView positioned:NSWindowAbove relativeTo:nil];
-                CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
-                self.webView.frame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+                // For fullSize webviews, use the content view's bounds (excludes title bar)
+                // instead of the passed frame which may include the window chrome dimensions.
+                NSRect webviewFrame = autoResize ? window.contentView.bounds : frame;
+                if (!autoResize) {
+                    CGFloat adjustedY = window.contentView.bounds.size.height - frame.origin.y - frame.size.height;
+                    webviewFrame = NSMakeRect(frame.origin.x, adjustedY, frame.size.width, frame.size.height);
+                }
+                self.webView.frame = webviewFrame;
 
                 // Ensure the webview is properly layer-backed and visible
                 self.webView.wantsLayer = YES;
@@ -2681,24 +2689,16 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     }
 
     - (void)evaluateJavaScriptWithNoCompletion:(const char*)jsString {
-        WKContentWorld *isolatedWorld = [WKContentWorld pageWorld];
+        // Copy the string before dispatch_async since the JS-side buffer may be GC'd
         NSString *code = (jsString ? [NSString stringWithUTF8String:jsString] : @"");
-        [self.webView evaluateJavaScript:code
-                                inFrame:nil
-                        inContentWorld:isolatedWorld
-                    completionHandler:nil];
-
-        // DEBUG
-        // [self.webView evaluateJavaScript:code
-        //                   inFrame:nil
-        //           inContentWorld:isolatedWorld
-        //       completionHandler:^(id result, NSError *error) {
-        //     if (error) {
-        //         NSLog(@"JavaScript evaluation error: %@", error);
-        //     } else {
-        //         NSLog(@"JavaScript evaluation result: %@", result);
-        //     }
-        // }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!self.webView) return;
+            WKContentWorld *isolatedWorld = [WKContentWorld pageWorld];
+            [self.webView evaluateJavaScript:code
+                                    inFrame:nil
+                            inContentWorld:isolatedWorld
+                        completionHandler:nil];
+        });
     }
 
     - (void)callAsyncJavascript:(const char*)messageId jsString:(const char*)jsString webviewId:(uint32_t)webviewId hostWebviewId:(uint32_t)hostWebviewId completionHandler:(callAsyncJavascriptCompletionHandler)completionHandler {
@@ -4087,7 +4087,7 @@ private:
 
 ElectrobunHandler* ElectrobunHandler::g_instance = nullptr;
 
-std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
+electrobun::ChromiumFlagConfig g_userChromiumFlags;
 
 class ElectrobunApp : public CefApp,
                      public CefBrowserProcessHandler,
@@ -4098,21 +4098,16 @@ public:
     }
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
         command_line->AppendSwitchWithValue("custom-scheme", "views");
-        // Note: This stops CEF (Chromium) trying to access Chromium's storage for system-level things
-        // like credential management. Using a mock keychain just means it doesn't use keychain
-        // for credential storage. Other security features like cookies, https, etc. are unaffected.
-        command_line->AppendSwitch("use-mock-keychain");
 
-        // Enable fullscreen support for videos
-        command_line->AppendSwitch("enable-features=PictureInPicture");
-        command_line->AppendSwitch("enable-fullscreen");
-
-        // Allow DevTools frontend (served over https) to connect to local ws://127.0.0.1:9222
-        command_line->AppendSwitchWithValue("remote-allow-origins", "*");
-        command_line->AppendSwitch("allow-insecure-localhost");
-
-        // Note: CEF transparency is handled via OSR (off-screen rendering) mode
-        // which is enabled when transparent:true is set in the window options
+        // macOS default flags — can be overridden via chromiumFlags in config
+        static const std::vector<electrobun::DefaultFlag> defaults = {
+            {"use-mock-keychain", ""},
+            {"enable-features=PictureInPicture", ""},
+            {"enable-fullscreen", ""},
+            {"remote-allow-origins", "*"},
+            {"allow-insecure-localhost", ""},
+        };
+        electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 
         // Apply user-defined chromium flags from build.json
         electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);
@@ -6273,6 +6268,18 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             }
         }
     }
+
+    - (BOOL)applicationShouldHandleReopen:(NSApplication *)application hasVisibleWindows:(BOOL)hasVisibleWindows {
+        (void)hasVisibleWindows;
+
+        [application activateIgnoringOtherApps:YES];
+
+        if (g_appReopenHandler) {
+            g_appReopenHandler();
+        }
+
+        return YES;
+    }
 @end
 
 @implementation WindowDelegate
@@ -6285,27 +6292,28 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             self.closeHandler(self.windowId);
         }
     }
-    - (void)windowDidResize:(NSNotification *)notification {
+   - (void)windowDidResize:(NSNotification *)notification {
         NSWindow *window = [notification object];
         NSRect windowFrame = [window frame];
         ContainerView *containerView = [window contentView];
-        NSRect fullFrame = [window frame];
-        fullFrame.origin.x = 0;
-        fullFrame.origin.y = 0;                
-                
-        for (AbstractView *abstractView in containerView.abstractViews) {                              
-            if (abstractView.fullSize) {                
-                [abstractView resize:fullFrame withMasksJSON:""];                
-            }
+        // Use the content view's bounds (excludes title bar) instead of the
+        // window frame so fullSize webviews don't overflow the visible area.
+        NSRect fullFrame = containerView.bounds;
 
+        for (AbstractView *abstractView in containerView.abstractViews) {
+            if (abstractView.fullSize) {
+                [abstractView resize:fullFrame withMasksJSON:""];
+            }
         }
+
         if (self.resizeHandler) {
             NSScreen *primaryScreen = [NSScreen screens][0];
             NSRect screenFrame = [primaryScreen frame];
-            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;                        
+            windowFrame.origin.y = screenFrame.size.height - windowFrame.origin.y - windowFrame.size.height;
+            NSRect contentRect = [window contentRectForFrameRect:windowFrame];
             self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
-                            windowFrame.size.width, windowFrame.size.height);
-        }                
+                               contentRect.size.width, contentRect.size.height);
+        }
     }
     - (void)windowDidMove:(NSNotification *)notification {
         if (self.moveHandler) {
@@ -6330,6 +6338,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 [window makeFirstResponder:abstractView.nsView];
                 break;
             }
+        }
+    }
+    - (void)windowDidResignKey:(NSNotification *)notification {
+        if (self.blurHandler) {
+            self.blurHandler(self.windowId);
         }
     }
 @end
@@ -6949,10 +6962,49 @@ extern "C" void webviewToggleDevTools(AbstractView *abstractView) {
     });
 }
 
+extern "C" void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
+            WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
+            if (wkImpl.webView) {
+                wkImpl.webView.pageZoom = zoomLevel;
+                [wkImpl.webView setNeedsDisplay:YES];
+                [wkImpl.webView setNeedsLayout:YES];
+            }
+        }
+    });
+}
+
+extern "C" double webviewGetPageZoom(AbstractView *abstractView) {
+    __block double zoomLevel = 1.0;
+    if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
+        WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
+        if (wkImpl.webView) {
+            if ([NSThread isMainThread]) {
+                zoomLevel = wkImpl.webView.pageZoom;
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    zoomLevel = wkImpl.webView.pageZoom;
+                });
+            }
+        }
+    }
+    return zoomLevel;
+}
+
+
 extern "C" NSRect createNSRectWrapper(double x, double y, double width, double height) {
     return NSMakeRect(x, y, width, height);
 }
 
+
+@interface ElectrobunWindow : NSWindow
+@end
+
+@implementation ElectrobunWindow
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return YES; }
+@end
 
 NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      createNSWindowWithFrameAndStyleParams config,
@@ -6960,17 +7012,18 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      WindowMoveHandler zigMoveHandler,
                                                      WindowResizeHandler zigResizeHandler,
                                                      WindowFocusHandler zigFocusHandler,
+                                                     WindowBlurHandler zigBlurHandler,
                                                      WindowKeyHandler zigKeyHandler) {
     
     NSScreen *primaryScreen = [NSScreen screens][0];
     NSRect screenFrame = [primaryScreen frame];
     config.frame.origin.y = screenFrame.size.height - config.frame.origin.y;
     
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:config.frame
-                                                   styleMask:config.styleMask
-                                                     backing:NSBackingStoreBuffered
-                                                       defer:YES
-                                                      screen:primaryScreen];
+    NSWindow *window = [[ElectrobunWindow alloc] initWithContentRect:config.frame
+                                                          styleMask:config.styleMask
+                                                            backing:NSBackingStoreBuffered
+                                                              defer:YES
+                                                             screen:primaryScreen];
     
     [window setFrameTopLeftPoint:config.frame.origin];
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
@@ -6982,6 +7035,7 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     delegate.resizeHandler = zigResizeHandler;
     delegate.moveHandler = zigMoveHandler;
     delegate.focusHandler = zigFocusHandler;
+    delegate.blurHandler = zigBlurHandler;
     delegate.keyHandler = zigKeyHandler;
     delegate.windowId = windowId;
     delegate.window = window;
@@ -7015,6 +7069,7 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   WindowMoveHandler zigMoveHandler,
   WindowResizeHandler zigResizeHandler,
   WindowFocusHandler zigFocusHandler,
+  WindowBlurHandler zigBlurHandler,
   WindowKeyHandler zigKeyHandler
   ) {
 
@@ -7043,6 +7098,7 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             zigMoveHandler,
             zigResizeHandler,
             zigFocusHandler,
+            zigBlurHandler,
             zigKeyHandler
         );
 
@@ -7713,6 +7769,45 @@ extern "C" void setURLOpenHandler(URLOpenHandler handler) {
     g_urlOpenHandler = handler;
 }
 
+extern "C" void setAppReopenHandler(AppReopenHandler handler) {
+    g_appReopenHandler = handler;
+}
+
+extern "C" void setDockIconVisible(bool visible) {
+    void (^applyVisibility)(void) = ^{
+        NSApplication *app = [NSApplication sharedApplication];
+        if (visible) {
+            [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+            [app activateIgnoringOtherApps:YES];
+        } else {
+            [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        }
+    };
+
+    if ([NSThread isMainThread]) {
+        applyVisibility();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), applyVisibility);
+    }
+}
+
+extern "C" bool isDockIconVisible() {
+    __block bool isVisible = true;
+
+    void (^readVisibility)(void) = ^{
+        NSApplication *app = [NSApplication sharedApplication];
+        isVisible = [app activationPolicy] == NSApplicationActivationPolicyRegular;
+    };
+
+    if ([NSThread isMainThread]) {
+        readVisibility();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), readVisibility);
+    }
+
+    return isVisible;
+}
+
 extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,
                                     uint32_t width, uint32_t height, ZigStatusItemHandler zigTrayItemHandler) {
     
@@ -7802,12 +7897,46 @@ extern "C" void removeTray(NSStatusItem *statusItem) {
     }
 }
 
+extern "C" const char* getTrayBounds(NSStatusItem *statusItem) {
+    if (!statusItem) {
+        return strdup("{\"x\":0,\"y\":0,\"width\":0,\"height\":0}");
+    }
+
+    __block NSString *json = nil;
+
+    void (^readBounds)(void) = ^{
+        NSStatusBarButton *button = statusItem.button;
+        if (!button || !button.window) {
+            json = @"{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
+            return;
+        }
+
+        NSRect frameInWindow = button.frame;
+        NSRect frameOnScreen = [button.window convertRectToScreen:frameInWindow];
+        json = [NSString stringWithFormat:@"{\"x\":%.0f,\"y\":%.0f,\"width\":%.0f,\"height\":%.0f}",
+            frameOnScreen.origin.x,
+            frameOnScreen.origin.y,
+            frameOnScreen.size.width,
+            frameOnScreen.size.height];
+    };
+
+    if ([NSThread isMainThread]) {
+        readBounds();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), readBounds);
+    }
+
+    return strdup([json UTF8String]);
+}
+
 extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
-    NSLog(@"Setting application menu from JSON in objc");
+    // Copy the string before dispatch_async since the JS-side buffer may be GC'd
+    char *jsonCopy = strdup(jsonString);
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        free(jsonCopy);
         if (error) {
             NSLog(@"Failed to parse JSON: %@", error);
             return;
@@ -7822,10 +7951,13 @@ extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler 
 }
 
 extern "C" void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
+    // Copy the string before dispatch_async since the JS-side buffer may be GC'd
+    char *jsonCopy = strdup(jsonString);
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSData *jsonData = [NSData dataWithBytes:jsonString length:strlen(jsonString)];
+        NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        free(jsonCopy);
         if (error) {
             NSLog(@"Failed to parse JSON: %@", error);
             return;
@@ -8581,4 +8713,24 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
 // Window icon - Linux only, no-op for macOS (macOS uses app bundle icon)
 extern "C" void setWindowIcon(void* window, const char* iconPath) {
     // Not supported on macOS - macOS windows use the app bundle icon
+}
+
+extern "C" void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSWindowCollectionBehavior behavior = [window collectionBehavior];
+        if (visible) {
+            behavior |= NSWindowCollectionBehaviorCanJoinAllSpaces;
+        } else {
+            behavior &= ~NSWindowCollectionBehaviorCanJoinAllSpaces;
+        }
+        [window setCollectionBehavior:behavior];
+    });
+}
+
+extern "C" bool isWindowVisibleOnAllWorkspaces(NSWindow *window) {
+    __block bool result = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = ([window collectionBehavior] & NSWindowCollectionBehaviorCanJoinAllSpaces) != 0;
+    });
+    return result;
 }

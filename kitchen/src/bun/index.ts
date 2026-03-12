@@ -12,6 +12,8 @@ import Electrobun, {
 import { executor } from "../test-framework/executor";
 import { allTests } from "../tests";
 import type { TestRunnerRPC, UpdateInfo } from "../test-runner/rpc";
+import { mkdir, readFile, writeFile } from "fs/promises";
+import { dirname, join } from "path";
 
 console.log("\n");
 console.log("╔════════════════════════════════════════════════════════════╗");
@@ -34,6 +36,46 @@ console.log(
 	`   Available Renderers: ${buildConfig.availableRenderers.join(", ")}`,
 );
 console.log("");
+
+type TestRunnerPreferences = {
+	searchQuery: string;
+};
+
+const testRunnerPreferencesPath = join(
+	Utils.paths.userData,
+	"test-runner-preferences.json",
+);
+
+const loadTestRunnerPreferences = async (): Promise<TestRunnerPreferences> => {
+	try {
+		const raw = await readFile(testRunnerPreferencesPath, "utf-8");
+		const parsed = JSON.parse(raw) as Partial<TestRunnerPreferences>;
+		return {
+			searchQuery:
+				typeof parsed.searchQuery === "string" ? parsed.searchQuery : "",
+		};
+	} catch {
+		return { searchQuery: "" };
+	}
+};
+
+let testRunnerPreferences: TestRunnerPreferences =
+	await loadTestRunnerPreferences();
+
+const saveTestRunnerPreferences = async (
+	next: Partial<TestRunnerPreferences>,
+): Promise<void> => {
+	testRunnerPreferences = {
+		...testRunnerPreferences,
+		...next,
+	};
+	await mkdir(dirname(testRunnerPreferencesPath), { recursive: true });
+	await writeFile(
+		testRunnerPreferencesPath,
+		JSON.stringify(testRunnerPreferences, null, 2),
+		"utf-8",
+	);
+};
 
 // Update state
 const localInfo = await Updater.getLocallocalInfo();
@@ -214,6 +256,14 @@ const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
 
 			clearUpdateStatusHistory: () => {
 				Updater.clearStatusHistory();
+			},
+
+			getTestRunnerPreferences: () => {
+				return testRunnerPreferences;
+			},
+
+			setTestRunnerPreferences: async ({ searchQuery }) => {
+				await saveTestRunnerPreferences({ searchQuery });
 			},
 		},
 		messages: {

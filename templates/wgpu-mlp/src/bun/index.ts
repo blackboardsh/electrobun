@@ -249,7 +249,11 @@ async function initGPU() {
     gpuReady = true;
     console.log("[wgpu-mlp] GPU compute ready");
   } catch (err) {
-    console.log("[wgpu-mlp] GPU init failed", String(err));
+    console.log("[wgpu-mlp] GPU init failed", {
+      error: String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      message: err instanceof Error ? err.message : undefined
+    });
     return;
   }
 }

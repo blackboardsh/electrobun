@@ -519,7 +519,7 @@ static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
 // CEF global variables
 static bool g_cef_initialized = false;
 static CefRefPtr<CefApp> g_cef_app;
-static std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
+static electrobun::ChromiumFlagConfig g_userChromiumFlags;
 static HANDLE g_job_object = nullptr;  // Job object to track all child processes
 
 // Quit/shutdown coordination
@@ -555,13 +555,14 @@ public:
     }
 
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
-        // Disable features for minimal implementation
-        command_line->AppendSwitch("disable-web-security");
-        command_line->AppendSwitch("disable-features=VizDisplayCompositor");
-
-        // Allow DevTools frontend (served over http) to connect to local ws://127.0.0.1
-        command_line->AppendSwitchWithValue("remote-allow-origins", "*");
-        command_line->AppendSwitch("allow-insecure-localhost");
+        // Windows default flags — can be overridden via chromiumFlags in config
+        static const std::vector<electrobun::DefaultFlag> defaults = {
+            {"disable-web-security", ""},
+            {"disable-features=VizDisplayCompositor", ""},
+            {"remote-allow-origins", "*"},
+            {"allow-insecure-localhost", ""},
+        };
+        electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 
         // Apply user-defined chromium flags from build.json
         electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);
@@ -4585,6 +4586,7 @@ typedef struct {
     WindowMoveHandler moveHandler;
     WindowResizeHandler resizeHandler;
     WindowFocusHandler focusHandler;
+    WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
     bool isHiddenTitleBar; // titleBarStyle="hidden": extend client area over NC title bar region
 } WindowData;
@@ -4879,6 +4881,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         cefView->HandleWindowMessage(msg, wParam, lParam);
                     }
                 }
+
+                // Dispatch keyboard events to keyHandler callback
+                if (data && data->keyHandler &&
+                    (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP)) {
+                    uint32_t keyCode = (uint32_t)wParam;
+                    uint32_t modifiers = 0;
+                    if (GetKeyState(VK_SHIFT) & 0x8000) modifiers |= 1 << 0;
+                    if (GetKeyState(VK_CONTROL) & 0x8000) modifiers |= 1 << 1;
+                    if (GetKeyState(VK_MENU) & 0x8000) modifiers |= 1 << 2;
+                    uint32_t isDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) ? 1 : 0;
+                    uint32_t isRepeat = (lParam & (1 << 30)) ? 1 : 0;
+                    data->keyHandler(data->windowId, keyCode, modifiers, isDown, isRepeat);
+                }
             }
             break;
 
@@ -4925,7 +4940,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_ACTIVATE:
             // Window activation - WA_ACTIVE or WA_CLICKACTIVE means window is being activated
-            if (LOWORD(wParam) != WA_INACTIVE) {
+            if (LOWORD(wParam) == WA_INACTIVE) {
+                if (data && data->blurHandler) {
+                    data->blurHandler(data->windowId);
+                }
+            } else {
                 if (data && data->focusHandler) {
                     data->focusHandler(data->windowId);
                 }
@@ -6109,7 +6128,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 nullptr);
                             
                             
-                            // Add preload scripts - TEST ADDITION
+                            // Add preload scripts
                             std::string combinedScript;
                             if (!view->electrobunScript.empty()) {
                                 combinedScript += view->electrobunScript;
@@ -6118,7 +6137,17 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 if (!combinedScript.empty()) {
                                     combinedScript += "\n";
                                 }
-                                combinedScript += view->customScript;
+                                // Resolve views:// URLs to file content (matching macOS behavior)
+                                if (view->customScript.substr(0, 8) == "views://") {
+                                    std::string fileContent = loadViewsFile(view->customScript.substr(8));
+                                    if (!fileContent.empty()) {
+                                        combinedScript += fileContent;
+                                    } else {
+                                        std::cout << "[WebView2] Could not read custom preload script from: " << view->customScript << std::endl;
+                                    }
+                                } else {
+                                    combinedScript += view->customScript;
+                                }
                             }
 
                             // Add Ctrl+Click detection and navigation rules handler
@@ -8483,6 +8512,16 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
     }
 }
 
+ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
+    // pageZoom is WebKit-specific, not available on Windows
+    // TODO: implement WebView2 zoom if needed
+}
+
+ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
+    // pageZoom is WebKit-specific, not available on Windows
+    return 1.0;
+}
+
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {
     // Stub implementation
     NSRect rect = {x, y, width, height};
@@ -8495,6 +8534,7 @@ ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
                                          WindowMoveHandler zigMoveHandler,
                                          WindowResizeHandler zigResizeHandler,
                                          WindowFocusHandler zigFocusHandler,
+                                         WindowBlurHandler zigBlurHandler,
                                          WindowKeyHandler zigKeyHandler) {
     // Stub implementation
     return new NSWindow();
@@ -8518,6 +8558,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler,
+    WindowBlurHandler zigBlurHandler,
     WindowKeyHandler zigKeyHandler) {
 
     // Everything GUI-related needs to be dispatched to main thread
@@ -8543,6 +8584,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         data->moveHandler = zigMoveHandler;
         data->resizeHandler = zigResizeHandler;
         data->focusHandler = zigFocusHandler;
+        data->blurHandler = zigBlurHandler;
         data->keyHandler = zigKeyHandler;
 
         // Map style mask to Windows style
@@ -8945,6 +8987,15 @@ ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(NSWindow *window) {
 
     LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
     return (exStyle & WS_EX_TOPMOST) != 0;
+}
+
+ELECTROBUN_EXPORT void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) {
+    // Not applicable on Windows - no-op
+}
+
+ELECTROBUN_EXPORT bool isWindowVisibleOnAllWorkspaces(NSWindow *window) {
+    // Not applicable on Windows
+    return false;
 }
 
 ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
@@ -10090,6 +10141,11 @@ ELECTROBUN_EXPORT void removeTray(NSStatusItem *statusItem) {
         // Clean up the tray item
         delete statusItem;
     });
+}
+
+ELECTROBUN_EXPORT const char* getTrayBounds(NSStatusItem *statusItem) {
+    (void)statusItem;
+    return _strdup("{\"x\":0,\"y\":0,\"width\":0,\"height\":0}");
 }
 
 ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
@@ -11520,8 +11576,26 @@ extern "C" ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionI
 
 // URL scheme handler - macOS only, stub for Windows
 extern "C" ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*)) {
+    (void)callback;
     // Not supported on Windows - stub to prevent dlopen failure
     // Windows URL protocol handling is done via registry
+}
+
+// App reopen handler - macOS only, stub for Windows
+extern "C" ELECTROBUN_EXPORT void setAppReopenHandler(void (*callback)()) {
+    (void)callback;
+    // Not supported on Windows - stub to prevent dlopen failure
+}
+
+// Dock icon visibility - macOS only, stubs for Windows
+extern "C" ELECTROBUN_EXPORT void setDockIconVisible(bool visible) {
+    (void)visible;
+    // Not supported on Windows - stub to prevent dlopen failure
+}
+
+extern "C" ELECTROBUN_EXPORT bool isDockIconVisible() {
+    // Not supported on Windows
+    return true;
 }
 
 // Window icon - Linux only, no-op for Windows

@@ -101,6 +101,7 @@ export const native = (() => {
 					FFIType.function, // moveHandler
 					FFIType.function, // resizeHandler
 					FFIType.function, // focusHandler
+					FFIType.function, // blurHandler
 					FFIType.function, // keyHandler
 				],
 				returns: FFIType.ptr,
@@ -161,6 +162,14 @@ export const native = (() => {
 				returns: FFIType.void,
 			},
 			isWindowAlwaysOnTop: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			setWindowVisibleOnAllWorkspaces: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			isWindowVisibleOnAllWorkspaces: {
 				args: [FFIType.ptr],
 				returns: FFIType.bool,
 			},
@@ -338,6 +347,14 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
+			webviewSetPageZoom: {
+				args: [FFIType.ptr, FFIType.f64],
+				returns: FFIType.void,
+			},
+			webviewGetPageZoom: {
+				args: [FFIType.ptr],
+				returns: FFIType.f64,
+			},
 			wgpuViewSetFrame: {
 				args: [
 					FFIType.ptr,
@@ -456,6 +473,10 @@ export const native = (() => {
 			removeTray: {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
+			},
+			getTrayBounds: {
+				args: [FFIType.ptr],
+				returns: FFIType.cstring,
 			},
 			setApplicationMenu: {
 				args: [FFIType.cstring, FFIType.function],
@@ -607,6 +628,18 @@ export const native = (() => {
 				args: [FFIType.function], // handler callback
 				returns: FFIType.void,
 			},
+			setAppReopenHandler: {
+				args: [FFIType.function],
+				returns: FFIType.void,
+			},
+			setDockIconVisible: {
+				args: [FFIType.bool],
+				returns: FFIType.void,
+			},
+			isDockIconVisible: {
+				args: [],
+				returns: FFIType.bool,
+			},
 
 			// Window style utilities
 			getWindowStyle: {
@@ -722,6 +755,7 @@ export const ffi = {
 			};
 			titleBarStyle: string;
 			transparent: boolean;
+			hidden?: boolean;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -744,6 +778,7 @@ export const ffi = {
 				},
 				titleBarStyle,
 				transparent,
+				hidden = false,
 			} = params;
 
 			const styleMask = native.symbols.getWindowStyle(
@@ -777,6 +812,7 @@ export const ffi = {
 				windowMoveCallback,
 				windowResizeCallback,
 				windowFocusCallback,
+				windowBlurCallback,
 				windowKeyCallback,
 			);
 
@@ -785,7 +821,9 @@ export const ffi = {
 			}
 
 			native.symbols.setWindowTitle(windowPtr, toCString(title));
-			native.symbols.showWindow(windowPtr);
+			if (!hidden) {
+				native.symbols.showWindow(windowPtr);
+			}
 
 			return windowPtr;
 		},
@@ -933,6 +971,34 @@ export const ffi = {
 			return native.symbols.isWindowAlwaysOnTop(windowPtr);
 		},
 
+		setWindowVisibleOnAllWorkspaces: (params: {
+			winId: number;
+			visibleOnAllWorkspaces: boolean;
+		}) => {
+			const { winId, visibleOnAllWorkspaces } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+			if (!windowPtr) {
+				throw `Can't set visible on all workspaces. Window no longer exists`;
+			}
+
+			native.symbols.setWindowVisibleOnAllWorkspaces(
+				windowPtr,
+				visibleOnAllWorkspaces,
+			);
+		},
+
+		isWindowVisibleOnAllWorkspaces: (params: { winId: number }): boolean => {
+			const { winId } = params;
+			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+
+			if (!windowPtr) {
+				return false;
+			}
+
+			return native.symbols.isWindowVisibleOnAllWorkspaces(windowPtr);
+		},
+
 		setWindowPosition: (params: { winId: number; x: number; y: number }) => {
 			const { winId, x, y } = params;
 			const windowPtr = getWindowPtr(winId);
@@ -1032,7 +1098,6 @@ export const ffi = {
 			startTransparent: boolean;
 			startPassthrough: boolean;
 		}): FFIType.ptr => {
-
 			const {
 				id,
 				windowId,
@@ -1349,6 +1414,23 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			native.symbols.removeTray(tray.ptr);
 			// The Tray class will handle removing from TrayMap
 		},
+		getTrayBounds: (params: { id: number }): Rectangle => {
+			const tray = Tray.getById(params.id);
+			if (!tray?.ptr) {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
+
+			const jsonStr = native.symbols.getTrayBounds(tray.ptr);
+			if (!jsonStr) {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
+
+			try {
+				return JSON.parse(jsonStr.toString());
+			} catch {
+				return { x: 0, y: 0, width: 0, height: 0 };
+			}
+		},
 		setApplicationMenu: (params: { menuConfig: string }): void => {
 			const { menuConfig } = params;
 
@@ -1393,6 +1475,12 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 				toCString(subtitle),
 				silent,
 			);
+		},
+		setDockIconVisible: (params: { visible: boolean }): void => {
+			native.symbols.setDockIconVisible(params.visible);
+		},
+		isDockIconVisible: (): boolean => {
+			return native.symbols.isDockIconVisible();
 		},
 		openFileDialog: (params: {
 			startingFolder: string;
@@ -1755,6 +1843,25 @@ const windowFocusCallback = new JSCallback(
 	},
 );
 
+const windowBlurCallback = new JSCallback(
+	(id) => {
+		const handler = electrobunEventEmitter.events.window.blur;
+		const event = handler({
+			id,
+		});
+		
+		// global event
+        electrobunEventEmitter.emitEvent(event);
+        electrobunEventEmitter.emitEvent(event, id);
+  },
+  {
+		args: ["u32"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+// global event
 const windowKeyCallback = new JSCallback(
 	(id, keyCode, modifiers, isDown, isRepeat) => {
 		const handler = isDown
@@ -1828,6 +1935,27 @@ const urlOpenCallback = new JSCallback(
 // Register the URL open handler with native code (macOS only)
 if (process.platform === "darwin") {
 	native.symbols.setURLOpenHandler(urlOpenCallback);
+}
+
+const appReopenCallback = new JSCallback(
+	() => {
+		if (process.platform === "darwin") {
+			native.symbols.setDockIconVisible(true);
+		}
+
+		const handler = electrobunEventEmitter.events.app.reopen;
+		const event = handler({});
+		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: [],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+if (process.platform === "darwin") {
+	native.symbols.setAppReopenHandler(appReopenCallback);
 }
 
 // Quit requested callback - invoked by native code when system quit is requested
@@ -2920,6 +3048,19 @@ export const internalRpcHandlers = {
 				return;
 			}
 			native.symbols.webviewToggleDevTools(webview.ptr);
+		},
+		webviewTagExecuteJavascript: (params: { id: number; js: string }) => {
+			const webview = BrowserView.getById(params.id);
+			if (!webview || !webview.ptr) {
+				console.error(
+					`webviewTagExecuteJavascript: BrowserView not found or has no ptr for id ${params.id}`,
+				);
+				return;
+			}
+			native.symbols.evaluateJavaScriptWithNoCompletion(
+				webview.ptr,
+				toCString(params.js),
+			);
 		},
 		webviewEvent: (params: unknown) => {
 			console.log("-----------------+webviewEvent", params);

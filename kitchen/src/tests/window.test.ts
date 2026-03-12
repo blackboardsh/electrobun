@@ -1,6 +1,6 @@
 // BrowserWindow Tests - Tests for window creation and management
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, type TitleBarStyle } from "../test-framework/types";
 import { BrowserWindow } from "electrobun/bun";
 
 export const windowTests = [
@@ -20,6 +20,90 @@ export const windowTests = [
       expect(win.id).toBeGreaterThan(0);
       expect(win.webviewId).toBeGreaterThan(0);
       log(`Created window with id: ${win.id}, webviewId: ${win.webviewId}`);
+    },
+  }),
+
+  defineTest({
+    name: "Window hidden option",
+    category: "BrowserWindow",
+    description: "Test creating a window in hidden mode and showing it later",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Hidden Window Test",
+        width: 400,
+        height: 300,
+        renderer: "cef",
+        hidden: true,
+      });
+
+      expect(win.id).toBeGreaterThan(0);
+      expect(win.webviewId).toBeGreaterThan(0);
+      log("Hidden window created");
+
+      win.window.show();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      log("Hidden window shown successfully");
+    },
+  }),
+
+  defineTest({
+    name: "Window page zoom API",
+    category: "BrowserWindow",
+    description: "Test BrowserWindow setPageZoom/getPageZoom behavior",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Page Zoom Test",
+        width: 420,
+        height: 320,
+        renderer: "native",
+      });
+
+      const targetZoom = 1.25;
+      win.window.setPageZoom(targetZoom);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const zoom = win.window.getPageZoom();
+      expect(typeof zoom).toBe("number");
+
+      if (process.platform === "darwin") {
+        expect(Math.abs(zoom - targetZoom)).toBeLessThan(0.02);
+      } else {
+        expect(zoom).toBe(1.0);
+      }
+
+      log(`Window zoom reported: ${zoom}`);
+    },
+  }),
+
+  defineTest({
+    name: "BrowserView page zoom API",
+    category: "BrowserWindow",
+    description: "Test BrowserView setPageZoom/getPageZoom behavior",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "View Zoom Test",
+        width: 420,
+        height: 320,
+        renderer: "native",
+      });
+
+      const targetZoom = 1.1;
+      win.webview.setPageZoom(targetZoom);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const zoom = win.webview.getPageZoom();
+      expect(typeof zoom).toBe("number");
+
+      if (process.platform === "darwin") {
+        expect(Math.abs(zoom - targetZoom)).toBeLessThan(0.02);
+      } else {
+        expect(zoom).toBe(1.0);
+      }
+
+      log(`Webview zoom reported: ${zoom}`);
     },
   }),
 
@@ -201,7 +285,37 @@ export const windowTests = [
 
       log("AlwaysOnTop toggle completed");
     },
-  }),
+  }), 
+ 
+  defineTest({
+    name: "Window visibleOnAllWorkspaces",
+    category: "BrowserWindow",
+    description: "Test window visible on all workspaces behavior",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Visible On All Workspaces Test",
+        renderer: 'cef',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      log("Checking initial visibleOnAllWorkspaces state");
+      expect(win.window.isVisibleOnAllWorkspaces()).toBe(false);
+
+      log("Setting visibleOnAllWorkspaces to true");
+      win.window.setVisibleOnAllWorkspaces(true);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(win.window.isVisibleOnAllWorkspaces()).toBe(true);
+
+      log("Setting visibleOnAllWorkspaces to false");
+      win.window.setVisibleOnAllWorkspaces(false);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(win.window.isVisibleOnAllWorkspaces()).toBe(false);
+
+      log("VisibleOnAllWorkspaces toggle completed");
+     },
+ }),
 
   defineTest({
     name: "Window focus",
@@ -301,50 +415,50 @@ export const windowTests = [
     },
   }),
 
-  defineTest({
-    name: "Window focus event",
+  ...(['default', 'hiddenInset', 'hidden'] satisfies TitleBarStyle[]).map(titleBarStyle => defineTest({
+    name: `Window focus and blur events (titleBarStyle: ${titleBarStyle})`,
     category: "BrowserWindow",
-    description: "Test that focus event fires when window gains focus",
+    description: "Test that focus and blur events fire when windows gain and lose focus",
     async run({ createWindow, log }) {
+      let blurEventFired = false;
       let focusEventFired = false;
 
-      const win = await createWindow({
+      const win1 = await createWindow({
         url: "views://test-harness/index.html",
         title: "Focus Event Test",
         renderer: 'cef',
+        titleBarStyle,
       });
 
-      win.window.on("focus", () => {
-        focusEventFired = true;
-      });
+      win1.window.on("blur", () => { blurEventFired = true; });
 
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      log("Triggering focus");
-      win.window.focus();
-      
-      // Give more time for focus event in automated environment
+      log("Creating second window to steal focus");
+      const win2 = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Focus Stealer",
+        renderer: 'cef',
+        titleBarStyle,
+      });
+
+      win2.window.on("focus", () => { focusEventFired = true; });
+
+      win1.window.focus();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      win2.window.focus();
+
+      // Give time for blur/focus events to fire
       await new Promise((resolve) => setTimeout(resolve, 800));
 
-      if (!focusEventFired) {
-        log("Focus event didn't fire, trying to activate window...");
-        // On some Linux window managers, we need to ensure the window is visible
-        win.window.show();
-        win.window.focus();
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
+      expect(blurEventFired).toBe(true);
+      expect(focusEventFired).toBe(true);
 
-      if (!focusEventFired) {
-        log("WARNING: Window focus event not supported in this environment");
-        log("This is common in automated test environments on Linux");
-        // Skip this test in automated environments
-        return;
-      }
-
-      // At this point focusEventFired is guaranteed to be true
+      log("Blur event fired successfully");
       log("Focus event fired successfully");
     },
-  }),
+  })),
 
   defineTest({
     name: "BrowserWindow.getById",

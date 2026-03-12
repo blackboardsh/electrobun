@@ -4,7 +4,7 @@ export default {
 	app: {
 		name: "Electrobun Kitchen Sink",
 		identifier: "sh.blackboard.electrobun-kitchen",
-		version: "1.15.0-beta.0",
+		version: "1.15.1",
 		urlSchemes: ["electrobun-playground"],
 	},
 	runtime: {
@@ -55,8 +55,11 @@ export default {
 			"playgrounds/webviewtag": {
 				entrypoint: "src/playgrounds/webviewtag/index.ts",
 			},
-			"playgrounds/window-events": {
-				entrypoint: "src/playgrounds/window-events/index.ts",
+			"playgrounds/window-events-move-resize": {
+				entrypoint: "src/playgrounds/window-events-move-resize/index.ts",
+			},
+			"playgrounds/window-events-blur-focus": {
+				entrypoint: "src/playgrounds/window-events-blur-focus/index.ts",
 			},
 			"playgrounds/custom-titlebar": {
 				entrypoint: "src/playgrounds/custom-titlebar/index.ts",
@@ -123,8 +126,10 @@ export default {
 				"views/playgrounds/webviewtag/electrobun.png",
 			"assets/electrobun-logo-32-template.png":
 				"views/assets/electrobun-logo-32-template.png",
-			"src/playgrounds/window-events/index.html":
-				"views/playgrounds/window-events/index.html",
+			"src/playgrounds/window-events-move-resize/index.html":
+				"views/playgrounds/window-events-move-resize/index.html",
+			"src/playgrounds/window-events-blur-focus/index.html":
+				"views/playgrounds/window-events-blur-focus/index.html",
 			"src/playgrounds/custom-titlebar/index.html":
 				"views/playgrounds/custom-titlebar/index.html",
 			"src/playgrounds/transparent-window/index.html":

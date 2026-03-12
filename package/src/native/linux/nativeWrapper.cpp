@@ -87,6 +87,10 @@ static int g_sigint_count = 0;
 static std::atomic<int> g_activeOperations{0};
 static std::mutex g_cefBrowserMutex;
 
+// Map from CEF browser identifier to electrobun webviewId, used by scheme handlers
+static std::map<int, uint32_t> g_browserIdToWebviewId;
+static std::mutex g_browserIdToWebviewIdMutex;
+
 // Use OperationGuard from shared/shutdown_guard.h
 using electrobun::OperationGuard;
 
@@ -135,6 +139,7 @@ typedef void (*WindowCloseCallback)(uint32_t windowId);
 typedef void (*WindowMoveCallback)(uint32_t windowId, double x, double y);
 typedef void (*WindowResizeCallback)(uint32_t windowId, double x, double y, double width, double height);
 typedef void (*WindowFocusCallback)(uint32_t windowId);
+typedef void (*WindowBlurCallback)(uint32_t windowId);
 
 // Forward declaration for WebKit scheme handler
 static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data);
@@ -211,6 +216,7 @@ struct X11Window {
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
+    WindowBlurCallback blurCallback;
     WindowKeyHandler keyCallback;
     std::vector<Window> childWindows;  // For managing webviews
     ContainerView* containerView = nullptr;  // Associated container for webview management
@@ -341,7 +347,7 @@ static std::mutex g_webviewMapMutex;
 static std::map<int, std::string> g_preloadScripts;
 
 CefRefPtr<class ElectrobunApp> g_app;
-std::vector<electrobun::ChromiumFlag> g_userChromiumFlags;
+electrobun::ChromiumFlagConfig g_userChromiumFlags;
 
 
 // Get the directory of the current executable
@@ -521,7 +527,7 @@ public:
 // CEF views:// scheme handler implementation
 class ViewsResourceHandler : public CefResourceHandler {
 public:
-    ViewsResourceHandler() : offset_(0) {}
+    explicit ViewsResourceHandler(uint32_t webviewId) : offset_(0), webviewId_(webviewId) {}
     
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
         std::string url = request->GetURL();
@@ -534,8 +540,8 @@ public:
         
         // Check if this is the internal HTML request
         if (fullPath == "internal/index.html") {
-            // Use stored HTML content instead of JSCallback
-            const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
+            // Use stored HTML content for this specific webview
+            const char* htmlContent = getWebviewHTMLContent(webviewId_);
             if (htmlContent) {
                 data_ = std::string(htmlContent);
                 mimeType_ = "text/html";
@@ -685,6 +691,7 @@ private:
     std::string data_;
     std::string mimeType_;
     size_t offset_;
+    uint32_t webviewId_;
     
     IMPLEMENT_REFCOUNTING(ViewsResourceHandler);
 };
@@ -694,7 +701,16 @@ class ViewsSchemeHandlerFactory : public CefSchemeHandlerFactory {
 public:
     CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, 
                                        const CefString& scheme_name, CefRefPtr<CefRequest> request) override {
-        return new ViewsResourceHandler();
+        // Resolve the webviewId for the browser making this request
+        uint32_t webviewId = 0;
+        if (browser) {
+            std::lock_guard<std::mutex> lock(g_browserIdToWebviewIdMutex);
+            auto it = g_browserIdToWebviewId.find(browser->GetIdentifier());
+            if (it != g_browserIdToWebviewId.end()) {
+                webviewId = it->second;
+            }
+        }
+        return new ViewsResourceHandler(webviewId);
     }
     
 private:
@@ -740,26 +756,30 @@ public:
     
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
         command_line->AppendSwitchWithValue("custom-scheme", "views");
-        command_line->AppendSwitch("use-mock-keychain");
-        // Linux-specific settings - disable GPU acceleration for VM compatibility
-        command_line->AppendSwitch("disable-gpu");
-        command_line->AppendSwitch("disable-gpu-compositing");
-        command_line->AppendSwitch("disable-gpu-sandbox");
-        command_line->AppendSwitch("enable-software-rasterizer");
-        command_line->AppendSwitch("force-software-rasterizer");
-        command_line->AppendSwitch("disable-accelerated-2d-canvas");
-        command_line->AppendSwitch("disable-accelerated-video-decode");
-        command_line->AppendSwitch("disable-accelerated-video-encode");
-        command_line->AppendSwitch("disable-gpu-memory-buffer-video-frames");
-        // Additional VM/headless flags
-        command_line->AppendSwitch("disable-dev-shm-usage");
-        command_line->AppendSwitch("disable-extensions");
-        command_line->AppendSwitch("disable-plugins");
-        command_line->AppendSwitch("disable-web-security");
-        command_line->AppendSwitch("no-sandbox");
-        // Force X11 backend for window embedding compatibility
-        command_line->AppendSwitchWithValue("ozone-platform", "x11");
-        command_line->AppendSwitch("use-x11");
+
+        // Linux default flags — can be overridden via chromiumFlags in config
+        // GPU acceleration disabled by default for VM compatibility;
+        // skip with e.g. chromiumFlags: { "disable-gpu": false }
+        static const std::vector<electrobun::DefaultFlag> defaults = {
+            {"use-mock-keychain", ""},
+            {"disable-gpu", ""},
+            {"disable-gpu-compositing", ""},
+            {"disable-gpu-sandbox", ""},
+            {"enable-software-rasterizer", ""},
+            {"force-software-rasterizer", ""},
+            {"disable-accelerated-2d-canvas", ""},
+            {"disable-accelerated-video-decode", ""},
+            {"disable-accelerated-video-encode", ""},
+            {"disable-gpu-memory-buffer-video-frames", ""},
+            {"disable-dev-shm-usage", ""},
+            {"disable-extensions", ""},
+            {"disable-plugins", ""},
+            {"disable-web-security", ""},
+            {"no-sandbox", ""},
+            {"ozone-platform", "x11"},
+            {"use-x11", ""},
+        };
+        electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 
         // Apply user-defined chromium flags from build.json
         electrobun::applyChromiumFlags(g_userChromiumFlags, command_line);
@@ -1219,6 +1239,12 @@ public:
         // Set the browser reference
         SetBrowser(browser);
         
+        // Register browser ID → webviewId so scheme handlers can look up content
+        {
+            std::lock_guard<std::mutex> lock(g_browserIdToWebviewIdMutex);
+            g_browserIdToWebviewId[browser->GetIdentifier()] = webview_id_;
+        }
+        
         // Notify CEFWebViewImpl that browser is created
         if (browser_created_callback_) {
             browser_created_callback_(browser);
@@ -1343,6 +1369,12 @@ public:
     // Critical: Handle browser cleanup to prevent use-after-free
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
         printf("CEF: OnBeforeClose called for browser %d\n", browser->GetIdentifier());
+        
+        // Remove browser ID → webviewId mapping
+        {
+            std::lock_guard<std::mutex> lock(g_browserIdToWebviewIdMutex);
+            g_browserIdToWebviewId.erase(browser->GetIdentifier());
+        }
         
         // Clear browser reference to prevent use-after-free
         std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
@@ -2492,19 +2524,27 @@ public:
         isRemoved = true;
         
         if (webview) {
-            // First remove from parent synchronously to avoid race conditions
-            if (gtk_widget_get_parent(webview)) {
-                GtkWidget* parent = gtk_widget_get_parent(webview);
-                gtk_container_remove(GTK_CONTAINER(parent), webview);
-            }
-            
-            // Schedule GTK widget destruction on idle
             GtkWidget* widget_to_destroy = webview;
             webview = nullptr;  // Clear our reference immediately
             
+            // gtk_widget_destroy on the parent window recursively destroys all
+            // children, so the webview widget may already be invalid by the time
+            // this idle callback runs. Guard every GTK call with GTK_IS_WIDGET.
             g_idle_add([](gpointer data) -> gboolean {
                 GtkWidget* widget = static_cast<GtkWidget*>(data);
                 
+                if (!GTK_IS_WIDGET(widget)) {
+                    // Already destroyed by parent window teardown — nothing to do.
+                    return G_SOURCE_REMOVE;
+                }
+                
+                // Only try to unparent if the widget still has a live parent.
+                GtkWidget* parent = gtk_widget_get_parent(widget);
+                if (parent && GTK_IS_CONTAINER(parent)) {
+                    gtk_container_remove(GTK_CONTAINER(parent), widget);
+                }
+                
+                // Final destroy (no-op if GTK already freed it via the parent).
                 if (GTK_IS_WIDGET(widget)) {
                     gtk_widget_destroy(widget);
                 }
@@ -4071,7 +4111,16 @@ public:
             browser = nullptr;
             widget = nullptr;
         }
-        
+
+        // Clear the browser_close_callback before scheduling CloseBrowser.
+        // OnBeforeClose fires after CloseBrowser and invokes this callback, but by
+        // that time the CEFWebViewImpl may already be destroyed (last shared_ptr
+        // released). Clearing it here is safe because we already set browser=nullptr
+        // above, so the callback would be a no-op anyway.
+        if (client) {
+            client->SetBrowserCloseCallback(nullptr);
+        }
+
         // Close browser asynchronously outside the lock
         if (browser_to_close) {
             // Schedule browser close on idle
@@ -4085,11 +4134,12 @@ public:
             }, new CefRefPtr<CefBrowser>(browser_to_close));
         }
         
-        // Destroy widget asynchronously
+        // Destroy widget asynchronously. The parent window may have already
+        // destroyed this widget via gtk_widget_destroy cascade — guard accordingly.
         if (widget_to_destroy) {
             g_idle_add([](gpointer data) -> gboolean {
                 GtkWidget* widget = static_cast<GtkWidget*>(data);
-                if (widget) {
+                if (GTK_IS_WIDGET(widget)) {
                     gtk_widget_hide(widget);
                     gtk_widget_destroy(widget);
                 }
@@ -4431,8 +4481,12 @@ public:
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
+    WindowBlurCallback blurCallback;
+    WindowKeyHandler keyCallback;
+  
+    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr) {
 
-    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr) {
+
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
@@ -4440,8 +4494,8 @@ public:
         gtk_widget_show(overlay);
     }
     
-    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback)
-        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback) {
+    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback)
+        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), blurCallback(blurCallback), keyCallback(keyCallback) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_container_add(GTK_CONTAINER(window), overlay);
@@ -5109,8 +5163,23 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     // Check if this is the internal HTML request
     if (strcmp(fullPath, "internal/index.html") == 0) {
         fflush(stdout);
-        // Use stored HTML content instead of JSCallback
-        const char* htmlContent = getWebviewHTMLContent(1); // TODO: get webviewId properly
+        
+        // Resolve the webviewId by matching the requesting WebKitWebView to g_webviewMap
+        uint32_t webviewId = 0;
+        WebKitWebView* requestingWebView = webkit_uri_scheme_request_get_web_view(request);
+        if (requestingWebView) {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+            for (auto& [id, view] : g_webviewMap) {
+                auto* wkImpl = dynamic_cast<WebKitWebViewImpl*>(view.get());
+                if (wkImpl && wkImpl->webview == GTK_WIDGET(requestingWebView)) {
+                    webviewId = id;
+                    break;
+                }
+            }
+        }
+        
+        // Use stored HTML content for this specific webview
+        const char* htmlContent = getWebviewHTMLContent(webviewId);
         if (htmlContent) {
             gsize contentLength = strlen(htmlContent);
             GInputStream* stream = g_memory_input_stream_new_from_data(g_strdup(htmlContent), contentLength, g_free);
@@ -5767,6 +5836,12 @@ gboolean process_x11_events(gpointer data) {
                     }
                     break;
 
+                case FocusOut:
+                    // Window received focus
+                    if (x11win->blurCallback) {
+                        x11win->blurCallback(x11win->windowId);
+                   }
+                   break;
                 case KeyPress:
                 case KeyRelease:
                     if (x11win->keyCallback) {
@@ -5853,7 +5928,7 @@ void runEventLoop() {
 void showWindow(void* window);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
     void* result = dispatch_sync_main([&]() -> void* {
@@ -6000,6 +6075,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->moveCallback = moveCallback;
             x11win->resizeCallback = resizeCallback;
             x11win->focusCallback = focusCallback;
+            x11win->blurCallback = blurCallback;
             x11win->keyCallback = keyCallback;
             x11win->transparent = transparent;
 
@@ -6026,7 +6102,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 }
 
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
    
@@ -6085,8 +6161,8 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         }
         
         // Create container with callbacks
-        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback);
-
+        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback);
+      
         {
             std::lock_guard<std::mutex> lock(g_containersMutex);
             g_containers[windowId] = container;
@@ -6098,11 +6174,15 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         // Connect window delete event to handle X button clicks properly
         g_signal_connect(window, "delete-event", G_CALLBACK(onWindowDeleteEvent), container.get());
 
-        // Connect destroy signal to clean up the container
+        // Connect destroy signal to clean up the container.
+        // Note: cleanupWebviewsForWindow() may have already erased the container from
+        // g_containers. We guard with windowId > 0 and hold g_containersMutex so the
+        // erase is safe and idempotent.
         g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget* widget, gpointer user_data) {
             ContainerView* container = static_cast<ContainerView*>(user_data);
-            if (container) {
+            if (container && container->windowId > 0) {
                 printf("DEBUG: Window destroyed, cleaning up container for window ID: %u\n", container->windowId);
+                std::lock_guard<std::mutex> lock(g_containersMutex);
                 g_containers.erase(container->windowId);
             }
         }), container.get());
@@ -6116,6 +6196,14 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
             return FALSE; // Allow event to propagate
         }), container.get());
 
+        g_signal_connect(window, "focus-out-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventFocus* event, gpointer user_data) -> gboolean {
+            ContainerView* container = static_cast<ContainerView*>(user_data);
+            if (container && container->blurCallback) {
+                container->blurCallback(container->windowId);
+            }
+            return FALSE; // Allow event to propagate
+        }), container.get());
+
         // Note: Removed gtk_main_quit as default behavior - let the app decide whether to exit
 
 
@@ -6124,8 +6212,41 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
       
         
         // Connect mouse motion event for debugging
-        gtk_widget_add_events(window, GDK_POINTER_MOTION_MASK);
+        gtk_widget_add_events(window, GDK_POINTER_MOTION_MASK | GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE_MASK);
         g_signal_connect(window, "motion-notify-event", G_CALLBACK(onMouseMove), container.get());
+        
+        // Connect keyboard events
+        g_signal_connect(window, "key-press-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventKey* event, gpointer user_data) -> gboolean {
+            ContainerView* container = static_cast<ContainerView*>(user_data);
+            if (container && container->keyCallback) {
+                // Convert GDK modifiers to our format
+                uint32_t modifiers = 0;
+                if (event->state & GDK_SHIFT_MASK) modifiers |= (1 << 0);
+                if (event->state & GDK_CONTROL_MASK) modifiers |= (1 << 1);
+                if (event->state & GDK_MOD1_MASK) modifiers |= (1 << 2); // Alt
+                if (event->state & GDK_SUPER_MASK) modifiers |= (1 << 3); // Super/Windows key
+                
+                // GDK uses hardware keycodes which should match X11 keycodes
+                container->keyCallback(container->windowId, event->hardware_keycode, modifiers, 1u, 0u);
+            }
+            return FALSE; // Allow event to propagate
+        }), container.get());
+        
+        g_signal_connect(window, "key-release-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventKey* event, gpointer user_data) -> gboolean {
+            ContainerView* container = static_cast<ContainerView*>(user_data);
+            if (container && container->keyCallback) {
+                // Convert GDK modifiers to our format
+                uint32_t modifiers = 0;
+                if (event->state & GDK_SHIFT_MASK) modifiers |= (1 << 0);
+                if (event->state & GDK_CONTROL_MASK) modifiers |= (1 << 1);
+                if (event->state & GDK_MOD1_MASK) modifiers |= (1 << 2); // Alt
+                if (event->state & GDK_SUPER_MASK) modifiers |= (1 << 3); // Super/Windows key
+                
+                // GDK uses hardware keycodes which should match X11 keycodes
+                container->keyCallback(container->windowId, event->hardware_keycode, modifiers, 0u, 0u);
+            }
+            return FALSE; // Allow event to propagate
+        }), container.get());
    
         
         return (void*)window;
@@ -6141,13 +6262,13 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 // Mac-compatible function for Linux
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
-                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowKeyHandler keyCallback) {
+                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback) {
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
-        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, keyCallback, titleBarStyle, transparent);
+        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
     } else {
         // Pass titleBarStyle and transparent to GTK window creation
-        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, titleBarStyle, transparent);
+        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
     }
 
 }
@@ -7509,7 +7630,7 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
     runOnMainThreadSyncVoid([&]() {
         WGPUInstance instance = (WGPUInstance)instancePtr;
         WGPUSurface surface = (WGPUSurface)surfacePtr;
-        if (!instance || !surface) return;
+        if (!instance) return;
 
         struct AdapterRequestCtx {
             std::mutex* mutex;
@@ -7532,7 +7653,11 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
         bool adapterDone = false;
 
         WGPURequestAdapterOptions opts = {};
-        opts.compatibleSurface = surface;
+        // Only set compatibleSurface if we have a valid surface (for rendering)
+        // For compute-only operations, surface can be null
+        if (surface) {
+            opts.compatibleSurface = surface;
+        }
         WGPURequestAdapterCallbackInfo adapterInfo = {};
         adapterInfo.mode = WGPUCallbackMode_AllowSpontaneous;
         adapterInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter cbAdapter, WGPUStringView /*message*/, void* userdata1, void* /*userdata2*/) {
@@ -7855,6 +7980,16 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView* abstractView) {
     }
 }
 
+ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView* abstractView, double zoomLevel) {
+    // pageZoom is WebKit-specific, not available on Linux CEF
+    // TODO: implement CEF zoom if needed
+}
+
+ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView* abstractView) {
+    // pageZoom is WebKit-specific, not available on Linux CEF
+    return 1.0;
+}
+
 ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView* abstractView, const char* scriptIdentifier, const char* scriptContent, bool forMainFrameOnly) {
     if (abstractView) {
         dispatch_sync_main_void([&]() {
@@ -7906,160 +8041,78 @@ static gboolean onWindowDragButtonRelease(GtkWidget* widget, GdkEventButton* eve
     return FALSE; // Let other handlers process the event
 }
 
-ELECTROBUN_EXPORT void startWindowMove(void* window) {
-    dispatch_sync_main_void([&]() {
-        // Handle both GTK and X11 windows
-        if (isCEFAvailable()) {
-            // For X11/CEF windows, we need to use X11 APIs
-            X11Window* x11win = static_cast<X11Window*>(window);
-            if (x11win && x11win->display && x11win->window) {
-                // Get current mouse position
-                Window root, child;
-                int rootX, rootY, winX, winY;
-                unsigned int mask;
-                XQueryPointer(x11win->display, x11win->window, &root, &child, 
-                            &rootX, &rootY, &winX, &winY, &mask);
-                
-                // Start window move using X11's built-in window manager support
-                XEvent xev;
-                memset(&xev, 0, sizeof(xev));
-                xev.xclient.type = ClientMessage;
-                xev.xclient.window = x11win->window;
-                xev.xclient.message_type = XInternAtom(x11win->display, "_NET_WM_MOVERESIZE", False);
-                xev.xclient.format = 32;
-                xev.xclient.data.l[0] = rootX;
-                xev.xclient.data.l[1] = rootY;
-                xev.xclient.data.l[2] = 8; // _NET_WM_MOVERESIZE_MOVE
-                xev.xclient.data.l[3] = Button1;
-                xev.xclient.data.l[4] = 1;
-                
-                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
-                          SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-                XFlush(x11win->display);
-            }
-        } else {
-            // For GTK windows
-            GtkWidget* gtkWindow = GTK_WIDGET(window);
-            if (!gtkWindow || !GTK_IS_WINDOW(gtkWindow)) {
-                fprintf(stderr, "Invalid window provided to startWindowMove\n");
-                return;
-            }
-            
-            // Check if widget is realized
-            if (!gtk_widget_get_realized(gtkWindow)) {
-                fprintf(stderr, "Window not realized, cannot start window move\n");
-                return;
-            }
-            
-            // Get the GDK window and validate it
-            GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
-            if (!gdkWindow) {
-                fprintf(stderr, "No GDK window available for startWindowMove\n");
-                return;
-            }
-            
-            // Clean up any existing drag
-            stopWindowMove();
-            
-            // Store the window being dragged
-            g_draggedWindow = gtkWindow;
-            
-            // Get current mouse position relative to window
-            GdkDisplay* display = gdk_display_get_default();
-            if (!display) {
-                fprintf(stderr, "No default display available\n");
-                stopWindowMove();
-                return;
-            }
-            
-            GdkSeat* seat = gdk_display_get_default_seat(display);
-            if (!seat) {
-                fprintf(stderr, "No default seat available\n");
-                stopWindowMove();
-                return;
-            }
-            
-            GdkDevice* device = gdk_seat_get_pointer(seat);
-            if (!device) {
-                fprintf(stderr, "No pointer device available\n");
-                stopWindowMove();
-                return;
-            }
-            
-            gint rootX, rootY, winX, winY;
-            gdk_device_get_position(device, nullptr, &rootX, &rootY);
-            gdk_window_get_device_position(gdkWindow, device, &winX, &winY, nullptr);
-            
-            // Store the offset where the drag started within the window
-            g_dragStartX = winX;
-            g_dragStartY = winY;
-            
-            // Enable motion events on the window
-            gtk_widget_add_events(gtkWindow, GDK_POINTER_MOTION_MASK | GDK_BUTTON_RELEASE_MASK);
-            
-            // Connect motion and button release handlers
-            g_motionHandlerId = g_signal_connect(gtkWindow, "motion-notify-event", 
-                                               G_CALLBACK(onWindowDragMotion), nullptr);
-            g_buttonReleaseHandlerId = g_signal_connect(gtkWindow, "button-release-event", 
-                                                       G_CALLBACK(onWindowDragButtonRelease), nullptr);
-            
-            // Grab the pointer to ensure we get all mouse events
-            GdkGrabStatus status = gdk_seat_grab(seat, gdkWindow,
-                                                GDK_SEAT_CAPABILITY_POINTER,
-                                                FALSE, // owner_events
-                                                nullptr, // cursor
-                                                nullptr, // event
-                                                nullptr, // prepare_func
-                                                nullptr); // prepare_func_data
-            
-            if (status != GDK_GRAB_SUCCESS) {
-                fprintf(stderr, "Failed to grab pointer for window drag (status: %d)\n", status);
-                stopWindowMove();
-            } else {
-                printf("Window drag started successfully\n");
-                fflush(stdout);
-            }
-        }
-    });
+ELECTROBUN_EXPORT void startWindowMove(void *window) {
+  dispatch_sync_main_void([&]() {
+    if (isCEFAvailable()) {
+      // CEF is always forced to X11 mode (--ozone-platform=x11 / --use-x11),
+      // so _NET_WM_MOVERESIZE works even on Wayland via XWayland.
+      X11Window *x11win = static_cast<X11Window *>(window);
+      if (!x11win || !x11win->display || !x11win->window)
+        return;
+
+      Window root, child;
+      int rootX, rootY, winX, winY;
+      unsigned int mask;
+      XQueryPointer(x11win->display, x11win->window, &root, &child, &rootX,
+                    &rootY, &winX, &winY, &mask);
+
+      XEvent xev;
+      memset(&xev, 0, sizeof(xev));
+      xev.xclient.type = ClientMessage;
+      xev.xclient.window = x11win->window;
+      xev.xclient.message_type =
+          XInternAtom(x11win->display, "_NET_WM_MOVERESIZE", False);
+      xev.xclient.format = 32;
+      xev.xclient.data.l[0] = rootX;
+      xev.xclient.data.l[1] = rootY;
+      xev.xclient.data.l[2] = 8; // _NET_WM_MOVERESIZE_MOVE
+      xev.xclient.data.l[3] = Button1;
+      xev.xclient.data.l[4] = 1;
+
+      XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                 SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+      XFlush(x11win->display);
+    } else {
+      // GTK path: delegate to the compositor/WM on both X11 and Wayland.
+      // gtk_window_begin_move_drag works natively on both — no manual grab
+      // needed.
+      GtkWidget *gtkWindow = GTK_WIDGET(window);
+      if (!gtkWindow || !GTK_IS_WINDOW(gtkWindow)) {
+        fprintf(stderr, "startWindowMove: invalid GTK window\n");
+        return;
+      }
+
+      if (!gtk_widget_get_realized(gtkWindow)) {
+        fprintf(stderr, "startWindowMove: window not realized\n");
+        return;
+      }
+
+      GdkDisplay *display = gdk_display_get_default();
+      GdkSeat *seat = display ? gdk_display_get_default_seat(display) : nullptr;
+      GdkDevice *device = seat ? gdk_seat_get_pointer(seat) : nullptr;
+
+      if (!device) {
+        fprintf(stderr, "startWindowMove: no pointer device\n");
+        return;
+      }
+
+      gint rootX, rootY;
+      gdk_device_get_position(device, nullptr, &rootX, &rootY);
+
+      gtk_window_begin_move_drag(GTK_WINDOW(gtkWindow), GDK_BUTTON_PRIMARY,
+                                 rootX, rootY, gtk_get_current_event_time());
+
+      printf("Window drag started\n");
+      fflush(stdout);
+    }
+  });
 }
 
 ELECTROBUN_EXPORT void stopWindowMove() {
-    dispatch_sync_main_void([&]() {
-        printf("stopWindowMove called\n");
-        fflush(stdout);
-        
-        if (g_draggedWindow) {
-            printf("Cleaning up window drag state\n");
-            fflush(stdout);
-            
-            // Disconnect handlers safely
-            if (g_motionHandlerId > 0 && G_IS_OBJECT(g_draggedWindow)) {
-                g_signal_handler_disconnect(g_draggedWindow, g_motionHandlerId);
-                g_motionHandlerId = 0;
-            }
-            if (g_buttonReleaseHandlerId > 0 && G_IS_OBJECT(g_draggedWindow)) {
-                g_signal_handler_disconnect(g_draggedWindow, g_buttonReleaseHandlerId);
-                g_buttonReleaseHandlerId = 0;
-            }
-            
-            // Release pointer grab safely
-            GdkDisplay* display = gdk_display_get_default();
-            if (display) {
-                GdkSeat* seat = gdk_display_get_default_seat(display);
-                if (seat) {
-                    gdk_seat_ungrab(seat);
-                }
-            }
-            
-            // Clear state
-            g_draggedWindow = nullptr;
-            g_dragStartX = 0;
-            g_dragStartY = 0;
-            
-            printf("Window drag cleanup completed\n");
-            fflush(stdout);
-        }
-    });
+  // gtk_window_begin_move_drag is handled entirely by the WM/compositor —
+  // there's nothing to clean up on our side.
+  printf("stopWindowMove called\n");
+  fflush(stdout);
 }
 
 ELECTROBUN_EXPORT void addPreloadScriptToWebView(AbstractView* abstractView, const char* scriptContent, bool forMainFrameOnly) {
@@ -8755,6 +8808,11 @@ ELECTROBUN_EXPORT void removeTray(void* statusItem) {
         }
     });
 }
+
+ELECTROBUN_EXPORT const char* getTrayBounds(void* statusItem) {
+    (void)statusItem;
+    return strdup("{\"x\":0,\"y\":0,\"width\":0,\"height\":0}");
+}
 #else // NO_APPINDICATOR
 // Stub implementations when AppIndicator is not available
 ELECTROBUN_EXPORT void* createTray(uint32_t trayId, const char* title, const char* pathToImage, bool isTemplate, uint32_t width, uint32_t height, void* clickHandler) {
@@ -8766,6 +8824,7 @@ ELECTROBUN_EXPORT void setTrayImage(void* statusItem, const char* image) {}
 ELECTROBUN_EXPORT void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {}
 ELECTROBUN_EXPORT void setTrayMenu(void* statusItem, const char* menuConfig) {}
 ELECTROBUN_EXPORT void removeTray(void* statusItem) {}
+ELECTROBUN_EXPORT const char* getTrayBounds(void* statusItem) { return strdup("{\"x\":0,\"y\":0,\"width\":0,\"height\":0}"); }
 #endif // NO_APPINDICATOR
 
 ELECTROBUN_EXPORT void setApplicationMenu(const char* jsonString, void* applicationMenuHandler) {
@@ -9062,31 +9121,33 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
             GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
             printf("DEBUG: closeWindow called for GTK window\n");
             
-            // Find the container for this window to get the windowId and callback
+            // Find the container for this window to get the windowId and callback.
+            // Hold a shared_ptr so the ContainerView stays alive through gtk_widget_destroy
+            // (the "destroy" signal handler accesses it via raw pointer).
             uint32_t windowId = 0;
             WindowCloseCallback closeCallback = nullptr;
+            std::shared_ptr<ContainerView> containerRef;
             {
                 std::lock_guard<std::mutex> lock(g_containersMutex);
                 for (auto& [id, container] : g_containers) {
                     if (container->window == gtkWindow) {
                         windowId = id;
                         closeCallback = container->closeCallback;
+                        containerRef = container; // keep alive
                         break;
                     }
                 }
             }
             
-            // Clean up webviews first
-            if (windowId > 0) {
-                cleanupWebviewsForWindow(windowId);
-            }
-            
-            // Call the close callback before destroying the window
+            // Call the close callback before destroying the widget.
             if (closeCallback && windowId > 0) {
                 printf("DEBUG: Calling close callback for GTK window ID: %u\n", windowId);
                 closeCallback(windowId);
             }
             
+            // gtk_widget_destroy fires the "destroy" signal synchronously.
+            // containerRef keeps the ContainerView alive so the signal handler's
+            // raw ContainerView* user_data is valid for the duration of the call.
             printf("DEBUG: Destroying GTK window\n");
             gtk_widget_destroy(gtkWindow);
         } else {
@@ -9117,10 +9178,13 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                 auto display = x11win->display;
                 auto x11_window = x11win->window;
                 
-                // Clean up webviews first
-                cleanupWebviewsForWindow(windowId);
+                // Call the close callback BEFORE removing from maps.
+                if (callback) {
+                    printf("DEBUG: Calling close callback for X11 window ID: %u\n", windowId);
+                    callback(windowId);
+                }
                 
-                // Remove from global maps first to prevent any access during callback
+                // Remove the X11 window from global maps.
                 {
                     std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
                     for (auto it = g_x11_child_window_to_parent_id.begin(); it != g_x11_child_window_to_parent_id.end();) {
@@ -9132,12 +9196,6 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                     }
                     g_x11_window_to_id.erase(x11_window);
                     g_x11_windows.erase(windowId);
-                }
-                
-                // Call the close callback
-                if (callback) {
-                    printf("DEBUG: Calling close callback for X11 window ID: %u\n", windowId);
-                    callback(windowId);
                 }
                 
                 printf("DEBUG: Destroying X11 window\n");
@@ -9558,6 +9616,15 @@ ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(void* window) {
         }
     });
     return result;
+}
+
+ELECTROBUN_EXPORT void setWindowVisibleOnAllWorkspaces(void* window, bool visible) {
+    // Not applicable on Linux - no-op
+}
+
+ELECTROBUN_EXPORT bool isWindowVisibleOnAllWorkspaces(void* window) {
+    // Not applicable on Linux
+    return false;
 }
 
 ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
@@ -10802,8 +10869,24 @@ ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionIdentifier, 
 }
 
 ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*)) {
+    (void)callback;
     // Not supported on Linux - stub to prevent dlopen failure
     // Linux URL protocol handling is done via desktop file associations
+}
+
+ELECTROBUN_EXPORT void setAppReopenHandler(void (*callback)()) {
+    (void)callback;
+    // Not supported on Linux - stub to prevent dlopen failure
+}
+
+ELECTROBUN_EXPORT void setDockIconVisible(bool visible) {
+    (void)visible;
+    // Not supported on Linux - stub to prevent dlopen failure
+}
+
+ELECTROBUN_EXPORT bool isDockIconVisible() {
+    // Not supported on Linux
+    return true;
 }
 
 // Graceful shutdown function to coordinate cleanup

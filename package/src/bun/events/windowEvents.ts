@@ -17,6 +17,7 @@ export default {
 		new ElectrobunEvent<ResizeData, {}>("resize", data),
 	move: (data: MoveData) => new ElectrobunEvent<MoveData, {}>("move", data),
 	focus: (data: IdData) => new ElectrobunEvent<IdData, {}>("focus", data),
+	blur: (data: IdData) => new ElectrobunEvent<IdData, {}>("blur", data),
 	keyDown: (data: KeyData) => new ElectrobunEvent<KeyData, {}>("keyDown", data),
 	keyUp: (data: KeyData) => new ElectrobunEvent<KeyData, {}>("keyUp", data),
 };

@@ -1,10 +1,9 @@
 import { GpuWindow, Screen, WGPU, WGPUBridge } from "electrobun/bun";
-import { CString, ptr } from "bun:ffi";
+import { CString, ptr, toArrayBuffer } from "bun:ffi";
 
 const WGPUNative = WGPU.native;
 const WGPU_STRLEN = 0xffffffffffffffffn;
 const WGPU_DEPTH_SLICE_UNDEFINED = 0xffffffff;
-const WGPUTextureFormat_BGRA8UnormSrgb = 0x0000001c;
 const WGPUTextureUsage_RenderAttachment = 0x0000000000000010n;
 const WGPUBufferUsage_Vertex = 0x0000000000000020n;
 const WGPUBufferUsage_CopyDst = 0x0000000000000008n;
@@ -31,24 +30,6 @@ function writeU64(view: DataView, offset: number, value: bigint) {
 	view.setBigUint64(offset, value, true);
 }
 
-function makeSurfaceSourceMetalLayer(layerPtr: number) {
-	const buffer = new ArrayBuffer(24);
-	const view = new DataView(buffer);
-	writePtr(view, 0, 0);
-	writeU32(view, 8, 0x00000004);
-	writeU32(view, 12, 0);
-	writePtr(view, 16, layerPtr);
-	return { buffer, ptr: ptr(buffer) };
-}
-
-function makeSurfaceDescriptor(nextInChainPtr: number) {
-	const buffer = new ArrayBuffer(24);
-	const view = new DataView(buffer);
-	writePtr(view, 0, nextInChainPtr);
-	writePtr(view, 8, 0);
-	writeU64(view, 16, 0n);
-	return { buffer, ptr: ptr(buffer) };
-}
 
 function makeSurfaceConfiguration(
 	devicePtr: number,
@@ -287,17 +268,14 @@ const win = new GpuWindow({
 	transparent: false,
 });
 
-const layerPtr = win.wgpuView.getNativeHandle();
-if (!WGPUNative.available || !layerPtr) {
+if (!WGPUNative.available) {
 	throw new Error("WGPU not available for wgpu");
 }
 
 const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-const metalLayerDesc = makeSurfaceSourceMetalLayer(layerPtr as number);
-const surfaceDesc = makeSurfaceDescriptor(metalLayerDesc.ptr as number);
-const surface = WGPUBridge.instanceCreateSurface(
+const surface = WGPUBridge.createSurfaceForView(
 	instance as number,
-	surfaceDesc.ptr as number,
+	win.wgpuView.ptr as number,
 );
 
 const adapterDevice = new BigUint64Array(2);
@@ -314,11 +292,27 @@ if (!adapter || !device) {
 
 const queue = WGPUNative.symbols.wgpuDeviceGetQueue(device);
 
+// Query the surface capabilities to get a supported texture format
+const capsBuffer = new ArrayBuffer(64);
+const capsView = new DataView(capsBuffer);
+WGPUNative.symbols.wgpuSurfaceGetCapabilities(
+	surface,
+	adapter,
+	ptr(capsBuffer),
+);
+const formatCount = Number(capsView.getBigUint64(16, true));
+const formatPtr = Number(capsView.getBigUint64(24, true));
+let surfaceFormat = 0x00000017; // BGRA8Unorm fallback
+if (formatCount && formatPtr) {
+	const formats = new Uint32Array(toArrayBuffer(formatPtr, 0, formatCount * 4));
+	if (formats.length) surfaceFormat = formats[0]!;
+}
+
 const surfaceConfig = makeSurfaceConfiguration(
 	device,
 	size,
 	size,
-	WGPUTextureFormat_BGRA8UnormSrgb,
+	surfaceFormat,
 );
 WGPUBridge.surfaceConfigure(surface as number, surfaceConfig.ptr as number);
 
@@ -431,7 +425,7 @@ const attrPtr = ptr(attrBuf);
 KEEPALIVE.push(attrBuf);
 const vertexLayout = makeVertexBufferLayout(attrPtr as number, 4, 36);
 const vertexState = makeVertexState(shaderModule, entryPoint.ptr, vertexLayout.ptr as number);
-const colorTarget = makeColorTargetState(WGPUTextureFormat_BGRA8UnormSrgb);
+const colorTarget = makeColorTargetState(surfaceFormat);
 const fragmentState = makeFragmentState(shaderModule, fragEntryPoint.ptr, colorTarget.ptr as number);
 const primitiveState = makePrimitiveState();
 const multisampleState = makeMultisampleState();

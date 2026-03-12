@@ -43,7 +43,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -53,7 +53,7 @@ jobs:
           echo "Runner OS: $RUNNER_OS"
           df -h /
 
-      - uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.8
 
@@ -124,13 +124,13 @@ jobs:
           echo "version=$CEF_VER" >> $GITHUB_OUTPUT
 
       - name: Cache CEF vendor directory
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: package/vendors/cef
           key: cef-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ steps.cef-version.outputs.version }}
 
       - name: Cache process_helper binary
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             package/src/native/build/process_helper
@@ -142,19 +142,19 @@ jobs:
         working-directory: package
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: electrobun-cli-${{ matrix.platform_name }}-${{ matrix.arch }}
           path: package/electrobun-cli-${{ matrix.platform_name }}-${{ matrix.arch }}.tar.gz
 
       - name: Upload core artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: electrobun-core-${{ matrix.platform_name }}-${{ matrix.arch }}
           path: package/electrobun-core-${{ matrix.platform_name }}-${{ matrix.arch }}.tar.gz
 
       - name: Upload CEF artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: electrobun-cef-${{ matrix.platform_name }}-${{ matrix.arch }}
           path: package/electrobun-cef-${{ matrix.platform_name }}-${{ matrix.arch }}.tar.gz
@@ -236,15 +236,15 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
@@ -276,14 +276,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '18'
           registry-url: 'https://registry.npmjs.org'
 
-      - uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.8
 

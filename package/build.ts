@@ -2199,6 +2199,7 @@ async function generateTemplateEmbeddings() {
 					entry.name === ".DS_Store" ||
 					entry.name.startsWith(".") ||
 					entry.name === "package-lock.json" ||
+					entry.name === "bun.lock" ||
 					entry.name === "bun.lockb" ||
 					entry.name === "yarn.lock"
 				) {
@@ -2235,7 +2236,11 @@ async function generateTemplateEmbeddings() {
 		// Pin the electrobun dependency version in template package.json
 		if (files["package.json"]) {
 			const pkgJson = JSON.parse(files["package.json"]);
-			if (pkgJson.dependencies?.electrobun === "latest") {
+			const electrobunDep = pkgJson.dependencies?.electrobun;
+			if (
+				typeof electrobunDep === "string" &&
+				(electrobunDep === "latest" || electrobunDep.startsWith("file:"))
+			) {
 				pkgJson.dependencies.electrobun = electrobunVersion;
 			}
 			files["package.json"] = JSON.stringify(pkgJson, null, "\t") + "\n";
