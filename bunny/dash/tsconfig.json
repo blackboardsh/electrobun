@@ -10,5 +10,5 @@
     "noEmit": true,
     "types": []
   },
-  "include": ["web/**/*.ts", "web/**/*.tsx", "worker.ts", "build.ts"]
+  "include": ["**/*.ts", "**/*.tsx"]
 }

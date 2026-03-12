@@ -1,6 +1,7 @@
 import {
   BrowserView,
   BrowserWindow,
+  Screen,
   Tray,
   Utils,
   type RPCSchema,
@@ -128,6 +129,8 @@ class CarrotInstance {
   logs: string[] = [];
   tray: Tray | null = null;
   controllerWindow: BrowserWindow | null = null;
+  bunnyWindow: BrowserWindow | null = null;
+  bunnyPollTimeout: ReturnType<typeof setTimeout> | null = null;
   worker: Worker | null = null;
   requestId = 1;
   pending = new Map<
@@ -284,6 +287,8 @@ class CarrotInstance {
       }
     }
 
+    this.closeBunnyWindow();
+
     this.pushLog("carrot stopped");
     runtime.notifyDashboardChanged();
   }
@@ -344,8 +349,19 @@ class CarrotInstance {
       handlers: {
         requests: {
           invoke: async ({ method, params }) => this.invoke(method, params),
+          _: async (method, params) => this.invoke(String(method), params),
         },
-        messages: {},
+        messages: {
+          "*": (messageName, payload) => {
+            this.invoke(`send:${String(messageName)}`, payload).catch((error) => {
+              this.pushLog(
+                `view message failed: ${String(messageName)} ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+            });
+          },
+        },
       },
     });
 
@@ -418,8 +434,59 @@ class CarrotInstance {
         await this.handleHostAction(message.action, message.payload);
         break;
       }
+      case "host-request": {
+        const response = await this.handleHostRequest(message.method, message.params)
+          .then((payload) => ({
+            type: "host-response" as const,
+            requestId: message.requestId,
+            success: true,
+            payload,
+          }))
+          .catch((error: unknown) => ({
+            type: "host-response" as const,
+            requestId: message.requestId,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        this.worker?.postMessage(response);
+        break;
+      }
       default:
         break;
+    }
+  }
+
+  private async handleHostRequest(method: string, params: unknown) {
+    switch (method) {
+      case "open-file-dialog": {
+        const options = (params || {}) as {
+          startingFolder?: string;
+          allowedFileTypes?: string;
+          canChooseFiles?: boolean;
+          canChooseDirectory?: boolean;
+          allowsMultipleSelection?: boolean;
+        };
+        return Utils.openFileDialog({
+          startingFolder: options.startingFolder,
+          allowedFileTypes: options.allowedFileTypes,
+          canChooseFiles: options.canChooseFiles,
+          canChooseDirectory: options.canChooseDirectory,
+          allowsMultipleSelection: options.allowsMultipleSelection,
+        });
+      }
+      case "open-path": {
+        return Utils.openPath(String((params as { path?: string } | undefined)?.path || ""));
+      }
+      case "show-item-in-folder": {
+        Utils.showItemInFolder(String((params as { path?: string } | undefined)?.path || ""));
+        return true;
+      }
+      case "clipboard-write-text": {
+        Utils.clipboardWriteText(String((params as { text?: string } | undefined)?.text || ""));
+        return true;
+      }
+      default:
+        throw new Error(`Unknown host request: ${method}`);
     }
   }
 
@@ -464,6 +531,14 @@ class CarrotInstance {
         await this.openWindow();
         break;
       }
+      case "open-bunny-window": {
+        await this.toggleBunnyWindow(payload as { screenX?: number; screenY?: number } | undefined);
+        break;
+      }
+      case "open-manager": {
+        (runtime as any).openManagerWindow();
+        break;
+      }
       case "remove-tray": {
         this.tray?.remove();
         this.tray = null;
@@ -475,8 +550,12 @@ class CarrotInstance {
         break;
       }
       case "emit-view": {
-        const eventPayload = payload as { name: string; payload?: unknown };
-        (this.controllerWindow?.webview.rpc as any)?.send?.runtimeEvent(eventPayload);
+        const eventPayload = payload as { name: string; payload?: unknown; raw?: boolean };
+        if (eventPayload.raw) {
+          (this.controllerWindow?.webview.rpc as any)?.send?.[eventPayload.name]?.(eventPayload.payload);
+        } else {
+          (this.controllerWindow?.webview.rpc as any)?.send?.runtimeEvent(eventPayload);
+        }
         break;
       }
       case "log": {
@@ -487,6 +566,109 @@ class CarrotInstance {
       default:
         break;
     }
+  }
+
+  private closeBunnyWindow() {
+    if (this.bunnyPollTimeout) {
+      clearTimeout(this.bunnyPollTimeout);
+      this.bunnyPollTimeout = null;
+    }
+
+    if (this.bunnyWindow) {
+      const win = this.bunnyWindow;
+      this.bunnyWindow = null;
+      try {
+        win.close();
+      } catch {}
+    }
+  }
+
+  private async toggleBunnyWindow(payload?: { screenX?: number; screenY?: number }) {
+    if (this.bunnyWindow) {
+      this.closeBunnyWindow();
+      return;
+    }
+
+    const size = 80 + Math.floor(Math.random() * 90);
+    const halfSize = Math.floor(size / 2);
+    const display = Screen.getPrimaryDisplay();
+    const workArea = display.workArea;
+    const x =
+      typeof payload?.screenX === "number"
+        ? payload.screenX - halfSize
+        : workArea.x + Math.floor(Math.random() * Math.max(1, workArea.width - size));
+    const y =
+      typeof payload?.screenY === "number"
+        ? payload.screenY - halfSize
+        : workArea.y + Math.floor(Math.random() * Math.max(1, workArea.height - size));
+
+    const bunnyRpc = BrowserView.defineRPC<any>({
+      maxRequestTime: 5000,
+      handlers: {
+        requests: {},
+        messages: {
+          bunnyClicked: () => {
+            this.closeBunnyWindow();
+          },
+        },
+      },
+    });
+
+    const win = new BrowserWindow({
+      title: `${this.carrot.manifest.name} Bunny`,
+      url: "views://bunny/index.html",
+      viewsRoot: this.carrot.currentDir,
+      rpc: bunnyRpc,
+      titleBarStyle: "hidden",
+      transparent: true,
+      passthrough: false,
+      frame: { width: size, height: size, x, y },
+    });
+
+    win.setAlwaysOnTop(true);
+    this.bunnyWindow = win;
+
+    const sendCursor = () => {
+      if (!this.bunnyWindow) {
+        return;
+      }
+      const cursor = Screen.getCursorScreenPoint();
+      const frame = this.bunnyWindow.getFrame();
+      (this.bunnyWindow.webview.rpc as any)?.send?.cursorMove({
+        screenX: cursor.x,
+        screenY: cursor.y,
+        winX: frame.x,
+        winY: frame.y,
+        winW: frame.width,
+        winH: frame.height,
+      });
+    };
+
+    const pollCursor = () => {
+      this.bunnyPollTimeout = null;
+      if (!this.bunnyWindow) {
+        return;
+      }
+      try {
+        sendCursor();
+      } catch {}
+      this.bunnyPollTimeout = setTimeout(pollCursor, 100);
+    };
+
+    win.webview.on("dom-ready", () => {
+      try {
+        sendCursor();
+      } catch {}
+      if (!this.bunnyPollTimeout) {
+        this.bunnyPollTimeout = setTimeout(pollCursor, 100);
+      }
+    });
+
+    win.on("close", () => {
+      if (this.bunnyWindow === win) {
+        this.closeBunnyWindow();
+      }
+    });
   }
 }
 

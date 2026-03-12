@@ -1,6 +1,5 @@
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 type BuildContext = {
   sourceDir: string;
@@ -10,88 +9,132 @@ type BuildContext = {
   defaultBuild: () => Promise<void>;
 };
 
-function assertBuildSuccess(label: string, result: Awaited<ReturnType<typeof Bun.build>>) {
-  if (result.success) {
-    return;
+function resolveBuiltColabViews(sourceDir: string) {
+  const colabBuildRoot = resolve(sourceDir, "../../../colab/build");
+  if (!existsSync(colabBuildRoot)) {
+    throw new Error(`Missing Colab build output at ${colabBuildRoot}`);
   }
 
-  const details = result.logs
-    .map((log) => log.message || log.name || JSON.stringify(log))
-    .join("\n");
+  const buildTargets = readdirSync(colabBuildRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(colabBuildRoot, entry.name))
+    .sort()
+    .reverse();
 
-  throw new Error(`Failed to build ${label}${details ? `\n${details}` : ""}`);
+  for (const buildTarget of buildTargets) {
+    const appCandidates = readdirSync(buildTarget, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.endsWith(".app"))
+      .map((entry) => {
+        const appContentsDir = join(buildTarget, entry.name, "Contents");
+        return {
+          appContentsDir,
+          viewsDir: join(appContentsDir, "Resources", "app", "views"),
+          macosDir: join(appContentsDir, "MacOS"),
+        };
+      });
+
+    for (const candidate of appCandidates) {
+      const { appContentsDir, viewsDir, macosDir } = candidate;
+      const ivdeDir = join(viewsDir, "ivde");
+      const bunnyDir = join(viewsDir, "bunny");
+      const assetsDir = join(viewsDir, "assets");
+      const ptyBinaryPath = join(macosDir, process.platform === "win32" ? "colab-pty.exe" : "colab-pty");
+      if (existsSync(join(ivdeDir, "index.js")) && existsSync(join(bunnyDir, "index.js")) && existsSync(assetsDir)) {
+        return { appContentsDir, viewsDir, ivdeDir, bunnyDir, assetsDir, ptyBinaryPath };
+      }
+    }
+  }
+
+  throw new Error(
+    `No built Colab app views were found under ${colabBuildRoot}. Run 'bun build:dev' in /Users/yoav/.colab-canary/projects/code/colab first.`,
+  );
 }
 
-async function importModule(modulePath: string) {
-  return import(pathToFileURL(modulePath).href);
-}
-
-export async function buildCarrot({ sourceDir, outDir, manifest, sdkViewModule }: BuildContext) {
+export async function buildCarrot({ sourceDir, outDir, manifest }: BuildContext) {
   const resolvedOutDir = resolve(outDir);
-  const viewsOutDir = join(resolvedOutDir, "views");
+  const { ivdeDir, bunnyDir, assetsDir, ptyBinaryPath } = resolveBuiltColabViews(sourceDir);
   const workerEntry = existsSync(join(sourceDir, "worker.ts"))
     ? join(sourceDir, "worker.ts")
     : join(sourceDir, "worker.js");
-  const colabNodeModules = resolve(sourceDir, "../../../colab/node_modules");
-  const esbuildModulePath = join(colabNodeModules, "esbuild", "lib", "main.js");
-  const solidPluginModulePath = join(
-    colabNodeModules,
-    "esbuild-plugin-solid",
-    "dist",
-    "cjs",
-    "plugin.cjs",
-  );
-
-  if (!existsSync(esbuildModulePath) || !existsSync(solidPluginModulePath)) {
-    throw new Error(
-      `Missing local Solid build toolchain. Expected Colab dependencies under ${colabNodeModules}`,
-    );
-  }
 
   rmSync(resolvedOutDir, { recursive: true, force: true });
-  mkdirSync(viewsOutDir, { recursive: true });
+  mkdirSync(resolvedOutDir, { recursive: true });
 
-  cpSync(join(sourceDir, "web", "index.html"), join(viewsOutDir, "index.html"));
+  cpSync(ivdeDir, join(resolvedOutDir, "ivde"), { recursive: true });
+  cpSync(bunnyDir, join(resolvedOutDir, "bunny"), { recursive: true });
+  cpSync(assetsDir, join(resolvedOutDir, "assets"), { recursive: true });
 
-  const esbuild = await importModule(esbuildModulePath);
-  const solidPluginModule = await importModule(solidPluginModulePath);
-  const solidPlugin = solidPluginModule.solidPlugin ?? solidPluginModule.default?.solidPlugin;
+  const copiedIvdeDir = join(resolvedOutDir, "ivde");
+  const ivdeHtmlPath = join(copiedIvdeDir, "index.html");
+  const dashWindowCssPath = join(copiedIvdeDir, "bunny-dash-window.css");
+  const ivdeHtml = readFileSync(ivdeHtmlPath, "utf8");
+  const dashWindowCssHref = "views://ivde/bunny-dash-window.css";
+  const patchedIvdeHtml = ivdeHtml.includes(dashWindowCssHref)
+    ? ivdeHtml
+    : ivdeHtml.replace(
+        '<link rel="stylesheet" href="views://ivde/index.css" />',
+        '<link rel="stylesheet" href="views://ivde/index.css" />\n    <link rel="stylesheet" href="views://ivde/bunny-dash-window.css" />',
+      );
+  writeFileSync(ivdeHtmlPath, patchedIvdeHtml);
+  writeFileSync(
+    dashWindowCssPath,
+    `html,
+body {
+  background: #1e1e1e;
+  overflow: hidden;
+}
 
-  if (typeof solidPlugin !== "function") {
-    throw new Error("Failed to load esbuild-plugin-solid from Colab dependencies");
+body,
+#app {
+  min-height: 100vh;
+  background: #1e1e1e;
+}
+
+#app {
+  position: relative;
+  overflow: hidden;
+}
+
+#app > div:first-child {
+  min-height: 100vh;
+  background: #1e1e1e;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+#workbench-container {
+  background: #1e1e1e;
+}
+`,
+  );
+
+  if (existsSync(ptyBinaryPath)) {
+    cpSync(ptyBinaryPath, join(resolvedOutDir, process.platform === "win32" ? "colab-pty.exe" : "colab-pty"));
   }
 
-  await esbuild.build({
-    absWorkingDir: sourceDir,
-    entryPoints: [join(sourceDir, "web", "main.tsx")],
-    outfile: join(viewsOutDir, "index.js"),
-    bundle: true,
-    format: "esm",
-    platform: "browser",
-    sourcemap: "inline",
-    nodePaths: [colabNodeModules],
-    define: {
-      "process.env.NODE_ENV": '"production"',
-    },
-    plugins: [
-      solidPlugin(),
-      {
-        name: "bunny-ears-sdk-alias",
-        setup(build: any) {
-          build.onResolve({ filter: /^bunny-ears\/view$/ }, () => ({
-            path: sdkViewModule,
-          }));
-        },
-      },
-    ],
-  });
-
-  const workerBuild = await Bun.build({
+  const buildResult = await Bun.build({
     entrypoints: [workerEntry],
     outdir: resolvedOutDir,
     target: "bun",
+    format: "esm",
+    splitting: false,
+    sourcemap: "inline",
+    packages: "bundle",
+    external: [],
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    naming: {
+      entry: "worker.js",
+    },
   });
-  assertBuildSuccess(`${manifest.name} worker`, workerBuild);
+
+  if (!buildResult.success) {
+    const details = buildResult.logs
+      .map((log) => log.message || log.name || JSON.stringify(log))
+      .join("\n");
+    throw new Error(`Failed to build Bunny Dash worker${details ? `\n${details}` : ""}`);
+  }
 
   writeFileSync(
     join(resolvedOutDir, "carrot.json"),
@@ -100,7 +143,7 @@ export async function buildCarrot({ sourceDir, outDir, manifest, sdkViewModule }
         ...manifest,
         view: {
           ...manifest.view,
-          relativePath: "views/index.html",
+          relativePath: "ivde/index.html",
         },
         worker: {
           ...manifest.worker,

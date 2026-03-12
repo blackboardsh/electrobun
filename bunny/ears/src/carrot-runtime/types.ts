@@ -141,10 +141,31 @@ export type HostActionMessage = {
     | "set-tray-menu"
     | "remove-tray"
     | "focus-window"
+    | "open-bunny-window"
+    | "open-manager"
     | "stop-carrot"
     | "emit-view"
     | "log";
   payload?: unknown;
+};
+
+export type HostRequestMessage = {
+  type: "host-request";
+  requestId: number;
+  method:
+    | "open-file-dialog"
+    | "open-path"
+    | "show-item-in-folder"
+    | "clipboard-write-text";
+  params?: unknown;
+};
+
+export type HostResponseMessage = {
+  type: "host-response";
+  requestId: number;
+  success: boolean;
+  payload?: unknown;
+  error?: string;
 };
 
 export type WorkerResponseMessage = {
@@ -164,6 +185,8 @@ export type CarrotWorkerMessage =
   | WorkerEventMessage
   | WorkerInitMessage
   | HostActionMessage
+  | HostRequestMessage
+  | HostResponseMessage
   | WorkerResponseMessage
   | WorkerReadyMessage;
 

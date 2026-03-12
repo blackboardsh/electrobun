@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type {
   CarrotManifest,
   CarrotPermissionGrant,
   CarrotWorkerMessage,
   HostActionMessage,
+  HostRequestMessage,
   WorkerResponseMessage,
 } from "../src/carrot-runtime/types";
 import {
@@ -22,6 +23,15 @@ const EARS_ROOT = resolve(import.meta.dir, "..");
 const CARROTS_ROOT = resolve(EARS_ROOT, "..", "carrots");
 const DASH_ROOT = resolve(EARS_ROOT, "..", "dash");
 const PACKAGE_ROOT = resolve(EARS_ROOT, "..", "..", "package");
+const COLAB_GOLDFISHDB_ROOT = resolve(
+  EARS_ROOT,
+  "..",
+  "..",
+  "..",
+  "colab",
+  "node_modules",
+  "goldfishdb",
+);
 
 process.env.BUNNY_EARS_SDK_VIEW_MODULE = join(
   EARS_ROOT,
@@ -32,6 +42,76 @@ process.env.BUNNY_EARS_SDK_VIEW_MODULE = join(
 process.env.BUNNY_EARS_ZSTD_BIN = join(PACKAGE_ROOT, "dist-macos-arm64", "zig-zstd");
 
 const { buildCarrotSource } = await import("../src/bun/carrotBuilder");
+const GoldfishDB = (await import(COLAB_GOLDFISHDB_ROOT)).default;
+
+const {
+  array,
+  boolean,
+  collection,
+  defaultOpts,
+  number,
+  object,
+  schema,
+  string,
+} = GoldfishDB.v1.schemaType;
+
+const layoutWindowSchema = object(
+  {
+    id: string({ required: true, internal: false }),
+    title: string({ required: true, internal: false }),
+    workspaceId: string({ required: true, internal: false }),
+    mainTabIds: array(string(defaultOpts), { required: true, internal: false }),
+    sideTabIds: array(string(defaultOpts), { required: true, internal: false }),
+    currentMainTabId: string({ required: true, internal: false }),
+    currentSideTabId: string({ required: true, internal: false }),
+  },
+  { required: true, internal: false },
+);
+
+const dashTestSchema = schema({
+  v: 1,
+  stores: {
+    workspaces: collection({
+      key: string({ required: true, internal: false }),
+      name: string({ required: true, internal: false }),
+      subtitle: string({ required: true, internal: false }),
+      sortOrder: number({ required: true, internal: false }),
+    }),
+    projectMounts: collection({
+      key: string({ required: true, internal: false }),
+      workspaceId: string({ required: true, internal: false }),
+      name: string({ required: true, internal: false }),
+      instanceId: string({ required: true, internal: false }),
+      instanceLabel: string({ required: true, internal: false }),
+      path: string({ required: true, internal: false }),
+      kind: string({ required: true, internal: false }),
+      status: string({ required: true, internal: false }),
+      sortOrder: number({ required: true, internal: false }),
+    }),
+    layouts: collection({
+      key: string({ required: true, internal: false }),
+      name: string({ required: true, internal: false }),
+      description: string({ required: true, internal: false }),
+      sortOrder: number({ required: true, internal: false }),
+      windows: array(layoutWindowSchema, { required: true, internal: false }),
+    }),
+    sessionSnapshots: collection({
+      key: string({ required: true, internal: false }),
+      updatedAt: number({ required: true, internal: false }),
+      currentLayoutId: string({ required: true, internal: false }),
+      currentWindowId: string({ required: true, internal: false }),
+      windows: array(layoutWindowSchema, { required: true, internal: false }),
+    }),
+    uiSettings: collection({
+      key: string({ required: true, internal: false }),
+      sidebarCollapsed: boolean({ required: true, internal: false }),
+      bunnyPopoverOpen: boolean({ required: true, internal: false }),
+      currentLayoutId: string({ required: true, internal: false }),
+      currentWindowId: string({ required: true, internal: false }),
+      activeTreeNodeId: string({ required: true, internal: false }),
+    }),
+  },
+});
 
 type RunningCarrot = {
   manifest: CarrotManifest;
@@ -66,8 +146,84 @@ function isResponseMessage(message: CarrotWorkerMessage): message is WorkerRespo
   return message.type === "response";
 }
 
+function isHostRequestMessage(message: CarrotWorkerMessage): message is HostRequestMessage {
+  return message.type === "host-request";
+}
+
 function actionTitle(message: HostActionMessage) {
   return (message.payload as { title?: string } | undefined)?.title;
+}
+
+function flattenTree(
+  nodes: Array<{ id: string; label: string; children?: Array<{ id: string; label: string; children?: any[] }> }>,
+): Array<{ id: string; label: string }> {
+  return nodes.flatMap((node) => [
+    { id: node.id, label: node.label },
+    ...(node.children ? flattenTree(node.children as any) : []),
+  ]);
+}
+
+function createDashTestDb(dbFolder: string) {
+  return new (GoldfishDB as any)().init({
+    schemaHistory: [{ v: 1, schema: dashTestSchema, migrationSteps: false }],
+    db_folder: dbFolder,
+  });
+}
+
+function seedDashTestDb(db: ReturnType<typeof createDashTestDb>) {
+  db.collection("workspaces").insert({
+    key: "local-workspace",
+    name: "Local Workspace",
+    subtitle: "Project folders on this Bunny Ears instance.",
+    sortOrder: 0,
+  });
+
+  db.collection("layouts").insert({
+    key: "current-session",
+    name: "Current Session",
+    description: "Local Bunny Dash window layout.",
+    sortOrder: 0,
+    windows: [
+      {
+        id: "main",
+        title: "Main",
+        workspaceId: "local-workspace",
+        mainTabIds: ["workspace"],
+        sideTabIds: ["session"],
+        currentMainTabId: "workspace",
+        currentSideTabId: "session",
+      },
+    ],
+  });
+
+  db.collection("sessionSnapshots").insert({
+    key: "last",
+    updatedAt: Date.now(),
+    currentLayoutId: "current-session",
+    currentWindowId: "main",
+    windows: [
+      {
+        id: "main",
+        title: "Main",
+        workspaceId: "local-workspace",
+        mainTabIds: ["workspace"],
+        sideTabIds: ["session"],
+        currentMainTabId: "workspace",
+        currentSideTabId: "session",
+      },
+    ],
+  });
+
+  db.collection("uiSettings").insert({
+    key: "primary",
+    sidebarCollapsed: false,
+    bunnyPopoverOpen: false,
+    currentLayoutId: "current-session",
+    currentWindowId: "main",
+    activeTreeNodeId: "workspace-overview:local-workspace",
+  });
+
+  (db as any).trySave?.();
 }
 
 async function buildCarrot(id: string) {
@@ -99,6 +255,9 @@ async function startCarrot(
 async function startBuiltCarrot(
   built: Awaited<ReturnType<typeof buildCarrotAt>>,
   permissionsOverride?: CarrotPermissionGrant,
+  options?: {
+    setupRuntime?: (args: { runtimeDir: string; statePath: string; logsPath: string }) => void | Promise<void>;
+  },
 ): Promise<RunningCarrot> {
   const runtimeLabel = built.manifest.id || "carrot";
   const runtimeDir = makeTempDir(`bunny-ears-${runtimeLabel}-runtime-`);
@@ -107,6 +266,12 @@ async function startBuiltCarrot(
   const grantedPermissions = normalizeCarrotPermissions(
     permissionsOverride ?? built.manifest.permissions,
   );
+
+  await options?.setupRuntime?.({
+    runtimeDir,
+    statePath,
+    logsPath,
+  });
 
   const worker = new Worker(join(built.outDir, built.manifest.worker.relativePath), {
     type: "module",
@@ -160,6 +325,37 @@ async function startBuiltCarrot(
   }
 
   worker.onmessage = (event: MessageEvent<CarrotWorkerMessage>) => {
+    if (isHostRequestMessage(event.data)) {
+      const method = event.data.method as string;
+      let payload: unknown = null;
+      let success = true;
+      let error: string | undefined;
+
+      switch (method) {
+        case "open-file-dialog":
+          payload = [];
+          break;
+        case "open-path":
+        case "show-item-in-folder":
+        case "clipboard-write-text":
+          payload = true;
+          break;
+        default:
+          success = false;
+          error = `Unknown host request: ${method}`;
+          break;
+      }
+
+      worker.postMessage({
+        type: "host-response",
+        requestId: event.data.requestId,
+        success,
+        payload,
+        error,
+      } satisfies CarrotWorkerMessage);
+      return;
+    }
+
     queue.push(event.data);
     flushQueue();
   };
@@ -381,17 +577,32 @@ describe("Bunny Ears carrots", () => {
   test("Bunny Dash builds from source and exposes a Colab-shaped shell snapshot", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-build-");
     expect(built.manifest.id).toBe("bunny-dash");
-    expect(existsSync(join(built.outDir, "views", "index.js"))).toBe(true);
-    expect(existsSync(join(built.outDir, "views", "index.css"))).toBe(true);
+    expect(existsSync(join(built.outDir, "ivde", "index.js"))).toBe(true);
+    expect(existsSync(join(built.outDir, "ivde", "index.css"))).toBe(true);
     expect(existsSync(join(built.outDir, "worker.js"))).toBe(true);
-    const html = await Bun.file(join(built.outDir, "views", "index.html")).text();
-    expect(html).toContain('href="index.css"');
+    expect(built.manifest.view.relativePath).toBe("ivde/index.html");
+    const html = await Bun.file(join(built.outDir, "ivde", "index.html")).text();
+    expect(html).toContain('href="views://ivde/index.css"');
 
     const carrot = await startBuiltCarrot(built);
     const initialTray = await carrot.nextAction("set-tray");
-    expect(initialTray.payload).toEqual({ title: "Dash: Marketing Day" });
+    expect(initialTray.payload).toEqual({ title: "Dash: Current Session" });
     const initialTrayMenu = await carrot.nextAction("set-tray-menu");
     expect(Array.isArray(initialTrayMenu.payload)).toBe(true);
+
+    const initialColabState = (await carrot.request("getInitialState")) as {
+      buildVars: { channel: string };
+      workspace: { id: string; name: string; windows: Array<{ id: string }> };
+      projects: Array<{ id: string; name: string }>;
+      tokens: unknown[];
+      appSettings: { colabCloud: { email: string } };
+    };
+    expect(initialColabState.buildVars.channel).toBe("dev");
+    expect(initialColabState.workspace.name).toBe("Local Workspace");
+    expect(initialColabState.workspace.windows[0]?.id).toBe("main");
+    expect(initialColabState.projects).toEqual([]);
+    expect(initialColabState.tokens).toEqual([]);
+    expect(initialColabState.appSettings.colabCloud.email).toBe("");
 
     const initial = (await carrot.request("getSnapshot")) as {
       shellTitle: string;
@@ -412,18 +623,30 @@ describe("Bunny Ears carrots", () => {
     };
     expect(initial.shellTitle).toBe("Bunny Dash");
     expect(initial.cloudLabel).toBe("Bunny Cloud");
-    expect(initial.currentLayout.name).toBe("Marketing Day");
-    expect(initial.currentWorkspace.name).toBe("Marketing");
-    expect(initial.layoutWindows.length).toBeGreaterThan(1);
-    expect(initial.workspaces.length).toBeGreaterThan(1);
+    expect(initial.currentLayout.name).toBe("Current Session");
+    expect(initial.currentWorkspace.name).toBe("Local Workspace");
+    expect(initial.layoutWindows.length).toBe(1);
+    expect(initial.workspaces.length).toBe(1);
     expect(initial.topActions.map((action) => action.label)).toEqual([
       "Command Palette",
       "Resume Last State",
       "Pop Out Bunny",
       "Bunny Cloud",
     ]);
-    expect(initial.currentWindow.currentMainTabId).toBe("projects");
+    expect(initial.currentWindow.currentMainTabId).toBe("workspace");
     expect(initial.commandHint.length).toBeGreaterThan(0);
+
+    const openBunnyRequest = carrot.request("send:openBunnyWindow", { screenX: 10, screenY: 20 });
+    const openBunnyWindow = await carrot.nextAction("open-bunny-window");
+    await openBunnyRequest;
+    expect(openBunnyWindow.action).toBe("open-bunny-window");
+    expect(openBunnyWindow.payload).toEqual({ screenX: 10, screenY: 20 });
+
+    await carrot.request("send:createWorkspace");
+    const createdWorkspaceState = (await carrot.request("getInitialState")) as {
+      workspace: { name: string };
+    };
+    expect(createdWorkspaceState.workspace.name).toBe("Workspace 2");
 
     const palette = (await carrot.request("togglePalette")) as typeof initial;
     expect(palette.state.commandPaletteOpen).toBe(true);
@@ -433,24 +656,206 @@ describe("Bunny Ears carrots", () => {
     expect(cloud.currentWindow.currentSideTabId).toBe("cloud");
     expect(cloud.state.activeTreeNodeId).toBe(`layout-overview:${cloud.currentLayout.id}`);
 
-    const switchedWorkspace = (await carrot.request("switchWorkspace", {
-      workspaceId: "platform",
-    })) as typeof initial;
-    expect(switchedWorkspace.currentWorkspace.id).toBe("platform");
-
-    carrot.postEvent("tray", { action: "layout:fleet-ops" });
-    const trayAfterLayoutSwitch = await carrot.nextAction(
-      "set-tray",
-      (message) => actionTitle(message) === "Dash: Fleet Ops",
-    );
-    expect(trayAfterLayoutSwitch.payload).toEqual({ title: "Dash: Fleet Ops" });
-    const switchedLayout = (await carrot.request("getSnapshot")) as typeof initial;
-    expect(switchedLayout.currentLayout.id).toBe("fleet-ops");
-    expect(switchedLayout.currentWindow.title).toBe("Fleet Console");
-
     const sidebar = (await carrot.request("toggleSidebar")) as typeof initial;
     expect(sidebar.state.sidebarCollapsed).toBe(true);
     expect(existsSync(carrot.statePath)).toBe(true);
+  });
+
+  test("Bunny Dash uses GoldfishDB to create workspaces, attach projects, and save layouts", async () => {
+    const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-goldfish-build-");
+    const carrot = await startBuiltCarrot(built);
+    const projectDir = makeTempDir("bunny-dash-project-");
+    mkdirSync(join(projectDir, "src"), { recursive: true });
+    writeFileSync(join(projectDir, "README.md"), "# Acme Studio\n");
+    writeFileSync(join(projectDir, "src", "index.ts"), "export const dash = true;\n");
+
+    await carrot.nextAction("set-tray");
+    await carrot.nextAction("set-tray-menu");
+
+    const createdWorkspace = (await carrot.request("createWorkspace", {
+      name: "Acme Studio",
+      subtitle: "Shared client work for Acme.",
+    })) as {
+      currentWorkspace: { id: string; name: string };
+      workspaces: Array<{ id: string; name: string }>;
+    };
+    expect(createdWorkspace.currentWorkspace.name).toBe("Acme Studio");
+    expect(createdWorkspace.workspaces.some((workspace) => workspace.name === "Acme Studio")).toBe(
+      true,
+    );
+
+    const withProject = (await carrot.request("addProjectMount", {
+      workspaceId: createdWorkspace.currentWorkspace.id,
+      name: "acme-site",
+      path: projectDir,
+    })) as {
+      tree: Array<{ id: string; label: string; children?: Array<{ id: string; label: string }> }>;
+      workspaces: Array<{ id: string; name: string; projectCount: number }>;
+      state: { activeTreeNodeId: string };
+    };
+    expect(withProject.state.activeTreeNodeId).toBe("project:acme-studio-acme-site");
+    expect(
+      withProject.workspaces.find((workspace) => workspace.id === createdWorkspace.currentWorkspace.id)
+        ?.projectCount,
+    ).toBe(1);
+    const labels = flattenTree(withProject.tree).map((node) => node.label);
+    expect(labels).toContain("README.md");
+    expect(labels).toContain("src");
+
+    const filePreview = (await carrot.request("selectNode", {
+      nodeId: `fsfile:${join(projectDir, "README.md")}`,
+    })) as {
+      currentWindow: { currentMainTabId: string };
+      mainTabs: Array<{ id: string; body: string }>;
+    };
+    expect(filePreview.currentWindow.currentMainTabId).toBe("projects");
+    expect(filePreview.mainTabs.find((tab) => tab.id === "projects")?.body).toContain(
+      "# Acme Studio",
+    );
+
+    const cloud = (await carrot.request("openCloudPanel")) as {
+      currentWindow: { currentMainTabId: string; currentSideTabId: string };
+    };
+    expect(cloud.currentWindow.currentMainTabId).toBe("cloud");
+    expect(cloud.currentWindow.currentSideTabId).toBe("cloud");
+
+    const savedLayout = (await carrot.request("saveLayout", {
+      name: "Acme Sprint",
+      description: "Saved from the Acme workspace.",
+    })) as {
+      currentLayout: { id: string; name: string };
+      layouts: Array<{ id: string; name: string }>;
+    };
+    expect(savedLayout.currentLayout.name).toBe("Acme Sprint");
+    expect(savedLayout.layouts.some((layout) => layout.name === "Acme Sprint")).toBe(true);
+
+    await carrot.request("applyLayout", { layoutId: "current-session" });
+    const restored = (await carrot.request("applyLayout", {
+      layoutId: savedLayout.currentLayout.id,
+    })) as {
+      currentLayout: { id: string; name: string };
+      currentWorkspace: { id: string; name: string };
+      currentWindow: { currentMainTabId: string; currentSideTabId: string };
+    };
+    expect(restored.currentLayout.name).toBe("Acme Sprint");
+    expect(restored.currentWorkspace.name).toBe("Acme Studio");
+    expect(restored.currentWindow.currentMainTabId).toBe("cloud");
+    expect(restored.currentWindow.currentSideTabId).toBe("cloud");
+
+    const goldfishDbPath = join(dirname(carrot.statePath), "goldfishdb", "goldfish.db");
+    expect(existsSync(goldfishDbPath)).toBe(true);
+  });
+
+  test("Bunny Dash exposes the Colab PTY terminal backend", async () => {
+    const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-terminal-build-");
+    expect(existsSync(join(built.outDir, process.platform === "win32" ? "colab-pty.exe" : "colab-pty"))).toBe(true);
+
+    const carrot = await startBuiltCarrot(built);
+    await carrot.nextAction("set-tray");
+    await carrot.nextAction("set-tray-menu");
+
+    const terminalId = (await carrot.request("createTerminal", {
+      cwd: tmpdir(),
+    })) as string;
+    expect(typeof terminalId).toBe("string");
+    expect(terminalId.length).toBeGreaterThan(0);
+
+    const output = await carrot.nextAction(
+      "emit-view",
+      (message) =>
+        (message.payload as { name?: string; payload?: { terminalId?: string; data?: string } } | undefined)
+          ?.name === "terminalOutput" &&
+        (message.payload as { payload?: { terminalId?: string } } | undefined)?.payload?.terminalId === terminalId,
+    );
+    expect((output.payload as { name: string }).name).toBe("terminalOutput");
+
+    const cwd = (await carrot.request("getTerminalCwd", { terminalId })) as string | null;
+    expect(cwd).toBe(realpathSync(tmpdir()));
+
+    const killed = (await carrot.request("killTerminal", { terminalId })) as boolean;
+    expect(killed).toBe(true);
+  });
+
+  test("Bunny Dash normalizes the old fake current-session tabs from persisted GoldfishDB state", async () => {
+    const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-migrate-build-");
+    const carrot = await startBuiltCarrot(built, undefined, {
+      setupRuntime({ runtimeDir }) {
+        const dbFolder = join(runtimeDir, "goldfishdb");
+        const db = createDashTestDb(dbFolder);
+        seedDashTestDb(db);
+
+        const layoutDoc = db
+          .collection("layouts")
+          .query({
+            where: (item: { key: string }) => item.key === "current-session",
+            limit: 1,
+          }).data?.[0];
+        const snapshotDoc = db
+          .collection("sessionSnapshots")
+          .query({
+            where: (item: { key: string }) => item.key === "last",
+            limit: 1,
+          }).data?.[0];
+        const uiDoc = db
+          .collection("uiSettings")
+          .query({
+            where: (item: { key: string }) => item.key === "primary",
+            limit: 1,
+          }).data?.[0];
+
+        expect(layoutDoc).toBeTruthy();
+        expect(snapshotDoc).toBeTruthy();
+        expect(uiDoc).toBeTruthy();
+
+        const legacyWindow = {
+          id: "main",
+          title: "Main",
+          workspaceId: "local-workspace",
+          mainTabIds: ["workspace", "projects", "layout", "instances", "cloud"],
+          sideTabIds: ["session", "windows", "notes", "cloud"],
+          currentMainTabId: "layout",
+          currentSideTabId: "session",
+        };
+
+        db.collection("layouts").update(layoutDoc!.id, {
+          windows: [legacyWindow],
+        });
+        db.collection("sessionSnapshots").update(snapshotDoc!.id, {
+          currentLayoutId: "current-session",
+          currentWindowId: "main",
+          windows: [legacyWindow],
+        });
+        db.collection("uiSettings").update(uiDoc!.id, {
+          currentLayoutId: "current-session",
+          currentWindowId: "main",
+          activeTreeNodeId: "layout-overview:current-session",
+        });
+
+        (db as any).trySave?.();
+      },
+    });
+
+    await carrot.nextAction("set-tray");
+    await carrot.nextAction("set-tray-menu");
+
+    const initial = (await carrot.request("getSnapshot")) as {
+      currentWindow: { currentMainTabId: string; currentSideTabId: string };
+      mainTabs: Array<{ id: string }>;
+      sideTabs: Array<{ id: string }>;
+      state: { activeTreeNodeId: string };
+    };
+
+    expect(initial.currentWindow.currentMainTabId).toBe("workspace");
+    expect(initial.currentWindow.currentSideTabId).toBe("session");
+    expect(initial.mainTabs.map((tab) => tab.id)).toEqual(["workspace"]);
+    expect(initial.sideTabs.map((tab) => tab.id)).toEqual(["session"]);
+    expect(initial.state.activeTreeNodeId).toBe("workspace-overview:local-workspace");
+
+    const persistedState = JSON.parse(readFileSync(carrot.statePath, "utf8")) as {
+      sessionSnapshot: { windows: Array<{ mainTabIds: string[]; sideTabIds: string[] }> };
+    };
+    expect(persistedState.sessionSnapshot.windows[0]?.mainTabIds).toEqual(["workspace"]);
+    expect(persistedState.sessionSnapshot.windows[0]?.sideTabIds).toEqual(["session"]);
   });
 
   test("Forrager emits tray and notification actions from its built worker", async () => {

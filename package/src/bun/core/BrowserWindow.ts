@@ -33,6 +33,8 @@ export type WindowOptionsType<T = undefined> = {
 	titleBarStyle: "hidden" | "hiddenInset" | "default";
 	// transparent: when true, window background is transparent (see-through)
 	transparent: boolean;
+	// passthrough: when true, mouse events pass through transparent regions
+	passthrough: boolean;
 	hidden?: boolean;
 	navigationRules: string | null;
 	// Sandbox mode: when true, disables RPC and only allows event emission
@@ -56,6 +58,7 @@ const defaultOptions: WindowOptionsType = {
 	renderer: buildConfig.defaultRenderer,
 	titleBarStyle: "default",
 	transparent: false,
+	passthrough: false,
 	hidden: false,
 	navigationRules: null,
 	sandbox: false,
@@ -118,6 +121,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	viewsRoot: string | null = null;
 	renderer: "native" | "cef" = "native";
 	transparent: boolean = false;
+	passthrough: boolean = false;
 	hidden: boolean = false;
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
@@ -147,6 +151,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.viewsRoot = options.viewsRoot || null;
 		this.renderer = options.renderer || defaultOptions.renderer;
 		this.transparent = options.transparent ?? false;
+		this.passthrough = options.passthrough ?? false;
 		this.hidden = options.hidden ?? false;
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
@@ -233,6 +238,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			windowId: this.id,
 			navigationRules: this.navigationRules,
 			sandbox: this.sandbox,
+			startPassthrough: this.passthrough,
 		});
 
 		console.log("setting webviewId: ", webview.id);

@@ -189,5 +189,15 @@ export async function buildCarrotSource(sourceDir: string, outDir: string) {
   const manifest = readManifest(normalizedSourceDir);
 
   await runCustomBuild(normalizedSourceDir, outDir, manifest);
+
+  const builtManifestPath = join(outDir, "carrot.json");
+  if (existsSync(builtManifestPath)) {
+    const builtManifest = JSON.parse(readFileSync(builtManifestPath, "utf8")) as CarrotManifest;
+    return {
+      ...builtManifest,
+      permissions: normalizeCarrotPermissions(builtManifest.permissions),
+    } satisfies CarrotManifest;
+  }
+
   return manifest;
 }

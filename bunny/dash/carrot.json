@@ -12,7 +12,10 @@
     },
     "bun": {
       "read": true,
-      "write": true
+      "write": true,
+      "run": true,
+      "env": true,
+      "ffi": true
     },
     "isolation": "shared-worker"
   },
@@ -21,7 +24,7 @@
     "title": "Bunny Dash",
     "width": 1480,
     "height": 920,
-    "titleBarStyle": "hidden"
+    "titleBarStyle": "hiddenInset"
   },
   "worker": {
     "relativePath": "worker.js"
