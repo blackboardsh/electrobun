@@ -132,6 +132,8 @@ export const chromelessTests = [
           url: "views://playgrounds/transparent-window/index.html",
           renderer: "cef",
           frame: { width: 450, height: 500, x: 200, y: 100 },
+          // styleMask.Borderless enables a fully frameless popup-style window
+          styleMask: { Borderless: true },
           // 'hidden' titleBarStyle hides titlebar and native controls
           titleBarStyle: "hidden",
           // transparent: true makes window background see-through
