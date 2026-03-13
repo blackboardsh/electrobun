@@ -128,6 +128,7 @@ class CarrotInstance {
   status: CarrotStatus = "stopped";
   logs: string[] = [];
   tray: Tray | null = null;
+  controllerWindows = new Map<string, BrowserWindow>();
   controllerWindow: BrowserWindow | null = null;
   bunnyWindow: BrowserWindow | null = null;
   bunnyPollTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -182,10 +183,35 @@ class CarrotInstance {
     };
   }
 
+  private syncPrimaryControllerWindow() {
+    this.controllerWindow = this.controllerWindows.values().next().value ?? null;
+  }
+
+  private setControllerWindow(windowId: string, win: BrowserWindow) {
+    this.controllerWindows.set(windowId, win);
+    this.syncPrimaryControllerWindow();
+  }
+
+  private removeControllerWindow(windowId: string, win?: BrowserWindow) {
+    const existing = this.controllerWindows.get(windowId);
+    if (!existing) {
+      return;
+    }
+    if (win && existing !== win) {
+      return;
+    }
+    this.controllerWindows.delete(windowId);
+    this.syncPrimaryControllerWindow();
+  }
+
+  private getPrimaryControllerWindowId() {
+    return this.controllerWindows.keys().next().value ?? "main";
+  }
+
   async start() {
     if (this.status === "running" || this.status === "starting") {
       if (this.carrot.manifest.mode === "window") {
-        this.controllerWindow?.focus();
+        this.openWindow().catch(() => {});
       }
       return;
     }
@@ -233,7 +259,7 @@ class CarrotInstance {
         id: this.carrot.manifest.id,
         url: this.carrot.viewUrl,
       });
-      this.createControllerWindow();
+      this.createControllerWindow("main");
     } else {
       bootLog("skipping hidden background controller window", {
         id: this.carrot.manifest.id,
@@ -277,9 +303,8 @@ class CarrotInstance {
       this.tray = null;
     }
 
-    if (this.controllerWindow) {
-      const win = this.controllerWindow;
-      this.controllerWindow = null;
+    for (const [windowId, win] of this.controllerWindows) {
+      this.removeControllerWindow(windowId, win);
       try {
         win.close();
       } catch {
@@ -293,20 +318,46 @@ class CarrotInstance {
     runtime.notifyDashboardChanged();
   }
 
-  async openWindow() {
-    if (this.carrot.manifest.mode !== "window") {
+  async openWindow(windowId = this.getPrimaryControllerWindowId(), options?: { title?: string }) {
+    if (!hasHostPermission(this.carrot.install.permissionsGranted, "windows")) {
       return;
     }
 
     if (this.status !== "running") {
       await this.start();
+    }
+
+    const existing = this.controllerWindows.get(windowId);
+    if (existing) {
+      existing.focus();
       return;
     }
 
-    this.controllerWindow?.focus();
+    bootLog("opening carrot window", {
+      id: this.carrot.manifest.id,
+      windowId,
+    });
+    this.createControllerWindow(windowId, {
+      hidden: false,
+      title: options?.title,
+    });
+    this.controllerWindows.get(windowId)?.focus();
   }
 
-  async invoke(method: string, params?: unknown) {
+  async closeWindow(windowId = this.getPrimaryControllerWindowId()) {
+    const win = this.controllerWindows.get(windowId);
+    if (!win) {
+      return;
+    }
+    this.removeControllerWindow(windowId, win);
+    try {
+      win.close();
+    } catch {
+      // Window may already be gone.
+    }
+  }
+
+  async invoke(method: string, params?: unknown, windowId?: string) {
     if (!this.worker) {
       throw new Error(`${this.carrot.manifest.name} is not running`);
     }
@@ -321,6 +372,7 @@ class CarrotInstance {
       requestId,
       method,
       params,
+      windowId,
     } satisfies CarrotWorkerMessage);
 
     return promise;
@@ -343,17 +395,25 @@ class CarrotInstance {
     runtime.notifyDashboardChanged();
   }
 
-  private createControllerWindow() {
+  private createControllerWindow(
+    windowId = "main",
+    options?: { hidden?: boolean; title?: string },
+  ) {
+    const existing = this.controllerWindows.get(windowId);
+    if (existing) {
+      return existing;
+    }
+
     const rpc = BrowserView.defineRPC<CarrotViewRPC>({
       maxRequestTime: 10000,
       handlers: {
         requests: {
-          invoke: async ({ method, params }) => this.invoke(method, params),
-          _: async (method, params) => this.invoke(String(method), params),
+          invoke: async ({ method, params }) => this.invoke(method, params, windowId),
+          _: async (method, params) => this.invoke(String(method), params, windowId),
         },
         messages: {
           "*": (messageName, payload) => {
-            this.invoke(`send:${String(messageName)}`, payload).catch((error) => {
+            this.invoke(`send:${String(messageName)}`, payload, windowId).catch((error) => {
               this.pushLog(
                 `view message failed: ${String(messageName)} ${
                   error instanceof Error ? error.message : String(error)
@@ -366,11 +426,12 @@ class CarrotInstance {
     });
 
     const hidden =
-      this.carrot.manifest.mode === "background" ||
-      this.carrot.manifest.view.hidden === true;
+      options?.hidden ??
+      (this.carrot.manifest.mode === "background" ||
+        this.carrot.manifest.view.hidden === true);
 
     const win = new BrowserWindow({
-      title: this.carrot.manifest.view.title,
+      title: options?.title || this.carrot.manifest.view.title,
       url: this.carrot.viewUrl,
       viewsRoot: this.carrot.currentDir,
       rpc,
@@ -385,9 +446,10 @@ class CarrotInstance {
       },
     });
 
-    this.controllerWindow = win;
+    this.setControllerWindow(windowId, win);
     bootLog("controller window created", {
       id: this.carrot.manifest.id,
+      windowId,
       hidden,
       url: this.carrot.viewUrl,
     });
@@ -403,14 +465,21 @@ class CarrotInstance {
       });
     });
 
+    win.on("focus", () => {
+      this.sendEvent("window-focus", { windowId });
+    });
+
     win.on("close", () => {
-      if (this.controllerWindow === win) {
-        this.controllerWindow = null;
-        if (this.status === "running" && this.carrot.manifest.mode === "window") {
+      this.removeControllerWindow(windowId, win);
+      this.sendEvent("window-closed", { windowId });
+      if (this.status === "running" && this.carrot.manifest.mode === "window") {
+        if (this.controllerWindows.size === 0) {
           void this.stop();
         }
       }
     });
+
+    return win;
   }
 
   private async handleWorkerMessage(message: CarrotWorkerMessage) {
@@ -528,7 +597,19 @@ class CarrotInstance {
         break;
       }
       case "focus-window": {
-        await this.openWindow();
+        const focusPayload =
+          payload && typeof payload === "object"
+            ? (payload as { windowId?: string; title?: string })
+            : {};
+        await this.openWindow(focusPayload.windowId, { title: focusPayload.title });
+        break;
+      }
+      case "close-window": {
+        const closePayload =
+          payload && typeof payload === "object"
+            ? (payload as { windowId?: string })
+            : {};
+        await this.closeWindow(closePayload.windowId);
         break;
       }
       case "open-bunny-window": {
@@ -550,11 +631,23 @@ class CarrotInstance {
         break;
       }
       case "emit-view": {
-        const eventPayload = payload as { name: string; payload?: unknown; raw?: boolean };
+        const eventPayload = payload as {
+          name: string;
+          payload?: unknown;
+          raw?: boolean;
+          windowId?: string;
+        };
+        const targets = eventPayload.windowId
+          ? [this.controllerWindows.get(eventPayload.windowId)].filter(Boolean)
+          : Array.from(this.controllerWindows.values());
         if (eventPayload.raw) {
-          (this.controllerWindow?.webview.rpc as any)?.send?.[eventPayload.name]?.(eventPayload.payload);
+          for (const target of targets) {
+            (target?.webview.rpc as any)?.send?.[eventPayload.name]?.(eventPayload.payload);
+          }
         } else {
-          (this.controllerWindow?.webview.rpc as any)?.send?.runtimeEvent(eventPayload);
+          for (const target of targets) {
+            (target?.webview.rpc as any)?.send?.runtimeEvent(eventPayload);
+          }
         }
         break;
       }

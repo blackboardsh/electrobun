@@ -7,8 +7,65 @@ import ActualElectrobun, {
   type WebviewEventTypes,
   type WgpuTagElement,
   type WgpuEventTypes,
-} from "../../ears/node_modules/electrobun/dist/api/browser/index.ts";
-import { createCarrotClient } from "bunny-ears/view";
+} from "../../../package/dist/api/browser/index";
+
+type RuntimeEventHandler = (payload: unknown) => void;
+
+function createCarrotClient() {
+  const BaseElectroview = (ActualElectrobun as any).Electroview;
+  const eventHandlers = new Map<string, Set<RuntimeEventHandler>>();
+  let bootInfo: {
+    id: string;
+    name: string;
+    permissions: string[];
+    grantedPermissions: Record<string, unknown>;
+    mode: "window" | "background";
+  } | null = null;
+
+  const rpc = BaseElectroview.defineRPC({
+    maxRequestTime: 10000,
+    handlers: {
+      requests: {},
+      messages: {
+        carrotBoot: (payload: typeof bootInfo) => {
+          bootInfo = payload;
+          dispatch("boot", payload);
+        },
+        runtimeEvent: ({ name, payload }: { name: string; payload: unknown }) => {
+          dispatch(name, payload);
+        },
+      },
+    },
+  });
+
+  const electroview = new BaseElectroview({ rpc });
+
+  function dispatch(name: string, payload: unknown) {
+    eventHandlers.get(name)?.forEach((handler) => handler(payload));
+  }
+
+  return {
+    rpc,
+    electroview,
+    get bootInfo() {
+      return bootInfo;
+    },
+    hasPermission(permission: string) {
+      return bootInfo?.permissions.includes(permission) ?? false;
+    },
+    invoke<T = unknown>(method: string, params?: unknown): Promise<T> {
+      return electroview.rpc.request.invoke({ method, params }) as Promise<T>;
+    },
+    on(name: string, handler: RuntimeEventHandler) {
+      const handlers = eventHandlers.get(name) ?? new Set<RuntimeEventHandler>();
+      handlers.add(handler);
+      eventHandlers.set(name, handlers);
+      return () => {
+        handlers.delete(handler);
+      };
+    },
+  };
+}
 
 const carrotClient = createCarrotClient();
 

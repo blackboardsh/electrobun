@@ -1,0 +1,198 @@
+ /* Add your custom CSS reset styles here */
+ html,
+ body,
+ div,
+ span,
+ applet,
+ object,
+ iframe,
+ h1,
+ h2,
+ h3,
+ h4,
+ h5,
+ h6,
+ p,
+ blockquote,
+ pre,
+ a,
+ abbr,
+ acronym,
+ address,
+ big,
+ cite,
+ code,
+ del,
+ dfn,
+ em,
+ img,
+ ins,
+ kbd,
+ q,
+ s,
+ samp,
+ small,
+ strike,
+ strong,
+ sub,
+ sup,
+ tt,
+ var,
+ b,
+ u,
+ i,
+ center,
+ dl,
+ dt,
+ dd,
+ ol,
+ ul,
+ li,
+ fieldset,
+ form,
+ label,
+ legend,
+ table,
+ caption,
+ tbody,
+ tfoot,
+ thead,
+ tr,
+ th,
+ td,
+ article,
+ aside,
+ canvas,
+ details,
+ embed,
+ figure,
+ figcaption,
+ footer,
+ header,
+ hgroup,
+ menu,
+ nav,
+ output,
+ ruby,
+ section,
+ summary,
+ time,
+ mark,
+ audio,
+ video {
+   margin: 0;
+   padding: 0;
+   border: 0;
+   font-size: 100%;
+   font: inherit;
+   vertical-align: baseline;
+ }
+
+ *::-webkit-scrollbar {
+  display: none;
+}
+
+ body {
+   background: #1e1e1e;   
+ }
+
+ /* NOTE: this hides tab content in the light dom
+    We inject a ::slotted rule into the shadow dom to 
+    unhide it there. */
+ #workbench-container>.tabcontent {
+   display: none;
+ }
+
+ .workspace-menu-button {
+  background: #111;
+  cursor: pointer;
+ }
+
+ .workspace-menu-button:hover {
+  background: #efefef;
+  color: #111;
+ }
+
+
+ .workspace-menu {
+  cursor: pointer;
+ }
+
+
+ .workspace-menu li {
+  background: #111;
+  cursor: pointer;
+  padding: 10px;
+  margin: 2px;
+ }
+
+ .workspace-menu li:hover {
+  background: #333;
+ }
+
+ .app-menu-button:hover {
+  filter: invert();
+ }
+
+ .app-menu li {
+  background: #e3e3e3;
+  cursor: pointer;
+  padding: 10px;
+  margin: 2px;
+ }
+
+ .app-menu li:hover {
+  background: rgb(81, 145, 185);
+ }
+
+ .update-button > span {
+  background: #db0;
+ }
+
+ .update-button:hover > span {
+  background: #dd0;
+ }
+
+ .update-button:active > span {
+  background: #ca0
+ }
+
+.update-button.error > span {
+  background: #b93131;
+}
+
+.update-button.error:hover > span {
+  background: #d84040;
+}
+
+.update-button.error:active > span {
+  background: #9f2a2a;
+}
+
+ .browser-btn {
+  background: #333;  
+  border-radius: 8px;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+ }
+
+ .browser-btn:hover {
+  background: #444;
+  box-shadow: 0px 0px 3px 0px #000;
+ }
+
+ .browser-btn:disabled {  
+  cursor: default;
+ }
+
+ .browser-btn:disabled:hover {
+  background: #333;
+  box-shadow: none;
+ }
+
+ .browser-btn:disabled img {
+  opacity: 0.3;
+ }

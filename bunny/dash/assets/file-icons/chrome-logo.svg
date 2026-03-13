@@ -1,0 +1,9 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Chrome logo simplified for 16x16 -->
+  <circle cx="8" cy="8" r="7" fill="#4285F4"/>
+  <circle cx="8" cy="8" r="4.5" fill="white"/>
+  <circle cx="8" cy="8" r="3" fill="#4285F4"/>
+  <path d="M8 1 L8 5.5" stroke="white" stroke-width="1.5"/>
+  <path d="M8 1 L3.5 9" stroke="#34A853" stroke-width="1.5"/>
+  <path d="M8 1 L12.5 9" stroke="#EA4335" stroke-width="1.5"/>
+</svg>

@@ -114,6 +114,7 @@ export type WorkerRequestMessage = {
   requestId: number;
   method: string;
   params?: unknown;
+  windowId?: string;
 };
 
 export type WorkerEventMessage = {
@@ -141,6 +142,7 @@ export type HostActionMessage = {
     | "set-tray-menu"
     | "remove-tray"
     | "focus-window"
+    | "close-window"
     | "open-bunny-window"
     | "open-manager"
     | "stop-carrot"

@@ -18,7 +18,7 @@ import {
   type DashDocumentTypes,
   migrateLegacyExampleData,
   seedDashDb,
-  type LayoutWindow,
+  type LensWindow,
   type WindowTabId,
 } from "./db";
 import { TerminalManager } from "./terminalManager";
@@ -109,11 +109,11 @@ type Tab = {
   body: string;
 };
 
-type SessionSnapshot = {
+type CurrentState = {
   updatedAt: number;
   currentLayoutId: string;
   currentWindowId: string;
-  windows: LayoutWindow[];
+  windows: LensWindow[];
 };
 
 type DashState = {
@@ -128,8 +128,8 @@ type DashState = {
 
 type WorkspaceDoc = DashDocumentTypes["workspaces"];
 type ProjectMountDoc = DashDocumentTypes["projectMounts"];
-type LayoutDoc = DashDocumentTypes["layouts"];
-type SessionSnapshotDoc = DashDocumentTypes["sessionSnapshots"];
+type LensDoc = DashDocumentTypes["layouts"];
+type CurrentStateDoc = DashDocumentTypes["sessionSnapshots"];
 type UiSettingsDoc = DashDocumentTypes["uiSettings"];
 
 type Snapshot = {
@@ -140,7 +140,7 @@ type Snapshot = {
   cloudStatus: string;
   commandHint: string;
   topActions: Array<{ id: string; label: string }>;
-  currentLayout: {
+  currentLens: {
     id: string;
     name: string;
     description: string;
@@ -156,7 +156,7 @@ type Snapshot = {
     currentMainTabId: string;
     currentSideTabId: string;
   };
-  layouts: Array<{
+  lenses: Array<{
     id: string;
     name: string;
     description: string;
@@ -170,14 +170,14 @@ type Snapshot = {
     projectCount: number;
     isCurrent: boolean;
   }>;
-  layoutWindows: Array<{
+  openWindows: Array<{
     id: string;
     title: string;
     workspaceId: string;
     workspaceName: string;
     isActive: boolean;
   }>;
-  sessionSummary: {
+  currentStateSummary: {
     updatedAt: number;
     label: string;
   };
@@ -192,9 +192,10 @@ let statePath = "";
 let permissions = new Set<string>();
 let dashDb: DashDb | null = null;
 let manifestVersion = "0.0.1";
-let runtimeWindows: LayoutWindow[] = [];
+let runtimeWindows: LensWindow[] = [];
 let hostRequestId = 1;
 let terminalManager: TerminalManager | null = null;
+const terminalWindowOwners = new Map<string, string>();
 const pendingHostRequests = new Map<
   number,
   {
@@ -205,31 +206,32 @@ const pendingHostRequests = new Map<
 const expandedFsDirs = new Set<string>();
 const directoryWatchers = new Map<string, FSWatcher>();
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+const LIVE_WINDOW_ID_SEPARATOR = "::";
 const LEGACY_CURRENT_SESSION_MAIN_TABS: WindowTabId[] = [
   "workspace",
   "projects",
-  "layout",
+  "lens",
   "instances",
   "cloud",
 ];
 const LEGACY_CURRENT_SESSION_SIDE_TABS: WindowTabId[] = [
-  "session",
+  "current-state",
   "windows",
   "notes",
   "cloud",
 ];
-const DEFAULT_CURRENT_SESSION_WINDOW: LayoutWindow = {
+const DEFAULT_STARTER_LENS_WINDOW: LensWindow = {
   id: "main",
   title: "Main",
   workspaceId: "local-workspace",
   mainTabIds: ["workspace"],
-  sideTabIds: ["session"],
+  sideTabIds: ["current-state"],
   currentMainTabId: "workspace",
-  currentSideTabId: "session",
+  currentSideTabId: "current-state",
 };
-let sessionSnapshot: SessionSnapshot = {
+let currentState: CurrentState = {
   updatedAt: Date.now(),
-  currentLayoutId: "current-session",
+  currentLayoutId: "starter-lens",
   currentWindowId: "main",
   windows: [],
 };
@@ -271,12 +273,12 @@ let state: DashState = {
   commandPaletteOpen: false,
   bunnyPopoverOpen: false,
   commandQuery: "",
-  currentLayoutId: "current-session",
+  currentLayoutId: "starter-lens",
   currentWindowId: "main",
-  activeTreeNodeId: "workspace-overview:local-workspace",
+  activeTreeNodeId: "lens-overview:starter-lens",
 };
 
-function cloneWindows(value: LayoutWindow[]) {
+function cloneWindows(value: LensWindow[]) {
   return structuredClone(value);
 }
 
@@ -319,8 +321,12 @@ function requestHost<T = unknown>(method: string, params?: unknown): Promise<T> 
   });
 }
 
-function focusWindow() {
-  post({ type: "action", action: "focus-window" });
+function focusWindow(windowId?: string, title?: string) {
+  post({ type: "action", action: "focus-window", payload: { windowId, title } });
+}
+
+function closeWindow(windowId?: string) {
+  post({ type: "action", action: "close-window", payload: { windowId } });
 }
 
 function stopCarrot() {
@@ -339,6 +345,25 @@ function flushDb() {
   if (typeof db.trySave === "function") {
     db.trySave();
   }
+}
+
+function getLensesForWorkspace(workspaceId: string) {
+  return listLenses().filter((lens) => getLensWorkspaceId(lens) === workspaceId);
+}
+
+function setActiveWindow(windowId?: string) {
+  if (!windowId) {
+    return;
+  }
+  if (!runtimeWindows.some((window) => window.id === windowId)) {
+    return;
+  }
+  state.currentWindowId = windowId;
+  const lensId = lensIdFromWindowId(windowId);
+  if (lensId && findLensByKey(lensId)) {
+    state.currentLayoutId = lensId;
+  }
+  syncActiveTreeNode();
 }
 
 function listWorkspaces() {
@@ -369,7 +394,7 @@ function scheduleRefresh(reason: string) {
   }, 80);
 }
 
-function listLayouts() {
+function listLenses() {
   return [...(ensureDb().collection("layouts").query().data || [])].sort(
     (a, b) => a.sortOrder - b.sortOrder,
   );
@@ -383,8 +408,8 @@ function findProjectMountByKey(key: string) {
   return listProjectMounts().find((project) => project.key === key) || null;
 }
 
-function findLayoutByKey(key: string) {
-  return listLayouts().find((layout) => layout.key === key) || null;
+function findLensByKey(key: string) {
+  return listLenses().find((layout) => layout.key === key) || null;
 }
 
 function getWorkspaceByKey(key: string) {
@@ -395,10 +420,10 @@ function getWorkspaceByKey(key: string) {
   return workspace;
 }
 
-function getLayoutByKey(key: string) {
-  const layout = findLayoutByKey(key);
+function getLensByKey(key: string) {
+  const layout = findLensByKey(key);
   if (!layout) {
-    throw new Error(`Unknown layout: ${key}`);
+    throw new Error(`Unknown lens: ${key}`);
   }
   return layout;
 }
@@ -441,6 +466,99 @@ function makeDefaultColabWindow(id = "main"): ColabWindow {
     tabs: {},
     currentPaneId: "root",
   };
+}
+
+function cloneColabWindow(value: ColabWindow) {
+  return structuredClone(value);
+}
+
+function serializeColabWindow(value: ColabWindow) {
+  return JSON.stringify(value);
+}
+
+function parseStoredColabWindow(lens: LensDoc) {
+  if (typeof lens.windowStateJson === "string" && lens.windowStateJson.trim()) {
+    try {
+      return JSON.parse(lens.windowStateJson) as ColabWindow;
+    } catch (error) {
+      log(
+        `failed to parse stored lens window for ${lens.key}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  return makeDefaultColabWindow(lens.windows[0]?.id || "main");
+}
+
+function getLensWorkspaceId(lens: LensDoc) {
+  return lens.workspaceId || lens.windows[0]?.workspaceId || "local-workspace";
+}
+
+function makeLiveWindowId(lensId: string, baseWindowId = "main") {
+  return `${lensId}${LIVE_WINDOW_ID_SEPARATOR}${baseWindowId}${LIVE_WINDOW_ID_SEPARATOR}${Date.now()}`;
+}
+
+function lensIdFromWindowId(windowId: string) {
+  const maybeLensId = windowId.split(LIVE_WINDOW_ID_SEPARATOR)[0];
+  if (maybeLensId && findLensByKey(maybeLensId)) {
+    return maybeLensId;
+  }
+  return null;
+}
+
+function getLensIdForWindow(window: LensWindow) {
+  return lensIdFromWindowId(window.id) || state.currentLayoutId;
+}
+
+function buildLiveWindowTitle(workspace: WorkspaceDoc, lens: LensDoc, windowTitle?: string) {
+  return windowTitle?.trim() || `${workspace.name} · ${lens.name}`;
+}
+
+function removeColabWindowFromAllWorkspaces(windowId: string) {
+  for (const workspace of Object.values(colabState.workspaces || {})) {
+    workspace.windows = (workspace.windows || []).filter((window) => window.id !== windowId);
+  }
+}
+
+function upsertColabWindowForWorkspace(workspaceId: string, window: ColabWindow) {
+  const workspace = getOrCreateColabWorkspace(workspaceId);
+  const existingIndex = workspace.windows.findIndex((candidate) => candidate.id === window.id);
+  if (existingIndex >= 0) {
+    workspace.windows[existingIndex] = cloneColabWindow(window);
+  } else {
+    workspace.windows = [...workspace.windows, cloneColabWindow(window)];
+  }
+}
+
+function ensureColabWorkspaceWindow(runtimeWindow: LensWindow, lens?: LensDoc) {
+  const workspaceId = runtimeWindow.workspaceId;
+  const workspace = getOrCreateColabWorkspace(workspaceId);
+  const existing = workspace.windows.find((candidate) => candidate.id === runtimeWindow.id);
+  if (existing) {
+    return existing;
+  }
+
+  const resolvedLens = lens || findLensByKey(getLensIdForWindow(runtimeWindow)) || getCurrentLens();
+  const next = cloneColabWindow(parseStoredColabWindow(resolvedLens));
+  next.id = runtimeWindow.id;
+  upsertColabWindowForWorkspace(workspaceId, next);
+  return next;
+}
+
+function getColabWindowForRuntimeWindow(windowId: string) {
+  for (const workspace of Object.values(colabState.workspaces || {})) {
+    const existing = workspace.windows.find((candidate) => candidate.id === windowId);
+    if (existing) {
+      return existing;
+    }
+  }
+  const runtimeWindow = runtimeWindows.find((candidate) => candidate.id === windowId);
+  if (!runtimeWindow) {
+    return null;
+  }
+  return ensureColabWorkspaceWindow(runtimeWindow);
 }
 
 function getOrCreateColabWorkspace(workspaceId: string) {
@@ -520,24 +638,30 @@ function colabPeerDependencies() {
   };
 }
 
-function emitViewMessage(name: string, payload?: unknown) {
-  post({ type: "action", action: "emit-view", payload: { raw: true, name, payload } });
+function emitViewMessage(name: string, payload?: unknown, windowId?: string) {
+  post({
+    type: "action",
+    action: "emit-view",
+    payload: { raw: true, name, payload, windowId },
+  });
 }
 
 function getTerminalManager() {
   if (!terminalManager) {
     terminalManager = new TerminalManager((message) => {
+      const targetWindowId = terminalWindowOwners.get(message.terminalId);
       if (message.type === "terminalOutput") {
         emitViewMessage("terminalOutput", {
           terminalId: message.terminalId,
           data: message.data,
-        });
+        }, targetWindowId);
       } else if (message.type === "terminalExit") {
         emitViewMessage("terminalExit", {
           terminalId: message.terminalId,
           exitCode: message.exitCode,
           signal: message.signal,
-        });
+        }, targetWindowId);
+        terminalWindowOwners.delete(message.terminalId);
       }
     });
   }
@@ -545,17 +669,36 @@ function getTerminalManager() {
   return terminalManager;
 }
 
-function emitSetProjects() {
-  const workspace = currentColabWorkspace();
-  emitViewMessage("setProjects", {
-    projects: colabProjectsForWorkspace(workspace.id),
-    tokens: colabState.tokens || [],
-    workspace,
-    appSettings: colabState.appSettings || defaultColabAppSettings,
-  });
+function emitSetProjectsForWindow(windowId: string) {
+  const runtimeWindow = runtimeWindows.find((window) => window.id === windowId);
+  if (!runtimeWindow) {
+    return;
+  }
+
+  const workspace = getOrCreateColabWorkspace(runtimeWindow.workspaceId);
+  ensureColabWorkspaceWindow(runtimeWindow);
+  emitViewMessage(
+    "setProjects",
+    {
+      projects: colabProjectsForWorkspace(workspace.id),
+      tokens: colabState.tokens || [],
+      workspace,
+      appSettings: colabState.appSettings || defaultColabAppSettings,
+    },
+    windowId,
+  );
 }
 
-function emitFileWatchEvent(absolutePath: string) {
+function emitSetProjects(workspaceId?: string) {
+  const windows = workspaceId
+    ? runtimeWindows.filter((window) => window.workspaceId === workspaceId)
+    : runtimeWindows;
+  for (const window of windows) {
+    emitSetProjectsForWindow(window.id);
+  }
+}
+
+function emitFileWatchEvent(absolutePath: string, workspaceId?: string) {
   const exists = existsSync(absolutePath);
   let isFile = false;
   let isDir = false;
@@ -568,14 +711,23 @@ function emitFileWatchEvent(absolutePath: string) {
     } catch {}
   }
 
-  emitViewMessage("fileWatchEvent", {
-    absolutePath,
-    exists,
-    isDelete: !exists,
-    isAdding: exists,
-    isFile,
-    isDir,
-  });
+  const targetWindows = workspaceId
+    ? runtimeWindows.filter((window) => window.workspaceId === workspaceId)
+    : runtimeWindows;
+  for (const window of targetWindows) {
+    emitViewMessage(
+      "fileWatchEvent",
+      {
+        absolutePath,
+        exists,
+        isDelete: !exists,
+        isAdding: exists,
+        isFile,
+        isDir,
+      },
+      window.id,
+    );
+  }
 }
 
 function syncProjectWatchers() {
@@ -611,7 +763,7 @@ function syncProjectWatchers() {
             return;
           }
 
-          emitFileWatchEvent(absolutePath);
+          emitFileWatchEvent(absolutePath, project.workspaceId);
           scheduleRefresh(`project ${project.name}`);
         },
       );
@@ -626,13 +778,13 @@ function syncProjectWatchers() {
   }
 }
 
-function getSessionSnapshotDoc() {
+function getCurrentStateDoc() {
   const doc = ensureDb()
     .collection("sessionSnapshots")
     .query({ where: (item) => item.key === "last", limit: 1 }).data?.[0];
 
   if (!doc) {
-    throw new Error("Missing Bunny Dash session snapshot");
+    throw new Error("Missing Bunny Dash current state");
   }
 
   return doc;
@@ -650,7 +802,7 @@ function getUiSettingsDoc() {
   return doc;
 }
 
-function captureSessionSnapshot(): SessionSnapshot {
+function captureCurrentState(): CurrentState {
   return {
     updatedAt: Date.now(),
     currentLayoutId: state.currentLayoutId,
@@ -681,8 +833,16 @@ function getCurrentWindow() {
   return current;
 }
 
-function getCurrentLayout() {
-  return getLayoutByKey(state.currentLayoutId);
+function getCurrentLens() {
+  const currentWindow = getCurrentWindowUnsafe();
+  if (currentWindow) {
+    const lensId = getLensIdForWindow(currentWindow);
+    const lens = findLensByKey(lensId);
+    if (lens) {
+      return lens;
+    }
+  }
+  return getLensByKey(state.currentLayoutId);
 }
 
 function getCurrentWorkspace() {
@@ -695,13 +855,13 @@ function getCurrentWorkspace() {
 }
 
 function ensureRuntimeState() {
-  const layouts = listLayouts();
+  const layouts = listLenses();
   if (!layouts.some((layout) => layout.key === state.currentLayoutId)) {
     state.currentLayoutId = layouts[0]!.key;
   }
 
   if (runtimeWindows.length === 0) {
-    runtimeWindows = cloneWindows(getLayoutByKey(state.currentLayoutId).windows);
+    runtimeWindows = cloneWindows(getLensByKey(state.currentLayoutId).windows);
   }
 
   if (!runtimeWindows.some((window) => window.id === state.currentWindowId)) {
@@ -719,6 +879,20 @@ function ensureRuntimeState() {
     if (!window.sideTabIds.includes(window.currentSideTabId)) {
       window.currentSideTabId = window.sideTabIds[0]!;
     }
+    ensureColabWorkspaceWindow(window);
+  }
+
+  const activeWindow = getCurrentWindowUnsafe();
+  const activeLensId = activeWindow ? lensIdFromWindowId(activeWindow.id) : null;
+  if (activeLensId && findLensByKey(activeLensId)) {
+    state.currentLayoutId = activeLensId;
+  }
+
+  const runtimeWindowIds = new Set(runtimeWindows.map((window) => window.id));
+  for (const workspace of Object.values(colabState.workspaces || {})) {
+    workspace.windows = (workspace.windows || []).filter((window) =>
+      runtimeWindowIds.has(window.id),
+    );
   }
 
   if (!isTreeNodeIdValid(state.activeTreeNodeId)) {
@@ -726,17 +900,17 @@ function ensureRuntimeState() {
   }
 }
 
-function isLegacyCurrentSessionWindow(window: LayoutWindow) {
+function isLegacyCurrentSessionWindow(window: LensWindow) {
   return (
-    window.id === DEFAULT_CURRENT_SESSION_WINDOW.id &&
-    window.title === DEFAULT_CURRENT_SESSION_WINDOW.title &&
-    window.workspaceId === DEFAULT_CURRENT_SESSION_WINDOW.workspaceId &&
+    window.id === DEFAULT_STARTER_LENS_WINDOW.id &&
+    window.title === DEFAULT_STARTER_LENS_WINDOW.title &&
+    window.workspaceId === DEFAULT_STARTER_LENS_WINDOW.workspaceId &&
     sameTabIds(window.mainTabIds, LEGACY_CURRENT_SESSION_MAIN_TABS) &&
     sameTabIds(window.sideTabIds, LEGACY_CURRENT_SESSION_SIDE_TABS)
   );
 }
 
-function normalizeCurrentSessionWindows(windows: LayoutWindow[]) {
+function normalizeCurrentSessionWindows(windows: LensWindow[]) {
   let didNormalize = false;
   const nextWindows = windows.map((window) => {
     if (!isLegacyCurrentSessionWindow(window)) {
@@ -746,10 +920,10 @@ function normalizeCurrentSessionWindows(windows: LayoutWindow[]) {
     didNormalize = true;
     return {
       ...window,
-      mainTabIds: [...DEFAULT_CURRENT_SESSION_WINDOW.mainTabIds],
-      sideTabIds: [...DEFAULT_CURRENT_SESSION_WINDOW.sideTabIds],
-      currentMainTabId: DEFAULT_CURRENT_SESSION_WINDOW.currentMainTabId,
-      currentSideTabId: DEFAULT_CURRENT_SESSION_WINDOW.currentSideTabId,
+      mainTabIds: [...DEFAULT_STARTER_LENS_WINDOW.mainTabIds],
+      sideTabIds: [...DEFAULT_STARTER_LENS_WINDOW.sideTabIds],
+      currentMainTabId: DEFAULT_STARTER_LENS_WINDOW.currentMainTabId,
+      currentSideTabId: DEFAULT_STARTER_LENS_WINDOW.currentSideTabId,
     };
   });
 
@@ -759,11 +933,12 @@ function normalizeCurrentSessionWindows(windows: LayoutWindow[]) {
   };
 }
 
-function normalizePersistedCurrentSession() {
+function migrateLegacyStarterLens() {
   const db = ensureDb();
-  const snapshotDoc = getSessionSnapshotDoc();
+  const snapshotDoc = getCurrentStateDoc();
   const uiDoc = getUiSettingsDoc();
-  const currentSessionLayout = findLayoutByKey("current-session");
+  const starterLens = findLensByKey("starter-lens");
+  const legacyCurrentSessionLens = findLensByKey("current-session");
 
   const normalizedSnapshot = normalizeCurrentSessionWindows(snapshotDoc.windows);
   if (normalizedSnapshot.didNormalize) {
@@ -772,26 +947,73 @@ function normalizePersistedCurrentSession() {
     });
   }
 
-  if (currentSessionLayout) {
-    const normalizedLayout = normalizeCurrentSessionWindows(currentSessionLayout.windows);
+  if (legacyCurrentSessionLens && !starterLens) {
+    db.collection("layouts").update(legacyCurrentSessionLens.id, {
+      key: "starter-lens",
+      name: "Starter Lens",
+      description: "Default Bunny Dash lens for local work.",
+    });
+  }
+
+  const canonicalStarterLens = findLensByKey("starter-lens") || legacyCurrentSessionLens;
+
+  if (canonicalStarterLens) {
+    const normalizedLayout = normalizeCurrentSessionWindows(canonicalStarterLens.windows);
     if (normalizedLayout.didNormalize) {
-      db.collection("layouts").update(currentSessionLayout.id, {
+      db.collection("layouts").update(canonicalStarterLens.id, {
         windows: cloneWindows(normalizedLayout.windows),
       });
     }
   }
 
-  if (
-    normalizedSnapshot.didNormalize &&
-    uiDoc.currentLayoutId === "current-session" &&
-    uiDoc.activeTreeNodeId === "layout-overview:current-session"
-  ) {
-    db.collection("uiSettings").update(uiDoc.id, {
-      activeTreeNodeId: "workspace-overview:local-workspace",
+  if (snapshotDoc.currentLayoutId === "current-session") {
+    db.collection("sessionSnapshots").update(snapshotDoc.id, {
+      currentLayoutId: "starter-lens",
     });
   }
 
-  if (normalizedSnapshot.didNormalize || currentSessionLayout) {
+  if (
+    uiDoc.currentLayoutId === "current-session" ||
+    uiDoc.activeTreeNodeId === "lens-overview:current-session"
+  ) {
+    db.collection("uiSettings").update(uiDoc.id, {
+      currentLayoutId: uiDoc.currentLayoutId === "current-session" ? "starter-lens" : uiDoc.currentLayoutId,
+      activeTreeNodeId: "lens-overview:starter-lens",
+    });
+  }
+
+  if (normalizedSnapshot.didNormalize || legacyCurrentSessionLens || snapshotDoc.currentLayoutId === "current-session") {
+    flushDb();
+  }
+}
+
+function hydrateLensMetadata() {
+  const db = ensureDb();
+  let didUpdate = false;
+
+  for (const lens of listLenses()) {
+    const workspaceId = getLensWorkspaceId(lens);
+    const updates: Partial<LensDoc> = {};
+
+    if (!lens.workspaceId) {
+      updates.workspaceId = workspaceId;
+    }
+
+    if (!lens.windowStateJson) {
+      const fallbackWindow =
+        currentColabWorkspace().id === workspaceId
+          ? getColabWindowForRuntimeWindow(state.currentWindowId) || makeDefaultColabWindow()
+          : makeDefaultColabWindow(lens.windows[0]?.id || "main");
+      updates.windowStateJson = serializeColabWindow(fallbackWindow);
+    }
+
+    if (Object.keys(updates).length > 0) {
+      db.collection("layouts").update(lens.id, updates);
+      didUpdate = true;
+    }
+  }
+
+  if (didUpdate) {
     flushDb();
   }
 }
@@ -799,13 +1021,13 @@ function normalizePersistedCurrentSession() {
 function buildStats() {
   const workspaces = listWorkspaces();
   const projects = listProjectMounts();
-  const layouts = listLayouts();
+  const lenses = listLenses();
   const instanceCount = new Set(projects.map((project) => project.instanceLabel)).size;
 
   return [
     { label: "Workspaces", value: String(workspaces.length) },
     { label: "Projects", value: String(projects.length) },
-    { label: "Layouts", value: String(layouts.length) },
+    { label: "Lenses", value: String(lenses.length) },
     { label: "Instances", value: String(instanceCount) },
   ];
 }
@@ -927,31 +1149,29 @@ function buildProjectFileNodes(rootPath: string): TreeNode[] {
 
 function buildTree(workspace: WorkspaceDoc): TreeNode[] {
   const workspaceProjects = getProjectMountsForWorkspace(workspace.key);
-  const layouts = listLayouts();
   const workspaces = listWorkspaces();
 
   return [
     {
-      id: `layout-root:${state.currentLayoutId}`,
-      label: "Layout",
+      id: "workspaces-root",
+      label: "Workspaces",
       kind: "folder",
-      children: layouts.map((layout) => ({
-        id: `layout-overview:${layout.key}`,
-        label: layout.name,
-        kind: "file" as const,
+      children: workspaces.map((candidate) => ({
+        id: `workspace:${candidate.key}`,
+        label: candidate.name,
+        kind: "folder" as const,
+        children: getLensesForWorkspace(candidate.key).map((lens) => ({
+          id: `lens-overview:${lens.key}`,
+          label: lens.name,
+          kind: "file" as const,
+        })),
       })),
     },
     {
-      id: `workspace:${workspace.key}`,
-      label: workspace.name,
+      id: `projects-root:${workspace.key}`,
+      label: "Projects",
       kind: "folder",
-      children: [
-        {
-          id: `workspace-overview:${workspace.key}`,
-          label: "Overview",
-          kind: "file",
-        },
-        ...workspaceProjects.map((project) => ({
+      children: workspaceProjects.map((project) => ({
           id: `project:${project.key}`,
           label: project.name,
           kind: "folder" as const,
@@ -964,11 +1184,10 @@ function buildTree(workspace: WorkspaceDoc): TreeNode[] {
             ...buildProjectFileNodes(project.path),
           ],
         })),
-      ],
     },
     {
-      id: "session-overview",
-      label: "Session",
+      id: "current-state-overview",
+      label: "Current State",
       kind: "folder",
       children: runtimeWindows.map((window) => ({
         id: `window:${window.id}`,
@@ -990,16 +1209,6 @@ function buildTree(workspace: WorkspaceDoc): TreeNode[] {
           kind: "file" as const,
         };
       }),
-    },
-    {
-      id: "workspace-switcher",
-      label: "All Workspaces",
-      kind: "folder",
-      children: workspaces.map((candidate) => ({
-        id: `workspace:${candidate.key}`,
-        label: candidate.name,
-        kind: "file" as const,
-      })),
     },
   ];
 }
@@ -1045,8 +1254,8 @@ function formatProjectExplorerBody(workspaceId: string) {
 function buildTab(
   tabId: WindowTabId,
   currentWorkspace: WorkspaceDoc,
-  currentLayout: LayoutDoc,
-  currentWindow: LayoutWindow,
+  currentLens: LensDoc,
+  currentWindow: LensWindow,
 ): Tab {
   switch (tabId) {
     case "workspace":
@@ -1065,13 +1274,13 @@ function buildTab(
         icon: "◫",
         body: formatProjectExplorerBody(currentWorkspace.key),
       };
-    case "layout":
+    case "lens":
       return {
         id: tabId,
-        title: "Layout",
+        title: "Lens",
         kind: "fleet",
         icon: "▥",
-        body: `${currentLayout.name}\n\n${currentLayout.description}\n\nWindows\n${runtimeWindows
+        body: `${currentLens.name}\n\n${currentLens.description}\n\nWindows\n${runtimeWindows
           .map((window) => `- ${window.title} (${getWorkspaceByKey(window.workspaceId).name})`)
           .join("\n")}`,
       };
@@ -1145,22 +1354,22 @@ function buildTab(
         kind: "notes",
         icon: "✎",
         body:
-          "Bunny Dash now persists workspaces, project mounts, layouts, and the active session in GoldfishDB. The current UI uses that local store as the source of truth rather than the old in-memory seed data.",
+          "Bunny Dash now persists workspaces, project mounts, lenses, and current state in GoldfishDB. The current UI uses that local store as the source of truth rather than the old in-memory seed data.",
       };
-    case "session":
+    case "current-state":
     default:
       return {
         id: tabId,
-        title: "Session",
+        title: "Current State",
         kind: "notes",
         icon: "◌",
-        body: `Current window: ${currentWindow.title}\nLayout: ${currentLayout.name}\nWorkspace: ${currentWorkspace.name}\n\nLast updated: ${new Date(sessionSnapshot.updatedAt).toLocaleString()}\nLocal store: GoldfishDB`,
+        body: `Current window: ${currentWindow.title}\nLens: ${currentLens.name}\nWorkspace: ${currentWorkspace.name}\n\nLast updated: ${new Date(currentState.updatedAt).toLocaleString()}\nLocal store: GoldfishDB`,
       };
   }
 }
 
-function formatSessionLabel(updatedAt: number) {
-  return `Last saved ${new Date(updatedAt).toLocaleTimeString([], {
+function formatCurrentStateLabel(updatedAt: number) {
+  return `Updated ${new Date(updatedAt).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
   })}`;
@@ -1190,35 +1399,35 @@ function snapshot(): Snapshot {
   ensureRuntimeState();
 
   const workspaces = listWorkspaces();
-  const layouts = listLayouts();
-  const currentLayout = getCurrentLayout();
+  const lenses = listLenses();
+  const currentLens = getCurrentLens();
   const currentWindow = getCurrentWindow();
   const currentWorkspace = getCurrentWorkspace();
   const tree = buildTree(currentWorkspace);
   const mainTabs = currentWindow.mainTabIds.map((tabId) =>
-    buildTab(tabId, currentWorkspace, currentLayout, currentWindow),
+    buildTab(tabId, currentWorkspace, currentLens, currentWindow),
   );
   const sideTabs = currentWindow.sideTabIds.map((tabId) =>
-    buildTab(tabId, currentWorkspace, currentLayout, currentWindow),
+    buildTab(tabId, currentWorkspace, currentLens, currentWindow),
   );
 
   return {
     shellTitle: "Bunny Dash",
-    subtitle: "Local shell for Bunny Ears fleets, layouts, and project work.",
+    subtitle: "Local shell for Bunny Ears fleets, lenses, and project work.",
     permissions: [...permissions],
     cloudLabel: "Bunny Cloud",
     cloudStatus: "colab-cloud is the working reference foundation for the future Bunny Cloud service.",
     commandHint: process.platform === "darwin" ? "cmd+p" : "ctrl+p",
     topActions: [
       { id: "command-palette", label: "Command Palette" },
-      { id: "resume-last-state", label: "Resume Last State" },
+      { id: "resume-last-state", label: "Resume Current State" },
       { id: "pop-out-bunny", label: "Pop Out Bunny" },
       { id: "bunny-cloud", label: "Bunny Cloud" },
     ],
-    currentLayout: {
-      id: currentLayout.key,
-      name: currentLayout.name,
-      description: currentLayout.description,
+    currentLens: {
+      id: currentLens.key,
+      name: currentLens.name,
+      description: currentLens.description,
     },
     currentWorkspace: {
       id: currentWorkspace.key,
@@ -1231,12 +1440,12 @@ function snapshot(): Snapshot {
       currentMainTabId: currentWindow.currentMainTabId,
       currentSideTabId: currentWindow.currentSideTabId,
     },
-    layouts: layouts.map((layout) => ({
-      id: layout.key,
-      name: layout.name,
-      description: layout.description,
-      windowCount: layout.windows.length,
-      isActive: layout.key === state.currentLayoutId,
+    lenses: lenses.map((lens) => ({
+      id: lens.key,
+      name: lens.name,
+      description: lens.description,
+      windowCount: lens.windows.length,
+      isActive: lens.key === state.currentLayoutId,
     })),
     workspaces: workspaces.map((workspace) => ({
       id: workspace.key,
@@ -1245,16 +1454,16 @@ function snapshot(): Snapshot {
       projectCount: getProjectMountsForWorkspace(workspace.key).length,
       isCurrent: workspace.key === currentWorkspace.key,
     })),
-    layoutWindows: runtimeWindows.map((window) => ({
+    openWindows: runtimeWindows.map((window) => ({
       id: window.id,
       title: window.title,
       workspaceId: window.workspaceId,
       workspaceName: getWorkspaceByKey(window.workspaceId).name,
       isActive: window.id === state.currentWindowId,
     })),
-    sessionSummary: {
-      updatedAt: sessionSnapshot.updatedAt,
-      label: formatSessionLabel(sessionSnapshot.updatedAt),
+    currentStateSummary: {
+      updatedAt: currentState.updatedAt,
+      label: formatCurrentStateLabel(currentState.updatedAt),
     },
     tree,
     mainTabs,
@@ -1291,10 +1500,10 @@ function syncActiveTreeNode() {
 
   if (projects.length > 0) {
     state.activeTreeNodeId = `project:${projects[0]!.key}`;
-  } else if (currentWindow.currentMainTabId === "layout") {
-    state.activeTreeNodeId = `layout-overview:${state.currentLayoutId}`;
+  } else if (currentWindow.currentMainTabId === "lens") {
+    state.activeTreeNodeId = `lens-overview:${state.currentLayoutId}`;
   } else {
-    state.activeTreeNodeId = `workspace-overview:${currentWorkspace.key}`;
+    state.activeTreeNodeId = `lens-overview:${getCurrentLens().key}`;
   }
 }
 
@@ -1303,11 +1512,17 @@ async function writeCompatibilityState() {
     state: {
       sidebarCollapsed: state.sidebarCollapsed,
       bunnyPopoverOpen: false,
+      currentLensId: state.currentLayoutId,
       currentLayoutId: state.currentLayoutId,
       currentWindowId: state.currentWindowId,
       activeTreeNodeId: state.activeTreeNodeId,
     },
-    sessionSnapshot,
+    lens: {
+      id: state.currentLayoutId,
+      name: getCurrentLens().name,
+    },
+    currentState,
+    sessionSnapshot: currentState,
     db: {
       engine: "goldfishdb",
       folder: dirname(statePath) + "/goldfishdb",
@@ -1321,7 +1536,7 @@ async function writeCompatibilityState() {
 async function saveState() {
   const db = ensureDb();
   const uiDoc = getUiSettingsDoc();
-  const snapshotDoc = getSessionSnapshotDoc();
+  const snapshotDoc = getCurrentStateDoc();
 
   db.collection("uiSettings").update(uiDoc.id, {
     sidebarCollapsed: state.sidebarCollapsed,
@@ -1331,12 +1546,12 @@ async function saveState() {
     activeTreeNodeId: state.activeTreeNodeId,
   });
 
-  sessionSnapshot = captureSessionSnapshot();
+  currentState = captureCurrentState();
   db.collection("sessionSnapshots").update(snapshotDoc.id, {
-    updatedAt: sessionSnapshot.updatedAt,
-    currentLayoutId: sessionSnapshot.currentLayoutId,
-    currentWindowId: sessionSnapshot.currentWindowId,
-    windows: cloneWindows(sessionSnapshot.windows),
+    updatedAt: currentState.updatedAt,
+    currentLayoutId: currentState.currentLayoutId,
+    currentWindowId: currentState.currentWindowId,
+    windows: cloneWindows(currentState.windows),
   });
 
   flushDb();
@@ -1348,11 +1563,11 @@ async function loadState() {
   dashDb = createDashDb(dbFolder);
   seedDashDb(dashDb);
   migrateLegacyExampleData(dashDb);
-  normalizePersistedCurrentSession();
+  migrateLegacyStarterLens();
   flushDb();
 
   const uiDoc = getUiSettingsDoc();
-  const snapshotDoc = getSessionSnapshotDoc();
+  const snapshotDoc = getCurrentStateDoc();
 
   state = {
     sidebarCollapsed: uiDoc.sidebarCollapsed,
@@ -1361,11 +1576,11 @@ async function loadState() {
     commandQuery: "",
     currentLayoutId: uiDoc.currentLayoutId || snapshotDoc.currentLayoutId,
     currentWindowId: uiDoc.currentWindowId || snapshotDoc.currentWindowId,
-    activeTreeNodeId: uiDoc.activeTreeNodeId || `layout-overview:${snapshotDoc.currentLayoutId}`,
+    activeTreeNodeId: uiDoc.activeTreeNodeId || `lens-overview:${snapshotDoc.currentLayoutId}`,
   };
 
   runtimeWindows = cloneWindows(snapshotDoc.windows);
-  sessionSnapshot = {
+  currentState = {
     updatedAt: snapshotDoc.updatedAt,
     currentLayoutId: snapshotDoc.currentLayoutId,
     currentWindowId: snapshotDoc.currentWindowId,
@@ -1398,6 +1613,7 @@ async function loadState() {
     }
   }
 
+  hydrateLensMetadata();
   ensureRuntimeState();
   syncProjectWatchers();
   await writeCompatibilityState();
@@ -1437,53 +1653,6 @@ function ensureSideTab(tabId: WindowTabId) {
   currentWindow.currentSideTabId = tabId;
 }
 
-async function applyLayout(layoutId: string) {
-  const layout = getLayoutByKey(layoutId);
-  runtimeWindows = cloneWindows(layout.windows);
-  state.currentLayoutId = layout.key;
-  state.currentWindowId = runtimeWindows[0]!.id;
-  state.commandPaletteOpen = false;
-  state.commandQuery = "";
-  syncActiveTreeNode();
-  await saveState();
-  syncTray();
-  emitSnapshot();
-  log(`layout applied: ${layout.name}`);
-}
-
-async function resumeLastState() {
-  const snapshotDoc = getSessionSnapshotDoc();
-  runtimeWindows = cloneWindows(snapshotDoc.windows);
-  state.currentLayoutId = snapshotDoc.currentLayoutId;
-  state.currentWindowId = snapshotDoc.currentWindowId;
-  state.commandPaletteOpen = false;
-  state.commandQuery = "";
-  sessionSnapshot = {
-    updatedAt: snapshotDoc.updatedAt,
-    currentLayoutId: snapshotDoc.currentLayoutId,
-    currentWindowId: snapshotDoc.currentWindowId,
-    windows: cloneWindows(snapshotDoc.windows),
-  };
-  ensureRuntimeState();
-  await saveState();
-  syncTray();
-  emitSnapshot();
-  log("resumed last state");
-}
-
-async function updateCurrentLayout() {
-  const db = ensureDb();
-  const layout = getLayoutByKey(state.currentLayoutId);
-  db.collection("layouts").update(layout.id, {
-    windows: cloneWindows(runtimeWindows),
-  });
-  flushDb();
-  await saveState();
-  syncTray();
-  emitSnapshot();
-  log(`updated layout: ${layout.name}`);
-}
-
 function uniqueKey(base: string, existingKeys: string[]) {
   let candidate = slugify(base);
   let index = 2;
@@ -1494,9 +1663,139 @@ function uniqueKey(base: string, existingKeys: string[]) {
   return candidate;
 }
 
+function toLensTemplateWindow(window: LensWindow): LensWindow {
+  return {
+    ...structuredClone(window),
+    id: window.id.split(LIVE_WINDOW_ID_SEPARATOR)[1] || "main",
+  };
+}
+
+function buildRuntimeWindowFromLens(lens: LensDoc, windowId?: string): LensWindow {
+  const template = structuredClone(lens.windows[0] || DEFAULT_STARTER_LENS_WINDOW);
+  const workspace = getWorkspaceByKey(getLensWorkspaceId(lens));
+  return {
+    ...template,
+    id: windowId || template.id,
+    workspaceId: workspace.key,
+    title: buildLiveWindowTitle(workspace, lens, template.title),
+  };
+}
+
+function applyLensWindowStateToRuntimeWindow(lens: LensDoc, runtimeWindowId: string, workspaceId: string) {
+  removeColabWindowFromAllWorkspaces(runtimeWindowId);
+  const nextWindow = cloneColabWindow(parseStoredColabWindow(lens));
+  nextWindow.id = runtimeWindowId;
+  upsertColabWindowForWorkspace(workspaceId, nextWindow);
+  return nextWindow;
+}
+
+function getCurrentColabWindow() {
+  return ensureColabWorkspaceWindow(getCurrentWindow(), getCurrentLens());
+}
+
+async function restoreLensInCurrentWindow(lensId: string) {
+  const lens = getLensByKey(lensId);
+  const currentWindow = getCurrentWindow();
+  const restoredWindow = buildRuntimeWindowFromLens(lens, currentWindow.id);
+
+  currentWindow.title = restoredWindow.title;
+  currentWindow.workspaceId = restoredWindow.workspaceId;
+  currentWindow.mainTabIds = [...restoredWindow.mainTabIds];
+  currentWindow.sideTabIds = [...restoredWindow.sideTabIds];
+  currentWindow.currentMainTabId = restoredWindow.currentMainTabId;
+  currentWindow.currentSideTabId = restoredWindow.currentSideTabId;
+
+  applyLensWindowStateToRuntimeWindow(lens, currentWindow.id, restoredWindow.workspaceId);
+  state.currentLayoutId = lens.key;
+  state.commandPaletteOpen = false;
+  state.commandQuery = "";
+  state.activeTreeNodeId = `lens-overview:${lens.key}`;
+  await saveState();
+  syncTray();
+  emitSetProjectsForWindow(currentWindow.id);
+  emitSnapshot();
+  log(`lens restored: ${lens.name}`);
+  return snapshot();
+}
+
+async function openLensInNewWindow(lensId: string) {
+  const lens = getLensByKey(lensId);
+  const liveWindowId = makeLiveWindowId(lens.key, lens.windows[0]?.id || "main");
+  const runtimeWindow = buildRuntimeWindowFromLens(lens, liveWindowId);
+
+  runtimeWindows.push(runtimeWindow);
+  applyLensWindowStateToRuntimeWindow(lens, liveWindowId, runtimeWindow.workspaceId);
+
+  state.currentWindowId = liveWindowId;
+  state.currentLayoutId = lens.key;
+  state.commandPaletteOpen = false;
+  state.commandQuery = "";
+  state.activeTreeNodeId = `lens-overview:${lens.key}`;
+  await saveState();
+  syncTray();
+  emitSnapshot();
+  emitSetProjectsForWindow(liveWindowId);
+  focusWindow(liveWindowId, runtimeWindow.title);
+  log(`lens opened in new window: ${lens.name}`);
+  return snapshot();
+}
+
+async function activateLens(lensId: string) {
+  const currentWindow = getCurrentWindow();
+  const currentLensId = getLensIdForWindow(currentWindow);
+  if (currentLensId === lensId) {
+    return restoreLensInCurrentWindow(lensId);
+  }
+  return openLensInNewWindow(lensId);
+}
+
+async function openLens(lensId: string) {
+  return activateLens(lensId);
+}
+
+async function restoreCurrentState() {
+  const snapshotDoc = getCurrentStateDoc();
+  runtimeWindows = cloneWindows(snapshotDoc.windows);
+  state.currentLayoutId = snapshotDoc.currentLayoutId;
+  state.currentWindowId = snapshotDoc.currentWindowId;
+  state.commandPaletteOpen = false;
+  state.commandQuery = "";
+  currentState = {
+    updatedAt: snapshotDoc.updatedAt,
+    currentLayoutId: snapshotDoc.currentLayoutId,
+    currentWindowId: snapshotDoc.currentWindowId,
+    windows: cloneWindows(snapshotDoc.windows),
+  };
+  ensureRuntimeState();
+  await saveState();
+  syncTray();
+  emitSetProjects();
+  emitSnapshot();
+  focusWindow(state.currentWindowId, getCurrentWindow().title);
+  log("current state restored");
+}
+
+async function overwriteCurrentLens() {
+  const db = ensureDb();
+  const lens = getCurrentLens();
+  const currentWindow = getCurrentWindow();
+  const currentColabWindow = getCurrentColabWindow();
+  db.collection("layouts").update(lens.id, {
+    workspaceId: currentWindow.workspaceId,
+    windowStateJson: serializeColabWindow(currentColabWindow),
+    windows: [toLensTemplateWindow(currentWindow)],
+  });
+  flushDb();
+  await saveState();
+  syncTray();
+  emitSnapshot();
+  log(`lens overwritten: ${lens.name}`);
+}
+
 async function createWorkspace(name: string, subtitle = "") {
   const db = ensureDb();
   const workspaces = listWorkspaces();
+  const lenses = listLenses();
   const key = uniqueKey(name, workspaces.map((workspace) => workspace.key));
   const created = db.collection("workspaces").insert({
     key,
@@ -1505,12 +1804,43 @@ async function createWorkspace(name: string, subtitle = "") {
     sortOrder: workspaces.length,
   });
 
+  const starterColabWindow = makeDefaultColabWindow("main");
+  const lensName = `${created.name} Lens`;
+  const lensKey = uniqueKey(lensName, lenses.map((lens) => lens.key));
+  const createdLens = db.collection("layouts").insert({
+    key: lensKey,
+    name: lensName,
+    description: `Starter lens for ${created.name}.`,
+    workspaceId: created.key,
+    windowStateJson: serializeColabWindow(starterColabWindow),
+    sortOrder: lenses.length,
+    windows: [
+      {
+        id: "main",
+        title: buildLiveWindowTitle(created, { name: lensName } as LensDoc, "Main"),
+        workspaceId: created.key,
+        mainTabIds: ["workspace"],
+        sideTabIds: ["current-state"],
+        currentMainTabId: "workspace",
+        currentSideTabId: "current-state",
+      },
+    ],
+  });
+
   const currentWindow = getCurrentWindow();
   currentWindow.workspaceId = created.key;
-  state.activeTreeNodeId = `workspace-overview:${created.key}`;
+  currentWindow.title = buildLiveWindowTitle(created, createdLens, "Main");
+  state.currentLayoutId = createdLens.key;
+  state.activeTreeNodeId = `lens-overview:${createdLens.key}`;
+  removeColabWindowFromAllWorkspaces(currentWindow.id);
+  upsertColabWindowForWorkspace(created.key, {
+    ...starterColabWindow,
+    id: currentWindow.id,
+  });
   flushDb();
   await saveState();
   syncTray();
+  emitSetProjectsForWindow(currentWindow.id);
   emitSnapshot();
   log(`workspace created: ${created.name}`);
   return snapshot();
@@ -1577,41 +1907,44 @@ async function addProjectMount(params: {
   return snapshot();
 }
 
-async function saveLayout(name: string, description = "") {
-  const layouts = listLayouts();
+async function saveLens(name: string, description = "") {
+  const lenses = listLenses();
   const cleanName = name.trim();
   if (!cleanName) {
-    throw new Error("Layout name is required");
+    throw new Error("Lens name is required");
   }
 
-  const key = uniqueKey(cleanName, layouts.map((layout) => layout.key));
+  const key = uniqueKey(cleanName, lenses.map((lens) => lens.key));
+  const currentWindow = getCurrentWindow();
+  const currentColabWindow = getCurrentColabWindow();
   const created = ensureDb().collection("layouts").insert({
     key,
     name: cleanName,
     description: description.trim() || `Saved from ${getCurrentWorkspace().name}`,
-    sortOrder: layouts.length,
-    windows: cloneWindows(runtimeWindows),
+    workspaceId: currentWindow.workspaceId,
+    windowStateJson: serializeColabWindow(currentColabWindow),
+    sortOrder: lenses.length,
+    windows: [toLensTemplateWindow(currentWindow)],
   });
 
   state.currentLayoutId = created.key;
-  state.activeTreeNodeId = `layout-overview:${created.key}`;
+  state.activeTreeNodeId = `lens-overview:${created.key}`;
   flushDb();
   await saveState();
   syncTray();
   emitSnapshot();
-  log(`layout saved: ${created.name}`);
+  log(`lens saved: ${created.name}`);
   return snapshot();
 }
 
-async function switchWorkspace(workspaceId: string) {
+async function openWorkspace(workspaceId: string) {
   const workspace = getWorkspaceByKey(workspaceId);
-  const currentWindow = getCurrentWindow();
-  currentWindow.workspaceId = workspace.key;
-  state.activeTreeNodeId = `workspace-overview:${workspace.key}`;
-  await saveState();
-  syncTray();
-  emitSnapshot();
-  log(`workspace switched to ${workspace.name}`);
+  const firstLens = getLensesForWorkspace(workspace.key)[0];
+  if (!firstLens) {
+    log(`workspace has no lenses: ${workspace.name}`);
+    return;
+  }
+  await openLensInNewWindow(firstLens.key);
 }
 
 async function openQuickAccess(tabId: "browser" | "terminal" | "agent") {
@@ -1624,11 +1957,11 @@ async function openQuickAccess(tabId: "browser" | "terminal" | "agent") {
   return snapshot();
 }
 
-async function selectLayoutWindow(windowId: string) {
+async function selectWindow(windowId: string) {
   if (!runtimeWindows.some((window) => window.id === windowId)) {
     return;
   }
-  state.currentWindowId = windowId;
+  setActiveWindow(windowId);
   syncActiveTreeNode();
   await saveState();
   syncTray();
@@ -1638,14 +1971,23 @@ async function selectLayoutWindow(windowId: string) {
 async function selectNode(nodeId: string) {
   state.activeTreeNodeId = nodeId;
 
-  if (nodeId.startsWith("layout-overview:")) {
-    ensureMainTab("layout");
+  if (nodeId.startsWith("lens-overview:")) {
+    await activateLens(nodeId.replace("lens-overview:", ""));
+    return;
+  } else if (nodeId.startsWith("lens:")) {
+    await activateLens(nodeId.replace("lens:", ""));
+    return;
   } else if (nodeId.startsWith("workspace-overview:")) {
+    const workspaceId = nodeId.replace("workspace-overview:", "");
+    if (workspaceId !== getCurrentWorkspace().key) {
+      await openWorkspace(workspaceId);
+      return;
+    }
     ensureMainTab("workspace");
-  } else if (nodeId === "session-overview") {
-    ensureSideTab("session");
+  } else if (nodeId === "current-state-overview") {
+    ensureSideTab("current-state");
   } else if (nodeId.startsWith("window:")) {
-    await selectLayoutWindow(nodeId.replace("window:", ""));
+    await selectWindow(nodeId.replace("window:", ""));
     ensureSideTab("windows");
     return;
   } else if (nodeId.startsWith("project:")) {
@@ -1667,10 +2009,8 @@ async function selectNode(nodeId: string) {
   } else if (nodeId.startsWith("instance:")) {
     ensureMainTab("instances");
   } else if (nodeId.startsWith("workspace:")) {
-    await switchWorkspace(nodeId.replace("workspace:", ""));
     return;
-  } else if (nodeId.startsWith("layout-root:")) {
-    await applyLayout(nodeId.replace("layout-root:", ""));
+  } else if (nodeId.startsWith("lens-root:")) {
     return;
   }
 
@@ -1680,38 +2020,34 @@ async function selectNode(nodeId: string) {
 
 function syncTray() {
   if (!permissions.has("host:tray")) return;
-  const currentLayout = getCurrentLayout();
-  const currentWorkspace = getCurrentWorkspace();
-  const layouts = listLayouts();
+  const currentLens = getCurrentLens();
   const workspaces = listWorkspaces();
 
-  post({ type: "action", action: "set-tray", payload: { title: `Dash: ${currentLayout.name}` } });
+  post({ type: "action", action: "set-tray", payload: { title: `Dash: ${currentLens.name}` } });
   post({
     type: "action",
     action: "set-tray-menu",
     payload: [
       { type: "normal", label: "Open Bunny Dash", action: "open-window" },
-      { type: "normal", label: "Resume Last State", action: "resume-last-state" },
-      { type: "normal", label: "Update Current Layout", action: "update-current-layout" },
+      { type: "normal", label: "Restore Current State", action: "restore-current-state" },
+      { type: "normal", label: "Overwrite Current Lens", action: "overwrite-current-lens" },
       { type: "divider" },
       {
         type: "normal",
-        label: `Switch Layout (${currentLayout.name})`,
-        action: "noop-layout",
-        submenu: layouts.map((layout) => ({
-          type: "normal",
-          label: layout.key === state.currentLayoutId ? `• ${layout.name}` : layout.name,
-          action: `layout:${layout.key}`,
-        })),
-      },
-      {
-        type: "normal",
-        label: `Switch Workspace (${currentWorkspace.name})`,
-        action: "noop-workspace",
+        label: "Open Lens",
+        action: "noop-lens",
         submenu: workspaces.map((workspace) => ({
           type: "normal",
-          label: workspace.key === currentWorkspace.key ? `• ${workspace.name}` : workspace.name,
-          action: `workspace:${workspace.key}`,
+          label: workspace.name,
+          action: `noop-workspace:${workspace.key}`,
+          submenu: getLensesForWorkspace(workspace.key).map((lens) => ({
+            type: "normal",
+            label:
+              lens.key === state.currentLayoutId && workspace.key === getCurrentWorkspace().key
+                ? `• ${lens.name}`
+                : lens.name,
+            action: `lens:${lens.key}`,
+          })),
         })),
       },
       { type: "divider" },
@@ -1875,12 +2211,83 @@ async function findAllInWorkspace(query: string) {
   return results;
 }
 
+function buildWorkspaceLensSidebarData() {
+  const currentWindow = getCurrentWindow();
+  const currentLensId = getLensIdForWindow(currentWindow);
+
+  return {
+    currentWindowId: currentWindow.id,
+    currentWorkspaceId: currentWindow.workspaceId,
+    currentLensId,
+    workspaces: listWorkspaces().map((workspace) => ({
+      id: workspace.key,
+      name: workspace.name,
+      lenses: getLensesForWorkspace(workspace.key).map((lens) => ({
+        id: lens.key,
+        name: lens.name,
+        isCurrent:
+          lens.key === currentLensId && workspace.key === currentWindow.workspaceId,
+      })),
+    })),
+  };
+}
+
+async function createAdditionalWindow(offset?: { x?: number; y?: number }) {
+  const currentWindow = getCurrentWindow();
+  const currentLens = getCurrentLens();
+  const currentWorkspace = getCurrentWorkspace();
+  const currentColabWindow = getCurrentColabWindow();
+  const nextWindowId = makeLiveWindowId(currentLens.key, currentWindow.id.split(LIVE_WINDOW_ID_SEPARATOR)[1] || "main");
+  const nextRuntimeWindow = {
+    ...structuredClone(currentWindow),
+    id: nextWindowId,
+  };
+  const nextColabWindow = cloneColabWindow(currentColabWindow);
+  nextColabWindow.id = nextWindowId;
+  if (offset) {
+    nextColabWindow.position = {
+      ...nextColabWindow.position,
+      x: nextColabWindow.position.x + Number(offset.x || 0),
+      y: nextColabWindow.position.y + Number(offset.y || 0),
+    };
+  }
+
+  runtimeWindows.push(nextRuntimeWindow);
+  upsertColabWindowForWorkspace(currentWorkspace.key, nextColabWindow);
+  state.currentWindowId = nextWindowId;
+  state.currentLayoutId = currentLens.key;
+  state.commandPaletteOpen = false;
+  state.commandQuery = "";
+  syncActiveTreeNode();
+  await saveState();
+  syncTray();
+  emitSnapshot();
+  emitSetProjectsForWindow(nextWindowId);
+  focusWindow(nextWindowId, nextRuntimeWindow.title);
+  log(`window opened: ${nextWindowId}`);
+  return snapshot();
+}
+
+async function hideCurrentWorkspaceWindows() {
+  const workspaceId = getCurrentWorkspace().key;
+  const windowIds = runtimeWindows
+    .filter((window) => window.workspaceId === workspaceId)
+    .map((window) => window.id);
+
+  for (const windowId of windowIds) {
+    closeWindow(windowId);
+  }
+
+  log(`workspace hidden: ${workspaceId}`);
+}
+
 async function handleColabRequest(method: string, params: any) {
   switch (method) {
     case "getInitialState": {
       const workspace = currentColabWorkspace();
+      ensureColabWorkspaceWindow(getCurrentWindow());
       return {
-        windowId: workspace.windows[0]?.id || "main",
+        windowId: getCurrentWindow().id,
         buildVars: colabBuildVars(),
         paths: colabPaths(),
         peerDependencies: colabPeerDependencies(),
@@ -2017,10 +2424,14 @@ async function handleColabRequest(method: string, params: any) {
       return new TextDecoder().decode(result.stdout || new Uint8Array());
     }
     case "createTerminal":
-      return getTerminalManager().createTerminal(
+      return (() => {
+        const terminalId = getTerminalManager().createTerminal(
         String(params?.cwd || process.cwd()),
         typeof params?.shell === "string" ? params.shell : undefined,
-      );
+        );
+        terminalWindowOwners.set(terminalId, getCurrentWindow().id);
+        return terminalId;
+      })();
     case "writeToTerminal":
       return getTerminalManager().writeToTerminal(
         String(params?.terminalId || ""),
@@ -2036,6 +2447,10 @@ async function handleColabRequest(method: string, params: any) {
       return getTerminalManager().killTerminal(String(params?.terminalId || ""));
     case "getTerminalCwd":
       return getTerminalManager().getTerminalCwd(String(params?.terminalId || ""));
+    case "getWorkspaceLensSidebar":
+      return buildWorkspaceLensSidebarData();
+    case "activateLens":
+      return activateLens(String(params?.lensId || state.currentLayoutId));
     case "findFilesInWorkspace":
       return findFilesInWorkspace(String(params?.query || ""));
     case "findAllInWorkspace":
@@ -2120,7 +2535,7 @@ async function handleColabSend(name: string, payload: any) {
       });
       return;
     case "closeWindow":
-      stopCarrot();
+      closeWindow(getCurrentWindow().id);
       return;
     case "createWorkspace": {
       const nextName = `Workspace ${listWorkspaces().length + 1}`;
@@ -2211,20 +2626,28 @@ async function handleColabSend(name: string, payload: any) {
       db.collection("workspaces").remove(current.id);
       delete (colabState.workspaces || {})[current.key];
       flushDb();
-      await switchWorkspace(listWorkspaces()[0]!.key);
+      await openWorkspace(listWorkspaces()[0]!.key);
       emitSetProjects();
       await writeCompatibilityState();
       return;
     }
     case "track":
-    case "hideWorkspace":
-    case "createWindow":
     case "installUpdateNow":
     case "addToken":
     case "deleteToken":
     case "formatFile":
     case "tsServerRequest":
     case "syncDevlink":
+      return;
+    case "createWindow":
+      await createAdditionalWindow(
+        payload && typeof payload === "object"
+          ? { x: Number(payload.offset?.x || 0), y: Number(payload.offset?.y || 0) }
+          : undefined,
+      );
+      return;
+    case "hideWorkspace":
+      await hideCurrentWorkspaceWindows();
       return;
     default:
       return;
@@ -2258,7 +2681,7 @@ self.onmessage = async (event) => {
     manifestVersion = message.manifest?.version || manifestVersion;
     await loadState();
     ensureRuntimeState();
-    sessionSnapshot = captureSessionSnapshot();
+    currentState = captureCurrentState();
     post({ type: "ready" });
     syncTray();
     emitSnapshot();
@@ -2273,18 +2696,37 @@ self.onmessage = async (event) => {
       return;
     }
 
+    if (message.name === "window-focus") {
+      setActiveWindow(String(message.payload?.windowId || ""));
+      syncTray();
+      emitSnapshot();
+      return;
+    }
+
+    if (message.name === "window-closed") {
+      const closedWindowId = String(message.payload?.windowId || "");
+      terminalWindowOwners.forEach((ownerWindowId, terminalId) => {
+        if (ownerWindowId === closedWindowId) {
+          terminalWindowOwners.delete(terminalId);
+        }
+      });
+      return;
+    }
+
     if (message.name === "tray") {
       const action = String(message.payload?.action || "");
       if (action === "open-window") {
-        focusWindow();
-      } else if (action === "resume-last-state") {
-        await resumeLastState();
-      } else if (action === "update-current-layout") {
-        await updateCurrentLayout();
+        focusWindow(state.currentWindowId, getCurrentWindow().title);
+      } else if (action === "resume-last-state" || action === "restore-current-state") {
+        await restoreCurrentState();
+      } else if (action === "update-current-layout" || action === "overwrite-current-lens") {
+        await overwriteCurrentLens();
       } else if (action.startsWith("layout:")) {
-        await applyLayout(action.replace("layout:", ""));
+        await openLens(action.replace("layout:", ""));
+      } else if (action.startsWith("lens:")) {
+        await openLens(action.replace("lens:", ""));
       } else if (action.startsWith("workspace:")) {
-        await switchWorkspace(action.replace("workspace:", ""));
+        await openWorkspace(action.replace("workspace:", ""));
       } else if (action === "stop") {
         stopCarrot();
       }
@@ -2297,6 +2739,8 @@ self.onmessage = async (event) => {
   }
 
   try {
+    setActiveWindow(typeof message.windowId === "string" ? message.windowId : undefined);
+
     if (typeof message.method === "string" && message.method.startsWith("send:")) {
       await handleColabSend(message.method.slice(5), message.params);
       post({ type: "response", requestId: message.requestId, success: true, payload: null });
@@ -2352,7 +2796,7 @@ self.onmessage = async (event) => {
       case "openCloudPanel":
         ensureMainTab("cloud");
         ensureSideTab("cloud");
-        state.activeTreeNodeId = `layout-overview:${state.currentLayoutId}`;
+        state.activeTreeNodeId = `lens-overview:${state.currentLayoutId}`;
         await saveState();
         emitSnapshot();
         post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
@@ -2366,24 +2810,28 @@ self.onmessage = async (event) => {
         post({ type: "response", requestId: message.requestId, success: true, payload: next });
         break;
       }
+      case "openLens":
       case "applyLayout":
-        await applyLayout(String(message.params?.layoutId || state.currentLayoutId));
+        await openLens(String(message.params?.lensId || message.params?.layoutId || state.currentLayoutId));
         post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
         break;
       case "switchWorkspace":
-        await switchWorkspace(String(message.params?.workspaceId || getCurrentWorkspace().key));
+        await openWorkspace(String(message.params?.workspaceId || getCurrentWorkspace().key));
         post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
         break;
       case "selectLayoutWindow":
-        await selectLayoutWindow(String(message.params?.windowId || state.currentWindowId));
+      case "selectWindow":
+        await selectWindow(String(message.params?.windowId || state.currentWindowId));
         post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
         break;
+      case "restoreCurrentState":
       case "resumeLastState":
-        await resumeLastState();
+        await restoreCurrentState();
         post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
         break;
+      case "overwriteCurrentLens":
       case "updateCurrentLayout":
-        await updateCurrentLayout();
+        await overwriteCurrentLens();
         post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
         break;
       case "createWorkspace": {
@@ -2406,8 +2854,9 @@ self.onmessage = async (event) => {
         post({ type: "response", requestId: message.requestId, success: true, payload: created });
         break;
       }
+      case "saveLens":
       case "saveLayout": {
-        const created = await saveLayout(
+        const created = await saveLens(
           String(message.params?.name || ""),
           String(message.params?.description || ""),
         );

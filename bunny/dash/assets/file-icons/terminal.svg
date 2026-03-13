@@ -1,0 +1,8 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Terminal background -->
+  <path d="M2 16.2V7.8C2 6.51984 2 5.87976 2.25192 5.39608C2.47392 4.96678 2.84678 4.59392 3.27608 4.37192C3.75976 4.12 4.39984 4.12 5.68 4.12H18.32C19.6002 4.12 20.2402 4.12 20.7239 4.37192C21.1532 4.59392 21.5261 4.96678 21.7481 5.39608C22 5.87976 22 6.51984 22 7.8V16.2C22 17.4802 22 18.1202 21.7481 18.6039C21.5261 19.0332 21.1532 19.4061 20.7239 19.6281C20.2402 19.88 19.6002 19.88 18.32 19.88H5.68C4.39984 19.88 3.75976 19.88 3.27608 19.6281C2.84678 19.4061 2.47392 19.0332 2.25192 18.6039C2 18.1202 2 17.4802 2 16.2Z" fill="#000000" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Terminal prompt arrow -->
+  <path d="M6.5 9.5L10 12L6.5 14.5" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Terminal cursor line -->
+  <path d="M17.5 14.5H12.5" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

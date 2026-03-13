@@ -3,7 +3,7 @@ import DB, { type SchemaToDocumentTypes } from "../../../goldfishdb/src/node/ind
 export type WindowTabId =
   | "workspace"
   | "projects"
-  | "layout"
+  | "lens"
   | "instances"
   | "cloud"
   | "browser"
@@ -11,9 +11,9 @@ export type WindowTabId =
   | "agent"
   | "windows"
   | "notes"
-  | "session";
+  | "current-state";
 
-export type LayoutWindow = {
+export type LensWindow = {
   id: string;
   title: string;
   workspaceId: string;
@@ -34,7 +34,7 @@ const {
   string,
 } = DB.v1.schemaType;
 
-const layoutWindowSchema = object(
+const lensWindowSchema = object(
   {
     id: string({ required: true, internal: false }),
     title: string({ required: true, internal: false }),
@@ -71,15 +71,17 @@ export const dashSchema1 = schema({
       key: string({ required: true, internal: false }),
       name: string({ required: true, internal: false }),
       description: string({ required: true, internal: false }),
+      workspaceId: string({ required: false, internal: false }),
+      windowStateJson: string({ required: false, internal: false }),
       sortOrder: number({ required: true, internal: false }),
-      windows: array(layoutWindowSchema, { required: true, internal: false }),
+      windows: array(lensWindowSchema, { required: true, internal: false }),
     }),
     sessionSnapshots: collection({
       key: string({ required: true, internal: false }),
       updatedAt: number({ required: true, internal: false }),
       currentLayoutId: string({ required: true, internal: false }),
       currentWindowId: string({ required: true, internal: false }),
-      windows: array(layoutWindowSchema, { required: true, internal: false }),
+      windows: array(lensWindowSchema, { required: true, internal: false }),
     }),
     uiSettings: collection({
       key: string({ required: true, internal: false }),
@@ -127,25 +129,50 @@ export const seededProjectMounts: Array<{
   status: string;
 }> = [];
 
-export const seededLayouts: Array<{
+export const seededLenses: Array<{
   key: string;
   name: string;
   description: string;
-  windows: LayoutWindow[];
+  workspaceId: string;
+  windowStateJson: string;
+  windows: LensWindow[];
 }> = [
   {
-    key: "current-session",
-    name: "Current Session",
-    description: "Local Bunny Dash window layout.",
+    key: "starter-lens",
+    name: "Starter Lens",
+    description: "Default Bunny Dash lens for local work.",
+    workspaceId: "local-workspace",
+    windowStateJson: JSON.stringify({
+      id: "main",
+      ui: {
+        showSidebar: true,
+        sidebarWidth: 250,
+      },
+      position: {
+        x: 0,
+        y: 0,
+        width: 1500,
+        height: 900,
+      },
+      expansions: [],
+      rootPane: {
+        id: "root",
+        type: "pane",
+        tabIds: [],
+        currentTabId: null,
+      },
+      tabs: {},
+      currentPaneId: "root",
+    }),
     windows: [
       {
         id: "main",
         title: "Main",
         workspaceId: "local-workspace",
         mainTabIds: ["workspace"],
-        sideTabIds: ["session"],
+        sideTabIds: ["current-state"],
         currentMainTabId: "workspace",
-        currentSideTabId: "session",
+        currentSideTabId: "current-state",
       },
     ],
   },
@@ -239,9 +266,9 @@ export function seedDashDb(db: DashDb) {
     });
   });
 
-  seededLayouts.forEach((layout, index) => {
+  seededLenses.forEach((lens, index) => {
     db.collection("layouts").insert({
-      ...layout,
+      ...lens,
       sortOrder: index,
     });
   });
@@ -249,17 +276,17 @@ export function seedDashDb(db: DashDb) {
   db.collection("sessionSnapshots").insert({
     key: "last",
     updatedAt: Date.now(),
-    currentLayoutId: seededLayouts[0]!.key,
-    currentWindowId: seededLayouts[0]!.windows[0]!.id,
-    windows: structuredClone(seededLayouts[0]!.windows),
+    currentLayoutId: seededLenses[0]!.key,
+    currentWindowId: seededLenses[0]!.windows[0]!.id,
+    windows: structuredClone(seededLenses[0]!.windows),
   });
 
   db.collection("uiSettings").insert({
     key: "primary",
     sidebarCollapsed: false,
     bunnyPopoverOpen: false,
-    currentLayoutId: seededLayouts[0]!.key,
-    currentWindowId: seededLayouts[0]!.windows[0]!.id,
-    activeTreeNodeId: `workspace-overview:${seededWorkspaces[0]!.key}`,
+    currentLayoutId: seededLenses[0]!.key,
+    currentWindowId: seededLenses[0]!.windows[0]!.id,
+    activeTreeNodeId: `lens-overview:${seededLenses[0]!.key}`,
   });
 }

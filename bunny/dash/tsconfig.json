@@ -6,9 +6,12 @@
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
     "allowJs": true,
-    "strict": true,
+    "strict": false,
     "noEmit": true,
-    "types": []
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "types": ["bun", "node"]
   },
-  "include": ["**/*.ts", "**/*.tsx"]
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["web/**/*", "workspace-lenses-overlay.*"]
 }

@@ -179,9 +179,9 @@ function seedDashTestDb(db: ReturnType<typeof createDashTestDb>) {
   });
 
   db.collection("layouts").insert({
-    key: "current-session",
-    name: "Current Session",
-    description: "Local Bunny Dash window layout.",
+    key: "starter-lens",
+    name: "Starter Lens",
+    description: "Default Bunny Dash lens for local work.",
     sortOrder: 0,
     windows: [
       {
@@ -189,9 +189,9 @@ function seedDashTestDb(db: ReturnType<typeof createDashTestDb>) {
         title: "Main",
         workspaceId: "local-workspace",
         mainTabIds: ["workspace"],
-        sideTabIds: ["session"],
+        sideTabIds: ["current-state"],
         currentMainTabId: "workspace",
-        currentSideTabId: "session",
+        currentSideTabId: "current-state",
       },
     ],
   });
@@ -199,7 +199,7 @@ function seedDashTestDb(db: ReturnType<typeof createDashTestDb>) {
   db.collection("sessionSnapshots").insert({
     key: "last",
     updatedAt: Date.now(),
-    currentLayoutId: "current-session",
+    currentLayoutId: "starter-lens",
     currentWindowId: "main",
     windows: [
       {
@@ -207,9 +207,9 @@ function seedDashTestDb(db: ReturnType<typeof createDashTestDb>) {
         title: "Main",
         workspaceId: "local-workspace",
         mainTabIds: ["workspace"],
-        sideTabIds: ["session"],
+        sideTabIds: ["current-state"],
         currentMainTabId: "workspace",
-        currentSideTabId: "session",
+        currentSideTabId: "current-state",
       },
     ],
   });
@@ -218,9 +218,9 @@ function seedDashTestDb(db: ReturnType<typeof createDashTestDb>) {
     key: "primary",
     sidebarCollapsed: false,
     bunnyPopoverOpen: false,
-    currentLayoutId: "current-session",
+    currentLayoutId: "starter-lens",
     currentWindowId: "main",
-    activeTreeNodeId: "workspace-overview:local-workspace",
+    activeTreeNodeId: "lens-overview:starter-lens",
   });
 
   (db as any).trySave?.();
@@ -586,7 +586,7 @@ describe("Bunny Ears carrots", () => {
 
     const carrot = await startBuiltCarrot(built);
     const initialTray = await carrot.nextAction("set-tray");
-    expect(initialTray.payload).toEqual({ title: "Dash: Current Session" });
+    expect(initialTray.payload).toEqual({ title: "Dash: Starter Lens" });
     const initialTrayMenu = await carrot.nextAction("set-tray-menu");
     expect(Array.isArray(initialTrayMenu.payload)).toBe(true);
 
@@ -608,10 +608,10 @@ describe("Bunny Ears carrots", () => {
       shellTitle: string;
       cloudLabel: string;
       commandHint: string;
-      currentLayout: { id: string; name: string };
+      currentLens: { id: string; name: string };
       currentWorkspace: { id: string; name: string };
       currentWindow: { id: string; title: string; currentMainTabId: string; currentSideTabId: string };
-      layoutWindows: Array<{ id: string; title: string; workspaceName: string }>;
+      openWindows: Array<{ id: string; title: string; workspaceName: string }>;
       workspaces: Array<{ id: string; name: string }>;
       topActions: Array<{ id: string; label: string }>;
       state: {
@@ -623,13 +623,13 @@ describe("Bunny Ears carrots", () => {
     };
     expect(initial.shellTitle).toBe("Bunny Dash");
     expect(initial.cloudLabel).toBe("Bunny Cloud");
-    expect(initial.currentLayout.name).toBe("Current Session");
+    expect(initial.currentLens.name).toBe("Starter Lens");
     expect(initial.currentWorkspace.name).toBe("Local Workspace");
-    expect(initial.layoutWindows.length).toBe(1);
+    expect(initial.openWindows.length).toBe(1);
     expect(initial.workspaces.length).toBe(1);
     expect(initial.topActions.map((action) => action.label)).toEqual([
       "Command Palette",
-      "Resume Last State",
+      "Resume Current State",
       "Pop Out Bunny",
       "Bunny Cloud",
     ]);
@@ -654,14 +654,14 @@ describe("Bunny Ears carrots", () => {
     const cloud = (await carrot.request("openCloudPanel")) as typeof initial;
     expect(cloud.currentWindow.currentMainTabId).toBe("cloud");
     expect(cloud.currentWindow.currentSideTabId).toBe("cloud");
-    expect(cloud.state.activeTreeNodeId).toBe(`layout-overview:${cloud.currentLayout.id}`);
+    expect(cloud.state.activeTreeNodeId).toBe(`lens-overview:${cloud.currentLens.id}`);
 
     const sidebar = (await carrot.request("toggleSidebar")) as typeof initial;
     expect(sidebar.state.sidebarCollapsed).toBe(true);
     expect(existsSync(carrot.statePath)).toBe(true);
   });
 
-  test("Bunny Dash uses GoldfishDB to create workspaces, attach projects, and save layouts", async () => {
+  test("Bunny Dash uses GoldfishDB to create workspaces, attach projects, and save lenses", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-goldfish-build-");
     const carrot = await startBuiltCarrot(built);
     const projectDir = makeTempDir("bunny-dash-project-");
@@ -719,28 +719,46 @@ describe("Bunny Ears carrots", () => {
     expect(cloud.currentWindow.currentMainTabId).toBe("cloud");
     expect(cloud.currentWindow.currentSideTabId).toBe("cloud");
 
-    const savedLayout = (await carrot.request("saveLayout", {
+    const savedLens = (await carrot.request("saveLens", {
       name: "Acme Sprint",
       description: "Saved from the Acme workspace.",
     })) as {
-      currentLayout: { id: string; name: string };
-      layouts: Array<{ id: string; name: string }>;
+      currentLens: { id: string; name: string };
+      lenses: Array<{ id: string; name: string }>;
     };
-    expect(savedLayout.currentLayout.name).toBe("Acme Sprint");
-    expect(savedLayout.layouts.some((layout) => layout.name === "Acme Sprint")).toBe(true);
+    expect(savedLens.currentLens.name).toBe("Acme Sprint");
+    expect(savedLens.lenses.some((lens) => lens.name === "Acme Sprint")).toBe(true);
 
-    await carrot.request("applyLayout", { layoutId: "current-session" });
-    const restored = (await carrot.request("applyLayout", {
-      layoutId: savedLayout.currentLayout.id,
+    const openStarterLens = carrot.request("activateLens", { lensId: "starter-lens" });
+    const openStarterWindow = await carrot.nextAction(
+      "focus-window",
+      (message) =>
+        typeof (message.payload as { windowId?: string } | undefined)?.windowId === "string" &&
+        (message.payload as { windowId?: string } | undefined)?.windowId !== "main",
+    );
+    const restored = (await openStarterLens) as {
+      currentLens: { id: string; name: string };
+      currentWorkspace: { id: string; name: string };
+      currentWindow: { id: string; currentMainTabId: string; currentSideTabId: string };
+      openWindows: Array<{ id: string; workspaceName: string }>;
+    };
+    expect(openStarterWindow.action).toBe("focus-window");
+    expect((openStarterWindow.payload as { windowId?: string }).windowId).not.toBe("main");
+    expect(restored.currentLens.name).toBe("Starter Lens");
+    expect(restored.currentWorkspace.name).toBe("Local Workspace");
+    expect(restored.openWindows.length).toBe(2);
+
+    const reopenedSprint = (await carrot.request("activateLens", {
+      lensId: savedLens.currentLens.id,
     })) as {
-      currentLayout: { id: string; name: string };
+      currentLens: { id: string; name: string };
       currentWorkspace: { id: string; name: string };
       currentWindow: { currentMainTabId: string; currentSideTabId: string };
     };
-    expect(restored.currentLayout.name).toBe("Acme Sprint");
-    expect(restored.currentWorkspace.name).toBe("Acme Studio");
-    expect(restored.currentWindow.currentMainTabId).toBe("cloud");
-    expect(restored.currentWindow.currentSideTabId).toBe("cloud");
+    expect(reopenedSprint.currentLens.name).toBe("Acme Sprint");
+    expect(reopenedSprint.currentWorkspace.name).toBe("Acme Studio");
+    expect(reopenedSprint.currentWindow.currentMainTabId).toBe("cloud");
+    expect(reopenedSprint.currentWindow.currentSideTabId).toBe("cloud");
 
     const goldfishDbPath = join(dirname(carrot.statePath), "goldfishdb", "goldfish.db");
     expect(existsSync(goldfishDbPath)).toBe(true);
@@ -776,7 +794,7 @@ describe("Bunny Ears carrots", () => {
     expect(killed).toBe(true);
   });
 
-  test("Bunny Dash normalizes the old fake current-session tabs from persisted GoldfishDB state", async () => {
+  test("Bunny Dash migrates the old current-session seed into the starter lens and current state", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-migrate-build-");
     const carrot = await startBuiltCarrot(built, undefined, {
       setupRuntime({ runtimeDir }) {
@@ -787,7 +805,7 @@ describe("Bunny Ears carrots", () => {
         const layoutDoc = db
           .collection("layouts")
           .query({
-            where: (item: { key: string }) => item.key === "current-session",
+            where: (item: { key: string }) => item.key === "starter-lens",
             limit: 1,
           }).data?.[0];
         const snapshotDoc = db
@@ -811,13 +829,16 @@ describe("Bunny Ears carrots", () => {
           id: "main",
           title: "Main",
           workspaceId: "local-workspace",
-          mainTabIds: ["workspace", "projects", "layout", "instances", "cloud"],
-          sideTabIds: ["session", "windows", "notes", "cloud"],
-          currentMainTabId: "layout",
-          currentSideTabId: "session",
+          mainTabIds: ["workspace", "projects", "lens", "instances", "cloud"],
+          sideTabIds: ["current-state", "windows", "notes", "cloud"],
+          currentMainTabId: "lens",
+          currentSideTabId: "current-state",
         };
 
         db.collection("layouts").update(layoutDoc!.id, {
+          key: "current-session",
+          name: "Current Session",
+          description: "Local Bunny Dash window layout.",
           windows: [legacyWindow],
         });
         db.collection("sessionSnapshots").update(snapshotDoc!.id, {
@@ -828,7 +849,7 @@ describe("Bunny Ears carrots", () => {
         db.collection("uiSettings").update(uiDoc!.id, {
           currentLayoutId: "current-session",
           currentWindowId: "main",
-          activeTreeNodeId: "layout-overview:current-session",
+          activeTreeNodeId: "lens-overview:current-session",
         });
 
         (db as any).trySave?.();
@@ -839,23 +860,31 @@ describe("Bunny Ears carrots", () => {
     await carrot.nextAction("set-tray-menu");
 
     const initial = (await carrot.request("getSnapshot")) as {
+      currentLens: { id: string; name: string };
       currentWindow: { currentMainTabId: string; currentSideTabId: string };
       mainTabs: Array<{ id: string }>;
       sideTabs: Array<{ id: string }>;
       state: { activeTreeNodeId: string };
     };
 
+    expect(initial.currentLens.id).toBe("starter-lens");
+    expect(initial.currentLens.name).toBe("Starter Lens");
     expect(initial.currentWindow.currentMainTabId).toBe("workspace");
-    expect(initial.currentWindow.currentSideTabId).toBe("session");
+    expect(initial.currentWindow.currentSideTabId).toBe("current-state");
     expect(initial.mainTabs.map((tab) => tab.id)).toEqual(["workspace"]);
-    expect(initial.sideTabs.map((tab) => tab.id)).toEqual(["session"]);
-    expect(initial.state.activeTreeNodeId).toBe("workspace-overview:local-workspace");
+    expect(initial.sideTabs.map((tab) => tab.id)).toEqual(["current-state"]);
+    expect(initial.state.activeTreeNodeId).toBe("lens-overview:starter-lens");
 
     const persistedState = JSON.parse(readFileSync(carrot.statePath, "utf8")) as {
+      lens: { id: string; name: string };
       sessionSnapshot: { windows: Array<{ mainTabIds: string[]; sideTabIds: string[] }> };
+      currentState: { windows: Array<{ mainTabIds: string[]; sideTabIds: string[] }> };
     };
+    expect(persistedState.lens).toEqual({ id: "starter-lens", name: "Starter Lens" });
     expect(persistedState.sessionSnapshot.windows[0]?.mainTabIds).toEqual(["workspace"]);
-    expect(persistedState.sessionSnapshot.windows[0]?.sideTabIds).toEqual(["session"]);
+    expect(persistedState.sessionSnapshot.windows[0]?.sideTabIds).toEqual(["current-state"]);
+    expect(persistedState.currentState.windows[0]?.mainTabIds).toEqual(["workspace"]);
+    expect(persistedState.currentState.windows[0]?.sideTabIds).toEqual(["current-state"]);
   });
 
   test("Forrager emits tray and notification actions from its built worker", async () => {
