@@ -11,6 +11,9 @@ const rpc = Electroview.defineRPC<any>({
 const electrobun = new Electrobun.Electroview({ rpc });
 
 document.addEventListener("DOMContentLoaded", () => {
+  const isWindows = /win/i.test(navigator.platform);
+  document.body.classList.toggle("platform-windows", isWindows);
+
   // Custom window control buttons
   document.getElementById("closeBtn")?.addEventListener("click", () => {
     (electrobun.rpc as any)?.request.closeWindow({});
