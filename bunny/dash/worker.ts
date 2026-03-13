@@ -12,6 +12,7 @@ import {
   type FSWatcher,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { ApplicationMenu, BrowserWindow, Tray, Utils, app } from "electrobun/bun";
 import {
   createDashDb,
   type DashDb,
@@ -193,16 +194,10 @@ let permissions = new Set<string>();
 let dashDb: DashDb | null = null;
 let manifestVersion = "0.0.1";
 let runtimeWindows: LensWindow[] = [];
-let hostRequestId = 1;
 let terminalManager: TerminalManager | null = null;
+const browserWindows = new Map<string, BrowserWindow>();
+let tray: Tray | null = null;
 const terminalWindowOwners = new Map<string, string>();
-const pendingHostRequests = new Map<
-  number,
-  {
-    resolve: (payload: unknown) => void;
-    reject: (error: Error) => void;
-  }
->();
 const expandedFsDirs = new Set<string>();
 const directoryWatchers = new Map<string, FSWatcher>();
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -261,6 +256,80 @@ const defaultColabAppSettings: ColabAppSettings = {
   },
 };
 
+const builtInShortcuts: Array<{
+  accelerator: string;
+  key: string;
+  ctrl: boolean;
+  shift: boolean;
+  alt: boolean;
+  meta: boolean;
+}> = [
+  {
+    accelerator: "t",
+    key: "t",
+    ctrl: false,
+    shift: false,
+    alt: false,
+    meta: true,
+  },
+  {
+    accelerator: "p",
+    key: "p",
+    ctrl: false,
+    shift: false,
+    alt: false,
+    meta: true,
+  },
+  {
+    accelerator: "cmd+shift+p",
+    key: "p",
+    ctrl: false,
+    shift: true,
+    alt: false,
+    meta: true,
+  },
+  {
+    accelerator: "cmd+shift+f",
+    key: "f",
+    ctrl: false,
+    shift: true,
+    alt: false,
+    meta: true,
+  },
+  {
+    accelerator: "w",
+    key: "w",
+    ctrl: false,
+    shift: false,
+    alt: false,
+    meta: true,
+  },
+  {
+    accelerator: "cmd+shift+w",
+    key: "w",
+    ctrl: false,
+    shift: true,
+    alt: false,
+    meta: true,
+  },
+  {
+    accelerator: "ctrl+tab",
+    key: "Tab",
+    ctrl: true,
+    shift: false,
+    alt: false,
+    meta: false,
+  },
+  {
+    accelerator: "ctrl+shift+tab",
+    key: "Tab",
+    ctrl: true,
+    shift: true,
+    alt: false,
+    meta: false,
+  },
+];
+
 let colabState: PersistedColabState = {
   workspaces: {},
   appSettings: structuredClone(defaultColabAppSettings),
@@ -277,6 +346,8 @@ let state: DashState = {
   currentWindowId: "main",
   activeTreeNodeId: "lens-overview:starter-lens",
 };
+
+let bootPromise: Promise<void> | null = null;
 
 function cloneWindows(value: LensWindow[]) {
   return structuredClone(value);
@@ -303,34 +374,314 @@ function post(message: unknown) {
   self.postMessage(message);
 }
 
-function requestHost<T = unknown>(method: string, params?: unknown): Promise<T> {
-  const requestId = hostRequestId++;
+function getOrCreateBrowserWindow(windowId = state.currentWindowId, title?: string) {
+  const runtimeWindow = runtimeWindows.find((candidate) => candidate.id === windowId);
+  if (!runtimeWindow) {
+    throw new Error(`Unknown runtime window: ${windowId}`);
+  }
 
-  post({
-    type: "host-request",
-    requestId,
-    method,
-    params,
-  });
+  const existing = browserWindows.get(windowId);
+  if (existing) {
+    if (title && title !== existing.title) {
+      existing.setTitle(title);
+    }
+    return existing;
+  }
 
-  return new Promise<T>((resolve, reject) => {
-    pendingHostRequests.set(requestId, {
-      resolve: (payload) => resolve(payload as T),
-      reject,
-    });
+  const colabWindow = getColabWindowForRuntimeWindow(windowId);
+  const win = new BrowserWindow({
+    id: windowId,
+    title: title || runtimeWindow.title,
+    url: "views://ivde/index.html",
+    titleBarStyle: "hiddenInset",
+    frame: {
+      x: colabWindow?.position.x ?? 120,
+      y: colabWindow?.position.y ?? 120,
+      width: colabWindow?.position.width ?? 1400,
+      height: colabWindow?.position.height ?? 920,
+    },
   });
+  browserWindows.set(windowId, win);
+  return win;
 }
 
 function focusWindow(windowId?: string, title?: string) {
-  post({ type: "action", action: "focus-window", payload: { windowId, title } });
+  getOrCreateBrowserWindow(windowId, title).focus();
 }
 
 function closeWindow(windowId?: string) {
-  post({ type: "action", action: "close-window", payload: { windowId } });
+  const targetWindowId = windowId || state.currentWindowId;
+  const existing = browserWindows.get(targetWindowId);
+  if (!existing) {
+    return;
+  }
+  browserWindows.delete(targetWindowId);
+  existing.close();
 }
 
 function stopCarrot() {
-  post({ type: "action", action: "stop-carrot" });
+  app.quit();
+}
+
+function getMenuStartingFolder() {
+  return process.env.HOME || getDashHomeDir();
+}
+
+function openAboutWindow(url: string) {
+  const id = `about-${Date.now().toString(36)}`;
+  const win = new BrowserWindow({
+    id,
+    title: "About",
+    url,
+    frame: {
+      width: 800,
+      height: 800,
+      x: 120,
+      y: 120,
+    },
+  });
+  browserWindows.set(id, win);
+}
+
+function sendToFocusedDashWindow(name: string, payload?: unknown) {
+  emitViewMessage(name, payload, state.currentWindowId);
+}
+
+async function handleApplicationMenuAction(action: string) {
+  if (action === "terms-of-service") {
+    openAboutWindow("https://colab.dev/terms-of-service");
+    return;
+  }
+  if (action === "privacy-statement") {
+    openAboutWindow("https://colab.dev/privacy");
+    return;
+  }
+  if (action === "acknowledgements") {
+    openAboutWindow("views://assets/licenses.html");
+    return;
+  }
+  if (action === "open-file") {
+    const files = await Utils.openFileDialog({
+      startingFolder: getMenuStartingFolder(),
+      allowedFileTypes: "",
+      canChooseFiles: true,
+      canChooseDirectory: false,
+      allowsMultipleSelection: true,
+    });
+    for (const filePath of files) {
+      sendToFocusedDashWindow("openFileInEditor", {
+        filePath,
+        createIfNotExists: false,
+      });
+    }
+    return;
+  }
+  if (action === "open-folder") {
+    const folders = await Utils.openFileDialog({
+      startingFolder: getMenuStartingFolder(),
+      allowedFileTypes: "",
+      canChooseFiles: false,
+      canChooseDirectory: true,
+      allowsMultipleSelection: false,
+    });
+    for (const folderPath of folders) {
+      sendToFocusedDashWindow("openFolderAsProject", {
+        folderPath,
+      });
+    }
+    return;
+  }
+  if (action === "open-command-palette") {
+    sendToFocusedDashWindow("openCommandPalette", {});
+    return;
+  }
+  if (action === "new-browser-tab") {
+    sendToFocusedDashWindow("newBrowserTab", {});
+    return;
+  }
+  if (action === "close-tab") {
+    sendToFocusedDashWindow("closeCurrentTab", {});
+    return;
+  }
+  if (action === "close-window") {
+    sendToFocusedDashWindow("closeCurrentWindow", {});
+    return;
+  }
+  if (action === "plugin-marketplace") {
+    sendToFocusedDashWindow("openSettings", { settingsType: "plugin-marketplace" });
+    return;
+  }
+  if (action === "llama-settings") {
+    sendToFocusedDashWindow("openSettings", { settingsType: "llama-settings" });
+    return;
+  }
+  if (action === "colab-settings") {
+    sendToFocusedDashWindow("openSettings", { settingsType: "global-settings" });
+    return;
+  }
+  if (action === "workspace-settings") {
+    sendToFocusedDashWindow("openSettings", { settingsType: "workspace-settings" });
+    return;
+  }
+  if (action.startsWith("global-shortcut:")) {
+    const accelerator = action.replace("global-shortcut:", "");
+    const shortcut = builtInShortcuts.find((candidate) => candidate.accelerator === accelerator);
+    if (!shortcut) {
+      return;
+    }
+    sendToFocusedDashWindow("handleGlobalShortcut", {
+      key: shortcut.key,
+      ctrl: shortcut.ctrl,
+      shift: shortcut.shift,
+      alt: shortcut.alt,
+      meta: shortcut.meta,
+    });
+  }
+}
+
+function syncApplicationMenu() {
+  ApplicationMenu.setApplicationMenu([
+    {
+      label: "Bunny Dash",
+      submenu: [{ role: "quit", accelerator: "cmd+q" }],
+    },
+    {
+      label: "File",
+      submenu: [
+        {
+          type: "normal",
+          label: "Open File...",
+          action: "open-file",
+          accelerator: "cmd+o",
+        },
+        {
+          type: "normal",
+          label: "Open Folder...",
+          action: "open-folder",
+          accelerator: "cmd+shift+o",
+        },
+        { type: "separator" },
+        {
+          type: "normal",
+          label: "New Browser Tab",
+          action: "new-browser-tab",
+          accelerator: "cmd+t",
+        },
+        {
+          type: "normal",
+          label: "Close Tab",
+          action: "close-tab",
+          accelerator: "cmd+w",
+        },
+        {
+          type: "normal",
+          label: "Close Window",
+          action: "close-window",
+          accelerator: "cmd+shift+w",
+        },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        {
+          type: "normal",
+          label: "Next Tab",
+          action: "global-shortcut:ctrl+tab",
+          accelerator: "ctrl+tab",
+        },
+        {
+          type: "normal",
+          label: "Previous Tab",
+          action: "global-shortcut:ctrl+shift+tab",
+          accelerator: "ctrl+shift+tab",
+        },
+      ],
+    },
+    {
+      label: "Tools",
+      submenu: [
+        {
+          type: "normal",
+          label: "Command Palette",
+          action: "open-command-palette",
+          accelerator: "cmd+p",
+        },
+        {
+          type: "normal",
+          label: "Command Palette (Commands)",
+          action: "global-shortcut:cmd+shift+p",
+          accelerator: "cmd+shift+p",
+        },
+        {
+          type: "normal",
+          label: "Find in Files",
+          action: "global-shortcut:cmd+shift+f",
+          accelerator: "cmd+shift+f",
+        },
+      ],
+    },
+    {
+      label: "Settings",
+      submenu: [
+        {
+          type: "normal",
+          label: "Plugins",
+          action: "plugin-marketplace",
+        },
+        {
+          type: "normal",
+          label: "Llama Settings",
+          action: "llama-settings",
+        },
+        {
+          type: "normal",
+          label: "Bunny Dash Settings",
+          action: "colab-settings",
+        },
+        {
+          type: "normal",
+          label: "Workspace Settings",
+          action: "workspace-settings",
+        },
+      ],
+    },
+    {
+      role: "help",
+      label: "Help",
+      submenu: [
+        {
+          type: "normal",
+          label: "Terms of Service",
+          action: "terms-of-service",
+        },
+        {
+          type: "normal",
+          label: "Privacy Statement",
+          action: "privacy-statement",
+        },
+        {
+          type: "normal",
+          label: "Acknowledgements",
+          action: "acknowledgements",
+        },
+      ],
+    },
+  ]);
 }
 
 function ensureDb() {
@@ -339,6 +690,48 @@ function ensureDb() {
   }
   return dashDb;
 }
+
+function initializeRuntimeContext(message?: {
+  context?: { permissions?: string[]; statePath?: string };
+  manifest?: { version?: string };
+}) {
+  permissions = new Set(
+    message?.context?.permissions ||
+      ((app.permissions as string[] | undefined) ?? []),
+  );
+  statePath = message?.context?.statePath || app.statePath || statePath;
+  manifestVersion = message?.manifest?.version || app.manifest?.version || manifestVersion;
+}
+
+function ensureBootPromise() {
+  if (!bootPromise) {
+    bootPromise = (async () => {
+      await loadState();
+      ensureRuntimeState();
+      currentState = captureCurrentState();
+      syncApplicationMenu();
+      post({ type: "ready" });
+      syncTray();
+      emitSnapshot();
+      log("bunny dash worker initialized");
+    })();
+  }
+
+  return bootPromise;
+}
+
+initializeRuntimeContext();
+if (statePath) {
+  void ensureBootPromise();
+}
+
+ApplicationMenu.on("application-menu-clicked", (payload) => {
+  const action = String((payload as { action?: string } | undefined)?.action || "");
+  if (!action) {
+    return;
+  }
+  void handleApplicationMenuAction(action);
+});
 
 function flushDb() {
   const db = ensureDb() as any;
@@ -639,10 +1032,17 @@ function colabPeerDependencies() {
 }
 
 function emitViewMessage(name: string, payload?: unknown, windowId?: string) {
+  const targetWindowId = windowId || state.currentWindowId;
+  const existing = browserWindows.get(targetWindowId);
+  if (existing) {
+    existing.send(name, payload, { raw: true });
+    return;
+  }
+
   post({
     type: "action",
     action: "emit-view",
-    payload: { raw: true, name, payload, windowId },
+    payload: { raw: true, name, payload, windowId: targetWindowId },
   });
 }
 
@@ -1957,6 +2357,24 @@ async function openQuickAccess(tabId: "browser" | "terminal" | "agent") {
   return snapshot();
 }
 
+async function handleTrayAction(action: string) {
+  if (action === "open-window") {
+    focusWindow(state.currentWindowId, getCurrentWindow().title);
+  } else if (action === "resume-last-state" || action === "restore-current-state") {
+    await restoreCurrentState();
+  } else if (action === "update-current-layout" || action === "overwrite-current-lens") {
+    await overwriteCurrentLens();
+  } else if (action.startsWith("layout:")) {
+    await openLens(action.replace("layout:", ""));
+  } else if (action.startsWith("lens:")) {
+    await openLens(action.replace("lens:", ""));
+  } else if (action.startsWith("workspace:")) {
+    await openWorkspace(action.replace("workspace:", ""));
+  } else if (action === "stop") {
+    stopCarrot();
+  }
+}
+
 async function selectWindow(windowId: string) {
   if (!runtimeWindows.some((window) => window.id === windowId)) {
     return;
@@ -2023,37 +2441,41 @@ function syncTray() {
   const currentLens = getCurrentLens();
   const workspaces = listWorkspaces();
 
-  post({ type: "action", action: "set-tray", payload: { title: `Dash: ${currentLens.name}` } });
-  post({
-    type: "action",
-    action: "set-tray-menu",
-    payload: [
-      { type: "normal", label: "Open Bunny Dash", action: "open-window" },
-      { type: "normal", label: "Restore Current State", action: "restore-current-state" },
-      { type: "normal", label: "Overwrite Current Lens", action: "overwrite-current-lens" },
-      { type: "divider" },
-      {
+  if (!tray) {
+    tray = new Tray({ title: `Dash: ${currentLens.name}` });
+    tray.on("click", (payload) => {
+      void handleTrayAction(String((payload as { action?: string } | undefined)?.action || ""));
+    });
+  } else {
+    tray.setTitle(`Dash: ${currentLens.name}`);
+  }
+
+  tray.setMenu([
+    { type: "normal", label: "Open Bunny Dash", action: "open-window" },
+    { type: "normal", label: "Restore Current State", action: "restore-current-state" },
+    { type: "normal", label: "Overwrite Current Lens", action: "overwrite-current-lens" },
+    { type: "divider" },
+    {
+      type: "normal",
+      label: "Open Lens",
+      action: "noop-lens",
+      submenu: workspaces.map((workspace) => ({
         type: "normal",
-        label: "Open Lens",
-        action: "noop-lens",
-        submenu: workspaces.map((workspace) => ({
+        label: workspace.name,
+        action: `noop-workspace:${workspace.key}`,
+        submenu: getLensesForWorkspace(workspace.key).map((lens) => ({
           type: "normal",
-          label: workspace.name,
-          action: `noop-workspace:${workspace.key}`,
-          submenu: getLensesForWorkspace(workspace.key).map((lens) => ({
-            type: "normal",
-            label:
-              lens.key === state.currentLayoutId && workspace.key === getCurrentWorkspace().key
-                ? `• ${lens.name}`
-                : lens.name,
-            action: `lens:${lens.key}`,
-          })),
+          label:
+            lens.key === state.currentLayoutId && workspace.key === getCurrentWorkspace().key
+              ? `• ${lens.name}`
+              : lens.name,
+          action: `lens:${lens.key}`,
         })),
-      },
-      { type: "divider" },
-      { type: "normal", label: "Stop Bunny Dash", action: "stop" },
-    ],
-  });
+      })),
+    },
+    { type: "divider" },
+    { type: "normal", label: "Stop Bunny Dash", action: "stop" },
+  ]);
 }
 
 function getNodeForPath(path: string) {
@@ -2335,7 +2757,7 @@ async function handleColabRequest(method: string, params: any) {
       await writeCompatibilityState();
       return;
     case "openFileDialog":
-      return requestHost<string[]>("open-file-dialog", {
+      return Utils.openFileDialog({
         startingFolder: params?.startingFolder,
         allowedFileTypes: params?.allowedFileTypes,
         canChooseFiles: params?.canChooseFiles,
@@ -2401,7 +2823,7 @@ async function handleColabRequest(method: string, params: any) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     case "showInFinder":
-      await requestHost("show-item-in-folder", { path: String(params?.path || "") });
+      await Utils.showItemInFolder(String(params?.path || ""));
       return;
     case "copy":
       cpSync(String(params?.src || ""), String(params?.dest || ""), { recursive: true });
@@ -2525,13 +2947,9 @@ async function handleColabRequest(method: string, params: any) {
 async function handleColabSend(name: string, payload: any) {
   switch (name) {
     case "openBunnyWindow":
-      post({
-        type: "action",
-        action: "open-bunny-window",
-        payload: {
-          screenX: typeof payload?.screenX === "number" ? payload.screenX : undefined,
-          screenY: typeof payload?.screenY === "number" ? payload.screenY : undefined,
-        },
+      app.openBunnyWindow({
+        screenX: typeof payload?.screenX === "number" ? payload.screenX : undefined,
+        screenY: typeof payload?.screenY === "number" ? payload.screenY : undefined,
       });
       return;
     case "closeWindow":
@@ -2661,35 +3079,15 @@ process.on("exit", () => {
 self.onmessage = async (event) => {
   const message = event.data as any;
 
-  if (message.type === "host-response") {
-    const pending = pendingHostRequests.get(message.requestId);
-    if (!pending) {
-      return;
-    }
-    pendingHostRequests.delete(message.requestId);
-    if (message.success) {
-      pending.resolve(message.payload);
-    } else {
-      pending.reject(new Error(message.error || "Unknown host error"));
-    }
-    return;
-  }
-
   if (message.type === "init") {
-    permissions = new Set(message.context.permissions || []);
-    statePath = message.context.statePath;
-    manifestVersion = message.manifest?.version || manifestVersion;
-    await loadState();
-    ensureRuntimeState();
-    currentState = captureCurrentState();
-    post({ type: "ready" });
-    syncTray();
-    emitSnapshot();
-    log("bunny dash worker initialized");
+    initializeRuntimeContext(message);
+    await ensureBootPromise();
     return;
   }
 
   if (message.type === "event") {
+    await ensureBootPromise();
+
     if (message.name === "boot") {
       syncTray();
       emitSnapshot();
@@ -2705,31 +3103,13 @@ self.onmessage = async (event) => {
 
     if (message.name === "window-closed") {
       const closedWindowId = String(message.payload?.windowId || "");
+      browserWindows.delete(closedWindowId);
       terminalWindowOwners.forEach((ownerWindowId, terminalId) => {
         if (ownerWindowId === closedWindowId) {
           terminalWindowOwners.delete(terminalId);
         }
       });
       return;
-    }
-
-    if (message.name === "tray") {
-      const action = String(message.payload?.action || "");
-      if (action === "open-window") {
-        focusWindow(state.currentWindowId, getCurrentWindow().title);
-      } else if (action === "resume-last-state" || action === "restore-current-state") {
-        await restoreCurrentState();
-      } else if (action === "update-current-layout" || action === "overwrite-current-lens") {
-        await overwriteCurrentLens();
-      } else if (action.startsWith("layout:")) {
-        await openLens(action.replace("layout:", ""));
-      } else if (action.startsWith("lens:")) {
-        await openLens(action.replace("lens:", ""));
-      } else if (action.startsWith("workspace:")) {
-        await openWorkspace(action.replace("workspace:", ""));
-      } else if (action === "stop") {
-        stopCarrot();
-      }
     }
     return;
   }
@@ -2739,6 +3119,7 @@ self.onmessage = async (event) => {
   }
 
   try {
+    await ensureBootPromise();
     setActiveWindow(typeof message.windowId === "string" ? message.windowId : undefined);
 
     if (typeof message.method === "string" && message.method.startsWith("send:")) {

@@ -15,6 +15,7 @@ type BuildContext = {
   outDir: string;
   manifest: any;
   sdkViewModule: string;
+  sdkBunModule: string;
   defaultBuild: () => Promise<void>;
 };
 
@@ -71,6 +72,17 @@ function makeElectrobunViewAliasPlugin(sourceDir: string) {
     setup(build: any) {
       build.onResolve({ filter: /^electrobun\/view$/ }, () => ({
         path: adapterPath,
+      }));
+    },
+  };
+}
+
+function makeElectrobunBunAliasPlugin(sdkBunModule: string) {
+  return {
+    name: "bunny-dash-electrobun-bun-alias",
+    setup(build: any) {
+      build.onResolve({ filter: /^electrobun(?:\/bun)?$/ }, () => ({
+        path: sdkBunModule,
       }));
     },
   };
@@ -257,7 +269,7 @@ function buildPtyBinary(sourceDir: string, resolvedOutDir: string) {
   );
 }
 
-export async function buildCarrot({ sourceDir, outDir, manifest }: BuildContext) {
+export async function buildCarrot({ sourceDir, outDir, manifest, sdkBunModule }: BuildContext) {
   const resolvedOutDir = resolve(outDir);
   const workerEntry = existsSync(join(sourceDir, "worker.ts"))
     ? join(sourceDir, "worker.ts")
@@ -290,6 +302,7 @@ export async function buildCarrot({ sourceDir, outDir, manifest }: BuildContext)
     define: {
       "process.env.NODE_ENV": '"production"',
     },
+    plugins: [makeElectrobunBunAliasPlugin(sdkBunModule)],
     naming: {
       entry: "worker.js",
     },

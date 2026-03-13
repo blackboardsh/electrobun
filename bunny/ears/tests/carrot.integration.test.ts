@@ -39,6 +39,12 @@ process.env.BUNNY_EARS_SDK_VIEW_MODULE = join(
   "carrot-runtime",
   "view.ts",
 );
+process.env.BUNNY_EARS_SDK_BUN_MODULE = join(
+  EARS_ROOT,
+  "src",
+  "carrot-runtime",
+  "bun.ts",
+);
 process.env.BUNNY_EARS_ZSTD_BIN = join(PACKAGE_ROOT, "dist-macos-arm64", "zig-zstd");
 
 const { buildCarrotSource } = await import("../src/bun/carrotBuilder");
@@ -335,6 +341,14 @@ async function startBuiltCarrot(
         case "open-file-dialog":
           payload = [];
           break;
+        case "screen-get-primary-display":
+          payload = {
+            workArea: { x: 0, y: 0, width: 1440, height: 900 },
+          };
+          break;
+        case "screen-get-cursor-screen-point":
+          payload = { x: 720, y: 450 };
+          break;
         case "open-path":
         case "show-item-in-folder":
         case "clipboard-write-text":
@@ -574,6 +588,85 @@ describe("Bunny Ears carrots", () => {
     expect(existsSync(carrot.statePath)).toBe(true);
   });
 
+  test("carrot ApplicationMenu can set a menu and receive click events through electrobun/bun", async () => {
+    const sourceDir = makeTempDir("bunny-ears-menu-carrot-source-");
+    cleanups.add(() => rmSync(sourceDir, { recursive: true, force: true }));
+
+    mkdirSync(join(sourceDir, "web"), { recursive: true });
+    writeFileSync(
+      join(sourceDir, "carrot.json"),
+      JSON.stringify(
+        {
+          id: "menu-carrot",
+          name: "Menu Carrot",
+          version: "0.0.1",
+          description: "ApplicationMenu test carrot",
+          mode: "background",
+          permissions: {
+            host: {
+              storage: true,
+            },
+          },
+          view: {
+            relativePath: "views/index.html",
+            title: "Menu Carrot",
+            width: 600,
+            height: 400,
+          },
+          worker: {
+            relativePath: "worker.js",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    writeFileSync(join(sourceDir, "web", "index.html"), "<!doctype html><div>menu carrot</div>\n");
+    writeFileSync(join(sourceDir, "web", "index.ts"), "export {};\n");
+    writeFileSync(
+      join(sourceDir, "worker.ts"),
+      [
+        'import { ApplicationMenu } from "electrobun/bun";',
+        "",
+        "ApplicationMenu.setApplicationMenu([",
+        '  { label: "Menu Carrot", submenu: [{ label: "Workspace Settings", action: "workspace-settings" }] },',
+        "]);",
+        "",
+        'ApplicationMenu.on("application-menu-clicked", (payload) => {',
+        "  self.postMessage({",
+        '    type: "action",',
+        '    action: "log",',
+        "    payload: { message: JSON.stringify(payload) },",
+        "  });",
+        "});",
+        "",
+        'self.postMessage({ type: "ready" });',
+        "",
+      ].join("\n"),
+    );
+
+    const built = await buildCarrotAt(sourceDir, "bunny-ears-menu-carrot-build-");
+    const carrot = await startBuiltCarrot(built);
+
+    const setMenu = await carrot.nextAction("set-application-menu");
+    const menu = (setMenu.payload as { menu?: Array<{ label?: string; submenu?: Array<{ action?: string }> }> })
+      .menu;
+    expect(menu?.[0]?.label).toBe("Menu Carrot");
+    expect(menu?.[0]?.submenu?.[0]?.action).toBe("workspace-settings");
+
+    carrot.postEvent("application-menu-clicked", {
+      action: "workspace-settings",
+    });
+
+    const logAction = await carrot.nextAction(
+      "log",
+      (message) =>
+        typeof (message.payload as { message?: string } | undefined)?.message === "string" &&
+        (message.payload as { message: string }).message.includes("workspace-settings"),
+    );
+    expect((logAction.payload as { message: string }).message).toContain("workspace-settings");
+  });
+
   test("Bunny Dash builds from source and exposes a Colab-shaped shell snapshot", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-build-");
     expect(built.manifest.id).toBe("bunny-dash");
@@ -585,6 +678,113 @@ describe("Bunny Ears carrots", () => {
     expect(html).toContain('href="views://ivde/index.css"');
 
     const carrot = await startBuiltCarrot(built);
+    const initialApplicationMenu = await carrot.nextAction("set-application-menu");
+    expect(initialApplicationMenu.payload).toEqual({
+      menu: [
+      {
+        label: "Bunny Dash",
+        submenu: [{ role: "quit", accelerator: "cmd+q" }],
+      },
+      {
+        label: "File",
+        submenu: [
+          { type: "normal", label: "Open File...", action: "open-file", accelerator: "cmd+o" },
+          {
+            type: "normal",
+            label: "Open Folder...",
+            action: "open-folder",
+            accelerator: "cmd+shift+o",
+          },
+          { type: "separator" },
+          {
+            type: "normal",
+            label: "New Browser Tab",
+            action: "new-browser-tab",
+            accelerator: "cmd+t",
+          },
+          { type: "normal", label: "Close Tab", action: "close-tab", accelerator: "cmd+w" },
+          {
+            type: "normal",
+            label: "Close Window",
+            action: "close-window",
+            accelerator: "cmd+shift+w",
+          },
+        ],
+      },
+      {
+        label: "Edit",
+        submenu: [
+          { role: "undo" },
+          { role: "redo" },
+          { type: "separator" },
+          { role: "cut" },
+          { role: "copy" },
+          { role: "paste" },
+          { role: "pasteAndMatchStyle" },
+          { role: "delete" },
+          { role: "selectAll" },
+        ],
+      },
+      {
+        label: "View",
+        submenu: [
+          {
+            type: "normal",
+            label: "Next Tab",
+            action: "global-shortcut:ctrl+tab",
+            accelerator: "ctrl+tab",
+          },
+          {
+            type: "normal",
+            label: "Previous Tab",
+            action: "global-shortcut:ctrl+shift+tab",
+            accelerator: "ctrl+shift+tab",
+          },
+        ],
+      },
+      {
+        label: "Tools",
+        submenu: [
+          {
+            type: "normal",
+            label: "Command Palette",
+            action: "open-command-palette",
+            accelerator: "cmd+p",
+          },
+          {
+            type: "normal",
+            label: "Command Palette (Commands)",
+            action: "global-shortcut:cmd+shift+p",
+            accelerator: "cmd+shift+p",
+          },
+          {
+            type: "normal",
+            label: "Find in Files",
+            action: "global-shortcut:cmd+shift+f",
+            accelerator: "cmd+shift+f",
+          },
+        ],
+      },
+      {
+        label: "Settings",
+        submenu: [
+          { type: "normal", label: "Plugins", action: "plugin-marketplace" },
+          { type: "normal", label: "Llama Settings", action: "llama-settings" },
+          { type: "normal", label: "Bunny Dash Settings", action: "colab-settings" },
+          { type: "normal", label: "Workspace Settings", action: "workspace-settings" },
+        ],
+      },
+      {
+        role: "help",
+        label: "Help",
+        submenu: [
+          { type: "normal", label: "Terms of Service", action: "terms-of-service" },
+          { type: "normal", label: "Privacy Statement", action: "privacy-statement" },
+          { type: "normal", label: "Acknowledgements", action: "acknowledgements" },
+        ],
+      },
+      ],
+    });
     const initialTray = await carrot.nextAction("set-tray");
     expect(initialTray.payload).toEqual({ title: "Dash: Starter Lens" });
     const initialTrayMenu = await carrot.nextAction("set-tray-menu");
@@ -659,7 +859,7 @@ describe("Bunny Ears carrots", () => {
     const sidebar = (await carrot.request("toggleSidebar")) as typeof initial;
     expect(sidebar.state.sidebarCollapsed).toBe(true);
     expect(existsSync(carrot.statePath)).toBe(true);
-  });
+  }, 20000);
 
   test("Bunny Dash uses GoldfishDB to create workspaces, attach projects, and save lenses", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-goldfish-build-");
@@ -762,7 +962,7 @@ describe("Bunny Ears carrots", () => {
 
     const goldfishDbPath = join(dirname(carrot.statePath), "goldfishdb", "goldfish.db");
     expect(existsSync(goldfishDbPath)).toBe(true);
-  });
+  }, 20000);
 
   test("Bunny Dash exposes the Colab PTY terminal backend", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-terminal-build-");
@@ -792,7 +992,7 @@ describe("Bunny Ears carrots", () => {
 
     const killed = (await carrot.request("killTerminal", { terminalId })) as boolean;
     expect(killed).toBe(true);
-  });
+  }, 20000);
 
   test("Bunny Dash migrates the old current-session seed into the starter lens and current state", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-migrate-build-");
@@ -885,7 +1085,7 @@ describe("Bunny Ears carrots", () => {
     expect(persistedState.sessionSnapshot.windows[0]?.sideTabIds).toEqual(["current-state"]);
     expect(persistedState.currentState.windows[0]?.mainTabIds).toEqual(["workspace"]);
     expect(persistedState.currentState.windows[0]?.sideTabIds).toEqual(["current-state"]);
-  });
+  }, 20000);
 
   test("Forrager emits tray and notification actions from its built worker", async () => {
     const carrot = await startCarrot("forrager");

@@ -1,4 +1,5 @@
 import {
+  ApplicationMenu,
   BrowserView,
   BrowserWindow,
   Screen,
@@ -128,6 +129,7 @@ class CarrotInstance {
   status: CarrotStatus = "stopped";
   logs: string[] = [];
   tray: Tray | null = null;
+  applicationMenu: any[] | null = null;
   controllerWindows = new Map<string, BrowserWindow>();
   controllerWindow: BrowserWindow | null = null;
   bunnyWindow: BrowserWindow | null = null;
@@ -181,6 +183,18 @@ class CarrotInstance {
       lastBuildError: this.carrot.install.lastBuildError ?? null,
       logTail: this.logs.slice(-4),
     };
+  }
+
+  activateApplicationMenu() {
+    (runtime as any).activateCarrotApplicationMenu(this);
+  }
+
+  restoreApplicationMenuIfActive() {
+    (runtime as any).restoreApplicationMenuIfOwner(this);
+  }
+
+  sendApplicationMenuClicked(payload: unknown) {
+    this.sendEvent("application-menu-clicked", payload);
   }
 
   private syncPrimaryControllerWindow() {
@@ -266,18 +280,6 @@ class CarrotInstance {
       });
     }
 
-    bootLog("posting carrot init", { id: this.carrot.manifest.id });
-    this.worker.postMessage({
-      type: "init",
-      manifest: this.carrot.manifest,
-      context: {
-        statePath: this.statePath,
-        logsPath: this.logsPath,
-        permissions: flattenCarrotPermissions(this.carrot.install.permissionsGranted),
-        grantedPermissions: this.carrot.install.permissionsGranted,
-      },
-    } satisfies CarrotWorkerMessage);
-
     this.status = "running";
     bootLog("carrot running", { id: this.carrot.manifest.id });
     runtime.notifyDashboardChanged();
@@ -313,6 +315,7 @@ class CarrotInstance {
     }
 
     this.closeBunnyWindow();
+    this.restoreApplicationMenuIfActive();
 
     this.pushLog("carrot stopped");
     runtime.notifyDashboardChanged();
@@ -397,7 +400,20 @@ class CarrotInstance {
 
   private createControllerWindow(
     windowId = "main",
-    options?: { hidden?: boolean; title?: string },
+    options?: {
+      hidden?: boolean;
+      title?: string;
+      url?: string | null;
+      frame?: {
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+      };
+      titleBarStyle?: "hidden" | "hiddenInset" | "default";
+      transparent?: boolean;
+      passthrough?: boolean;
+    },
   ) {
     const existing = this.controllerWindows.get(windowId);
     if (existing) {
@@ -429,21 +445,27 @@ class CarrotInstance {
       options?.hidden ??
       (this.carrot.manifest.mode === "background" ||
         this.carrot.manifest.view.hidden === true);
+    const frame = {
+      width: options?.frame?.width ?? this.carrot.manifest.view.width,
+      height: options?.frame?.height ?? this.carrot.manifest.view.height,
+      x: options?.frame?.x ?? 120,
+      y: options?.frame?.y ?? 120,
+    };
+    const url =
+      typeof options?.url === "string" && options.url.length > 0
+        ? options.url
+        : this.carrot.viewUrl;
 
     const win = new BrowserWindow({
       title: options?.title || this.carrot.manifest.view.title,
-      url: this.carrot.viewUrl,
+      url,
       viewsRoot: this.carrot.currentDir,
       rpc,
-      titleBarStyle: this.carrot.manifest.view.titleBarStyle ?? "default",
-      transparent: this.carrot.manifest.view.transparent ?? false,
+      titleBarStyle: options?.titleBarStyle ?? this.carrot.manifest.view.titleBarStyle ?? "default",
+      transparent: options?.transparent ?? this.carrot.manifest.view.transparent ?? false,
+      passthrough: options?.passthrough ?? false,
       hidden,
-      frame: {
-        width: this.carrot.manifest.view.width,
-        height: this.carrot.manifest.view.height,
-        x: 120,
-        y: 120,
-      },
+      frame,
     });
 
     this.setControllerWindow(windowId, win);
@@ -466,11 +488,13 @@ class CarrotInstance {
     });
 
     win.on("focus", () => {
+      this.activateApplicationMenu();
       this.sendEvent("window-focus", { windowId });
     });
 
     win.on("close", () => {
       this.removeControllerWindow(windowId, win);
+      this.restoreApplicationMenuIfActive();
       this.sendEvent("window-closed", { windowId });
       if (this.status === "running" && this.carrot.manifest.mode === "window") {
         if (this.controllerWindows.size === 0) {
@@ -554,6 +578,12 @@ class CarrotInstance {
         Utils.clipboardWriteText(String((params as { text?: string } | undefined)?.text || ""));
         return true;
       }
+      case "screen-get-primary-display": {
+        return Screen.getPrimaryDisplay();
+      }
+      case "screen-get-cursor-screen-point": {
+        return Screen.getCursorScreenPoint();
+      }
       default:
         throw new Error(`Unknown host request: ${method}`);
     }
@@ -594,6 +624,97 @@ class CarrotInstance {
           return;
         }
         this.tray.setMenu(payload as any);
+        break;
+      }
+      case "window-create": {
+        const createPayload =
+          payload && typeof payload === "object"
+            ? (payload as {
+                windowId?: string;
+                options?: {
+                  hidden?: boolean;
+                  title?: string;
+                  url?: string | null;
+                  frame?: {
+                    x?: number;
+                    y?: number;
+                    width?: number;
+                    height?: number;
+                  };
+                  titleBarStyle?: "hidden" | "hiddenInset" | "default";
+                  transparent?: boolean;
+                  passthrough?: boolean;
+                };
+              })
+            : {};
+        const windowId = createPayload.windowId || this.getPrimaryControllerWindowId();
+        this.createControllerWindow(windowId, createPayload.options);
+        break;
+      }
+      case "window-set-title": {
+        const titlePayload =
+          payload && typeof payload === "object"
+            ? (payload as { windowId?: string; title?: string })
+            : {};
+        const win = this.controllerWindows.get(titlePayload.windowId || this.getPrimaryControllerWindowId());
+        if (win && typeof titlePayload.title === "string") {
+          win.setTitle(titlePayload.title);
+        }
+        break;
+      }
+      case "window-set-frame": {
+        const framePayload =
+          payload && typeof payload === "object"
+            ? (payload as {
+                windowId?: string;
+                frame?: {
+                  x?: number;
+                  y?: number;
+                  width?: number;
+                  height?: number;
+                };
+              })
+            : {};
+        const win = this.controllerWindows.get(framePayload.windowId || this.getPrimaryControllerWindowId());
+        const frame = framePayload.frame;
+        if (win && frame) {
+          const nextFrame = {
+            x: frame.x ?? win.frame.x,
+            y: frame.y ?? win.frame.y,
+            width: frame.width ?? win.frame.width,
+            height: frame.height ?? win.frame.height,
+          };
+          win.setFrame(nextFrame.x, nextFrame.y, nextFrame.width, nextFrame.height);
+        }
+        break;
+      }
+      case "window-set-always-on-top": {
+        const alwaysOnTopPayload =
+          payload && typeof payload === "object"
+            ? (payload as { windowId?: string; alwaysOnTop?: boolean })
+            : {};
+        const win = this.controllerWindows.get(
+          alwaysOnTopPayload.windowId || this.getPrimaryControllerWindowId(),
+        );
+        if (win) {
+          win.setAlwaysOnTop(Boolean(alwaysOnTopPayload.alwaysOnTop));
+        }
+        break;
+      }
+      case "set-application-menu": {
+        const menuPayload =
+          payload && typeof payload === "object"
+            ? (payload as { menu?: any[] })
+            : {};
+        this.applicationMenu = Array.isArray(menuPayload.menu) ? menuPayload.menu : null;
+        if ((runtime as any).activeApplicationMenuOwnerId === this.carrot.manifest.id) {
+          this.activateApplicationMenu();
+        }
+        break;
+      }
+      case "clear-application-menu": {
+        this.applicationMenu = null;
+        this.restoreApplicationMenuIfActive();
         break;
       }
       case "focus-window": {
@@ -769,6 +890,7 @@ class BunnyEarsRuntime {
   tray: Tray;
   managerWindow: BrowserWindow | null = null;
   carrots = new Map<string, CarrotInstance>();
+  activeApplicationMenuOwnerId: string | null = null;
   pendingConsent: {
     request: CarrotPermissionConsentRequest;
     prepared: PreparedCarrotInstall;
@@ -789,6 +911,34 @@ class BunnyEarsRuntime {
       if (!action) return;
       void this.handleTrayAction(action);
     });
+
+    ApplicationMenu.on("application-menu-clicked", (event: any) => {
+      const action = event?.data?.action;
+      if (!this.activeApplicationMenuOwnerId) {
+        if (action === "open-manager") {
+          this.openManagerWindow();
+        }
+        return;
+      }
+
+      if (action === "open-manager") {
+        this.openManagerWindow();
+        return;
+      }
+
+      if (action === "quit") {
+        process.exit(0);
+        return;
+      }
+
+      const carrot = this.carrots.get(this.activeApplicationMenuOwnerId);
+      if (!carrot) {
+        return;
+      }
+      carrot.sendApplicationMenuClicked(event?.data ?? event);
+    });
+
+    this.restoreDefaultApplicationMenu();
   }
 
   async boot() {
@@ -827,6 +977,66 @@ class BunnyEarsRuntime {
   notifyDashboardChanged() {
     this.tray.setMenu(this.buildTrayMenu());
     (this.managerWindow?.webview.rpc as any)?.send?.dashboardChanged(this.dashboardState());
+  }
+
+  private defaultApplicationMenu() {
+    return [
+      {
+        label: "Bunny Ears",
+        submenu: [{ role: "quit", accelerator: "cmd+q" }],
+      },
+      {
+        label: "File",
+        submenu: [
+          {
+            type: "normal" as const,
+            label: "Open Bunny Ears",
+            action: "open-manager",
+          },
+        ],
+      },
+    ];
+  }
+
+  private installApplicationMenu(menu: any[]) {
+    ApplicationMenu.setApplicationMenu(menu);
+  }
+
+  private restoreDefaultApplicationMenu() {
+    this.activeApplicationMenuOwnerId = null;
+    this.installApplicationMenu(this.defaultApplicationMenu());
+  }
+
+  activateCarrotApplicationMenu(carrot: CarrotInstance) {
+    if (Array.isArray(carrot.applicationMenu) && carrot.applicationMenu.length > 0) {
+      this.activeApplicationMenuOwnerId = carrot.carrot.manifest.id;
+      this.installApplicationMenu(carrot.applicationMenu);
+      return;
+    }
+
+    this.restoreDefaultApplicationMenu();
+  }
+
+  restoreApplicationMenuIfOwner(carrot: CarrotInstance) {
+    if (this.activeApplicationMenuOwnerId !== carrot.carrot.manifest.id) {
+      return;
+    }
+
+    const nextOwner = Array.from(this.carrots.values()).find(
+      (candidate) =>
+        candidate !== carrot &&
+        candidate.status === "running" &&
+        candidate.controllerWindows.size > 0 &&
+        Array.isArray(candidate.applicationMenu) &&
+        candidate.applicationMenu.length > 0,
+    );
+
+    if (nextOwner) {
+      this.activateCarrotApplicationMenu(nextOwner);
+      return;
+    }
+
+    this.restoreDefaultApplicationMenu();
   }
 
   private buildTrayMenu() {
@@ -1232,6 +1442,9 @@ class BunnyEarsRuntime {
     win.webview.on("dom-ready", () => {
       bootLog("manager dom-ready");
       (win.webview.rpc as any)?.send?.dashboardChanged(this.dashboardState());
+    });
+    win.on("focus", () => {
+      this.restoreDefaultApplicationMenu();
     });
     win.on("close", () => {
       this.clearPendingConsent();

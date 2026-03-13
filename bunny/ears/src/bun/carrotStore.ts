@@ -21,7 +21,7 @@ import type {
   CarrotPermissionGrant,
   CarrotRegistry,
 } from "../carrot-runtime/types";
-import { normalizeCarrotPermissions } from "../carrot-runtime/types";
+import { flattenCarrotPermissions, normalizeCarrotPermissions } from "../carrot-runtime/types";
 
 const INSTALLED_CARROTS_ROOT =
   process.env.BUNNY_EARS_CARROT_ROOT || join(Utils.paths.userData, "carrots");
@@ -36,6 +36,7 @@ export type InstalledCarrot = {
   stateDir: string;
   extractionDir: string;
   installPath: string;
+  bundleWorkerPath: string;
   workerPath: string;
   viewPath: string;
   viewUrl: string;
@@ -170,6 +171,43 @@ function toViewsUrl(relativePath: string) {
   return `views://${relativePath.replace(/^\/+/, "")}`;
 }
 
+function writeWorkerBootstrap(
+  currentDir: string,
+  manifest: CarrotManifest,
+  install: CarrotInstallRecord,
+  bundleWorkerPath: string,
+  stateDir: string,
+) {
+  const bootstrapDir = join(currentDir, ".bunny");
+  const bootstrapPath = join(bootstrapDir, "carrot-bun-entrypoint.mjs");
+  const workerRelativePath = bundleWorkerPath
+    .slice(currentDir.length + 1)
+    .replaceAll(sep, "/");
+  const workerImportPath = workerRelativePath.startsWith(".")
+    ? workerRelativePath
+    : `../${workerRelativePath}`;
+
+  mkdirSync(bootstrapDir, { recursive: true });
+  writeFileSync(
+    bootstrapPath,
+    [
+      `globalThis.__bunnyCarrotBootstrap = ${JSON.stringify({
+        manifest,
+        context: {
+          statePath: join(stateDir, "state.json"),
+          logsPath: join(stateDir, "logs.txt"),
+          permissions: flattenCarrotPermissions(install.permissionsGranted),
+          grantedPermissions: install.permissionsGranted,
+        },
+      })};`,
+      `await import(${JSON.stringify(workerImportPath)});`,
+      "",
+    ].join("\n"),
+  );
+
+  return bootstrapPath;
+}
+
 function assertPreparedCarrotPayload(sourceDir: string) {
   const manifestPath = join(sourceDir, "carrot.json");
   if (!existsSync(manifestPath)) {
@@ -223,20 +261,28 @@ function loadInstalledCarrot(record: CarrotInstallRecord): InstalledCarrot | nul
   }
 
   const manifest = readManifestAt(manifestPath);
-  const workerPath = resolveInside(paths.currentDir, manifest.worker.relativePath);
+  const bundleWorkerPath = resolveInside(paths.currentDir, manifest.worker.relativePath);
   const viewPath = resolveInside(paths.currentDir, manifest.view.relativePath);
 
-  if (!existsSync(workerPath) || !existsSync(viewPath)) {
+  if (!existsSync(bundleWorkerPath) || !existsSync(viewPath)) {
     return null;
   }
 
   mkdirSync(paths.stateDir, { recursive: true });
   mkdirSync(paths.extractionDir, { recursive: true });
+  const workerPath = writeWorkerBootstrap(
+    paths.currentDir,
+    manifest,
+    record,
+    bundleWorkerPath,
+    paths.stateDir,
+  );
 
   return {
     install: record,
     manifest,
     ...paths,
+    bundleWorkerPath,
     workerPath,
     viewPath,
     viewUrl: toViewsUrl(manifest.view.relativePath),

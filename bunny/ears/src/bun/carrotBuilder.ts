@@ -21,11 +21,22 @@ function getSdkViewModule() {
   return join(appRoot, "views", "carrot-sdk-view", "view.js");
 }
 
+function getSdkBunModule() {
+  const override = process.env.BUNNY_EARS_SDK_BUN_MODULE;
+  if (override) {
+    return isAbsolute(override) ? override : resolve(override);
+  }
+
+  const appRoot = resolve("../Resources/app");
+  return join(appRoot, "carrot-runtime", "bun.ts");
+}
+
 type CustomBuildContext = {
   sourceDir: string;
   outDir: string;
   manifest: CarrotManifest;
   sdkViewModule: string;
+  sdkBunModule: string;
   defaultBuild: () => Promise<void>;
 };
 
@@ -76,6 +87,17 @@ function sdkAliasPlugin() {
   };
 }
 
+function bunRuntimeAliasPlugin() {
+  return {
+    name: "bunny-ears-bun-runtime-alias",
+    setup(build: any) {
+      build.onResolve({ filter: /^electrobun(?:\/bun)?$/ }, () => ({
+        path: getSdkBunModule(),
+      }));
+    },
+  };
+}
+
 async function runDefaultBuild(sourceDir: string, outDir: string, manifest: CarrotManifest) {
   const webDir = join(sourceDir, "web");
   const viewEntry = join(webDir, "index.ts");
@@ -88,9 +110,14 @@ async function runDefaultBuild(sourceDir: string, outDir: string, manifest: Carr
   const viewsOutDir = join(outDir, "views");
 
   const sdkViewModule = getSdkViewModule();
+  const sdkBunModule = getSdkBunModule();
 
   if (!existsSync(sdkViewModule)) {
     throw new Error(`Missing Bunny Ears SDK bundle: ${sdkViewModule}`);
+  }
+
+  if (!existsSync(sdkBunModule)) {
+    throw new Error(`Missing Bunny Ears Bun runtime bundle: ${sdkBunModule}`);
   }
 
   if (!existsSync(viewEntry)) {
@@ -131,6 +158,7 @@ async function runDefaultBuild(sourceDir: string, outDir: string, manifest: Carr
     entrypoints: [workerEntry],
     outdir: outDir,
     target: "bun",
+    plugins: [bunRuntimeAliasPlugin()],
   });
   assertBuildSuccess(`${manifest.name} worker`, workerBuild);
 
@@ -180,6 +208,7 @@ async function runCustomBuild(sourceDir: string, outDir: string, manifest: Carro
     outDir,
     manifest,
     sdkViewModule: getSdkViewModule(),
+    sdkBunModule: getSdkBunModule(),
     defaultBuild: () => runDefaultBuild(sourceDir, outDir, manifest),
   });
 }

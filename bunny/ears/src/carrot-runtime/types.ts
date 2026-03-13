@@ -138,6 +138,12 @@ export type HostActionMessage = {
   type: "action";
   action:
     | "notify"
+    | "window-create"
+    | "window-set-title"
+    | "window-set-frame"
+    | "window-set-always-on-top"
+    | "set-application-menu"
+    | "clear-application-menu"
     | "set-tray"
     | "set-tray-menu"
     | "remove-tray"
@@ -158,7 +164,9 @@ export type HostRequestMessage = {
     | "open-file-dialog"
     | "open-path"
     | "show-item-in-folder"
-    | "clipboard-write-text";
+    | "clipboard-write-text"
+    | "screen-get-primary-display"
+    | "screen-get-cursor-screen-point";
   params?: unknown;
 };
 
