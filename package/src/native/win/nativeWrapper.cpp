@@ -4614,9 +4614,9 @@ static bool GetHiddenTitleBarTopResizeHitTest(HWND hwnd, WindowData* data, POINT
     }
 
     UINT dpi = GetDpiForWindow(hwnd);
-    int borderX = GetSystemMetricsForDpi(SM_CXFRAME, dpi)
+    int borderX = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
                 + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-    int borderY = GetSystemMetricsForDpi(SM_CYFRAME, dpi)
+    int borderY = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi)
                 + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
     borderX = (std::max)(borderX, MulDiv(12, dpi, 96));
     borderY = (std::max)(borderY, MulDiv(12, dpi, 96));
@@ -9116,9 +9116,8 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
         return;
     }
 
-    // Do not allow dragging when the window is maximized or minimized.
-    // A maximized window must first be restored before it can be moved.
-    if (IsZoomed(hwnd) || IsIconic(hwnd)) {
+    // A minimized window cannot enter the shell move loop directly.
+    if (IsIconic(hwnd)) {
         return;
     }
 
@@ -9128,12 +9127,72 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
         SetForegroundWindow(hwnd);
         ReleaseCapture();
 
+        POINT cursorPos = {};
+        bool hasCursorPos = GetCursorPos(&cursorPos);
+
+        if (IsZoomed(hwnd)) {
+            WINDOWPLACEMENT placement = {};
+            placement.length = sizeof(placement);
+            bool hasPlacement = GetWindowPlacement(hwnd, &placement) == TRUE;
+
+            RECT restoredRect = hasPlacement ? placement.rcNormalPosition : RECT{};
+            int restoredWidth = restoredRect.right - restoredRect.left;
+            int restoredHeight = restoredRect.bottom - restoredRect.top;
+
+            ShowWindow(hwnd, SW_RESTORE);
+
+            if (hasCursorPos && restoredWidth > 0 && restoredHeight > 0) {
+                RECT maximizedRect = {};
+                if (GetWindowRect(hwnd, &maximizedRect)) {
+                    int maximizedWidth =
+                        (std::max)(1, static_cast<int>(maximizedRect.right - maximizedRect.left));
+                    double cursorRatio =
+                        static_cast<double>(cursorPos.x - maximizedRect.left) /
+                        static_cast<double>(maximizedWidth);
+
+                    if (cursorRatio < 0.0) cursorRatio = 0.0;
+                    if (cursorRatio > 1.0) cursorRatio = 1.0;
+
+                    UINT dpi = GetDpiForWindow(hwnd);
+                    int titleBarOffset = MulDiv(10, dpi, 96);
+                    int restoredLeft =
+                        cursorPos.x - static_cast<int>(std::round(cursorRatio * restoredWidth));
+                    int restoredTop = cursorPos.y - titleBarOffset;
+
+                    HMONITOR monitor = MonitorFromPoint(cursorPos, MONITOR_DEFAULTTONEAREST);
+                    MONITORINFO monitorInfo = {};
+                    monitorInfo.cbSize = sizeof(monitorInfo);
+                    if (monitor && GetMonitorInfo(monitor, &monitorInfo)) {
+                        int minLeft = monitorInfo.rcWork.left;
+                        int maxLeft = monitorInfo.rcWork.right - restoredWidth;
+                        int minTop = monitorInfo.rcWork.top;
+                        int maxTop = monitorInfo.rcWork.bottom - restoredHeight;
+
+                        if (maxLeft < minLeft) maxLeft = minLeft;
+                        if (maxTop < minTop) maxTop = minTop;
+
+                        restoredLeft = (std::max)(minLeft, (std::min)(restoredLeft, maxLeft));
+                        restoredTop = (std::max)(minTop, (std::min)(restoredTop, maxTop));
+                    }
+
+                    SetWindowPos(
+                        hwnd,
+                        NULL,
+                        restoredLeft,
+                        restoredTop,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+                    );
+                }
+            }
+        }
+
         // WM_SYSCOMMAND/SC_MOVE is the standard programmatic move entry point.
         // Fall back to WM_NCLBUTTONDOWN for parity with existing behavior.
         SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, 0);
 
-        POINT cursorPos;
-        if (GetCursorPos(&cursorPos)) {
+        if (hasCursorPos) {
             SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(cursorPos.x, cursorPos.y));
         }
     });
