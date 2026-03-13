@@ -14,6 +14,8 @@
         }
 
         body {
+            display: flex;
+            flex-direction: column;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #fff;
@@ -21,6 +23,7 @@
 
         /* Custom titlebar - draggable region */
         .titlebar {
+            flex: 0 0 38px;
             height: 38px;
             background: rgba(0, 0, 0, 0.3);
             display: flex;
@@ -29,6 +32,7 @@
             padding: 0 12px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
             cursor: grab;
+            position: relative;
         }
 
         .titlebar:active {
@@ -90,6 +94,8 @@
 
         /* Content area */
         .content {
+            flex: 1 1 auto;
+            min-height: 0;
             padding: 20px;
             overflow-y: auto;
         }

@@ -4125,6 +4125,8 @@ void SetWebViewOnWebView2View(HWND containerWindow, void* webview) {
     }
 }
 
+static bool ShouldParentHandleHiddenTitleBarHitTest(HWND parentHwnd, POINT screenPt);
+
 // ContainerView class definition
 class ContainerView {
 private:
@@ -4156,6 +4158,17 @@ private:
     
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (msg) {
+            case WM_NCHITTEST: {
+                HWND parentHwnd = GetParent(m_hwnd);
+                if (parentHwnd) {
+                    POINT screenPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    if (ShouldParentHandleHiddenTitleBarHitTest(parentHwnd, screenPt)) {
+                        return HTTRANSPARENT;
+                    }
+                }
+                break;
+            }
+
             case WM_SIZE: {
                 // // Resize all full-size webviews when container resizes
                 // int width = LOWORD(lParam);
@@ -4579,7 +4592,6 @@ struct createNSWindowWithFrameAndStyleParams {
     const char *titleBarStyle;
 };
 
-// Define a struct to store window data
 typedef struct {
     uint32_t windowId;
     WindowCloseHandler closeHandler;
@@ -4590,6 +4602,52 @@ typedef struct {
     WindowKeyHandler keyHandler;
     bool isHiddenTitleBar; // titleBarStyle="hidden": extend client area over NC title bar region
 } WindowData;
+
+static bool GetHiddenTitleBarTopResizeHitTest(HWND hwnd, WindowData* data, POINT screenPt, LRESULT* hitResult) {
+    if (!hitResult || !data || !data->isHiddenTitleBar || IsZoomed(hwnd)) {
+        return false;
+    }
+
+    RECT windowRect;
+    if (!GetWindowRect(hwnd, &windowRect)) {
+        return false;
+    }
+
+    UINT dpi = GetDpiForWindow(hwnd);
+    int borderX = GetSystemMetricsForDpi(SM_CXFRAME, dpi)
+                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    int borderY = GetSystemMetricsForDpi(SM_CYFRAME, dpi)
+                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    borderX = (std::max)(borderX, MulDiv(12, dpi, 96));
+    borderY = (std::max)(borderY, MulDiv(12, dpi, 96));
+
+    if (screenPt.x < windowRect.left || screenPt.x >= windowRect.right) {
+        return false;
+    }
+
+    if (screenPt.y < windowRect.top || screenPt.y >= windowRect.top + borderY) {
+        return false;
+    }
+
+    if (screenPt.x < windowRect.left + borderX) {
+        *hitResult = HTTOPLEFT;
+        return true;
+    }
+
+    if (screenPt.x >= windowRect.right - borderX) {
+        *hitResult = HTTOPRIGHT;
+        return true;
+    }
+
+    *hitResult = HTTOP;
+    return true;
+}
+
+static bool ShouldParentHandleHiddenTitleBarHitTest(HWND parentHwnd, POINT screenPt) {
+    auto* parentData = reinterpret_cast<WindowData*>(GetWindowLongPtr(parentHwnd, GWLP_USERDATA));
+    LRESULT hitResult = HTNOWHERE;
+    return GetHiddenTitleBarTopResizeHitTest(parentHwnd, parentData, screenPt, &hitResult);
+}
 
 
 // Handle application menu item selection
@@ -4815,18 +4873,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     LRESULT hit = DefWindowProc(hwnd, msg, wParam, lParam);
                     if (hit == HTCLIENT) {
                         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                        RECT clientRect;
-                        GetClientRect(hwnd, &clientRect);
-                        POINT origin = { 0, 0 };
-                        ClientToScreen(hwnd, &origin);
-                        UINT dpi = GetDpiForWindow(hwnd);
-                        int borderY = GetSystemMetricsForDpi(SM_CYFRAME, dpi)
-                                    + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-                        // Convert screen cursor to client coords
-                        POINT clientPt = { pt.x - origin.x, pt.y - origin.y };
-                        if (clientPt.y >= 0 && clientPt.y <= borderY
-                            && clientPt.x >= 0 && clientPt.x <= clientRect.right) {
-                            return HTTOP;
+                        LRESULT topResizeHit = HTNOWHERE;
+                        if (GetHiddenTitleBarTopResizeHitTest(hwnd, data, pt, &topResizeHit)) {
+                            return topResizeHit;
                         }
                     }
                     return hit;
@@ -4854,10 +4903,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             break;
 
-        // Forward mouse and keyboard events to CEF OSR view if present
-        case WM_MOUSEMOVE:
         case WM_LBUTTONDOWN:
         case WM_LBUTTONUP:
+        case WM_MOUSEMOVE:
         case WM_RBUTTONDOWN:
         case WM_RBUTTONUP:
         case WM_MBUTTONDOWN:
@@ -9074,24 +9122,30 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
         return;
     }
 
-    // Use the native Windows drag mechanism: posting WM_NCLBUTTONDOWN with HTCAPTION
-    // hands the drag loop to the Windows Shell. This enables all standard shell
-    // behaviors including Aero Snap (edge/corner snap), Win11 Snap Layouts (hover
-    // maximize), and quarter-tiling. This is the same approach used by Tauri (tao)
-    // and Electron for custom-titlebar windows.
-    POINT cursorPos;
-    GetCursorPos(&cursorPos);
-    ReleaseCapture();
-    PostMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(cursorPos.x, cursorPos.y));
+    // Start shell-managed window move on the window thread so drag regions work
+    // consistently even when the click originated from an embedded child view.
+    MainThreadDispatcher::dispatch_sync([hwnd]() {
+        SetForegroundWindow(hwnd);
+        ReleaseCapture();
+
+        // WM_SYSCOMMAND/SC_MOVE is the standard programmatic move entry point.
+        // Fall back to WM_NCLBUTTONDOWN for parity with existing behavior.
+        SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, 0);
+
+        POINT cursorPos;
+        if (GetCursorPos(&cursorPos)) {
+            SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(cursorPos.x, cursorPos.y));
+        }
+    });
 }
 
-ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
+ELECTROBUN_EXPORT bool moveToTrash(char* pathString) {
     if (!pathString) {
-        ::log("ERROR: NULL path string passed to moveToTrash");
+        ::log("ERROR: NULL path passed to moveToTrash");
         return FALSE;
     }
-    
-    // Convert to wide string for Windows API
+
+    // Convert path to wide string
     int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, pathString, -1, NULL, 0);
     if (wideCharLen == 0) {
         ::log("ERROR: Failed to convert path to wide string");
