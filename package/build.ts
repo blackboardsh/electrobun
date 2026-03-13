@@ -1511,6 +1511,7 @@ async function vendorCEF() {
 					"cef",
 					"build",
 					"libcef_dll_wrapper",
+					"Release",
 					"libcef_dll_wrapper.lib",
 				),
 			)
@@ -1518,16 +1519,13 @@ async function vendorCEF() {
 			// Clean and create build directory
 			await $`cd vendors/cef && powershell -command "if (Test-Path build) { Remove-Item -Recurse -Force build }"`;
 			await $`cd vendors/cef && mkdir build`;
-			// Generate Ninja build files with sandbox disabled.
-			// Ninja works with VS Build Tools alone (no full VS IDE required),
-			// unlike the "Visual Studio 17 2022" generator which requires the IDE.
-			// Both cmake calls are wrapped in runMsvcCommand so vcvarsall.bat
-			// sets up the MSVC environment (compiler, linker, paths) for Ninja.
-			const cefSrcDir = join(process.cwd(), "vendors", "cef");
-			const cefBuildDir = join(process.cwd(), "vendors", "cef", "build");
-			await runMsvcCommand(`"${CMAKE_BIN}" -G "Ninja" -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release -S "${cefSrcDir}" -B "${cefBuildDir}"`);
+			// Generate Visual Studio project with sandbox disabled
+			await $`cd vendors/cef/build && "${CMAKE_BIN}" -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
 			// Build the wrapper library only
-			await runMsvcCommand(`"${CMAKE_BIN}" --build "${cefBuildDir}" --target libcef_dll_wrapper`);
+			// await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
+			// const msbuildPath = await $`"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe | head -n 1`.text();
+			// await $`cd vendors/cef/build && "${msbuildPath.trim()}" cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
+			await $`cd vendors/cef/build && "${CMAKE_BIN}" --build . --config Release --target libcef_dll_wrapper`;
 		}
 
 		// Build process_helper binary for Windows
@@ -1540,7 +1538,7 @@ async function vendorCEF() {
 
 			const cefInclude = `./vendors/cef`;
 			const cefLib = `./vendors/cef/Release/libcef.lib`;
-			const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/libcef_dll_wrapper.lib`;
+			const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
 
 			// Compile the Windows helper process
 			await runMsvcCommand(
@@ -1804,7 +1802,7 @@ async function buildNative() {
 		const webview2Lib = `./vendors/webview2/Microsoft.Web.WebView2/build/native/${webview2Arch}/WebView2LoaderStatic.lib`;
 		const cefInclude = `./vendors/cef`;
 		const cefLib = `./vendors/cef/Release/libcef.lib`;
-		const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/libcef_dll_wrapper.lib`;
+		const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
 
 		const wgpuIncludeDir = join(
 			process.cwd(),
@@ -1826,9 +1824,8 @@ async function buildNative() {
 
 		// Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
 		// Note: ASAR reading is now implemented directly in C++ (no external library needed)
-		const importLibPath = `src/native/win/build/libNativeWrapper-build-${Date.now()}.lib`;
 		await runMsvcCommand(
-			`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib comctl32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib /IMPLIB:${importLibPath} src/native/win/build/nativeWrapper.obj`,
+			`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib comctl32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`,
 		);
 	} else if (OS === "linux") {
 		// Skip package checks in CI or continue anyway if packages are missing
