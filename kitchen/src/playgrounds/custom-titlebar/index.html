@@ -23,19 +23,18 @@
 
         /* Custom titlebar - draggable region */
         .titlebar {
-            flex: 0 0 38px;
-            height: 38px;
+            flex: 0 0 42px;
+            height: 42px;
             background: rgba(0, 0, 0, 0.3);
             display: flex;
             align-items: center;
             justify-content: space-between;
             padding: 0 12px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            cursor: grab;
             position: relative;
         }
 
-        .titlebar:active {
+        body:not(.platform-windows) .titlebar:active {
             cursor: grabbing;
         }
 
