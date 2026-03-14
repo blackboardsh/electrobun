@@ -1611,6 +1611,157 @@ describe("Bunny Ears carrots", () => {
     expect(killed).toBe(true);
   }, 20000);
 
+  test("Bunny Search carrot builds from source and emits search results for client carrots", async () => {
+    const built = await buildCarrotAt(
+      resolve(EARS_ROOT, "..", "foundation-carrots", "search"),
+      "bunny-ears-search-build-",
+    );
+    expect(built.manifest.id).toBe("bunny.search");
+    expect(
+      existsSync(join(built.outDir, process.platform === "win32" ? "rg.exe" : "rg")),
+    ).toBe(true);
+
+    const carrot = await startBuiltCarrot(built);
+    const projectDir = makeTempDir("bunny-search-project-");
+    mkdirSync(join(projectDir, "src"), { recursive: true });
+    mkdirSync(join(projectDir, "packages", "demo", ".git"), { recursive: true });
+    writeFileSync(join(projectDir, "README.md"), "magic-needle in readme\n");
+    writeFileSync(join(projectDir, "src", "needle.ts"), "export const needleValue = 'magic-needle';\n");
+
+    const ownerSource = {
+      carrotId: "dash-client",
+      windowId: "main",
+    };
+
+    const findAllResponse = (await carrot.request("findAllInWorkspace", {
+      query: "magic-needle",
+      targets: [{ projectId: "project-1", path: projectDir }],
+      __source: ownerSource,
+    })) as Array<unknown>;
+    expect(findAllResponse).toEqual([]);
+
+    const findAllEvent = await carrot.nextAction(
+      "emit-carrot-event",
+      (message) =>
+        (message.payload as { carrotId?: string; name?: string; payload?: { projectId?: string } } | undefined)
+          ?.carrotId === "dash-client" &&
+        (message.payload as { name?: string } | undefined)?.name === "search-find-all-results" &&
+        (message.payload as { payload?: { projectId?: string } } | undefined)?.payload?.projectId === "project-1",
+    );
+    expect((findAllEvent.payload as { name?: string } | undefined)?.name).toBe(
+      "search-find-all-results",
+    );
+
+    const findFilesResponse = (await carrot.request("findFilesInWorkspace", {
+      query: "needle.ts",
+      targets: [{ projectId: "project-1", path: projectDir }],
+      __source: ownerSource,
+    })) as Array<unknown>;
+    expect(findFilesResponse).toEqual([]);
+
+    const findFilesEvent = await carrot.nextAction(
+      "emit-carrot-event",
+      (message) =>
+        (message.payload as { carrotId?: string; name?: string; payload?: { projectId?: string; results?: string[] } } | undefined)
+          ?.carrotId === "dash-client" &&
+        (message.payload as { name?: string } | undefined)?.name === "search-find-files-results" &&
+        (message.payload as { payload?: { projectId?: string } } | undefined)?.payload?.projectId === "project-1",
+    );
+    expect((findFilesEvent.payload as { name?: string } | undefined)?.name).toBe(
+      "search-find-files-results",
+    );
+    expect(
+      ((findFilesEvent.payload as { payload?: { results?: string[] } } | undefined)?.payload?.results || []).some(
+        (result) => result.endsWith("needle.ts"),
+      ),
+    ).toBe(true);
+
+    const nestedGitRepo = (await carrot.request("findFirstNestedGitRepo", {
+      searchPath: projectDir,
+      timeoutMs: 2_000,
+    })) as string | null;
+    expect(String(nestedGitRepo || "").replace(/[\\/]+$/, "")).toBe(
+      join(projectDir, "packages", "demo", ".git"),
+    );
+  }, 20000);
+
+  test("Bunny Dash uses bunny.search as its workspace search backend", async () => {
+    const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-search-build-");
+    const carrot = await startBuiltCarrot(built);
+    const projectDir = makeTempDir("bunny-dash-search-project-");
+    mkdirSync(join(projectDir, "src"), { recursive: true });
+    writeFileSync(join(projectDir, "README.md"), "dash-search-needle in readme\n");
+    writeFileSync(join(projectDir, "src", "needle.ts"), "export const dashSearchNeedle = true;\n");
+
+    await carrot.nextAction("set-tray");
+    await carrot.nextAction("set-tray-menu");
+
+    const createdWorkspace = (await carrot.request("createWorkspace", {
+      name: "Search Workspace",
+      subtitle: "Workspace search wiring test.",
+    })) as {
+      currentWorkspace: { id: string };
+    };
+
+    await carrot.request("addProjectMount", {
+      workspaceId: createdWorkspace.currentWorkspace.id,
+      name: "search-project",
+      path: projectDir,
+    });
+
+    const initialState = (await carrot.request("getInitialState")) as {
+      projects: Array<{ id: string; path: string }>;
+    };
+    const searchProject = initialState.projects.find((project) => project.path === projectDir);
+    expect(searchProject).toBeTruthy();
+
+    const findAllResponse = (await carrot.request("findAllInWorkspace", {
+      query: "dash-search-needle",
+    })) as Array<unknown>;
+    expect(findAllResponse).toEqual([]);
+
+    const findAllEvent = await carrot.nextAction(
+      "emit-view",
+      (message) =>
+        (message.payload as { name?: string; payload?: { query?: string; results?: Array<{ path?: string }> } } | undefined)
+          ?.name === "findAllInFolderResult" &&
+        (message.payload as { payload?: { query?: string } } | undefined)?.payload?.query ===
+          "dash-search-needle",
+    );
+    expect((findAllEvent.payload as { name?: string } | undefined)?.name).toBe(
+      "findAllInFolderResult",
+    );
+    expect((findAllEvent.payload as { raw?: boolean } | undefined)?.raw).toBe(false);
+    expect(
+      (findAllEvent.payload as { payload?: { projectId?: string } } | undefined)?.payload?.projectId,
+    ).toBe(searchProject?.id);
+
+    const findFilesResponse = (await carrot.request("findFilesInWorkspace", {
+      query: "needle.ts",
+    })) as Array<unknown>;
+    expect(findFilesResponse).toEqual([]);
+
+    const findFilesEvent = await carrot.nextAction(
+      "emit-view",
+      (message) =>
+        (message.payload as { name?: string; payload?: { query?: string; results?: string[] } } | undefined)
+          ?.name === "findFilesInWorkspaceResult" &&
+        (message.payload as { payload?: { query?: string } } | undefined)?.payload?.query === "needle.ts",
+    );
+    expect((findFilesEvent.payload as { name?: string } | undefined)?.name).toBe(
+      "findFilesInWorkspaceResult",
+    );
+    expect((findFilesEvent.payload as { raw?: boolean } | undefined)?.raw).toBe(false);
+    expect(
+      (findFilesEvent.payload as { payload?: { projectId?: string } } | undefined)?.payload?.projectId,
+    ).toBe(searchProject?.id);
+    expect(
+      ((findFilesEvent.payload as { payload?: { results?: string[] } } | undefined)?.payload?.results || []).some(
+        (result) => result.endsWith("needle.ts"),
+      ),
+    ).toBe(true);
+  }, 20000);
+
   test("Bunny PTY carrot kills orphaned terminals after the heartbeat timeout", async () => {
     const built = await buildCarrotAt(
       resolve(EARS_ROOT, "..", "foundation-carrots", "pty"),

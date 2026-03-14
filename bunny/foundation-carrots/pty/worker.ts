@@ -52,7 +52,7 @@ const DEFAULT_TERMINAL_HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TERMINAL_HEARTBEAT_SWEEP_MS = 30 * 1000;
 
 function parseDurationMs(
-  value: string | undefined,
+  value: unknown,
   fallback: number,
   minimum: number,
 ) {
@@ -178,12 +178,12 @@ function restartHeartbeatSweepTimer() {
 
 function initializeRuntimeContext(message?: WorkerRuntimeContext) {
   terminalHeartbeatTimeoutMs = parseDurationMs(
-    String(message?.context?.config?.ptyHeartbeatTimeoutMs ?? ""),
+    message?.context?.config?.ptyHeartbeatTimeoutMs,
     terminalHeartbeatTimeoutMs,
     1_000,
   );
   terminalHeartbeatSweepMs = parseDurationMs(
-    String(message?.context?.config?.ptyHeartbeatSweepMs ?? ""),
+    message?.context?.config?.ptyHeartbeatSweepMs,
     terminalHeartbeatSweepMs,
     250,
   );

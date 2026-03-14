@@ -234,6 +234,7 @@ let ptyHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 const LIVE_WINDOW_ID_SEPARATOR = "::";
 const WORKSPACE_CURRENT_LENS_PREFIX = "__workspace-current__:";
 const PTY_CARROT_ID = "bunny.pty";
+const SEARCH_CARROT_ID = "bunny.search";
 const DEFAULT_PTY_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 let ptyHeartbeatIntervalMs = DEFAULT_PTY_HEARTBEAT_INTERVAL_MS;
 const LEGACY_CURRENT_SESSION_MAIN_TABS: WindowTabId[] = [
@@ -434,7 +435,7 @@ function sleep(ms: number) {
   });
 }
 
-function parseDurationMs(value: string | undefined, fallback: number, minimum: number) {
+function parseDurationMs(value: unknown, fallback: number, minimum: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return fallback;
@@ -1036,11 +1037,8 @@ function initializeRuntimeContext(message?: {
   statePath = message?.context?.statePath || app.statePath || statePath;
   manifestVersion = message?.manifest?.version || app.manifest?.version || manifestVersion;
   ptyHeartbeatIntervalMs = parseDurationMs(
-    String(
-      message?.context?.config?.ptyHeartbeatIntervalMs ??
-        process.env.BUNNY_DASH_PTY_HEARTBEAT_INTERVAL_MS ??
-        "",
-    ),
+    message?.context?.config?.ptyHeartbeatIntervalMs ??
+      process.env.BUNNY_DASH_PTY_HEARTBEAT_INTERVAL_MS,
     ptyHeartbeatIntervalMs,
     1_000,
   );
@@ -1572,6 +1570,21 @@ async function invokePtyCarrot<T = unknown>(
   return Carrots.invoke<T>(PTY_CARROT_ID, method, params, options);
 }
 
+async function invokeSearchCarrot<T = unknown>(
+  method: string,
+  params?: unknown,
+  options?: { windowId?: string },
+) {
+  return Carrots.invoke<T>(SEARCH_CARROT_ID, method, params, options);
+}
+
+function buildSearchTargetsForWorkspace(workspaceId = getCurrentWorkspace().key) {
+  return getProjectMountsForWorkspace(workspaceId).map((project) => ({
+    projectId: project.key,
+    path: project.path,
+  }));
+}
+
 async function heartbeatPtyTerminals() {
   const terminalIds = Array.from(terminalWindowOwners.keys());
   if (terminalIds.length === 0) {
@@ -1595,6 +1608,63 @@ function ensurePtyHeartbeatLoop() {
   ptyHeartbeatTimer = setInterval(() => {
     void heartbeatPtyTerminals();
   }, ptyHeartbeatIntervalMs);
+}
+
+function handleSearchFindAllResults(payload: unknown) {
+  const eventPayload =
+    payload && typeof payload === "object"
+      ? (payload as {
+          query?: string;
+          projectId?: string;
+          results?: Array<{ path?: string; line?: number; column?: number; match?: string }>;
+          windowId?: string | null;
+        })
+      : {};
+
+  const targetWindowId =
+    typeof eventPayload.windowId === "string" ? eventPayload.windowId : state.currentWindowId;
+
+  sendRuntimeEventToDashWindow(
+    targetWindowId,
+    "findAllInFolderResult",
+    {
+      query: String(eventPayload.query || ""),
+      projectId: String(eventPayload.projectId || ""),
+      results: Array.isArray(eventPayload.results)
+        ? eventPayload.results.map((result) => ({
+            path: String(result?.path || ""),
+            line: Number(result?.line || 0),
+            column: Number(result?.column || 0),
+            match: String(result?.match || ""),
+          }))
+        : [],
+    },
+  );
+}
+
+function handleSearchFindFilesResults(payload: unknown) {
+  const eventPayload =
+    payload && typeof payload === "object"
+      ? (payload as {
+          query?: string;
+          projectId?: string;
+          results?: string[];
+          windowId?: string | null;
+        })
+      : {};
+
+  const targetWindowId =
+    typeof eventPayload.windowId === "string" ? eventPayload.windowId : state.currentWindowId;
+
+  sendRuntimeEventToDashWindow(
+    targetWindowId,
+    "findFilesInWorkspaceResult",
+    {
+      query: String(eventPayload.query || ""),
+      projectId: String(eventPayload.projectId || ""),
+      results: Array.isArray(eventPayload.results) ? eventPayload.results.map(String) : [],
+    },
+  );
 }
 
 app.on("pty-terminal-output", handlePtyTerminalOutput);
@@ -3397,116 +3467,6 @@ function readSlateConfig(path: string) {
   }
 }
 
-async function findFilesInWorkspace(query: string) {
-  const needle = query.trim().toLowerCase();
-  if (!needle) {
-    return [];
-  }
-
-  const matches: string[] = [];
-  const queue = getProjectMountsForWorkspace(getCurrentWorkspace().key).map((project) => project.path);
-
-  while (queue.length > 0 && matches.length < 200) {
-    const current = queue.shift()!;
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(current);
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      const fullPath = join(current, entry);
-      if (isIgnoredPath(fullPath)) {
-        continue;
-      }
-      let stat;
-      try {
-        stat = statSync(fullPath);
-      } catch {
-        continue;
-      }
-      if (stat.isDirectory()) {
-        queue.push(fullPath);
-      }
-      if (entry.toLowerCase().includes(needle)) {
-        matches.push(fullPath);
-      }
-      if (matches.length >= 200) {
-        break;
-      }
-    }
-  }
-
-  return matches;
-}
-
-async function findAllInWorkspace(query: string) {
-  const needle = query.trim();
-  if (!needle) {
-    return [];
-  }
-
-  const results: Array<{ path: string; line: number; column: number; match: string }> = [];
-  const queue = getProjectMountsForWorkspace(getCurrentWorkspace().key).map((project) => project.path);
-
-  while (queue.length > 0 && results.length < 200) {
-    const current = queue.shift()!;
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(current);
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      const fullPath = join(current, entry);
-      if (isIgnoredPath(fullPath)) {
-        continue;
-      }
-      let stat;
-      try {
-        stat = statSync(fullPath);
-      } catch {
-        continue;
-      }
-      if (stat.isDirectory()) {
-        queue.push(fullPath);
-        continue;
-      }
-
-      let contents = "";
-      try {
-        contents = readFileSync(fullPath, "utf8");
-      } catch {
-        continue;
-      }
-
-      const lines = contents.split("\n");
-      for (let index = 0; index < lines.length; index += 1) {
-        const column = lines[index]!.indexOf(needle);
-        if (column >= 0) {
-          results.push({
-            path: fullPath,
-            line: index + 1,
-            column: column + 1,
-            match: lines[index]!,
-          });
-        }
-        if (results.length >= 200) {
-          break;
-        }
-      }
-
-      if (results.length >= 200) {
-        break;
-      }
-    }
-  }
-
-  return results;
-}
-
 function buildWorkspaceLensSidebarData() {
   const currentWindow = getCurrentWindow();
   const currentLensId = getLensIdForWindow(currentWindow);
@@ -3767,12 +3727,38 @@ async function handleColabRequest(method: string, params: any) {
     case "activateLens":
       return activateLens(String(params?.lensId || state.currentLayoutId));
     case "findFilesInWorkspace":
-      return findFilesInWorkspace(String(params?.query || ""));
+      return invokeSearchCarrot<string[]>(
+        "findFilesInWorkspace",
+        {
+          query: String(params?.query || ""),
+          targets: buildSearchTargetsForWorkspace(),
+        },
+        { windowId: getCurrentWindow().id },
+      );
     case "findAllInWorkspace":
-      return findAllInWorkspace(String(params?.query || ""));
+      return invokeSearchCarrot<
+        Array<{ path: string; line: number; column: number; match: string }>
+      >(
+        "findAllInWorkspace",
+        {
+          query: String(params?.query || ""),
+          targets: buildSearchTargetsForWorkspace(),
+        },
+        { windowId: getCurrentWindow().id },
+      );
     case "cancelFileSearch":
+      return invokeSearchCarrot<boolean>("cancelFileSearch", {}, {
+        windowId: getCurrentWindow().id,
+      });
     case "cancelFindAll":
-      return true;
+      return invokeSearchCarrot<boolean>("cancelFindAll", {}, {
+        windowId: getCurrentWindow().id,
+      });
+    case "findFirstNestedGitRepo":
+      return invokeSearchCarrot<string | null>("findFirstNestedGitRepo", {
+        searchPath: String(params?.searchPath || ""),
+        timeoutMs: Number(params?.timeoutMs || 5_000),
+      });
     case "getUniqueNewName":
       return getUniqueNewName(String(params?.parentPath || ""), String(params?.baseName || "untitled"));
     case "getUniqueLensName":
@@ -3982,6 +3968,16 @@ self.onmessage = async (event) => {
 
   if (message.type === "event") {
     await ensureBootPromise();
+
+    if (message.name === "search-find-all-results") {
+      handleSearchFindAllResults(message.payload);
+      return;
+    }
+
+    if (message.name === "search-find-files-results") {
+      handleSearchFindFilesResults(message.payload);
+      return;
+    }
 
     if (message.name === "boot") {
       syncTray();
