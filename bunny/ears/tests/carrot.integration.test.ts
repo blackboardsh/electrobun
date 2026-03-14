@@ -728,12 +728,12 @@ describe("Bunny Ears carrots", () => {
   test("Bunny Dash builds from source and exposes a Colab-shaped shell snapshot", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-build-");
     expect(built.manifest.id).toBe("bunny-dash");
-    expect(existsSync(join(built.outDir, "ivde", "index.js"))).toBe(true);
-    expect(existsSync(join(built.outDir, "ivde", "index.css"))).toBe(true);
+    expect(existsSync(join(built.outDir, "lens", "index.js"))).toBe(true);
+    expect(existsSync(join(built.outDir, "lens", "index.css"))).toBe(true);
     expect(existsSync(join(built.outDir, "worker.js"))).toBe(true);
-    expect(built.manifest.view.relativePath).toBe("ivde/index.html");
-    const html = await Bun.file(join(built.outDir, "ivde", "index.html")).text();
-    expect(html).toContain('href="views://ivde/index.css"');
+    expect(built.manifest.view.relativePath).toBe("lens/index.html");
+    const html = await Bun.file(join(built.outDir, "lens", "index.html")).text();
+    expect(html).toContain('href="views://lens/index.css"');
 
     const carrot = await startBuiltCarrot(built);
     const initialApplicationMenu = await carrot.nextAction("set-application-menu");

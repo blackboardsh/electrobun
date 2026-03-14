@@ -88,13 +88,13 @@ function makeElectrobunBunAliasPlugin(sdkBunModule: string) {
   };
 }
 
-async function buildIvde(sourceDir: string, ivdeOutDir: string) {
+async function buildLens(sourceDir: string, lensOutDir: string) {
   const require = createRequire(import.meta.url);
   const esbuild = require("esbuild");
   const MonacoEsbuildPlugin = require("esbuild-monaco-editor-plugin");
   const { solidPlugin } = require("esbuild-plugin-solid");
 
-  const entry = join(sourceDir, "renderers", "ivde", "index.tsx");
+  const entry = join(sourceDir, "renderers", "lens", "index.tsx");
   const externalDeps = [
     "vscode",
     "typescript",
@@ -106,12 +106,12 @@ async function buildIvde(sourceDir: string, ivdeOutDir: string) {
   await esbuild.build({
     absWorkingDir: sourceDir,
     entryPoints: [entry],
-    outfile: join(ivdeOutDir, "index.js"),
+    outfile: join(lensOutDir, "index.js"),
     bundle: true,
     plugins: [
       makeElectrobunViewAliasPlugin(sourceDir),
       MonacoEsbuildPlugin({
-        destDir: ivdeOutDir,
+        destDir: lensOutDir,
         pathPrefix: "/",
         minify: false,
         languages: ["typescript", "javascript", "html", "css", "json", "markdown"],
@@ -149,7 +149,7 @@ async function buildBunny(sourceDir: string, bunnyOutDir: string) {
   });
 }
 
-function buildTailwind(sourceDir: string, ivdeOutDir: string) {
+function buildTailwind(sourceDir: string, lensOutDir: string) {
   const tailwindBinary = join(
     sourceDir,
     "node_modules",
@@ -165,13 +165,13 @@ function buildTailwind(sourceDir: string, ivdeOutDir: string) {
     tailwindBinary,
     [
       "--content",
-      join(sourceDir, "renderers", "ivde", "**", "*.tsx"),
+      join(sourceDir, "renderers", "lens", "**", "*.tsx"),
       "-c",
       join(sourceDir, "renderers", "tailwind.config.js"),
       "-i",
-      join(sourceDir, "renderers", "ivde", "index.css"),
+      join(sourceDir, "renderers", "lens", "index.css"),
       "-o",
-      join(ivdeOutDir, "tailwind.css"),
+      join(lensOutDir, "tailwind.css"),
     ],
     {
       cwd: sourceDir,
@@ -181,16 +181,16 @@ function buildTailwind(sourceDir: string, ivdeOutDir: string) {
 }
 
 function prepareHtmlAndAssets(sourceDir: string, resolvedOutDir: string) {
-  const ivdeOutDir = join(resolvedOutDir, "ivde");
+  const lensOutDir = join(resolvedOutDir, "lens");
   const bunnyOutDir = join(resolvedOutDir, "bunny");
   const assetsOutDir = join(resolvedOutDir, "assets");
 
-  mkdirSync(ivdeOutDir, { recursive: true });
+  mkdirSync(lensOutDir, { recursive: true });
   mkdirSync(bunnyOutDir, { recursive: true });
   mkdirSync(assetsOutDir, { recursive: true });
 
-  cpSync(join(sourceDir, "renderers", "ivde", "index.html"), join(ivdeOutDir, "index.html"));
-  cpSync(join(sourceDir, "renderers", "ivde", "styles"), join(ivdeOutDir, "styles"), {
+  cpSync(join(sourceDir, "renderers", "lens", "index.html"), join(lensOutDir, "index.html"));
+  cpSync(join(sourceDir, "renderers", "lens", "styles"), join(lensOutDir, "styles"), {
     recursive: true,
   });
   cpSync(join(sourceDir, "renderers", "bunny", "index.html"), join(bunnyOutDir, "index.html"));
@@ -203,31 +203,31 @@ function prepareHtmlAndAssets(sourceDir: string, resolvedOutDir: string) {
   });
   cpSync(
     join(sourceDir, "node_modules", "@xterm", "xterm", "css", "xterm.css"),
-    join(ivdeOutDir, "xterm.css"),
+    join(lensOutDir, "xterm.css"),
     {
       force: true,
     },
   );
   cpSync(
     join(sourceDir, "assets", "custom.editor.worker.js"),
-    join(ivdeOutDir, "custom.editor.worker.js"),
+    join(lensOutDir, "custom.editor.worker.js"),
     {
       force: true,
     },
   );
 
-  const ivdeHtmlPath = join(ivdeOutDir, "index.html");
-  const ivdeHtml = readFileSync(ivdeHtmlPath, "utf8");
-  const dashWindowCssHref = "views://ivde/bunny-dash-window.css";
-  let patchedIvdeHtml = ivdeHtml;
-  if (!patchedIvdeHtml.includes(dashWindowCssHref)) {
-    patchedIvdeHtml = patchedIvdeHtml.replace(
-      '<link rel="stylesheet" href="views://ivde/index.css" />',
-      '<link rel="stylesheet" href="views://ivde/index.css" />\n    <link rel="stylesheet" href="views://ivde/bunny-dash-window.css" />',
+  const lensHtmlPath = join(lensOutDir, "index.html");
+  const lensHtml = readFileSync(lensHtmlPath, "utf8");
+  const dashWindowCssHref = "views://lens/bunny-dash-window.css";
+  let patchedLensHtml = lensHtml;
+  if (!patchedLensHtml.includes(dashWindowCssHref)) {
+    patchedLensHtml = patchedLensHtml.replace(
+      '<link rel="stylesheet" href="views://lens/index.css" />',
+      '<link rel="stylesheet" href="views://lens/index.css" />\n    <link rel="stylesheet" href="views://lens/bunny-dash-window.css" />',
     );
   }
-  writeFileSync(ivdeHtmlPath, patchedIvdeHtml);
-  writeFileSync(join(ivdeOutDir, "bunny-dash-window.css"), makeDashWindowCss());
+  writeFileSync(lensHtmlPath, patchedLensHtml);
+  writeFileSync(join(lensOutDir, "bunny-dash-window.css"), makeDashWindowCss());
 }
 
 function buildPtyBinary(sourceDir: string, resolvedOutDir: string) {
@@ -282,8 +282,8 @@ export async function buildCarrot({ sourceDir, outDir, manifest, sdkBunModule }:
   process.chdir(sourceDir);
   try {
     prepareHtmlAndAssets(sourceDir, resolvedOutDir);
-    buildTailwind(sourceDir, join(resolvedOutDir, "ivde"));
-    await buildIvde(sourceDir, join(resolvedOutDir, "ivde"));
+    buildTailwind(sourceDir, join(resolvedOutDir, "lens"));
+    await buildLens(sourceDir, join(resolvedOutDir, "lens"));
     await buildBunny(sourceDir, join(resolvedOutDir, "bunny"));
     buildPtyBinary(sourceDir, resolvedOutDir);
   } finally {
@@ -316,7 +316,7 @@ export async function buildCarrot({ sourceDir, outDir, manifest, sdkBunModule }:
         ...manifest,
         view: {
           ...manifest.view,
-          relativePath: "ivde/index.html",
+          relativePath: "lens/index.html",
         },
         worker: {
           ...manifest.worker,

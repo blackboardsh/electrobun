@@ -442,7 +442,7 @@ function getOrCreateBrowserWindow(windowId = state.currentWindowId, title?: stri
   const win = new BrowserWindow({
     id: windowId,
     title: title || runtimeWindow.title,
-    url: "views://ivde/index.html",
+    url: "views://lens/index.html",
     titleBarStyle: "hiddenInset",
     frame: {
       x: colabWindow?.position.x ?? 120,
