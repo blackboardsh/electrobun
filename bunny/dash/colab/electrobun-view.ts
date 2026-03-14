@@ -27,6 +27,9 @@ function createCarrotClient() {
     handlers: {
       requests: {},
       messages: {
+        "*": (messageName: string, payload: unknown) => {
+          dispatch(String(messageName), payload);
+        },
         carrotBoot: (payload: typeof bootInfo) => {
           bootInfo = payload;
           dispatch("boot", payload);

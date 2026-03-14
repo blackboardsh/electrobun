@@ -528,6 +528,29 @@ export const Screen = {
   },
 };
 
+export const Carrots = {
+  async invoke<T = unknown>(
+    carrotId: string,
+    method: string,
+    params?: unknown,
+    options?: { windowId?: string },
+  ) {
+    return carrotRuntime.requestHost<T>("invoke-carrot", {
+      carrotId,
+      method,
+      params,
+      windowId: options?.windowId,
+    });
+  },
+  emit(carrotId: string, name: string, payload?: unknown) {
+    carrotRuntime.sendAction("emit-carrot-event", {
+      carrotId,
+      name,
+      payload,
+    });
+  },
+};
+
 export const ApplicationMenu = {
   setApplicationMenu(menu: CarrotApplicationMenuItem[]) {
     if (!Array.isArray(menu) || menu.length === 0) {
@@ -614,6 +637,7 @@ const Electrobun = {
   Tray,
   Utils,
   Screen,
+  Carrots,
   ApplicationMenu,
   ContextMenu,
   Updater,

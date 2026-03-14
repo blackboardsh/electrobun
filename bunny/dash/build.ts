@@ -10,6 +10,8 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
+const PTY_BINARY_NAME = process.platform === "win32" ? "pty.exe" : "pty";
+
 type BuildContext = {
   sourceDir: string;
   outDir: string;
@@ -255,16 +257,16 @@ function buildPtyBinary(sourceDir: string, resolvedOutDir: string) {
     "pty",
     "zig-out",
     "bin",
-    process.platform === "win32" ? "colab-pty.exe" : "colab-pty",
+    PTY_BINARY_NAME,
   );
 
   if (!existsSync(builtPtyBinary)) {
-    throw new Error(`Failed to build colab-pty at ${builtPtyBinary}`);
+    throw new Error(`Failed to build ${PTY_BINARY_NAME} at ${builtPtyBinary}`);
   }
 
   cpSync(
     builtPtyBinary,
-    join(resolvedOutDir, process.platform === "win32" ? "colab-pty.exe" : "colab-pty"),
+    join(resolvedOutDir, PTY_BINARY_NAME),
     { force: true },
   );
 }

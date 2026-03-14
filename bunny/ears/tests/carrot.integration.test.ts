@@ -1391,7 +1391,7 @@ describe("Bunny Ears carrots", () => {
 
   test("Bunny Dash exposes the Colab PTY terminal backend", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-terminal-build-");
-    expect(existsSync(join(built.outDir, process.platform === "win32" ? "colab-pty.exe" : "colab-pty"))).toBe(true);
+    expect(existsSync(join(built.outDir, process.platform === "win32" ? "pty.exe" : "pty"))).toBe(true);
 
     const carrot = await startBuiltCarrot(built);
     await carrot.nextAction("set-tray");
@@ -1411,6 +1411,45 @@ describe("Bunny Ears carrots", () => {
         (message.payload as { payload?: { terminalId?: string } } | undefined)?.payload?.terminalId === terminalId,
     );
     expect((output.payload as { name: string }).name).toBe("terminalOutput");
+
+    const cwd = (await carrot.request("getTerminalCwd", { terminalId })) as string | null;
+    expect(cwd).toBe(realpathSync(tmpdir()));
+
+    const killed = (await carrot.request("killTerminal", { terminalId })) as boolean;
+    expect(killed).toBe(true);
+  }, 20000);
+
+  test("Bunny PTY carrot builds from source and emits terminal events for client carrots", async () => {
+    const built = await buildCarrotAt(
+      resolve(EARS_ROOT, "..", "foundation-carrots", "pty"),
+      "bunny-ears-pty-build-",
+    );
+    expect(built.manifest.id).toBe("bunny.pty");
+    expect(
+      existsSync(join(built.outDir, process.platform === "win32" ? "pty.exe" : "pty")),
+    ).toBe(true);
+
+    const carrot = await startBuiltCarrot(built);
+
+    const terminalId = (await carrot.request("createTerminal", {
+      cwd: tmpdir(),
+      __source: {
+        carrotId: "dash-client",
+        windowId: "main",
+      },
+    })) as string;
+    expect(typeof terminalId).toBe("string");
+    expect(terminalId.length).toBeGreaterThan(0);
+
+    const output = await carrot.nextAction(
+      "emit-carrot-event",
+      (message) =>
+        (message.payload as { carrotId?: string; name?: string; payload?: { terminalId?: string } } | undefined)
+          ?.carrotId === "dash-client" &&
+        (message.payload as { name?: string } | undefined)?.name === "pty-terminal-output" &&
+        (message.payload as { payload?: { terminalId?: string } } | undefined)?.payload?.terminalId === terminalId,
+    );
+    expect((output.payload as { name: string }).name).toBe("pty-terminal-output");
 
     const cwd = (await carrot.request("getTerminalCwd", { terminalId })) as string | null;
     expect(cwd).toBe(realpathSync(tmpdir()));

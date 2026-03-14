@@ -20,6 +20,8 @@ export const TerminalSlate = ({ tabId }: { tabId: string }) => {
   let webglAddon: WebglAddon | null = null;
   let searchAddon: SearchAddon | null = null;
   let cwdUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
+  const pendingTerminalOutput: Array<{ terminalId: string; data: string }> = [];
+  const pendingTerminalExit: Array<{ terminalId: string; exitCode: number }> = [];
   const [showSearch, setShowSearch] = createSignal(false);
   const [searchQuery, setSearchQuery] = createSignal("");
 
@@ -59,32 +61,6 @@ export const TerminalSlate = ({ tabId }: { tabId: string }) => {
     if (!_tab) return;
 
     try {
-      // Create terminal in bun process
-      const id = await electrobun.rpc?.request.createTerminal({
-        cwd: _tab.cwd || "/",
-        shell: _tab.cmd,
-      });
-
-      if (!id) {
-        console.error("Failed to create terminal");
-        return;
-      }
-
-      setTerminalId(id);
-
-      // Store the terminal ID in the tab for cleanup
-      setState(
-        produce((_state) => {
-          const win = getWindow(_state);
-          if (win && win.tabs[tabId]) {
-            win.tabs[tabId].terminalId = id;
-          }
-        })
-      );
-      
-      // Initial update of current directory
-      setTimeout(updateCurrentDir, 1000);
-
       // Create xterm terminal
       terminal = new Terminal({
         cursorBlink: true,
@@ -264,18 +240,55 @@ export const TerminalSlate = ({ tabId }: { tabId: string }) => {
         resizeObserver.disconnect();
       });
 
+      // Create terminal in bun process after listeners and xterm are ready.
+      const id = await electrobun.rpc?.request.createTerminal({
+        cwd: _tab.cwd || "/",
+        shell: _tab.cmd,
+      });
+
+      if (!id) {
+        console.error("Failed to create terminal");
+        return;
+      }
+
+      setTerminalId(id);
+
+      for (const pending of pendingTerminalOutput.splice(0)) {
+        if (pending.terminalId === id && terminal) {
+          terminal.write(pending.data);
+        }
+      }
+
+      for (const pending of pendingTerminalExit.splice(0)) {
+        if (pending.terminalId === id && terminal) {
+          terminal.write(`\r\n\x1b[31mProcess exited with code ${pending.exitCode}\x1b[0m\r\n`);
+        }
+      }
+
+      setState(
+        produce((_state) => {
+          const win = getWindow(_state);
+          if (win && win.tabs[tabId]) {
+            win.tabs[tabId].terminalId = id;
+          }
+        })
+      );
+
+      setTimeout(updateCurrentDir, 1000);
+
     } catch (error) {
       console.error("Failed to initialize terminal:", error);
     }
   };
 
   onMount(() => {
-    // Initialize the terminal
-    initializeTerminal();
-
     // Set up CustomEvent listeners for terminal messages
     const handleTerminalOutput = (event: CustomEvent<{ terminalId: string; data: string }>) => {
       const data = event.detail;
+      if (!terminalId()) {
+        pendingTerminalOutput.push(data);
+        return;
+      }
       if (data.terminalId === terminalId() && terminal) {
         terminal.write(data.data);
       }
@@ -283,6 +296,10 @@ export const TerminalSlate = ({ tabId }: { tabId: string }) => {
 
     const handleTerminalExit = (event: CustomEvent<{ terminalId: string; exitCode: number }>) => {
       const data = event.detail;
+      if (!terminalId()) {
+        pendingTerminalExit.push(data);
+        return;
+      }
       if (data.terminalId === terminalId() && terminal) {
         terminal.write(`\r\n\x1b[31mProcess exited with code ${data.exitCode}\x1b[0m\r\n`);
       }
@@ -291,6 +308,9 @@ export const TerminalSlate = ({ tabId }: { tabId: string }) => {
     // Listen for terminal messages via CustomEvents
     window.addEventListener('terminalOutput', handleTerminalOutput as EventListener);
     window.addEventListener('terminalExit', handleTerminalExit as EventListener);
+
+    // Initialize the terminal after listeners are attached.
+    void initializeTerminal();
 
     onCleanup(() => {
       // Remove event listeners

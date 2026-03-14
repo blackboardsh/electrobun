@@ -12,7 +12,15 @@ import {
   type FSWatcher,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { ApplicationMenu, BrowserWindow, ContextMenu, Tray, Utils, app } from "electrobun/bun";
+import {
+  ApplicationMenu,
+  BrowserWindow,
+  Carrots,
+  ContextMenu,
+  Tray,
+  Utils,
+  app,
+} from "electrobun/bun";
 import {
   createDashDb,
   type DashDb,
@@ -226,6 +234,7 @@ const framePersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 const LIVE_WINDOW_ID_SEPARATOR = "::";
 const WORKSPACE_CURRENT_LENS_PREFIX = "__workspace-current__:";
+const PTY_CARROT_ID = "bunny.pty";
 const LEGACY_CURRENT_SESSION_MAIN_TABS: WindowTabId[] = [
   "workspace",
   "projects",
@@ -1451,6 +1460,81 @@ function getTerminalManager() {
   return terminalManager;
 }
 
+function handlePtyTerminalOutput(payload: unknown) {
+  const eventPayload =
+    payload && typeof payload === "object"
+      ? (payload as {
+          terminalId?: string;
+          data?: string;
+          windowId?: string | null;
+        })
+      : {};
+  const terminalId = String(eventPayload.terminalId || "");
+  if (!terminalId) {
+    return;
+  }
+
+  const targetWindowId =
+    typeof eventPayload.windowId === "string" && eventPayload.windowId.length > 0
+      ? eventPayload.windowId
+      : terminalWindowOwners.get(terminalId);
+  if (targetWindowId) {
+    terminalWindowOwners.set(terminalId, targetWindowId);
+  }
+
+  emitViewMessage(
+    "terminalOutput",
+    {
+      terminalId,
+      data: String(eventPayload.data || ""),
+    },
+    targetWindowId,
+  );
+}
+
+function handlePtyTerminalExit(payload: unknown) {
+  const eventPayload =
+    payload && typeof payload === "object"
+      ? (payload as {
+          terminalId?: string;
+          exitCode?: number;
+          signal?: number;
+          windowId?: string | null;
+        })
+      : {};
+  const terminalId = String(eventPayload.terminalId || "");
+  if (!terminalId) {
+    return;
+  }
+
+  const targetWindowId =
+    typeof eventPayload.windowId === "string" && eventPayload.windowId.length > 0
+      ? eventPayload.windowId
+      : terminalWindowOwners.get(terminalId);
+  emitViewMessage(
+    "terminalExit",
+    {
+      terminalId,
+      exitCode: Number(eventPayload.exitCode || 0),
+      signal: Number(eventPayload.signal || 0),
+    },
+    targetWindowId,
+  );
+  log(`PTY carrot terminal exited ${terminalId}`);
+  terminalWindowOwners.delete(terminalId);
+}
+
+async function invokePtyCarrot<T = unknown>(
+  method: string,
+  params?: unknown,
+  options?: { windowId?: string },
+) {
+  return Carrots.invoke<T>(PTY_CARROT_ID, method, params, options);
+}
+
+app.on("pty-terminal-output", handlePtyTerminalOutput);
+app.on("pty-terminal-exit", handlePtyTerminalExit);
+
 function emitSetProjectsForWindow(windowId: string) {
   const runtimeWindow = runtimeWindows.find((window) => window.id === windowId);
   if (!runtimeWindow) {
@@ -2146,7 +2230,7 @@ function buildTab(
         kind: "notes",
         icon: "›_",
         body:
-          "Terminal sessions will move into a dedicated PTY carrot so Bunny Dash can attach locally or remotely without SSH. This is the future colab-pty path.",
+          "Terminal sessions will move into a dedicated PTY carrot so Bunny Dash can attach locally or remotely without SSH. This is the future pty path.",
       };
     case "agent":
       return {
@@ -3571,29 +3655,88 @@ async function handleColabRequest(method: string, params: any) {
       return new TextDecoder().decode(result.stdout || new Uint8Array());
     }
     case "createTerminal":
-      return (() => {
-        const terminalId = getTerminalManager().createTerminal(
-        String(params?.cwd || process.cwd()),
-        typeof params?.shell === "string" ? params.shell : undefined,
-        );
-        terminalWindowOwners.set(terminalId, getCurrentWindow().id);
-        return terminalId;
+      return (async () => {
+        const currentWindowId = getCurrentWindow().id;
+        try {
+          const terminalId = await invokePtyCarrot<string>(
+            "createTerminal",
+            {
+              cwd: String(params?.cwd || process.cwd()),
+              shell: typeof params?.shell === "string" ? params.shell : undefined,
+              cols: Number(params?.cols || 80),
+              rows: Number(params?.rows || 24),
+            },
+            { windowId: currentWindowId },
+          );
+          log(`PTY carrot created terminal ${terminalId} for window ${currentWindowId}`);
+          terminalWindowOwners.set(terminalId, currentWindowId);
+          return terminalId;
+        } catch (error) {
+          log(
+            `PTY carrot unavailable, falling back to local terminal manager: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          const terminalId = getTerminalManager().createTerminal(
+            String(params?.cwd || process.cwd()),
+            typeof params?.shell === "string" ? params.shell : undefined,
+          );
+          terminalWindowOwners.set(terminalId, currentWindowId);
+          return terminalId;
+        }
       })();
     case "writeToTerminal":
-      return getTerminalManager().writeToTerminal(
-        String(params?.terminalId || ""),
-        String(params?.data || ""),
-      );
+      return (async () => {
+        try {
+          return await invokePtyCarrot<boolean>("writeToTerminal", {
+            terminalId: String(params?.terminalId || ""),
+            data: String(params?.data || ""),
+          });
+        } catch {
+          return getTerminalManager().writeToTerminal(
+            String(params?.terminalId || ""),
+            String(params?.data || ""),
+          );
+        }
+      })();
     case "resizeTerminal":
-      return getTerminalManager().resizeTerminal(
-        String(params?.terminalId || ""),
-        Number(params?.cols || 80),
-        Number(params?.rows || 24),
-      );
+      return (async () => {
+        try {
+          return await invokePtyCarrot<boolean>("resizeTerminal", {
+            terminalId: String(params?.terminalId || ""),
+            cols: Number(params?.cols || 80),
+            rows: Number(params?.rows || 24),
+          });
+        } catch {
+          return getTerminalManager().resizeTerminal(
+            String(params?.terminalId || ""),
+            Number(params?.cols || 80),
+            Number(params?.rows || 24),
+          );
+        }
+      })();
     case "killTerminal":
-      return getTerminalManager().killTerminal(String(params?.terminalId || ""));
+      return (async () => {
+        try {
+          const result = await invokePtyCarrot<boolean>("killTerminal", {
+            terminalId: String(params?.terminalId || ""),
+          });
+          terminalWindowOwners.delete(String(params?.terminalId || ""));
+          return result;
+        } catch {
+          return getTerminalManager().killTerminal(String(params?.terminalId || ""));
+        }
+      })();
     case "getTerminalCwd":
-      return getTerminalManager().getTerminalCwd(String(params?.terminalId || ""));
+      return (async () => {
+        try {
+          return await invokePtyCarrot<string | null>("getTerminalCwd", {
+            terminalId: String(params?.terminalId || ""),
+          });
+        } catch {
+          return getTerminalManager().getTerminalCwd(String(params?.terminalId || ""));
+        }
+      })();
     case "getWorkspaceLensSidebar":
       return buildWorkspaceLensSidebarData();
     case "activateLens":

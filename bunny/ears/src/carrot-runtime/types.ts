@@ -157,6 +157,7 @@ export type HostActionMessage = {
     | "open-manager"
     | "stop-carrot"
     | "emit-view"
+    | "emit-carrot-event"
     | "log";
   payload?: unknown;
 };
@@ -170,6 +171,7 @@ export type HostRequestMessage = {
     | "show-item-in-folder"
     | "clipboard-write-text"
     | "window-get-frame"
+    | "invoke-carrot"
     | "screen-get-primary-display"
     | "screen-get-cursor-screen-point";
   params?: unknown;

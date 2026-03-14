@@ -94,6 +94,21 @@ function normalizeInstallSource(
   source: CarrotInstallSource,
   fallbackHash: string | null,
 ): CarrotInstallSource {
+  if (source.kind === "local") {
+    const legacySegment = `${sep}bunny${sep}carrots${sep}`;
+    const nextSegment = `${sep}bunny${sep}test-carrots${sep}`;
+    if (source.path.includes(legacySegment) && !existsSync(source.path)) {
+      const migratedPath = source.path.replace(legacySegment, nextSegment);
+      if (migratedPath !== source.path && existsSync(migratedPath)) {
+        return {
+          kind: "local",
+          path: migratedPath,
+        };
+      }
+    }
+    return source;
+  }
+
   if (source.kind !== "artifact") {
     return source;
   }

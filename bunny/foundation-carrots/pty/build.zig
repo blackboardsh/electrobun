@@ -11,7 +11,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Link with libc for PTY functions
     exe.linkLibC();
 
     b.installArtifact(exe);
