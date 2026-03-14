@@ -508,7 +508,12 @@ export const native = (() => {
 					FFIType.cstring, // body
 					FFIType.cstring, // subtitle
 					FFIType.bool, // silent
+					FFIType.cstring, // userInfoJson
 				],
+				returns: FFIType.void,
+			},
+			setNotificationClickedHandler: {
+				args: [FFIType.function],
 				returns: FFIType.void,
 			},
 
@@ -1467,13 +1472,16 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			body?: string;
 			subtitle?: string;
 			silent?: boolean;
+			userInfo?: Record<string, unknown>;
 		}): void => {
-			const { title, body = "", subtitle = "", silent = false } = params;
+			const { title, body = "", subtitle = "", silent = false, userInfo } = params;
+			const userInfoJson = userInfo ? JSON.stringify(userInfo) : "";
 			native.symbols.showNotification(
 				toCString(title),
 				toCString(body),
 				toCString(subtitle),
 				silent,
+				toCString(userInfoJson),
 			);
 		},
 		setDockIconVisible: (params: { visible: boolean }): void => {
@@ -1935,6 +1943,32 @@ const urlOpenCallback = new JSCallback(
 // Register the URL open handler with native code (macOS only)
 if (process.platform === "darwin") {
 	native.symbols.setURLOpenHandler(urlOpenCallback);
+}
+
+// Notification click handler
+const notificationClickedCallback = new JSCallback(
+	(userInfoJsonPtr) => {
+		const userInfoJson = new CString(userInfoJsonPtr).toString();
+		let userInfo: Record<string, unknown> = {};
+		try {
+			userInfo = JSON.parse(userInfoJson);
+		} catch {
+			// ignore parse errors
+		}
+		const event = electrobunEventEmitter.events.app.notificationClicked({
+			userInfo,
+		});
+		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: [FFIType.cstring],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+if (process.platform === "darwin") {
+	native.symbols.setNotificationClickedHandler(notificationClickedCallback);
 }
 
 const appReopenCallback = new JSCallback(

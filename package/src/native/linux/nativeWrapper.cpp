@@ -8327,7 +8327,8 @@ ELECTROBUN_EXPORT bool openPath(const char* pathString) {
 }
 
 // Show a native desktop notification using notify-send
-void showNotification(const char* title, const char* body, const char* subtitle, bool silent) {
+void showNotification(const char* title, const char* body, const char* subtitle, bool silent, const char* userInfoJson) {
+    (void)userInfoJson; // Not yet used on Linux
     if (!title) {
         fprintf(stderr, "ERROR: NULL title passed to showNotification\n");
         return;
@@ -10877,6 +10878,11 @@ ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*)) {
 ELECTROBUN_EXPORT void setAppReopenHandler(void (*callback)()) {
     (void)callback;
     // Not supported on Linux - stub to prevent dlopen failure
+}
+
+ELECTROBUN_EXPORT void setNotificationClickedHandler(void (*callback)(const char*)) {
+    (void)callback;
+    // Not yet supported on Linux - stub to prevent dlopen failure
 }
 
 ELECTROBUN_EXPORT void setDockIconVisible(bool visible) {
