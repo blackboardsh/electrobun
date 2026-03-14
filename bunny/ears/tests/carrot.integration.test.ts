@@ -132,6 +132,7 @@ type RunningCarrot = {
 };
 
 const cleanups = new Set<() => void>();
+const textDecoder = new TextDecoder();
 
 afterEach(() => {
   for (const cleanup of cleanups) {
@@ -142,6 +143,30 @@ afterEach(() => {
 
 function makeTempDir(prefix: string) {
   return mkdtempSync(join(tmpdir(), prefix));
+}
+
+function runGit(args: string[], cwd: string) {
+  const gitBin = Bun.which("git");
+  if (!gitBin) {
+    throw new Error("git is not installed");
+  }
+
+  const result = Bun.spawnSync([gitBin, ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `git ${args.join(" ")} failed: ${textDecoder.decode(result.stderr || new Uint8Array())}`,
+    );
+  }
+
+  return {
+    stdout: textDecoder.decode(result.stdout || new Uint8Array()),
+    stderr: textDecoder.decode(result.stderr || new Uint8Array()),
+  };
 }
 
 function isActionMessage(message: CarrotWorkerMessage): message is HostActionMessage {
@@ -1685,6 +1710,46 @@ describe("Bunny Ears carrots", () => {
     );
   }, 20000);
 
+  test("Bunny Git carrot builds from source and serves repo operations for client carrots", async () => {
+    const built = await buildCarrotAt(
+      resolve(EARS_ROOT, "..", "foundation-carrots", "git"),
+      "bunny-ears-git-build-",
+    );
+    expect(built.manifest.id).toBe("bunny.git");
+    expect(existsSync(join(built.outDir, "worker.js"))).toBe(true);
+
+    const carrot = await startBuiltCarrot(built);
+    const repoDir = makeTempDir("bunny-git-project-");
+    writeFileSync(join(repoDir, "README.md"), "# Bunny Git\n");
+    runGit(["init", "--initial-branch", "main"], repoDir);
+    runGit(["config", "user.name", "Bunny Test"], repoDir);
+    runGit(["config", "user.email", "bunny@test.local"], repoDir);
+    runGit(["add", "README.md"], repoDir);
+    runGit(["commit", "-m", "Initial commit"], repoDir);
+
+    const isRepoRoot = (await carrot.request("gitCheckIsRepoRoot", {
+      repoRoot: repoDir,
+      __source: {
+        carrotId: "dash-client",
+        windowId: "main",
+      },
+    })) as boolean;
+    expect(isRepoRoot).toBe(true);
+
+    const status = (await carrot.request("gitStatus", {
+      repoRoot: repoDir,
+    })) as { current?: string; modified?: string[] };
+    expect(status.current).toBe("main");
+    expect(status.modified || []).toEqual([]);
+
+    writeFileSync(join(repoDir, "README.md"), "# Bunny Git\n\nchanged\n");
+    const diff = (await carrot.request("gitDiff", {
+      repoRoot: repoDir,
+      options: ["--", "README.md"],
+    })) as string;
+    expect(diff).toContain("changed");
+  }, 20000);
+
   test("Bunny Dash uses bunny.search as its workspace search backend", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-search-build-");
     const carrot = await startBuiltCarrot(built);
@@ -1760,6 +1825,61 @@ describe("Bunny Ears carrots", () => {
         (result) => result.endsWith("needle.ts"),
       ),
     ).toBe(true);
+  }, 20000);
+
+  test("Bunny Dash uses bunny.git as its git backend dependency", async () => {
+    const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-git-build-");
+    const carrot = await startBuiltCarrot(built);
+    const repoDir = makeTempDir("bunny-dash-git-project-");
+    writeFileSync(join(repoDir, "README.md"), "# Dash Git\n");
+    runGit(["init", "--initial-branch", "main"], repoDir);
+    runGit(["config", "user.name", "Dash Git"], repoDir);
+    runGit(["config", "user.email", "dash-git@test.local"], repoDir);
+    runGit(["add", "README.md"], repoDir);
+    runGit(["commit", "-m", "Initial commit"], repoDir);
+
+    await carrot.nextAction("set-tray");
+    await carrot.nextAction("set-tray-menu");
+
+    const createdWorkspace = (await carrot.request("createWorkspace", {
+      name: "Git Workspace",
+      subtitle: "Workspace git wiring test.",
+    })) as {
+      currentWorkspace: { id: string };
+    };
+
+    await carrot.request("addProjectMount", {
+      workspaceId: createdWorkspace.currentWorkspace.id,
+      name: "git-project",
+      path: repoDir,
+    });
+
+    const isRepoRoot = (await carrot.request("gitCheckIsRepoRoot", {
+      repoRoot: repoDir,
+    })) as boolean;
+    expect(isRepoRoot).toBe(true);
+
+    const status = (await carrot.request("gitStatus", {
+      repoRoot: repoDir,
+    })) as { current?: string; modified?: string[] };
+    expect(status.current).toBe("main");
+    expect(status.modified || []).toEqual([]);
+
+    writeFileSync(join(repoDir, "README.md"), "# Dash Git\n\nchanged\n");
+    const diff = (await carrot.request("gitDiff", {
+      repoRoot: repoDir,
+      options: ["--", "README.md"],
+    })) as string;
+    expect(diff).toContain("changed");
+
+    const gitConfig = (await carrot.request("getGitConfig")) as {
+      hasKeychainHelper?: boolean;
+      name?: string;
+      email?: string;
+    };
+    expect(typeof gitConfig.hasKeychainHelper).toBe("boolean");
+    expect(typeof gitConfig.name).toBe("string");
+    expect(typeof gitConfig.email).toBe("string");
   }, 20000);
 
   test("Bunny PTY carrot kills orphaned terminals after the heartbeat timeout", async () => {

@@ -235,6 +235,7 @@ const LIVE_WINDOW_ID_SEPARATOR = "::";
 const WORKSPACE_CURRENT_LENS_PREFIX = "__workspace-current__:";
 const PTY_CARROT_ID = "bunny.pty";
 const SEARCH_CARROT_ID = "bunny.search";
+const GIT_CARROT_ID = "bunny.git";
 const DEFAULT_PTY_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 let ptyHeartbeatIntervalMs = DEFAULT_PTY_HEARTBEAT_INTERVAL_MS;
 const LEGACY_CURRENT_SESSION_MAIN_TABS: WindowTabId[] = [
@@ -726,6 +727,17 @@ async function handleContextMenuAction(action: string, data: any) {
         nodeType: "repo",
       });
       return;
+    case "init_git_in_folder": {
+      const nodePath = String(data?.nodePath || "");
+      if (!nodePath) {
+        return;
+      }
+      await invokeGitCarrot("initGit", { repoRoot: nodePath }, { windowId });
+      emitFileWatchEvent(join(nodePath, ".git"));
+      emitFileWatchEvent(join(nodePath, ".gitignore"));
+      emitFileWatchEvent(nodePath);
+      return;
+    }
     case "copy_path_to_clipboard":
       await Utils.clipboardWriteText(String(data?.nodePath || ""));
       return;
@@ -1576,6 +1588,14 @@ async function invokeSearchCarrot<T = unknown>(
   options?: { windowId?: string },
 ) {
   return Carrots.invoke<T>(SEARCH_CARROT_ID, method, params, options);
+}
+
+async function invokeGitCarrot<T = unknown>(
+  method: string,
+  params?: unknown,
+  options?: { windowId?: string },
+) {
+  return Carrots.invoke<T>(GIT_CARROT_ID, method, params, options);
 }
 
 function buildSearchTargetsForWorkspace(workspaceId = getCurrentWorkspace().key) {
@@ -3754,6 +3774,52 @@ async function handleColabRequest(method: string, params: any) {
       return invokeSearchCarrot<boolean>("cancelFindAll", {}, {
         windowId: getCurrentWindow().id,
       });
+    case "gitShow":
+    case "gitCommit":
+    case "gitCommitAmend":
+    case "gitAdd":
+    case "gitLog":
+    case "gitStatus":
+    case "gitDiff":
+    case "gitCheckout":
+    case "gitCheckIsRepoRoot":
+    case "gitCheckIsRepoInTree":
+    case "gitRevParse":
+    case "gitReset":
+    case "gitRevert":
+    case "gitApply":
+    case "gitStageHunkFromPatch":
+    case "gitStageSpecificLines":
+    case "gitStageMonacoChange":
+    case "gitUnstageMonacoChange":
+    case "gitCreatePatchFromLines":
+    case "gitStashList":
+    case "gitStashCreate":
+    case "gitStashApply":
+    case "gitStashPop":
+    case "gitStashShow":
+    case "gitRemote":
+    case "gitAddRemote":
+    case "gitFetch":
+    case "gitPull":
+    case "gitPush":
+    case "gitBranch":
+    case "gitCheckoutBranch":
+    case "gitLogRemoteOnly":
+    case "gitClone":
+    case "gitValidateUrl":
+    case "getGitConfig":
+    case "setGitConfig":
+    case "checkGitHubCredentials":
+    case "storeGitHubCredentials":
+    case "removeGitHubCredentials":
+    case "gitCreateBranch":
+    case "gitDeleteBranch":
+    case "gitTrackRemoteBranch":
+    case "initGit":
+      return invokeGitCarrot(method, params, {
+        windowId: getCurrentWindow().id,
+      });
     case "findFirstNestedGitRepo":
       return invokeSearchCarrot<string | null>("findFirstNestedGitRepo", {
         searchPath: String(params?.searchPath || ""),
@@ -3815,14 +3881,6 @@ async function handleColabRequest(method: string, params: any) {
     case "getTokens":
       return colabState.tokens || [];
     case "setToken":
-      return;
-    case "getGitConfig":
-      return { name: "", email: "", hasKeychainHelper: false };
-    case "checkGitHubCredentials":
-      return { hasCredentials: false };
-    case "storeGitHubCredentials":
-    case "removeGitHubCredentials":
-    case "setGitConfig":
       return;
     default:
       return UNHANDLED_COLAB_REQUEST;
