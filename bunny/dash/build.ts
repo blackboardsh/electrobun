@@ -10,8 +10,6 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
-const PTY_BINARY_NAME = process.platform === "win32" ? "pty.exe" : "pty";
-
 type BuildContext = {
   sourceDir: string;
   outDir: string;
@@ -232,45 +230,6 @@ function prepareHtmlAndAssets(sourceDir: string, resolvedOutDir: string) {
   writeFileSync(join(lensOutDir, "bunny-dash-window.css"), makeDashWindowCss());
 }
 
-function buildPtyBinary(sourceDir: string, resolvedOutDir: string) {
-  const zigBinary = join(
-    sourceDir,
-    "..",
-    "..",
-    "package",
-    "vendors",
-    "zig",
-    process.platform === "win32" ? "zig.exe" : "zig",
-  );
-
-  if (!existsSync(zigBinary)) {
-    throw new Error(`Missing Zig binary at ${zigBinary}`);
-  }
-
-  execFileSync(zigBinary, ["build"], {
-    cwd: join(sourceDir, "pty"),
-    stdio: "pipe",
-  });
-
-  const builtPtyBinary = join(
-    sourceDir,
-    "pty",
-    "zig-out",
-    "bin",
-    PTY_BINARY_NAME,
-  );
-
-  if (!existsSync(builtPtyBinary)) {
-    throw new Error(`Failed to build ${PTY_BINARY_NAME} at ${builtPtyBinary}`);
-  }
-
-  cpSync(
-    builtPtyBinary,
-    join(resolvedOutDir, PTY_BINARY_NAME),
-    { force: true },
-  );
-}
-
 export async function buildCarrot({ sourceDir, outDir, manifest, sdkBunModule }: BuildContext) {
   const resolvedOutDir = resolve(outDir);
   const workerEntry = existsSync(join(sourceDir, "worker.ts"))
@@ -287,7 +246,6 @@ export async function buildCarrot({ sourceDir, outDir, manifest, sdkBunModule }:
     buildTailwind(sourceDir, join(resolvedOutDir, "lens"));
     await buildLens(sourceDir, join(resolvedOutDir, "lens"));
     await buildBunny(sourceDir, join(resolvedOutDir, "bunny"));
-    buildPtyBinary(sourceDir, resolvedOutDir);
   } finally {
     process.chdir(originalCwd);
   }

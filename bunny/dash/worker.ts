@@ -30,7 +30,6 @@ import {
   type LensWindow,
   type WindowTabId,
 } from "./db";
-import { TerminalManager } from "./terminalManager";
 
 type ColabPane =
   | {
@@ -224,7 +223,6 @@ let permissions = new Set<string>();
 let dashDb: DashDb | null = null;
 let manifestVersion = "0.0.1";
 let runtimeWindows: LensWindow[] = [];
-let terminalManager: TerminalManager | null = null;
 const browserWindows = new Map<string, BrowserWindow>();
 let tray: Tray | null = null;
 const terminalWindowOwners = new Map<string, string>();
@@ -1435,29 +1433,6 @@ function emitViewMessage(name: string, payload?: unknown, windowId?: string) {
     action: "emit-view",
     payload: { raw: true, name, payload, windowId: targetWindowId },
   });
-}
-
-function getTerminalManager() {
-  if (!terminalManager) {
-    terminalManager = new TerminalManager((message) => {
-      const targetWindowId = terminalWindowOwners.get(message.terminalId);
-      if (message.type === "terminalOutput") {
-        emitViewMessage("terminalOutput", {
-          terminalId: message.terminalId,
-          data: message.data,
-        }, targetWindowId);
-      } else if (message.type === "terminalExit") {
-        emitViewMessage("terminalExit", {
-          terminalId: message.terminalId,
-          exitCode: message.exitCode,
-          signal: message.signal,
-        }, targetWindowId);
-        terminalWindowOwners.delete(message.terminalId);
-      }
-    });
-  }
-
-  return terminalManager;
 }
 
 function handlePtyTerminalOutput(payload: unknown) {
@@ -3657,86 +3632,43 @@ async function handleColabRequest(method: string, params: any) {
     case "createTerminal":
       return (async () => {
         const currentWindowId = getCurrentWindow().id;
-        try {
-          const terminalId = await invokePtyCarrot<string>(
-            "createTerminal",
-            {
-              cwd: String(params?.cwd || process.cwd()),
-              shell: typeof params?.shell === "string" ? params.shell : undefined,
-              cols: Number(params?.cols || 80),
-              rows: Number(params?.rows || 24),
-            },
-            { windowId: currentWindowId },
-          );
-          log(`PTY carrot created terminal ${terminalId} for window ${currentWindowId}`);
-          terminalWindowOwners.set(terminalId, currentWindowId);
-          return terminalId;
-        } catch (error) {
-          log(
-            `PTY carrot unavailable, falling back to local terminal manager: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-          const terminalId = getTerminalManager().createTerminal(
-            String(params?.cwd || process.cwd()),
-            typeof params?.shell === "string" ? params.shell : undefined,
-          );
-          terminalWindowOwners.set(terminalId, currentWindowId);
-          return terminalId;
-        }
-      })();
-    case "writeToTerminal":
-      return (async () => {
-        try {
-          return await invokePtyCarrot<boolean>("writeToTerminal", {
-            terminalId: String(params?.terminalId || ""),
-            data: String(params?.data || ""),
-          });
-        } catch {
-          return getTerminalManager().writeToTerminal(
-            String(params?.terminalId || ""),
-            String(params?.data || ""),
-          );
-        }
-      })();
-    case "resizeTerminal":
-      return (async () => {
-        try {
-          return await invokePtyCarrot<boolean>("resizeTerminal", {
-            terminalId: String(params?.terminalId || ""),
+        const terminalId = await invokePtyCarrot<string>(
+          "createTerminal",
+          {
+            cwd: String(params?.cwd || process.cwd()),
+            shell: typeof params?.shell === "string" ? params.shell : undefined,
             cols: Number(params?.cols || 80),
             rows: Number(params?.rows || 24),
-          });
-        } catch {
-          return getTerminalManager().resizeTerminal(
-            String(params?.terminalId || ""),
-            Number(params?.cols || 80),
-            Number(params?.rows || 24),
-          );
-        }
+          },
+          { windowId: currentWindowId },
+        );
+        log(`PTY carrot created terminal ${terminalId} for window ${currentWindowId}`);
+        terminalWindowOwners.set(terminalId, currentWindowId);
+        return terminalId;
       })();
+    case "writeToTerminal":
+      return invokePtyCarrot<boolean>("writeToTerminal", {
+        terminalId: String(params?.terminalId || ""),
+        data: String(params?.data || ""),
+      });
+    case "resizeTerminal":
+      return invokePtyCarrot<boolean>("resizeTerminal", {
+        terminalId: String(params?.terminalId || ""),
+        cols: Number(params?.cols || 80),
+        rows: Number(params?.rows || 24),
+      });
     case "killTerminal":
       return (async () => {
-        try {
-          const result = await invokePtyCarrot<boolean>("killTerminal", {
-            terminalId: String(params?.terminalId || ""),
-          });
-          terminalWindowOwners.delete(String(params?.terminalId || ""));
-          return result;
-        } catch {
-          return getTerminalManager().killTerminal(String(params?.terminalId || ""));
-        }
+        const result = await invokePtyCarrot<boolean>("killTerminal", {
+          terminalId: String(params?.terminalId || ""),
+        });
+        terminalWindowOwners.delete(String(params?.terminalId || ""));
+        return result;
       })();
     case "getTerminalCwd":
-      return (async () => {
-        try {
-          return await invokePtyCarrot<string | null>("getTerminalCwd", {
-            terminalId: String(params?.terminalId || ""),
-          });
-        } catch {
-          return getTerminalManager().getTerminalCwd(String(params?.terminalId || ""));
-        }
-      })();
+      return invokePtyCarrot<string | null>("getTerminalCwd", {
+        terminalId: String(params?.terminalId || ""),
+      });
     case "getWorkspaceLensSidebar":
       return buildWorkspaceLensSidebarData();
     case "activateLens":

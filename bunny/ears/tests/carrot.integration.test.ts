@@ -289,6 +289,10 @@ async function startBuiltCarrot(
     string,
     { x: number; y: number; width: number; height: number }
   >();
+  const dependencyCarrots = new Map<
+    string,
+    { carrot: RunningCarrot; stopped: { value: boolean } }
+  >();
 
   const queue: CarrotWorkerMessage[] = [];
   const waiters: Array<{
@@ -336,7 +340,84 @@ async function startBuiltCarrot(
     });
   }
 
-  worker.onmessage = (event: MessageEvent<CarrotWorkerMessage>) => {
+  function withSourceEnvelope(
+    sourceCarrotId: string,
+    sourceWindowId: string | undefined,
+    payload: unknown,
+  ) {
+    const source = {
+      carrotId: sourceCarrotId,
+      windowId: sourceWindowId ?? null,
+    };
+
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      return {
+        ...(payload as Record<string, unknown>),
+        __source: source,
+      };
+    }
+
+    return {
+      value: payload,
+      __source: source,
+    };
+  }
+
+  async function ensureDependencyCarrot(carrotId: string) {
+    const existing = dependencyCarrots.get(carrotId);
+    if (existing) {
+      return existing.carrot;
+    }
+
+    const specifier = built.manifest.dependencies?.[carrotId];
+    if (!specifier || !specifier.startsWith("file:")) {
+      throw new Error(`Missing local file dependency specifier for ${carrotId}`);
+    }
+
+    const dependencySourceDir = resolve(built.sourceDir, specifier.slice("file:".length));
+    const dependencyBuilt = await buildCarrotAt(
+      dependencySourceDir,
+      `bunny-ears-${carrotId.replace(/[^a-z0-9]+/gi, "-")}-dep-build-`,
+    );
+    const dependencyCarrot = await startBuiltCarrot(dependencyBuilt);
+    const stopped = { value: false };
+
+    dependencyCarrots.set(carrotId, {
+      carrot: dependencyCarrot,
+      stopped,
+    });
+
+    const forwardEvents = async () => {
+      while (!stopped.value) {
+        try {
+          const action = await dependencyCarrot.nextAction("emit-carrot-event");
+          const payload = action.payload as
+            | {
+                carrotId?: string;
+                name?: string;
+                payload?: unknown;
+              }
+            | undefined;
+          if (!payload?.name || payload.carrotId !== built.manifest.id) {
+            continue;
+          }
+
+          worker.postMessage({
+            type: "event",
+            name: payload.name,
+            payload: withSourceEnvelope(carrotId, undefined, payload.payload),
+          } satisfies CarrotWorkerMessage);
+        } catch {
+          return;
+        }
+      }
+    };
+
+    void forwardEvents();
+    return dependencyCarrot;
+  }
+
+  worker.onmessage = async (event: MessageEvent<CarrotWorkerMessage>) => {
     if (isHostRequestMessage(event.data)) {
       const method = event.data.method as string;
       let payload: unknown = null;
@@ -371,6 +452,31 @@ async function startBuiltCarrot(
         case "clipboard-write-text":
           payload = true;
           break;
+        case "invoke-carrot": {
+          try {
+            const request = event.data.params as
+              | {
+                  carrotId?: string;
+                  method?: string;
+                  params?: unknown;
+                  windowId?: string;
+                }
+              | undefined;
+            const target = await ensureDependencyCarrot(String(request?.carrotId || ""));
+            payload = await target.request(
+              String(request?.method || ""),
+              withSourceEnvelope(
+                built.manifest.id,
+                request?.windowId,
+                request?.params,
+              ),
+            );
+          } catch (invokeError) {
+            success = false;
+            error = invokeError instanceof Error ? invokeError.message : String(invokeError);
+          }
+          break;
+        }
         default:
           success = false;
           error = `Unknown host request: ${method}`;
@@ -456,6 +562,10 @@ async function startBuiltCarrot(
   await nextMessage((message) => message.type === "ready");
 
   const cleanup = () => {
+    for (const dependency of dependencyCarrots.values()) {
+      dependency.stopped.value = true;
+      dependency.carrot.cleanup();
+    }
     worker.terminate();
     if (!options?.keepRuntime) {
       rmSync(runtimeDir, { recursive: true, force: true });
@@ -509,6 +619,7 @@ async function startBuiltCarrot(
 describe("Bunny Ears carrots", () => {
   test("permission consent requests enumerate requested host and Bun permissions", () => {
     const prepared: PreparedCarrotInstall = {
+      preparedDir: "/tmp/consent-test",
       manifest: {
         id: "consent-test",
         name: "Consent Test",
@@ -545,7 +656,7 @@ describe("Bunny Ears carrots", () => {
       devMode: true,
       lastBuildAt: Date.now(),
       currentHash: null,
-      install: () => {
+      install: async () => {
         throw new Error("not used");
       },
       cleanup: () => {},
@@ -567,6 +678,7 @@ describe("Bunny Ears carrots", () => {
       isolation: "shared-worker",
     });
     const prepared: PreparedCarrotInstall = {
+      preparedDir: "/tmp/consent-match",
       manifest: {
         id: "consent-match",
         name: "Consent Match",
@@ -605,7 +717,7 @@ describe("Bunny Ears carrots", () => {
       devMode: true,
       lastBuildAt: Date.now(),
       currentHash: null,
-      install: () => {
+      install: async () => {
         throw new Error("not used");
       },
       cleanup: () => {},
@@ -1389,9 +1501,9 @@ describe("Bunny Ears carrots", () => {
     );
   }, 20000);
 
-  test("Bunny Dash exposes the Colab PTY terminal backend", async () => {
+  test("Bunny Dash uses bunny.pty as its terminal backend dependency", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-terminal-build-");
-    expect(existsSync(join(built.outDir, process.platform === "win32" ? "pty.exe" : "pty"))).toBe(true);
+    expect(existsSync(join(built.outDir, process.platform === "win32" ? "pty.exe" : "pty"))).toBe(false);
 
     const carrot = await startBuiltCarrot(built);
     await carrot.nextAction("set-tray");

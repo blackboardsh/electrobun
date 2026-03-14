@@ -43,13 +43,14 @@ export type InstalledCarrot = {
 };
 
 export type PreparedCarrotInstall = {
+  preparedDir: string;
   manifest: CarrotManifest;
   previousInstall: CarrotInstallRecord | null;
   source: CarrotInstallSource;
   devMode: boolean;
   lastBuildAt: number | null;
   currentHash: string | null;
-  install: (permissionsGranted?: CarrotPermissionGrant) => InstalledCarrot;
+  install: (permissionsGranted?: CarrotPermissionGrant) => Promise<InstalledCarrot>;
   cleanup: () => void;
 };
 
@@ -441,6 +442,92 @@ function looksLikeSourceDirectory(path: string) {
   );
 }
 
+function resolveWorkspaceDependencyPath(sourceDir: string, dependencyId: string) {
+  const dependencyName = dependencyId.split(".").pop() || dependencyId;
+  const bunnyRoot = resolve(sourceDir, "..");
+  const candidates = [
+    resolve(bunnyRoot, dependencyName),
+    resolve(bunnyRoot, "foundation-carrots", dependencyName),
+    resolve(bunnyRoot, "test-carrots", dependencyName),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate) && statSync(candidate).isDirectory() && looksLikeSourceDirectory(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    `Unable to resolve workspace dependency ${dependencyId} from ${sourceDir}`,
+  );
+}
+
+function resolveDependencySourcePath(
+  parentSource: CarrotInstallSource,
+  dependencyId: string,
+  specifier: string,
+) {
+  if (parentSource.kind !== "local") {
+    throw new Error(
+      `Dependency ${dependencyId} uses ${specifier}, but only local source installs currently support file/workspace carrot dependencies`,
+    );
+  }
+
+  if (specifier.startsWith("file:")) {
+    return resolve(parentSource.path, specifier.slice("file:".length));
+  }
+
+  if (specifier.startsWith("workspace:")) {
+    return resolveWorkspaceDependencyPath(parentSource.path, dependencyId);
+  }
+
+  throw new Error(
+    `Unsupported carrot dependency specifier for ${dependencyId}: ${specifier}. Only file: and workspace: are supported right now.`,
+  );
+}
+
+async function installDependencyTree(
+  manifest: CarrotManifest,
+  source: CarrotInstallSource,
+  visited: Set<string>,
+) {
+  const dependencies = manifest.dependencies ?? {};
+  for (const [dependencyId, specifier] of Object.entries(dependencies)) {
+    if (visited.has(dependencyId)) {
+      continue;
+    }
+    visited.add(dependencyId);
+
+    const dependencySourceDir = resolveDependencySourcePath(source, dependencyId, specifier);
+    const preparedDependency = await prepareDevCarrotInstallFromSource(dependencySourceDir);
+    try {
+      if (preparedDependency.manifest.id !== dependencyId) {
+        throw new Error(
+          `Dependency ${dependencyId} resolved to ${preparedDependency.manifest.id} at ${dependencySourceDir}`,
+        );
+      }
+
+      await installDependencyTree(
+        preparedDependency.manifest,
+        preparedDependency.source,
+        visited,
+      );
+
+      const existing = readInstalledRecord(dependencyId);
+      installPreparedCarrot(preparedDependency.preparedDir, {
+        source: preparedDependency.source,
+        currentHash: preparedDependency.currentHash ?? existing?.currentHash ?? null,
+        previousInstall: existing ?? preparedDependency.previousInstall ?? undefined,
+        permissionsGranted: existing?.permissionsGranted,
+        devMode: preparedDependency.devMode,
+        lastBuildAt: preparedDependency.lastBuildAt,
+      });
+    } finally {
+      preparedDependency.cleanup();
+    }
+  }
+}
+
 function createPreparedInstall(
   preparedDir: string,
   options: {
@@ -456,21 +543,25 @@ function createPreparedInstall(
   const previousInstall = options.previousInstall ?? readInstalledRecord(manifest.id);
 
   return {
+    preparedDir,
     manifest,
     previousInstall: previousInstall ?? null,
     source: options.source,
     devMode: options.devMode ?? false,
     lastBuildAt: options.lastBuildAt ?? null,
     currentHash: options.currentHash ?? previousInstall?.currentHash ?? null,
-    install: (permissionsGranted) =>
-      installPreparedCarrot(preparedDir, {
+    install: async (permissionsGranted) => {
+      const visited = new Set<string>([manifest.id]);
+      await installDependencyTree(manifest, options.source, visited);
+      return installPreparedCarrot(preparedDir, {
         source: options.source,
         currentHash: options.currentHash ?? previousInstall?.currentHash ?? null,
         previousInstall: previousInstall ?? undefined,
         permissionsGranted,
         devMode: options.devMode ?? false,
         lastBuildAt: options.lastBuildAt ?? null,
-      }),
+      });
+    },
     cleanup: options.cleanup ?? (() => {}),
   };
 }
@@ -550,7 +641,7 @@ export async function installDevCarrotFromSource(
 ) {
   const prepared = await prepareDevCarrotInstallFromSource(sourceDir);
   try {
-    return prepared.install(permissionsGranted);
+    return await prepared.install(permissionsGranted);
   } finally {
     prepared.cleanup();
   }
@@ -585,7 +676,7 @@ export async function reinstallInstalledCarrot(
 
   const prepared = await prepareReinstall(record);
   try {
-    return prepared.install(permissionsGranted ?? record.permissionsGranted);
+    return await prepared.install(permissionsGranted ?? record.permissionsGranted);
   } finally {
     prepared.cleanup();
   }

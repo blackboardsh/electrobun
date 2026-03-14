@@ -1268,7 +1268,7 @@ class BunnyEarsRuntime {
     options: { preserveRunningState?: boolean } = {},
   ) {
     try {
-      const installed = prepared.install(grantedPermissions);
+      const installed = await prepared.install(grantedPermissions);
       await this.upsertInstalledCarrot(installed, {
         openWindow: installed.manifest.mode === "window",
         preserveRunningState: options.preserveRunningState,
