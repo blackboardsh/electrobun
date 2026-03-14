@@ -6392,14 +6392,12 @@ extern "C" void startEventLoop(const char* identifier, const char* name, const c
     // Initialize the global AbstractView tracking map
     if (!globalAbstractViews) {
         globalAbstractViews = [[NSMutableDictionary alloc] init];
-        NSLog(@"Initialized global AbstractView tracking map");
     }
     
     // Initialize webview HTML content storage
     if (!webviewHTMLContent) {
         webviewHTMLContent = [[NSMutableDictionary alloc] init];
         webviewHTMLLock = [[NSLock alloc] init];
-        NSLog(@"Initialized webview HTML content storage");
     }
     
     // Set up dispatch sources for SIGINT and SIGTERM so they work regardless of
@@ -8020,8 +8018,6 @@ extern "C" void setJSUtils(GetMimeType getMimeType, GetHTMLForWebviewSync getHTM
     dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_DEFAULT, 0);
     jsWorkerQueue = dispatch_queue_create("com.electrobun.jsworker", attr);    
 
-    NSLog(@"setJSUtils called but using map-based approach instead of callbacks");
-    
 }
 
 // MARK: - Webview HTML Content Management (replaces JSCallback approach)

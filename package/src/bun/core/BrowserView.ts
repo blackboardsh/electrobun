@@ -134,22 +134,11 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		BrowserViewMap[this.id] = this;
 		this.ptr = this.init() as Pointer;
 
-		// If HTML content was provided, load it after webview creation
+		// If HTML content was provided, load it after webview creation.
 		if (this.html) {
-			console.log(
-				`DEBUG: BrowserView constructor triggering loadHTML for webview ${this.id}`,
-			);
-			// Small delay to ensure webview is ready
 			setTimeout(() => {
-				console.log(
-					`DEBUG: BrowserView delayed loadHTML for webview ${this.id}`,
-				);
 				this.loadHTML(this.html!);
-			}, 100); // Back to 100ms since we fixed the race condition
-		} else {
-			console.log(
-				`DEBUG: BrowserView constructor - no HTML provided for webview ${this.id}`,
-			);
+			}, 100);
 		}
 	}
 

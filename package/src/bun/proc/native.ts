@@ -2439,7 +2439,11 @@ const bunBridgePostmessageHandler = new JSCallback(
 			if (!msgStr.length) {
 				return;
 			}
-			const msgJson = JSON.parse(msgStr.toString());
+			const rawMessage = msgStr.toString().trim();
+			if (!rawMessage || (rawMessage[0] !== "{" && rawMessage[0] !== "[")) {
+				return;
+			}
+			const msgJson = JSON.parse(rawMessage);
 
 			const webview = BrowserView.getById(id);
 			if (!webview) return;
@@ -2447,7 +2451,6 @@ const bunBridgePostmessageHandler = new JSCallback(
 			webview.rpcHandler?.(msgJson);
 		} catch (err) {
 			console.error("error sending message to bun: ", err);
-			console.error("msgString: ", new CString(msg));
 		}
 	},
 	{
@@ -2468,7 +2471,11 @@ const eventBridgeHandler = new JSCallback(
 	(_id: number, msg: number) => {
 		try {
 			const message = new CString(msg as unknown as Pointer);
-			const jsonMessage = JSON.parse(message.toString());
+			const rawMessage = message.toString().trim();
+			if (!rawMessage || (rawMessage[0] !== "{" && rawMessage[0] !== "[")) {
+				return;
+			}
+			const jsonMessage = JSON.parse(rawMessage);
 
 			// Only handle webviewEvent messages - no RPC
 			if (jsonMessage.id === "webviewEvent") {

@@ -39,7 +39,12 @@ import {
 } from "./carrotConsent";
 import { toBunWorkerPermissions } from "./workerPermissions";
 
+const DEBUG_BUNNY_EARS_BOOT = process.env.BUNNY_EARS_BOOT_DEBUG === "1";
+
 function bootLog(message: string, details?: unknown) {
+  if (!DEBUG_BUNNY_EARS_BOOT) {
+    return;
+  }
   if (details === undefined) {
     console.log(`[bunny-ears:boot] ${message}`);
     return;
@@ -1521,4 +1526,3 @@ if (refreshErrors.length > 0) {
 
 const runtime = new BunnyEarsRuntime();
 await runtime.boot();
-console.log("[bunny-ears] runtime booted");
