@@ -280,6 +280,59 @@ const rpc = Electroview.defineRPC<WorkspaceRPC>({
         console.log('openUrlInNewTab', url)
         openNewTabForNode(`__COLAB_INTERNAL__/web`, false, { focusNewTab: false, url });
       },
+      showLensSettings: ({ mode, workspaceId, lensId, sourceLensId, name, description }) => {
+        setState("settingsPane", {
+          type: "lens-settings",
+          data: {
+            mode,
+            workspaceId,
+            lensId,
+            sourceLensId,
+            name,
+            description: description || "",
+          },
+        });
+      },
+      refreshBunnyDashState: async () => {
+        const response = await electrobun.rpc?.request.getInitialState();
+        if (!response) {
+          return;
+        }
+
+        const {
+          windowId,
+          buildVars,
+          paths,
+          peerDependencies,
+          workspace,
+          bunnyDash,
+          projects,
+          tokens,
+          appSettings,
+        } = response;
+
+        const projectsById = projects?.reduce(
+          (acc: Record<string, ProjectType>, project: ProjectType) => {
+            acc[project.id] = project;
+            return acc;
+          },
+          {},
+        );
+
+        setState({
+          windowId,
+          buildVars,
+          paths,
+          peerDependencies,
+          workspace,
+          bunnyDash,
+          projects: projectsById || {},
+          tokens: tokens || [],
+          appSettings: appSettings
+            ? { ...state.appSettings, ...appSettings }
+            : state.appSettings,
+        });
+      },
       showNodeSettings: ({ nodePath }) => {
         const node = getNode(nodePath);
         if (!node) {

@@ -59,6 +59,30 @@ export type WorkspaceRPC = {
         };
         response: any;
       };
+      getUniqueLensName: {
+        params: {
+          workspaceId: string;
+          baseName?: string;
+        };
+        response: string;
+      };
+      createLens: {
+        params: {
+          workspaceId: string;
+          name?: string;
+          description?: string;
+          sourceLensId?: string;
+        };
+        response: any;
+      };
+      renameLens: {
+        params: {
+          lensId: string;
+          name: string;
+          description?: string;
+        };
+        response: any;
+      };
       showContextMenu: {
         params: {
           // todo: electrobun should expose menu items type
@@ -1076,6 +1100,14 @@ export type WorkspaceRPC = {
       openUrlInNewTab: {
         url: string;
       };
+      showLensSettings: {
+        mode: "create" | "rename";
+        workspaceId: string;
+        lensId?: string;
+        sourceLensId?: string;
+        name: string;
+        description?: string;
+      };
       showNodeSettings: {
         nodePath: string;
       };
@@ -1154,6 +1186,7 @@ export type WorkspaceRPC = {
       removeOpenFile: {
         filePath: string;
       };
+      refreshBunnyDashState: void;
     };
   }>;
 };

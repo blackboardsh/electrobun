@@ -885,13 +885,22 @@ export const WorkspaceLensesTree = () => {
 		await refreshDashStateFromWorker();
 	};
 
-	const saveCurrentLens = async () => {
-		console.log("[bunny-dash] saveCurrentLens click");
-		await syncWorkspaceNow();
-		console.log("[bunny-dash] saveCurrentLens synced");
-		await electrobun.rpc?.request.saveLens({});
-		console.log("[bunny-dash] saveCurrentLens resolved");
-		await refreshDashStateFromWorker();
+	const openCreateLensSettings = async (workspaceId: string) => {
+		const name =
+			(await electrobun.rpc?.request.getUniqueLensName({
+				workspaceId,
+				baseName: "Lens",
+			})) || "Lens 1";
+
+		setState("settingsPane", {
+			type: "lens-settings",
+			data: {
+				mode: "create",
+				workspaceId,
+				name,
+				description: "",
+			},
+		});
 	};
 
 	const restoreCurrentLens = async (
@@ -923,6 +932,15 @@ export const WorkspaceLensesTree = () => {
 		await electrobun.rpc?.request.showContextMenu({
 			menuItems: [
 				{
+					label: "New Lens...",
+					...createContextMenuAction("workspace_new_lens", {
+						workspaceId: workspace.id,
+					}),
+				},
+				{
+					type: "separator",
+				},
+				{
 					label: "Open in New Window",
 					...createContextMenuAction("workspace_open_in_new_window", {
 						workspaceId: workspace.id,
@@ -945,6 +963,13 @@ export const WorkspaceLensesTree = () => {
 				{
 					label: "Open in New Window",
 					...createContextMenuAction("lens_open_in_new_window", {
+						workspaceId: workspace.id,
+						lensId: lens.id,
+					}),
+				},
+				{
+					label: "Rename Lens...",
+					...createContextMenuAction("lens_rename", {
 						workspaceId: workspace.id,
 						lensId: lens.id,
 					}),
@@ -1012,7 +1037,7 @@ export const WorkspaceLensesTree = () => {
 														{
 															label: "Save",
 															onClick: () => {
-																void saveCurrentLens();
+																void openCreateLensSettings(workspace.id);
 															},
 														},
 													]

@@ -994,10 +994,48 @@ describe("Bunny Ears carrots", () => {
       description: "Saved from the Acme workspace.",
     })) as {
       currentLens: { id: string; name: string };
+      currentWindow: { id: string };
       lenses: Array<{ id: string; name: string }>;
     };
     expect(savedLens.currentLens.name).toBe("Acme Sprint");
     expect(savedLens.lenses.some((lens) => lens.name === "Acme Sprint")).toBe(true);
+
+    const firstSuggestedLensName = (await carrot.request("getUniqueLensName", {
+      workspaceId: createdWorkspace.currentWorkspace.id,
+      baseName: "Lens",
+    })) as string;
+    expect(firstSuggestedLensName).toBe("Lens 1");
+
+    const createdLensOne = (await carrot.request("createLens", {
+      workspaceId: createdWorkspace.currentWorkspace.id,
+      name: firstSuggestedLensName,
+    })) as {
+      currentLens: { id: string; name: string };
+      lenses: Array<{ id: string; name: string }>;
+    };
+    expect(createdLensOne.currentLens.name).toBe("Lens 1");
+    expect(createdLensOne.lenses.some((lens) => lens.name === "Lens 1")).toBe(true);
+
+    const secondSuggestedLensName = (await carrot.request("getUniqueLensName", {
+      workspaceId: createdWorkspace.currentWorkspace.id,
+      baseName: "Lens",
+    })) as string;
+    expect(secondSuggestedLensName).toBe("Lens 2");
+
+    const renamedLens = (await carrot.request("renameLens", {
+      lensId: createdLensOne.currentLens.id,
+      name: "Focus",
+      description: "Renamed lens.",
+    })) as {
+      currentLens: { id: string; name: string };
+      lenses: Array<{ id: string; name: string; description: string }>;
+    };
+    expect(renamedLens.currentLens.name).toBe("Focus");
+    expect(
+      renamedLens.lenses.some(
+        (lens) => lens.id === createdLensOne.currentLens.id && lens.name === "Focus",
+      ),
+    ).toBe(true);
 
     const syncedState = (await carrot.request("getInitialState")) as {
       workspace: {
@@ -1214,25 +1252,52 @@ describe("Bunny Ears carrots", () => {
 
     carrot.postEvent("context-menu-clicked", {
       action: "lens_fork",
-      data: { lensId: savedLens.currentLens.id },
+      data: {
+        lensId: savedLens.currentLens.id,
+        windowId: savedLens.currentWindow.id,
+      },
     });
-    await carrot.nextAction(
-      "log",
+    const forkSettings = await carrot.nextAction(
+      "emit-view",
       (message) =>
-        typeof (message.payload as { message?: string } | undefined)?.message === "string" &&
-        (message.payload as { message: string }).message.includes("lens forked:"),
+        (message.payload as { name?: string; payload?: { mode?: string; sourceLensId?: string; name?: string } } | undefined)
+          ?.name === "showLensSettings" &&
+        (message.payload as { windowId?: string } | undefined)?.windowId ===
+          savedLens.currentWindow.id &&
+        (message.payload as { payload?: { sourceLensId?: string } } | undefined)?.payload?.sourceLensId ===
+          savedLens.currentLens.id,
     );
-    const forkedLensState = (await carrot.request("getSnapshot")) as {
+    expect((forkSettings.payload as { payload: { mode: string; name: string } }).payload.mode).toBe(
+      "create",
+    );
+    expect((forkSettings.payload as { payload: { name: string } }).payload.name).toBe(
+      "Acme Sprint Copy",
+    );
+
+    const createdForkedLens = (await carrot.request("createLens", {
+      workspaceId: createdWorkspace.currentWorkspace.id,
+      sourceLensId: savedLens.currentLens.id,
+      name: "Acme Sprint Copy",
+      description: "Forked from Acme Sprint",
+    })) as {
       lenses: Array<{ id: string; name: string }>;
     };
-    expect(forkedLensState.lenses.some((lens) => lens.name === "Acme Sprint Copy")).toBe(true);
+    expect(createdForkedLens.lenses.some((lens) => lens.name === "Acme Sprint Copy")).toBe(true);
 
-    const forkedLens = forkedLensState.lenses.find((lens) => lens.name === "Acme Sprint Copy");
+    const forkedLens = createdForkedLens.lenses.find((lens) => lens.name === "Acme Sprint Copy");
     expect(forkedLens).toBeTruthy();
     carrot.postEvent("context-menu-clicked", {
       action: "lens_delete",
-      data: { lensId: forkedLens!.id },
+      data: {
+        lensId: forkedLens!.id,
+        windowId: savedLens.currentWindow.id,
+      },
     });
+    await carrot.nextAction(
+      "emit-view",
+      (message) =>
+        (message.payload as { name?: string } | undefined)?.name === "refreshBunnyDashState",
+    );
     await carrot.nextAction(
       "log",
       (message) =>

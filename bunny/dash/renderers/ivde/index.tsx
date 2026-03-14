@@ -71,6 +71,7 @@ import {
 	// fullyDeleteNode,
 	splitPane,
 	state,
+	syncWorkspaceNow,
 	updateSyncedAppSettings,
 	updateSyncedState,
 	walkPanesForId,
@@ -943,6 +944,9 @@ const App = () => {
 											>
 												<WorkspaceSettings />
 											</Match>
+											<Match when={state.settingsPane.type === "lens-settings"}>
+												<LensSettings />
+											</Match>
 											<Match when={state.settingsPane.type.includes("node")}>
 												<NodeSettings />
 											</Match>
@@ -1131,6 +1135,177 @@ const WorkspaceSettings = () => {
 		//     )}
 		//   </For>
 		// </div>
+	);
+};
+
+const LensSettings = () => {
+	const lensSettings = () => {
+		if (state.settingsPane.type !== "lens-settings") {
+			return null;
+		}
+		return state.settingsPane.data;
+	};
+
+	let inputNameRef: HTMLInputElement | undefined;
+	let inputDescriptionRef: HTMLTextAreaElement | undefined;
+
+	const applyInitialState = async () => {
+		const response = await electrobun.rpc?.request.getInitialState();
+		if (!response) {
+			return;
+		}
+
+		const {
+			windowId,
+			buildVars,
+			paths,
+			peerDependencies,
+			workspace,
+			bunnyDash,
+			projects,
+			tokens,
+			appSettings,
+		} = response;
+
+		const projectsById = projects?.reduce(
+			(acc: Record<string, ProjectType>, project: ProjectType) => {
+				acc[project.id] = project;
+				return acc;
+			},
+			{},
+		);
+
+		setState({
+			windowId,
+			buildVars,
+			paths,
+			peerDependencies,
+			workspace,
+			bunnyDash,
+			projects: projectsById,
+			tokens,
+			appSettings: appSettings
+				? { ...state.appSettings, ...appSettings }
+				: state.appSettings,
+		});
+	};
+
+	createEffect(() => {
+		const data = lensSettings();
+		if (!data) {
+			return;
+		}
+
+		if (inputNameRef) {
+			inputNameRef.value = data.name;
+		}
+		if (inputDescriptionRef) {
+			inputDescriptionRef.value = data.description || "";
+		}
+	});
+
+	const onSubmit = (e: SubmitEvent) => {
+		e.preventDefault();
+
+		(async () => {
+			const data = lensSettings();
+			if (!data) {
+				return;
+			}
+
+			const nextName = inputNameRef?.value?.trim() || data.name.trim();
+			const nextDescription = inputDescriptionRef?.value?.trim() || "";
+			if (!nextName) {
+				inputNameRef?.focus();
+				inputNameRef?.select();
+				return;
+			}
+
+			if (data.mode === "create") {
+				if (data.workspaceId === state.bunnyDash.currentWorkspaceId) {
+					await syncWorkspaceNow();
+				}
+				await electrobun.rpc?.request.createLens({
+					workspaceId: data.workspaceId,
+					name: nextName,
+					description: nextDescription,
+					sourceLensId: data.sourceLensId,
+				});
+			} else if (data.lensId) {
+				await electrobun.rpc?.request.renameLens({
+					lensId: data.lensId,
+					name: nextName,
+					description: nextDescription,
+				});
+			}
+
+			await applyInitialState();
+			setState("settingsPane", { type: "", data: {} });
+		})();
+	};
+
+	const saveDisabled = () => {
+		const data = lensSettings();
+		if (!data) {
+			return true;
+		}
+		return !(inputNameRef?.value?.trim() || data.name.trim());
+	};
+
+	return (
+		<div
+			style={{
+				background: "#404040",
+				width: "100%",
+				height: "100%",
+				display: "flex",
+				"flex-direction": "column",
+				color: "#d9d9d9",
+			}}
+		>
+			<form onSubmit={onSubmit}>
+				<SettingsPaneSaveClose
+					label={lensSettings()?.mode === "rename" ? "Rename Lens" : "New Lens"}
+					saveDisabled={saveDisabled}
+				/>
+				<div style="display: flex;flex-direction: column;flex-grow: 1;overflow: auto overlay; border-top: 1px solid #212121">
+					<div style="flex-grow: 1;align-self: stretch; box-sizing: border-box;">
+						<div class="formbody">
+							<div style="margin-top: 0px;background-color: transparent;border-left: 0px solid rgb(33, 33, 33);border-right: 0px solid rgb(33, 33, 33);border-radius: 0px;border-bottom: 1px solid rgb(33, 33, 33);">
+								<SettingsPaneFormSection
+									label={lensSettings()?.mode === "rename" ? "Lens" : "Create Lens"}
+								>
+									<SettingsPaneField label="Name">
+										<input
+											ref={(el) => {
+												inputNameRef = el;
+											}}
+											type="text"
+											name="name"
+											value={lensSettings()?.name || ""}
+											placeholder="Lens name"
+											style="background: #2b2b2b;border-radius: 2px;border: 1px solid #212121;color: #d9d9d9;outline: none;cursor: text;display: block;font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;font-size: 12px;padding-top: 8px;padding-right: 9px;padding-bottom: 8px;padding-left: 9px;line-height: 14px;width: 100%;box-sizing: border-box;"
+										/>
+									</SettingsPaneField>
+									<SettingsPaneField label="Description">
+										<textarea
+											ref={(el) => {
+												inputDescriptionRef = el;
+											}}
+											name="description"
+											placeholder="Optional description"
+											style="background: #2b2b2b;border-radius: 2px;border: 1px solid #212121;color: #d9d9d9;outline: none;cursor: text;display: block;font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;font-size: 12px;padding-top: 8px;padding-right: 9px;padding-bottom: 8px;padding-left: 9px;line-height: 16px;min-height: 96px;resize: vertical;width: 100%;box-sizing: border-box;"
+										>
+											{lensSettings()?.description || ""}
+										</textarea>
+									</SettingsPaneField>
+								</SettingsPaneFormSection>
+							</div>
+						</div>
+					</div>
+				</div>
+			</form>
+		</div>
 	);
 };
 

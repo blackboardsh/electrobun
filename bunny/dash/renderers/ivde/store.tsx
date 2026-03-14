@@ -244,6 +244,17 @@ export interface AppState {
         data: {};
       }
     | {
+        type: "lens-settings";
+        data: {
+          mode: "create" | "rename";
+          workspaceId: string;
+          lensId?: string;
+          sourceLensId?: string;
+          name: string;
+          description: string;
+        };
+      }
+    | {
         type: "add-node" | "edit-node";
         data: {
           node: CachedFileType | PreviewFileTreeType;

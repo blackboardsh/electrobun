@@ -534,52 +534,116 @@ function sendToDashWindow(windowId: string | undefined, name: string, payload?: 
   emitViewMessage(name, payload, windowId || state.currentWindowId);
 }
 
-async function forkLens(lensId: string) {
-  const lens = getLensByKey(lensId);
-  const lenses = listLenses();
-  const isCurrentLens = lens.key === getLensIdForWindow(getCurrentWindow());
-  const sourceWindow = isCurrentLens ? getCurrentWindow() : null;
-  if (isCurrentLens && sourceWindow) {
-    await syncRuntimeWindowFrameFromHost(sourceWindow.id);
-  }
-  const sourceColabWindow = isCurrentLens ? getCurrentColabWindow() : parseStoredColabWindow(lens);
-  const cleanName = uniqueKey(`${lens.name} Copy`, lenses.map((existing) => existing.name))
-    .replace(/-/g, " ")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-  const key = uniqueKey(cleanName, lenses.map((existing) => existing.key));
-
-  const created = ensureDb().collection("layouts").insert({
-    key,
-    name: cleanName,
-    description: lens.description?.trim() || `Forked from ${lens.name}`,
-    workspaceId: getLensWorkspaceId(lens),
-    windowStateJson: serializeColabWindow(sourceColabWindow),
-    sortOrder: lenses.length,
-    windows: [sourceWindow ? toLensTemplateWindow(sourceWindow) : structuredClone(lens.windows[0] || DEFAULT_STARTER_LENS_WINDOW)],
+function sendRuntimeEventToDashWindow(windowId: string | undefined, name: string, payload?: unknown) {
+  post({
+    type: "action",
+    action: "emit-view",
+    payload: {
+      name,
+      payload,
+      raw: false,
+      windowId: windowId || state.currentWindowId,
+    },
   });
+}
 
-  flushDb();
-  await saveState();
-  syncTray();
-  emitSetProjectsForWindow(getCurrentWindow().id);
-  emitSnapshot();
-  log(`lens forked: ${created.name}`);
-  return snapshot();
+function broadcastRuntimeEventToDashWindows(name: string, payload?: unknown) {
+  post({
+    type: "action",
+    action: "emit-view",
+    payload: { raw: false, name, payload },
+  });
+}
+
+function getUniqueLensNameForWorkspace(workspaceId: string, baseName = "Lens", excludeLensId?: string) {
+  const existingNames = new Set(
+    getLensesForWorkspace(workspaceId)
+      .filter((lens) => lens.key !== excludeLensId)
+      .map((lens) => lens.name.trim().toLowerCase()),
+  );
+
+  let index = 1;
+  while (existingNames.has(`${baseName} ${index}`.toLowerCase())) {
+    index += 1;
+  }
+
+  return `${baseName} ${index}`;
+}
+
+function getUniqueLensDisplayName(workspaceId: string, rawName: string, excludeLensId?: string) {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return getUniqueLensNameForWorkspace(workspaceId, "Lens", excludeLensId);
+  }
+
+  const existingNames = new Set(
+    getLensesForWorkspace(workspaceId)
+      .filter((lens) => lens.key !== excludeLensId)
+      .map((lens) => lens.name.trim().toLowerCase()),
+  );
+
+  if (!existingNames.has(trimmed.toLowerCase())) {
+    return trimmed;
+  }
+
+  let index = 2;
+  let candidate = `${trimmed} ${index}`;
+  while (existingNames.has(candidate.toLowerCase())) {
+    index += 1;
+    candidate = `${trimmed} ${index}`;
+  }
+  return candidate;
 }
 
 async function handleContextMenuAction(action: string, data: any) {
   const windowId = typeof data?.windowId === "string" ? data.windowId : state.currentWindowId;
+  if (windowId) {
+    setActiveWindow(windowId);
+  }
 
   switch (action) {
+    case "workspace_new_lens":
+      sendRuntimeEventToDashWindow(windowId, "showLensSettings", {
+        mode: "create",
+        workspaceId: String(data?.workspaceId || getCurrentWorkspace().key),
+        name: getUniqueLensNameForWorkspace(
+          String(data?.workspaceId || getCurrentWorkspace().key),
+          "Lens",
+        ),
+        description: "",
+      });
+      return;
     case "workspace_open_in_new_window":
       await openWorkspaceInNewWindow(String(data?.workspaceId || getCurrentWorkspace().key));
       return;
     case "lens_open_in_new_window":
       await openLensInNewWindow(String(data?.lensId || state.currentLayoutId));
       return;
-    case "lens_fork":
-      await forkLens(String(data?.lensId || state.currentLayoutId));
+    case "lens_rename": {
+      const lens = getLensByKey(String(data?.lensId || state.currentLayoutId));
+      sendRuntimeEventToDashWindow(windowId, "showLensSettings", {
+        mode: "rename",
+        workspaceId: getLensWorkspaceId(lens),
+        lensId: lens.key,
+        name: lens.name,
+        description: lens.description || "",
+      });
       return;
+    }
+    case "lens_fork": {
+      const lens = getLensByKey(String(data?.lensId || state.currentLayoutId));
+      sendRuntimeEventToDashWindow(windowId, "showLensSettings", {
+        mode: "create",
+        workspaceId: getLensWorkspaceId(lens),
+        sourceLensId: lens.key,
+        name: getUniqueLensDisplayName(
+          getLensWorkspaceId(lens),
+          `${lens.name} Copy`,
+        ),
+        description: lens.description?.trim() || `Forked from ${lens.name}`,
+      });
+      return;
+    }
     case "lens_delete":
       await deleteLens(String(data?.lensId || state.currentLayoutId));
       return;
@@ -2686,6 +2750,82 @@ async function overwriteCurrentLens() {
   log(`lens overwritten: ${lens.name}`);
 }
 
+async function createLens(
+  workspaceId: string,
+  name: string,
+  description = "",
+  sourceLensId?: string,
+) {
+  const workspace = getWorkspaceByKey(workspaceId);
+  const lenses = listLenses();
+  const cleanName = getUniqueLensDisplayName(workspace.key, name);
+  const key = uniqueKey(cleanName, lenses.map((lens) => lens.key));
+  const currentWindow = getCurrentWindow();
+  const sourceLens = sourceLensId ? getLensByKey(sourceLensId) : null;
+  const useCurrentWindowState =
+    !sourceLens && currentWindow.workspaceId === workspace.key;
+
+  let sourceColabWindow: ColabWindow;
+  let sourceRuntimeWindow: LensWindow;
+
+  if (sourceLens) {
+    const isCurrentLens = sourceLens.key === getLensIdForWindow(currentWindow);
+    const sourceWindow = isCurrentLens ? currentWindow : null;
+    if (isCurrentLens && sourceWindow) {
+      await syncRuntimeWindowFrameFromHost(sourceWindow.id);
+    }
+    sourceColabWindow = isCurrentLens
+      ? getCurrentColabWindow()
+      : parseStoredColabWindow(sourceLens);
+    sourceRuntimeWindow = sourceWindow
+      ? sourceWindow
+      : buildRuntimeWindowFromLens(
+          sourceLens,
+          sourceLens.windows[0]?.id || "main",
+        );
+  } else if (useCurrentWindowState) {
+    await syncRuntimeWindowFrameFromHost(currentWindow.id);
+    sourceColabWindow = getCurrentColabWindow();
+    sourceRuntimeWindow = currentWindow;
+  } else {
+    const workspaceCurrentLens = ensureWorkspaceCurrentLens(workspace.key);
+    sourceColabWindow = parseStoredColabWindow(workspaceCurrentLens);
+    sourceRuntimeWindow = buildRuntimeWindowFromLens(
+      workspaceCurrentLens,
+      workspaceCurrentLens.windows[0]?.id || "main",
+    );
+  }
+
+  const created = ensureDb().collection("layouts").insert({
+    key,
+    name: cleanName,
+    description: description.trim() || (sourceLens ? `Forked from ${sourceLens.name}` : `Saved from ${workspace.name}`),
+    workspaceId: workspace.key,
+    windowStateJson: serializeColabWindow(sourceColabWindow),
+    sortOrder: lenses.length,
+    windows: [toLensTemplateWindow(sourceRuntimeWindow)],
+  });
+
+  if (useCurrentWindowState) {
+    state.currentLayoutId = created.key;
+    currentWindow.lensId = created.key;
+    state.activeTreeNodeId = `lens-overview:${created.key}`;
+  }
+
+  flushDb();
+  await saveState();
+  syncTray();
+  if (useCurrentWindowState) {
+    emitSetProjectsForWindow(currentWindow.id);
+  } else {
+    emitSetProjects();
+  }
+  broadcastRuntimeEventToDashWindows("refreshBunnyDashState");
+  emitSnapshot();
+  log(sourceLens ? `lens forked: ${created.name}` : `lens created: ${created.name}`);
+  return snapshot();
+}
+
 async function createWorkspace(name: string, subtitle = "") {
   const db = ensureDb();
   const workspaces = listWorkspaces();
@@ -2786,40 +2926,39 @@ async function addProjectMount(params: {
 }
 
 async function saveLens(name: string, description = "") {
-  const lenses = listLenses();
   const workspace = getCurrentWorkspace();
   await syncRuntimeWindowFrameFromHost(getCurrentWindow().id);
   const currentColabWindow = getCurrentColabWindow();
   log(
     `saveLens begin: workspace=${workspace.key} name=${name || "<auto>"} rootPane=${currentColabWindow.rootPane.type} currentPane=${currentColabWindow.currentPaneId}`,
   );
-  const cleanName =
-    name.trim() ||
-    uniqueKey(`${workspace.name} Lens`, getLensesForWorkspace(workspace.key).map((lens) => lens.name))
-      .replace(/-/g, " ")
-      .replace(/\b\w/g, (match) => match.toUpperCase());
+  return createLens(
+    workspace.key,
+    name || getUniqueLensNameForWorkspace(workspace.key, "Lens"),
+    description,
+  );
+}
 
-  const key = uniqueKey(cleanName, lenses.map((lens) => lens.key));
-  const currentWindow = getCurrentWindow();
-  const created = ensureDb().collection("layouts").insert({
-    key,
+async function renameLens(lensId: string, name: string, description = "") {
+  const lens = getLensByKey(lensId);
+  if (isWorkspaceCurrentLensKey(lens.key)) {
+    throw new Error("Cannot rename the workspace current lens");
+  }
+
+  const workspace = getWorkspaceByKey(getLensWorkspaceId(lens));
+  const cleanName = getUniqueLensDisplayName(workspace.key, name, lens.key);
+  ensureDb().collection("layouts").update(lens.id, {
     name: cleanName,
-    description: description.trim() || `Saved from ${getCurrentWorkspace().name}`,
-    workspaceId: currentWindow.workspaceId,
-    windowStateJson: serializeColabWindow(currentColabWindow),
-    sortOrder: lenses.length,
-    windows: [toLensTemplateWindow(currentWindow)],
+    description: description.trim(),
   });
 
-  state.currentLayoutId = created.key;
-  currentWindow.lensId = created.key;
-  state.activeTreeNodeId = `lens-overview:${created.key}`;
   flushDb();
   await saveState();
   syncTray();
-  emitSetProjectsForWindow(currentWindow.id);
+  emitSetProjects();
+  broadcastRuntimeEventToDashWindows("refreshBunnyDashState");
   emitSnapshot();
-  log(`lens saved: ${created.name}`);
+  log(`lens renamed: ${cleanName}`);
   return snapshot();
 }
 
@@ -2907,6 +3046,7 @@ async function deleteLens(lensId: string) {
   await saveState();
   syncTray();
   emitSetProjects();
+  broadcastRuntimeEventToDashWindows("refreshBunnyDashState");
   emitSnapshot();
   log(`lens deleted: ${lens.name}`);
   return snapshot();
@@ -3467,6 +3607,11 @@ async function handleColabRequest(method: string, params: any) {
       return true;
     case "getUniqueNewName":
       return getUniqueNewName(String(params?.parentPath || ""), String(params?.baseName || "untitled"));
+    case "getUniqueLensName":
+      return getUniqueLensNameForWorkspace(
+        String(params?.workspaceId || getCurrentWorkspace().key),
+        String(params?.baseName || "Lens"),
+      );
     case "makeFileNameSafe":
       return makeFileNameSafe(String(params?.value || ""));
     case "getFaviconForUrl":
@@ -3858,6 +4003,25 @@ self.onmessage = async (event) => {
           String(message.params?.description || ""),
         );
         post({ type: "response", requestId: message.requestId, success: true, payload: created });
+        break;
+      }
+      case "createLens": {
+        const created = await createLens(
+          String(message.params?.workspaceId || getCurrentWorkspace().key),
+          String(message.params?.name || ""),
+          String(message.params?.description || ""),
+          typeof message.params?.sourceLensId === "string" ? message.params.sourceLensId : undefined,
+        );
+        post({ type: "response", requestId: message.requestId, success: true, payload: created });
+        break;
+      }
+      case "renameLens": {
+        const renamed = await renameLens(
+          String(message.params?.lensId || state.currentLayoutId),
+          String(message.params?.name || ""),
+          String(message.params?.description || ""),
+        );
+        post({ type: "response", requestId: message.requestId, success: true, payload: renamed });
         break;
       }
       default: {
