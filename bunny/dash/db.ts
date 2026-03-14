@@ -15,6 +15,7 @@ export type WindowTabId =
 
 export type LensWindow = {
   id: string;
+  lensId?: string;
   title: string;
   workspaceId: string;
   mainTabIds: WindowTabId[];
@@ -37,6 +38,7 @@ const {
 const lensWindowSchema = object(
   {
     id: string({ required: true, internal: false }),
+    lensId: string({ required: false, internal: false }),
     title: string({ required: true, internal: false }),
     workspaceId: string({ required: true, internal: false }),
     mainTabIds: array(string(defaultOpts), { required: true, internal: false }),
@@ -49,6 +51,51 @@ const lensWindowSchema = object(
 
 export const dashSchema1 = schema({
   v: 1,
+  stores: {
+    workspaces: collection({
+      key: string({ required: true, internal: false }),
+      name: string({ required: true, internal: false }),
+      subtitle: string({ required: true, internal: false }),
+      sortOrder: number({ required: true, internal: false }),
+    }),
+    projectMounts: collection({
+      key: string({ required: true, internal: false }),
+      workspaceId: string({ required: true, internal: false }),
+      name: string({ required: true, internal: false }),
+      instanceId: string({ required: true, internal: false }),
+      instanceLabel: string({ required: true, internal: false }),
+      path: string({ required: true, internal: false }),
+      kind: string({ required: true, internal: false }),
+      status: string({ required: true, internal: false }),
+      sortOrder: number({ required: true, internal: false }),
+    }),
+    layouts: collection({
+      key: string({ required: true, internal: false }),
+      name: string({ required: true, internal: false }),
+      description: string({ required: true, internal: false }),
+      sortOrder: number({ required: true, internal: false }),
+      windows: array(lensWindowSchema, { required: true, internal: false }),
+    }),
+    sessionSnapshots: collection({
+      key: string({ required: true, internal: false }),
+      updatedAt: number({ required: true, internal: false }),
+      currentLayoutId: string({ required: true, internal: false }),
+      currentWindowId: string({ required: true, internal: false }),
+      windows: array(lensWindowSchema, { required: true, internal: false }),
+    }),
+    uiSettings: collection({
+      key: string({ required: true, internal: false }),
+      sidebarCollapsed: boolean({ required: true, internal: false }),
+      bunnyPopoverOpen: boolean({ required: true, internal: false }),
+      currentLayoutId: string({ required: true, internal: false }),
+      currentWindowId: string({ required: true, internal: false }),
+      activeTreeNodeId: string({ required: true, internal: false }),
+    }),
+  },
+});
+
+export const dashSchema2 = schema({
+  v: 2,
   stores: {
     workspaces: collection({
       key: string({ required: true, internal: false }),
@@ -94,7 +141,7 @@ export const dashSchema1 = schema({
   },
 });
 
-export type DashDocumentTypes = SchemaToDocumentTypes<typeof dashSchema1>;
+export type DashDocumentTypes = SchemaToDocumentTypes<typeof dashSchema2>;
 export type DashDb = ReturnType<typeof createDashDb>;
 
 const LEGACY_WORKSPACE_KEYS = ["marketing", "platform", "client-alpha"] as const;
@@ -237,8 +284,11 @@ export function createDashDb(dbFolder: string) {
   };
 
   try {
-    return new DB<typeof dashSchema1>().init({
-      schemaHistory: [{ v: 1, schema: dashSchema1, migrationSteps: false }],
+    return new DB<typeof dashSchema2>().init({
+      schemaHistory: [
+        { v: 1, schema: dashSchema1, migrationSteps: false },
+        { v: 2, schema: dashSchema2, migrationSteps: false },
+      ],
       db_folder: dbFolder,
     });
   } finally {

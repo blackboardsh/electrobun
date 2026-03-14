@@ -142,6 +142,7 @@ export type HostActionMessage = {
     | "window-set-title"
     | "window-set-frame"
     | "window-set-always-on-top"
+    | "show-context-menu"
     | "set-application-menu"
     | "clear-application-menu"
     | "set-tray"
@@ -165,6 +166,7 @@ export type HostRequestMessage = {
     | "open-path"
     | "show-item-in-folder"
     | "clipboard-write-text"
+    | "window-get-frame"
     | "screen-get-primary-display"
     | "screen-get-cursor-screen-point";
   params?: unknown;

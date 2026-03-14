@@ -2,6 +2,7 @@ import {
   ApplicationMenu,
   BrowserView,
   BrowserWindow,
+  ContextMenu as HostContextMenu,
   Screen,
   Tray,
   Utils,
@@ -195,6 +196,10 @@ class CarrotInstance {
 
   sendApplicationMenuClicked(payload: unknown) {
     this.sendEvent("application-menu-clicked", payload);
+  }
+
+  sendContextMenuClicked(payload: unknown) {
+    this.sendEvent("context-menu-clicked", payload);
   }
 
   private syncPrimaryControllerWindow() {
@@ -492,6 +497,24 @@ class CarrotInstance {
       this.sendEvent("window-focus", { windowId });
     });
 
+    win.on("move", (event: any) => {
+      this.sendEvent("window-move", {
+        windowId,
+        x: event?.data?.x,
+        y: event?.data?.y,
+      });
+    });
+
+    win.on("resize", (event: any) => {
+      this.sendEvent("window-resize", {
+        windowId,
+        x: event?.data?.x,
+        y: event?.data?.y,
+        width: event?.data?.width,
+        height: event?.data?.height,
+      });
+    });
+
     win.on("close", () => {
       this.removeControllerWindow(windowId, win);
       this.restoreApplicationMenuIfActive();
@@ -577,6 +600,15 @@ class CarrotInstance {
       case "clipboard-write-text": {
         Utils.clipboardWriteText(String((params as { text?: string } | undefined)?.text || ""));
         return true;
+      }
+      case "window-get-frame": {
+        const requestedWindowId = String((params as { windowId?: string } | undefined)?.windowId || "");
+        const targetWindowId = requestedWindowId || this.getPrimaryControllerWindowId();
+        const win = this.controllerWindows.get(targetWindowId);
+        if (!win) {
+          return null;
+        }
+        return win.getFrame();
       }
       case "screen-get-primary-display": {
         return Screen.getPrimaryDisplay();
@@ -698,6 +730,17 @@ class CarrotInstance {
         );
         if (win) {
           win.setAlwaysOnTop(Boolean(alwaysOnTopPayload.alwaysOnTop));
+        }
+        break;
+      }
+      case "show-context-menu": {
+        const menuPayload =
+          payload && typeof payload === "object"
+            ? (payload as { menu?: any[] })
+            : {};
+        if (Array.isArray(menuPayload.menu) && menuPayload.menu.length > 0) {
+          (runtime as any).activeContextMenuOwnerId = this.carrot.manifest.id;
+          HostContextMenu.showContextMenu(menuPayload.menu);
         }
         break;
       }
@@ -891,6 +934,7 @@ class BunnyEarsRuntime {
   managerWindow: BrowserWindow | null = null;
   carrots = new Map<string, CarrotInstance>();
   activeApplicationMenuOwnerId: string | null = null;
+  activeContextMenuOwnerId: string | null = null;
   pendingConsent: {
     request: CarrotPermissionConsentRequest;
     prepared: PreparedCarrotInstall;
@@ -936,6 +980,20 @@ class BunnyEarsRuntime {
         return;
       }
       carrot.sendApplicationMenuClicked(event?.data ?? event);
+    });
+
+    HostContextMenu.on("context-menu-clicked", (event: any) => {
+      const ownerId = this.activeContextMenuOwnerId;
+      this.activeContextMenuOwnerId = null;
+      if (!ownerId) {
+        return;
+      }
+
+      const carrot = this.carrots.get(ownerId);
+      if (!carrot) {
+        return;
+      }
+      carrot.sendContextMenuClicked(event?.data ?? event);
     });
 
     this.restoreDefaultApplicationMenu();

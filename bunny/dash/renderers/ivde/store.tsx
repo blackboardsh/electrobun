@@ -49,6 +49,26 @@ export type WorkspaceType = {
   windows: Array<WindowType>;
 };
 
+export type BunnyDashLensType = {
+  id: string;
+  name: string;
+  description: string;
+  workspaceId: string;
+  isCurrent: boolean;
+  isDirty: boolean;
+};
+
+export type BunnyDashWorkspaceTreeType = {
+  id: string;
+  name: string;
+  subtitle: string;
+  isCurrent: boolean;
+  currentLensId: string;
+  currentLensIsActive: boolean;
+  canExpand: boolean;
+  lenses: BunnyDashLensType[];
+};
+
 export type BaseTabType = {
   id: string;
   // todo (yoav): path should only be on file and browser profile tabs
@@ -113,14 +133,27 @@ export const getUniqueId = () => {
 // todo (yoav): [blocking] for the state properties that sync to the database, we should have a function
 // like updateSyncedState() that updates the state in the browser and sends a message to the main
 // to be saved into the database. That way we can get from the server without triggering a circular flow
+let pendingWorkspaceSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+export const syncWorkspaceNow = async () => {
+  if (pendingWorkspaceSyncTimer) {
+    clearTimeout(pendingWorkspaceSyncTimer);
+    pendingWorkspaceSyncTimer = null;
+  }
+
+  await electrobun.rpc?.request.syncWorkspace({
+    workspace: unwrap(state.workspace),
+  });
+};
 
 export const updateSyncedState = () => {
-  // stateUpdater();
+  if (pendingWorkspaceSyncTimer) {
+    clearTimeout(pendingWorkspaceSyncTimer);
+  }
 
-  setTimeout(() => {
-    electrobun.rpc?.request.syncWorkspace({
-      workspace: unwrap(state.workspace),
-    });
+  pendingWorkspaceSyncTimer = setTimeout(() => {
+    pendingWorkspaceSyncTimer = null;
+    void syncWorkspaceNow();
   });
 };
 
@@ -184,6 +217,11 @@ export interface AppState {
   // todo (yoav): [blocking] more clearly separate local ephemeral state from synced state
   // todo (yoav): [blocking] make workspaces singular in the db
   workspace: WorkspaceType; //CurrentDocumentTypes['workspaces']
+  bunnyDash: {
+    currentWorkspaceId: string;
+    currentLensId: string;
+    workspaces: BunnyDashWorkspaceTreeType[];
+  };
   projects: { [id: string]: CurrentDocumentTypes["projects"] };
   tokens: any[];
   // the current window id. This doesn't change for the life of the window
@@ -418,6 +456,11 @@ const initialState: AppState = {
     name: "",
     color: "",
     windows: [],
+  },
+  bunnyDash: {
+    currentWorkspaceId: "",
+    currentLensId: "",
+    workspaces: [],
   },
   windowId: "",
   editors: {},
@@ -1141,7 +1184,7 @@ export const splitPane = (
       }
     })
   );
-  // updateSyncedState();
+  updateSyncedState();
 };
 
 export const getEditorForTab = (tabId: string) => {

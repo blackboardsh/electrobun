@@ -262,11 +262,13 @@ async function startBuiltCarrot(
   built: Awaited<ReturnType<typeof buildCarrotAt>>,
   permissionsOverride?: CarrotPermissionGrant,
   options?: {
+    runtimeDir?: string;
+    keepRuntime?: boolean;
     setupRuntime?: (args: { runtimeDir: string; statePath: string; logsPath: string }) => void | Promise<void>;
   },
 ): Promise<RunningCarrot> {
   const runtimeLabel = built.manifest.id || "carrot";
-  const runtimeDir = makeTempDir(`bunny-ears-${runtimeLabel}-runtime-`);
+  const runtimeDir = options?.runtimeDir || makeTempDir(`bunny-ears-${runtimeLabel}-runtime-`);
   const statePath = join(runtimeDir, "state.json");
   const logsPath = join(runtimeDir, "logs.txt");
   const grantedPermissions = normalizeCarrotPermissions(
@@ -283,6 +285,10 @@ async function startBuiltCarrot(
     type: "module",
     permissions: toBunWorkerPermissions(grantedPermissions),
   });
+  const fakeWindowFrames = new Map<
+    string,
+    { x: number; y: number; width: number; height: number }
+  >();
 
   const queue: CarrotWorkerMessage[] = [];
   const waiters: Array<{
@@ -349,6 +355,17 @@ async function startBuiltCarrot(
         case "screen-get-cursor-screen-point":
           payload = { x: 720, y: 450 };
           break;
+        case "window-get-frame":
+          payload =
+            fakeWindowFrames.get(
+              String((event.data.params as { windowId?: string } | undefined)?.windowId || "main"),
+            ) || {
+              x: 120,
+              y: 120,
+              width: 1400,
+              height: 920,
+            };
+          break;
         case "open-path":
         case "show-item-in-folder":
         case "clipboard-write-text":
@@ -368,6 +385,45 @@ async function startBuiltCarrot(
         error,
       } satisfies CarrotWorkerMessage);
       return;
+    }
+
+    if (isActionMessage(event.data)) {
+      if (event.data.action === "window-create") {
+        const payload = event.data.payload as
+          | {
+              windowId?: string;
+              options?: {
+                frame?: { x?: number; y?: number; width?: number; height?: number };
+              };
+            }
+          | undefined;
+        const frame = payload?.options?.frame;
+        fakeWindowFrames.set(payload?.windowId || "main", {
+          x: frame?.x ?? 120,
+          y: frame?.y ?? 120,
+          width: frame?.width ?? 1400,
+          height: frame?.height ?? 920,
+        });
+      } else if (event.data.action === "window-set-frame") {
+        const payload = event.data.payload as
+          | {
+              windowId?: string;
+              frame?: { x?: number; y?: number; width?: number; height?: number };
+            }
+          | undefined;
+        const existing = fakeWindowFrames.get(payload?.windowId || "main") || {
+          x: 120,
+          y: 120,
+          width: 1400,
+          height: 920,
+        };
+        fakeWindowFrames.set(payload?.windowId || "main", {
+          x: payload?.frame?.x ?? existing.x,
+          y: payload?.frame?.y ?? existing.y,
+          width: payload?.frame?.width ?? existing.width,
+          height: payload?.frame?.height ?? existing.height,
+        });
+      }
     }
 
     queue.push(event.data);
@@ -401,7 +457,9 @@ async function startBuiltCarrot(
 
   const cleanup = () => {
     worker.terminate();
-    rmSync(runtimeDir, { recursive: true, force: true });
+    if (!options?.keepRuntime) {
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
     built.cleanup();
   };
   cleanups.add(cleanup);
@@ -793,6 +851,15 @@ describe("Bunny Ears carrots", () => {
     const initialColabState = (await carrot.request("getInitialState")) as {
       buildVars: { channel: string };
       workspace: { id: string; name: string; windows: Array<{ id: string }> };
+      bunnyDash: {
+        currentWorkspaceId: string;
+        currentLensId: string;
+        workspaces: Array<{
+          id: string;
+          name: string;
+          lenses: Array<{ id: string; name: string; isCurrent: boolean }>;
+        }>;
+      };
       projects: Array<{ id: string; name: string }>;
       tokens: unknown[];
       appSettings: { colabCloud: { email: string } };
@@ -800,6 +867,9 @@ describe("Bunny Ears carrots", () => {
     expect(initialColabState.buildVars.channel).toBe("dev");
     expect(initialColabState.workspace.name).toBe("Local Workspace");
     expect(initialColabState.workspace.windows[0]?.id).toBe("main");
+    expect(initialColabState.bunnyDash.currentWorkspaceId).toBe("local-workspace");
+    expect(initialColabState.bunnyDash.currentLensId).toBe("starter-lens");
+    expect(initialColabState.bunnyDash.workspaces[0]?.lenses[0]?.name).toBe("Starter Lens");
     expect(initialColabState.projects).toEqual([]);
     expect(initialColabState.tokens).toEqual([]);
     expect(initialColabState.appSettings.colabCloud.email).toBe("");
@@ -929,39 +999,324 @@ describe("Bunny Ears carrots", () => {
     expect(savedLens.currentLens.name).toBe("Acme Sprint");
     expect(savedLens.lenses.some((lens) => lens.name === "Acme Sprint")).toBe(true);
 
-    const openStarterLens = carrot.request("activateLens", { lensId: "starter-lens" });
-    const openStarterWindow = await carrot.nextAction(
+    const syncedState = (await carrot.request("getInitialState")) as {
+      workspace: {
+        id: string;
+        name: string;
+        color: string;
+        windows: Array<{
+          id: string;
+          ui: { showSidebar: boolean; sidebarWidth: number };
+          position: { x: number; y: number; width: number; height: number };
+          expansions: string[];
+          rootPane: any;
+          currentPaneId: string;
+          tabs: Record<string, any>;
+        }>;
+      };
+    };
+    const splitWorkspace = structuredClone(syncedState.workspace);
+    const splitWindow = splitWorkspace.windows[0]!;
+    splitWindow.rootPane = {
+      id: "container-1",
+      type: "container",
+      direction: "row",
+      divider: 50,
+      panes: [
+        {
+          id: "left-pane",
+          type: "pane",
+          tabIds: ["workspace"],
+          currentTabId: "workspace",
+        },
+        {
+          id: "right-pane",
+          type: "pane",
+          tabIds: ["cloud"],
+          currentTabId: "cloud",
+        },
+      ],
+    };
+    splitWindow.currentPaneId = "right-pane";
+    splitWindow.tabs.workspace = {
+      ...(splitWindow.tabs.workspace || {}),
+      id: "workspace",
+      paneId: "left-pane",
+    };
+    splitWindow.tabs.cloud = {
+      ...(splitWindow.tabs.cloud || {}),
+      id: "cloud",
+      paneId: "right-pane",
+    };
+    await carrot.request("syncWorkspace", { workspace: splitWorkspace });
+
+    const splitLens = (await carrot.request("saveLens", {
+      name: "Acme Split",
+      description: "Saved split pane state.",
+    })) as {
+      currentLens: { id: string; name: string };
+      lenses: Array<{ id: string; name: string }>;
+    };
+    expect(splitLens.currentLens.name).toBe("Acme Split");
+
+    const unsplitWorkspace = structuredClone(splitWorkspace);
+    const unsplitWindow = unsplitWorkspace.windows[0]!;
+    unsplitWindow.rootPane = {
+      id: "root",
+      type: "pane",
+      tabIds: ["workspace"],
+      currentTabId: "workspace",
+    };
+    unsplitWindow.currentPaneId = "root";
+    unsplitWindow.tabs.workspace = {
+      ...(unsplitWindow.tabs.workspace || {}),
+      id: "workspace",
+      paneId: "root",
+    };
+    await carrot.request("syncWorkspace", { workspace: unsplitWorkspace });
+
+    await carrot.request("openLens", { lensId: splitLens.currentLens.id });
+    const restoredSplitState = (await carrot.request("getInitialState")) as {
+      workspace: {
+        windows: Array<{
+          rootPane: { type: string; panes?: Array<{ id: string }> };
+          currentPaneId: string;
+        }>;
+      };
+    };
+    expect(restoredSplitState.workspace.windows[0]?.rootPane.type).toBe("container");
+    expect(restoredSplitState.workspace.windows[0]?.currentPaneId).toBe("right-pane");
+
+    const switchedWorkspace = (await carrot.request("openWorkspace", {
+      workspaceId: createdWorkspace.currentWorkspace.id,
+    })) as {
+      currentWorkspace: { id: string; name: string };
+      currentLens: { id: string; name: string };
+      currentWindow: { id: string; currentMainTabId: string; currentSideTabId: string };
+      openWindows: Array<{ id: string; workspaceName: string }>;
+    };
+    expect(switchedWorkspace.currentWorkspace.name).toBe("Acme Studio");
+    expect(switchedWorkspace.currentLens.id).toBe(`__workspace-current__:${createdWorkspace.currentWorkspace.id}`);
+    expect(switchedWorkspace.currentWindow.id).toBe("main");
+    expect(switchedWorkspace.openWindows.length).toBe(1);
+
+    const switchedStarterLens = (await carrot.request("activateLens", {
+      lensId: "starter-lens",
+    })) as {
+      currentLens: { id: string; name: string };
+      currentWorkspace: { id: string; name: string };
+      currentWindow: { id: string };
+      openWindows: Array<{ id: string }>;
+    };
+    expect(switchedStarterLens.currentLens.name).toBe("Starter Lens");
+    expect(switchedStarterLens.currentWorkspace.name).toBe("Local Workspace");
+    expect(switchedStarterLens.currentWindow.id).toBe("main");
+    expect(switchedStarterLens.openWindows.length).toBe(1);
+
+    const switchedSprintLens = (await carrot.request("activateLens", {
+      lensId: savedLens.currentLens.id,
+    })) as {
+      currentLens: { id: string; name: string };
+      currentWorkspace: { id: string; name: string };
+      currentWindow: { id: string };
+      openWindows: Array<{ id: string }>;
+    };
+    expect(switchedSprintLens.currentLens.name).toBe("Acme Sprint");
+    expect(switchedSprintLens.currentWorkspace.name).toBe("Acme Studio");
+    expect(switchedSprintLens.currentWindow.id).toBe("main");
+    expect(switchedSprintLens.openWindows.length).toBe(1);
+
+    carrot.postEvent("context-menu-clicked", {
+      action: "workspace_open_in_new_window",
+      data: { workspaceId: createdWorkspace.currentWorkspace.id },
+    });
+    const openedWorkspaceWindow = await carrot.nextAction(
       "focus-window",
       (message) =>
         typeof (message.payload as { windowId?: string } | undefined)?.windowId === "string" &&
         (message.payload as { windowId?: string } | undefined)?.windowId !== "main",
     );
-    const restored = (await openStarterLens) as {
-      currentLens: { id: string; name: string };
-      currentWorkspace: { id: string; name: string };
-      currentWindow: { id: string; currentMainTabId: string; currentSideTabId: string };
-      openWindows: Array<{ id: string; workspaceName: string }>;
+    const workspaceContextState = (await carrot.request("getSnapshot")) as {
+      currentWindow: { id: string };
+      openWindows: Array<{ id: string }>;
     };
-    expect(openStarterWindow.action).toBe("focus-window");
-    expect((openStarterWindow.payload as { windowId?: string }).windowId).not.toBe("main");
-    expect(restored.currentLens.name).toBe("Starter Lens");
-    expect(restored.currentWorkspace.name).toBe("Local Workspace");
-    expect(restored.openWindows.length).toBe(2);
+    const workspaceContextWindowId = (openedWorkspaceWindow.payload as { windowId: string }).windowId;
+    expect(workspaceContextState.currentWindow.id).toBe(workspaceContextWindowId);
+    expect(workspaceContextState.openWindows.length).toBe(2);
 
-    const reopenedSprint = (await carrot.request("activateLens", {
-      lensId: savedLens.currentLens.id,
-    })) as {
-      currentLens: { id: string; name: string };
-      currentWorkspace: { id: string; name: string };
-      currentWindow: { currentMainTabId: string; currentSideTabId: string };
+    const directWorkspaceWindowRequest = carrot.request("openWorkspaceInNewWindow", {
+      workspaceId: createdWorkspace.currentWorkspace.id,
+    });
+    const directWorkspaceWindow = await carrot.nextAction(
+      "focus-window",
+      (message) =>
+        typeof (message.payload as { windowId?: string } | undefined)?.windowId === "string" &&
+        !["main", workspaceContextWindowId].includes(
+          String((message.payload as { windowId?: string } | undefined)?.windowId || ""),
+        ),
+    );
+    const directWorkspaceWindowState = (await directWorkspaceWindowRequest) as {
+      currentWindow: { id: string };
+      openWindows: Array<{ id: string }>;
     };
-    expect(reopenedSprint.currentLens.name).toBe("Acme Sprint");
-    expect(reopenedSprint.currentWorkspace.name).toBe("Acme Studio");
-    expect(reopenedSprint.currentWindow.currentMainTabId).toBe("cloud");
-    expect(reopenedSprint.currentWindow.currentSideTabId).toBe("cloud");
+    const directWorkspaceWindowId = (directWorkspaceWindow.payload as { windowId: string }).windowId;
+    expect(directWorkspaceWindowState.currentWindow.id).toBe(directWorkspaceWindowId);
+    expect(directWorkspaceWindowState.openWindows.length).toBe(3);
+
+    carrot.postEvent("context-menu-clicked", {
+      action: "lens_open_in_new_window",
+      data: { lensId: savedLens.currentLens.id },
+    });
+    const openedLensWindow = await carrot.nextAction(
+      "focus-window",
+      (message) =>
+        typeof (message.payload as { windowId?: string } | undefined)?.windowId === "string" &&
+        !["main", workspaceContextWindowId, directWorkspaceWindowId].includes(
+          String((message.payload as { windowId?: string } | undefined)?.windowId || ""),
+        ),
+    );
+    const lensContextState = (await carrot.request("getSnapshot")) as {
+      currentLens: { id: string; name: string };
+      currentWindow: { id: string };
+      openWindows: Array<{ id: string }>;
+      lenses: Array<{ id: string; name: string }>;
+    };
+    expect(lensContextState.currentWindow.id).toBe(
+      (openedLensWindow.payload as { windowId: string }).windowId,
+    );
+    expect(lensContextState.currentLens.name).toBe("Acme Sprint");
+    expect(lensContextState.openWindows.length).toBe(4);
+
+    const directLensWindowRequest = carrot.request("openLensInNewWindow", {
+      lensId: savedLens.currentLens.id,
+    });
+    const directLensWindow = await carrot.nextAction(
+      "focus-window",
+      (message) =>
+        typeof (message.payload as { windowId?: string } | undefined)?.windowId === "string" &&
+        ![
+          "main",
+          workspaceContextWindowId,
+          directWorkspaceWindowId,
+          (openedLensWindow.payload as { windowId: string }).windowId,
+        ].includes(String((message.payload as { windowId?: string } | undefined)?.windowId || "")),
+    );
+    const directLensWindowState = (await directLensWindowRequest) as {
+      currentLens: { id: string; name: string };
+      currentWindow: { id: string };
+      openWindows: Array<{ id: string }>;
+    };
+    expect(directLensWindowState.currentWindow.id).toBe(
+      (directLensWindow.payload as { windowId: string }).windowId,
+    );
+    expect(directLensWindowState.currentLens.name).toBe("Acme Sprint");
+    expect(directLensWindowState.openWindows.length).toBe(5);
+
+    carrot.postEvent("context-menu-clicked", {
+      action: "lens_fork",
+      data: { lensId: savedLens.currentLens.id },
+    });
+    await carrot.nextAction(
+      "log",
+      (message) =>
+        typeof (message.payload as { message?: string } | undefined)?.message === "string" &&
+        (message.payload as { message: string }).message.includes("lens forked:"),
+    );
+    const forkedLensState = (await carrot.request("getSnapshot")) as {
+      lenses: Array<{ id: string; name: string }>;
+    };
+    expect(forkedLensState.lenses.some((lens) => lens.name === "Acme Sprint Copy")).toBe(true);
+
+    const forkedLens = forkedLensState.lenses.find((lens) => lens.name === "Acme Sprint Copy");
+    expect(forkedLens).toBeTruthy();
+    carrot.postEvent("context-menu-clicked", {
+      action: "lens_delete",
+      data: { lensId: forkedLens!.id },
+    });
+    await carrot.nextAction(
+      "log",
+      (message) =>
+        typeof (message.payload as { message?: string } | undefined)?.message === "string" &&
+        (message.payload as { message: string }).message.includes("lens deleted: Acme Sprint Copy"),
+    );
+    const deletedLensState = (await carrot.request("getSnapshot")) as {
+      lenses: Array<{ id: string; name: string }>;
+    };
+    expect(deletedLensState.lenses.some((lens) => lens.name === "Acme Sprint Copy")).toBe(false);
 
     const goldfishDbPath = join(dirname(carrot.statePath), "goldfishdb", "goldfish.db");
     expect(existsSync(goldfishDbPath)).toBe(true);
+  }, 20000);
+
+  test("Bunny Dash reopens the windows that were open when the worker restarts", async () => {
+    const runtimeDir = makeTempDir("bunny-ears-dash-reopen-runtime-");
+    cleanups.add(() => rmSync(runtimeDir, { recursive: true, force: true }));
+
+    const firstBuilt = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-reopen-build-a-");
+    const first = await startBuiltCarrot(firstBuilt, undefined, {
+      runtimeDir,
+      keepRuntime: true,
+    });
+
+    await first.nextAction("set-tray");
+    await first.nextAction("set-tray-menu");
+
+    await first.request("createWorkspace", {
+      name: "Restart Workspace",
+      subtitle: "Restored after restart.",
+    });
+
+    await first.request("saveLens", {
+      name: "Restart Lens",
+      description: "Saved before restart.",
+    });
+
+    const openLensInNewWindow = first.request("openLensInNewWindow", {
+      lensId: "restart-lens",
+    });
+    const secondWindowFocus = await first.nextAction(
+      "focus-window",
+      (message) =>
+        typeof (message.payload as { windowId?: string } | undefined)?.windowId === "string" &&
+        (message.payload as { windowId?: string }).windowId !== "main",
+    );
+    await openLensInNewWindow;
+    const secondWindowId = (secondWindowFocus.payload as { windowId: string }).windowId;
+
+    const beforeRestart = (await first.request("getSnapshot")) as {
+      openWindows: Array<{ id: string }>;
+    };
+    expect(beforeRestart.openWindows.map((window) => window.id).sort()).toEqual(
+      ["main", secondWindowId].sort(),
+    );
+
+    first.cleanup();
+    cleanups.delete(first.cleanup);
+
+    const secondBuilt = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-reopen-build-b-");
+    const second = await startBuiltCarrot(secondBuilt, undefined, {
+      runtimeDir,
+      keepRuntime: true,
+    });
+
+    const recreatedMain = await second.nextAction(
+      "window-create",
+      (message) => (message.payload as { windowId?: string } | undefined)?.windowId === "main",
+    );
+    const recreatedSecond = await second.nextAction(
+      "window-create",
+      (message) =>
+        (message.payload as { windowId?: string } | undefined)?.windowId === secondWindowId,
+    );
+    expect((recreatedMain.payload as { windowId?: string }).windowId).toBe("main");
+    expect((recreatedSecond.payload as { windowId?: string }).windowId).toBe(secondWindowId);
+
+    const afterRestart = (await second.request("getSnapshot")) as {
+      openWindows: Array<{ id: string }>;
+    };
+    expect(afterRestart.openWindows.map((window) => window.id).sort()).toEqual(
+      ["main", secondWindowId].sort(),
+    );
   }, 20000);
 
   test("Bunny Dash exposes the Colab PTY terminal backend", async () => {

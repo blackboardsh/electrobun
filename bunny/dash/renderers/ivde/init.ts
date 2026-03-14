@@ -22,7 +22,7 @@ import {
   getCurrentTab,
   getPaneWithId,
 } from "./store";
-import { produce, reconcile } from "solid-js/store";
+import { produce } from "solid-js/store";
 import { join, basename, dirname } from "../utils/pathUtils";
 import { _getNode, getNode } from "./FileWatcher";
 import { trackFrontend } from "./analytics";
@@ -52,7 +52,7 @@ const rpc = Electroview.defineRPC<WorkspaceRPC>({
       updateStatus: (data) => {
         setState("update", data);
       },
-      setProjects: ({ projects, tokens, workspace, appSettings }) => {
+      setProjects: ({ projects, tokens, workspace, appSettings, bunnyDash }) => {
         // TODO: [blocking] make this a util, maybe in goldfish
         console.log("setProjects", { projects, tokens, workspace, appSettings });
         const projectsById = projects?.reduce(
@@ -71,22 +71,23 @@ const rpc = Electroview.defineRPC<WorkspaceRPC>({
 
         // todo (yoav): [blocking] make this a util and core part of colab
         // todo (yoav): [blocking] what stuff is actually synced with the server and what is just local to the window and ephemeral
-
-        setState(
-          reconcile({
-            ...state,
-            workspace,
-
-            projects: projectsById,
-            tokens,
-            // Merge appSettings from database with existing defaults
-            appSettings: appSettings ? { ...state.appSettings, ...appSettings } : state.appSettings,
-            // Note: we need the fileTrees to exist when this
-            // setState gets triggered, since the presence of projects
-            // and tabs and such will trigger rendering a bunch of stuff
-            // fileTrees: fileTreesByProjectId,
-          })
+        const activeWindow = workspace?.windows?.find(
+          (window: { id: string; rootPane?: { type?: string }; currentPaneId?: string }) =>
+            window.id === state.windowId,
         );
+        console.log("[bunny-dash] setProjects applying workspace state", {
+          windowId: state.windowId,
+          rootPaneType: activeWindow?.rootPane?.type,
+          currentPaneId: activeWindow?.currentPaneId,
+        });
+
+	        setState("workspace", workspace);
+	        setState("bunnyDash", bunnyDash);
+	        setState("projects", projectsById || {});
+	        setState("tokens", tokens || []);
+	        if (appSettings) {
+	          setState("appSettings", { ...state.appSettings, ...appSettings });
+	        }
 
         console.log("projects", state.projects);
       },
@@ -485,6 +486,12 @@ const rpc = Electroview.defineRPC<WorkspaceRPC>({
       terminalExit: (data: { terminalId: string; exitCode: number }) => {
         // Notify all terminal components about terminal exit
         window.dispatchEvent(new CustomEvent('terminalExit', { detail: data }));
+      },
+      beginWindowTransition: (data: { label: string }) => {
+        window.dispatchEvent(new CustomEvent('bunnyDashBeginWindowTransition', { detail: data }));
+      },
+      endWindowTransition: () => {
+        window.dispatchEvent(new CustomEvent('bunnyDashEndWindowTransition'));
       },
       openFileInEditor: (data: { filePath: string; createIfNotExists?: boolean }) => {
         // Open a file in the editor (from edit command, Open menu, or drag-drop)

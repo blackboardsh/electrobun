@@ -9,6 +9,7 @@ import {
 	createMemo,
 	createRenderEffect,
 	createSignal,
+	onCleanup,
 	onMount,
 } from "solid-js";
 import { produce, reconcile, unwrap } from "solid-js/store";
@@ -90,6 +91,7 @@ import {
 	FindAllResultsTree,
 	OpenFilesTree,
 	ProjectsTree,
+	WorkspaceLensesTree,
 	TemplateNodes,
 	createContextMenuAction,
 	getIconForNode,
@@ -472,6 +474,7 @@ const getInitialState = () => {
 				paths,
 				peerDependencies,
 				workspace,
+				bunnyDash,
 				projects,
 				tokens,
 				appSettings,
@@ -495,6 +498,7 @@ const getInitialState = () => {
 					paths,
 					peerDependencies,
 					workspace,
+					bunnyDash,
 					projects: projectsById,
 					tokens,
 					// Merge appSettings from database with existing defaults
@@ -650,9 +654,102 @@ const App = () => {
 	});
 
 	const [isLoaded, setIsLoaded] = createSignal(false);
-	setTimeout(() => {
+	const [transitionLabelOverride, setTransitionLabelOverride] = createSignal<string | null>(null);
+	let windowTransitionTimers: Array<ReturnType<typeof setTimeout>> = [];
+
+	const buildWindowTransitionLabel = () => {
+		const workspaceName = state.workspace?.name?.trim() || "Workspace";
+		const currentLensId = state.bunnyDash?.currentLensId || "";
+		const currentLens = state.bunnyDash?.workspaces
+			?.flatMap((workspace) => workspace.lenses)
+			.find((lens) => lens.id === currentLensId);
+		if (!currentLens || currentLens.name === "Current") {
+			return workspaceName;
+		}
+		return `${workspaceName} · ${currentLens.name}`;
+	};
+
+	const clearWindowTransitionTimers = () => {
+		for (const timer of windowTransitionTimers) {
+			clearTimeout(timer);
+		}
+		windowTransitionTimers = [];
+	};
+
+	const hideMountedWebSlatesForTransition = () => {
+		const webSlates = document.querySelectorAll("electrobun-webview[data-type='webslate']");
+		for (const webSlate of webSlates) {
+			const element = webSlate as HTMLElement & {
+				toggleTransparent?: (transparent?: boolean) => void;
+			};
+			try {
+				element.toggleTransparent?.(true);
+			} catch {}
+			element.style.opacity = "0";
+			element.style.visibility = "hidden";
+			element.style.pointerEvents = "none";
+		}
+	};
+
+	const beginWindowTransition = (label?: string) => {
+		clearWindowTransitionTimers();
+		setTransitionLabelOverride(label?.trim() || null);
+		hideMountedWebSlatesForTransition();
+		setIsLoaded(false);
+	};
+
+	const endWindowTransition = () => {
+		clearWindowTransitionTimers();
 		setIsLoaded(true);
-	}, 400);
+		windowTransitionTimers.push(
+			setTimeout(() => {
+				setTransitionLabelOverride(null);
+			}, 1000),
+		);
+	};
+
+	const transitionLabel = createMemo(() => {
+		const override = transitionLabelOverride()?.trim();
+		if (override) {
+			return override;
+		}
+		return buildWindowTransitionLabel();
+	});
+
+	onMount(() => {
+		const handleBeginWindowTransition = (
+			event: CustomEvent<{ label?: string }>,
+		) => {
+			beginWindowTransition(event.detail?.label);
+		};
+		const handleEndWindowTransition = () => {
+			endWindowTransition();
+		};
+		window.addEventListener(
+			"bunnyDashBeginWindowTransition",
+			handleBeginWindowTransition as EventListener,
+		);
+		window.addEventListener(
+			"bunnyDashEndWindowTransition",
+			handleEndWindowTransition as EventListener,
+		);
+		windowTransitionTimers.push(
+			setTimeout(() => {
+				setIsLoaded(true);
+			}, 1000),
+		);
+		onCleanup(() => {
+			clearWindowTransitionTimers();
+			window.removeEventListener(
+				"bunnyDashBeginWindowTransition",
+				handleBeginWindowTransition as EventListener,
+			);
+			window.removeEventListener(
+				"bunnyDashEndWindowTransition",
+				handleEndWindowTransition as EventListener,
+			);
+		});
+	});
 
 	// Drag and drop state
 	const [isDraggingOver, setIsDraggingOver] = createSignal(false);
@@ -703,14 +800,13 @@ const App = () => {
 			onDragLeave={handleDragLeave}
 			onDragOver={handleDragOver}
 			onDrop={handleDrop}
-			style={{
-				height: "100vh", //"calc(100vh - 40px)",
-				display: "flex",
-				opacity: isLoaded() ? 1 : 0,
-				transition: "opacity 1000ms linear",
-				"flex-direction": "column",
-				"-webkit-user-select": "none",
-				position: "relative",
+				style={{
+					height: "100vh", //"calc(100vh - 40px)",
+					display: "flex",
+					"flex-direction": "column",
+					"-webkit-user-select": "none",
+					position: "relative",
+					background: "#000",
 
 				// "align-items": "flex-start",
 				// height: "100vh",
@@ -756,123 +852,164 @@ const App = () => {
 					</div>
 				</div>
 			</Show>
-			{/* Download notification is now shown in WebSlate URL bar */}
-			<TopBar />
-			<div
-				style={{
-					display: "flex",
-					height: "calc(100vh - 40px - 22px)",
-					overflow: "auto",
-				}}
-			>
-				<Sidebar />
 				<div
 					style={{
-						flex: 1,
-						position: "relative",
-						overflow: "hidden",
+						position: "absolute",
+						top: 0,
+						left: 0,
+						right: 0,
+						bottom: 0,
+						"z-index": 30000,
+						display: "flex",
+						"align-items": "center",
+						"justify-content": "center",
+						"pointer-events": "none",
+						opacity: isLoaded() ? 0 : 1,
+						transition: "opacity 1000ms ease",
 					}}
 				>
 					<div
-						id="workbench-container"
-						ref={shadowHost}
-						style="width:100%; height: 100%"
-					>
-						<For each={Object.keys(getWindow()?.tabs || {})}>
-							{(tabId) => <TabContent tabId={tabId} />}
-						</For>
-					</div>
-					<div
-						class="settings-pane webview-overlay"
 						style={{
-							background: "#404040",
-							width: "500px",
-							position: "absolute",
-							top: "0px",
-							bottom: "0px",
-							left: state.settingsPane.type ? "0px" : "-514px",
-							transition: "150ms left",
-							"z-index": 1001,
+							color: "#f3f3f3",
+							"font-size": "22px",
+							"font-weight": "600",
+							"letter-spacing": "0.04em",
+							"text-transform": "none",
+							opacity: isLoaded() ? 0 : 1,
+							transform: isLoaded() ? "translateY(8px)" : "translateY(0px)",
+							transition: "opacity 300ms ease, transform 300ms ease",
 						}}
 					>
-						<div style="position:absolute; right: -14px;border-left: 2px solid #212121; border-right: 2px solid #212121; background: #2b2b2b; width: 10px; height: 100%;" />
-						<Show when={state.settingsPane.type}>
-							<div style={{}}>
-								<Switch>
-									<Match when={state.settingsPane.type === "global-settings"}>
-										<GlobalSettings />
-									</Match>
-									<Match
-										when={state.settingsPane.type === "workspace-settings"}
-									>
-										<WorkspaceSettings />
-									</Match>
-									<Match when={state.settingsPane.type.includes("node")}>
-										<NodeSettings />
-									</Match>
-									<Match when={state.settingsPane.type === "llama-settings"}>
-										<LlamaSettings />
-									</Match>
-									<Match when={state.settingsPane.type === "github-settings"}>
-										<GitHubSettings />
-									</Match>
-									<Match when={state.settingsPane.type === "colab-cloud-settings"}>
-										<ColabCloudSettings />
-									</Match>
-									<Match when={state.settingsPane.type === "plugin-marketplace"}>
-										<PluginMarketplace />
-									</Match>
-									<Match when={state.settingsPane.type === "plugin-settings"}>
-										<PluginSettings />
-									</Match>
-								</Switch>
-							</div>
-						</Show>
+						{transitionLabel()}
 					</div>
-					{githubAuthUrl() && (
-						<electrobun-webview
-							// nodeintegration={false}
-							ref={(el) => {
-								// YYY - el was Electron.WebviewTag type
-								githubAuthWebview = el; // as Electron.WebviewTag;
-								el.addEventListener(
-									"did-navigate",
-									githubAuthWebviewWillNavigate,
-								);
-							}}
-							class="webview-overlay"
-							partition={`persist:sites:${state.workspace.id}`}
+				</div>
+				<div
+					style={{
+						display: "flex",
+						"flex-direction": "column",
+						height: "100%",
+						opacity: isLoaded() ? 1 : 0,
+						transition: "opacity 1000ms ease",
+					}}
+				>
+					{/* Download notification is now shown in WebSlate URL bar */}
+					<TopBar />
+					<div
+						style={{
+							display: "flex",
+							height: "calc(100vh - 40px - 22px)",
+							overflow: "auto",
+						}}
+					>
+						<Sidebar />
+						<div
 							style={{
-								position: "absolute",
-								top: "0px",
-								bottom: "0px", // Full height like settings pane
-								left: "514px", // Start after settings pane (500px + 14px border)
-								"z-index": 10,
-								right: "0px",
-								height: "auto",
-								width: "auto",
-								background: "#fff",
+								flex: 1,
+								position: "relative",
+								overflow: "hidden",
 							}}
-							src={githubAuthUrl()}
-						/>
-					)}
+						>
+							<div
+								id="workbench-container"
+								ref={shadowHost}
+								style="width:100%; height: 100%"
+							>
+								<For each={Object.keys(getWindow()?.tabs || {})}>
+									{(tabId) => <TabContent tabId={tabId} />}
+								</For>
+							</div>
+							<div
+								class="settings-pane webview-overlay"
+								style={{
+									background: "#404040",
+									width: "500px",
+									position: "absolute",
+									top: "0px",
+									bottom: "0px",
+									left: state.settingsPane.type ? "0px" : "-514px",
+									transition: "150ms left",
+									"z-index": 1001,
+								}}
+							>
+								<div style="position:absolute; right: -14px;border-left: 2px solid #212121; border-right: 2px solid #212121; background: #2b2b2b; width: 10px; height: 100%;" />
+								<Show when={state.settingsPane.type}>
+									<div style={{}}>
+										<Switch>
+											<Match when={state.settingsPane.type === "global-settings"}>
+												<GlobalSettings />
+											</Match>
+											<Match
+												when={state.settingsPane.type === "workspace-settings"}
+											>
+												<WorkspaceSettings />
+											</Match>
+											<Match when={state.settingsPane.type.includes("node")}>
+												<NodeSettings />
+											</Match>
+											<Match when={state.settingsPane.type === "llama-settings"}>
+												<LlamaSettings />
+											</Match>
+											<Match when={state.settingsPane.type === "github-settings"}>
+												<GitHubSettings />
+											</Match>
+											<Match when={state.settingsPane.type === "colab-cloud-settings"}>
+												<ColabCloudSettings />
+											</Match>
+											<Match when={state.settingsPane.type === "plugin-marketplace"}>
+												<PluginMarketplace />
+											</Match>
+											<Match when={state.settingsPane.type === "plugin-settings"}>
+												<PluginSettings />
+											</Match>
+										</Switch>
+									</div>
+								</Show>
+							</div>
+							{githubAuthUrl() && (
+								<electrobun-webview
+									// nodeintegration={false}
+									ref={(el) => {
+										// YYY - el was Electron.WebviewTag type
+										githubAuthWebview = el; // as Electron.WebviewTag;
+										el.addEventListener(
+											"did-navigate",
+											githubAuthWebviewWillNavigate,
+										);
+									}}
+									class="webview-overlay"
+									partition={`persist:sites:${state.workspace.id}`}
+									style={{
+										position: "absolute",
+										top: "0px",
+										bottom: "0px", // Full height like settings pane
+										left: "514px", // Start after settings pane (500px + 14px border)
+										"z-index": 10,
+										right: "0px",
+										height: "auto",
+										width: "auto",
+										background: "#fff",
+									}}
+									src={githubAuthUrl()}
+								/>
+							)}
+						</div>
+					</div>
+					<StatusBar />
+					{/* Close Window Confirmation Dialog */}
+					<Dialog
+						isOpen={closeWindowDialogOpen}
+						title="Close Window?"
+						message={`You have ${Object.keys(getWindow()?.tabs || {}).length} open tab(s). Are you sure you want to close this window?`}
+						onConfirm={confirmCloseWindow}
+						onCancel={() => setCloseWindowDialogOpen(false)}
+						confirmText="Close Window"
+						cancelText="Cancel"
+						type="danger"
+					/>
 				</div>
 			</div>
-			<StatusBar />
-			{/* Close Window Confirmation Dialog */}
-			<Dialog
-				isOpen={closeWindowDialogOpen}
-				title="Close Window?"
-				message={`You have ${Object.keys(getWindow()?.tabs || {}).length} open tab(s). Are you sure you want to close this window?`}
-				onConfirm={confirmCloseWindow}
-				onCancel={() => setCloseWindowDialogOpen(false)}
-				confirmText="Close Window"
-				cancelText="Cancel"
-				type="danger"
-			/>
-		</div>
-	);
-};
+		);
+	};
 
 // const SettingsPaneCollapsableSection = ({label}) => {
 //   return ()
@@ -4182,6 +4319,7 @@ const Sidebar = () => {
 						<>
 							<TemplateNodes />
 							<OpenFilesTree />
+							<WorkspaceLensesTree />
 							<ProjectsTree />
 						</>
 					)}

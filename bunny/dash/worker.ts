@@ -12,7 +12,7 @@ import {
   type FSWatcher,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { ApplicationMenu, BrowserWindow, Tray, Utils, app } from "electrobun/bun";
+import { ApplicationMenu, BrowserWindow, ContextMenu, Tray, Utils, app } from "electrobun/bun";
 import {
   createDashDb,
   type DashDb,
@@ -189,6 +189,28 @@ type Snapshot = {
   state: DashState;
 };
 
+type BunnyDashWorkspaceLensPayload = {
+  currentWorkspaceId: string;
+  currentLensId: string;
+  workspaces: Array<{
+    id: string;
+    name: string;
+    subtitle: string;
+    isCurrent: boolean;
+    currentLensId: string;
+    currentLensIsActive: boolean;
+    canExpand: boolean;
+    lenses: Array<{
+      id: string;
+      name: string;
+      description: string;
+      workspaceId: string;
+      isCurrent: boolean;
+      isDirty: boolean;
+    }>;
+  }>;
+};
+
 let statePath = "";
 let permissions = new Set<string>();
 let dashDb: DashDb | null = null;
@@ -200,8 +222,10 @@ let tray: Tray | null = null;
 const terminalWindowOwners = new Map<string, string>();
 const expandedFsDirs = new Set<string>();
 const directoryWatchers = new Map<string, FSWatcher>();
+const framePersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 const LIVE_WINDOW_ID_SEPARATOR = "::";
+const WORKSPACE_CURRENT_LENS_PREFIX = "__workspace-current__:";
 const LEGACY_CURRENT_SESSION_MAIN_TABS: WindowTabId[] = [
   "workspace",
   "projects",
@@ -217,6 +241,7 @@ const LEGACY_CURRENT_SESSION_SIDE_TABS: WindowTabId[] = [
 ];
 const DEFAULT_STARTER_LENS_WINDOW: LensWindow = {
   id: "main",
+  lensId: "starter-lens",
   title: "Main",
   workspaceId: "local-workspace",
   mainTabIds: ["workspace"],
@@ -357,6 +382,17 @@ function sameTabIds(left: WindowTabId[], right: WindowTabId[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function sameLensWindowTemplate(left: LensWindow, right: LensWindow) {
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.title === right.title &&
+    left.currentMainTabId === right.currentMainTabId &&
+    left.currentSideTabId === right.currentSideTabId &&
+    sameTabIds(left.mainTabIds, right.mainTabIds) &&
+    sameTabIds(left.sideTabIds, right.sideTabIds)
+  );
+}
+
 function slugify(input: string) {
   return input
     .trim()
@@ -366,12 +402,26 @@ function slugify(input: string) {
     .replace(/-{2,}/g, "-") || "untitled";
 }
 
+function workspaceCurrentLensKey(workspaceId: string) {
+  return `${WORKSPACE_CURRENT_LENS_PREFIX}${workspaceId}`;
+}
+
+function isWorkspaceCurrentLensKey(key: string) {
+  return key.startsWith(WORKSPACE_CURRENT_LENS_PREFIX);
+}
+
 function log(message: string) {
   post({ type: "action", action: "log", payload: { message } });
 }
 
 function post(message: unknown) {
   self.postMessage(message);
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function getOrCreateBrowserWindow(windowId = state.currentWindowId, title?: string) {
@@ -402,6 +452,25 @@ function getOrCreateBrowserWindow(windowId = state.currentWindowId, title?: stri
     },
   });
   browserWindows.set(windowId, win);
+
+  win.on("move", (event: any) => {
+    updateColabWindowFrame(windowId, {
+      x: typeof event?.data?.x === "number" ? event.data.x : undefined,
+      y: typeof event?.data?.y === "number" ? event.data.y : undefined,
+    });
+    schedulePersistWindowFrame(windowId);
+  });
+
+  win.on("resize", (event: any) => {
+    updateColabWindowFrame(windowId, {
+      x: typeof event?.data?.x === "number" ? event.data.x : undefined,
+      y: typeof event?.data?.y === "number" ? event.data.y : undefined,
+      width: typeof event?.data?.width === "number" ? event.data.width : undefined,
+      height: typeof event?.data?.height === "number" ? event.data.height : undefined,
+    });
+    schedulePersistWindowFrame(windowId);
+  });
+
   return win;
 }
 
@@ -421,6 +490,20 @@ function closeWindow(windowId?: string) {
 
 function stopCarrot() {
   app.quit();
+}
+
+async function reopenRuntimeWindowsOnBoot() {
+  if (runtimeWindows.length === 0) {
+    return;
+  }
+
+  for (const runtimeWindow of runtimeWindows) {
+    getOrCreateBrowserWindow(runtimeWindow.id, runtimeWindow.title);
+  }
+
+  if (runtimeWindows.some((window) => window.id === state.currentWindowId)) {
+    focusWindow(state.currentWindowId, getCurrentWindow().title);
+  }
 }
 
 function getMenuStartingFolder() {
@@ -445,6 +528,171 @@ function openAboutWindow(url: string) {
 
 function sendToFocusedDashWindow(name: string, payload?: unknown) {
   emitViewMessage(name, payload, state.currentWindowId);
+}
+
+function sendToDashWindow(windowId: string | undefined, name: string, payload?: unknown) {
+  emitViewMessage(name, payload, windowId || state.currentWindowId);
+}
+
+async function forkLens(lensId: string) {
+  const lens = getLensByKey(lensId);
+  const lenses = listLenses();
+  const isCurrentLens = lens.key === getLensIdForWindow(getCurrentWindow());
+  const sourceWindow = isCurrentLens ? getCurrentWindow() : null;
+  if (isCurrentLens && sourceWindow) {
+    await syncRuntimeWindowFrameFromHost(sourceWindow.id);
+  }
+  const sourceColabWindow = isCurrentLens ? getCurrentColabWindow() : parseStoredColabWindow(lens);
+  const cleanName = uniqueKey(`${lens.name} Copy`, lenses.map((existing) => existing.name))
+    .replace(/-/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+  const key = uniqueKey(cleanName, lenses.map((existing) => existing.key));
+
+  const created = ensureDb().collection("layouts").insert({
+    key,
+    name: cleanName,
+    description: lens.description?.trim() || `Forked from ${lens.name}`,
+    workspaceId: getLensWorkspaceId(lens),
+    windowStateJson: serializeColabWindow(sourceColabWindow),
+    sortOrder: lenses.length,
+    windows: [sourceWindow ? toLensTemplateWindow(sourceWindow) : structuredClone(lens.windows[0] || DEFAULT_STARTER_LENS_WINDOW)],
+  });
+
+  flushDb();
+  await saveState();
+  syncTray();
+  emitSetProjectsForWindow(getCurrentWindow().id);
+  emitSnapshot();
+  log(`lens forked: ${created.name}`);
+  return snapshot();
+}
+
+async function handleContextMenuAction(action: string, data: any) {
+  const windowId = typeof data?.windowId === "string" ? data.windowId : state.currentWindowId;
+
+  switch (action) {
+    case "workspace_open_in_new_window":
+      await openWorkspaceInNewWindow(String(data?.workspaceId || getCurrentWorkspace().key));
+      return;
+    case "lens_open_in_new_window":
+      await openLensInNewWindow(String(data?.lensId || state.currentLayoutId));
+      return;
+    case "lens_fork":
+      await forkLens(String(data?.lensId || state.currentLayoutId));
+      return;
+    case "lens_delete":
+      await deleteLens(String(data?.lensId || state.currentLayoutId));
+      return;
+    case "focus_tab":
+      sendToDashWindow(windowId, "focusTab", { tabId: data?.tabId });
+      return;
+    case "open_new_tab":
+      sendToDashWindow(windowId, "openNewTab", { nodePath: data?.nodePath });
+      return;
+    case "open_as_text":
+      sendToDashWindow(windowId, "openAsText", { nodePath: data?.nodePath });
+      return;
+    case "show_node_settings":
+      sendToDashWindow(windowId, "showNodeSettings", { nodePath: data?.nodePath });
+      return;
+    case "add_child_node":
+      sendToDashWindow(windowId, "addChildNode", { nodePath: data?.nodePath });
+      return;
+    case "add_child_file":
+      sendToDashWindow(windowId, "addChildNode", {
+        nodePath: data?.nodePath,
+        nodeType: "file",
+      });
+      return;
+    case "add_child_folder":
+      sendToDashWindow(windowId, "addChildNode", {
+        nodePath: data?.nodePath,
+        nodeType: "dir",
+      });
+      return;
+    case "add_child_web":
+      sendToDashWindow(windowId, "addChildNode", {
+        nodePath: data?.nodePath,
+        nodeType: "web",
+      });
+      return;
+    case "add_child_agent":
+      sendToDashWindow(windowId, "addChildNode", {
+        nodePath: data?.nodePath,
+        nodeType: "agent",
+      });
+      return;
+    case "create_preload_file":
+      sendToDashWindow(windowId, "createSpecialFile", {
+        nodePath: data?.nodePath,
+        fileType: "preload",
+      });
+      return;
+    case "create_context_file":
+      sendToDashWindow(windowId, "createSpecialFile", {
+        nodePath: data?.nodePath,
+        fileType: "context",
+      });
+      return;
+    case "new_terminal":
+      sendToDashWindow(windowId, "newTerminal", { nodePath: data?.nodePath });
+      return;
+    case "clone_repo_to_folder":
+      sendToDashWindow(windowId, "addChildNode", {
+        nodePath: data?.nodePath,
+        nodeType: "repo",
+      });
+      return;
+    case "copy_path_to_clipboard":
+      await Utils.clipboardWriteText(String(data?.nodePath || ""));
+      return;
+    case "open_node_in_finder":
+      await Utils.showItemInFolder(String(data?.nodePath || ""));
+      return;
+    case "remove_project_from_colab": {
+      const project = findProjectMountByKey(String(data?.projectId || ""));
+      if (project) {
+        ensureDb().collection("projectMounts").remove(project.id);
+        flushDb();
+        syncProjectWatchers();
+        emitSetProjects();
+        await writeCompatibilityState();
+      }
+      return;
+    }
+    case "fully_delete_node_from_disk": {
+      const nodePath = String(data?.nodePath || "");
+      const projectId = typeof data?.projectId === "string" ? data.projectId : "";
+      if (projectId) {
+        const project = findProjectMountByKey(projectId);
+        if (project) {
+          ensureDb().collection("projectMounts").remove(project.id);
+          flushDb();
+        }
+      }
+      rmSync(nodePath, { recursive: true, force: true });
+      emitFileWatchEvent(nodePath);
+      emitSetProjects();
+      return;
+    }
+    case "split_pane_container":
+      sendToDashWindow(windowId, "splitPaneContainer", {
+        pathToPane: data?.pathToPane,
+        direction: data?.direction,
+      });
+      return;
+    case "remove_open_file":
+      sendToDashWindow(windowId, "removeOpenFile", { filePath: data?.filePath });
+      return;
+    case "open_open_file":
+      sendToDashWindow(windowId, "openFileInEditor", {
+        filePath: data?.filePath,
+        createIfNotExists: false,
+      });
+      return;
+    default:
+      return;
+  }
 }
 
 async function handleApplicationMenuAction(action: string) {
@@ -710,6 +958,7 @@ function ensureBootPromise() {
       ensureRuntimeState();
       currentState = captureCurrentState();
       syncApplicationMenu();
+      await reopenRuntimeWindowsOnBoot();
       post({ type: "ready" });
       syncTray();
       emitSnapshot();
@@ -733,6 +982,24 @@ ApplicationMenu.on("application-menu-clicked", (payload) => {
   void handleApplicationMenuAction(action);
 });
 
+ContextMenu.on("context-menu-clicked", (payload) => {
+  const action =
+    String(
+      (payload as { action?: string; data?: unknown } | undefined)?.action ||
+        (payload as { data?: { action?: string } } | undefined)?.data?.action ||
+        "",
+    );
+  if (!action) {
+    return;
+  }
+
+  const data =
+    (payload as { data?: unknown } | undefined)?.data ??
+    (payload as { data?: { data?: unknown } } | undefined)?.data?.data ??
+    {};
+  void handleContextMenuAction(action, data);
+});
+
 function flushDb() {
   const db = ensureDb() as any;
   if (typeof db.trySave === "function") {
@@ -741,18 +1008,21 @@ function flushDb() {
 }
 
 function getLensesForWorkspace(workspaceId: string) {
-  return listLenses().filter((lens) => getLensWorkspaceId(lens) === workspaceId);
+  return listLenses().filter(
+    (lens) => getLensWorkspaceId(lens) === workspaceId && !isWorkspaceCurrentLensKey(lens.key),
+  );
 }
 
 function setActiveWindow(windowId?: string) {
   if (!windowId) {
     return;
   }
-  if (!runtimeWindows.some((window) => window.id === windowId)) {
+  const runtimeWindow = runtimeWindows.find((window) => window.id === windowId);
+  if (!runtimeWindow) {
     return;
   }
   state.currentWindowId = windowId;
-  const lensId = lensIdFromWindowId(windowId);
+  const lensId = getLensIdForWindow(runtimeWindow);
   if (lensId && findLensByKey(lensId)) {
     state.currentLayoutId = lensId;
   }
@@ -819,6 +1089,37 @@ function getLensByKey(key: string) {
     throw new Error(`Unknown lens: ${key}`);
   }
   return layout;
+}
+
+function ensureWorkspaceCurrentLens(workspaceId: string) {
+  const existing = findLensByKey(workspaceCurrentLensKey(workspaceId));
+  if (existing) {
+    return existing;
+  }
+
+  const db = ensureDb();
+  const workspace = getWorkspaceByKey(workspaceId);
+  const hiddenLens = db.collection("layouts").insert({
+    key: workspaceCurrentLensKey(workspaceId),
+    name: "Current",
+    description: `Current working state for ${workspace.name}.`,
+    workspaceId,
+    windowStateJson: serializeColabWindow(makeDefaultColabWindow("main")),
+    sortOrder: listLenses().length,
+    windows: [
+      {
+        id: "main",
+        title: buildLiveWindowTitle(workspace, { name: "Current" } as LensDoc, "Main"),
+        workspaceId,
+        mainTabIds: ["workspace"],
+        sideTabIds: ["current-state"],
+        currentMainTabId: "workspace",
+        currentSideTabId: "current-state",
+      },
+    ],
+  });
+  flushDb();
+  return hiddenLens;
 }
 
 function getProjectMountsForWorkspace(workspaceId: string) {
@@ -902,7 +1203,24 @@ function lensIdFromWindowId(windowId: string) {
 }
 
 function getLensIdForWindow(window: LensWindow) {
+  if (window.lensId && findLensByKey(window.lensId)) {
+    return window.lensId;
+  }
   return lensIdFromWindowId(window.id) || state.currentLayoutId;
+}
+
+function resolveWindowLensId(window: LensWindow) {
+  if (window.lensId && findLensByKey(window.lensId)) {
+    return window.lensId;
+  }
+  const fromId = lensIdFromWindowId(window.id);
+  if (fromId && findLensByKey(fromId)) {
+    return fromId;
+  }
+  if (window.id === state.currentWindowId && findLensByKey(state.currentLayoutId)) {
+    return state.currentLayoutId;
+  }
+  return ensureWorkspaceCurrentLens(window.workspaceId).key;
 }
 
 function buildLiveWindowTitle(workspace: WorkspaceDoc, lens: LensDoc, windowTitle?: string) {
@@ -1084,9 +1402,45 @@ function emitSetProjectsForWindow(windowId: string) {
       tokens: colabState.tokens || [],
       workspace,
       appSettings: colabState.appSettings || defaultColabAppSettings,
+      bunnyDash: buildWorkspaceLensPayload(windowId),
     },
     windowId,
   );
+}
+
+function buildWorkspaceLensPayload(windowId = state.currentWindowId): BunnyDashWorkspaceLensPayload {
+  const runtimeWindow = runtimeWindows.find((window) => window.id === windowId) || getCurrentWindowUnsafe();
+  const currentWorkspaceId = runtimeWindow?.workspaceId || getCurrentWorkspace().key;
+  const currentLensId = runtimeWindow ? getLensIdForWindow(runtimeWindow) : state.currentLayoutId;
+
+  return {
+    currentWorkspaceId,
+    currentLensId,
+    workspaces: listWorkspaces().map((workspace) => ({
+      id: workspace.key,
+      name: workspace.name,
+      subtitle: workspace.subtitle,
+      isCurrent: workspace.key === currentWorkspaceId,
+      currentLensId: ensureWorkspaceCurrentLens(workspace.key).key,
+      currentLensIsActive:
+        workspace.key === currentWorkspaceId &&
+        ensureWorkspaceCurrentLens(workspace.key).key === currentLensId,
+      canExpand: getLensesForWorkspace(workspace.key).length > 0,
+      lenses: getLensesForWorkspace(workspace.key).map((lens) => ({
+        id: lens.key,
+        name: lens.name,
+        description: lens.description,
+        workspaceId: workspace.key,
+        isCurrent: workspace.key === currentWorkspaceId && lens.key === currentLensId,
+        isDirty:
+          workspace.key === currentWorkspaceId &&
+          lens.key === currentLensId &&
+          runtimeWindow != null
+            ? isLensDirtyInWindow(lens, runtimeWindow)
+            : false,
+      })),
+    })),
+  };
 }
 
 function emitSetProjects(workspaceId?: string) {
@@ -1218,6 +1572,10 @@ function getCurrentWindowUnsafe() {
 function getCurrentWorkspaceUnsafe() {
   const currentWindow = getCurrentWindowUnsafe();
   if (!currentWindow) {
+    const currentLens = findLensByKey(state.currentLayoutId);
+    if (currentLens) {
+      return findWorkspaceByKey(getLensWorkspaceId(currentLens)) || listWorkspaces()[0] || null;
+    }
     return listWorkspaces()[0] || null;
   }
 
@@ -1260,11 +1618,7 @@ function ensureRuntimeState() {
     state.currentLayoutId = layouts[0]!.key;
   }
 
-  if (runtimeWindows.length === 0) {
-    runtimeWindows = cloneWindows(getLensByKey(state.currentLayoutId).windows);
-  }
-
-  if (!runtimeWindows.some((window) => window.id === state.currentWindowId)) {
+  if (runtimeWindows.length > 0 && !runtimeWindows.some((window) => window.id === state.currentWindowId)) {
     state.currentWindowId = runtimeWindows[0]!.id;
   }
 
@@ -1273,6 +1627,7 @@ function ensureRuntimeState() {
     if (!workspaceIds.has(window.workspaceId)) {
       window.workspaceId = listWorkspaces()[0]!.key;
     }
+    window.lensId = resolveWindowLensId(window);
     if (!window.mainTabIds.includes(window.currentMainTabId)) {
       window.currentMainTabId = window.mainTabIds[0]!;
     }
@@ -1283,7 +1638,7 @@ function ensureRuntimeState() {
   }
 
   const activeWindow = getCurrentWindowUnsafe();
-  const activeLensId = activeWindow ? lensIdFromWindowId(activeWindow.id) : null;
+  const activeLensId = activeWindow ? getLensIdForWindow(activeWindow) : null;
   if (activeLensId && findLensByKey(activeLensId)) {
     state.currentLayoutId = activeLensId;
   }
@@ -1391,6 +1746,10 @@ function hydrateLensMetadata() {
   const db = ensureDb();
   let didUpdate = false;
 
+  for (const workspace of listWorkspaces()) {
+    ensureWorkspaceCurrentLens(workspace.key);
+  }
+
   for (const lens of listLenses()) {
     const workspaceId = getLensWorkspaceId(lens);
     const updates: Partial<LensDoc> = {};
@@ -1421,7 +1780,7 @@ function hydrateLensMetadata() {
 function buildStats() {
   const workspaces = listWorkspaces();
   const projects = listProjectMounts();
-  const lenses = listLenses();
+  const lenses = listLenses().filter((lens) => !isWorkspaceCurrentLensKey(lens.key));
   const instanceCount = new Set(projects.map((project) => project.instanceLabel)).size;
 
   return [
@@ -1801,7 +2160,8 @@ function snapshot(): Snapshot {
   const workspaces = listWorkspaces();
   const lenses = listLenses();
   const currentLens = getCurrentLens();
-  const currentWindow = getCurrentWindow();
+  const currentWindow =
+    getCurrentWindowUnsafe() || buildRuntimeWindowFromLens(currentLens, state.currentWindowId || "main");
   const currentWorkspace = getCurrentWorkspace();
   const tree = buildTree(currentWorkspace);
   const mainTabs = currentWindow.mainTabIds.map((tabId) =>
@@ -1937,6 +2297,7 @@ async function saveState() {
   const db = ensureDb();
   const uiDoc = getUiSettingsDoc();
   const snapshotDoc = getCurrentStateDoc();
+  const currentWindow = getCurrentWindowUnsafe();
 
   db.collection("uiSettings").update(uiDoc.id, {
     sidebarCollapsed: state.sidebarCollapsed,
@@ -1953,6 +2314,17 @@ async function saveState() {
     currentWindowId: currentState.currentWindowId,
     windows: cloneWindows(currentState.windows),
   });
+
+  if (currentWindow) {
+    await syncRuntimeWindowFrameFromHost(currentWindow.id);
+    const currentColabWindow = getCurrentColabWindow();
+    const currentWorkspaceLens = ensureWorkspaceCurrentLens(currentWindow.workspaceId);
+    db.collection("layouts").update(currentWorkspaceLens.id, {
+      workspaceId: currentWindow.workspaceId,
+      windowStateJson: serializeColabWindow(currentColabWindow),
+      windows: [toLensTemplateWindow(currentWindow)],
+    });
+  }
 
   flushDb();
   await writeCompatibilityState();
@@ -2076,8 +2448,21 @@ function buildRuntimeWindowFromLens(lens: LensDoc, windowId?: string): LensWindo
   return {
     ...template,
     id: windowId || template.id,
+    lensId: lens.key,
     workspaceId: workspace.key,
     title: buildLiveWindowTitle(workspace, lens, template.title),
+  };
+}
+
+function buildDefaultRuntimeWindowForWorkspace(workspaceId: string, windowId: string): LensWindow {
+  const workspace = getWorkspaceByKey(workspaceId);
+  const currentLens = ensureWorkspaceCurrentLens(workspace.key);
+  return {
+    ...structuredClone(DEFAULT_STARTER_LENS_WINDOW),
+    id: windowId,
+    lensId: currentLens.key,
+    workspaceId: workspace.key,
+    title: "Main",
   };
 }
 
@@ -2089,23 +2474,105 @@ function applyLensWindowStateToRuntimeWindow(lens: LensDoc, runtimeWindowId: str
   return nextWindow;
 }
 
+function applyDefaultWorkspaceStateToRuntimeWindow(runtimeWindowId: string, workspaceId: string) {
+  removeColabWindowFromAllWorkspaces(runtimeWindowId);
+  const nextWindow = makeDefaultColabWindow(runtimeWindowId);
+  upsertColabWindowForWorkspace(workspaceId, nextWindow);
+  return nextWindow;
+}
+
 function getCurrentColabWindow() {
   return ensureColabWorkspaceWindow(getCurrentWindow(), getCurrentLens());
 }
 
+function updateColabWindowFrame(
+  windowId: string,
+  frame: Partial<{ x: number; y: number; width: number; height: number }>,
+) {
+  const colabWindow = getColabWindowForRuntimeWindow(windowId);
+  if (!colabWindow) {
+    return;
+  }
+
+  colabWindow.position = {
+    ...colabWindow.position,
+    ...(typeof frame.x === "number" ? { x: frame.x } : {}),
+    ...(typeof frame.y === "number" ? { y: frame.y } : {}),
+    ...(typeof frame.width === "number" ? { width: frame.width } : {}),
+    ...(typeof frame.height === "number" ? { height: frame.height } : {}),
+  };
+  upsertColabWindowForWorkspace(
+    runtimeWindows.find((window) => window.id === windowId)?.workspaceId || getCurrentWorkspace().key,
+    colabWindow,
+  );
+}
+
+function schedulePersistWindowFrame(windowId: string) {
+  const existing = framePersistTimers.get(windowId);
+  if (existing) {
+    clearTimeout(existing);
+  }
+
+  framePersistTimers.set(
+    windowId,
+    setTimeout(() => {
+      framePersistTimers.delete(windowId);
+      if (state.currentWindowId !== windowId) {
+        return;
+      }
+      void saveState();
+    }, 120),
+  );
+}
+
+function isLensDirtyInWindow(lens: LensDoc, window: LensWindow) {
+  const currentColabWindow = getColabWindowForRuntimeWindow(window.id);
+  if (!currentColabWindow) {
+    return false;
+  }
+
+  const savedColabWindow = parseStoredColabWindow(lens);
+  const savedTemplate = lens.windows[0] || DEFAULT_STARTER_LENS_WINDOW;
+  const currentTemplate = toLensTemplateWindow(window);
+
+  return (
+    JSON.stringify(currentColabWindow) !== JSON.stringify(savedColabWindow) ||
+    !sameLensWindowTemplate(currentTemplate, savedTemplate)
+  );
+}
+
 async function restoreLensInCurrentWindow(lensId: string) {
   const lens = getLensByKey(lensId);
+  const savedWindowState = parseStoredColabWindow(lens);
+  log(
+    `restoreLensInCurrentWindow begin: ${lens.key} rootPane=${savedWindowState.rootPane.type} currentPane=${savedWindowState.currentPaneId}`,
+  );
   const currentWindow = getCurrentWindow();
   const restoredWindow = buildRuntimeWindowFromLens(lens, currentWindow.id);
 
   currentWindow.title = restoredWindow.title;
+  currentWindow.lensId = restoredWindow.lensId;
   currentWindow.workspaceId = restoredWindow.workspaceId;
   currentWindow.mainTabIds = [...restoredWindow.mainTabIds];
   currentWindow.sideTabIds = [...restoredWindow.sideTabIds];
   currentWindow.currentMainTabId = restoredWindow.currentMainTabId;
   currentWindow.currentSideTabId = restoredWindow.currentSideTabId;
 
-  applyLensWindowStateToRuntimeWindow(lens, currentWindow.id, restoredWindow.workspaceId);
+  const restoredColabWindow = applyLensWindowStateToRuntimeWindow(
+    lens,
+    currentWindow.id,
+    restoredWindow.workspaceId,
+  );
+  const existingBrowserWindow = browserWindows.get(currentWindow.id);
+  if (existingBrowserWindow) {
+    existingBrowserWindow.setTitle(restoredWindow.title);
+    existingBrowserWindow.setFrame(
+      restoredColabWindow.position.x,
+      restoredColabWindow.position.y,
+      restoredColabWindow.position.width,
+      restoredColabWindow.position.height,
+    );
+  }
   state.currentLayoutId = lens.key;
   state.commandPaletteOpen = false;
   state.commandQuery = "";
@@ -2120,6 +2587,10 @@ async function restoreLensInCurrentWindow(lensId: string) {
 
 async function openLensInNewWindow(lensId: string) {
   const lens = getLensByKey(lensId);
+  const savedWindowState = parseStoredColabWindow(lens);
+  log(
+    `openLensInNewWindow begin: ${lens.key} rootPane=${savedWindowState.rootPane.type} currentPane=${savedWindowState.currentPaneId}`,
+  );
   const liveWindowId = makeLiveWindowId(lens.key, lens.windows[0]?.id || "main");
   const runtimeWindow = buildRuntimeWindowFromLens(lens, liveWindowId);
 
@@ -2140,16 +2611,32 @@ async function openLensInNewWindow(lensId: string) {
   return snapshot();
 }
 
-async function activateLens(lensId: string) {
-  const currentWindow = getCurrentWindow();
-  const currentLensId = getLensIdForWindow(currentWindow);
-  if (currentLensId === lensId) {
-    return restoreLensInCurrentWindow(lensId);
+async function focusExistingLensWindow(windowId: string) {
+  const runtimeWindow = runtimeWindows.find((window) => window.id === windowId);
+  if (!runtimeWindow) {
+    throw new Error(`Unknown runtime window: ${windowId}`);
   }
-  return openLensInNewWindow(lensId);
+
+  state.currentWindowId = runtimeWindow.id;
+  state.currentLayoutId = getLensIdForWindow(runtimeWindow);
+  state.commandPaletteOpen = false;
+  state.commandQuery = "";
+  syncActiveTreeNode();
+  await saveState();
+  syncTray();
+  emitSnapshot();
+  emitSetProjectsForWindow(runtimeWindow.id);
+  focusWindow(runtimeWindow.id, runtimeWindow.title);
+  log(`lens focused: ${state.currentLayoutId}`);
+  return snapshot();
+}
+
+async function activateLens(lensId: string) {
+  return restoreLensInCurrentWindow(lensId);
 }
 
 async function openLens(lensId: string) {
+  log(`openLens request: ${lensId}`);
   return activateLens(lensId);
 }
 
@@ -2171,7 +2658,9 @@ async function restoreCurrentState() {
   syncTray();
   emitSetProjects();
   emitSnapshot();
-  focusWindow(state.currentWindowId, getCurrentWindow().title);
+  if (runtimeWindows.length > 0) {
+    focusWindow(state.currentWindowId, getCurrentWindow().title);
+  }
   log("current state restored");
 }
 
@@ -2179,7 +2668,11 @@ async function overwriteCurrentLens() {
   const db = ensureDb();
   const lens = getCurrentLens();
   const currentWindow = getCurrentWindow();
+  await syncRuntimeWindowFrameFromHost(currentWindow.id);
   const currentColabWindow = getCurrentColabWindow();
+  log(
+    `overwriteCurrentLens begin: ${lens.key} rootPane=${currentColabWindow.rootPane.type} currentPane=${currentColabWindow.currentPaneId}`,
+  );
   db.collection("layouts").update(lens.id, {
     workspaceId: currentWindow.workspaceId,
     windowStateJson: serializeColabWindow(currentColabWindow),
@@ -2188,6 +2681,7 @@ async function overwriteCurrentLens() {
   flushDb();
   await saveState();
   syncTray();
+  emitSetProjectsForWindow(currentWindow.id);
   emitSnapshot();
   log(`lens overwritten: ${lens.name}`);
 }
@@ -2195,7 +2689,6 @@ async function overwriteCurrentLens() {
 async function createWorkspace(name: string, subtitle = "") {
   const db = ensureDb();
   const workspaces = listWorkspaces();
-  const lenses = listLenses();
   const key = uniqueKey(name, workspaces.map((workspace) => workspace.key));
   const created = db.collection("workspaces").insert({
     key,
@@ -2204,34 +2697,19 @@ async function createWorkspace(name: string, subtitle = "") {
     sortOrder: workspaces.length,
   });
 
-  const starterColabWindow = makeDefaultColabWindow("main");
-  const lensName = `${created.name} Lens`;
-  const lensKey = uniqueKey(lensName, lenses.map((lens) => lens.key));
-  const createdLens = db.collection("layouts").insert({
-    key: lensKey,
-    name: lensName,
-    description: `Starter lens for ${created.name}.`,
-    workspaceId: created.key,
-    windowStateJson: serializeColabWindow(starterColabWindow),
-    sortOrder: lenses.length,
-    windows: [
-      {
-        id: "main",
-        title: buildLiveWindowTitle(created, { name: lensName } as LensDoc, "Main"),
-        workspaceId: created.key,
-        mainTabIds: ["workspace"],
-        sideTabIds: ["current-state"],
-        currentMainTabId: "workspace",
-        currentSideTabId: "current-state",
-      },
-    ],
-  });
+  const currentLens = ensureWorkspaceCurrentLens(created.key);
+  const starterColabWindow = parseStoredColabWindow(currentLens);
+  const starterRuntimeWindow = buildRuntimeWindowFromLens(currentLens, getCurrentWindow().id);
 
   const currentWindow = getCurrentWindow();
   currentWindow.workspaceId = created.key;
-  currentWindow.title = buildLiveWindowTitle(created, createdLens, "Main");
-  state.currentLayoutId = createdLens.key;
-  state.activeTreeNodeId = `lens-overview:${createdLens.key}`;
+  currentWindow.title = starterRuntimeWindow.title;
+  currentWindow.mainTabIds = [...starterRuntimeWindow.mainTabIds];
+  currentWindow.sideTabIds = [...starterRuntimeWindow.sideTabIds];
+  currentWindow.currentMainTabId = starterRuntimeWindow.currentMainTabId;
+  currentWindow.currentSideTabId = starterRuntimeWindow.currentSideTabId;
+  state.currentLayoutId = currentLens.key;
+  state.activeTreeNodeId = `workspace-overview:${created.key}`;
   removeColabWindowFromAllWorkspaces(currentWindow.id);
   upsertColabWindowForWorkspace(created.key, {
     ...starterColabWindow,
@@ -2309,14 +2787,20 @@ async function addProjectMount(params: {
 
 async function saveLens(name: string, description = "") {
   const lenses = listLenses();
-  const cleanName = name.trim();
-  if (!cleanName) {
-    throw new Error("Lens name is required");
-  }
+  const workspace = getCurrentWorkspace();
+  await syncRuntimeWindowFrameFromHost(getCurrentWindow().id);
+  const currentColabWindow = getCurrentColabWindow();
+  log(
+    `saveLens begin: workspace=${workspace.key} name=${name || "<auto>"} rootPane=${currentColabWindow.rootPane.type} currentPane=${currentColabWindow.currentPaneId}`,
+  );
+  const cleanName =
+    name.trim() ||
+    uniqueKey(`${workspace.name} Lens`, getLensesForWorkspace(workspace.key).map((lens) => lens.name))
+      .replace(/-/g, " ")
+      .replace(/\b\w/g, (match) => match.toUpperCase());
 
   const key = uniqueKey(cleanName, lenses.map((lens) => lens.key));
   const currentWindow = getCurrentWindow();
-  const currentColabWindow = getCurrentColabWindow();
   const created = ensureDb().collection("layouts").insert({
     key,
     name: cleanName,
@@ -2328,23 +2812,116 @@ async function saveLens(name: string, description = "") {
   });
 
   state.currentLayoutId = created.key;
+  currentWindow.lensId = created.key;
   state.activeTreeNodeId = `lens-overview:${created.key}`;
   flushDb();
   await saveState();
   syncTray();
+  emitSetProjectsForWindow(currentWindow.id);
   emitSnapshot();
   log(`lens saved: ${created.name}`);
   return snapshot();
 }
 
+async function openWorkspaceInNewWindow(workspaceId: string) {
+  const workspace = getWorkspaceByKey(workspaceId);
+  const currentLens = ensureWorkspaceCurrentLens(workspace.key);
+  const savedWindowState = parseStoredColabWindow(currentLens);
+  log(
+    `openWorkspaceInNewWindow begin: ${workspace.key} rootPane=${savedWindowState.rootPane.type} currentPane=${savedWindowState.currentPaneId}`,
+  );
+  const liveWindowId = makeLiveWindowId(currentLens.key, currentLens.windows[0]?.id || "main");
+  const runtimeWindow = buildRuntimeWindowFromLens(currentLens, liveWindowId);
+
+  runtimeWindows.push(runtimeWindow);
+  applyLensWindowStateToRuntimeWindow(currentLens, liveWindowId, runtimeWindow.workspaceId);
+
+  state.currentWindowId = liveWindowId;
+  state.currentLayoutId = currentLens.key;
+  state.commandPaletteOpen = false;
+  state.commandQuery = "";
+  state.activeTreeNodeId = `workspace-overview:${workspace.key}`;
+  await saveState();
+  syncTray();
+  emitSnapshot();
+  emitSetProjectsForWindow(liveWindowId);
+  focusWindow(liveWindowId, runtimeWindow.title);
+  log(`workspace opened in new window: ${workspace.name}`);
+  return snapshot();
+}
+
+async function syncRuntimeWindowFrameFromHost(windowId = state.currentWindowId) {
+  const frame = await app.getWindowFrame(windowId);
+  if (!frame) {
+    return null;
+  }
+  updateColabWindowFrame(windowId, frame);
+  return frame;
+}
+
+async function deleteLens(lensId: string) {
+  const lens = getLensByKey(lensId);
+  if (isWorkspaceCurrentLensKey(lens.key)) {
+    throw new Error("Cannot delete a workspace current lens");
+  }
+
+  const workspaceId = getLensWorkspaceId(lens);
+  const replacementLens = ensureWorkspaceCurrentLens(workspaceId);
+  const affectedWindows = runtimeWindows.filter((window) => getLensIdForWindow(window) === lens.key);
+
+  for (const runtimeWindow of affectedWindows) {
+    const restoredWindow = buildRuntimeWindowFromLens(replacementLens, runtimeWindow.id);
+    runtimeWindow.title = restoredWindow.title;
+    runtimeWindow.lensId = restoredWindow.lensId;
+    runtimeWindow.workspaceId = restoredWindow.workspaceId;
+    runtimeWindow.mainTabIds = [...restoredWindow.mainTabIds];
+    runtimeWindow.sideTabIds = [...restoredWindow.sideTabIds];
+    runtimeWindow.currentMainTabId = restoredWindow.currentMainTabId;
+    runtimeWindow.currentSideTabId = restoredWindow.currentSideTabId;
+
+    const restoredColabWindow = applyLensWindowStateToRuntimeWindow(
+      replacementLens,
+      runtimeWindow.id,
+      restoredWindow.workspaceId,
+    );
+    const existingBrowserWindow = browserWindows.get(runtimeWindow.id);
+    if (existingBrowserWindow) {
+      existingBrowserWindow.setTitle(restoredWindow.title);
+      existingBrowserWindow.setFrame(
+        restoredColabWindow.position.x,
+        restoredColabWindow.position.y,
+        restoredColabWindow.position.width,
+        restoredColabWindow.position.height,
+      );
+    }
+  }
+
+  ensureDb().collection("layouts").remove(lens.id);
+  if (state.currentLayoutId === lens.key) {
+    state.currentLayoutId = replacementLens.key;
+  }
+  if (state.activeTreeNodeId === `lens-overview:${lens.key}`) {
+    state.activeTreeNodeId = `workspace-overview:${workspaceId}`;
+  }
+  flushDb();
+  await saveState();
+  syncTray();
+  emitSetProjects();
+  emitSnapshot();
+  log(`lens deleted: ${lens.name}`);
+  return snapshot();
+}
+
 async function openWorkspace(workspaceId: string) {
   const workspace = getWorkspaceByKey(workspaceId);
-  const firstLens = getLensesForWorkspace(workspace.key)[0];
-  if (!firstLens) {
-    log(`workspace has no lenses: ${workspace.name}`);
-    return;
-  }
-  await openLensInNewWindow(firstLens.key);
+  const currentLens = ensureWorkspaceCurrentLens(workspace.key);
+  log(`openWorkspace request: ${workspace.key}`);
+  await restoreLensInCurrentWindow(currentLens.key);
+  state.activeTreeNodeId = `workspace-overview:${workspace.key}`;
+  await saveState();
+  emitSetProjectsForWindow(getCurrentWindow().id);
+  emitSnapshot();
+  return snapshot();
 }
 
 async function openQuickAccess(tabId: "browser" | "terminal" | "agent") {
@@ -2359,17 +2936,21 @@ async function openQuickAccess(tabId: "browser" | "terminal" | "agent") {
 
 async function handleTrayAction(action: string) {
   if (action === "open-window") {
+    if (runtimeWindows.length === 0) {
+      await openWorkspaceInNewWindow(getCurrentWorkspace().key);
+      return;
+    }
     focusWindow(state.currentWindowId, getCurrentWindow().title);
   } else if (action === "resume-last-state" || action === "restore-current-state") {
     await restoreCurrentState();
   } else if (action === "update-current-layout" || action === "overwrite-current-lens") {
     await overwriteCurrentLens();
   } else if (action.startsWith("layout:")) {
-    await openLens(action.replace("layout:", ""));
+    await openLensInNewWindow(action.replace("layout:", ""));
   } else if (action.startsWith("lens:")) {
-    await openLens(action.replace("lens:", ""));
+    await openLensInNewWindow(action.replace("lens:", ""));
   } else if (action.startsWith("workspace:")) {
-    await openWorkspace(action.replace("workspace:", ""));
+    await openWorkspaceInNewWindow(action.replace("workspace:", ""));
   } else if (action === "stop") {
     stopCarrot();
   }
@@ -2440,6 +3021,7 @@ function syncTray() {
   if (!permissions.has("host:tray")) return;
   const currentLens = getCurrentLens();
   const workspaces = listWorkspaces();
+  const currentWorkspace = getCurrentWorkspaceUnsafe();
 
   if (!tray) {
     tray = new Tray({ title: `Dash: ${currentLens.name}` });
@@ -2457,16 +3039,16 @@ function syncTray() {
     { type: "divider" },
     {
       type: "normal",
-      label: "Open Lens",
-      action: "noop-lens",
-      submenu: workspaces.map((workspace) => ({
-        type: "normal",
-        label: workspace.name,
-        action: `noop-workspace:${workspace.key}`,
-        submenu: getLensesForWorkspace(workspace.key).map((lens) => ({
+        label: "Open Lens",
+        action: "noop-lens",
+        submenu: workspaces.map((workspace) => ({
           type: "normal",
-          label:
-            lens.key === state.currentLayoutId && workspace.key === getCurrentWorkspace().key
+          label: workspace.name,
+          action: `noop-workspace:${workspace.key}`,
+          submenu: getLensesForWorkspace(workspace.key).map((lens) => ({
+            type: "normal",
+            label:
+            lens.key === state.currentLayoutId && workspace.key === currentWorkspace?.key
               ? `• ${lens.name}`
               : lens.name,
           action: `lens:${lens.key}`,
@@ -2714,6 +3296,7 @@ async function handleColabRequest(method: string, params: any) {
         paths: colabPaths(),
         peerDependencies: colabPeerDependencies(),
         workspace,
+        bunnyDash: buildWorkspaceLensPayload(getCurrentWindow().id),
         projects: colabProjectsForWorkspace(workspace.id),
         tokens: colabState.tokens || [],
         appSettings: colabState.appSettings || defaultColabAppSettings,
@@ -2748,9 +3331,11 @@ async function handleColabRequest(method: string, params: any) {
         return result;
       });
     case "syncWorkspace":
+      log(`syncWorkspace request: workspace=${getCurrentWorkspace().key}`);
       colabState.workspaces ||= {};
       colabState.workspaces[getCurrentWorkspace().key] = params.workspace;
-      await writeCompatibilityState();
+      await saveState();
+      emitSetProjectsForWindow(getCurrentWindow().id);
       return;
     case "syncAppSettings":
       colabState.appSettings = params.appSettings;
@@ -2887,6 +3472,7 @@ async function handleColabRequest(method: string, params: any) {
     case "getFaviconForUrl":
       return "views://assets/file-icons/bookmark.svg";
     case "showContextMenu":
+      ContextMenu.showContextMenu(Array.isArray(params?.menuItems) ? params.menuItems : []);
       return;
     case "pluginGetFileDecoration":
     case "pluginFindSlateForFolder":
@@ -3104,11 +3690,32 @@ self.onmessage = async (event) => {
     if (message.name === "window-closed") {
       const closedWindowId = String(message.payload?.windowId || "");
       browserWindows.delete(closedWindowId);
+      removeColabWindowFromAllWorkspaces(closedWindowId);
+      runtimeWindows = runtimeWindows.filter((window) => window.id !== closedWindowId);
       terminalWindowOwners.forEach((ownerWindowId, terminalId) => {
         if (ownerWindowId === closedWindowId) {
           terminalWindowOwners.delete(terminalId);
         }
       });
+      const pendingPersist = framePersistTimers.get(closedWindowId);
+      if (pendingPersist) {
+        clearTimeout(pendingPersist);
+        framePersistTimers.delete(closedWindowId);
+      }
+      if (state.currentWindowId === closedWindowId) {
+        state.currentWindowId = runtimeWindows[0]?.id || "";
+      }
+      if (runtimeWindows.length > 0) {
+        const currentWindow = getCurrentWindowUnsafe();
+        if (currentWindow) {
+          state.currentLayoutId = getLensIdForWindow(currentWindow);
+        }
+      }
+      syncActiveTreeNode();
+      await saveState();
+      syncTray();
+      emitSetProjects();
+      emitSnapshot();
       return;
     }
     return;
@@ -3196,8 +3803,17 @@ self.onmessage = async (event) => {
         await openLens(String(message.params?.lensId || message.params?.layoutId || state.currentLayoutId));
         post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
         break;
+      case "openLensInNewWindow":
+        await openLensInNewWindow(String(message.params?.lensId || state.currentLayoutId));
+        post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
+        break;
       case "switchWorkspace":
+      case "openWorkspace":
         await openWorkspace(String(message.params?.workspaceId || getCurrentWorkspace().key));
+        post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
+        break;
+      case "openWorkspaceInNewWindow":
+        await openWorkspaceInNewWindow(String(message.params?.workspaceId || getCurrentWorkspace().key));
         post({ type: "response", requestId: message.requestId, success: true, payload: snapshot() });
         break;
       case "selectLayoutWindow":

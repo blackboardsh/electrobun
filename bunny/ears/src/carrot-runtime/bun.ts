@@ -49,6 +49,8 @@ type CarrotApplicationMenuItem =
     }
   | { type: "divider" | "separator" };
 
+type CarrotContextMenuItem = CarrotApplicationMenuItem;
+
 type InitMessage = {
   type: "init";
   manifest?: {
@@ -315,6 +317,16 @@ class RuntimeWindow {
       return;
     }
 
+    if (name === "window-move" || name === "window-resize") {
+      instance.frame = {
+        ...instance.frame,
+        ...(typeof payload.x === "number" ? { x: payload.x } : {}),
+        ...(typeof payload.y === "number" ? { y: payload.y } : {}),
+        ...(typeof payload.width === "number" ? { width: payload.width } : {}),
+        ...(typeof payload.height === "number" ? { height: payload.height } : {}),
+      };
+    }
+
     if (name === "window-closed") {
       RuntimeWindow.instances.delete(windowId);
     }
@@ -322,8 +334,28 @@ class RuntimeWindow {
     instance.handlers.get(name)?.forEach((handler) => handler(payload));
   }
 
-  on(name: "focus" | "close" | "window-focus" | "window-closed", handler: (payload: unknown) => void) {
-    const eventName = name === "focus" ? "window-focus" : name === "close" ? "window-closed" : name;
+  on(
+    name:
+      | "focus"
+      | "close"
+      | "move"
+      | "resize"
+      | "window-focus"
+      | "window-closed"
+      | "window-move"
+      | "window-resize",
+    handler: (payload: unknown) => void,
+  ) {
+    const eventName =
+      name === "focus"
+        ? "window-focus"
+        : name === "close"
+          ? "window-closed"
+          : name === "move"
+            ? "window-move"
+            : name === "resize"
+              ? "window-resize"
+              : name;
     const handlers = this.handlers.get(eventName) ?? new Set<(payload: unknown) => void>();
     handlers.add(handler);
     this.handlers.set(eventName, handlers);
@@ -395,6 +427,14 @@ carrotRuntime.on("window-focus", (payload) => {
 
 carrotRuntime.on("window-closed", (payload) => {
   RuntimeWindow.dispatch("window-closed", payload as { windowId?: string });
+});
+
+carrotRuntime.on("window-move", (payload) => {
+  RuntimeWindow.dispatch("window-move", payload as { windowId?: string });
+});
+
+carrotRuntime.on("window-resize", (payload) => {
+  RuntimeWindow.dispatch("window-resize", payload as { windowId?: string });
 });
 
 class RuntimeTray {
@@ -503,6 +543,20 @@ export const ApplicationMenu = {
   },
 };
 
+export const ContextMenu = {
+  showContextMenu(menu: CarrotContextMenuItem[]) {
+    if (!Array.isArray(menu) || menu.length === 0) {
+      return;
+    }
+    carrotRuntime.sendAction("show-context-menu", {
+      menu,
+    });
+  },
+  on(name: "context-menu-clicked", handler: EventHandler) {
+    return carrotRuntime.on(name, handler);
+  },
+};
+
 export const Updater = {
   checkForUpdate() {
     throw new Error("Updater is not implemented for carrots yet");
@@ -543,6 +597,16 @@ export const app = {
   get logsPath() {
     return carrotRuntime.context?.logsPath ?? "";
   },
+  async getWindowFrame(windowId?: string) {
+    return carrotRuntime.requestHost<{
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    } | null>("window-get-frame", {
+      windowId,
+    });
+  },
 };
 
 const Electrobun = {
@@ -551,6 +615,7 @@ const Electrobun = {
   Utils,
   Screen,
   ApplicationMenu,
+  ContextMenu,
   Updater,
   app,
 };
@@ -559,5 +624,6 @@ export type WindowOptionsType = CarrotWindowOptions;
 export type TrayOptions = CarrotTrayOptions;
 export type MenuItemConfig = CarrotMenuItem;
 export type ApplicationMenuItemConfig = CarrotApplicationMenuItem;
+export type ContextMenuItemConfig = CarrotContextMenuItem;
 
 export default Electrobun;

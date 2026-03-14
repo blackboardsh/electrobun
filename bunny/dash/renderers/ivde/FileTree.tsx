@@ -31,6 +31,7 @@ import { getNode } from "./FileWatcher";
 
 import {
 	type AppState,
+	type BunnyDashWorkspaceTreeType,
 	editNodeSettings,
 	focusTabWithId,
 	getCurrentTab,
@@ -42,6 +43,7 @@ import {
 	setNodeExpanded,
 	setState,
 	state,
+	syncWorkspaceNow,
 	updateSyncedState,
 	removeOpenFile,
 } from "./store";
@@ -128,6 +130,75 @@ const makeSafeSerializer = () => {
 		return value;
 	};
 };
+
+async function refreshDashStateFromWorker() {
+	const nextState = await electrobun.rpc?.request.getInitialState();
+	if (!nextState) {
+		return;
+	}
+
+	const payload = nextState as {
+		windowId?: string;
+		workspace?: unknown;
+		bunnyDash?: unknown;
+		projects?: Array<{ id: string }>;
+		tokens?: unknown[];
+		appSettings?: Record<string, unknown>;
+	};
+
+	const projectsById = Array.isArray(payload.projects)
+		? payload.projects.reduce((acc: Record<string, any>, project: any) => {
+				if (project?.id) {
+					acc[project.id] = project;
+				}
+				return acc;
+			}, {})
+		: {};
+
+	if (payload.windowId) {
+		setState("windowId", payload.windowId);
+	}
+	if (payload.workspace) {
+		setState("workspace", payload.workspace as any);
+	}
+	if (payload.bunnyDash) {
+		setState("bunnyDash", payload.bunnyDash as any);
+	}
+	setState("projects", projectsById);
+	setState("tokens", Array.isArray(payload.tokens) ? payload.tokens : []);
+	if (payload.appSettings) {
+		setState("appSettings", { ...state.appSettings, ...payload.appSettings });
+	}
+}
+
+function dispatchWindowTransition(name: "begin" | "end", label?: string) {
+	if (name === "begin") {
+		window.dispatchEvent(
+			new CustomEvent("bunnyDashBeginWindowTransition", {
+				detail: { label },
+			}),
+		);
+		return;
+	}
+
+	window.dispatchEvent(new CustomEvent("bunnyDashEndWindowTransition"));
+}
+
+function sleep(ms: number) {
+	return new Promise<void>((resolve) => {
+		setTimeout(resolve, ms);
+	});
+}
+
+async function runInWindowTransition<T>(label: string, work: () => Promise<T>) {
+	dispatchWindowTransition("begin", label);
+	await sleep(1000);
+	try {
+		return await work();
+	} finally {
+		dispatchWindowTransition("end");
+	}
+}
 
 export const createContextMenuAction = (action: string, data: any) => {
 	return {
@@ -535,6 +606,482 @@ export const ProjectsTree = () => {
 					);
 				}}
 			</For>
+		</>
+	);
+};
+
+const WorkspaceTreeRow = (props: {
+	node: CachedFileType | PreviewFileTreeType;
+	label: string;
+	icon: string;
+	isCurrent?: boolean;
+	expanded?: Accessor<boolean>;
+	hasChildren?: boolean;
+	onToggle?: () => void;
+	onActivate?: (event: MouseEvent) => void;
+	onContextMenu?: (event: MouseEvent) => void;
+	subtitle?: string;
+	actions?: Array<{
+		label: string;
+		onClick: () => void;
+	}>;
+}) => {
+	const [isHovered, setIsHovered] = createSignal(false);
+	const [isExpandHovered, setIsExpandHovered] = createSignal(false);
+
+	const focusedRowBackground = () => {
+		if (props.isCurrent) {
+			return "rgba(0, 150, 255, 0.3)";
+		}
+		if (isHovered()) {
+			return "rgba(0, 0, 0, 0.1)";
+		}
+		return "transparent";
+	};
+
+	return (
+		<span
+			onClick={(event) => {
+				event.stopPropagation();
+				props.onActivate?.(event);
+			}}
+			onContextMenu={(event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				props.onContextMenu?.(event);
+			}}
+			onMouseEnter={() => setIsHovered(true)}
+			onMouseLeave={() => {
+				setIsHovered(false);
+				setIsExpandHovered(false);
+			}}
+			style={{
+				"-webkit-user-select": "none",
+				display: "flex",
+				"text-overflow": "ellipsis",
+				width: "100%",
+				overflow: "hidden",
+				cursor: "pointer",
+				position: "relative",
+			}}
+		>
+			<span
+				style={{
+					background: focusedRowBackground(),
+					transition: "background-color 0.25s ease-out",
+					position: "absolute",
+					top: "0px",
+					right: "0px",
+					height: "23px",
+					left: "-100px",
+				}}
+			/>
+			<span
+				style={{
+					padding: "0px 4px 0 5px",
+					width: "8px",
+					height: "23px",
+					"margin-left": "0px",
+					color: "#666",
+					background: "transparent",
+					display: "flex",
+					"align-items": "center",
+					opacity: props.hasChildren ? "1" : "0.2",
+				}}
+			>
+				<div
+					onMouseEnter={() => setIsExpandHovered(true)}
+					onMouseLeave={() => setIsExpandHovered(false)}
+					onClick={(event) => {
+						event.stopPropagation();
+						props.onToggle?.();
+					}}
+					style={{
+						width: "8px",
+						rotate: props.expanded?.() ? "0deg" : "-90deg",
+						translate: isExpandHovered() ? "2px" : "0px",
+						"transform-origin": "center",
+						transition: "translate 0.1s ease-in-out, rotate 0.2s ease-in-out",
+						display: "flex",
+						"align-items": "center",
+						visibility: props.hasChildren ? "visible" : "hidden",
+					}}
+				>
+					<Show when={props.hasChildren}>
+						<img
+							width={10}
+							height={10}
+							src="views://assets/file-icons/folder-arrow-down.svg"
+							style={{
+								rotate: props.expanded?.() ? "0deg" : "-90deg",
+							}}
+						/>
+					</Show>
+				</div>
+			</span>
+			<span
+				style={{
+					padding: "0",
+					overflow: "show",
+					width: "100%",
+					"text-overflow": "ellipsis",
+					position: "relative",
+					display: "flex",
+					"align-items": "center",
+				}}
+			>
+				<div
+					style={{
+						width: "16px",
+						height: "23px",
+						display: "flex",
+						"margin-right": "5px",
+						"align-items": "center",
+					}}
+				>
+					<img src={props.icon} width="16" height="16" />
+				</div>
+				<span
+					style={{
+						display: "flex",
+						cursor: "pointer",
+						width: "100%",
+						overflow: "hidden",
+					}}
+				>
+					<span
+						style={{
+							color: "#333",
+							background: "transparent",
+							"font-weight": props.isCurrent ? "600" : "400",
+							overflow: "hidden",
+							"text-overflow": "ellipsis",
+							"white-space": "nowrap",
+						}}
+					>
+						{props.label}
+					</span>
+					<Show when={props.subtitle}>
+						<span
+							style={{
+								"margin-left": "6px",
+								color: "#666",
+								"font-size": "11px",
+								"flex-shrink": 0,
+							}}
+						>
+							{props.subtitle}
+						</span>
+					</Show>
+					<Show when={props.actions?.length && (isHovered() || props.isCurrent)}>
+						<span
+							style={{
+								display: "flex",
+								gap: "4px",
+								"margin-left": "8px",
+								"flex-shrink": 0,
+							}}
+						>
+							<For each={props.actions || []}>
+								{(action) => (
+									<button
+										type="button"
+										onMouseDown={(event) => {
+											event.preventDefault();
+											event.stopPropagation();
+										}}
+										onClick={(event) => {
+											event.preventDefault();
+											event.stopPropagation();
+											void Promise.resolve(action.onClick()).catch((error) => {
+												console.error("Workspace tree action failed:", error);
+											});
+										}}
+										style={{
+											border: "1px solid rgba(0, 0, 0, 0.14)",
+											background: "rgba(255, 255, 255, 0.85)",
+											color: "#333",
+											"font-size": "10px",
+											"line-height": "14px",
+											padding: "0 6px",
+											"border-radius": "999px",
+											cursor: "pointer",
+										}}
+									>
+										{action.label}
+									</button>
+								)}
+							</For>
+						</span>
+					</Show>
+				</span>
+			</span>
+		</span>
+	);
+};
+
+export const WorkspaceLensesTree = () => {
+	const [expandedWorkspaceIds, setExpandedWorkspaceIds] = createSignal<Set<string>>(new Set());
+
+	createEffect(() => {
+		let changed = false;
+		const next = new Set(expandedWorkspaceIds());
+		for (const workspace of state.bunnyDash.workspaces) {
+			if ((workspace.isCurrent || next.size === 0) && !next.has(workspace.id)) {
+				next.add(workspace.id);
+				changed = true;
+			}
+		}
+		if (changed) {
+			setExpandedWorkspaceIds(next);
+		}
+	});
+
+	const toggleWorkspace = (workspaceId: string) => {
+		setExpandedWorkspaceIds((current) => {
+			const next = new Set(current);
+			if (next.has(workspaceId)) {
+				next.delete(workspaceId);
+			} else {
+				next.add(workspaceId);
+			}
+			return next;
+		});
+	};
+
+	const openLens = async (
+		lensId: string,
+		workspace: BunnyDashWorkspaceTreeType,
+		lens: BunnyDashWorkspaceTreeType["lenses"][number],
+	) => {
+		const label = `${workspace.name} · ${lens.name}`;
+		await runInWindowTransition(label, async () => {
+			await syncWorkspaceNow();
+			await electrobun.rpc?.request.openLens({ lensId });
+			await refreshDashStateFromWorker();
+		});
+	};
+
+	const openLensInNewWindow = async (lensId: string) => {
+		await syncWorkspaceNow();
+		await electrobun.rpc?.request.openLensInNewWindow({ lensId });
+		await refreshDashStateFromWorker();
+	};
+
+	const openWorkspace = async (
+		workspaceId: string,
+		workspace: BunnyDashWorkspaceTreeType,
+	) => {
+		await runInWindowTransition(workspace.name, async () => {
+			await syncWorkspaceNow();
+			await electrobun.rpc?.request.openWorkspace({ workspaceId });
+			await refreshDashStateFromWorker();
+		});
+	};
+
+	const openWorkspaceInNewWindow = async (workspaceId: string) => {
+		await syncWorkspaceNow();
+		await electrobun.rpc?.request.openWorkspaceInNewWindow({ workspaceId });
+		await refreshDashStateFromWorker();
+	};
+
+	const saveCurrentLens = async () => {
+		console.log("[bunny-dash] saveCurrentLens click");
+		await syncWorkspaceNow();
+		console.log("[bunny-dash] saveCurrentLens synced");
+		await electrobun.rpc?.request.saveLens({});
+		console.log("[bunny-dash] saveCurrentLens resolved");
+		await refreshDashStateFromWorker();
+	};
+
+	const restoreCurrentLens = async (
+		workspace: BunnyDashWorkspaceTreeType,
+		lens: BunnyDashWorkspaceTreeType["lenses"][number],
+	) => {
+		await runInWindowTransition(`${workspace.name} · ${lens.name}`, async () => {
+			await electrobun.rpc?.request.openLens({ lensId: lens.id });
+			await refreshDashStateFromWorker();
+		});
+	};
+
+	const overwriteCurrentLens = async () => {
+		console.log("[bunny-dash] overwriteCurrentLens click");
+		await syncWorkspaceNow();
+		console.log("[bunny-dash] overwriteCurrentLens synced");
+		await electrobun.rpc?.request.overwriteCurrentLens();
+		console.log("[bunny-dash] overwriteCurrentLens resolved");
+		await refreshDashStateFromWorker();
+	};
+
+	const showWorkspaceContextMenu = async (
+		event: MouseEvent,
+		workspace: BunnyDashWorkspaceTreeType,
+	) => {
+		event.preventDefault();
+		event.stopPropagation();
+		await syncWorkspaceNow();
+		await electrobun.rpc?.request.showContextMenu({
+			menuItems: [
+				{
+					label: "Open in New Window",
+					...createContextMenuAction("workspace_open_in_new_window", {
+						workspaceId: workspace.id,
+					}),
+				},
+			],
+		});
+	};
+
+	const showLensContextMenu = async (
+		event: MouseEvent,
+		workspace: BunnyDashWorkspaceTreeType,
+		lens: BunnyDashWorkspaceTreeType["lenses"][number],
+	) => {
+		event.preventDefault();
+		event.stopPropagation();
+		await syncWorkspaceNow();
+		await electrobun.rpc?.request.showContextMenu({
+			menuItems: [
+				{
+					label: "Open in New Window",
+					...createContextMenuAction("lens_open_in_new_window", {
+						workspaceId: workspace.id,
+						lensId: lens.id,
+					}),
+				},
+				{
+					label: "Fork",
+					...createContextMenuAction("lens_fork", {
+						workspaceId: workspace.id,
+						lensId: lens.id,
+					}),
+				},
+				{
+					type: "separator",
+				},
+				{
+					label: "Delete Lens",
+					...createContextMenuAction("lens_delete", {
+						workspaceId: workspace.id,
+						lensId: lens.id,
+					}),
+				},
+			],
+		});
+	};
+
+	return (
+		<>
+			<CategoryRow label="Workspaces" />
+			<Show when={state.bunnyDash.workspaces.length > 0}>
+				<TreeUL>
+					<For each={state.bunnyDash.workspaces}>
+						{(workspace: BunnyDashWorkspaceTreeType) => {
+							const isExpanded = () => expandedWorkspaceIds().has(workspace.id);
+							const workspaceNode = {
+								type: "dir" as const,
+								name: workspace.name,
+								path: `__BUNNY_WORKSPACE__/${workspace.id}`,
+								children: [],
+							};
+
+							return (
+								<TreeLI node={workspaceNode as any}>
+									<WorkspaceTreeRow
+										node={workspaceNode as any}
+										label={workspace.name}
+										icon="views://assets/file-icons/new-window.svg"
+										subtitle={workspace.currentLensIsActive ? "Current" : ""}
+										hasChildren={workspace.canExpand}
+										expanded={isExpanded}
+										isCurrent={workspace.currentLensIsActive}
+										onToggle={() => toggleWorkspace(workspace.id)}
+										onActivate={(event) => {
+											if (event.metaKey || event.ctrlKey) {
+												void openWorkspaceInNewWindow(workspace.id);
+												return;
+											}
+											void openWorkspace(workspace.id, workspace);
+										}}
+										onContextMenu={(event) => {
+											void showWorkspaceContextMenu(event, workspace);
+										}}
+										actions={
+											workspace.id === state.bunnyDash.currentWorkspaceId
+												? [
+														{
+															label: "Save",
+															onClick: () => {
+																void saveCurrentLens();
+															},
+														},
+													]
+												: []
+										}
+									/>
+									<Show when={isExpanded()}>
+										<TreeUL showLeftBar={true}>
+											<For each={workspace.lenses}>
+												{(lens) => {
+													const lensNode = {
+														type: "file" as const,
+														name: lens.name,
+														path: `__BUNNY_LENS__/${lens.id}`,
+														persistedContent: "",
+														isDirty: false,
+														model: null,
+														editors: {},
+													};
+
+													return (
+														<TreeLI node={lensNode as any}>
+															<WorkspaceTreeRow
+																node={lensNode as any}
+																label={lens.name}
+																icon="views://assets/file-icons/bookmark.svg"
+																isCurrent={lens.isCurrent}
+																subtitle={lens.isDirty ? "modified" : ""}
+																onActivate={(event) => {
+																	if (event.metaKey || event.ctrlKey) {
+																		void openLensInNewWindow(lens.id);
+																		return;
+																	}
+																	void openLens(lens.id, workspace, lens);
+																}}
+																onContextMenu={(event) => {
+																	void showLensContextMenu(event, workspace, lens);
+																}}
+																actions={
+																	lens.isCurrent
+																		? [
+																				{
+																					label: "Save",
+																					onClick: () => {
+																						void overwriteCurrentLens();
+																					},
+																				},
+																				{
+																					label: "Restore",
+																					onClick: () => {
+																						void restoreCurrentLens(workspace, lens);
+																					},
+																				},
+																			]
+																		: []
+																}
+															/>
+														</TreeLI>
+													);
+												}}
+											</For>
+										</TreeUL>
+									</Show>
+								</TreeLI>
+							);
+						}}
+					</For>
+				</TreeUL>
+			</Show>
 		</>
 	);
 };

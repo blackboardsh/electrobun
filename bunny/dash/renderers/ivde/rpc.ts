@@ -24,6 +24,41 @@ export type WorkspaceRPC = {
         params: void;
         response: any;
       };
+      openLens: {
+        params: {
+          lensId: string;
+        };
+        response: any;
+      };
+      openLensInNewWindow: {
+        params: {
+          lensId: string;
+        };
+        response: any;
+      };
+      openWorkspace: {
+        params: {
+          workspaceId: string;
+        };
+        response: any;
+      };
+      openWorkspaceInNewWindow: {
+        params: {
+          workspaceId: string;
+        };
+        response: any;
+      };
+      overwriteCurrentLens: {
+        params: void;
+        response: any;
+      };
+      saveLens: {
+        params: {
+          name?: string;
+          description?: string;
+        };
+        response: any;
+      };
       showContextMenu: {
         params: {
           // todo: electrobun should expose menu items type
@@ -994,6 +1029,27 @@ export type WorkspaceRPC = {
         tokens: any;
         workspace: any;
         appSettings: any;
+        bunnyDash: {
+          currentWorkspaceId: string;
+          currentLensId: string;
+          workspaces: Array<{
+            id: string;
+            name: string;
+            subtitle: string;
+            isCurrent: boolean;
+            currentLensId: string;
+            currentLensIsActive: boolean;
+            canExpand: boolean;
+            lenses: Array<{
+              id: string;
+              name: string;
+              description: string;
+              workspaceId: string;
+              isCurrent: boolean;
+              isDirty: boolean;
+            }>;
+          }>;
+        };
       };
       fileWatchEvent: {
         absolutePath: string;
@@ -1077,6 +1133,10 @@ export type WorkspaceRPC = {
         exitCode: number;
         signal?: number;
       };
+      beginWindowTransition: {
+        label: string;
+      };
+      endWindowTransition: {};
       // Open a file in the editor (from edit command, Open menu, or drag-drop)
       openFileInEditor: {
         filePath: string;
