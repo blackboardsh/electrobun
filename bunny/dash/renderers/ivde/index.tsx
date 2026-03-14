@@ -455,6 +455,41 @@ createEffect(() => {
 	}
 });
 
+function syncAllElectrobunWebviews() {
+	document
+		.querySelectorAll("electrobun-webview")
+		.forEach((el: any) => el?.syncDimensions?.(true));
+}
+
+function createWebviewSyncBurst(durationMs = 250) {
+	let rafId: number | null = null;
+
+	const stop = () => {
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+			rafId = null;
+		}
+	};
+
+	const start = () => {
+		stop();
+		const startedAt = performance.now();
+
+		const tick = () => {
+			syncAllElectrobunWebviews();
+			if (performance.now() - startedAt < durationMs) {
+				rafId = requestAnimationFrame(tick);
+			} else {
+				rafId = null;
+			}
+		};
+
+		tick();
+	};
+
+	return { start, stop };
+}
+
 const getInitialState = () => {
 	console.log("renderer getInitialState - making RPC call...");
 
@@ -567,6 +602,17 @@ const App = () => {
 
 	let shadowHost: HTMLDivElement | undefined;
 	let shadowRoot: ShadowRoot;
+	const settingsPaneWebviewSync = createWebviewSyncBurst(250);
+	let previousSettingsPaneOpen = Boolean(state.settingsPane.type);
+
+	createEffect(() => {
+		const isSettingsPaneOpen = Boolean(state.settingsPane.type);
+		if (isSettingsPaneOpen === previousSettingsPaneOpen) {
+			return;
+		}
+		previousSettingsPaneOpen = isSettingsPaneOpen;
+		settingsPaneWebviewSync.start();
+	});
 
 	// GitHub auth webview navigation handler
 	const githubAuthWebviewWillNavigate = async (e: any) => {
@@ -652,6 +698,10 @@ const App = () => {
 		window.addEventListener('openFileInEditor', handleOpenFileInEditor as EventListener);
 		window.addEventListener('openFolderAsProject', handleOpenFolderAsProject as EventListener);
 		window.addEventListener('removeOpenFile', handleRemoveOpenFile as EventListener);
+	});
+
+	onCleanup(() => {
+		settingsPaneWebviewSync.stop();
 	});
 
 	const [isLoaded, setIsLoaded] = createSignal(false);
