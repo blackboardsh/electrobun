@@ -20,7 +20,7 @@ import type { PreparedCarrotInstall } from "../src/bun/carrotStore";
 import { toBunWorkerPermissions } from "../src/bun/workerPermissions";
 
 const EARS_ROOT = resolve(import.meta.dir, "..");
-const CARROTS_ROOT = resolve(EARS_ROOT, "..", "carrots");
+const TEST_CARROTS_ROOT = resolve(EARS_ROOT, "..", "test-carrots");
 const DASH_ROOT = resolve(EARS_ROOT, "..", "dash");
 const PACKAGE_ROOT = resolve(EARS_ROOT, "..", "..", "package");
 const COLAB_GOLDFISHDB_ROOT = resolve(
@@ -233,7 +233,7 @@ function seedDashTestDb(db: ReturnType<typeof createDashTestDb>) {
 }
 
 async function buildCarrot(id: string) {
-  const sourceDir = join(CARROTS_ROOT, id);
+  const sourceDir = join(TEST_CARROTS_ROOT, id);
   return buildCarrotAt(sourceDir, `bunny-ears-${id}-build-`);
 }
 
@@ -728,6 +728,11 @@ describe("Bunny Ears carrots", () => {
   test("Bunny Dash builds from source and exposes a Colab-shaped shell snapshot", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-build-");
     expect(built.manifest.id).toBe("bunny-dash");
+    expect(built.manifest.dependencies).toEqual({
+      "bunny.pty": "file:../foundation-carrots/pty",
+      "bunny.search": "file:../foundation-carrots/search",
+      "bunny.git": "file:../foundation-carrots/git",
+    });
     expect(existsSync(join(built.outDir, "lens", "index.js"))).toBe(true);
     expect(existsSync(join(built.outDir, "lens", "index.css"))).toBe(true);
     expect(existsSync(join(built.outDir, "worker.js"))).toBe(true);

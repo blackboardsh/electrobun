@@ -1,0 +1,28 @@
+{
+  "id": "bunny.pty",
+  "name": "Bunny PTY",
+  "version": "0.0.1",
+  "description": "First-party PTY carrot scaffold for Bunny Dash and other carrots.",
+  "mode": "background",
+  "permissions": {
+    "host": {
+      "storage": true
+    },
+    "bun": {
+      "read": true,
+      "write": true,
+      "run": true
+    },
+    "isolation": "shared-worker"
+  },
+  "view": {
+    "relativePath": "views/index.html",
+    "title": "Bunny PTY",
+    "width": 320,
+    "height": 220,
+    "hidden": true
+  },
+  "worker": {
+    "relativePath": "worker.js"
+  }
+}

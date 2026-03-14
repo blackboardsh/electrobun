@@ -47,12 +47,15 @@ export type CarrotPermissionConsentRequest = {
 
 export type CarrotMode = "window" | "background";
 
+export type CarrotDependencyMap = Record<string, string>;
+
 export type CarrotManifest = {
   id: string;
   name: string;
   version: string;
   description: string;
   mode: CarrotMode;
+  dependencies?: CarrotDependencyMap;
   permissions: CarrotPermissionGrant;
   view: {
     relativePath: string;

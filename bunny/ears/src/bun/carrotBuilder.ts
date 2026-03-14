@@ -11,6 +11,14 @@ import { pathToFileURL } from "node:url";
 import type { CarrotManifest } from "../carrot-runtime/types";
 import { normalizeCarrotPermissions } from "../carrot-runtime/types";
 
+type CarrotAuthoringConfig = {
+  bunny?: {
+    carrot?: {
+      dependencies?: Record<string, string>;
+    };
+  };
+};
+
 function getSdkViewModule() {
   const override = process.env.BUNNY_EARS_SDK_VIEW_MODULE;
   if (override) {
@@ -58,6 +66,41 @@ function readManifest(sourceDir: string) {
   return {
     ...manifest,
     permissions: normalizeCarrotPermissions(manifest.permissions),
+  } satisfies CarrotManifest;
+}
+
+async function readCarrotAuthoringConfig(sourceDir: string) {
+  const configPath = join(sourceDir, "electrobun.config.ts");
+  if (!existsSync(configPath)) {
+    return null;
+  }
+
+  const loaded = (await import(
+    `${pathToFileURL(configPath).href}?t=${Date.now()}`
+  )) as { default?: CarrotAuthoringConfig } & CarrotAuthoringConfig;
+  return (loaded.default ?? loaded) as CarrotAuthoringConfig;
+}
+
+function mergeCarrotConfig(manifest: CarrotManifest, config: CarrotAuthoringConfig | null) {
+  const dependencyEntries = config?.bunny?.carrot?.dependencies;
+  if (!dependencyEntries || Object.keys(dependencyEntries).length === 0) {
+    return manifest;
+  }
+
+  for (const [dependencyId, specifier] of Object.entries(dependencyEntries)) {
+    if (typeof specifier !== "string" || specifier.trim().length === 0) {
+      throw new Error(
+        `Invalid bunny.carrot.dependencies entry for ${dependencyId} in ${manifest.id}: expected non-empty string specifier`,
+      );
+    }
+  }
+
+  return {
+    ...manifest,
+    dependencies: {
+      ...(manifest.dependencies ?? {}),
+      ...dependencyEntries,
+    },
   } satisfies CarrotManifest;
 }
 
@@ -215,7 +258,10 @@ async function runCustomBuild(sourceDir: string, outDir: string, manifest: Carro
 
 export async function buildCarrotSource(sourceDir: string, outDir: string) {
   const normalizedSourceDir = resolve(sourceDir);
-  const manifest = readManifest(normalizedSourceDir);
+  const manifest = mergeCarrotConfig(
+    readManifest(normalizedSourceDir),
+    await readCarrotAuthoringConfig(normalizedSourceDir),
+  );
 
   await runCustomBuild(normalizedSourceDir, outDir, manifest);
 
