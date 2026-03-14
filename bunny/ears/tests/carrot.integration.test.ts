@@ -264,6 +264,8 @@ async function startBuiltCarrot(
   options?: {
     runtimeDir?: string;
     keepRuntime?: boolean;
+    initContext?: Record<string, unknown>;
+    dependencyInitContext?: Record<string, Record<string, unknown>>;
     setupRuntime?: (args: { runtimeDir: string; statePath: string; logsPath: string }) => void | Promise<void>;
   },
 ): Promise<RunningCarrot> {
@@ -379,7 +381,9 @@ async function startBuiltCarrot(
       dependencySourceDir,
       `bunny-ears-${carrotId.replace(/[^a-z0-9]+/gi, "-")}-dep-build-`,
     );
-    const dependencyCarrot = await startBuiltCarrot(dependencyBuilt);
+    const dependencyCarrot = await startBuiltCarrot(dependencyBuilt, undefined, {
+      initContext: options?.dependencyInitContext?.[carrotId],
+    });
     const stopped = { value: false };
 
     dependencyCarrots.set(carrotId, {
@@ -556,6 +560,7 @@ async function startBuiltCarrot(
       logsPath,
       permissions: flattenCarrotPermissions(grantedPermissions),
       grantedPermissions,
+      config: options?.initContext,
     },
   } satisfies CarrotWorkerMessage);
 
@@ -1531,6 +1536,42 @@ describe("Bunny Ears carrots", () => {
     expect(killed).toBe(true);
   }, 20000);
 
+  test("Bunny Dash kills PTY sessions when replacing the current window state", async () => {
+    const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-terminal-cleanup-build-");
+    const carrot = await startBuiltCarrot(built);
+    await carrot.nextAction("set-tray");
+    await carrot.nextAction("set-tray-menu");
+
+    const terminalId = (await carrot.request("createTerminal", {
+      cwd: tmpdir(),
+    })) as string;
+    expect(typeof terminalId).toBe("string");
+
+    await carrot.nextAction(
+      "emit-view",
+      (message) =>
+        (message.payload as { name?: string; payload?: { terminalId?: string } } | undefined)
+          ?.name === "terminalOutput" &&
+        (message.payload as { payload?: { terminalId?: string } } | undefined)?.payload?.terminalId === terminalId,
+    );
+
+    await carrot.request("createWorkspace", {
+      name: "Workspace 2",
+      subtitle: "Cleanup test workspace",
+    });
+
+    const cleanupLog = await carrot.nextAction(
+      "log",
+      (message) =>
+        String((message.payload as { message?: string } | undefined)?.message || "").includes(
+          "killed 1 PTY terminal(s) for window",
+        ),
+    );
+    expect(String((cleanupLog.payload as { message?: string } | undefined)?.message || "")).toContain(
+      "killed 1 PTY terminal(s) for window",
+    );
+  }, 20000);
+
   test("Bunny PTY carrot builds from source and emits terminal events for client carrots", async () => {
     const built = await buildCarrotAt(
       resolve(EARS_ROOT, "..", "foundation-carrots", "pty"),
@@ -1562,6 +1603,187 @@ describe("Bunny Ears carrots", () => {
         (message.payload as { payload?: { terminalId?: string } } | undefined)?.payload?.terminalId === terminalId,
     );
     expect((output.payload as { name: string }).name).toBe("pty-terminal-output");
+
+    const cwd = (await carrot.request("getTerminalCwd", { terminalId })) as string | null;
+    expect(cwd).toBe(realpathSync(tmpdir()));
+
+    const killed = (await carrot.request("killTerminal", { terminalId })) as boolean;
+    expect(killed).toBe(true);
+  }, 20000);
+
+  test("Bunny PTY carrot kills orphaned terminals after the heartbeat timeout", async () => {
+    const built = await buildCarrotAt(
+      resolve(EARS_ROOT, "..", "foundation-carrots", "pty"),
+      "bunny-ears-pty-heartbeat-build-",
+    );
+    const worker = new Worker(join(built.outDir, built.manifest.worker.relativePath), {
+      type: "module",
+      permissions: toBunWorkerPermissions(normalizeCarrotPermissions(built.manifest.permissions)),
+    });
+    const workerCleanup = () => worker.terminate();
+    cleanups.add(workerCleanup);
+
+        const queue: CarrotWorkerMessage[] = [];
+        const waiters: Array<{
+          predicate: (message: CarrotWorkerMessage) => boolean;
+          resolve: (message: CarrotWorkerMessage) => void;
+          timer: ReturnType<typeof setTimeout>;
+        }> = [];
+
+        function flushQueue() {
+          for (let index = 0; index < waiters.length; index += 1) {
+            const waiter = waiters[index];
+            const queueIndex = queue.findIndex(waiter.predicate);
+            if (queueIndex === -1) {
+              continue;
+            }
+            const [message] = queue.splice(queueIndex, 1);
+            waiters.splice(index, 1);
+            clearTimeout(waiter.timer);
+            waiter.resolve(message);
+            index -= 1;
+          }
+        }
+
+        function nextMessage(
+          predicate: (message: CarrotWorkerMessage) => boolean,
+          timeoutMs = 5000,
+        ) {
+          const queueIndex = queue.findIndex(predicate);
+          if (queueIndex !== -1) {
+            return Promise.resolve(queue.splice(queueIndex, 1)[0]);
+          }
+
+          return new Promise<CarrotWorkerMessage>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              const waiterIndex = waiters.findIndex((waiter) => waiter.resolve === resolve);
+              if (waiterIndex !== -1) {
+                waiters.splice(waiterIndex, 1);
+              }
+              reject(new Error("Timed out waiting for PTY worker message"));
+            }, timeoutMs);
+            waiters.push({ predicate, resolve, timer });
+          });
+        }
+
+    worker.onmessage = (event: MessageEvent<CarrotWorkerMessage>) => {
+      queue.push(event.data);
+      flushQueue();
+    };
+
+    worker.postMessage({
+      type: "init",
+      manifest: built.manifest,
+      context: {
+        statePath: join(built.outDir, "state.json"),
+        logsPath: join(built.outDir, "logs.txt"),
+        permissions: flattenCarrotPermissions(normalizeCarrotPermissions(built.manifest.permissions)),
+        grantedPermissions: normalizeCarrotPermissions(built.manifest.permissions),
+        config: {
+          ptyHeartbeatTimeoutMs: 1000,
+          ptyHeartbeatSweepMs: 250,
+        },
+      },
+    } satisfies CarrotWorkerMessage);
+    await nextMessage((message) => message.type === "ready");
+
+    worker.postMessage({
+      type: "request",
+      requestId: 1,
+      method: "createTerminal",
+      params: {
+        cwd: tmpdir(),
+        __source: {
+          carrotId: "dash-client",
+          windowId: "main",
+        },
+      },
+    } satisfies CarrotWorkerMessage);
+
+    const createResponse = (await nextMessage(
+      (message) => isResponseMessage(message) && message.requestId === 1,
+    )) as WorkerResponseMessage;
+    expect(createResponse.success).toBe(true);
+    const terminalId = String(createResponse.payload || "");
+
+    await nextMessage(
+      (message) =>
+        isActionMessage(message) &&
+        message.action === "emit-carrot-event" &&
+        (message.payload as { carrotId?: string; name?: string; payload?: { terminalId?: string } } | undefined)
+          ?.carrotId === "dash-client" &&
+        (message.payload as { name?: string } | undefined)?.name === "pty-terminal-output" &&
+        (message.payload as { payload?: { terminalId?: string } } | undefined)?.payload?.terminalId === terminalId,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    worker.postMessage({
+      type: "request",
+      requestId: 2,
+      method: "sweepExpiredTerminals",
+      params: {},
+    } satisfies CarrotWorkerMessage);
+
+    const sweepResponse = (await nextMessage(
+      (message) => isResponseMessage(message) && message.requestId === 2,
+    )) as WorkerResponseMessage;
+    expect(sweepResponse.success).toBe(true);
+    expect(
+      [0, 1].includes(
+        Number((sweepResponse.payload as { killedCount?: number } | undefined)?.killedCount ?? -1),
+      ),
+    ).toBe(true);
+
+    worker.postMessage({
+      type: "request",
+      requestId: 3,
+      method: "getTerminalCwd",
+      params: {
+        terminalId,
+      },
+    } satisfies CarrotWorkerMessage);
+
+    const cwdResponse = (await nextMessage(
+      (message) => isResponseMessage(message) && message.requestId === 3,
+    )) as WorkerResponseMessage;
+    expect(cwdResponse.success).toBe(true);
+    const cwd = cwdResponse.payload as string | null;
+    expect(cwd).toBeNull();
+
+    cleanups.delete(workerCleanup);
+    workerCleanup();
+  }, 20000);
+
+  test("Bunny Dash renews PTY heartbeats for active terminal sessions", async () => {
+    const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-terminal-heartbeat-build-");
+    const carrot = await startBuiltCarrot(built, undefined, {
+      initContext: {
+        ptyHeartbeatIntervalMs: 1000,
+      },
+      dependencyInitContext: {
+        "bunny.pty": {
+          ptyHeartbeatTimeoutMs: 2000,
+          ptyHeartbeatSweepMs: 250,
+        },
+      },
+    });
+    await carrot.nextAction("set-tray");
+    await carrot.nextAction("set-tray-menu");
+
+    const terminalId = (await carrot.request("createTerminal", {
+      cwd: tmpdir(),
+    })) as string;
+    expect(typeof terminalId).toBe("string");
+
+    await carrot.nextAction(
+      "emit-view",
+      (message) =>
+        (message.payload as { name?: string; payload?: { terminalId?: string } } | undefined)
+          ?.name === "terminalOutput" &&
+        (message.payload as { payload?: { terminalId?: string } } | undefined)?.payload?.terminalId === terminalId,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 3500));
 
     const cwd = (await carrot.request("getTerminalCwd", { terminalId })) as string | null;
     expect(cwd).toBe(realpathSync(tmpdir()));

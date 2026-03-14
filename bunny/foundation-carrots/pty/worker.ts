@@ -28,7 +28,53 @@ type ResizeTerminalParams = TerminalActionParams & {
   rows?: number;
 };
 
-const terminalOwners = new Map<string, { carrotId: string; windowId?: string | null }>();
+type HeartbeatTerminalsParams = {
+  terminalIds?: unknown;
+  __source?: InvocationSource;
+};
+
+type WorkerRuntimeContext = {
+  context?: {
+    config?: {
+      ptyHeartbeatTimeoutMs?: unknown;
+      ptyHeartbeatSweepMs?: unknown;
+    };
+  };
+};
+
+type TerminalOwner = {
+  carrotId: string;
+  windowId?: string | null;
+  lastHeartbeatAt: number;
+};
+
+const DEFAULT_TERMINAL_HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_TERMINAL_HEARTBEAT_SWEEP_MS = 30 * 1000;
+
+function parseDurationMs(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(minimum, parsed);
+}
+
+let terminalHeartbeatTimeoutMs = parseDurationMs(
+  process.env.BUNNY_PTY_HEARTBEAT_TIMEOUT_MS,
+  DEFAULT_TERMINAL_HEARTBEAT_TIMEOUT_MS,
+  1_000,
+);
+let terminalHeartbeatSweepMs = parseDurationMs(
+  process.env.BUNNY_PTY_HEARTBEAT_SWEEP_MS,
+  DEFAULT_TERMINAL_HEARTBEAT_SWEEP_MS,
+  250,
+);
+
+const terminalOwners = new Map<string, TerminalOwner>();
 
 function post(message: unknown) {
   self.postMessage(message);
@@ -82,7 +128,69 @@ function emitToOwner(message: TerminalMessage) {
   }
 }
 
+function refreshTerminalLease(terminalId: string) {
+  const owner = terminalOwners.get(terminalId);
+  if (!owner) {
+    return false;
+  }
+
+  owner.lastHeartbeatAt = Date.now();
+  return true;
+}
+
+function refreshTerminalLeases(terminalIds: string[]) {
+  let refreshedCount = 0;
+  for (const terminalId of terminalIds) {
+    if (refreshTerminalLease(terminalId)) {
+      refreshedCount += 1;
+    }
+  }
+  return refreshedCount;
+}
+
+function sweepTerminalLeases() {
+  const now = Date.now();
+  let killedCount = 0;
+
+  for (const [terminalId, owner] of terminalOwners.entries()) {
+    if (now - owner.lastHeartbeatAt <= terminalHeartbeatTimeoutMs) {
+      continue;
+    }
+
+    log(`heartbeat timeout kill ${terminalId} for ${owner.carrotId}`);
+    if (terminalManager.killTerminal(terminalId)) {
+      killedCount += 1;
+    }
+  }
+
+  return killedCount;
+}
+
 const terminalManager = new TerminalManager(emitToOwner);
+let heartbeatSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+function restartHeartbeatSweepTimer() {
+  if (heartbeatSweepTimer) {
+    clearInterval(heartbeatSweepTimer);
+  }
+  heartbeatSweepTimer = setInterval(sweepTerminalLeases, terminalHeartbeatSweepMs);
+}
+
+function initializeRuntimeContext(message?: WorkerRuntimeContext) {
+  terminalHeartbeatTimeoutMs = parseDurationMs(
+    String(message?.context?.config?.ptyHeartbeatTimeoutMs ?? ""),
+    terminalHeartbeatTimeoutMs,
+    1_000,
+  );
+  terminalHeartbeatSweepMs = parseDurationMs(
+    String(message?.context?.config?.ptyHeartbeatSweepMs ?? ""),
+    terminalHeartbeatSweepMs,
+    250,
+  );
+  restartHeartbeatSweepTimer();
+}
+
+initializeRuntimeContext();
 
 async function handleRequest(method: string, params: unknown) {
   switch (method) {
@@ -95,12 +203,16 @@ async function handleRequest(method: string, params: unknown) {
         Number(request.cols || 80),
         Number(request.rows || 24),
       );
-      terminalOwners.set(terminalId, source);
+      terminalOwners.set(terminalId, {
+        ...source,
+        lastHeartbeatAt: Date.now(),
+      });
       log(`created terminal ${terminalId} for ${source.carrotId}`);
       return terminalId;
     }
     case "writeToTerminal": {
       const request = (params ?? {}) as WriteTerminalParams;
+      refreshTerminalLease(String(request.terminalId || ""));
       return terminalManager.writeToTerminal(
         String(request.terminalId || ""),
         String(request.data || ""),
@@ -108,6 +220,7 @@ async function handleRequest(method: string, params: unknown) {
     }
     case "resizeTerminal": {
       const request = (params ?? {}) as ResizeTerminalParams;
+      refreshTerminalLease(String(request.terminalId || ""));
       return terminalManager.resizeTerminal(
         String(request.terminalId || ""),
         Number(request.cols || 80),
@@ -123,8 +236,22 @@ async function handleRequest(method: string, params: unknown) {
     }
     case "getTerminalCwd": {
       const request = (params ?? {}) as TerminalActionParams;
+      refreshTerminalLease(String(request.terminalId || ""));
       return terminalManager.getTerminalCwd(String(request.terminalId || ""));
     }
+    case "heartbeatTerminals": {
+      const request = (params ?? {}) as HeartbeatTerminalsParams;
+      const terminalIds = Array.isArray(request.terminalIds)
+        ? request.terminalIds.map((terminalId) => String(terminalId || "")).filter(Boolean)
+        : [];
+      return {
+        refreshedCount: refreshTerminalLeases(terminalIds),
+      };
+    }
+    case "sweepExpiredTerminals":
+      return {
+        killedCount: sweepTerminalLeases(),
+      };
     default:
       return undefined;
   }
@@ -139,6 +266,11 @@ self.addEventListener("message", async (event) => {
         params?: unknown;
       }
     | undefined;
+
+  if (message?.type === "init") {
+    initializeRuntimeContext(message as WorkerRuntimeContext);
+    return;
+  }
 
   if (!message || message.type !== "request" || typeof message.requestId !== "number") {
     return;
@@ -173,6 +305,9 @@ self.addEventListener("message", async (event) => {
 });
 
 process.on("exit", () => {
+  if (heartbeatSweepTimer) {
+    clearInterval(heartbeatSweepTimer);
+  }
   terminalManager.cleanup();
 });
 

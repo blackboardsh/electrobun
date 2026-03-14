@@ -230,9 +230,12 @@ const expandedFsDirs = new Set<string>();
 const directoryWatchers = new Map<string, FSWatcher>();
 const framePersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let ptyHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 const LIVE_WINDOW_ID_SEPARATOR = "::";
 const WORKSPACE_CURRENT_LENS_PREFIX = "__workspace-current__:";
 const PTY_CARROT_ID = "bunny.pty";
+const DEFAULT_PTY_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+let ptyHeartbeatIntervalMs = DEFAULT_PTY_HEARTBEAT_INTERVAL_MS;
 const LEGACY_CURRENT_SESSION_MAIN_TABS: WindowTabId[] = [
   "workspace",
   "projects",
@@ -429,6 +432,14 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function parseDurationMs(value: string | undefined, fallback: number, minimum: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(minimum, parsed);
 }
 
 function getOrCreateBrowserWindow(windowId = state.currentWindowId, title?: string) {
@@ -1011,7 +1022,11 @@ function ensureDb() {
 }
 
 function initializeRuntimeContext(message?: {
-  context?: { permissions?: string[]; statePath?: string };
+  context?: {
+    permissions?: string[];
+    statePath?: string;
+    config?: { ptyHeartbeatIntervalMs?: unknown };
+  };
   manifest?: { version?: string };
 }) {
   permissions = new Set(
@@ -1020,6 +1035,15 @@ function initializeRuntimeContext(message?: {
   );
   statePath = message?.context?.statePath || app.statePath || statePath;
   manifestVersion = message?.manifest?.version || app.manifest?.version || manifestVersion;
+  ptyHeartbeatIntervalMs = parseDurationMs(
+    String(
+      message?.context?.config?.ptyHeartbeatIntervalMs ??
+        process.env.BUNNY_DASH_PTY_HEARTBEAT_INTERVAL_MS ??
+        "",
+    ),
+    ptyHeartbeatIntervalMs,
+    1_000,
+  );
 }
 
 function ensureBootPromise() {
@@ -1028,6 +1052,7 @@ function ensureBootPromise() {
       await loadState();
       ensureRuntimeState();
       currentState = captureCurrentState();
+      ensurePtyHeartbeatLoop();
       syncApplicationMenu();
       await reopenRuntimeWindowsOnBoot();
       post({ type: "ready" });
@@ -1069,6 +1094,13 @@ ContextMenu.on("context-menu-clicked", (payload) => {
     (payload as { data?: { data?: unknown } } | undefined)?.data?.data ??
     {};
   void handleContextMenuAction(action, data);
+});
+
+process.on("exit", () => {
+  if (ptyHeartbeatTimer) {
+    clearInterval(ptyHeartbeatTimer);
+    ptyHeartbeatTimer = null;
+  }
 });
 
 function flushDb() {
@@ -1499,12 +1531,70 @@ function handlePtyTerminalExit(payload: unknown) {
   terminalWindowOwners.delete(terminalId);
 }
 
+async function killTerminalSession(terminalId: string) {
+  if (!terminalId) {
+    return;
+  }
+
+  try {
+    await invokePtyCarrot<boolean>("killTerminal", {
+      terminalId,
+    });
+  } catch (error) {
+    log(
+      `failed to kill PTY terminal ${terminalId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    terminalWindowOwners.delete(terminalId);
+  }
+}
+
+async function killTerminalsForWindow(windowId: string) {
+  const terminalIds = Array.from(terminalWindowOwners.entries())
+    .filter(([, ownerWindowId]) => ownerWindowId === windowId)
+    .map(([terminalId]) => terminalId);
+
+  if (terminalIds.length === 0) {
+    return;
+  }
+
+  await Promise.all(terminalIds.map((terminalId) => killTerminalSession(terminalId)));
+  log(`killed ${terminalIds.length} PTY terminal(s) for window ${windowId}`);
+}
+
 async function invokePtyCarrot<T = unknown>(
   method: string,
   params?: unknown,
   options?: { windowId?: string },
 ) {
   return Carrots.invoke<T>(PTY_CARROT_ID, method, params, options);
+}
+
+async function heartbeatPtyTerminals() {
+  const terminalIds = Array.from(terminalWindowOwners.keys());
+  if (terminalIds.length === 0) {
+    return;
+  }
+
+  try {
+    await invokePtyCarrot<{ refreshedCount: number }>("heartbeatTerminals", {
+      terminalIds,
+    });
+  } catch {
+    // Ignore heartbeat failures here. Explicit terminal calls will still surface errors.
+  }
+}
+
+function ensurePtyHeartbeatLoop() {
+  if (ptyHeartbeatTimer) {
+    return;
+  }
+
+  ptyHeartbeatTimer = setInterval(() => {
+    void heartbeatPtyTerminals();
+  }, ptyHeartbeatIntervalMs);
 }
 
 app.on("pty-terminal-output", handlePtyTerminalOutput);
@@ -2671,6 +2761,7 @@ async function restoreLensInCurrentWindow(lensId: string) {
     `restoreLensInCurrentWindow begin: ${lens.key} rootPane=${savedWindowState.rootPane.type} currentPane=${savedWindowState.currentPaneId}`,
   );
   const currentWindow = getCurrentWindow();
+  await killTerminalsForWindow(currentWindow.id);
   const restoredWindow = buildRuntimeWindowFromLens(lens, currentWindow.id);
 
   currentWindow.title = restoredWindow.title;
@@ -2901,6 +2992,7 @@ async function createWorkspace(name: string, subtitle = "") {
   const starterRuntimeWindow = buildRuntimeWindowFromLens(currentLens, getCurrentWindow().id);
 
   const currentWindow = getCurrentWindow();
+  await killTerminalsForWindow(currentWindow.id);
   currentWindow.workspaceId = created.key;
   currentWindow.title = starterRuntimeWindow.title;
   currentWindow.mainTabIds = [...starterRuntimeWindow.mainTabIds];
@@ -3068,6 +3160,7 @@ async function deleteLens(lensId: string) {
   const affectedWindows = runtimeWindows.filter((window) => getLensIdForWindow(window) === lens.key);
 
   for (const runtimeWindow of affectedWindows) {
+    await killTerminalsForWindow(runtimeWindow.id);
     const restoredWindow = buildRuntimeWindowFromLens(replacementLens, runtimeWindow.id);
     runtimeWindow.title = restoredWindow.title;
     runtimeWindow.lensId = restoredWindow.lensId;
@@ -3878,10 +3971,6 @@ async function handleColabSend(name: string, payload: any) {
   }
 }
 
-process.on("exit", () => {
-  terminalManager?.cleanup();
-});
-
 self.onmessage = async (event) => {
   const message = event.data as any;
 
@@ -3910,13 +3999,9 @@ self.onmessage = async (event) => {
     if (message.name === "window-closed") {
       const closedWindowId = String(message.payload?.windowId || "");
       browserWindows.delete(closedWindowId);
+      await killTerminalsForWindow(closedWindowId);
       removeColabWindowFromAllWorkspaces(closedWindowId);
       runtimeWindows = runtimeWindows.filter((window) => window.id !== closedWindowId);
-      terminalWindowOwners.forEach((ownerWindowId, terminalId) => {
-        if (ownerWindowId === closedWindowId) {
-          terminalWindowOwners.delete(terminalId);
-        }
-      });
       const pendingPersist = framePersistTimers.get(closedWindowId);
       if (pendingPersist) {
         clearTimeout(pendingPersist);

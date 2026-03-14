@@ -134,6 +134,7 @@ export type WorkerInitMessage = {
     logsPath: string;
     permissions: CarrotPermissionTag[];
     grantedPermissions: CarrotPermissionGrant;
+    config?: Record<string, unknown>;
   };
 };
 
