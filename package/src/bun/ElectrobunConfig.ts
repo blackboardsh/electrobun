@@ -185,6 +185,20 @@ export interface ElectrobunConfig {
 		locales?: string[] | "*";
 
 		/**
+		 * Additional file or directory paths to watch for changes during `electrobun dev --watch`.
+		 * Paths are relative to the project root.
+		 * Useful for files that affect your build but aren't listed as entrypoints or copy sources.
+		 */
+		watch?: string[];
+
+		/**
+		 * Glob patterns for files that should not trigger a rebuild when changed.
+		 * Patterns are matched against project-relative paths.
+		 * The `build/`, `artifacts/`, and `node_modules/` directories are always ignored automatically.
+		 */
+		watchIgnore?: string[];
+
+		/**
 		 * macOS-specific build configuration
 		 */
 		mac?: {
