@@ -119,6 +119,10 @@ export const native = (() => {
 				],
 				returns: FFIType.void,
 			},
+			hideWindow: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
 			closeWindow: {
 				args: [
 					FFIType.ptr, // window ptr
@@ -860,6 +864,17 @@ export const ffi = {
 			}
 
 			native.symbols.showWindow(windowPtr);
+		},
+
+		hideWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				throw `Can't hide window. Window no longer exists`;
+			}
+
+			native.symbols.hideWindow(windowPtr);
 		},
 
 		minimizeWindow: (params: { winId: number }) => {
