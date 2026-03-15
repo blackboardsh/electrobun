@@ -3023,6 +3023,7 @@ private:
 
 public:
     std::string pendingUrl;
+    std::string pendingHtml;  // Stored inline HTML for loading after async creation
     std::string electrobunScript;
     std::string customScript;
     bool isCreationComplete = false;
@@ -3106,55 +3107,67 @@ public:
     }
     
     void loadURL(const char* urlString) override {
-        if (webview) {
-            std::string urlStr(urlString);
-            std::wstring url = std::wstring(urlString, urlString + strlen(urlString));
-            bool isViewsUrl = (urlStr.substr(0, 8) == "views://");
+        if (!urlString) return;
+        std::string urlStr(urlString);
 
-            // For all URLs, fire will-navigate event before Navigate()
-            // WebView2 doesn't fire NavigationStarting consistently, especially for blocked navigations
-            if (webviewEventHandler) {
-                // Escape URL for JSON
-                std::string escapedUrl;
-                for (char c : urlStr) {
-                    switch (c) {
-                        case '"': escapedUrl += "\\\""; break;
-                        case '\\': escapedUrl += "\\\\"; break;
-                        default: escapedUrl += c; break;
-                    }
+        // Fire will-navigate event on the calling thread (before Navigate)
+        bool isViewsUrl = (urlStr.substr(0, 8) == "views://");
+        if (webviewEventHandler) {
+            std::string escapedUrl;
+            for (char c : urlStr) {
+                switch (c) {
+                    case '"': escapedUrl += "\\\""; break;
+                    case '\\': escapedUrl += "\\\\"; break;
+                    default: escapedUrl += c; break;
                 }
-
-                // Fire will-navigate synchronously before Navigate()
-                std::string willNavEventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":true}";
-                webviewEventHandler(webviewId, _strdup("will-navigate"), _strdup(willNavEventData.c_str()));
             }
-
-            webview->Navigate(url.c_str());
-
-            // Fire did-navigate after Navigate() for views:// URLs only
-            // For https:// URLs, NavigationCompleted will fire did-navigate
-            if (isViewsUrl && webviewEventHandler) {
-                // Escape URL for JSON
-                std::string escapedUrl;
-                for (char c : urlStr) {
-                    switch (c) {
-                        case '"': escapedUrl += "\\\""; break;
-                        case '\\': escapedUrl += "\\\\"; break;
-                        default: escapedUrl += c; break;
-                    }
-                }
-
-                std::string didNavEventData = "{\"url\":\"" + escapedUrl + "\"}";
-                webviewEventHandler(webviewId, _strdup("did-navigate"), _strdup(didNavEventData.c_str()));
-            }
+            std::string willNavEventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":true}";
+            webviewEventHandler(webviewId, _strdup("will-navigate"), _strdup(willNavEventData.c_str()));
         }
+
+        // Navigate must happen on the UI thread — WebView2 APIs are single-threaded
+        WebviewEventHandler handler = webviewEventHandler;
+        uint32_t wvId = webviewId;
+        MainThreadDispatcher::dispatch_async([this, urlStr, isViewsUrl, handler, wvId]() {
+            if (webview) {
+                std::wstring url(urlStr.begin(), urlStr.end());
+                webview->Navigate(url.c_str());
+
+                // Fire did-navigate after Navigate() for views:// URLs only
+                // For https:// URLs, NavigationCompleted will fire did-navigate
+                if (isViewsUrl && handler) {
+                    std::string escapedUrl;
+                    for (char c : urlStr) {
+                        switch (c) {
+                            case '"': escapedUrl += "\\\""; break;
+                            case '\\': escapedUrl += "\\\\"; break;
+                            default: escapedUrl += c; break;
+                        }
+                    }
+                    std::string didNavEventData = "{\"url\":\"" + escapedUrl + "\"}";
+                    handler(wvId, _strdup("did-navigate"), _strdup(didNavEventData.c_str()));
+                }
+            } else {
+                // WebView2 not ready — store URL for creation callback to load
+                pendingUrl = urlStr;
+            }
+        });
     }
     
     void loadHTML(const char* htmlString) override {
-        if (webview && htmlString) {
-            std::wstring html = std::wstring(htmlString, htmlString + strlen(htmlString));
-            webview->NavigateToString(html.c_str());
-        }
+        if (!htmlString) return;
+        std::string htmlCopy(htmlString);
+        // Dispatch to main thread to avoid race with async WebView2 creation callback.
+        // Both this and the creation callback run on the main thread, so they can't interleave.
+        MainThreadDispatcher::dispatch_async([this, htmlCopy]() {
+            if (webview) {
+                std::wstring html(htmlCopy.begin(), htmlCopy.end());
+                webview->NavigateToString(html.c_str());
+            } else {
+                // WebView2 not ready — creation callback will load this
+                pendingHtml = htmlCopy;
+            }
+        });
     }
     
     void goBack() override {
@@ -6495,8 +6508,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             } else {
                             }
                             
-                            // Navigate to URL
-                            if (!view->pendingUrl.empty()) {
+                            // Navigate to URL or load pending HTML
+                            if (!view->pendingHtml.empty()) {
+                                std::wstring html(view->pendingHtml.begin(), view->pendingHtml.end());
+                                webview->NavigateToString(html.c_str());
+                                view->pendingHtml.clear();
+                            } else if (!view->pendingUrl.empty()) {
                                 view->loadURL(view->pendingUrl.c_str());
                             }
                             
@@ -8285,9 +8302,7 @@ ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView *abstractView, const char 
         ::log("ERROR: Invalid parameters passed to loadHTMLInWebView");
         return;
     }
-    
-    // Use virtual method which handles threading and implementation details
-    
+
     abstractView->loadHTML(htmlString);
 }
 
