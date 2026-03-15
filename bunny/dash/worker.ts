@@ -139,6 +139,10 @@ type ProjectMountDoc = DashDocumentTypes["projectMounts"];
 type LensDoc = DashDocumentTypes["layouts"];
 type CurrentStateDoc = DashDocumentTypes["sessionSnapshots"];
 type UiSettingsDoc = DashDocumentTypes["uiSettings"];
+type TypeScriptPeerDependencyStatus = {
+  installed: boolean;
+  version: string;
+};
 
 type Snapshot = {
   shellTitle: string;
@@ -239,6 +243,10 @@ const GIT_CARROT_ID = "bunny.git";
 const TSSERVER_CARROT_ID = "bunny.tsserver";
 const DEFAULT_PTY_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 let ptyHeartbeatIntervalMs = DEFAULT_PTY_HEARTBEAT_INTERVAL_MS;
+let typeScriptPeerDependencyStatus: TypeScriptPeerDependencyStatus = {
+  installed: false,
+  version: "",
+};
 const LEGACY_CURRENT_SESSION_MAIN_TABS: WindowTabId[] = [
   "workspace",
   "projects",
@@ -1064,6 +1072,7 @@ function ensureBootPromise() {
       ensureRuntimeState();
       currentState = captureCurrentState();
       ensurePtyHeartbeatLoop();
+      await refreshTypeScriptPeerDependencyStatus();
       syncApplicationMenu();
       await reopenRuntimeWindowsOnBoot();
       post({ type: "ready" });
@@ -1449,8 +1458,8 @@ function colabPeerDependencies() {
       version: Bun.version,
     },
     typescript: {
-      installed: false,
-      version: "",
+      installed: typeScriptPeerDependencyStatus.installed,
+      version: typeScriptPeerDependencyStatus.version,
     },
     biome: {
       installed: false,
@@ -1605,6 +1614,66 @@ async function invokeTsServerCarrot<T = unknown>(
   options?: { windowId?: string },
 ) {
   return Carrots.invoke<T>(TSSERVER_CARROT_ID, method, params, options);
+}
+
+async function refreshTypeScriptPeerDependencyStatus() {
+  try {
+    const status = await invokeTsServerCarrot<TypeScriptPeerDependencyStatus>("getTypeScriptStatus");
+    typeScriptPeerDependencyStatus = {
+      installed: Boolean(status?.installed),
+      version: String(status?.version || ""),
+    };
+  } catch {
+    typeScriptPeerDependencyStatus = {
+      installed: false,
+      version: "",
+    };
+  }
+}
+
+async function closeTsServerEditor(metadata: {
+  workspaceId?: string;
+  windowId?: string;
+  editorId?: string;
+}) {
+  if (!metadata.workspaceId || !metadata.windowId || !metadata.editorId) {
+    return;
+  }
+
+  try {
+    await invokeTsServerCarrot(
+      "closeEditor",
+      {
+        metadata: {
+          workspaceId: metadata.workspaceId,
+          windowId: metadata.windowId,
+          editorId: metadata.editorId,
+        },
+      },
+      { windowId: metadata.windowId },
+    );
+  } catch {
+    // Ignore editor-level tsserver cleanup failures. Window-level cleanup is the backstop.
+  }
+}
+
+async function closeTsServerEditorsForWindow(windowId: string, workspaceId?: string) {
+  if (!windowId) {
+    return;
+  }
+
+  try {
+    await invokeTsServerCarrot(
+      "closeWindowEditors",
+      {
+        windowId,
+        workspaceId,
+      },
+      { windowId },
+    );
+  } catch {
+    // Ignore window-level cleanup failures here. Reopen paths will re-establish state.
+  }
 }
 
 function buildSearchTargetsForWorkspace(workspaceId = getCurrentWorkspace().key) {
@@ -2894,6 +2963,7 @@ async function restoreLensInCurrentWindow(lensId: string) {
     `restoreLensInCurrentWindow begin: ${lens.key} rootPane=${savedWindowState.rootPane.type} currentPane=${savedWindowState.currentPaneId}`,
   );
   const currentWindow = getCurrentWindow();
+  await closeTsServerEditorsForWindow(currentWindow.id, currentWindow.workspaceId);
   await killTerminalsForWindow(currentWindow.id);
   const restoredWindow = buildRuntimeWindowFromLens(lens, currentWindow.id);
 
@@ -2988,6 +3058,9 @@ async function openLens(lensId: string) {
 }
 
 async function restoreCurrentState() {
+  for (const runtimeWindow of runtimeWindows) {
+    await closeTsServerEditorsForWindow(runtimeWindow.id, runtimeWindow.workspaceId);
+  }
   const snapshotDoc = getCurrentStateDoc();
   runtimeWindows = cloneWindows(snapshotDoc.windows);
   state.currentLayoutId = snapshotDoc.currentLayoutId;
@@ -3125,6 +3198,7 @@ async function createWorkspace(name: string, subtitle = "") {
   const starterRuntimeWindow = buildRuntimeWindowFromLens(currentLens, getCurrentWindow().id);
 
   const currentWindow = getCurrentWindow();
+  await closeTsServerEditorsForWindow(currentWindow.id, currentWindow.workspaceId);
   await killTerminalsForWindow(currentWindow.id);
   currentWindow.workspaceId = created.key;
   currentWindow.title = starterRuntimeWindow.title;
@@ -3293,6 +3367,7 @@ async function deleteLens(lensId: string) {
   const affectedWindows = runtimeWindows.filter((window) => getLensIdForWindow(window) === lens.key);
 
   for (const runtimeWindow of affectedWindows) {
+    await closeTsServerEditorsForWindow(runtimeWindow.id, runtimeWindow.workspaceId);
     await killTerminalsForWindow(runtimeWindow.id);
     const restoredWindow = buildRuntimeWindowFromLens(replacementLens, runtimeWindow.id);
     runtimeWindow.title = restoredWindow.title;
@@ -4061,6 +4136,13 @@ async function handleColabSend(name: string, payload: any) {
         },
       );
       return;
+    case "tsServerEditorClosed":
+      await closeTsServerEditor(
+        payload && typeof payload === "object" && payload.metadata && typeof payload.metadata === "object"
+          ? payload.metadata
+          : {},
+      );
+      return;
     case "createWindow":
       await createAdditionalWindow(
         payload && typeof payload === "object"
@@ -4118,7 +4200,9 @@ self.onmessage = async (event) => {
 
     if (message.name === "window-closed") {
       const closedWindowId = String(message.payload?.windowId || "");
+      const closedRuntimeWindow = runtimeWindows.find((window) => window.id === closedWindowId);
       browserWindows.delete(closedWindowId);
+      await closeTsServerEditorsForWindow(closedWindowId, closedRuntimeWindow?.workspaceId);
       await killTerminalsForWindow(closedWindowId);
       removeColabWindowFromAllWorkspaces(closedWindowId);
       runtimeWindows = runtimeWindows.filter((window) => window.id !== closedWindowId);

@@ -44,7 +44,14 @@ type TsServerSession = {
   expectedContentLength: number | null;
   requestMetadataBySeq: Map<number, TsServerClientMetadata>;
   fileMetadataByPath: Map<string, TsServerClientMetadata>;
+  editorMetadataById: Map<string, TsServerClientMetadata>;
+  editorOpenFilesById: Map<string, Set<string>>;
   lastMetadata: TsServerClientMetadata | null;
+};
+
+type TypeScriptStatus = {
+  installed: boolean;
+  version: string;
 };
 
 const HEADER_SEPARATOR = Buffer.from("\r\n\r\n");
@@ -95,6 +102,54 @@ function readTypescriptVersion() {
   }
 }
 
+function readTypeScriptStatus(): TypeScriptStatus {
+  return {
+    installed: existsSync(TSSERVER_PATH),
+    version: readTypescriptVersion(),
+  };
+}
+
+function getEditorKey(metadata: TsServerClientMetadata) {
+  return `${metadata.windowId}:${metadata.editorId}`;
+}
+
+function rememberEditorMetadata(session: TsServerSession, metadata: TsServerClientMetadata) {
+  session.editorMetadataById.set(getEditorKey(metadata), metadata);
+}
+
+function trackEditorOpenFile(
+  session: TsServerSession,
+  metadata: TsServerClientMetadata,
+  filePath: string,
+) {
+  const editorKey = getEditorKey(metadata);
+  const trackedFiles = session.editorOpenFilesById.get(editorKey) ?? new Set<string>();
+  trackedFiles.add(filePath);
+  session.editorOpenFilesById.set(editorKey, trackedFiles);
+  session.fileMetadataByPath.set(filePath, metadata);
+  rememberEditorMetadata(session, metadata);
+}
+
+function untrackEditorOpenFile(
+  session: TsServerSession,
+  metadata: TsServerClientMetadata,
+  filePath: string,
+) {
+  const editorKey = getEditorKey(metadata);
+  const trackedFiles = session.editorOpenFilesById.get(editorKey);
+  if (trackedFiles) {
+    trackedFiles.delete(filePath);
+    if (trackedFiles.size === 0) {
+      session.editorOpenFilesById.delete(editorKey);
+      session.editorMetadataById.delete(editorKey);
+    }
+  }
+
+  if (session.fileMetadataByPath.get(filePath)?.editorId === metadata.editorId) {
+    session.fileMetadataByPath.delete(filePath);
+  }
+}
+
 function emitTsServerMessage(
   session: TsServerSession,
   metadata: TsServerClientMetadata | null,
@@ -118,17 +173,17 @@ function updateFileTracking(
   metadata: TsServerClientMetadata,
 ) {
   if (command === "open" && typeof args?.file === "string") {
-    session.fileMetadataByPath.set(args.file, metadata);
+    trackEditorOpenFile(session, metadata, args.file);
     return;
   }
 
   if (command === "close" && typeof args?.file === "string") {
-    session.fileMetadataByPath.delete(args.file);
+    untrackEditorOpenFile(session, metadata, args.file);
     return;
   }
 
   if (command === "change" && typeof args?.file === "string") {
-    session.fileMetadataByPath.set(args.file, metadata);
+    trackEditorOpenFile(session, metadata, args.file);
     return;
   }
 
@@ -139,7 +194,7 @@ function updateFileTracking(
   if (Array.isArray(args.closedFiles)) {
     for (const file of args.closedFiles) {
       if (typeof file === "string") {
-        session.fileMetadataByPath.delete(file);
+        untrackEditorOpenFile(session, metadata, file);
       }
     }
   }
@@ -147,7 +202,7 @@ function updateFileTracking(
   if (Array.isArray(args.openFiles)) {
     for (const file of args.openFiles) {
       if (typeof file === "string") {
-        session.fileMetadataByPath.set(file, metadata);
+        trackEditorOpenFile(session, metadata, file);
       }
     }
   }
@@ -251,6 +306,8 @@ function createSession(owner: TsServerOwner) {
     expectedContentLength: null,
     requestMetadataBySeq: new Map(),
     fileMetadataByPath: new Map(),
+    editorMetadataById: new Map(),
+    editorOpenFilesById: new Map(),
     lastMetadata: null,
   };
 
@@ -328,6 +385,70 @@ function shutdownSession(session: TsServerSession) {
   }
 }
 
+function shutdownSessionIfIdle(session: TsServerSession) {
+  if (session.editorOpenFilesById.size > 0) {
+    return false;
+  }
+
+  sessions.delete(getSessionKey(session.owner));
+  shutdownSession(session);
+  return true;
+}
+
+function closeEditorTrackedFiles(
+  session: TsServerSession,
+  metadata: TsServerClientMetadata,
+) {
+  const editorKey = getEditorKey(metadata);
+  const trackedFiles = Array.from(session.editorOpenFilesById.get(editorKey) ?? []);
+  let closedFiles = 0;
+
+  for (const filePath of trackedFiles) {
+    writeRequest(session, "close", { file: filePath }, metadata);
+    closedFiles += 1;
+  }
+
+  session.editorOpenFilesById.delete(editorKey);
+  session.editorMetadataById.delete(editorKey);
+  return {
+    closedFiles,
+    shutdown: shutdownSessionIfIdle(session),
+  };
+}
+
+function closeWindowTrackedEditors(
+  session: TsServerSession,
+  windowId: string,
+  workspaceId?: string,
+) {
+  const matchingEditors = Array.from(session.editorMetadataById.values()).filter((metadata) => {
+    if (metadata.windowId !== windowId) {
+      return false;
+    }
+    if (workspaceId && metadata.workspaceId !== workspaceId) {
+      return false;
+    }
+    return true;
+  });
+
+  let closedEditors = 0;
+  let closedFiles = 0;
+
+  for (const metadata of matchingEditors) {
+    const result = closeEditorTrackedFiles(session, metadata);
+    if (result.closedFiles > 0) {
+      closedEditors += 1;
+      closedFiles += result.closedFiles;
+    }
+  }
+
+  return {
+    closedEditors,
+    closedFiles,
+    shutdown: shutdownSessionIfIdle(session),
+  };
+}
+
 process.on("exit", () => {
   for (const session of sessions.values()) {
     shutdownSession(session);
@@ -356,6 +477,49 @@ async function handleRequest(method: string, params: unknown) {
     }
     case "getTypeScriptVersion":
       return readTypescriptVersion();
+    case "getTypeScriptStatus":
+      return readTypeScriptStatus();
+    case "closeEditor": {
+      const request = (params ?? {}) as TsServerRequestParams;
+      const owner = extractSource(request);
+      const metadata = request.metadata;
+
+      if (!metadata?.workspaceId || !metadata?.windowId || !metadata?.editorId) {
+        throw new Error("closeEditor requires workspaceId, windowId, and editorId metadata");
+      }
+
+      const session = sessions.get(getSessionKey(owner));
+      if (!session) {
+        return { closedFiles: 0, shutdown: false };
+      }
+
+      return closeEditorTrackedFiles(session, metadata);
+    }
+    case "closeWindowEditors": {
+      const request = (params ?? {}) as {
+        windowId?: string;
+        workspaceId?: string;
+        __source?: InvocationSource;
+      };
+      const owner = extractSource(request);
+      const windowId = String(request.windowId || owner.windowId || "");
+      if (!windowId) {
+        throw new Error("closeWindowEditors requires a windowId");
+      }
+
+      const session = sessions.get(getSessionKey(owner));
+      if (!session) {
+        return { closedEditors: 0, closedFiles: 0, shutdown: false };
+      }
+
+      return closeWindowTrackedEditors(
+        session,
+        windowId,
+        typeof request.workspaceId === "string" && request.workspaceId.length > 0
+          ? request.workspaceId
+          : undefined,
+      );
+    }
     default:
       return undefined;
   }

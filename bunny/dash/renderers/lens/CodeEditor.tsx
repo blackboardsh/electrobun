@@ -882,6 +882,13 @@ export const Editor = ({ currentTabId }: { currentTabId: string }) => {
   });
 
   onCleanup(() => {
+    electrobun.rpc?.send("tsServerEditorClosed", {
+      metadata: {
+        workspaceId,
+        windowId,
+        editorId: uniqueId,
+      },
+    });
     // todo (yoav): move to a single event listener model
     window.removeEventListener("resize", onResize);
     if (editorRef) {

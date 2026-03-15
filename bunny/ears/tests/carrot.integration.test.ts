@@ -1765,6 +1765,14 @@ describe("Bunny Ears carrots", () => {
     expect(existsSync(join(built.outDir, "typescript", "lib", "tsserver.js"))).toBe(true);
 
     const carrot = await startBuiltCarrot(built);
+    const typeScriptStatus = (await carrot.request("getTypeScriptStatus")) as {
+      installed?: boolean;
+      version?: string;
+    };
+    expect(typeScriptStatus.installed).toBe(true);
+    expect(typeof typeScriptStatus.version).toBe("string");
+    expect(typeScriptStatus.version).not.toBe("");
+
     const projectDir = makeTempDir("bunny-tsserver-project-");
     const filePath = join(projectDir, "index.ts");
     writeFileSync(filePath, "const answer = 42;\nanswer.toFixed(2);\n");
@@ -1826,6 +1834,22 @@ describe("Bunny Ears carrots", () => {
           ?.payload?.message?.body?.displayString || "",
       ),
     ).toContain("const answer");
+
+    const closeWindowResult = (await carrot.request("closeWindowEditors", {
+      windowId: "main",
+      workspaceId: "workspace-1",
+      __source: {
+        carrotId: "dash-client",
+        windowId: "main",
+      },
+    })) as {
+      closedEditors?: number;
+      closedFiles?: number;
+      shutdown?: boolean;
+    };
+    expect(closeWindowResult.closedEditors).toBe(1);
+    expect(closeWindowResult.closedFiles).toBe(1);
+    expect(typeof closeWindowResult.shutdown).toBe("boolean");
   }, 20000);
 
   test("Bunny Dash uses bunny.search as its workspace search backend", async () => {
@@ -1969,6 +1993,18 @@ describe("Bunny Ears carrots", () => {
 
     await carrot.nextAction("set-tray");
     await carrot.nextAction("set-tray-menu");
+
+    const initialState = (await carrot.request("getInitialState")) as {
+      peerDependencies?: {
+        typescript?: {
+          installed?: boolean;
+          version?: string;
+        };
+      };
+    };
+    expect(initialState.peerDependencies?.typescript?.installed).toBe(true);
+    expect(typeof initialState.peerDependencies?.typescript?.version).toBe("string");
+    expect(initialState.peerDependencies?.typescript?.version).not.toBe("");
 
     const metadata = {
       workspaceId: "local-workspace",

@@ -1027,6 +1027,13 @@ export type WorkspaceRPC = {
           editorId: string;
         };
       };
+      tsServerEditorClosed: {
+        metadata: {
+          workspaceId: string;
+          windowId: string;
+          editorId: string;
+        };
+      };
       formatFile: {
         path: string;
       };
