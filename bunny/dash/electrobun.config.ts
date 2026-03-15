@@ -12,6 +12,7 @@ export default {
         "bunny.pty": "file:../foundation-carrots/pty",
         "bunny.search": "file:../foundation-carrots/search",
         "bunny.git": "file:../foundation-carrots/git",
+        "bunny.tsserver": "file:../foundation-carrots/tsserver",
       },
     },
   },

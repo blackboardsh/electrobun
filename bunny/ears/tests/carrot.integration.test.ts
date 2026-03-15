@@ -874,6 +874,7 @@ describe("Bunny Ears carrots", () => {
       "bunny.pty": "file:../foundation-carrots/pty",
       "bunny.search": "file:../foundation-carrots/search",
       "bunny.git": "file:../foundation-carrots/git",
+      "bunny.tsserver": "file:../foundation-carrots/tsserver",
     });
     expect(existsSync(join(built.outDir, "lens", "index.js"))).toBe(true);
     expect(existsSync(join(built.outDir, "lens", "index.css"))).toBe(true);
@@ -1754,6 +1755,79 @@ describe("Bunny Ears carrots", () => {
     expect(diff).toContain("changed");
   }, 20000);
 
+  test("Bunny TS Server carrot builds from source and emits tsserver messages for client carrots", async () => {
+    const built = await buildCarrotAt(
+      resolve(EARS_ROOT, "..", "foundation-carrots", "tsserver"),
+      "bunny-ears-tsserver-build-",
+    );
+    expect(built.manifest.id).toBe("bunny.tsserver");
+    expect(existsSync(join(built.outDir, "worker.js"))).toBe(true);
+    expect(existsSync(join(built.outDir, "typescript", "lib", "tsserver.js"))).toBe(true);
+
+    const carrot = await startBuiltCarrot(built);
+    const projectDir = makeTempDir("bunny-tsserver-project-");
+    const filePath = join(projectDir, "index.ts");
+    writeFileSync(filePath, "const answer = 42;\nanswer.toFixed(2);\n");
+
+    const metadata = {
+      workspaceId: "workspace-1",
+      windowId: "main",
+      editorId: "editor-1",
+    };
+
+    await carrot.request("tsServerRequest", {
+      command: "open",
+      args: {
+        file: filePath,
+      },
+      metadata,
+      __source: {
+        carrotId: "dash-client",
+        windowId: "main",
+      },
+    });
+
+    await carrot.request("tsServerRequest", {
+      command: "quickinfo",
+      args: {
+        file: filePath,
+        line: 2,
+        offset: 1,
+      },
+      metadata,
+      __source: {
+        carrotId: "dash-client",
+        windowId: "main",
+      },
+    });
+
+    const quickInfoEvent = await carrot.nextAction(
+      "emit-carrot-event",
+      (message) =>
+        (message.payload as {
+          carrotId?: string;
+          name?: string;
+          payload?: {
+            metadata?: { editorId?: string };
+            message?: { command?: string; type?: string; success?: boolean; body?: { displayString?: string } };
+          };
+        } | undefined)?.carrotId === "dash-client" &&
+        (message.payload as { name?: string } | undefined)?.name === "tsserver-message" &&
+        (message.payload as { payload?: { metadata?: { editorId?: string } } } | undefined)?.payload?.metadata?.editorId === "editor-1" &&
+        (message.payload as { payload?: { message?: { command?: string } } } | undefined)?.payload?.message?.command === "quickinfo",
+    );
+    expect((quickInfoEvent.payload as { name?: string } | undefined)?.name).toBe("tsserver-message");
+    expect(
+      (quickInfoEvent.payload as { payload?: { message?: { success?: boolean } } } | undefined)?.payload?.message?.success,
+    ).toBe(true);
+    expect(
+      String(
+        (quickInfoEvent.payload as { payload?: { message?: { body?: { displayString?: string } } } } | undefined)
+          ?.payload?.message?.body?.displayString || "",
+      ),
+    ).toContain("const answer");
+  }, 20000);
+
   test("Bunny Dash uses bunny.search as its workspace search backend", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-search-build-");
     const carrot = await startBuiltCarrot(built);
@@ -1884,6 +1958,67 @@ describe("Bunny Ears carrots", () => {
     expect(typeof gitConfig.hasKeychainHelper).toBe("boolean");
     expect(typeof gitConfig.name).toBe("string");
     expect(typeof gitConfig.email).toBe("string");
+  }, 20000);
+
+  test("Bunny Dash routes tsserver requests through bunny.tsserver", async () => {
+    const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-tsserver-build-");
+    const carrot = await startBuiltCarrot(built);
+    const projectDir = makeTempDir("bunny-dash-tsserver-project-");
+    const filePath = join(projectDir, "index.ts");
+    writeFileSync(filePath, "const answer = 42;\nanswer.toFixed(2);\n");
+
+    await carrot.nextAction("set-tray");
+    await carrot.nextAction("set-tray-menu");
+
+    const metadata = {
+      workspaceId: "local-workspace",
+      windowId: "main",
+      editorId: "editor-1",
+    };
+
+    await carrot.request("send:tsServerRequest", {
+      command: "open",
+      args: {
+        file: filePath,
+      },
+      metadata,
+    });
+
+    await carrot.request("send:tsServerRequest", {
+      command: "quickinfo",
+      args: {
+        file: filePath,
+        line: 2,
+        offset: 1,
+      },
+      metadata,
+    });
+
+    const quickInfoEvent = await carrot.nextAction(
+      "emit-view",
+      (message) =>
+        (message.payload as {
+          name?: string;
+          raw?: boolean;
+          payload?: {
+            metadata?: { editorId?: string };
+            message?: { command?: string; success?: boolean; body?: { displayString?: string } };
+          };
+        } | undefined)?.name === "tsServerMessage" &&
+        (message.payload as { raw?: boolean } | undefined)?.raw === false &&
+        (message.payload as { payload?: { metadata?: { editorId?: string } } } | undefined)?.payload?.metadata?.editorId === "editor-1" &&
+        (message.payload as { payload?: { message?: { command?: string } } } | undefined)?.payload?.message?.command === "quickinfo",
+    );
+    expect((quickInfoEvent.payload as { name?: string } | undefined)?.name).toBe("tsServerMessage");
+    expect(
+      (quickInfoEvent.payload as { payload?: { message?: { success?: boolean } } } | undefined)?.payload?.message?.success,
+    ).toBe(true);
+    expect(
+      String(
+        (quickInfoEvent.payload as { payload?: { message?: { body?: { displayString?: string } } } } | undefined)
+          ?.payload?.message?.body?.displayString || "",
+      ),
+    ).toContain("const answer");
   }, 20000);
 
   test("Bunny PTY carrot kills orphaned terminals after the heartbeat timeout", async () => {

@@ -236,6 +236,7 @@ const WORKSPACE_CURRENT_LENS_PREFIX = "__workspace-current__:";
 const PTY_CARROT_ID = "bunny.pty";
 const SEARCH_CARROT_ID = "bunny.search";
 const GIT_CARROT_ID = "bunny.git";
+const TSSERVER_CARROT_ID = "bunny.tsserver";
 const DEFAULT_PTY_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 let ptyHeartbeatIntervalMs = DEFAULT_PTY_HEARTBEAT_INTERVAL_MS;
 const LEGACY_CURRENT_SESSION_MAIN_TABS: WindowTabId[] = [
@@ -1598,6 +1599,14 @@ async function invokeGitCarrot<T = unknown>(
   return Carrots.invoke<T>(GIT_CARROT_ID, method, params, options);
 }
 
+async function invokeTsServerCarrot<T = unknown>(
+  method: string,
+  params?: unknown,
+  options?: { windowId?: string },
+) {
+  return Carrots.invoke<T>(TSSERVER_CARROT_ID, method, params, options);
+}
+
 function buildSearchTargetsForWorkspace(workspaceId = getCurrentWorkspace().key) {
   return getProjectMountsForWorkspace(workspaceId).map((project) => ({
     projectId: project.key,
@@ -1685,6 +1694,40 @@ function handleSearchFindFilesResults(payload: unknown) {
       results: Array.isArray(eventPayload.results) ? eventPayload.results.map(String) : [],
     },
   );
+}
+
+function handleTsServerMessage(payload: unknown) {
+  const eventPayload =
+    payload && typeof payload === "object"
+      ? (payload as {
+          message?: Record<string, unknown>;
+          metadata?: {
+            workspaceId?: string;
+            windowId?: string;
+            editorId?: string;
+          };
+          windowId?: string | null;
+        })
+      : {};
+
+  const targetWindowId =
+    typeof eventPayload.metadata?.windowId === "string"
+      ? eventPayload.metadata.windowId
+      : typeof eventPayload.windowId === "string"
+        ? eventPayload.windowId
+        : state.currentWindowId;
+
+  sendRuntimeEventToDashWindow(targetWindowId, "tsServerMessage", {
+    message:
+      eventPayload.message && typeof eventPayload.message === "object"
+        ? eventPayload.message
+        : {},
+    metadata: {
+      workspaceId: String(eventPayload.metadata?.workspaceId || ""),
+      windowId: String(targetWindowId || ""),
+      editorId: String(eventPayload.metadata?.editorId || ""),
+    },
+  });
 }
 
 app.on("pty-terminal-output", handlePtyTerminalOutput);
@@ -3997,8 +4040,26 @@ async function handleColabSend(name: string, payload: any) {
     case "addToken":
     case "deleteToken":
     case "formatFile":
-    case "tsServerRequest":
     case "syncDevlink":
+      return;
+    case "tsServerRequest":
+      await invokeTsServerCarrot<boolean>(
+        "tsServerRequest",
+        {
+          command: String(payload?.command || ""),
+          args: payload?.args ?? {},
+          metadata:
+            payload && typeof payload === "object" && payload.metadata && typeof payload.metadata === "object"
+              ? payload.metadata
+              : {},
+        },
+        {
+          windowId:
+            payload && typeof payload === "object" && typeof payload?.metadata?.windowId === "string"
+              ? payload.metadata.windowId
+              : getCurrentWindow().id,
+        },
+      );
       return;
     case "createWindow":
       await createAdditionalWindow(
@@ -4034,6 +4095,11 @@ self.onmessage = async (event) => {
 
     if (message.name === "search-find-files-results") {
       handleSearchFindFilesResults(message.payload);
+      return;
+    }
+
+    if (message.name === "tsserver-message") {
+      handleTsServerMessage(message.payload);
       return;
     }
 
