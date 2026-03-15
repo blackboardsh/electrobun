@@ -434,6 +434,10 @@ static std::mutex g_webviewCreationMutex;
 // Global map to store preload scripts by browser ID (needs to be early for load handler)
 static std::map<int, std::string> g_preloadScripts;
 
+// Global map to track browser ID to webview ID mapping (for CEF scheme handler)
+static std::map<int, uint32_t> browserToWebviewMap;
+static std::mutex browserMapMutex;
+
 // Global map to store CEFViews by container window handle (using void* to avoid forward declaration issues)
 static std::map<HWND, void*> g_cefViews;
 // Global map to store WebView2Views by container window handle (using void* to avoid forward declaration issues)
@@ -647,6 +651,10 @@ public:
 
         // Remove browser from global tracking
         g_cefBrowsers.erase(browser->GetIdentifier());
+        {
+            std::lock_guard<std::mutex> lock(browserMapMutex);
+            browserToWebviewMap.erase(browser->GetIdentifier());
+        }
         g_browser_count--;
 
         std::cout << "[CEF] Remaining browsers: " << g_browser_count << std::endl;
@@ -759,26 +767,38 @@ std::string getMimeTypeForFile(const std::string& path);
 // CEF Resource Handler for views:// scheme (based on Mac implementation)
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
-    ElectrobunSchemeHandler() : offset_(0), hasResponse_(false) {}
+    ElectrobunSchemeHandler(uint32_t webviewId)
+        : webviewId_(webviewId), offset_(0), hasResponse_(false) {}
 
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
         handle_request = true;
-        
+
         std::string url = request->GetURL();
         std::string path = url.substr(8); // Remove "views://" prefix
         if (path.empty()) path = "index.html";
-        
-        // Load file content using existing function
-        std::string content = loadViewsFile(path);
+
+        std::string content;
+        // Check for internal/index.html (inline HTML content)
+        if (path == "internal/index.html") {
+            const char* htmlContent = getWebviewHTMLContent(webviewId_);
+            if (htmlContent && strlen(htmlContent) > 0) {
+                content = std::string(htmlContent);
+                free((void*)htmlContent);
+            } else {
+                content = "<html><body><h1>No content set</h1></body></html>";
+            }
+        } else {
+            content = loadViewsFile(path);
+        }
         mimeType_ = getMimeTypeForFile(path);
-        
+
         if (!content.empty()) {
             responseData_.assign(content.begin(), content.end());
             hasResponse_ = true;
         } else {
             hasResponse_ = false;
         }
-        
+
         return hasResponse_;
     }
 
@@ -804,6 +824,7 @@ public:
     void Cancel() override {}
 
 private:
+    uint32_t webviewId_;
     std::string mimeType_;
     std::vector<char> responseData_;
     bool hasResponse_;
@@ -818,7 +839,17 @@ public:
                                        CefRefPtr<CefFrame> frame,
                                        const CefString& scheme_name,
                                        CefRefPtr<CefRequest> request) override {
-        return new ElectrobunSchemeHandler();
+        // Get webview ID from browser ID
+        uint32_t webviewId = 0;
+        if (browser) {
+            std::lock_guard<std::mutex> lock(browserMapMutex);
+            int browserId = browser->GetIdentifier();
+            auto it = browserToWebviewMap.find(browserId);
+            if (it != browserToWebviewMap.end()) {
+                webviewId = it->second;
+            }
+        }
+        return new ElectrobunSchemeHandler(webviewId);
     }
 
 private:
@@ -6011,7 +6042,20 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         
                                         if (uriStr.substr(0, 8) == "views://") {
                                             std::string filePath = uriStr.substr(8);
-                                            std::string content = loadViewsFile(filePath);
+                                            std::string content;
+
+                                            // Check for internal/index.html (inline HTML content)
+                                            if (filePath == "internal/index.html") {
+                                                const char* htmlContent = getWebviewHTMLContent(capturedWebviewId);
+                                                if (htmlContent && strlen(htmlContent) > 0) {
+                                                    content = std::string(htmlContent);
+                                                    free((void*)htmlContent);
+                                                } else {
+                                                    content = "<html><body><h1>No content set</h1></body></html>";
+                                                }
+                                            } else {
+                                                content = loadViewsFile(filePath);
+                                            }
 
                                             if (!content.empty()) {
                                                 // ::log("[WebView2] Loaded views file content, creating response");
@@ -6772,10 +6816,16 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             if (!combinedScript.empty()) {
                 g_preloadScripts[browser->GetIdentifier()] = combinedScript;
             }
-            
+
+            // Map browser ID to webview ID for CEF scheme handler
+            {
+                std::lock_guard<std::mutex> lock(browserMapMutex);
+                browserToWebviewMap[browser->GetIdentifier()] = webviewId;
+            }
+
             // Set browser on view immediately since we have it synchronously
             view->setBrowser(browser);
-            
+
             // Track browser in global map
             g_cefBrowsers[browser->GetIdentifier()] = browser;
             g_browser_count++;
