@@ -844,7 +844,8 @@ export const ffi = {
 			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
-				throw `Can't close window. Window no longer exists`;
+				// Window already closed — silently ignore the race condition
+				return;
 			}
 
 			native.symbols.closeWindow(windowPtr);
