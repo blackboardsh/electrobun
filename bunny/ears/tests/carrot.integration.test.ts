@@ -1717,6 +1717,10 @@ describe("Bunny Ears carrots", () => {
     );
     expect(built.manifest.id).toBe("bunny.git");
     expect(existsSync(join(built.outDir, "worker.js"))).toBe(true);
+    expect(existsSync(join(built.outDir, "vendor", process.platform === "win32" ? "git.exe" : "git"))).toBe(true);
+    expect(
+      existsSync(join(built.outDir, "vendor", process.platform === "win32" ? "git-remote-https.exe" : "git-remote-https")),
+    ).toBe(true);
 
     const carrot = await startBuiltCarrot(built);
     const repoDir = makeTempDir("bunny-git-project-");

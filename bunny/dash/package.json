@@ -13,7 +13,6 @@
     "esbuild-monaco-editor-plugin": "^0.1.1",
     "esbuild-plugin-solid": "^0.5.0",
     "monaco-editor": "0.52.0",
-    "simple-git": "^3.22.0",
     "solid-js": "^1.9.9",
     "tailwindcss": "^3.4.3",
     "typescript": "^5.9.3"

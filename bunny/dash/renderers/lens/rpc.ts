@@ -6,15 +6,56 @@ import type {
   SlateType,
 } from "../../shared/types/types";
 import type { AppState } from "./store";
-import type {
-  CommitResult,
-  DefaultLogFields,
-  LogResult,
-  Response,
-  StatusResult,
-} from "simple-git";
 import type { WorkspaceType } from "./store";
 import type { track } from "../../main/utils/analytics";
+
+type CommitResult = {
+  commit: string;
+  branch: string;
+  summary?: {
+    changes: number;
+    insertions: number;
+    deletions: number;
+  };
+  [key: string]: any;
+};
+
+type DefaultLogFields = {
+  hash: string;
+  date: string;
+  message: string;
+  refs?: string;
+  body?: string;
+  author_name?: string;
+  author_email?: string;
+  [key: string]: any;
+};
+
+type LogResult<T> = {
+  all: T[];
+  latest?: T;
+  total: number;
+  [key: string]: any;
+};
+
+type Response<T> = T;
+
+type StatusResult = {
+  not_added: string[];
+  conflicted: string[];
+  created: string[];
+  deleted: string[];
+  modified: string[];
+  renamed: Array<{ from: string; to: string }>;
+  files: Array<Record<string, any>>;
+  staged: string[];
+  ahead: number;
+  behind: number;
+  current: string;
+  tracking?: string | null;
+  detached: boolean;
+  [key: string]: any;
+};
 
 export type WorkspaceRPC = {
   // to bun

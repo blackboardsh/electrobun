@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { join, resolve } from "node:path";
 
@@ -40,22 +40,111 @@ function sdkBunAliasPlugin(sdkBunModule: string) {
   };
 }
 
-function simpleGitAliasPlugin(sourceDir: string) {
-  const simpleGitEntry = resolve(
-    sourceDir,
-    "..",
-    "..",
-    "dash",
-    "node_modules",
-    "simple-git",
-    "dist",
-    "esm",
-    "index.js",
+function walk(dir: string, onEntry: (entryPath: string) => boolean | void) {
+  if (!existsSync(dir)) {
+    return false;
+  }
+
+  for (const entry of readdirSync(dir)) {
+    const entryPath = join(dir, entry);
+    let stat;
+    try {
+      stat = statSync(entryPath);
+    } catch {
+      continue;
+    }
+
+    if (onEntry(entryPath)) {
+      return true;
+    }
+
+    if (stat.isDirectory() && walk(entryPath, onEntry)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function decodeOutput(bytes: Uint8Array<ArrayBufferLike> | undefined) {
+  return new TextDecoder().decode(bytes || new Uint8Array());
+}
+
+function resolveSimpleGitEntry(sourceDir: string) {
+  return resolve(sourceDir, "node_modules", "simple-git", "dist", "esm", "index.js");
+}
+
+function findVendoredGitDir(sourceDir: string) {
+  const explicitDir = process.env.BUNNY_GIT_VENDOR_DIR;
+  if (explicitDir && existsSync(explicitDir)) {
+    return resolve(explicitDir);
+  }
+
+  const sourceVendorDir = resolve(sourceDir, "..", "..", "..", "..", "colab", "vendor");
+  if (existsSync(join(sourceVendorDir, process.platform === "win32" ? "git.exe" : "git"))) {
+    return sourceVendorDir;
+  }
+
+  const buildRoot = resolve(sourceDir, "..", "..", "..", "..", "colab", "build");
+  let foundPath: string | null = null;
+
+  walk(buildRoot, (entryPath) => {
+    if (
+      entryPath.endsWith(`/vendor/${process.platform === "win32" ? "git.exe" : "git"}`) ||
+      entryPath.endsWith(`\\vendor\\${process.platform === "win32" ? "git.exe" : "git"}`)
+    ) {
+      foundPath = resolve(entryPath, "..");
+      return true;
+    }
+
+    return false;
+  });
+
+  if (foundPath) {
+    return foundPath;
+  }
+
+  throw new Error(
+    "Missing vendored git assets for bunny.git. Set BUNNY_GIT_VENDOR_DIR or ensure colab/vendor exists.",
   );
+}
+
+function ensureSimpleGitDependency(sourceDir: string) {
+  const packageJsonPath = join(sourceDir, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    throw new Error(`Missing bunny.git package.json at ${packageJsonPath}`);
+  }
+
+  const simpleGitEntry = resolveSimpleGitEntry(sourceDir);
+  if (existsSync(simpleGitEntry)) {
+    return simpleGitEntry;
+  }
+
+  const lockPath = join(sourceDir, "bun.lock");
+  const installArgs = existsSync(lockPath)
+    ? [process.execPath, "install", "--frozen-lockfile"]
+    : [process.execPath, "install"];
+  const result = Bun.spawnSync(installArgs, {
+    cwd: sourceDir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to install bunny.git dependencies:\n${decodeOutput(result.stderr) || decodeOutput(result.stdout)}`,
+    );
+  }
 
   if (!existsSync(simpleGitEntry)) {
-    throw new Error(`Missing simple-git dependency at ${simpleGitEntry}. Run 'bun install' in bunny/dash.`);
+    throw new Error(`simple-git was not installed at ${simpleGitEntry}`);
   }
+
+  return simpleGitEntry;
+}
+
+function simpleGitAliasPlugin(sourceDir: string) {
+  const simpleGitEntry = ensureSimpleGitDependency(sourceDir);
 
   return {
     name: "bunny-git-simple-git-alias",
@@ -101,6 +190,13 @@ export async function buildCarrot({ sourceDir, outDir, manifest, sdkViewModule, 
     plugins: [sdkBunAliasPlugin(sdkBunModule), simpleGitAliasPlugin(sourceDir)],
   });
   assertBuildSuccess(`${manifest.name} worker`, workerBuild);
+
+  cpSync(findVendoredGitDir(sourceDir), join(outDir, "vendor"), {
+    recursive: true,
+    force: true,
+    dereference: false,
+    verbatimSymlinks: true,
+  });
 
   writeFileSync(
     join(outDir, "carrot.json"),

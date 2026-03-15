@@ -5,9 +5,11 @@ import * as os from "os";
 
 // Path to macOS osxkeychain credential helper (if available)
 const OSXKEYCHAIN_HELPER = "/Library/Developer/CommandLineTools/usr/libexec/git-core/git-credential-osxkeychain";
-
-const GIT_BINARY_PATH = process.env.BUNNY_GIT_BINARY_PATH || Bun.which("git") || "git";
-const GIT_EXEC_PATH = process.env.BUNNY_GIT_EXEC_PATH || "";
+const DEFAULT_GIT_VENDOR_PATH = process.env.BUNNY_GIT_VENDOR_PATH || path.join(import.meta.dir, "vendor");
+const GIT_EXEC_PATH = process.env.BUNNY_GIT_EXEC_PATH || DEFAULT_GIT_VENDOR_PATH;
+const GIT_BINARY_PATH =
+  process.env.BUNNY_GIT_BINARY_PATH ||
+  path.join(GIT_EXEC_PATH, process.platform === "win32" ? "git.exe" : "git");
 
 // HOME ensures git can find ~/.gitconfig for user.name and user.email.
 const gitEnv = {
