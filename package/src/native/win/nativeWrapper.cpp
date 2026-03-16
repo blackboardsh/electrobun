@@ -11634,14 +11634,17 @@ extern "C" ELECTROBUN_EXPORT bool dcompInitForView(AbstractView* view, int width
         return false;
     }
 
-    // Get the container HWND (parent of the WGPUView child window)
-    HWND targetHwnd = NULL;
-    if (view->hwnd) {
-        targetHwnd = GetParent(view->hwnd);
-        if (!targetHwnd) targetHwnd = view->hwnd;
+    // Walk up from the WGPUView's child HWND to the top-level window.
+    // CreateTargetForHwnd requires a top-level HWND, not a child window.
+    HWND targetHwnd = view->hwnd;
+    if (targetHwnd) {
+        HWND ancestor = GetAncestor(targetHwnd, GA_ROOT);
+        if (ancestor) targetHwnd = ancestor;
+        printf("[DComp] dcompInitForView: view->hwnd=%p top-level=%p\n",
+               view->hwnd, targetHwnd);
     }
     if (!targetHwnd || !IsWindow(targetHwnd)) {
-        printf("[DComp] dcompInitForView: invalid HWND (view->hwnd=%p parent=%p)\n",
+        printf("[DComp] dcompInitForView: invalid HWND (view->hwnd=%p resolved=%p)\n",
                view->hwnd, targetHwnd);
         return false;
     }

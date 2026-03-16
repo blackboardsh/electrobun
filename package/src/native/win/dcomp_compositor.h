@@ -27,15 +27,38 @@
 using Microsoft::WRL::ComPtr;
 
 // Feature gate: DirectComposition requires Windows 8.1+.
-// Falls back to UpdateLayeredWindow on older systems.
+// Note: IsWindows8Point1OrGreater() requires an app manifest to report correctly.
+// Without a manifest, Windows lies about the version. We use RtlGetVersion instead
+// which always returns the true OS version.
 static bool isDCompAvailable() {
     static int cached = -1;
     if (cached >= 0) return cached == 1;
-    cached = IsWindows8Point1OrGreater() ? 1 : 0;
-    if (!cached) {
-        printf("[DComp] DirectComposition not available (requires Windows 8.1+)\n");
+
+    // RtlGetVersion is not affected by manifests — always returns the real version.
+    typedef LONG (WINAPI *RtlGetVersionPtr)(OSVERSIONINFOEXW*);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll) {
+        auto fn = (RtlGetVersionPtr)GetProcAddress(ntdll, "RtlGetVersion");
+        if (fn) {
+            OSVERSIONINFOEXW osInfo = {};
+            osInfo.dwOSVersionInfoSize = sizeof(osInfo);
+            if (fn(&osInfo) == 0) {
+                // Windows 8.1 = 6.3, Windows 10/11 = 10.0
+                bool ok = (osInfo.dwMajorVersion > 6) ||
+                          (osInfo.dwMajorVersion == 6 && osInfo.dwMinorVersion >= 3);
+                printf("[DComp] OS version: %lu.%lu.%lu — DComp %s\n",
+                       osInfo.dwMajorVersion, osInfo.dwMinorVersion,
+                       osInfo.dwBuildNumber, ok ? "available" : "not available");
+                cached = ok ? 1 : 0;
+                return ok;
+            }
+        }
     }
-    return cached == 1;
+
+    // Fallback: assume available on modern Windows
+    printf("[DComp] Could not detect OS version, assuming DComp available\n");
+    cached = 1;
+    return true;
 }
 
 // ============================================================================
