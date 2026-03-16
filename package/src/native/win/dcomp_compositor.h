@@ -22,7 +22,21 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 
+#include <versionhelpers.h>
+
 using Microsoft::WRL::ComPtr;
+
+// Feature gate: DirectComposition requires Windows 8.1+.
+// Falls back to UpdateLayeredWindow on older systems.
+static bool isDCompAvailable() {
+    static int cached = -1;
+    if (cached >= 0) return cached == 1;
+    cached = IsWindows8Point1OrGreater() ? 1 : 0;
+    if (!cached) {
+        printf("[DComp] DirectComposition not available (requires Windows 8.1+)\n");
+    }
+    return cached == 1;
+}
 
 // ============================================================================
 // HLSL shaders for Phase 3 triangle rendering via D3D11
@@ -67,6 +81,8 @@ public:
     // Initialize DirectComposition pipeline on an existing HWND.
     // Creates: D3D11 device -> DXGI swap chain (for composition) -> DComp visual tree
     bool init(HWND targetHwnd, int width, int height) {
+        if (!isDCompAvailable()) return false;
+
         this->targetHwnd = targetHwnd;
         this->surfaceWidth = width;
         this->surfaceHeight = height;
