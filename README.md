@@ -27,9 +27,39 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
 ## Apps Built with Electrobun
+- [24agents](https://github.com/jhsu/24agents) - Hyperprompter
+- [act-track-ai](https://github.com/IrdanGu/act-track-ai) - personal desktop productivity tracker
+- [Agents Council](https://github.com/MrLesk/agents-council) - agent-to-agent MCP communication tool for feedback requests
+- [ai-wrapped](https://github.com/gulivan/ai-wrapped) - Wrapped-style desktop dashboard for your AI coding agent activity
 - [Audio TTS](https://github.com/blackboardsh/audio-tts) - desktop text-to-speech app using Qwen3-TTS for voice design, cloning, and generation
+- [aueio-player-desktop](https://github.com/tuomashatakka/aueio-player-desktop) - beautiful, minimal cross-platform audio player
+- [bestdiff](https://github.com/tesmond/bestdiff) - a git diff checker with curved connectors
+- [BuddyWriter](https://github.com/OxFrancesco/BuddyWriter) - BuddyWriter desktop and mobile apps
+- [burns](https://github.com/l3wi/burns) - a Smithers manager
 - [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
+- [Codex Agents Composer](https://github.com/MrLesk/codex-agents-composer) - desktop app for managing your Codex agents and their skills
+- [codex-devtools](https://github.com/gulivan/codex-devtools) - desktop inspector for Codex session data; browse conversations, search messages, and analyze agent activity
+- [Deskdown](https://github.com/guarana-studio/deskdown) - transform any web address into a desktop app in under 20 seconds
+- [dev-3.0](https://github.com/h0x91b/dev-3.0) - helps you not get lost while managing multiple AI agents across projects
 - [DOOM](https://github.com/blackboardsh/electrobun-doom) - DOOM implemented in 2 ways: bun -> (c doom -> bundled wgpu) and (full ts port bun -> bundled wgpu)
+- [electrobun-rms](https://github.com/khanhthanhdev/electrobun-rms) - fast Electrobun desktop app template with React, Tailwind CSS, and Vite
+- [golb](https://github.com/chrisdadev13/golb) - desktop AI coding workspace built with React, Vite, and Tailwind
+- [GOG Achievements GUI](https://github.com/timendum/gog-achievements-gui) - desktop app for managing GOG achievements
+- [groov](https://github.com/laurenzcodes/groov) - desktop audio deck monitor
+- [Guerilla Glass](https://github.com/okikeSolutions/guerillaglass) - open-source cross-platform creator studio for fast Record -> Edit -> Deliver workflows
+- [Marginalia](https://github.com/lars-hoeijmans/Marginalia) - a simple note taking app
+- [md-browse](https://github.com/needle-tools/md-browse) - a markdown-first browser that converts web pages to clean markdown
+- [peekachu](https://github.com/needle-tools/peekachu) - password manager for AIs; store secrets in your OS keychain and scrub output so AI assistants never see actual values
+- [PLEXI](https://github.com/ianjamesburke/PLEXI) - a multi-dimensional terminal multiplexer for the agentic era
+- [Quiver](https://ataraxy-labs.github.io/quiver/) - desktop app for GitHub PR reviews, merge conflict resolution, and AI commit messages
+- [remotecode.io](https://github.com/samuelfaj/remotecode.io) - continue local AI coding sessions (Claude Code or Codex) from your mobile device
+- [sirene](https://github.com/KevinBonnoron/sirene) - self-hosted multi-backend text-to-speech platform with voice cloning
+- [StoryForge](https://github.com/vrrdnt/StoryForge) - desktop app for Vintage Story players to switch between game versions, modpacks, servers, and accounts
+- [Tensamin Client](https://github.com/Tensamin/Client) - web, desktop, and mobile app for accessing Tensamin
+- [tokenpass-desktop](https://github.com/b-open-io/tokenpass-desktop) - desktop app that runs the Sigma Identity stack locally for Bitcoin-backed authentication
+- [typsmthng-desktop](https://github.com/aaditagrawal/typsmthng-desktop) - experimental desktop typing application
+- [VoiceVault](https://github.com/PJH720/VoiceVault) - AI-powered voice recorder with transcription, summarization, and RAG search
+- [warren](https://github.com/Loa212/warren) - open-source, peer-to-peer terminal mesh for accessing your machines from any device without SSH keys or config files
 
 ### Video Demos
 
