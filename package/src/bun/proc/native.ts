@@ -500,6 +500,20 @@ export const native = (() => {
 				args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32],
 				returns: FFIType.ptr,
 			},
+			// DirectComposition Phase 4: WebView2 + WGPU visual tree
+			dcompSetupLayeredTree: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			dcompAttachWebView2: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			dcompUpdateVisualBounds: {
+				args: [FFIType.f32, FFIType.f32, FFIType.f32, FFIType.f32,
+				       FFIType.f32, FFIType.f32, FFIType.f32, FFIType.f32],
+				returns: FFIType.bool,
+			},
 			// Tray
 			createTray: {
 				args: [
@@ -1839,6 +1853,25 @@ export const DCompBridge = {
 	createWGPUChildHwnd: (x: number, y: number, w: number, h: number): Pointer | null => {
 		if (!native?.symbols?.dcompCreateWGPUChildHwnd) return null;
 		return native.symbols.dcompCreateWGPUChildHwnd(x, y, w, h) as Pointer;
+	},
+	// Phase 4: WebView2 + WGPU visual tree
+	setupLayeredTree: (webviewViewPtr: Pointer, wgpuSwapChainPtr: Pointer | null): boolean => {
+		if (!native?.symbols?.dcompSetupLayeredTree) return false;
+		return native.symbols.dcompSetupLayeredTree(
+			webviewViewPtr as any, (wgpuSwapChainPtr ?? 0) as any) as boolean;
+	},
+	attachWebView2: (webviewViewPtr: Pointer): boolean => {
+		if (!native?.symbols?.dcompAttachWebView2) return false;
+		return native.symbols.dcompAttachWebView2(webviewViewPtr as any) as boolean;
+	},
+	updateVisualBounds: (
+		wgpuX: number, wgpuY: number, wgpuW: number, wgpuH: number,
+		wv2X: number, wv2Y: number, wv2W: number, wv2H: number,
+	): boolean => {
+		if (!native?.symbols?.dcompUpdateVisualBounds) return false;
+		return native.symbols.dcompUpdateVisualBounds(
+			wgpuX, wgpuY, wgpuW, wgpuH,
+			wv2X, wv2Y, wv2W, wv2H) as boolean;
 	},
 };
 

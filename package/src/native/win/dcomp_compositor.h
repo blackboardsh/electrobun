@@ -421,6 +421,133 @@ public:
     }
 
     // ========================================================================
+    // Phase 4: WebView2 + WGPU compositing via visual tree
+    // ========================================================================
+
+    // Build the full DComp visual tree for layered compositing:
+    //
+    //   DirectComposition Device
+    //   +-- Composition Target (main HWND)
+    //       +-- Root Visual
+    //           +-- WGPU Visual (GPU content, back layer)
+    //           |   +-- content: WGPU swap chain or child HWND surface
+    //           +-- WebView2 Visual (HTML UI, front layer, transparent BG)
+    //               +-- content: WebView2 composition surface
+    //
+    // Call after init() and after WebView2 creation.
+    bool setupLayeredVisualTree(
+        IDXGISwapChain1* wgpuSwapChain,   // WGPU layer content (can be nullptr for child HWND mode)
+        IUnknown* webview2Surface           // WebView2 composition surface (from ICoreWebView2CompositionController)
+    ) {
+        if (!initialized || !dcompDevice) return false;
+
+        HRESULT hr;
+
+        // Create WGPU visual (back layer)
+        hr = dcompDevice->CreateVisual(&wgpuVisual);
+        if (FAILED(hr)) {
+            printf("[DComp] CreateVisual (WGPU) failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        // Set WGPU content: either a swap chain or leave empty for child HWND mode
+        if (wgpuSwapChain) {
+            hr = wgpuVisual->SetContent(wgpuSwapChain);
+            if (FAILED(hr)) {
+                printf("[DComp] SetContent (WGPU swap chain) failed: 0x%08lx\n", hr);
+                return false;
+            }
+        }
+
+        // Create WebView2 visual (front layer, rendered on top)
+        hr = dcompDevice->CreateVisual(&webview2Visual);
+        if (FAILED(hr)) {
+            printf("[DComp] CreateVisual (WebView2) failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        if (webview2Surface) {
+            hr = webview2Visual->SetContent(webview2Surface);
+            if (FAILED(hr)) {
+                printf("[DComp] SetContent (WebView2 surface) failed: 0x%08lx\n", hr);
+                return false;
+            }
+        }
+
+        // Remove existing root content and rebuild visual tree
+        rootVisual->SetContent(nullptr);
+
+        // Add WGPU visual first (back layer)
+        hr = rootVisual->AddVisual(wgpuVisual.Get(), TRUE, nullptr);
+        if (FAILED(hr)) {
+            printf("[DComp] AddVisual (WGPU) failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        // Add WebView2 visual on top (front layer)
+        hr = rootVisual->AddVisual(webview2Visual.Get(), TRUE, wgpuVisual.Get());
+        if (FAILED(hr)) {
+            printf("[DComp] AddVisual (WebView2) failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        hr = dcompDevice->Commit();
+        if (FAILED(hr)) {
+            printf("[DComp] Commit (layered tree) failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        printf("[DComp] Layered visual tree: WGPU (back) + WebView2 (front)\n");
+        layeredTreeActive = true;
+        return true;
+    }
+
+    // Set/update the WebView2 composition surface on the WebView2 visual.
+    bool setWebView2Content(IUnknown* surface) {
+        if (!webview2Visual) return false;
+        HRESULT hr = webview2Visual->SetContent(surface);
+        if (FAILED(hr)) return false;
+        return SUCCEEDED(dcompDevice->Commit());
+    }
+
+    // Set/update the WGPU swap chain on the WGPU visual.
+    bool setWGPUContent(IDXGISwapChain1* wgpuSwapChain) {
+        if (!wgpuVisual) return false;
+        HRESULT hr = wgpuVisual->SetContent(wgpuSwapChain);
+        if (FAILED(hr)) return false;
+        return SUCCEEDED(dcompDevice->Commit());
+    }
+
+    // Update visual positions and sizes (for resize synchronization).
+    bool updateVisualBounds(
+        float wgpuX, float wgpuY, float wgpuW, float wgpuH,
+        float wv2X, float wv2Y, float wv2W, float wv2H
+    ) {
+        if (!initialized) return false;
+        HRESULT hr;
+
+        if (wgpuVisual) {
+            wgpuVisual->SetOffsetX(wgpuX);
+            wgpuVisual->SetOffsetY(wgpuY);
+        }
+
+        if (webview2Visual) {
+            webview2Visual->SetOffsetX(wv2X);
+            webview2Visual->SetOffsetY(wv2Y);
+        }
+
+        hr = dcompDevice->Commit();
+        return SUCCEEDED(hr);
+    }
+
+    // Check if the layered visual tree is active.
+    bool isLayeredTreeActive() const { return layeredTreeActive; }
+
+    // Get the DComp visual for WebView2 (for cursor/input routing).
+    IDCompositionVisual* getWebView2Visual() const { return webview2Visual.Get(); }
+    IDCompositionVisual* getWGPUVisual() const { return wgpuVisual.Get(); }
+
+    // ========================================================================
     // Lifecycle
     // ========================================================================
 
@@ -460,6 +587,11 @@ public:
             DestroyWindow(wgpuChildHwnd);
             wgpuChildHwnd = NULL;
         }
+
+        // Release Phase 4 layered visuals
+        webview2Visual.Reset();
+        wgpuVisual.Reset();
+        layeredTreeActive = false;
 
         // Release triangle pipeline
         blendState.Reset();
@@ -569,6 +701,11 @@ private:
 
     // Phase 3: WGPU child HWND
     HWND wgpuChildHwnd = NULL;
+
+    // Phase 4: Layered visual tree (WGPU + WebView2)
+    ComPtr<IDCompositionVisual> wgpuVisual;
+    ComPtr<IDCompositionVisual> webview2Visual;
+    bool layeredTreeActive = false;
 
     // Render loop
     bool renderLoopActive = false;
