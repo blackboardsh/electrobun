@@ -7,7 +7,7 @@ import {
 	DCompBridge,
 	three,
 } from "electrobun/bun";
-import { CString, ptr, toArrayBuffer } from "bun:ffi";
+import { CString, ptr } from "bun:ffi";
 import { inflateSync } from "zlib";
 import { existsSync } from "fs";
 import { resolve } from "path";
@@ -19,7 +19,6 @@ const WGPUNative = WGPU.native;
 const WGPU_KEEPALIVE: any[] = [];
 
 const WGPUTextureFormat_RGBA8UnormSrgb = 0x00000017;
-const WGPUTextureFormat_BGRA8Unorm = 0x00000017; // same enum value — BGRA8Unorm
 const WGPUTextureUsage_RenderAttachment = 0x0000000000000010n;
 const WGPUTextureUsage_CopyDst = 0x0000000000000002n;
 const WGPUTextureUsage_CopySrc = 0x0000000000000001n;
@@ -1104,54 +1103,41 @@ function renderFrame() {
 
 	WGPUNative.symbols.wgpuInstanceProcessEvents(instance);
 
-	const dbg = statsFrameCount < 3;
-	if (dbg) console.log(`[render] frame ${statsFrameCount}: ${totalVertices} vertices`);
-
-	// Render to offscreen texture (not a surface)
+	// Render to offscreen texture
 	const renderTextureView = WGPUNative.symbols.wgpuTextureCreateView(renderTexture, 0);
-	if (!renderTextureView) { if (dbg) console.log("[render] FAIL: textureCreateView"); return; }
-	if (dbg) console.log("[render] textureView created");
+	if (!renderTextureView) return;
 
 	const colorAttachment = makeRenderPassColorAttachment(renderTextureView);
 	const renderPassDesc = makeRenderPassDescriptor(colorAttachment.ptr as number);
 	const encoder = WGPUNative.symbols.wgpuDeviceCreateCommandEncoder(device, encoderDesc.ptr as number);
-	if (!encoder) { if (dbg) console.log("[render] FAIL: createCommandEncoder"); return; }
-	if (dbg) console.log("[render] encoder created");
+	if (!encoder) return;
 
 	const pass = WGPUNative.symbols.wgpuCommandEncoderBeginRenderPass(encoder, renderPassDesc.ptr as number);
-	if (!pass) { if (dbg) console.log("[render] FAIL: beginRenderPass"); return; }
-	if (dbg) console.log("[render] render pass began");
+	if (!pass) return;
 
 	WGPUNative.symbols.wgpuRenderPassEncoderSetPipeline(pass, pipeline);
 	WGPUNative.symbols.wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup, 0, 0);
 	WGPUNative.symbols.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertexBuffer, 0, totalVertices * FLOATS_PER_VERTEX * 4);
 	WGPUNative.symbols.wgpuRenderPassEncoderDraw(pass, totalVertices, 1, 0, 0);
 	WGPUNative.symbols.wgpuRenderPassEncoderEnd(pass);
-	if (dbg) console.log("[render] draw done, ending pass");
 
 	// Copy rendered texture → readback buffer (GPU → CPU transfer)
 	const copySrc = makeTexelCopyTextureInfo(renderTexture);
 	const copyDst = makeTexelCopyBufferInfo(readbackBuffer, readbackBytesPerRow, currentHeight);
 	const copyExtent = makeExtent3D(currentWidth, currentHeight, 1);
-	if (dbg) console.log(`[render] copy: bpr=${readbackBytesPerRow} h=${currentHeight} size=${readbackSize}`);
 	WGPUNative.symbols.wgpuCommandEncoderCopyTextureToBuffer(
 		encoder, copySrc.ptr as number, copyDst.ptr as number, copyExtent.ptr as number);
-	if (dbg) console.log("[render] copy encoded");
 
 	const commandBuffer = WGPUNative.symbols.wgpuCommandEncoderFinish(encoder, 0);
-	if (!commandBuffer) { if (dbg) console.log("[render] FAIL: encoderFinish"); return; }
+	if (!commandBuffer) return;
 	const commandArray = makeCommandBufferArray(commandBuffer);
 	WGPUNative.symbols.wgpuQueueSubmit(queue, 1, commandArray.ptr as number);
-	if (dbg) console.log("[render] submitted");
 
 	// Map readback buffer + blit to DComp in one native call
-	// (handles row padding stripping, proper Dawn callback, and DComp present)
-	if (dbg) console.log(`[render] blitFromWGPUBuffer: bpr=${readbackBytesPerRow} ${currentWidth}x${currentHeight}`);
-	const blitOk = DCompBridge.blitFromWGPUBuffer(
+	DCompBridge.blitFromWGPUBuffer(
 		instance as any, readbackBuffer as any,
 		readbackBytesPerRow, currentWidth, currentHeight,
 	);
-	if (dbg) console.log(`[render] blit ok=${blitOk}`);
 
 	// Cleanup
 	WGPUNative.symbols.wgpuTextureViewRelease(renderTextureView);
