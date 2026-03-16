@@ -11912,6 +11912,17 @@ extern "C" ELECTROBUN_EXPORT bool dcompRenderTriangle(float angle) {
     return result;
 }
 
+// Blit raw BGRA pixel data from WGPU readback to the DComp swap chain.
+// pixelData: pointer to width*height*4 bytes of BGRA pixel data.
+extern "C" ELECTROBUN_EXPORT bool dcompBlitPixels(const void* pixelData, int width, int height) {
+    if (!g_dcompCompositor) return false;
+    bool result = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        result = g_dcompCompositor->blitFromPixels(pixelData, width, height);
+    });
+    return result;
+}
+
 // Start a 60 FPS render loop (rotating triangle).
 extern "C" ELECTROBUN_EXPORT void dcompStartRenderLoop() {
     if (!g_dcompCompositor) return;

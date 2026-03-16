@@ -421,6 +421,57 @@ public:
     }
 
     // ========================================================================
+    // WGPU Bridge: blit raw pixels to the DComp swap chain
+    // ========================================================================
+
+    // Accept raw BGRA pixel data and write it to the DComp swap chain.
+    // Called once per frame from the Three.js render loop after WGPU readback.
+    // pixelData must be width*height*4 bytes, BGRA format (matching swap chain).
+    bool blitFromPixels(const void* pixelData, int width, int height) {
+        if (!initialized || !swapChain || !d3dDevice || !d3dContext) return false;
+        if (!pixelData || width <= 0 || height <= 0) return false;
+
+        // Resize swap chain if dimensions changed
+        if (width != surfaceWidth || height != surfaceHeight) {
+            resize(width, height);
+        }
+
+        // Get back buffer
+        ComPtr<ID3D11Texture2D> backBuffer;
+        HRESULT hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr)) {
+            printf("[DComp] blitFromPixels: GetBuffer failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        // Upload pixel data directly to the back buffer
+        UINT rowPitch = width * 4;
+        d3dContext->UpdateSubresource(
+            backBuffer.Get(),
+            0,          // subresource
+            nullptr,    // full texture
+            pixelData,
+            rowPitch,   // bytes per row
+            0           // depth pitch (unused for 2D)
+        );
+
+        // Present and commit
+        hr = swapChain->Present(1, 0);
+        if (FAILED(hr)) {
+            printf("[DComp] blitFromPixels: Present failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        hr = dcompDevice->Commit();
+        if (FAILED(hr)) {
+            printf("[DComp] blitFromPixels: Commit failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        return true;
+    }
+
+    // ========================================================================
     // Phase 3: WGPU child visual support (Option C)
     // ========================================================================
 

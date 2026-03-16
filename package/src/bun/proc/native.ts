@@ -508,6 +508,11 @@ export const native = (() => {
 				args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32],
 				returns: FFIType.ptr,
 			},
+			// WGPU Bridge: blit pixels to DComp swap chain
+			dcompBlitPixels: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
 			// DirectComposition Phase 4: WebView2 + WGPU visual tree
 			dcompSetupLayeredTree: {
 				args: [FFIType.ptr, FFIType.ptr],
@@ -1869,6 +1874,11 @@ export const DCompBridge = {
 	createWGPUChildHwnd: (x: number, y: number, w: number, h: number): Pointer | null => {
 		if (!native?.symbols?.dcompCreateWGPUChildHwnd) return null;
 		return native.symbols.dcompCreateWGPUChildHwnd(x, y, w, h) as Pointer;
+	},
+	// WGPU Bridge: blit pixel data to DComp swap chain
+	blitPixels: (pixelData: Pointer, width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompBlitPixels) return false;
+		return native.symbols.dcompBlitPixels(pixelData as any, width, height) as boolean;
 	},
 	// Phase 4: WebView2 + WGPU visual tree
 	setupLayeredTree: (webviewViewPtr: Pointer, wgpuSwapChainPtr: Pointer | null): boolean => {
