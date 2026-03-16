@@ -23,6 +23,7 @@
 #pragma comment(lib, "d3dcompiler.lib")
 
 #include <versionhelpers.h>
+#include <WebView2.h>
 
 using Microsoft::WRL::ComPtr;
 
@@ -746,6 +747,13 @@ public:
         return SUCCEEDED(dcompDevice->Commit());
     }
 
+    // Set the WebView2 composition controller for mouse input forwarding.
+    // Called after CreateCoreWebView2CompositionController succeeds.
+    void setCompositionController(ICoreWebView2CompositionController* ctrl) {
+        compController = ctrl;
+        printf("[DComp] WebView2 composition controller registered for input forwarding\n");
+    }
+
     // Benchmark: measure frame time for the last rendered frame
     double getLastFrameTimeMs() const { return lastFrameTimeMs; }
     uint64_t getFrameCount() const { return frameCount; }
@@ -783,6 +791,9 @@ private:
     // Native resize hook
     bool nativeResizeHooked = false;
 
+    // WebView2 composition controller (for mouse input forwarding)
+    ComPtr<ICoreWebView2CompositionController> compController;
+
     // Phase 4: Layered visual tree (WGPU + WebView2)
     ComPtr<IDCompositionVisual> wgpuVisual;
     ComPtr<IDCompositionVisual> webview2Visual;
@@ -797,19 +808,54 @@ private:
     double lastFrameTimeMs = 0.0;
     uint64_t frameCount = 0;
 
-    // Native WM_SIZE subclass — resizes DComp swap chain at OS level
+    // Native subclass — handles WM_SIZE and forwards mouse events to
+    // WebView2 composition controller when in DComp mode.
     static LRESULT CALLBACK resizeSubclassProc(
         HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
         UINT_PTR subclassId, DWORD_PTR refData
     ) {
+        auto* self = (DCompCompositor*)refData;
+
         if (msg == WM_SIZE && wParam != SIZE_MINIMIZED) {
             int w = LOWORD(lParam);
             int h = HIWORD(lParam);
-            auto* self = (DCompCompositor*)refData;
             if (self && self->isInitialized() && w > 0 && h > 0) {
                 self->resize(w, h);
             }
         }
+
+        // Forward mouse events to the WebView2 composition controller
+        // (composition controllers don't have their own HWND, so they need
+        // explicit mouse input routing from the parent window)
+        if (self && self->compController) {
+            COREWEBVIEW2_MOUSE_EVENT_KIND mouseKind = (COREWEBVIEW2_MOUSE_EVENT_KIND)0;
+            bool isMouse = true;
+
+            switch (msg) {
+                case WM_MOUSEMOVE:    mouseKind = COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE; break;
+                case WM_LBUTTONDOWN:  mouseKind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN; break;
+                case WM_LBUTTONUP:    mouseKind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP; break;
+                case WM_LBUTTONDBLCLK: mouseKind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOUBLE_CLICK; break;
+                case WM_RBUTTONDOWN:  mouseKind = COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOWN; break;
+                case WM_RBUTTONUP:    mouseKind = COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP; break;
+                case WM_MOUSEWHEEL:   mouseKind = COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL; break;
+                case WM_MOUSELEAVE:   mouseKind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE; break;
+                default: isMouse = false; break;
+            }
+
+            if (isMouse && mouseKind != (COREWEBVIEW2_MOUSE_EVENT_KIND)0) {
+                POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS vkeys = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE;
+                if (wParam & MK_CONTROL) vkeys = (COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS)(vkeys | COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_CONTROL);
+                if (wParam & MK_SHIFT)   vkeys = (COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS)(vkeys | COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_SHIFT);
+
+                UINT mouseData = 0;
+                if (msg == WM_MOUSEWHEEL) mouseData = GET_WHEEL_DELTA_WPARAM(wParam);
+
+                self->compController->SendMouseInput(mouseKind, vkeys, mouseData, pt);
+            }
+        }
+
         return DefSubclassProc(hwnd, msg, wParam, lParam);
     }
 

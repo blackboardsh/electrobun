@@ -66,6 +66,9 @@
 // DirectComposition compositor (GPU surface compositing for Windows)
 #include "dcomp_compositor.h"
 
+// Forward declaration — defined in DComp section at bottom of file
+extern DCompCompositor* g_dcompCompositor;
+
 using namespace electrobun;
 
 // Simple ASAR reader implementation for Windows (no external dependency)
@@ -5970,15 +5973,109 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     return result;
                 }
                 
-                // Create WebView2 controller - MINIMAL VERSION
+                // Create WebView2 controller
+                // When DComp is active, use CreateCoreWebView2CompositionController
+                // so WebView2 renders into a DComp visual (enabling GPU layering).
+                // Otherwise, use standard CreateCoreWebView2Controller.
                 HWND targetHwnd = container->GetHwnd();
-                
+
                 if (!IsWindow(targetHwnd)) {
                     ::log("ERROR: Target window is no longer valid");
                     view->setCreationFailed(true);
                     return S_OK;
                 }
-                
+
+                // Check if DComp is active — if so, use composition controller
+                if (g_dcompCompositor && g_dcompCompositor->isInitialized()) {
+                    ComPtr<ICoreWebView2Environment3> env3;
+                    HRESULT qiResult = env->QueryInterface(IID_PPV_ARGS(&env3));
+                    if (SUCCEEDED(qiResult) && env3) {
+                        printf("[DComp] Creating WebView2 via CompositionController for DComp integration\n");
+                        HWND dcompHwnd = g_dcompCompositor->getTargetHwnd();
+                        return env3->CreateCoreWebView2CompositionController(dcompHwnd,
+                            Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
+                                [view, container, x, y, width, height, env, transparent](HRESULT result, ICoreWebView2CompositionController* compController) -> HRESULT {
+                                    if (FAILED(result) || !compController) {
+                                        printf("[DComp] CompositionController creation failed: 0x%08lx, falling back\n", result);
+                                        // Fall through to standard path below won't work here,
+                                        // so mark creation as failed
+                                        view->setCreationFailed(true);
+                                        return result;
+                                    }
+
+                                    printf("[DComp] CompositionController created successfully\n");
+
+                                    // Get the standard controller interface from composition controller
+                                    ComPtr<ICoreWebView2CompositionController> compCtrl(compController);
+                                    ComPtr<ICoreWebView2Controller> ctrl;
+                                    compCtrl->QueryInterface(IID_PPV_ARGS(&ctrl));
+
+                                    ComPtr<ICoreWebView2> webview;
+                                    ctrl->get_CoreWebView2(&webview);
+
+                                    view->setController(ctrl);
+                                    view->setCompositionController(compCtrl);
+                                    view->setWebView(webview);
+                                    view->setContainerHwnd(container->GetHwnd());
+
+                                    // Wire the composition controller into the DComp visual tree
+                                    if (g_dcompCompositor && g_dcompCompositor->isInitialized()) {
+                                        // Create a DComp visual for the WebView2
+                                        IDCompositionDevice* dcompDevice = g_dcompCompositor->getDCompDevice();
+                                        IDCompositionVisual* wv2Visual = g_dcompCompositor->getWebView2Visual();
+
+                                        if (wv2Visual) {
+                                            // Set the DComp visual as WebView2's render target
+                                            compCtrl->put_RootVisualTarget(wv2Visual);
+                                            printf("[DComp] WebView2 RootVisualTarget set to DComp visual\n");
+                                        } else {
+                                            // Create the layered tree first, then set the target
+                                            g_dcompCompositor->setupLayeredVisualTree(nullptr, nullptr);
+                                            IDCompositionVisual* newWv2Visual = g_dcompCompositor->getWebView2Visual();
+                                            if (newWv2Visual) {
+                                                compCtrl->put_RootVisualTarget(newWv2Visual);
+                                                printf("[DComp] WebView2 RootVisualTarget set (after tree setup)\n");
+                                            }
+                                        }
+                                        g_dcompCompositor->commit();
+                                    }
+
+                                    // Set up bridges and properties (same as standard path)
+                                    view->setupJavaScriptBridges();
+
+                                    RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+                                    ctrl->put_Bounds(bounds);
+                                    ctrl->put_IsVisible(TRUE);
+
+                                    if (transparent) {
+                                        ComPtr<ICoreWebView2Controller2> ctrl2;
+                                        if (SUCCEEDED(ctrl->QueryInterface(IID_PPV_ARGS(&ctrl2))) && ctrl2) {
+                                            COREWEBVIEW2_COLOR transparentColor = {0, 0, 0, 0};
+                                            ctrl2->put_DefaultBackgroundColor(transparentColor);
+                                        }
+                                    }
+
+                                    // Register with DComp for mouse input forwarding
+                                    if (g_dcompCompositor) {
+                                        g_dcompCompositor->setCompositionController(compCtrl.Get());
+                                    }
+
+                                    // Continue with standard webview setup...
+                                    view->setCreationComplete(true);
+                                    printf("[DComp] WebView2 composition setup complete\n");
+
+                                    // Load pending URL/HTML
+                                    if (!view->pendingUrl.empty()) {
+                                        view->loadURL(view->pendingUrl.c_str());
+                                    } else if (!view->pendingHtml.empty()) {
+                                        view->loadHTML(view->pendingHtml.c_str());
+                                    }
+
+                                    return S_OK;
+                                }).Get());
+                    }
+                }
+
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [view, container, x, y, width, height, env, transparent](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
