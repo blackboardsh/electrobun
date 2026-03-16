@@ -521,6 +521,23 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32],
 				returns: FFIType.bool,
 			},
+			// Zero-copy bridge: Dawn D3D11On12 → DComp (no CPU readback)
+			dcompInitMinimal: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			dcompInitZeroCopyBridge: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.ptr,  // returns WGPUTexture
+			},
+			dcompZeroCopyBeginFrame: {
+				args: [],
+				returns: FFIType.bool,
+			},
+			dcompZeroCopyEndFrameAndPresent: {
+				args: [],
+				returns: FFIType.bool,
+			},
 			// DirectComposition Phase 4: WebView2 + WGPU visual tree
 			dcompSetupLayeredTree: {
 				args: [FFIType.ptr, FFIType.ptr],
@@ -1902,6 +1919,27 @@ export const DCompBridge = {
 		return native.symbols.dcompBlitFromWGPUBuffer(
 			wgpuInstance as any, wgpuBuffer as any,
 			bytesPerRow, width, height) as boolean;
+	},
+	// Zero-copy bridge: Dawn D3D11On12 → DComp (no CPU readback)
+	initMinimal: (hwnd: Pointer, width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompInitMinimal) return false;
+		return native.symbols.dcompInitMinimal(hwnd as any, width, height) as boolean;
+	},
+	// Returns WGPUTexture pointer — use as CopyTextureToTexture destination
+	initZeroCopyBridge: (wgpuDevice: Pointer, width: number, height: number): Pointer | null => {
+		if (!native?.symbols?.dcompInitZeroCopyBridge) return null;
+		const ptr = native.symbols.dcompInitZeroCopyBridge(wgpuDevice as any, width, height);
+		return ptr ? (ptr as Pointer) : null;
+	},
+	// Call before encoding CopyTextureToTexture to the staging texture
+	zeroCopyBeginFrame: (): boolean => {
+		if (!native?.symbols?.dcompZeroCopyBeginFrame) return false;
+		return native.symbols.dcompZeroCopyBeginFrame() as boolean;
+	},
+	// Call after queueSubmit — copies staging→back buffer and presents
+	zeroCopyEndFrameAndPresent: (): boolean => {
+		if (!native?.symbols?.dcompZeroCopyEndFrameAndPresent) return false;
+		return native.symbols.dcompZeroCopyEndFrameAndPresent() as boolean;
 	},
 	// Phase 4: WebView2 + WGPU visual tree
 	setupLayeredTree: (webviewViewPtr: Pointer, wgpuSwapChainPtr: Pointer | null): boolean => {

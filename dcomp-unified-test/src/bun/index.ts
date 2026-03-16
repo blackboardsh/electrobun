@@ -612,39 +612,66 @@ if (!adapter || !device) {
 const queue = WGPUNative.symbols.wgpuDeviceGetQueue(device);
 
 // Use BGRA8Unorm to match the DComp D3D11 swap chain format
-const surfaceFormat = 0x00000017; // BGRA8Unorm
+const WGPUTextureFormat_BGRA8Unorm = 0x0000001B;
+const surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
 let currentWidth = winW;
 let currentHeight = winH;
 
 // Offscreen render resources (recreated on resize)
+let renderTexture: any = null;
+
+// Zero-copy bridge: staging texture lives on Dawn's DX12 device,
+// wrapped for D3D11 access to the DComp swap chain back buffer.
+// Replaces readback buffer + CPU pixel copy with GPU-to-GPU CopyTextureToTexture.
+const zeroCopyTexture = DCompBridge.initZeroCopyBridge(device as any, currentWidth, currentHeight);
+if (!zeroCopyTexture) {
+	console.warn("[zero-copy] Bridge init failed, falling back to readback path");
+}
+const useZeroCopy = !!zeroCopyTexture;
+// Check if the zero-copy texture supports RenderAttachment (single-copy path)
+// If so, we render directly to it — no separate renderTexture needed.
+const zeroCopyUsage = zeroCopyTexture
+	? Number(WGPUNative.symbols.wgpuTextureGetUsage(zeroCopyTexture as number))
+	: 0;
+const canRenderDirect = useZeroCopy && (zeroCopyUsage & Number(WGPUTextureUsage_RenderAttachment)) !== 0;
+console.log(`[bridge] ${useZeroCopy
+	? (canRenderDirect ? "ZERO-COPY DIRECT RENDER (single copy)" : "ZERO-COPY (two copies)")
+	: "READBACK (GPU→CPU→GPU)"} usage=0x${zeroCopyUsage.toString(16)}`);
+
+// Readback resources (fallback path only)
 let readbackBytesPerRow = alignTo(currentWidth * 4, 256);
 let readbackSize = readbackBytesPerRow * currentHeight;
-let renderTexture: any = null;
 let readbackBuffer: any = null;
 
 function recreateRenderResources() {
-	// Release old resources
-	if (renderTexture) WGPUNative.symbols.wgpuTextureRelease(renderTexture);
-	if (readbackBuffer) WGPUNative.symbols.wgpuBufferRelease(readbackBuffer);
+	// Release old resources (don't release zeroCopyTexture — it's owned by C++)
+	if (!canRenderDirect && renderTexture) WGPUNative.symbols.wgpuTextureRelease(renderTexture);
+	if (!useZeroCopy && readbackBuffer) WGPUNative.symbols.wgpuBufferRelease(readbackBuffer);
 
-	readbackBytesPerRow = alignTo(currentWidth * 4, 256);
-	readbackSize = readbackBytesPerRow * currentHeight;
+	if (canRenderDirect) {
+		// Single-copy: render directly to the staging texture
+		renderTexture = zeroCopyTexture;
+	} else {
+		const texDesc = makeTextureDescriptor(
+			currentWidth, currentHeight,
+			surfaceFormat,
+			WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc,
+		);
+		renderTexture = WGPUNative.symbols.wgpuDeviceCreateTexture(device, texDesc.ptr as number);
+	}
 
-	const texDesc = makeTextureDescriptor(
-		currentWidth, currentHeight,
-		surfaceFormat,
-		WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc,
-	);
-	renderTexture = WGPUNative.symbols.wgpuDeviceCreateTexture(device, texDesc.ptr as number);
+	if (!useZeroCopy) {
+		readbackBytesPerRow = alignTo(currentWidth * 4, 256);
+		readbackSize = readbackBytesPerRow * currentHeight;
+		const bufDesc = makeReadbackBufferDescriptor(readbackSize);
+		readbackBuffer = WGPUNative.symbols.wgpuDeviceCreateBuffer(device, bufDesc.ptr as number);
+	}
 
-	const bufDesc = makeReadbackBufferDescriptor(readbackSize);
-	readbackBuffer = WGPUNative.symbols.wgpuDeviceCreateBuffer(device, bufDesc.ptr as number);
-
-	console.log(`[resize] ${currentWidth}x${currentHeight} bpr=${readbackBytesPerRow}`);
+	console.log(`[resize] ${currentWidth}x${currentHeight}${canRenderDirect ? " (direct render)" : ""}`);
 }
 
 recreateRenderResources();
-if (!renderTexture || !readbackBuffer) {
+if (!renderTexture || (!useZeroCopy && !readbackBuffer)) {
 	throw new Error("Failed to create offscreen render resources");
 }
 
@@ -1121,23 +1148,51 @@ function renderFrame() {
 	WGPUNative.symbols.wgpuRenderPassEncoderDraw(pass, totalVertices, 1, 0, 0);
 	WGPUNative.symbols.wgpuRenderPassEncoderEnd(pass);
 
-	// Copy rendered texture → readback buffer (GPU → CPU transfer)
-	const copySrc = makeTexelCopyTextureInfo(renderTexture);
-	const copyDst = makeTexelCopyBufferInfo(readbackBuffer, readbackBytesPerRow, currentHeight);
-	const copyExtent = makeExtent3D(currentWidth, currentHeight, 1);
-	WGPUNative.symbols.wgpuCommandEncoderCopyTextureToBuffer(
-		encoder, copySrc.ptr as number, copyDst.ptr as number, copyExtent.ptr as number);
+	let commandBuffer: any;
+	if (useZeroCopy && canRenderDirect) {
+		// Single-copy: rendered directly to staging texture, just finish + present
+		DCompBridge.zeroCopyBeginFrame();
 
-	const commandBuffer = WGPUNative.symbols.wgpuCommandEncoderFinish(encoder, 0);
-	if (!commandBuffer) return;
-	const commandArray = makeCommandBufferArray(commandBuffer);
-	WGPUNative.symbols.wgpuQueueSubmit(queue, 1, commandArray.ptr as number);
+		commandBuffer = WGPUNative.symbols.wgpuCommandEncoderFinish(encoder, 0);
+		if (!commandBuffer) return;
+		const commandArray = makeCommandBufferArray(commandBuffer);
+		WGPUNative.symbols.wgpuQueueSubmit(queue, 1, commandArray.ptr as number);
 
-	// Map readback buffer + blit to DComp in one native call
-	DCompBridge.blitFromWGPUBuffer(
-		instance as any, readbackBuffer as any,
-		readbackBytesPerRow, currentWidth, currentHeight,
-	);
+		DCompBridge.zeroCopyEndFrameAndPresent();
+	} else if (useZeroCopy) {
+		// Two-copy: render → staging via CopyTextureToTexture
+		DCompBridge.zeroCopyBeginFrame();
+
+		const copySrc = makeTexelCopyTextureInfo(renderTexture);
+		const copyDst = makeTexelCopyTextureInfo(zeroCopyTexture as number);
+		const copyExtent = makeExtent3D(currentWidth, currentHeight, 1);
+		WGPUNative.symbols.wgpuCommandEncoderCopyTextureToTexture(
+			encoder, copySrc.ptr as number, copyDst.ptr as number, copyExtent.ptr as number);
+
+		commandBuffer = WGPUNative.symbols.wgpuCommandEncoderFinish(encoder, 0);
+		if (!commandBuffer) return;
+		const commandArray = makeCommandBufferArray(commandBuffer);
+		WGPUNative.symbols.wgpuQueueSubmit(queue, 1, commandArray.ptr as number);
+
+		DCompBridge.zeroCopyEndFrameAndPresent();
+	} else {
+		// Fallback: readback path (GPU → CPU → GPU)
+		const copySrc = makeTexelCopyTextureInfo(renderTexture);
+		const copyDst = makeTexelCopyBufferInfo(readbackBuffer, readbackBytesPerRow, currentHeight);
+		const copyExtent = makeExtent3D(currentWidth, currentHeight, 1);
+		WGPUNative.symbols.wgpuCommandEncoderCopyTextureToBuffer(
+			encoder, copySrc.ptr as number, copyDst.ptr as number, copyExtent.ptr as number);
+
+		commandBuffer = WGPUNative.symbols.wgpuCommandEncoderFinish(encoder, 0);
+		if (!commandBuffer) return;
+		const commandArray = makeCommandBufferArray(commandBuffer);
+		WGPUNative.symbols.wgpuQueueSubmit(queue, 1, commandArray.ptr as number);
+
+		DCompBridge.blitFromWGPUBuffer(
+			instance as any, readbackBuffer as any,
+			readbackBytesPerRow, currentWidth, currentHeight,
+		);
+	}
 
 	// Cleanup
 	WGPUNative.symbols.wgpuTextureViewRelease(renderTextureView);
@@ -1150,13 +1205,13 @@ function renderFrame() {
 	statsFrameCount++;
 }
 
-// Use setTimeout(0) loop instead of setInterval(16) — fires immediately
-// after each frame completes, maximizing FPS within the readback budget.
+// Use setImmediate for the render loop — fires on next event loop tick
+// without the 1-4ms minimum delay that setTimeout(0) imposes on Windows.
 let renderRunning = true;
 function renderLoop() {
 	if (!renderRunning) return;
 	renderFrame();
-	setTimeout(renderLoop, 0);
+	setImmediate(renderLoop);
 }
 renderLoop();
 

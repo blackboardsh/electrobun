@@ -19,6 +19,7 @@
 #include <atomic>
 #include "../shared/pending_resize_queue.h"
 #include "dawn/webgpu.h"
+#include "dawn/native/D3D12Backend.h"
 #include <wrl.h>
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
@@ -7499,6 +7500,7 @@ static void wgpu_log(const char* fmt, ...) {
 typedef WGPUInstance (*PFN_wgpuCreateInstance)(WGPUInstanceDescriptor const* descriptor);
 typedef WGPUFuture (*PFN_wgpuInstanceRequestAdapter)(WGPUInstance instance, WGPURequestAdapterOptions const* options, WGPURequestAdapterCallbackInfo callbackInfo);
 typedef WGPUFuture (*PFN_wgpuAdapterRequestDevice)(WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
+typedef WGPUBool (*PFN_wgpuAdapterHasFeature)(WGPUAdapter adapter, WGPUFeatureName feature);
 typedef WGPUQueue (*PFN_wgpuDeviceGetQueue)(WGPUDevice device);
 typedef void (*PFN_wgpuSurfaceGetCapabilities2)(WGPUSurface surface, WGPUAdapter adapter, WGPUSurfaceCapabilities* capabilities);
 typedef void (*PFN_wgpuSurfaceCapabilitiesFreeMembers2)(WGPUSurfaceCapabilities capabilities);
@@ -7524,6 +7526,7 @@ typedef void (*PFN_wgpuCommandEncoderRelease)(WGPUCommandEncoder encoder);
 static PFN_wgpuCreateInstance p_wgpuCreateInstance = nullptr;
 static PFN_wgpuInstanceRequestAdapter p_wgpuInstanceRequestAdapter = nullptr;
 static PFN_wgpuAdapterRequestDevice p_wgpuAdapterRequestDevice = nullptr;
+static PFN_wgpuAdapterHasFeature p_wgpuAdapterHasFeature = nullptr;
 static PFN_wgpuDeviceGetQueue p_wgpuDeviceGetQueue = nullptr;
 static PFN_wgpuSurfaceGetCapabilities2 p_wgpuSurfaceGetCapabilities = nullptr;
 static PFN_wgpuSurfaceCapabilitiesFreeMembers2 p_wgpuSurfaceCapabilitiesFreeMembers = nullptr;
@@ -7619,6 +7622,7 @@ static bool ensureWgpuTestSymbols() {
     LOAD_TEST_SYM(wgpuCreateInstance);
     LOAD_TEST_SYM(wgpuInstanceRequestAdapter);
     LOAD_TEST_SYM(wgpuAdapterRequestDevice);
+    LOAD_TEST_SYM(wgpuAdapterHasFeature);
     LOAD_TEST_SYM(wgpuDeviceGetQueue);
     LOAD_TEST_SYM(wgpuSurfaceGetCapabilities);
     LOAD_TEST_SYM(wgpuSurfaceCapabilitiesFreeMembers);
@@ -8424,9 +8428,30 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
             SetEvent(ctx->event);
         };
         deviceInfo.userdata1 = &deviceCtx;
+        // Request shared texture memory features for zero-copy DComp bridge
+        WGPUFeatureName zeroCopyFeatures[2];
+        size_t zeroCopyFeatureCount = 0;
+
+        if (p_wgpuAdapterHasFeature) {
+            if (p_wgpuAdapterHasFeature(adapter, WGPUFeatureName_SharedTextureMemoryDXGISharedHandle)) {
+                zeroCopyFeatures[zeroCopyFeatureCount++] = WGPUFeatureName_SharedTextureMemoryDXGISharedHandle;
+                printf("[WGPU] Adapter supports SharedTextureMemoryDXGISharedHandle\n");
+            }
+            if (p_wgpuAdapterHasFeature(adapter, WGPUFeatureName_SharedTextureMemoryD3D12Resource)) {
+                zeroCopyFeatures[zeroCopyFeatureCount++] = WGPUFeatureName_SharedTextureMemoryD3D12Resource;
+                printf("[WGPU] Adapter supports SharedTextureMemoryD3D12Resource\n");
+            }
+        }
+        if (zeroCopyFeatureCount == 0) {
+            printf("[WGPU] Adapter does not support any SharedTextureMemory features\n");
+        }
+
         WGPUDeviceDescriptor deviceDesc = {};
         deviceDesc.uncapturedErrorCallbackInfo.callback = gpuTestUncapturedErrorCallback;
         deviceDesc.uncapturedErrorCallbackInfo.userdata1 = &deviceCtx;
+        deviceDesc.requiredFeatureCount = zeroCopyFeatureCount;
+        deviceDesc.requiredFeatures = zeroCopyFeatures;
+
         p_wgpuAdapterRequestDevice(adapter, &deviceDesc, deviceInfo);
         WaitForSingleObject(deviceEvent, INFINITE);
         CloseHandle(deviceEvent);
@@ -12004,6 +12029,289 @@ extern "C" ELECTROBUN_EXPORT bool dcompBlitPixels(const void* pixelData, int wid
         result = g_dcompCompositor->blitFromPixels(pixelData, width, height);
     });
     return result;
+}
+
+// ============================================================================
+// Zero-copy bridge: Dawn D3D11On12 → DComp swap chain (no CPU readback)
+// ============================================================================
+
+// Minimal DComp init: visual tree only, no swap chain.
+// Used when zero-copy bridge will provide the swap chain later.
+extern "C" ELECTROBUN_EXPORT bool dcompInitMinimal(void* hwnd, int width, int height) {
+    if (!g_dcompCompositor) return false;
+    bool result = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        result = g_dcompCompositor->initMinimal((HWND)hwnd, width, height);
+    });
+    return result;
+}
+
+// Global state for zero-copy bridge
+static ComPtr<ID3D12Resource> g_zeroCopyStagingDx12;
+static ComPtr<ID3D11Resource> g_zeroCopyStagingD3d11;
+static ComPtr<ID3D11On12Device> g_d3d11on12Device;
+static WGPUSharedTextureMemory g_sharedTexMem = nullptr;
+static WGPUTexture g_zeroCopyTexture = nullptr;
+
+// Initialize zero-copy bridge:
+// 1. Get Dawn's D3D11On12 device, create DComp swap chain on it
+// 2. Create a DX12 staging texture on Dawn's device
+// 3. Wrap it for D3D11 via CreateWrappedResource
+// 4. Import into Dawn as SharedTextureMemory → create WGPUTexture
+// 5. Return the WGPUTexture pointer (TypeScript uses CopyTextureToTexture)
+//
+// Per-frame flow:
+//   TS: CopyTextureToTexture(renderTarget → zeroCopyTexture) + submit
+//   C++: dcompZeroCopyPresent() → D3D11 CopyResource → Present
+extern "C" ELECTROBUN_EXPORT void* dcompInitZeroCopyBridge(void* wgpuDevice, int width, int height) {
+    if (!g_dcompCompositor || !wgpuDevice) return nullptr;
+
+    WGPUDevice device = (WGPUDevice)wgpuDevice;
+
+    // Check which shared texture feature is available
+    bool hasDXGISharedHandle = wgpuDeviceHasFeature(device, WGPUFeatureName_SharedTextureMemoryDXGISharedHandle);
+    bool hasD3D12Resource = wgpuDeviceHasFeature(device, WGPUFeatureName_SharedTextureMemoryD3D12Resource);
+    printf("[DComp] SharedTextureMemory features: DXGISharedHandle=%d, D3D12Resource=%d\n",
+           hasDXGISharedHandle, hasD3D12Resource);
+
+    if (!hasDXGISharedHandle && !hasD3D12Resource) {
+        printf("[DComp] Zero-copy bridge unavailable: no shared texture memory feature\n");
+        return nullptr;
+    }
+
+    // Get Dawn's D3D11On12 device (shares DX12 device with Dawn)
+    auto d3d11on12 = dawn::native::d3d12::GetOrCreateD3D11On12Device(device);
+    if (!d3d11on12) {
+        printf("[DComp] GetOrCreateD3D11On12Device failed\n");
+        return nullptr;
+    }
+    printf("[DComp] Got D3D11On12 device from Dawn\n");
+
+    // Get the ID3D11Device interface
+    ComPtr<ID3D11Device> d3d11Device;
+    HRESULT hr = d3d11on12.As(&d3d11Device);
+    if (FAILED(hr)) {
+        printf("[DComp] D3D11On12 QI for ID3D11Device failed: 0x%08lx\n", hr);
+        return nullptr;
+    }
+
+    // Store the D3D11On12 device for per-frame acquire/release
+    hr = d3d11Device.As(&g_d3d11on12Device);
+    if (FAILED(hr)) {
+        printf("[DComp] QI for ID3D11On12Device failed: 0x%08lx\n", hr);
+        return nullptr;
+    }
+
+    // Create swap chain on this device (must happen on main thread for DComp)
+    bool ok = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        ok = g_dcompCompositor->initSwapChainFromDevice(d3d11Device.Get(), width, height);
+    });
+    if (!ok) return nullptr;
+
+    // Get Dawn's DX12 device to create the staging texture
+    auto dx12Device = dawn::native::d3d12::GetD3D12Device(device);
+    if (!dx12Device) {
+        printf("[DComp] GetD3D12Device failed\n");
+        return nullptr;
+    }
+
+    // Create a DX12 staging texture on Dawn's device with shared access.
+    D3D12_RESOURCE_DESC texDesc = {};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels = 1;
+    texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    hr = dx12Device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_SHARED,
+        &texDesc, D3D12_RESOURCE_STATE_COMMON,
+        nullptr, IID_PPV_ARGS(&g_zeroCopyStagingDx12));
+    if (FAILED(hr)) {
+        printf("[DComp] CreateCommittedResource (staging) failed: 0x%08lx\n", hr);
+        return nullptr;
+    }
+
+    // Wrap the DX12 staging texture for D3D11 access via D3D11On12
+    D3D11_RESOURCE_FLAGS d3d11Flags = {};
+    d3d11Flags.BindFlags = 0;
+
+    hr = g_d3d11on12Device->CreateWrappedResource(
+        g_zeroCopyStagingDx12.Get(),
+        &d3d11Flags,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_COPY_SOURCE,
+        IID_PPV_ARGS(&g_zeroCopyStagingD3d11));
+    if (FAILED(hr)) {
+        printf("[DComp] CreateWrappedResource (staging) failed: 0x%08lx\n", hr);
+        g_zeroCopyStagingDx12.Reset();
+        return nullptr;
+    }
+
+    // Import into Dawn via the best available feature
+    if (hasDXGISharedHandle) {
+        // Create a DXGI shared handle for the staging texture
+        HANDLE sharedHandle = nullptr;
+        hr = dx12Device->CreateSharedHandle(
+            g_zeroCopyStagingDx12.Get(), nullptr,
+            GENERIC_ALL, nullptr, &sharedHandle);
+        if (FAILED(hr)) {
+            printf("[DComp] CreateSharedHandle failed: 0x%08lx\n", hr);
+            g_zeroCopyStagingD3d11.Reset();
+            g_zeroCopyStagingDx12.Reset();
+            return nullptr;
+        }
+
+        WGPUSharedTextureMemoryDXGISharedHandleDescriptor dxgiDesc =
+            WGPU_SHARED_TEXTURE_MEMORY_DXGI_SHARED_HANDLE_DESCRIPTOR_INIT;
+        dxgiDesc.handle = sharedHandle;
+        dxgiDesc.useKeyedMutex = false;
+
+        WGPUSharedTextureMemoryDescriptor memDesc = WGPU_SHARED_TEXTURE_MEMORY_DESCRIPTOR_INIT;
+        memDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&dxgiDesc);
+
+        g_sharedTexMem = wgpuDeviceImportSharedTextureMemory(device, &memDesc);
+        CloseHandle(sharedHandle);
+
+        printf("[DComp] Imported via DXGI shared handle\n");
+    } else {
+        // Use Dawn native D3D12 resource descriptor
+        dawn::native::d3d12::SharedTextureMemoryD3D12ResourceDescriptor d3d12ResDesc;
+        d3d12ResDesc.resource = g_zeroCopyStagingDx12;
+
+        WGPUSharedTextureMemoryDescriptor memDesc = WGPU_SHARED_TEXTURE_MEMORY_DESCRIPTOR_INIT;
+        memDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&d3d12ResDesc);
+
+        g_sharedTexMem = wgpuDeviceImportSharedTextureMemory(device, &memDesc);
+        printf("[DComp] Imported via D3D12 resource descriptor\n");
+    }
+
+    if (!g_sharedTexMem) {
+        printf("[DComp] wgpuDeviceImportSharedTextureMemory returned null\n");
+        g_zeroCopyStagingD3d11.Reset();
+        g_zeroCopyStagingDx12.Reset();
+        return nullptr;
+    }
+
+    // Verify the shared texture memory is valid by checking its properties
+    WGPUSharedTextureMemoryProperties props = {};
+    WGPUStatus propStatus = wgpuSharedTextureMemoryGetProperties(g_sharedTexMem, &props);
+    if (propStatus != WGPUStatus_Success) {
+        printf("[DComp] SharedTextureMemory properties check failed (status=%d) — import was invalid\n", propStatus);
+        wgpuSharedTextureMemoryRelease(g_sharedTexMem);
+        g_sharedTexMem = nullptr;
+        g_zeroCopyStagingD3d11.Reset();
+        g_zeroCopyStagingDx12.Reset();
+        return nullptr;
+    }
+    printf("[DComp] SharedTextureMemory properties: format=%u, usage=0x%llx, size=%ux%u\n",
+           props.format, (unsigned long long)props.usage, props.size.width, props.size.height);
+
+    // Create a WGPUTexture from the shared memory.
+    // RenderAttachment: so Dawn can render directly to it (single-copy path).
+    // CopyDst: so Dawn can CopyTextureToTexture to it (two-copy fallback).
+    // Usage is constrained by what SharedTextureMemory reports as available.
+    WGPUTextureUsage requestedUsage = (WGPUTextureUsage)(
+        WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment);
+    // Only request usages that the shared memory supports
+    requestedUsage = (WGPUTextureUsage)(requestedUsage & props.usage);
+    printf("[DComp] Requesting texture usage: 0x%llx (props allow: 0x%llx)\n",
+           (unsigned long long)requestedUsage, (unsigned long long)props.usage);
+
+    WGPUTextureDescriptor wgpuTexDesc = {};
+    wgpuTexDesc.usage = requestedUsage;
+    wgpuTexDesc.dimension = WGPUTextureDimension_2D;
+    wgpuTexDesc.size = { (uint32_t)width, (uint32_t)height, 1 };
+    wgpuTexDesc.format = WGPUTextureFormat_BGRA8Unorm;
+    wgpuTexDesc.mipLevelCount = 1;
+    wgpuTexDesc.sampleCount = 1;
+
+    g_zeroCopyTexture = wgpuSharedTextureMemoryCreateTexture(g_sharedTexMem, &wgpuTexDesc);
+    if (!g_zeroCopyTexture) {
+        printf("[DComp] wgpuSharedTextureMemoryCreateTexture returned null\n");
+        wgpuSharedTextureMemoryRelease(g_sharedTexMem);
+        g_sharedTexMem = nullptr;
+        g_zeroCopyStagingD3d11.Reset();
+        g_zeroCopyStagingDx12.Reset();
+        return nullptr;
+    }
+
+    // Enable bridge mode so resize doesn't try to render
+    g_dcompCompositor->setBridgeMode(true);
+
+    printf("[DComp] Zero-copy bridge initialized: WGPUTexture=%p, DX12=%p, D3D11=%p\n",
+           g_zeroCopyTexture, g_zeroCopyStagingDx12.Get(), g_zeroCopyStagingD3d11.Get());
+
+    return g_zeroCopyTexture;
+}
+
+// Begin frame: tell Dawn it can use the shared texture.
+// Call BEFORE CopyTextureToTexture in the command encoder.
+extern "C" ELECTROBUN_EXPORT bool dcompZeroCopyBeginFrame() {
+    if (!g_sharedTexMem || !g_zeroCopyTexture) return false;
+
+    WGPUSharedTextureMemoryBeginAccessDescriptor beginDesc = {};
+    beginDesc.concurrentRead = false;
+    beginDesc.initialized = true;  // texture has valid content (or don't care)
+    beginDesc.fenceCount = 0;
+    beginDesc.fences = nullptr;
+    beginDesc.signaledValues = nullptr;
+
+    WGPUStatus status = wgpuSharedTextureMemoryBeginAccess(
+        g_sharedTexMem, g_zeroCopyTexture, &beginDesc);
+    return status == WGPUStatus_Success;
+}
+
+// End frame + present: release shared texture from Dawn, copy to back buffer, present.
+// Call AFTER queueSubmit (the command buffer with CopyTextureToTexture).
+extern "C" ELECTROBUN_EXPORT bool dcompZeroCopyEndFrameAndPresent() {
+    if (!g_sharedTexMem || !g_zeroCopyTexture || !g_dcompCompositor || !g_d3d11on12Device) return false;
+
+    // End Dawn's access to the shared texture
+    WGPUSharedTextureMemoryEndAccessState endState = {};
+    WGPUStatus status = wgpuSharedTextureMemoryEndAccess(
+        g_sharedTexMem, g_zeroCopyTexture, &endState);
+    if (status != WGPUStatus_Success) {
+        printf("[DComp] EndAccess failed: status=%d\n", status);
+        return false;
+    }
+
+    // Acquire staging texture for D3D11 access (Dawn has finished writing)
+    ID3D11Resource* stagingResources[] = { g_zeroCopyStagingD3d11.Get() };
+    g_d3d11on12Device->AcquireWrappedResources(stagingResources, 1);
+
+    // Get the swap chain back buffer
+    ComPtr<ID3D11Texture2D> backBuffer;
+    HRESULT hr = g_dcompCompositor->getSwapChain()->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+    if (FAILED(hr)) {
+        g_d3d11on12Device->ReleaseWrappedResources(stagingResources, 1);
+        return false;
+    }
+
+    // GPU copy: staging texture → back buffer (both on same D3D11On12 device)
+    auto* ctx = g_dcompCompositor->getExternalD3dContext();
+    if (ctx) {
+        ctx->CopyResource(backBuffer.Get(), g_zeroCopyStagingD3d11.Get());
+    }
+
+    // Release staging texture back to DX12 for next frame
+    g_d3d11on12Device->ReleaseWrappedResources(stagingResources, 1);
+
+    // Flush D3D11 context to ensure CopyResource + state transitions are submitted
+    if (ctx) ctx->Flush();
+
+    // Present the swap chain
+    hr = g_dcompCompositor->getSwapChain()->Present(0, 0);
+    if (FAILED(hr)) return false;
+
+    return SUCCEEDED(g_dcompCompositor->getDCompDevice()->Commit());
 }
 
 // Start a 60 FPS render loop (rotating triangle).

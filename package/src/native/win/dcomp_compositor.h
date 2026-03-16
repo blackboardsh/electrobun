@@ -12,7 +12,10 @@
 
 #include <dcomp.h>
 #include <dxgi1_2.h>
+#include <dxgi1_4.h>
 #include <d3d11.h>
+#include <d3d11on12.h>
+#include <d3d12.h>
 #include <d3dcompiler.h>
 #include <wrl.h>
 #include <cstdio>
@@ -20,6 +23,7 @@
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 
 #include <versionhelpers.h>
@@ -227,6 +231,173 @@ public:
         initialized = true;
         return true;
     }
+
+    // ========================================================================
+    // Zero-copy bridge: deferred swap chain init
+    // ========================================================================
+
+    // Minimal init: DComp visual tree only, no rendering device or swap chain.
+    // The swap chain is created later via initSwapChainFromDevice() once Dawn's
+    // D3D11On12 device is available.
+    bool initMinimal(HWND hwnd, int width, int height) {
+        if (!isDCompAvailable()) return false;
+
+        this->targetHwnd = hwnd;
+        this->surfaceWidth = width;
+        this->surfaceHeight = height;
+
+        // DCompositionCreateDevice2 with a DXGI device creates a DComp device
+        // that can hold visuals/targets. We pass nullptr to create a device-less
+        // compositor — swap chain content is attached later.
+        //
+        // Fallback: if nullptr doesn't work, we create a temporary D3D11 device
+        // just for DComp init. The swap chain content can be replaced later.
+        HRESULT hr = DCompositionCreateDevice2(nullptr, IID_PPV_ARGS(&dcompDevice));
+        if (FAILED(hr)) {
+            printf("[DComp] DCompositionCreateDevice2(null) failed: 0x%08lx, trying fallback\n", hr);
+
+            // Fallback: create a lightweight D3D11 device just for DComp
+            D3D_FEATURE_LEVEL featureLevel;
+            hr = D3D11CreateDevice(
+                nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                nullptr, 0, D3D11_SDK_VERSION,
+                &d3dDevice, &featureLevel, &d3dContext);
+            if (FAILED(hr)) {
+                printf("[DComp] Fallback D3D11CreateDevice failed: 0x%08lx\n", hr);
+                return false;
+            }
+
+            ComPtr<IDXGIDevice> dxgiDevice;
+            hr = d3dDevice.As(&dxgiDevice);
+            if (FAILED(hr)) return false;
+
+            hr = DCompositionCreateDevice(dxgiDevice.Get(), IID_PPV_ARGS(&dcompDevice));
+            if (FAILED(hr)) {
+                printf("[DComp] Fallback DCompositionCreateDevice failed: 0x%08lx\n", hr);
+                return false;
+            }
+        }
+
+        hr = dcompDevice->CreateTargetForHwnd(hwnd, FALSE, &dcompTarget);
+        if (FAILED(hr)) {
+            printf("[DComp] CreateTargetForHwnd failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        hr = dcompDevice->CreateVisual(&rootVisual);
+        if (FAILED(hr)) {
+            printf("[DComp] CreateVisual failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        hr = dcompTarget->SetRoot(rootVisual.Get());
+        if (FAILED(hr)) return false;
+
+        hr = dcompDevice->Commit();
+        if (FAILED(hr)) return false;
+
+        printf("[DComp] Minimal init done (visual tree only, no swap chain)\n");
+        initialized = true;
+        return true;
+    }
+
+    // Create a swap chain on an external D3D11 device (e.g., Dawn's D3D11On12).
+    // Call after initMinimal() + Dawn device creation.
+    bool initSwapChainFromDevice(ID3D11Device* externalDevice, int width, int height) {
+        if (!initialized || !dcompDevice || !rootVisual) return false;
+        if (!externalDevice) return false;
+
+        // Store the external device for blit/present operations
+        externalD3dDevice = externalDevice;
+        externalDevice->GetImmediateContext(&externalD3dContext);
+
+        // Get DXGI factory from external device
+        ComPtr<IDXGIDevice> dxgiDevice;
+        HRESULT hr = externalDevice->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
+        if (FAILED(hr)) {
+            printf("[DComp] External device QI for IDXGIDevice failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        ComPtr<IDXGIAdapter> dxgiAdapter;
+        hr = dxgiDevice->GetAdapter(&dxgiAdapter);
+        if (FAILED(hr)) return false;
+
+        ComPtr<IDXGIFactory2> factory;
+        hr = dxgiAdapter->GetParent(IID_PPV_ARGS(&factory));
+        if (FAILED(hr)) return false;
+
+        // Create swap chain for composition on the external device
+        DXGI_SWAP_CHAIN_DESC1 scDesc = {};
+        scDesc.Width = width;
+        scDesc.Height = height;
+        scDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        scDesc.SampleDesc.Count = 1;
+        scDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        scDesc.BufferCount = 2;
+        scDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        scDesc.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
+
+        hr = factory->CreateSwapChainForComposition(
+            externalDevice, &scDesc, nullptr, &swapChain);
+        if (FAILED(hr)) {
+            printf("[DComp] CreateSwapChainForComposition (external) failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        // Set as root visual content
+        hr = rootVisual->SetContent(swapChain.Get());
+        if (FAILED(hr)) return false;
+
+        hr = dcompDevice->Commit();
+        if (FAILED(hr)) return false;
+
+        surfaceWidth = width;
+        surfaceHeight = height;
+        zeroCopyMode = true;
+        printf("[DComp] Swap chain created on external D3D11 device (%dx%d)\n", width, height);
+        return true;
+    }
+
+    // Zero-copy present: copy source D3D11 texture to swap chain back buffer.
+    // sourceTexture must be on the same D3D11 device as the swap chain.
+    bool zeroCopyPresent(ID3D11Texture2D* sourceTexture) {
+        if (!swapChain || !externalD3dContext) return false;
+
+        ComPtr<ID3D11Texture2D> backBuffer;
+        HRESULT hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr)) {
+            printf("[DComp] zeroCopyPresent: GetBuffer failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        externalD3dContext->CopyResource(backBuffer.Get(), sourceTexture);
+
+        hr = swapChain->Present(0, 0);
+        if (FAILED(hr)) {
+            printf("[DComp] zeroCopyPresent: Present failed: 0x%08lx\n", hr);
+            return false;
+        }
+
+        return SUCCEEDED(dcompDevice->Commit());
+    }
+
+    // Just Present + Commit (when the copy was already done externally).
+    bool presentOnly() {
+        if (!swapChain || !dcompDevice) return false;
+
+        HRESULT hr = swapChain->Present(0, 0);
+        if (FAILED(hr)) return false;
+
+        return SUCCEEDED(dcompDevice->Commit());
+    }
+
+    bool isZeroCopyMode() const { return zeroCopyMode; }
+
+    // Get the external D3D11 device context (for D3D11On12 acquire/release).
+    ID3D11DeviceContext* getExternalD3dContext() const { return externalD3dContext.Get(); }
+    ID3D11Device* getExternalD3dDevice() const { return externalD3dDevice.Get(); }
 
     // ========================================================================
     // Phase 2: Solid color render
@@ -664,8 +835,11 @@ public:
         surfaceWidth = newWidth;
         surfaceHeight = newHeight;
 
-        d3dContext->ClearState();
-        d3dContext->Flush();
+        auto* ctx = externalD3dContext ? externalD3dContext.Get() : d3dContext.Get();
+        if (ctx) {
+            ctx->ClearState();
+            ctx->Flush();
+        }
 
         HRESULT hr = swapChain->ResizeBuffers(
             2, surfaceWidth, surfaceHeight,
@@ -757,6 +931,12 @@ public:
         dcompTarget.Reset();
         dcompDevice.Reset();
         swapChain.Reset();
+
+        // Release external device (zero-copy bridge)
+        externalD3dContext.Reset();
+        externalD3dDevice.Reset();
+        zeroCopyMode = false;
+
         d3dContext.Reset();
         d3dDevice.Reset();
         dxgiFactory.Reset();
@@ -862,6 +1042,13 @@ private:
 
     // Bridge mode: WGPU provides frames via blitFromPixels, skip render-on-resize
     bool bridgeMode = false;
+
+    // Zero-copy mode: swap chain created on Dawn's D3D11On12 device
+    bool zeroCopyMode = false;
+
+    // External D3D11 device (D3D11On12 from Dawn, for zero-copy bridge)
+    ComPtr<ID3D11Device> externalD3dDevice;
+    ComPtr<ID3D11DeviceContext> externalD3dContext;
 
     // WebView2 composition controller (for mouse input forwarding)
     ComPtr<ICoreWebView2CompositionController> compController;
