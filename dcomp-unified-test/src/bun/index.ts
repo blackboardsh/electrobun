@@ -1158,10 +1158,21 @@ function renderFrame() {
 	WGPUNative.symbols.wgpuCommandBufferRelease(commandBuffer);
 	WGPUNative.symbols.wgpuCommandEncoderRelease(encoder);
 
+	const frameEndTime = performance.now();
+	avgFrameTimeMs += (frameEndTime - now);
+	frameTimeSamples++;
 	statsFrameCount++;
 }
 
-const renderTimer = setInterval(renderFrame, 16);
+// Use setTimeout(0) loop instead of setInterval(16) — fires immediately
+// after each frame completes, maximizing FPS within the readback budget.
+let renderRunning = true;
+function renderLoop() {
+	if (!renderRunning) return;
+	renderFrame();
+	setTimeout(renderLoop, 0);
+}
+renderLoop();
 
 // ── DComp initialization ────────────────────────────────────────────────────
 
@@ -1170,17 +1181,22 @@ const renderTimer = setInterval(renderFrame, 16);
 // DComp is already initialized by enableMode. Push render stats to HUD.
 let statsFrameCount = 0;
 let lastStatsTime = performance.now();
+let avgFrameTimeMs = 0;
+let frameTimeSamples = 0;
 
 setInterval(() => {
 	const now = performance.now();
 	const elapsed = (now - lastStatsTime) / 1000;
 	const fps = elapsed > 0 ? Math.round(statsFrameCount / elapsed) : 0;
+	const ft = frameTimeSamples > 0 ? (avgFrameTimeMs / frameTimeSamples) : 0;
 	statsFrameCount = 0;
+	avgFrameTimeMs = 0;
+	frameTimeSamples = 0;
 	lastStatsTime = now;
 
-	win.setTitle(`Three.js + SolidJS + DComp | ${fps} FPS | Cubes: ${cubes.length}`);
+	win.setTitle(`Three.js + SolidJS + DComp | ${fps} FPS | ${ft.toFixed(1)}ms | Cubes: ${cubes.length}`);
 
-	const js = `if(window.__updateDCompStats){window.__updateDCompStats(${fps},0,${cubes.length})}`;
+	const js = `if(window.__updateDCompStats){window.__updateDCompStats(${fps},${ft.toFixed(2)},${cubes.length})}`;
 	try { win.webview.executeJavascript(js); } catch {}
 }, 1000);
 
@@ -1188,7 +1204,7 @@ setInterval(() => {
 
 win.on("close", () => {
 	if (dropTimer) clearInterval(dropTimer);
-	clearInterval(renderTimer);
+	renderRunning = false;
 	DCompBridge.shutdown();
 });
 

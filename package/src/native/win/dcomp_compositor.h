@@ -455,8 +455,8 @@ public:
             0           // depth pitch (unused for 2D)
         );
 
-        // Present and commit
-        hr = swapChain->Present(1, 0);
+        // Present without vsync — DComp handles frame scheduling
+        hr = swapChain->Present(0, 0);
         if (FAILED(hr)) {
             printf("[DComp] blitFromPixels: Present failed: 0x%08lx\n", hr);
             return false;
