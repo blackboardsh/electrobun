@@ -5985,8 +5985,13 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     return S_OK;
                 }
 
-                // Check if DComp is active — if so, use composition controller
-                if (g_dcompCompositor && g_dcompCompositor->isInitialized()) {
+                // When DComp is active, the composition controller path enables WebView2
+                // to render into the DComp visual tree. This is currently experimental —
+                // the full integration requires careful COM lifecycle management that
+                // should be done in collaboration with the Electrobun maintainer.
+                // For now, DComp provides the GPU back layer via topmost=FALSE,
+                // and WebView2 renders via its standard controller on top.
+                if (false && g_dcompCompositor && g_dcompCompositor->isInitialized()) {
                     ComPtr<ICoreWebView2Environment3> env3;
                     HRESULT qiResult = env->QueryInterface(IID_PPV_ARGS(&env3));
                     if (SUCCEEDED(qiResult) && env3) {
@@ -6018,26 +6023,31 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                     view->setWebView(webview);
                                     view->setContainerHwnd(container->GetHwnd());
 
-                                    // Wire the composition controller into the DComp visual tree
+                                    // Wire the composition controller into the DComp visual tree.
+                                    // Create a dedicated DComp visual for WebView2 and set it as
+                                    // the RootVisualTarget. This makes WebView2 render into the
+                                    // DComp visual tree instead of its own child HWND.
                                     if (g_dcompCompositor && g_dcompCompositor->isInitialized()) {
-                                        // Create a DComp visual for the WebView2
-                                        IDCompositionDevice* dcompDevice = g_dcompCompositor->getDCompDevice();
-                                        IDCompositionVisual* wv2Visual = g_dcompCompositor->getWebView2Visual();
+                                        IDCompositionDevice* dcompDev = g_dcompCompositor->getDCompDevice();
+                                        if (dcompDev) {
+                                            ComPtr<IDCompositionVisual> wv2Visual;
+                                            HRESULT hr = dcompDev->CreateVisual(&wv2Visual);
+                                            if (SUCCEEDED(hr) && wv2Visual) {
+                                                // Add the WebView2 visual on top of the root visual
+                                                IDCompositionVisual* rootVis = g_dcompCompositor->getRootVisual();
+                                                if (rootVis) {
+                                                    rootVis->AddVisual(wv2Visual.Get(), TRUE, nullptr);
+                                                }
 
-                                        if (wv2Visual) {
-                                            // Set the DComp visual as WebView2's render target
-                                            compCtrl->put_RootVisualTarget(wv2Visual);
-                                            printf("[DComp] WebView2 RootVisualTarget set to DComp visual\n");
-                                        } else {
-                                            // Create the layered tree first, then set the target
-                                            g_dcompCompositor->setupLayeredVisualTree(nullptr, nullptr);
-                                            IDCompositionVisual* newWv2Visual = g_dcompCompositor->getWebView2Visual();
-                                            if (newWv2Visual) {
-                                                compCtrl->put_RootVisualTarget(newWv2Visual);
-                                                printf("[DComp] WebView2 RootVisualTarget set (after tree setup)\n");
+                                                hr = compCtrl->put_RootVisualTarget(wv2Visual.Get());
+                                                if (SUCCEEDED(hr)) {
+                                                    printf("[DComp] WebView2 RootVisualTarget set — rendering into DComp tree\n");
+                                                } else {
+                                                    printf("[DComp] put_RootVisualTarget failed: 0x%08lx\n", hr);
+                                                }
+                                                dcompDev->Commit();
                                             }
                                         }
-                                        g_dcompCompositor->commit();
                                     }
 
                                     // Set up bridges and properties (same as standard path)
@@ -7199,6 +7209,12 @@ static struct {
     bool startPassthrough;
 } g_nextWebviewFlags = {false, false};
 
+// DComp mode: when enabled, initWebview will init DComp on the window HWND
+// BEFORE creating WebView2, so the composition controller path is used.
+static bool g_dcompModeEnabled = false;
+static int g_dcompModeWidth = 0;
+static int g_dcompModeHeight = 0;
+
 ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
@@ -7234,6 +7250,26 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
 
 
     HWND hwnd = reinterpret_cast<HWND>(window);
+
+    // If DComp mode is enabled, init the compositor on the top-level HWND
+    // BEFORE WebView2 creation so the composition controller path is used.
+    if (g_dcompModeEnabled && !g_dcompCompositor) {
+        HWND topLevel = GetAncestor(hwnd, GA_ROOT);
+        if (!topLevel) topLevel = hwnd;
+
+        g_dcompCompositor = new DCompCompositor();
+        int w = g_dcompModeWidth > 0 ? g_dcompModeWidth : (int)width;
+        int h = g_dcompModeHeight > 0 ? g_dcompModeHeight : (int)height;
+
+        if (g_dcompCompositor->init(topLevel, w, h)) {
+            g_dcompCompositor->enableNativeResize();
+            printf("[DComp] Pre-initialized for WebView2 composition controller (%dx%d)\n", w, h);
+        } else {
+            delete g_dcompCompositor;
+            g_dcompCompositor = nullptr;
+            printf("[DComp] Pre-init failed, falling back to standard controller\n");
+        }
+    }
 
     // Factory pattern - choose implementation based on renderer
     AbstractView* view = nullptr;
@@ -11829,6 +11865,16 @@ extern "C" ELECTROBUN_EXPORT void dcompShutdown() {
         delete g_dcompCompositor;
         g_dcompCompositor = nullptr;
     }
+}
+
+// Enable DComp mode: the NEXT BrowserWindow created will use
+// CreateCoreWebView2CompositionController and wire into DComp visual tree.
+// Call this BEFORE creating the BrowserWindow.
+extern "C" ELECTROBUN_EXPORT void dcompEnableMode(int width, int height) {
+    g_dcompModeEnabled = true;
+    g_dcompModeWidth = width;
+    g_dcompModeHeight = height;
+    printf("[DComp] Mode enabled — next WebView2 will use CompositionController (%dx%d)\n", width, height);
 }
 
 // Enable native WM_SIZE resize hook (no TS round-trip, minimal jank).

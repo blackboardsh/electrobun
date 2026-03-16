@@ -471,6 +471,10 @@ export const native = (() => {
 				args: [],
 				returns: FFIType.void,
 			},
+			dcompEnableMode: {
+				args: [FFIType.i32, FFIType.i32],
+				returns: FFIType.void,
+			},
 			dcompEnableNativeResize: {
 				args: [],
 				returns: FFIType.void,
@@ -1828,6 +1832,10 @@ export const DCompBridge = {
 	shutdown: (): void => {
 		if (!native?.symbols?.dcompShutdown) return;
 		native.symbols.dcompShutdown();
+	},
+	enableMode: (width: number, height: number): void => {
+		if (!native?.symbols?.dcompEnableMode) return;
+		native.symbols.dcompEnableMode(width, height);
 	},
 	enableNativeResize: (): void => {
 		if (!native?.symbols?.dcompEnableNativeResize) return;
